@@ -66,7 +66,7 @@ Via is still a newborn.
 - Via is intentionally minimal — and so is contributing.
 - If you love Go, simplicity, and meaningful abstractions — Come along for the ride!
 - Fork, branch, build, break things.
-- Follow the loop: ⚡Via → Context → Sync → 🧑‍💻 Signals/Actions → ⚡Via 🔁
+- Follow the loop: ⚡Via → Context → Sync → 🧑‍💻 Signals/Actions → ⚡Via → 🗘
 - Keep every line purposeful.
 - Share feedback: open an issue or start a discussion.
 
