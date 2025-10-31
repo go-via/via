@@ -1,7 +1,7 @@
 # ⚡Via
 Pure Go reactive web framework.
 
-### Why Via?
+## Why Via?
 Somewhere along the way, the web became tangled in layers of JavaScript, build chains, and frameworks stacked on frameworks.
 Via takes a radical stance:
 - No templates.
@@ -13,7 +13,7 @@ Via takes a radical stance:
 - Full reactivity
 - Pure Go.
 
-### Example
+## Example
 ```go
 package main
 
@@ -54,21 +54,14 @@ func main() {
 ```
 > ⚠️Via is in it's infancy. Things will break often.
 
-### Contributing
-Via is intentionally minimal — and so is contributing.
+## Contributing
+- Via is intentionally minimal — and so is contributing.
+-  If you love Go, precision, and small, meaningful abstractions — Come along for the ride.
+- Fork, branch, build, break things.
+- Follow the loop: Via → Context → State/Signals → View.
+- Keep every line purposeful.
 
-If you love Go, precision, and small, meaningful abstractions — Come along for the ride.
-
-Fork, branch, build, break things.
-
-Follow the loop: Via → Context → State/Signals → View.
-
-Keep every line purposeful.
-
-
-
-
-### Credits
+## Credits
 
 Via builds upon the work of these amazing projects:
 
