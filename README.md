@@ -1,17 +1,20 @@
 # ⚡Via
 Pure Go reactive web framework.
 
+
 ## Why Via?
 Somewhere along the way, the web became tangled in layers of JavaScript, build chains, and frameworks stacked on frameworks.
 Via takes a radical stance:
+
 - No templates.
 - No JavaScript.
 - No transpilation.
 - No hydration.
 - No front-end fatigue.
 - Single SSE stream.
-- Full reactivity
+- Full reactivity.
 - Pure Go.
+
 
 ## Example
 ```go
@@ -52,18 +55,29 @@ func main() {
 	v.Start(":3000")
 }
 ```
-> ⚠️Via is in it's infancy. Things will break often.
+
+
+## 🚧 Not ready for production
+
+Via is in it's infancy. Things will break often.
+
+> v0.1.0 will drop soon.
+
 
 ## Contributing
 - Via is intentionally minimal — and so is contributing.
--  If you love Go, precision, and small, meaningful abstractions — Come along for the ride.
+- If you love Go, simplicity, and meaningful abstractions — Come along for the ride!
 - Fork, branch, build, break things.
-- Follow the loop: Via → Context → State/Signals → View.
+- Follow the loop: ⚡Via → Context → Sync → 🧑‍💻 Signals/Actions → ⚡Via 🔁
 - Keep every line purposeful.
+- Share feedback: open an issue or start a discussion.
+
 
 ## Credits
 
 Via builds upon the work of these amazing projects:
 
-- [Datastar](data-star.dev) - The hypermedia powerhouse powering Via's browser reactivity and real-time HTML and signal patches over a always-on SSE event stream.
-- [Gomponents](maragu.dev/gomponents) - The awesome project that enables Via's Go-native HTML UI composition through the `via/h` package.
+- 🚀 [Datastar](https://data-star.dev) - The hypermedia powerhouse at the core of Via. It powers browser reactivity through Signals and enables real-time HTML/Signal patches over an always-on SSE event stream.
+- 🧩 [Gomponents](https://maragu.dev/gomponents) - The awesome project that enables Vias Go-native HTML composition through the `via/h` package.
+
+> Thank you for building something that doesn’t just function — it inspires. 🫶
