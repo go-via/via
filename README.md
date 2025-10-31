@@ -57,12 +57,8 @@ func main() {
 ```
 
 
-## 🚧 Not ready for production
-
-Via is in it's infancy. Things will break often.
-
-> v0.1.0 will drop soon.
-
+### 🚧 Via is a newborn 
+`v0.1` nears. Expect chaos.
 
 ## Contributing
 - Via is intentionally minimal — and so is contributing.
