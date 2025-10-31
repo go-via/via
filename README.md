@@ -57,8 +57,10 @@ func main() {
 ```
 
 
-### 🚧 Via is a newborn 
-`v0.1` nears. Expect chaos.
+## 🚧 Experimental
+Via is still a newborn.
+- `v0.1` nears. 
+- Expect chaos.
 
 ## Contributing
 - Via is intentionally minimal — and so is contributing.
