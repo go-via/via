@@ -5,22 +5,14 @@ Pure Go reactive web framework.
 Somewhere along the way, the web became tangled in layers of JavaScript, build chains, and frameworks stacked on frameworks.
 
 Via takes a radical stance:
-
-No templates.
-
-No JavaScript.
-
-No transpilation.
-
-No hydration.
-
-No front-end fatigue.
-
-Single SSE (Server Sent Events) connection.
-
-Full reactivity in the browser.
-
-Pure Go.
+- No templates.
+- No JavaScript.
+- No transpilation.
+- No hydration.
+- No front-end fatigue.
+- Single SSE stream.
+- Full reactivity
+- Pure Go.
 
 ### Example
 ```
