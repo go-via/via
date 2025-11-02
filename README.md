@@ -59,7 +59,7 @@ func main() {
 
 ## 🚧 Experimental
 Via is still a newborn.
-- `v0.1` nears. 
+- Version `0.1.0` nears. 
 - Expect chaos.
 
 ## Contributing
@@ -76,6 +76,6 @@ Via is still a newborn.
 Via builds upon the work of these amazing projects:
 
 - 🚀 [Datastar](https://data-star.dev) - The hypermedia powerhouse at the core of Via. It powers browser reactivity through Signals and enables real-time HTML/Signal patches over an always-on SSE event stream.
-- 🧩 [Gomponents](https://maragu.dev/gomponents) - The awesome project that enables Vias Go-native HTML composition through the `via/h` package.
+- 🧩 [Gomponents](https://maragu.dev/gomponents) - The awesome project that gifts Via with Go-native HTML composition superpowers through the `via/h` package.
 
 > Thank you for building something that doesn’t just function — it inspires. 🫶

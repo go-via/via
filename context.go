@@ -17,9 +17,10 @@ import (
 // It binds user state and actions, manages reactive signals, and defines UI through View.
 type Context struct {
 	id             string
-	route          string
 	app            *via
 	view           func() h.H
+	components     map[string]*Context
+	componentsMux  sync.RWMutex
 	sse            *datastar.ServerSentEventGenerator
 	actionRegistry map[string]func()
 	signals        map[string]*signal
@@ -34,23 +35,47 @@ type Context struct {
 func (c *Context) View(f func() h.H) {
 	if f == nil {
 		c.app.logErr(c, "failed to bind view to context: nil func")
+		return
 	}
 	c.view = func() h.H { return h.Div(h.ID(c.id), f()) }
 }
 
-type actionTrigger struct {
-	id string
+// Component registers a sub context that is self contained self contained with it's own
+// view, state actions and signals and returns the DOM node that can be added to the view
+// of the parent.
+func (c *Context) Component(f func(c *Context)) func() h.H {
+	id := c.id + "/_component/" + genRandID()
+	compCtx := newContext(id, c.app)
+	f(compCtx)
+	compCtx.sse = c.sse
+	// c.componentsMux.Lock()
+	// defer c.componentsMux.Unlock()
+	//
+	// c.components[id] = compCtx
+	c.app.contextRegistryMutex.Lock()
+	defer c.app.contextRegistryMutex.Unlock()
+	c.app.contextRegistry[id] = compCtx
+
+	return compCtx.view
 }
 
-func (a *actionTrigger) OnClick() h.H {
-	return h.Data("on:click", fmt.Sprintf("@get('/_action/%s')", a.id))
-}
-
-// Action registers a named event handler callable from the browser.
+// Action registers an event handler and returns a trigger to that event that
+// that can be added to the view fn as any other via.h element.
 //
-// Use h.OnClick("actionName") or similar event bindings to trigger actions.
-// Signal updates from the browser are automatically injected in the context before the
-// handler function executes.
+// Example:
+//
+//	n := 0
+//	increment := c.Action(func(){
+//		 n++
+//		 c.Sync()
+//	})
+//
+//	c.View(func() h.H {
+//		 return h.Div(
+//		 	 	h.P(h.Textf("Value of n: %d", n)),
+//		 	 	h.Button(h.Text("Increment n"), increment.OnClick()),
+//		 )
+//	})
 func (c *Context) Action(f func()) *actionTrigger {
 	// if id == "" {
 	// 	c.app.logErr(c, "failed to bind action to context: id is ''")
@@ -132,7 +157,7 @@ func (c *Context) injectSignals(sigs map[string]any) {
 }
 
 // Sync pushes the current view state and signal changes to the browser immediately
-// over the live SSE connection.
+// over the live SSE event stream.
 func (c *Context) Sync() {
 	if c.sse == nil {
 		c.app.logErr(c, "sync view failed: no sse connection")
@@ -157,7 +182,8 @@ func (c *Context) Sync() {
 	}
 }
 
-// SyncElements pushes an immediate html patch to the browser that merges DOM
+// SyncElements pushes an immediate html patch over the live SSE stream to the
+// browser that merges with the DOM
 //
 // For the merge to occur, the top level element in the patch needs to have
 // an ID that matches the ID of an element that already sits in the view.
@@ -171,7 +197,8 @@ func (c *Context) Sync() {
 //		h.P(h.Text("Hello from Via!"))
 //	)
 //
-// Then, the merge will only occur if the ID of the top level element mattches 'my-element'.
+// Then, the merge will only occur if the ID of the top level element in the patch
+// matches 'my-element'.
 func (c *Context) SyncElements(elem h.H) {
 	if c.sse == nil {
 		c.app.logErr(c, "sync element failed: no sse connection")
@@ -190,7 +217,7 @@ func (c *Context) SyncElements(elem h.H) {
 }
 
 // SyncSignals pushes the current signal changes to the browser immediately
-// over the live SSE connection.
+// over the live SSE event stream.
 func (c *Context) SyncSignals() {
 	if c.sse == nil {
 		c.app.logErr(c, "sync signals failed: sse connection not found")
@@ -217,6 +244,7 @@ func newContext(id string, a *via) *Context {
 	return &Context{
 		id:             id,
 		app:            a,
+		components:     make(map[string]*Context),
 		actionRegistry: make(map[string]func()),
 		signals:        make(map[string]*signal),
 		createdAt:      time.Now(),
