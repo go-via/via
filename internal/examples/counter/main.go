@@ -15,19 +15,10 @@ func main() {
 		s := CounterState{Count: 0}
 
 		step := c.Signal(1)
-		greeting := c.Signal("Hello...")
 
 		increment := c.Action(func() {
 			s.Count += step.Int()
 			c.Sync()
-		})
-		greetBob := c.Action(func() {
-			greeting.SetValue("Hello Bob!")
-			c.SyncSignals()
-		})
-		greetAlice := c.Action(func() {
-			greeting.SetValue("Hello Alice!")
-			c.SyncSignals()
 		})
 
 		c.View(func() h.H {
@@ -39,10 +30,6 @@ func main() {
 					h.Input(h.Type("number"), step.Bind()),
 				),
 				h.Button(h.Text("Increment"), increment.OnClick()),
-
-				h.P(h.Span(h.Text("Greeting: ")), h.Span(greeting.Text())),
-				h.Button(h.Text("Greet Alice"), greetBob.OnClick()),
-				h.Button(h.Text("Greet Alice"), greetAlice.OnClick()),
 			)
 		})
 	})
