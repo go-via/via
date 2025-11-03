@@ -32,17 +32,17 @@ func main() {
 	v := via.New()
 
 	v.Page("/", func(c *via.Context) {
-		s := Counter{Count: 0}
+		data := Counter{Count: 0}
 		step := c.Signal(1)
 
 		increment := c.Action(func() {
-			s.Count += step.Int()
+			data.Count += step.Int()
 			c.Sync()
 		})
 
 		c.View(func() h.H {
 			return h.Div(
-				h.P(h.Textf("Count: %d", s.Count)),
+				h.P(h.Textf("Count: %d", data.Count)),
 				h.Label(
 					h.Text("Update Step: "),
 					h.Input(h.Type("number"), step.Bind()),
