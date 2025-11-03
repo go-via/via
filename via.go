@@ -99,11 +99,6 @@ func (v *via) Page(route string, composeContext func(c *Context)) {
 		v.logDebug(c, "GET %s", route)
 		composeContext(c)
 		v.registerCtx(c.id, c)
-		// viewFn := c.view
-		// viewFnWithID := func() h.H {
-		// 	return h.Div(h.ID(c.id), viewFn())
-		// }
-		// c.view = viewFnWithID
 		view := v.baseLayout(h.HTML5Props{
 			Head: []h.H{
 				h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
@@ -180,7 +175,6 @@ func New() *via {
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
-		app.logDebug(nil, "GET /_action/%s via-ctx=%s", actionID, cID)
 		active_ctx_count := 0
 		inactive_ctx_count := 0
 		for _, c := range app.contextRegistry {
