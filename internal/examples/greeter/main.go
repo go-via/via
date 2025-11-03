@@ -9,13 +9,13 @@ func main() {
 	v := via.New()
 
 	v.Page("/", func(c *via.Context) {
-
 		greeting := c.Signal("Hello...")
 
 		greetBob := c.Action(func() {
 			greeting.SetValue("Hello Bob!")
 			c.SyncSignals()
 		})
+
 		greetAlice := c.Action(func() {
 			greeting.SetValue("Hello Alice!")
 			c.SyncSignals()
