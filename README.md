@@ -26,14 +26,13 @@ import (
 	"github.com/go-via/via/h"
 )
 
-type CounterState struct{ Count int }
+type Counter struct{ Count int }
 
 func main() {
 	v := via.New()
+
 	v.Page("/", func(c *via.Context) {
-
-		s := CounterState{Count: 0}
-
+		s := Counter{Count: 0}
 		step := c.Signal(1)
 
 		increment := c.Action(func() {
@@ -67,7 +66,6 @@ Via is still a newborn.
 - Via is intentionally minimal and opinionated — and so is contributing.
 - If you love Go, simplicity, and meaningful abstractions — Come along for the ride!
 - Fork, branch, build, break things.
-- Follow the loop: ⚡Via → Context → Sync → 🧑‍💻 Signals/Actions → ⚡Via → 🗘
 - Keep every line purposeful.
 - Share feedback: open an issue or start a discussion.
 
