@@ -392,6 +392,10 @@ func Var(children ...H) H {
 	return gh.Var(retype(children)...)
 }
 
+func StyleEl(children ...H) H {
+	return gh.StyleEl(retype(children)...)
+}
+
 func Video(children ...H) H {
 	return gh.Video(retype(children)...)
 }

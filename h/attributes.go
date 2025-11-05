@@ -26,6 +26,14 @@ func Placeholder(v string) H {
 	return gh.Placeholder(v)
 }
 
+func Rel(v string) H {
+	return gh.Rel(v)
+}
+
+func Class(v string) H {
+	return gh.Class(v)
+}
+
 // Data attributes automatically have their name prefixed with "data-".
 func Data(name, v string) H {
 	return gh.Data(name, v)

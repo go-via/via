@@ -40,44 +40,23 @@ func (c *Context) View(f func() h.H) {
 	c.view = func() h.H { return h.Div(h.ID(c.id), f()) }
 }
 
-// Component registers a sub context that has self contained data, actions and signals.
+// Component registers a subcontext that has self contained data, actions and signals.
 // It returns the component's view as a DOM node fn that can be placed in the view
 // of the parent. Components can be added to components.
 //
 // Example:
 //
-//	counterComponent := func(c *via.Context) {
-//		count := 0
-//		step := c.Signal(1)
-//
-//		increment := c.Action(func() {
-//			count += step.Int()
-//			c.Sync()
-//		})
-//
-//		c.View(func() h.H {
-//			return h.Div(
-//				h.P(h.Textf("Count: %d", count)),
-//				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
-//				h.Label(
-//					h.Text("Update Step: "),
-//					h.Input(h.Type("number"), step.Bind()),
-//				),
-//				h.Button(h.Text("Increment"), increment.OnClick()),
-//			)
-//		})
-//	})
+//	counterCompFn := func(c *via.Context) {
+//		(...)
+//	}
 //
 //	v.Page("/", func(c *via.Context) {
-//		counter1 := c.Component(counterComponent)
-//		counter2 := c.Component(counterComponent)
+//		counterComp := c.Component(counterCompFn)
 //
 //		c.View(func() h.H {
 //			return h.Div(
-//				h.H1(h.Text("Counter 1")),
-//				counter1(),
-//				h.H1(h.Text("Counter 2")),
-//				counter2(),
+//				h.H1(h.Text("Counter")),
+//				counterComp(),
 //			)
 //		})
 //	})
@@ -145,20 +124,24 @@ func (c *Context) Signals() map[string]*signal {
 	return c.signals
 }
 
-// Signal creates a reactive signal and initializes it with a value.
+// Signal creates a reactive signal and initializes it with the given value.
 // Use Bind() to link the value of input elements to the signal and Text() to
 // display the signal value and watch the UI update live as the input changes.
 //
 // Example:
 //
-//	h.Div(
-//		h.P(h.Span(h.Text("Hello, ")), h.Span(mysignal.Text())),
-//		h.Input(h.Value("World"), mysignal.Bind()),
-//	)
+//	mysignal := c.Signal("world")
+//
+//	c.View(func() h.H {
+//		return h.Div(
+//			h.P(h.Span(h.Text("Hello, ")), h.Span(mysignal.Text())),
+//			h.Input(mysignal.Bind()),
+//		)
+//	})
 //
 // Signals are 'alive' only in the browser, but Via always injects their values into
 // the Context before each action call.
-// If any signal value is updated by the server the update is automatically sent to the
+// If any signal value is updated by the server, the update is automatically sent to the
 // browser when using Sync() or SyncSignsls().
 func (c *Context) Signal(v any) *signal {
 	sigID := genRandID()
@@ -214,7 +197,8 @@ func (c *Context) Sync() {
 		sse = c.sse
 	}
 	if sse == nil {
-		c.app.logErr(c, "sync view failed: inactive SSE stream")
+		c.app.logWarn(c, "view out of sync: no sse stream")
+		return
 	}
 	elemsPatch := bytes.NewBuffer(make([]byte, 0))
 	if err := c.view().Render(elemsPatch); err != nil {
@@ -261,7 +245,8 @@ func (c *Context) SyncElements(elem h.H) {
 		sse = c.sse
 	}
 	if sse == nil {
-		c.app.logErr(c, "sync element failed: no sse connection")
+		c.app.logWarn(c, "elements out of sync: no sse stream")
+		return
 	}
 	if c.view == nil {
 		c.app.logErr(c, "sync element failed: viewfn is nil")
@@ -286,7 +271,8 @@ func (c *Context) SyncSignals() {
 		sse = c.sse
 	}
 	if sse == nil {
-		c.app.logErr(c, "sync signals failed: sse connection not found")
+		c.app.logWarn(c, "signals out of sync: no sse stream")
+		return
 	}
 	updatedSigs := make(map[string]any)
 	for id, sig := range c.signals {
@@ -300,6 +286,20 @@ func (c *Context) SyncSignals() {
 	if len(updatedSigs) != 0 {
 		_ = sse.MarshalAndPatchSignals(updatedSigs)
 	}
+}
+
+func (c *Context) ExecScript(s string) {
+	var sse *datastar.ServerSentEventGenerator
+	if c.isComponent() {
+		sse = c.parentPageCtx.sse
+	} else {
+		sse = c.sse
+	}
+	if sse == nil {
+		c.app.logWarn(c, "script out of sync: no sse stream")
+		return
+	}
+	_ = sse.ExecuteScript(s)
 }
 
 func newContext(id string, a *via) *Context {

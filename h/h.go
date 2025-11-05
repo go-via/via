@@ -35,6 +35,12 @@ func Raw(s string) H {
 	return g.Raw(s)
 }
 
+// Rawf creates a text DOM [Node] that just Renders the interpolated and
+// unescaped string format.
+func Rawf(format string, a ...any) H {
+	return g.Rawf(format, a...)
+}
+
 // Attr creates an attribute DOM [Node] with a name and optional value.
 // If only a name is passed, it's a name-only (boolean) attribute (like "required").
 // If a name and value are passed, it's a name-value attribute (like `class="header"`).

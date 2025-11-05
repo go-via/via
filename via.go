@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/go-via/via/h"
@@ -21,23 +22,10 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
-type config struct {
-	logLvl LogLevel
-}
-
-type LogLevel int
-
-const (
-	LogLevelError LogLevel = iota
-	LogLevelWarn
-	LogLevelInfo
-	LogLevelDebug
-)
-
 // via is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
 type via struct {
-	cfg                  config
+	cfg                  Configuration
 	mux                  *http.ServeMux
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.RWMutex
@@ -57,7 +45,7 @@ func (v *via) logWarn(c *Context, format string, a ...any) {
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
 	}
-	if v.cfg.logLvl <= LogLevelWarn {
+	if v.cfg.LogLvl <= LogLevelWarn {
 		log.Printf("[warn] %smsg=%q", cRef, fmt.Sprintf(format, a...))
 	}
 }
@@ -67,7 +55,7 @@ func (v *via) logInfo(c *Context, format string, a ...any) {
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
 	}
-	if v.cfg.logLvl >= LogLevelInfo {
+	if v.cfg.LogLvl <= LogLevelInfo {
 		log.Printf("[info] %smsg=%q", cRef, fmt.Sprintf(format, a...))
 	}
 }
@@ -77,8 +65,21 @@ func (v *via) logDebug(c *Context, format string, a ...any) {
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
 	}
-	if v.cfg.logLvl == LogLevelDebug {
+	if v.cfg.LogLvl == LogLevelDebug {
 		log.Printf("[debug] %smsg=%q", cRef, fmt.Sprintf(format, a...))
+	}
+}
+
+// Config overrides the default configuration with the given configuration options.
+func (v *via) Config(cfg Configuration) {
+	if cfg.LogLvl != v.cfg.LogLvl {
+		v.cfg.LogLvl = cfg.LogLvl
+	}
+	if cfg.DocumentHeadIncludes != nil {
+		v.cfg.DocumentHeadIncludes = cfg.DocumentHeadIncludes
+	}
+	if cfg.DocumentBodyIncludes != nil {
+		v.cfg.DocumentBodyIncludes = cfg.DocumentBodyIncludes
 	}
 }
 
@@ -94,17 +95,25 @@ func (v *via) logDebug(c *Context, format string, a ...any) {
 //	})
 func (v *via) Page(route string, composeContext func(c *Context)) {
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "favicon") {
+			return
+		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
 		c := newContext(id, v)
 		v.logDebug(c, "GET %s", route)
 		composeContext(c)
 		v.registerCtx(c.id, c)
-		view := v.baseLayout(h.HTML5Props{
-			Head: []h.H{
-				h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
-				h.Meta(h.Data("init", "@get('/_sse')")),
-			},
-			Body: []h.H{h.Div(h.ID(c.id))},
+		headElements := v.cfg.DocumentHeadIncludes
+		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
+		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
+		bottomBodyElements := []h.H{h.Div(h.ID(c.id), c.view())}
+		for _, el := range v.cfg.DocumentBodyIncludes {
+			bottomBodyElements = append(bottomBodyElements, el)
+		}
+		view := h.HTML5(h.HTML5Props{
+			Title: v.cfg.DocumentTitle,
+			Head:  headElements,
+			Body:  bottomBodyElements,
 		})
 		_ = view.Render(w)
 	}))
@@ -114,6 +123,7 @@ func (v *via) registerCtx(id string, c *Context) {
 	v.contextRegistryMutex.Lock()
 	defer v.contextRegistryMutex.Unlock()
 	v.contextRegistry[id] = c
+	v.logDebug(c, "new context added to registry")
 }
 
 // func (a *App) unregisterCtx(id string) {
@@ -131,6 +141,12 @@ func (v *via) getCtx(id string) (*Context, error) {
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
+// HandleFunc registers the HTTP handler function for a given pattern. The handler function panics if
+// in conflict with another registered handler with the same pattern.
+func (v *via) HandleFunc(pattern string, f http.HandlerFunc) {
+	v.mux.HandleFunc(pattern, f)
+}
+
 // Start starts the Via HTTP server on the given address.
 func (v *via) Start(addr string) {
 	v.logInfo(nil, "via started")
@@ -143,11 +159,13 @@ func New() *via {
 	app := &via{
 		mux:             mux,
 		contextRegistry: make(map[string]*Context),
-		cfg:             config{logLvl: LogLevelDebug},
-		baseLayout:      h.HTML5,
+		cfg: Configuration{
+			LogLvl:               LogLevelDebug,
+			DocumentTitle:        "Via Application",
+			DocumentHeadIncludes: make([]h.H, 0),
+			DocumentBodyIncludes: make([]h.H, 0),
+		},
 	}
-
-	app.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {})
 
 	app.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
@@ -165,7 +183,7 @@ func New() *via {
 		}
 		c.sse = datastar.NewSSE(w, r)
 		app.logDebug(c, "SSE connection established")
-		c.Sync()
+		c.SyncSignals()
 		<-c.sse.Context().Done()
 		c.sse = nil
 		app.logDebug(c, "SSE connection closed")
