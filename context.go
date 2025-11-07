@@ -17,7 +17,7 @@ import (
 // It binds user state and actions, manages reactive signals, and defines UI through View.
 type Context struct {
 	id                string
-	app               *via
+	app               *V
 	view              func() h.H
 	componentRegistry map[string]*Context
 	parentPageCtx     *Context
@@ -302,7 +302,7 @@ func (c *Context) ExecScript(s string) {
 	_ = sse.ExecuteScript(s)
 }
 
-func newContext(id string, a *via) *Context {
+func newContext(id string, a *V) *Context {
 	if a == nil {
 		log.Fatalf("create context failed: app pointer is nil")
 	}

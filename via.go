@@ -22,17 +22,17 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
-// via is the root application.
+// V is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
-type via struct {
-	cfg                  Configuration
+type V struct {
+	cfg                  Options
 	mux                  *http.ServeMux
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.RWMutex
 	baseLayout           func(h.HTML5Props) h.H
 }
 
-func (v *via) logErr(c *Context, format string, a ...any) {
+func (v *V) logErr(c *Context, format string, a ...any) {
 	cRef := ""
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
@@ -40,7 +40,7 @@ func (v *via) logErr(c *Context, format string, a ...any) {
 	log.Printf("[error] %smsg=%q", cRef, fmt.Sprintf(format, a...))
 }
 
-func (v *via) logWarn(c *Context, format string, a ...any) {
+func (v *V) logWarn(c *Context, format string, a ...any) {
 	cRef := ""
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
@@ -50,7 +50,7 @@ func (v *via) logWarn(c *Context, format string, a ...any) {
 	}
 }
 
-func (v *via) logInfo(c *Context, format string, a ...any) {
+func (v *V) logInfo(c *Context, format string, a ...any) {
 	cRef := ""
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
@@ -60,7 +60,7 @@ func (v *via) logInfo(c *Context, format string, a ...any) {
 	}
 }
 
-func (v *via) logDebug(c *Context, format string, a ...any) {
+func (v *V) logDebug(c *Context, format string, a ...any) {
 	cRef := ""
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
@@ -71,7 +71,7 @@ func (v *via) logDebug(c *Context, format string, a ...any) {
 }
 
 // Config overrides the default configuration with the given configuration options.
-func (v *via) Config(cfg Configuration) {
+func (v *V) Config(cfg Options) {
 	if cfg.LogLvl != v.cfg.LogLvl {
 		v.cfg.LogLvl = cfg.LogLvl
 	}
@@ -80,6 +80,13 @@ func (v *via) Config(cfg Configuration) {
 	}
 	if cfg.DocumentBodyIncludes != nil {
 		v.cfg.DocumentBodyIncludes = cfg.DocumentBodyIncludes
+	}
+	if cfg.Plugins != nil {
+		for _, plugin := range cfg.Plugins {
+			if plugin != nil {
+				plugin(v)
+			}
+		}
 	}
 }
 
@@ -93,7 +100,7 @@ func (v *via) Config(cfg Configuration) {
 //			return h.H1(h.Text("Hello, Via!"))
 //		})
 //	})
-func (v *via) Page(route string, composeContext func(c *Context)) {
+func (v *V) Page(route string, composeContext func(c *Context)) {
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "favicon") {
 			return
@@ -119,7 +126,7 @@ func (v *via) Page(route string, composeContext func(c *Context)) {
 	}))
 }
 
-func (v *via) registerCtx(id string, c *Context) {
+func (v *V) registerCtx(id string, c *Context) {
 	v.contextRegistryMutex.Lock()
 	defer v.contextRegistryMutex.Unlock()
 	v.contextRegistry[id] = c
@@ -134,7 +141,7 @@ func (v *via) registerCtx(id string, c *Context) {
 // 	}
 // }
 
-func (v *via) getCtx(id string) (*Context, error) {
+func (v *V) getCtx(id string) (*Context, error) {
 	if c, ok := v.contextRegistry[id]; ok {
 		return c, nil
 	}
@@ -143,23 +150,23 @@ func (v *via) getCtx(id string) (*Context, error) {
 
 // HandleFunc registers the HTTP handler function for a given pattern. The handler function panics if
 // in conflict with another registered handler with the same pattern.
-func (v *via) HandleFunc(pattern string, f http.HandlerFunc) {
+func (v *V) HandleFunc(pattern string, f http.HandlerFunc) {
 	v.mux.HandleFunc(pattern, f)
 }
 
 // Start starts the Via HTTP server on the given address.
-func (v *via) Start(addr string) {
+func (v *V) Start(addr string) {
 	v.logInfo(nil, "via started")
 	log.Fatalf("via failed: %v", http.ListenAndServe(addr, v.mux))
 }
 
 // New creates a new Via application with default configuration.
-func New() *via {
+func New() *V {
 	mux := http.NewServeMux()
-	app := &via{
+	app := &V{
 		mux:             mux,
 		contextRegistry: make(map[string]*Context),
-		cfg: Configuration{
+		cfg: Options{
 			LogLvl:               LogLevelDebug,
 			DocumentTitle:        "Via Application",
 			DocumentHeadIncludes: make([]h.H, 0),

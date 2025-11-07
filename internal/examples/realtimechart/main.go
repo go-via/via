@@ -13,7 +13,7 @@ import (
 func main() {
 	v := via.New()
 
-	v.Config(via.Configuration{
+	v.Config(via.Options{
 		DocumentTitle: "Via",
 		DocumentHeadIncludes: []h.H{
 			h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
