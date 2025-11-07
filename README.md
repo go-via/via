@@ -1,5 +1,5 @@
 # ⚡Via
-Pure Go reactive web framework.
+Real-time engine for building reactive web applications in pure Go.
 
 
 ## Why Via?
