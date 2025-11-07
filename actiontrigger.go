@@ -12,7 +12,13 @@ type actionTrigger struct {
 }
 
 // OnClick returns a via.h DOM node that triggers on click. It can be added
-// to other nodes in a view.
+// to element nodes in a view.
 func (a *actionTrigger) OnClick() h.H {
 	return h.Data("on:click", fmt.Sprintf("@get('/_action/%s')", a.id))
+}
+
+// OnChange returns a via.h DOM node that triggers on input change. It can be added
+// to element nodes in a view.
+func (a *actionTrigger) OnChange() h.H {
+	return h.Data("on:change__debounce.200ms", fmt.Sprintf("@get('/_action/%s')", a.id))
 }

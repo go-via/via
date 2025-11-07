@@ -38,33 +38,47 @@ func chartCompFn(c *via.Context) {
 	data := make([]float64, 1000)
 	labels := make([]string, 1000)
 
+	isLive := false
+	refreshRate := c.Signal(1)
+	tkr := time.NewTicker(1000 * time.Millisecond)
+
+	updateRefreshRate := c.Action(func() {
+		tkr.Reset(1000 / time.Duration(refreshRate.Int()) * time.Millisecond)
+	})
+
+	toggleIsLive := c.Action(func() {
+		isLive = !isLive
+	})
+
 	go func() {
-		tkr := time.NewTicker(60 * time.Millisecond)
 		defer tkr.Stop()
 		for range tkr.C {
 			labels = append(labels[1:], time.Now().Format("15:04:05.000"))
-			data = append(data[1:], rand.Float64()*1000)
+			data = append(data[1:], rand.Float64()*10)
 			labelsTxt, _ := json.Marshal(labels)
 			dataTxt, _ := json.Marshal(data)
 
-			c.ExecScript(fmt.Sprintf(`
+			if isLive {
+				c.ExecScript(fmt.Sprintf(`
 			if (myChart)
 				myChart.setOption({
 					xAxis: [{data: %s}],
 					series:[{data: %s}]
-				});
+				},{notMerge:false,lazyUpdate:true});
 			`, labelsTxt, dataTxt))
+			}
 		}
 	}()
 
 	c.View(func() h.H {
-		return h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
-			h.Script(h.Raw(`
+		return h.Div(
+			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
+				h.Script(h.Raw(`
 				const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
 					backgroundColor: prefersDark.matches ? 'transparent' : '#ffffff',
-					animationDurationUpdate: 60,  //  affects updates/redraws
+					animationDurationUpdate: 0,  //  affects updates/redraws
 					tooltip: {
 						trigger: 'axis',
 						position: function (pt) {
@@ -74,15 +88,6 @@ func chartCompFn(c *via.Context) {
 					title: {
 						left: 'center',
 						text: 'Large Area Chart'
-					},
-					toolbox: {
-						feature: {
-							dataZoom: {
-								yAxisIndex: 'none'
-							},
-							restore: {},
-							saveAsImage: {}
-						}
 					},
 					xAxis: {
 						type: 'category',
@@ -101,7 +106,7 @@ func chartCompFn(c *via.Context) {
 						},
 						{
 							start: 0,
-							end: 100
+							end: 100 
 						}
 					],
 					series: [
@@ -131,6 +136,22 @@ func chartCompFn(c *via.Context) {
 				};
 				option && myChart.setOption(option);
 			`)),
+				h.Section(
+					h.Article(
+						h.H5(h.Text("Controls")),
+						h.Hr(),
+						h.Div(h.Class("grid"),
+							h.FieldSet(
+								h.Legend(h.Text("Live Data")),
+								h.Input(h.Type("checkbox"), h.Role("switch"), toggleIsLive.OnChange()),
+							),
+							h.Label(h.ID("refresh-rate-input"), h.Span(h.Text("Refresh Rate  (")), h.Span(refreshRate.Text()), h.Span(h.Text(" Hz)")),
+								h.Input(h.Type("range"), h.Attr("min", "1"), h.Attr("max", "200"), refreshRate.Bind(), updateRefreshRate.OnChange()),
+							),
+						),
+					),
+				),
+			),
 		)
 	})
 }

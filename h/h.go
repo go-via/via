@@ -11,6 +11,7 @@ package h
 
 import (
 	"io"
+
 	g "maragu.dev/gomponents"
 	gc "maragu.dev/gomponents/components"
 )
@@ -48,6 +49,13 @@ func Rawf(format string, a ...any) H {
 // Use this if no convenience creator exists in the h package.
 func Attr(name string, value ...string) H {
 	return g.Attr(name, value...)
+}
+
+func If(condition bool, n H) H {
+	if condition {
+		return n
+	}
+	return nil
 }
 
 // HTML5Props defines properties for HTML5 pages. Title is set always set, Description

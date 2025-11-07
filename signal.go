@@ -49,7 +49,7 @@ func (s *signal) Bind() h.H {
 //
 // Example:
 //
-//	h.Div(h.Text("x: "), mysignal.Text())
+//	h.Div(mysignal.Text())
 func (s *signal) Text() h.H {
 	return h.Data("text", "$"+s.id)
 }

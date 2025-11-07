@@ -106,7 +106,7 @@ func (v *via) Page(route string, composeContext func(c *Context)) {
 		headElements := v.cfg.DocumentHeadIncludes
 		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
 		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
-		bottomBodyElements := []h.H{h.Div(h.ID(c.id), c.view())}
+		bottomBodyElements := []h.H{c.view()}
 		for _, el := range v.cfg.DocumentBodyIncludes {
 			bottomBodyElements = append(bottomBodyElements, el)
 		}
