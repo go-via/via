@@ -35,7 +35,7 @@ func (s *signal) Err() error {
 	return s.err
 }
 
-// Bind binds this signal to an imput element. When the imput changes
+// Bind binds this signal to an input element. When the input changes
 // its value the signal updates in real-time in the browser.
 //
 // Example:
