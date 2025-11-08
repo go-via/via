@@ -22,3 +22,8 @@ func (a *actionTrigger) OnClick() h.H {
 func (a *actionTrigger) OnChange() h.H {
 	return h.Data("on:change__debounce.200ms", fmt.Sprintf("@get('/_action/%s')", a.id))
 }
+
+// OnEnterKey returns a via.h DOM node that triggers when Enter key is pressed.
+func (a *actionTrigger) OnEnterKey() h.H {
+	return h.Data("on:keydown", fmt.Sprintf("(evt.code==='Enter') && @get('/_action/%s')", a.id))
+}

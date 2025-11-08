@@ -353,3 +353,19 @@ func genRandID() string {
 	rand.Read(b)
 	return hex.EncodeToString(b)[:8]
 }
+
+func (v *V) BroadcastSync() {
+	v.contextRegistryMutex.RLock()
+	defer v.contextRegistryMutex.RUnlock()
+
+	for _, c := range v.contextRegistry {
+		if c == nil {
+			continue
+		}
+		// only sync contexts that currently have an SSE connection
+		if c.sse != nil {
+			v.logDebug(c, "broadcasting sync to context")
+			c.Sync()
+		}
+	}
+}
