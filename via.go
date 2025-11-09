@@ -75,6 +75,9 @@ func (v *V) Config(cfg Options) {
 	if cfg.LogLvl != v.cfg.LogLvl {
 		v.cfg.LogLvl = cfg.LogLvl
 	}
+	if cfg.DocumentTitle != "" {
+		v.cfg.DocumentTitle = cfg.DocumentTitle
+	}
 	if cfg.DocumentHeadIncludes != nil {
 		v.cfg.DocumentHeadIncludes = cfg.DocumentHeadIncludes
 	}
@@ -142,6 +145,8 @@ func (v *V) registerCtx(id string, c *Context) {
 // }
 
 func (v *V) getCtx(id string) (*Context, error) {
+	v.contextRegistryMutex.RLock()
+	defer v.contextRegistryMutex.RUnlock()
 	if c, ok := v.contextRegistry[id]; ok {
 		return c, nil
 	}
