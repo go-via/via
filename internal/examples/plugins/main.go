@@ -8,8 +8,8 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// In this example we create a Via application with a plugin that adds PicoCSS. The plugin
-// is handed to Via in the app Configuration.
+// Example of a Via application with a plugin that adds PicoCSS. The plugin
+// is handed to Via in the Configuration.
 
 //go:embed pico.yellow.min.css
 var picoCSSFile []byte
@@ -41,9 +41,5 @@ func PicoCSSPlugin(v *via.V) {
 		w.Header().Set("Content-Type", "text/css")
 		_, _ = w.Write(picoCSSFile)
 	})
-	v.Config(via.Options{
-		DocumentHeadIncludes: []h.H{
-			h.Link(h.Rel("stylesheet"), h.Href("/_plugins/picocss/assets/style.css")),
-		},
-	})
+	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/_plugins/picocss/assets/style.css")))
 }

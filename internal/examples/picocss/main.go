@@ -8,12 +8,7 @@ import (
 func main() {
 	v := via.New()
 
-	v.Config(via.Options{
-		DocumentTitle: "Via",
-		DocumentHeadIncludes: []h.H{
-			h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
-		},
-	})
+	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")))
 
 	v.Page("/", func(c *via.Context) {
 		c.View(func() h.H {

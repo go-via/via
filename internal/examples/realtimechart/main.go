@@ -13,13 +13,10 @@ import (
 func main() {
 	v := via.New()
 
-	v.Config(via.Options{
-		DocumentTitle: "Via",
-		DocumentHeadIncludes: []h.H{
-			h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
-			h.Script(h.Src("https://unpkg.com/echarts@6.0.0/dist/echarts.min.js")),
-		},
-	})
+	v.AppendToHead(
+		h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
+		h.Script(h.Src("https://unpkg.com/echarts@6.0.0/dist/echarts.min.js")),
+	)
 
 	v.Page("/", func(c *via.Context) {
 		chartComp := c.Component(chartCompFn)

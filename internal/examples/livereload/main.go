@@ -10,13 +10,9 @@ type Counter struct{ Count int }
 func main() {
 	v := via.New()
 
-	LiveReloadPlugin(v)
-
 	v.Config(via.Options{
 		DocumentTitle: "Live Reload",
-		DocumentHeadIncludes: []h.H{
-			liveReloadScript(),
-		},
+		Plugins:       []via.Plugin{LiveReloadPlugin},
 	})
 
 	v.Page("/", func(c *via.Context) {
@@ -29,7 +25,7 @@ func main() {
 		})
 
 		c.View(func() h.H {
-			return h.Div(h.Class("container"),
+			return h.Div(
 				h.H1(h.Text("Live Reload")),
 				h.P(h.Textf("Count: %d", data.Count)),
 				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),

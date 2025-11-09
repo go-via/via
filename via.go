@@ -29,7 +29,8 @@ type V struct {
 	mux                  *http.ServeMux
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.RWMutex
-	baseLayout           func(h.HTML5Props) h.H
+	documentHeadIncludes []h.H
+	documentFootIncludes []h.H
 }
 
 func (v *V) logErr(c *Context, format string, a ...any) {
@@ -78,12 +79,6 @@ func (v *V) Config(cfg Options) {
 	if cfg.DocumentTitle != "" {
 		v.cfg.DocumentTitle = cfg.DocumentTitle
 	}
-	if cfg.DocumentHeadIncludes != nil {
-		v.cfg.DocumentHeadIncludes = cfg.DocumentHeadIncludes
-	}
-	if cfg.DocumentBodyIncludes != nil {
-		v.cfg.DocumentBodyIncludes = cfg.DocumentBodyIncludes
-	}
 	if cfg.Plugins != nil {
 		for _, plugin := range cfg.Plugins {
 			if plugin != nil {
@@ -91,6 +86,27 @@ func (v *V) Config(cfg Options) {
 			}
 		}
 	}
+}
+
+// AppendToHead appends the given h.H nodes to the head of the base HTML document.
+// Useful for including css stylesheets and JS scripts.
+func (v *V) AppendToHead(elements ...h.H) {
+	for _, el := range elements {
+		if el != nil {
+			v.documentHeadIncludes = append(v.documentHeadIncludes, el)
+		}
+	}
+}
+
+// AppendToFoot appends the given h.H nodes to the end of the base HTML document body.
+// Useful for including JS scripts.
+func (v *V) AppendToFoot(elements ...h.H) {
+	for _, el := range elements {
+		if el != nil {
+			v.documentFootIncludes = append(v.documentFootIncludes, el)
+		}
+	}
+
 }
 
 // Page registers a route and its associated page handler.
@@ -113,13 +129,11 @@ func (v *V) Page(route string, composeContext func(c *Context)) {
 		v.logDebug(c, "GET %s", route)
 		composeContext(c)
 		v.registerCtx(c.id, c)
-		headElements := v.cfg.DocumentHeadIncludes
+		headElements := v.documentHeadIncludes
 		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
 		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
 		bottomBodyElements := []h.H{c.view()}
-		for _, el := range v.cfg.DocumentBodyIncludes {
-			bottomBodyElements = append(bottomBodyElements, el)
-		}
+		bottomBodyElements = append(bottomBodyElements, v.documentFootIncludes...)
 		view := h.HTML5(h.HTML5Props{
 			Title: v.cfg.DocumentTitle,
 			Head:  headElements,
@@ -172,10 +186,8 @@ func New() *V {
 		mux:             mux,
 		contextRegistry: make(map[string]*Context),
 		cfg: Options{
-			LogLvl:               LogLevelDebug,
-			DocumentTitle:        "Via Application",
-			DocumentHeadIncludes: make([]h.H, 0),
-			DocumentBodyIncludes: make([]h.H, 0),
+			LogLvl:        LogLevelDebug,
+			DocumentTitle: "Via Application",
 		},
 	}
 
