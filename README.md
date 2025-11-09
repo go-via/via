@@ -65,7 +65,7 @@ Via is still a newborn.
 ## Contributing
 - Via is intentionally minimal and opinionated — and so is contributing.
 - If you love Go, simplicity, and meaningful abstractions — Come along for the ride!
-- Fork, branch, build, break things.
+- Fork, branch, build, tinker with things, submit a pull request.
 - Keep every line purposeful.
 - Share feedback: open an issue or start a discussion.
 
