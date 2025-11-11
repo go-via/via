@@ -1,0 +1,37 @@
+package main
+
+import (
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+)
+
+type Counter struct{ Count int }
+
+func main() {
+	v := via.New()
+
+	v.Page("/", func(c *via.Context) {
+
+		data := Counter{Count: 0}
+		step := c.Signal(1)
+
+		increment := c.Action(func() {
+			data.Count += step.Int()
+			c.Sync()
+		})
+
+		c.View(func() h.H {
+			return h.Div(
+				h.P(h.Textf("Count: %d", data.Count)),
+				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
+				h.Label(
+					h.Text("Update Step: "),
+					h.Input(h.Type("number"), step.Bind()),
+				),
+				h.Button(h.Text("Increment"), increment.OnClick()),
+			)
+		})
+	})
+
+	v.Start()
+}
