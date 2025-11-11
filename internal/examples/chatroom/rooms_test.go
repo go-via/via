@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -50,26 +51,37 @@ func TestRoomsMany(t *testing.T) {
 	assert.Equal(t, string("a"), rm.Name)
 }
 
+type DummySyncable struct {
+	room        *Room[RoomData, TestUserInfo]
+	timesCalled int
+}
+
+func (ds *DummySyncable) Sync() {
+	fmt.Println("Sync!")
+	// call data to simulate deadlock conditions from Publish()
+	ds.room.GetData()
+	ds.timesCalled++
+}
+
 func TestRoomJoinLeaveChannels(t *testing.T) {
 	rooms := NewRooms[RoomData, TestUserInfo](string("a"))
 	rm, _ := rooms.Get("a")
 	u1 := TestUserInfo{"Bob"}
+	u1Context := DummySyncable{room: rm}
 
-	rm.Start()
-	defer rm.Stop()
-	rm.Join(u1)
+	rooms.Start()
+	defer rooms.Stop()
+	uas := UserAndSync[RoomData, TestUserInfo]{user: &u1, sync: &u1Context}
+
+	// Joining a room does *not* mark it dirty. It's on the user to call Sync() -
+	// so the user gets the update immediately.
+	rm.Join(&uas)
 
 	// // Give it time to process
 	time.Sleep(1 * time.Millisecond)
 
-	assert.Equal(t, rm.MemberCount(), 1)
-
-	// Leave
-	rm.Leave(u1)
-	time.Sleep(1 * time.Millisecond)
-
-	assert.Equal(t, rm.MemberCount(), 0)
 	assert.Equal(t, rm.Dirty(), false)
+	assert.Equal(t, rm.MemberCount(), 1)
 
 	// Room Data
 	rm.UpdateData(func(data *RoomData) {
@@ -80,5 +92,16 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	data := rm.GetData()
 	assert.Equal(t, len(data.convo), 1)
 
-	// Context
+	// BROADCAST to connected users. Clears the dirty flag.
+	rm.Publish()
+	time.Sleep(1 * time.Millisecond)
+	assert.Equal(t, rm.Dirty(), false)
+	assert.Equal(t, u1Context.timesCalled, 1)
+	assert.Equal(t, rm.Dirty(), false)
+
+	// Leave
+	rm.Leave(&u1)
+	time.Sleep(1 * time.Millisecond)
+
+	assert.Equal(t, rm.MemberCount(), 0)
 }
