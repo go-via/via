@@ -234,10 +234,6 @@ func (u *UserInfo) Avatar() h.H {
 	return h.Div(h.Class("avatar"), h.Attr("title", u.Name), h.Text(u.emoji))
 }
 
-func (u UserInfo) getUserId() string {
-	return u.Name
-}
-
 type ChatEntry struct {
 	User    UserInfo
 	Message string

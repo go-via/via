@@ -20,10 +20,6 @@ type TestUserInfo struct {
 	Name string
 }
 
-func (u TestUserInfo) getUserId() string {
-	return u.Name
-}
-
 func TestRoomsZero(t *testing.T) {
 	rooms := NewRooms[RoomData, TestUserInfo]()
 	assert.NotNil(t, rooms)

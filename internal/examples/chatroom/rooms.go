@@ -6,18 +6,14 @@ import (
 	"time"
 )
 
-type userHasId interface {
-	comparable
-	getUserId() string
-}
 type Syncable interface {
 	Sync()
 }
-type UserAndSync[TR any, TU userHasId] struct {
+type UserAndSync[TR any, TU comparable] struct {
 	user *TU
 	sync Syncable
 }
-type Rooms[TR any, TU userHasId] struct {
+type Rooms[TR any, TU comparable] struct {
 	byName map[string]*Room[TR, TU]
 	names  []string
 }
@@ -47,7 +43,7 @@ func (rs *Rooms[TR, TU]) Stop() {
 
 // NewRooms seeds the rooms once at startup.
 // Assumptions: rooms don't change. Should be sorted by name.
-func NewRooms[TR any, TU userHasId](names ...string) Rooms[TR, TU] {
+func NewRooms[TR any, TU comparable](names ...string) Rooms[TR, TU] {
 	byName := make(map[string]*Room[TR, TU])
 	for _, n := range names {
 		byName[n] = NewRoom[TR, TU](n)
@@ -56,7 +52,7 @@ func NewRooms[TR any, TU userHasId](names ...string) Rooms[TR, TU] {
 	return Rooms[TR, TU]{byName, names}
 }
 
-type Room[TR any, TU userHasId] struct {
+type Room[TR any, TU comparable] struct {
 	data        TR
 	dataMu      sync.RWMutex
 	members     map[TU]Syncable
@@ -103,11 +99,11 @@ func (r *Room[TR, TU]) Publish() {
 func (r *Room[TR, TU]) GetData(subsetFn ...func(*TR) TR) TR {
 	r.dataMu.RLock()
 	defer r.dataMu.RUnlock()
-	
+
 	if len(subsetFn) == 0 || subsetFn[0] == nil {
 		return r.data
 	}
-	
+
 	tmp := r.data
 	return subsetFn[0](&tmp)
 }
@@ -130,7 +126,7 @@ func (r *Room[TR, TU]) MemberCount() int {
 	return len(r.members)
 }
 
-func NewRoom[TR any, TU userHasId](n string) *Room[TR, TU] {
+func NewRoom[TR any, TU comparable](n string) *Room[TR, TU] {
 	return &Room[TR, TU]{
 		Name:        n,
 		join:        make(chan *UserAndSync[TR, TU], 5),
