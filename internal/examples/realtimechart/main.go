@@ -28,7 +28,7 @@ func main() {
 		})
 	})
 
-	v.Start(":3000")
+	v.Start()
 }
 
 func chartCompFn(c *via.Context) {

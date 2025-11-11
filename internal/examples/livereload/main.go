@@ -12,7 +12,8 @@ func main() {
 
 	v.Config(via.Options{
 		DocumentTitle: "Live Reload",
-		Plugins:       []via.Plugin{LiveReloadPlugin},
+		DevMode:       true,
+		LogLvl:        via.LogLevelDebug,
 	})
 
 	v.Page("/", func(c *via.Context) {
@@ -26,7 +27,7 @@ func main() {
 
 		c.View(func() h.H {
 			return h.Div(
-				h.H1(h.Text("Live Reload")),
+				h.H1(h.Text("Live Reload with Via DevMode !!!")),
 				h.P(h.Textf("Count: %d", data.Count)),
 				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
 				h.Label(
@@ -38,5 +39,5 @@ func main() {
 		})
 	})
 
-	v.Start(":3000")
+	v.Start()
 }

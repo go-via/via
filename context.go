@@ -6,7 +6,6 @@ import (
 	"log"
 	"reflect"
 	"sync"
-	"time"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -25,7 +24,6 @@ type Context struct {
 	actionRegistry    map[string]func()
 	signals           map[string]*signal
 	signalsMux        sync.Mutex
-	createdAt         time.Time
 }
 
 // View defines the UI rendered by this context.
@@ -116,14 +114,6 @@ func (c *Context) getActionFn(id string) (func(), error) {
 	return nil, fmt.Errorf("action '%s' not found", id)
 }
 
-func (c *Context) Signals() map[string]*signal {
-	if c.signals == nil {
-		c.app.logErr(c, "failed to get signal: nil signals in ctx")
-		return make(map[string]*signal)
-	}
-	return c.signals
-}
-
 // Signal creates a reactive signal and initializes it with the given value.
 // Use Bind() to link the value of input elements to the signal and Text() to
 // display the signal value and watch the UI update live as the input changes.
@@ -179,6 +169,11 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	}
 	for k, v := range sigs {
 		if _, ok := c.signals[k]; !ok {
+			c.signals[k] = &signal{
+				id: k,
+				t:  reflect.TypeOf(v),
+				v:  reflect.ValueOf(v),
+			}
 			continue
 		}
 		c.signals[k].v = reflect.ValueOf(v)
@@ -313,6 +308,5 @@ func newContext(id string, a *V) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           make(map[string]*signal),
-		createdAt:         time.Now(),
 	}
 }

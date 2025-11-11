@@ -22,7 +22,7 @@ func main() {
 		})
 	})
 
-	v.Start(":3000")
+	v.Start()
 }
 
 func counterCompFn(c *via.Context) {
