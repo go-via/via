@@ -14,11 +14,13 @@ var (
 )
 
 func main() {
-	rooms := NewRooms()
+	rooms := NewRooms[Chat, UserInfo]("Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust")
 	v := via.New()
 	v.Config(via.Options{
+		DevMode:       true,
 		DocumentTitle: "ViaChat",
-		LogLvl:        via.LogLevelDebug,
+		LogLvl:        via.LogLevelInfo,
+		Plugins:       []via.Plugin{via.SigQuitPlugin},
 	})
 
 	v.AppendToHead(
@@ -43,41 +45,34 @@ func main() {
 			`)),
 	)
 
-	availableRooms := []string{"Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust"}
-	for _, room := range availableRooms {
-		GetRoom(rooms, room, Chat{}, true)
-	}
-
 	v.Page("/", func(c *via.Context) {
 		roomName := c.Signal("Go")
 		currentUser := NewUserInfo(randAnimal())
 		statement := c.Signal("")
 
-		var currentRoom *Room[Chat]
+		var currentRoom *Room[Chat, UserInfo]
 		var unregisterFromRoom func()
 
 		switchRoom := func() {
 			if unregisterFromRoom != nil {
 				unregisterFromRoom()
 			}
-			currentRoom = GetRoom(rooms, roomName.String(), Chat{}, false)
-			rooms.DirtyAll() // Because counts are showing, tabs need updating.
-			unregisterFromRoom = currentRoom.RegisterWithCleanup(c.Sync)
+			currentRoom, _ = rooms.Get(string(roomName.String()))
+			// TODO
+			// unregisterFromRoom = currentRoom.RegisterWithCleanup(c.Sync)
 			c.Sync()
 		}
 
 		switchRoomAction := c.Action(func() {
-			fmt.Println("Switch to", roomName.String())
 			switchRoom()
 		})
 
-		// fmt.Println("calling switchRoom")
 		switchRoom()
 
 		say := c.Action(func() {
-			fmt.Println("Saying", statement.String())
+			// fmt.Println("Saying", statement.String())
 			if statement.String() != "" && currentRoom != nil {
-				currentRoom.Write(func(chat *Chat) {
+				currentRoom.UpdateData(func(chat *Chat) {
 					chat.Entries = append(chat.Entries, ChatEntry{
 						User:    currentUser,
 						Message: statement.String(),
@@ -91,55 +86,52 @@ func main() {
 
 		c.View(func() h.H {
 			var tabs []h.H
-			rooms.VisitRooms(roomName.String(), func(roomID string, members int, isActive bool) {
-				displayName := roomID
-				if members > 0 {
-					displayName = fmt.Sprintf("%s (%d)", roomID, members)
-				}
-				if isActive {
+			currentRoomName := string(roomName.String())
+			rooms.Visit(func(n string) {
+				if n == currentRoomName {
 					tabs = append(tabs, h.Li(
 						h.A(
 							h.Href(""),
 							h.Attr("aria-current", "page"),
-							h.Text(displayName),
-							switchRoomAction.OnClick(WithSignal(roomName, roomID)),
+							h.Text(n),
+							switchRoomAction.OnClick(WithSignal(roomName, n)),
 						),
 					))
 				} else {
 					tabs = append(tabs, h.Li(
 						h.A(
 							h.Href("#"),
-							h.Text(displayName),
-							switchRoomAction.OnClick(via.WithSignal(roomName, roomID)),
+							h.Text(n),
+							switchRoomAction.OnClick(via.WithSignal(roomName, n)),
 						),
 					))
 				}
 			})
 
 			var messages []h.H
-			if currentRoom != nil {
-				currentRoom.Read(func(chat *Chat) {
-					for _, entry := range chat.Entries {
-						isCurrentUser := entry.User == currentUser
-						alignment := ""
-						if isCurrentUser {
-							alignment = "right"
-						}
+			// if currentRoom != nil {
+			// 	currentRoom.Read(func(chat *Chat) {
+			// 		for _, entry := range chat.Entries {
+			// 			isCurrentUser := entry.User == currentUser
+			// 			alignment := ""
+			// 			if isCurrentUser {
+			// 				alignment = "right"
+			// 			}
 
-						messageChildren := []h.H{h.Class("chat-message " + alignment)}
-						if !isCurrentUser {
-							messageChildren = append(messageChildren, entry.User.Avatar())
-						}
-						messageChildren = append(messageChildren,
-							h.Div(h.Class("bubble"),
-								h.P(h.Text(entry.Message)),
-							),
-						)
+			// 			messageChildren := []h.H{h.Class("chat-message " + alignment)}
+			// 			if !isCurrentUser {
+			// 				messageChildren = append(messageChildren, entry.User.Avatar())
+			// 			}
+			// 			messageChildren = append(messageChildren,
+			// 				h.Div(h.Class("bubble"),
+			// 					h.P(h.Text(entry.Message)),
+			// 				),
+			// 			)
 
-						messages = append(messages, h.Div(messageChildren...))
-					}
-				})
-			}
+			// 			messages = append(messages, h.Div(messageChildren...))
+			// 		}
+			// 	})
+			// }
 
 			chatHistory := []h.H{h.Class("chat-history")}
 			chatHistory = append(chatHistory, messages...)
@@ -183,6 +175,10 @@ func NewUserInfo(name, emoji string) UserInfo {
 
 func (u *UserInfo) Avatar() h.H {
 	return h.Div(h.Class("avatar"), h.Attr("title", u.Name), h.Text(u.emoji))
+}
+
+func (u UserInfo) getUserId() string {
+	return u.Name
 }
 
 type ChatEntry struct {

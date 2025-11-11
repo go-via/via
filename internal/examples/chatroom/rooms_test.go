@@ -9,31 +9,35 @@ import (
 
 type Statement struct {
 	text   string
-	author UserInfo
+	author TestUserInfo
 }
 
 type RoomData struct {
 	convo []Statement
 }
 
-func (u UserInfo) getUserId() string {
+type TestUserInfo struct {
+	Name string
+}
+
+func (u TestUserInfo) getUserId() string {
 	return u.Name
 }
 
 func TestRoomsZero(t *testing.T) {
-	rooms := NewRooms[RoomData, UserInfo]()
+	rooms := NewRooms[RoomData, TestUserInfo]()
 	assert.NotNil(t, rooms)
 }
 
 func TestRoomsMany(t *testing.T) {
-	names := []RoomName{"a", "b"}
-	rooms := NewRooms[RoomData, UserInfo](names...)
+	names := []string{"a", "b"}
+	rooms := NewRooms[RoomData, TestUserInfo](names...)
 	assert.NotNil(t, rooms)
 	assert.Equal(t, 2, len(rooms.names))
 
 	// Visit
 	seen := 0
-	rooms.Visit(func(name RoomName) { seen++ })
+	rooms.Visit(func(name string) { seen++ })
 	assert.Equal(t, seen, 2)
 
 	// GetRoom fail
@@ -43,13 +47,13 @@ func TestRoomsMany(t *testing.T) {
 	rm, ok := rooms.Get("a")
 	assert.True(t, ok)
 	assert.NotNil(t, rm)
-	assert.Equal(t, RoomName("a"), rm.Name)
+	assert.Equal(t, string("a"), rm.Name)
 }
 
 func TestRoomJoinLeaveChannels(t *testing.T) {
-	rooms := NewRooms[RoomData, UserInfo](RoomName("a"))
+	rooms := NewRooms[RoomData, TestUserInfo](string("a"))
 	rm, _ := rooms.Get("a")
-	u1 := UserInfo{"Bob", "🐕"}
+	u1 := TestUserInfo{"Bob"}
 
 	rm.Start()
 	defer rm.Stop()
@@ -72,6 +76,9 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 		data.convo = append(data.convo, Statement{"Hello", u1})
 	})
 	assert.Equal(t, rm.Dirty(), true)
+
+	data := rm.GetData()
+	assert.Equal(t, len(data.convo), 1)
 
 	// Context
 }
