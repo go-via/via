@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -57,8 +56,7 @@ type DummySyncable struct {
 }
 
 func (ds *DummySyncable) Sync() {
-	fmt.Println("Sync!")
-	// call data to simulate deadlock conditions from Publish()
+	// Data() hits deadlock conditions from Publish()
 	ds.room.GetData()
 	ds.timesCalled++
 }
@@ -97,7 +95,6 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	time.Sleep(1 * time.Millisecond)
 	assert.Equal(t, rm.Dirty(), false)
 	assert.Equal(t, u1Context.timesCalled, 1)
-	assert.Equal(t, rm.Dirty(), false)
 
 	// Leave
 	rm.Leave(&u1)

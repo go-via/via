@@ -99,10 +99,17 @@ func (r *Room[TR, TU]) Publish() {
 }
 
 // Get room data. This is a copy.
-func (r *Room[TR, TU]) GetData() TR {
+// Accepts an optional subset function to transform data before copying.
+func (r *Room[TR, TU]) GetData(subsetFn ...func(*TR) TR) TR {
 	r.dataMu.RLock()
 	defer r.dataMu.RUnlock()
-	return r.data
+	
+	if len(subsetFn) == 0 || subsetFn[0] == nil {
+		return r.data
+	}
+	
+	tmp := r.data
+	return subsetFn[0](&tmp)
 }
 
 func (r *Room[TR, TU]) Dirty() bool {
@@ -114,7 +121,6 @@ func (r *Room[TR, TU]) Join(us *UserAndSync[TR, TU]) {
 }
 
 func (r *Room[TR, TU]) Leave(u *TU) {
-	// fmt.Println("Pushing", u, "to leave channel")
 	r.leave <- u
 }
 

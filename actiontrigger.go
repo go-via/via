@@ -57,40 +57,40 @@ func buildOnExpr(base string, opts *triggerOpts) string {
 	return fmt.Sprintf("$%s=%s;%s", opts.signalID, opts.value, base)
 }
 
-// OnClick returns a via.h DOM attribute that triggers on click. It can be added
-// to element nodes in a view.
-func (a *actionTrigger) OnClick(options ...ActionTriggerOption) h.H {
+func applyOptions(options ...ActionTriggerOption) triggerOpts {
 	var opts triggerOpts
 	for _, opt := range options {
 		opt.apply(&opts)
 	}
-	base := fmt.Sprintf("@get('/_action/%s')", a.id)
-	return h.Data("on:click", buildOnExpr(base, &opts))
+	return opts
+}
+
+func actionURL(id string) string {
+	return fmt.Sprintf("@get('/_action/%s')", id)
+}
+
+// OnClick returns a via.h DOM attribute that triggers on click. It can be added
+// to element nodes in a view.
+func (a *actionTrigger) OnClick(options ...ActionTriggerOption) h.H {
+	opts := applyOptions(options...)
+	return h.Data("on:click", buildOnExpr(actionURL(a.id), &opts))
 }
 
 // OnChange returns a via.h DOM attribute that triggers on input change. It can be added
 // to element nodes in a view.
 func (a *actionTrigger) OnChange(options ...ActionTriggerOption) h.H {
-	var opts triggerOpts
-	for _, opt := range options {
-		opt.apply(&opts)
-	}
-	base := fmt.Sprintf("@get('/_action/%s')", a.id)
-	return h.Data("on:change__debounce.200ms", buildOnExpr(base, &opts))
+	opts := applyOptions(options...)
+	return h.Data("on:change__debounce.200ms", buildOnExpr(actionURL(a.id), &opts))
 }
 
 // OnEnterKey returns a via.h DOM attribute that triggers when a key is pressed.
 // key: optional, see https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key
 // Example: OnKeyDown("Enter")
 func (a *actionTrigger) OnKeyDown(key string, options ...ActionTriggerOption) h.H {
-	var opts triggerOpts
-	for _, opt := range options {
-		opt.apply(&opts)
-	}
+	opts := applyOptions(options...)
 	var condition string
 	if key != "" {
 		condition = fmt.Sprintf("evt.key==='%s' &&", key)
 	}
-	base := fmt.Sprintf("@get('/_action/%s')", a.id)
-	return h.Data("on:keydown", fmt.Sprintf("%s%s", condition, buildOnExpr(base, &opts)))
+	return h.Data("on:keydown", fmt.Sprintf("%s%s", condition, buildOnExpr(actionURL(a.id), &opts)))
 }

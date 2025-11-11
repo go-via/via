@@ -165,15 +165,19 @@ func main() {
 
 			var messages []h.H
 			if currentRoom != nil {
-				chat := currentRoom.GetData()
-				// fmt.Println("Rendering view", roomNameString, "/", currentUser.Name)
-				var lastFifty []ChatEntry
-				if len(chat.Entries) >= 50 {
-					lastFifty = chat.Entries[len(chat.Entries)-50:]
-				} else {
-					lastFifty = chat.Entries
-				}
-				for _, entry := range lastFifty {
+				chat := currentRoom.GetData(func(c *Chat) Chat {
+					n := len(c.Entries)
+					start := n - 50
+					if start < 0 {
+						start = 0
+					}
+					trimmed := make([]ChatEntry, n-start)
+					copy(trimmed, c.Entries[start:])
+					out := *c
+					out.Entries = trimmed
+					return out
+				})
+				for _, entry := range chat.Entries {
 
 					messageChildren := []h.H{h.Class("chat-message"), entry.User.Avatar()}
 					messageChildren = append(messageChildren,
