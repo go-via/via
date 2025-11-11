@@ -33,3 +33,6 @@ go.work.sum
 
 # Via related
 .via
+
+# Air artifacts
+*tmp/
