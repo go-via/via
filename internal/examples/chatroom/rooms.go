@@ -108,10 +108,6 @@ func (r *Room[TR, TU]) GetData(subsetFn ...func(*TR) TR) TR {
 	return subsetFn[0](&tmp)
 }
 
-func (r *Room[TR, TU]) Dirty() bool {
-	return r.dirty
-}
-
 func (r *Room[TR, TU]) Join(us *UserAndSync[TR, TU]) {
 	r.join <- us
 }

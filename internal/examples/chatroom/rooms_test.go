@@ -74,14 +74,14 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	// // Give it time to process
 	time.Sleep(1 * time.Millisecond)
 
-	assert.Equal(t, rm.Dirty(), false)
+	assert.Equal(t, rm.dirty, false)
 	assert.Equal(t, rm.MemberCount(), 1)
 
 	// Room Data
 	rm.UpdateData(func(data *RoomData) {
 		data.convo = append(data.convo, Statement{"Hello", u1})
 	})
-	assert.Equal(t, rm.Dirty(), true)
+	assert.Equal(t, rm.dirty, true)
 
 	data := rm.GetData()
 	assert.Equal(t, len(data.convo), 1)
@@ -89,7 +89,7 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	// BROADCAST to connected users. Clears the dirty flag.
 	rm.Publish()
 	time.Sleep(1 * time.Millisecond)
-	assert.Equal(t, rm.Dirty(), false)
+	assert.Equal(t, rm.dirty, false)
 	assert.Equal(t, u1Context.timesCalled, 1)
 
 	// Leave
