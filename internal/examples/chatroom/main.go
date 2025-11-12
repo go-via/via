@@ -132,8 +132,8 @@ func main() {
 			if currentRoom != nil {
 				currentRoom.UpdateData(func(chat *Chat) {
 					chat.Entries = append(chat.Entries, ChatEntry{
-						User:    currentUser,
-						Message: msg,
+						user:    currentUser,
+						message: msg,
 					})
 				})
 				statement.SetValue("")
@@ -181,10 +181,10 @@ func main() {
 				})
 				for _, entry := range chat.Entries {
 
-					messageChildren := []h.H{h.Class("chat-message"), entry.User.Avatar()}
+					messageChildren := []h.H{h.Class("chat-message"), entry.user.Avatar()}
 					messageChildren = append(messageChildren,
 						h.Div(h.Class("bubble"),
-							h.P(h.Text(entry.Message)),
+							h.P(h.Text(entry.message)),
 						),
 					)
 
@@ -208,7 +208,7 @@ func main() {
 						h.Attr("role", "group"),
 						h.Input(
 							h.Type("text"),
-							h.Placeholder(fmt.Sprintf("%s says...", currentUser.Name)),
+							h.Placeholder(currentUser.Name+" says..."),
 							statement.Bind(),
 							h.Attr("autofocus"),
 							say.OnKeyDown("Enter"),
@@ -237,8 +237,8 @@ func (u *UserInfo) Avatar() h.H {
 }
 
 type ChatEntry struct {
-	User    UserInfo
-	Message string
+	user    UserInfo
+	message string
 }
 
 type Chat struct {

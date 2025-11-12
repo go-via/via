@@ -57,6 +57,10 @@ func (ds *DummySyncable) Sync() {
 	ds.timesCalled++
 }
 
+func (ds *DummySyncable) Connected() bool {
+	return true
+}
+
 func TestRoomJoinLeaveChannels(t *testing.T) {
 	rooms := NewRooms[RoomData, TestUserInfo](string("a"))
 	rm, _ := rooms.Get("a")

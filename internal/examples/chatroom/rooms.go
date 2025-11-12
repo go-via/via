@@ -97,7 +97,7 @@ func (r *Room[TR, TU]) Publish() {
 	}
 }
 
-// Get room data. This is a copy.
+// GetData returns a copy of room data.
 // Accepts an optional subset function to transform data before copying.
 func (r *Room[TR, TU]) GetData(subsetFn ...func(*TR) TR) TR {
 	r.dataMu.RLock()
