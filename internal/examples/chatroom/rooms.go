@@ -116,12 +116,6 @@ func (r *Room[TR, TU]) Leave(u *TU) {
 	r.leave <- u
 }
 
-func (r *Room[TR, TU]) MemberCount() int {
-	r.membersMu.RLock()
-	defer r.membersMu.RUnlock()
-	return len(r.members)
-}
-
 func NewRoom[TR any, TU comparable](n string) *Room[TR, TU] {
 	return &Room[TR, TU]{
 		Name:        n,

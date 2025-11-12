@@ -75,7 +75,7 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	time.Sleep(1 * time.Millisecond)
 
 	assert.Equal(t, rm.dirty, false)
-	assert.Equal(t, rm.MemberCount(), 1)
+	assert.Equal(t, len(rm.members), 1)
 
 	// Room Data
 	rm.UpdateData(func(data *RoomData) {
@@ -96,5 +96,5 @@ func TestRoomJoinLeaveChannels(t *testing.T) {
 	rm.Leave(&u1)
 	time.Sleep(1 * time.Millisecond)
 
-	assert.Equal(t, rm.MemberCount(), 0)
+	assert.Equal(t, len(rm.members), 0)
 }

@@ -100,7 +100,10 @@ func main() {
 		var currentRoom *Room[Chat, UserInfo]
 
 		switchRoom := func() {
-			newRoom, _ := rooms.Get(string(roomName.String()))
+			newRoom, ok := rooms.Get(string(roomName.String()))
+			if !ok {
+				return
+			}
 			fmt.Println(">> switchRoom to ", newRoom.Name)
 			if currentRoom != nil && currentRoom != newRoom {
 				fmt.Println("LEAVING old room")
