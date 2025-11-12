@@ -31,7 +31,7 @@ func Textf(format string, a ...any) H {
 	return g.Textf(format, a...)
 }
 
-// / Raw creates a text DOM [Node] that just Renders the unescaped string t.
+// Raw creates a text DOM [Node] that just Renders the unescaped string t.
 func Raw(s string) H {
 	return g.Raw(s)
 }
