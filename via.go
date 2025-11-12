@@ -29,14 +29,13 @@ var datastarJS []byte
 // V is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
 type V struct {
-	cfg                       Options
-	mux                       *http.ServeMux
-	contextRegistry           map[string]*Context
-	contextRegistryMutex      sync.RWMutex
-	documentHeadIncludes      []h.H
-	documentFootIncludes      []h.H
-	devModePageInitFnMap      map[string]func(*Context)
-	devModePageInitFnMapMutex sync.Mutex
+	cfg                  Options
+	mux                  *http.ServeMux
+	contextRegistry      map[string]*Context
+	contextRegistryMutex sync.RWMutex
+	documentHeadIncludes []h.H
+	documentFootIncludes []h.H
+	devModePageInitFnMap map[string]func(*Context)
 }
 
 func (v *V) logErr(c *Context, format string, a ...any) {
@@ -77,7 +76,7 @@ func (v *V) logDebug(c *Context, format string, a ...any) {
 	}
 }
 
-// Config overrides the default configuration with the given configuration options.
+// Config overrides the default configuration with the given options.
 func (v *V) Config(cfg Options) {
 	if cfg.LogLvl != v.cfg.LogLvl {
 		v.cfg.LogLvl = cfg.LogLvl
@@ -132,19 +131,20 @@ func (v *V) AppendToFoot(elements ...h.H) {
 //	})
 func (v *V) Page(route string, initContextFn func(c *Context)) {
 	if v.cfg.DevMode {
-		v.devModePageInitFnMapMutex.Lock()
-		defer v.devModePageInitFnMapMutex.Unlock()
 		v.devModePageInitFnMap[route] = initContextFn
 	}
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		v.logDebug(nil, "GET %s", route)
 		if strings.Contains(r.URL.Path, "favicon") {
 			return
 		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
-		c := newContext(id, v)
-		v.logDebug(c, "GET %s", route)
+		c := newContext(id, route, v)
 		initContextFn(c)
 		v.registerCtx(c.id, c)
+		if v.cfg.DevMode {
+			v.Persist()
+		}
 		headElements := v.documentHeadIncludes
 		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
 		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
@@ -195,68 +195,56 @@ func (v *V) HandleFunc(pattern string, f http.HandlerFunc) {
 
 // Start starts the Via HTTP server on the given address.
 func (v *V) Start() {
-	v.logInfo(nil, "via started on address: %s", v.cfg.ServerAddress)
+	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
-func (v *V) persistCtx(c *Context) error {
-	idsplit := strings.Split(c.id, "_")
-	if len(idsplit) < 2 {
-		return fmt.Errorf("failed to identify ctx page route")
-	}
-	route := idsplit[0]
-	ctxmap := map[string]any{"id": c.id, "route": route}
-
-	p := path.Join(".via", "devmode", "ctx.json")
+func (v *V) Persist() {
+	p := filepath.Join(".via", "devmode", "ctx.json")
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-		return fmt.Errorf("failed to create directory for devmode files: %v", err)
+		log.Fatalf("failed to create directory for devmode files: %v", err)
 	}
-
 	file, err := os.Create(p)
 	if err != nil {
-		return fmt.Errorf("failed to create file in devmode directory: %v", err)
+		log.Printf("devmode: failed to persist ctx: %v", err)
 	}
 	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(ctxmap); err != nil {
-		return fmt.Errorf("failed to encode ctx: %s", err)
+	m := make(map[string]string)
+	for ctxID, ctx := range v.contextRegistry {
+		m[ctxID] = ctx.route
 	}
-	return nil
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(m); err != nil {
+		log.Printf("devmode: failed to persist ctx: %s", err)
+	}
+	log.Printf("devmode persisted ctx registryv")
 }
 
-func (v *V) restoreCtx() *Context {
+func (v *V) Restore() {
 	p := path.Join(".via", "devmode", "ctx.json")
 	file, err := os.Open(p)
 	if err != nil {
-		fmt.Println("Error opening file:", err)
-		return nil
+		v.logErr(nil, "devmode failed to restore ctx: %v", err)
+		return
 	}
 	defer file.Close()
-	var ctxmap map[string]any
-	if err := json.NewDecoder(file).Decode(&ctxmap); err != nil {
-		fmt.Println("Error restoring ctx:", err)
-		return nil
+	var ctxRegMap map[string]string
+	if err := json.NewDecoder(file).Decode(&ctxRegMap); err != nil {
+		v.logErr(nil, "devmode failed to restore ctx: %v", err)
+		return
 	}
-	ctxId, ok := ctxmap["id"].(string)
-	if !ok {
-		fmt.Println("Error restoring ctx")
-		return nil
-	}
-	pageRoute, ok := ctxmap["route"].(string)
-	if !ok {
-		fmt.Println("Error restoring ctx")
-		return nil
-	}
-	pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
-	if !ok {
-		fmt.Println("devmode failed to restore ctx: ")
-		return nil
-	}
+	for ctxID, pageRoute := range ctxRegMap {
+		pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
+		if !ok {
+			fmt.Println("devmode failed to restore ctx: page init func of ctx not found")
+			return
+		}
 
-	c := newContext(ctxId, v)
-	pageInitFn(c)
-	return c
+		c := newContext(ctxID, pageRoute, v)
+		pageInitFn(c)
+		v.registerCtx(ctxID, c)
+		v.logDebug(nil, "devmode restored ctx reg=%v", v.contextRegistry)
+	}
 }
 
 // New creates a new Via application with default configuration.
@@ -282,14 +270,10 @@ func New() *V {
 	v.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
-		if v.cfg.DevMode && len(v.contextRegistry) == 0 {
-			restoredC := v.restoreCtx()
-			if restoredC != nil {
-				restoredC.injectSignals(sigs)
-				v.registerCtx(restoredC.id, restoredC)
-			}
-		}
 		cID, _ := sigs["via-ctx"].(string)
+		if v.cfg.DevMode && len(v.contextRegistry) == 0 {
+			v.Restore()
+		}
 		c, err := v.getCtx(cID)
 		if err != nil {
 			v.logErr(nil, "failed to render page: %v", err)
@@ -299,7 +283,6 @@ func New() *V {
 		v.logDebug(c, "SSE connection established")
 		if v.cfg.DevMode {
 			c.Sync()
-			v.persistCtx(c)
 		} else {
 			c.SyncSignals()
 		}
@@ -312,16 +295,6 @@ func New() *V {
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
-		active_ctx_count := 0
-		inactive_ctx_count := 0
-		for _, c := range v.contextRegistry {
-			if c.sse != nil {
-				active_ctx_count++
-				continue
-			}
-			inactive_ctx_count++
-		}
-		v.logDebug(nil, "active_ctx_count=%d inactive_ctx_count=%d", active_ctx_count, inactive_ctx_count)
 		c, err := v.getCtx(cID)
 		if err != nil {
 			v.logErr(nil, "action '%s' failed: %v", actionID, err)
@@ -343,7 +316,6 @@ func New() *V {
 		v.logDebug(c, "signals=%v", sigs)
 		c.injectSignals(sigs)
 		actionFn()
-
 	})
 	return v
 }

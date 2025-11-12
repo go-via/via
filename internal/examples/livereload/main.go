@@ -27,7 +27,7 @@ func main() {
 
 		c.View(func() h.H {
 			return h.Div(
-				h.H1(h.Text("Live Reload with Via DevMode !!!")),
+				h.H1(h.Text("⚡Via Live Reload!")),
 				h.P(h.Textf("Count: %d", data.Count)),
 				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
 				h.Label(

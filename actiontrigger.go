@@ -83,7 +83,7 @@ func (a *actionTrigger) OnChange(options ...ActionTriggerOption) h.H {
 	return h.Data("on:change__debounce.200ms", buildOnExpr(actionURL(a.id), &opts))
 }
 
-// OnEnterKey returns a via.h DOM attribute that triggers when a key is pressed.
+// OneyDown returns a via.h DOM attribute that triggers when a key is pressed.
 // key: optional, see https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key
 // Example: OnKeyDown("Enter")
 func (a *actionTrigger) OnKeyDown(key string, options ...ActionTriggerOption) h.H {

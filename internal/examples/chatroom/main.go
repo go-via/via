@@ -24,7 +24,6 @@ func main() {
 		DevMode:       true,
 		DocumentTitle: "ViaChat",
 		LogLvl:        via.LogLevelInfo,
-		Plugins:       []via.Plugin{via.SigQuitPlugin},
 	})
 
 	v.AppendToHead(

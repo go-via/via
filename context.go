@@ -13,9 +13,10 @@ import (
 
 // Context is the living bridge between Go and the browser.
 //
-// It binds user state and actions, manages reactive signals, and defines UI through View.
+// It holds runtime state, defines actions, manages reactive signals, and defines UI through View.
 type Context struct {
 	id                string
+	route             string
 	app               *V
 	view              func() h.H
 	componentRegistry map[string]*Context
@@ -60,7 +61,7 @@ func (c *Context) View(f func() h.H) {
 //	})
 func (c *Context) Component(f func(c *Context)) func() h.H {
 	id := c.id + "/_component/" + genRandID()
-	compCtx := newContext(id, c.app)
+	compCtx := newContext(id, c.route, c.app)
 	if c.isComponent() {
 		compCtx.parentPageCtx = c.parentPageCtx
 	} else {
@@ -297,14 +298,15 @@ func (c *Context) ExecScript(s string) {
 	_ = sse.ExecuteScript(s)
 }
 
-func newContext(id string, a *V) *Context {
-	if a == nil {
+func newContext(id string, route string, app *V) *Context {
+	if app == nil {
 		log.Fatalf("create context failed: app pointer is nil")
 	}
 
 	return &Context{
 		id:                id,
-		app:               a,
+		route:             route,
+		app:               app,
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           make(map[string]*signal),

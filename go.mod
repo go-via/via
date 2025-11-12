@@ -5,6 +5,7 @@ go 1.25.3
 require maragu.dev/gomponents v1.2.0
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/starfederation/datastar-go v1.0.3
 	github.com/stretchr/testify v1.10.0
 )
@@ -16,5 +17,6 @@ require (
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
