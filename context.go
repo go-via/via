@@ -182,9 +182,7 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	}
 }
 
-// Sync pushes the current view state and signal changes to the browser immediately
-// over the live SSE event stream.
-func (c *Context) Sync() {
+func (c *Context) getSSE() *datastar.ServerSentEventGenerator {
 	// components use parent page sse stream
 	var sse *datastar.ServerSentEventGenerator
 	if c.isComponent() {
@@ -192,6 +190,18 @@ func (c *Context) Sync() {
 	} else {
 		sse = c.sse
 	}
+	return sse
+}
+
+// Connected checks if there's an SSE connection.
+func (c *Context) Connected() bool {
+	return c.getSSE() != nil
+}
+
+// Sync pushes the current view state and signal changes to the browser immediately
+// over the live SSE event stream.
+func (c *Context) Sync() {
+	sse := c.getSSE()
 	if sse == nil {
 		c.app.logWarn(c, "view out of sync: no sse stream")
 		return
@@ -234,12 +244,7 @@ func (c *Context) Sync() {
 // Then, the merge will only occur if the ID of the top level element in the patch
 // matches 'my-element'.
 func (c *Context) SyncElements(elem h.H) {
-	var sse *datastar.ServerSentEventGenerator
-	if c.isComponent() {
-		sse = c.parentPageCtx.sse
-	} else {
-		sse = c.sse
-	}
+	sse := c.getSSE()
 	if sse == nil {
 		c.app.logWarn(c, "elements out of sync: no sse stream")
 		return
@@ -260,12 +265,7 @@ func (c *Context) SyncElements(elem h.H) {
 // SyncSignals pushes the current signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) SyncSignals() {
-	var sse *datastar.ServerSentEventGenerator
-	if c.isComponent() {
-		sse = c.parentPageCtx.sse
-	} else {
-		sse = c.sse
-	}
+	sse := c.getSSE()
 	if sse == nil {
 		c.app.logWarn(c, "signals out of sync: no sse stream")
 		return
@@ -285,12 +285,7 @@ func (c *Context) SyncSignals() {
 }
 
 func (c *Context) ExecScript(s string) {
-	var sse *datastar.ServerSentEventGenerator
-	if c.isComponent() {
-		sse = c.parentPageCtx.sse
-	} else {
-		sse = c.sse
-	}
+	sse := c.getSSE()
 	if sse == nil {
 		c.app.logWarn(c, "script out of sync: no sse stream")
 		return
