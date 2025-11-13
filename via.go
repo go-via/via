@@ -244,7 +244,10 @@ func (v *V) devModeRestore() {
 	p := filepath.Join(".via", "devmode", "ctx.json")
 	file, err := os.Open(p)
 	if err != nil {
-		v.logWarn(nil, "devmode could not restore ctx from file: %v", err)
+		if os.IsNotExist(err) {
+			return
+		}
+		v.logErr(nil, "devmode could not restore ctx from file: %v", err)
 		return
 	}
 	defer file.Close()
@@ -265,6 +268,7 @@ func (v *V) devModeRestore() {
 		v.registerCtx(c)
 	}
 	v.logDebug(nil, "devmode restored ctx registry")
+	os.Remove(p)
 }
 
 // New creates a new *V application with default configuration.
