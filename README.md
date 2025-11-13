@@ -14,6 +14,7 @@ Via takes a radical stance:
 - No front-end fatigue.
 - Single SSE stream.
 - Full reactivity.
+- Built-in Brotli compression.
 - Pure Go.
 
 

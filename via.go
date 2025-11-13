@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/CAFxX/httpcompression"
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
 )
@@ -30,6 +31,7 @@ var datastarJS []byte
 type V struct {
 	cfg                  Options
 	mux                  *http.ServeMux
+	handler              http.Handler
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.Mutex
 	documentHeadIncludes []h.H
@@ -203,7 +205,7 @@ func (v *V) Start() {
 		v.devModeRestore()
 	}
 	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
-	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
+	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.handler))
 }
 
 func (v *V) devModePersist(c *Context) {
@@ -274,8 +276,19 @@ func (v *V) devModeRestore() {
 // New creates a new *V application with default configuration.
 func New() *V {
 	mux := http.NewServeMux()
+
+	compressionAdapter, err := httpcompression.DefaultAdapter(
+		httpcompression.MinSize(1024),
+		httpcompression.BrotliCompressionLevel(5),
+		httpcompression.ZstandardCompressor(nil),
+	)
+	if err != nil {
+		log.Fatalf("failed to create compression adapter: %v", err)
+	}
+
 	v := &V{
 		mux:                  mux,
+		handler:              compressionAdapter(mux),
 		contextRegistry:      make(map[string]*Context),
 		devModePageInitFnMap: make(map[string]func(*Context)),
 		cfg: Options{
