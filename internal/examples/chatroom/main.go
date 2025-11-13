@@ -80,9 +80,8 @@ func main() {
 			`)), h.Script(h.Raw(`
 				function scrollChatToBottom() {
 					const chatHistory = document.querySelector('.chat-history');
-					if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+					chatHistory.scrollTop = chatHistory.scrollHeight;
 				}
-				setInterval(scrollChatToBottom, 100);
 			`)),
 	)
 	rooms := NewRooms[Chat, UserInfo]("Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust")
@@ -192,7 +191,10 @@ func main() {
 				}
 			}
 
-			chatHistory := []h.H{h.Class("chat-history")}
+			chatHistory := []h.H{
+				h.Class("chat-history"),
+				h.Script(h.Raw(`new MutationObserver((mutations)=>{scrollChatToBottom()}).observe(document.querySelector('.chat-history'), {childList:true})`)),
+			}
 			chatHistory = append(chatHistory, messages...)
 
 			return h.Main(h.Class("container"),

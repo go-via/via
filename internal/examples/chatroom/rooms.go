@@ -129,7 +129,7 @@ func NewRoom[TR any, TU comparable](n string) *Room[TR, TU] {
 
 func (r *Room[TR, TU]) run() {
 	defer close(r.done)
-	publishTicker := time.NewTicker(400 * time.Millisecond)
+	publishTicker := time.NewTicker(250 * time.Millisecond)
 	defer publishTicker.Stop()
 	for {
 		select {
