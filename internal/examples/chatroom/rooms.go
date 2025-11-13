@@ -7,7 +7,6 @@ import (
 )
 
 type Syncable interface {
-	Connected() bool
 	Sync()
 }
 type UserAndSync[TR any, TU comparable] struct {
@@ -84,9 +83,7 @@ func (r *Room[TR, TU]) Publish() {
 
 	publishers := make([]Syncable, 0, len(r.members))
 	for _, sync := range r.members {
-		if sync.Connected() {
-			publishers = append(publishers, sync)
-		}
+		publishers = append(publishers, sync)
 	}
 	r.dirty = false
 	r.dataMu.Unlock()

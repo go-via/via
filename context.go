@@ -193,11 +193,6 @@ func (c *Context) getSSE() *datastar.ServerSentEventGenerator {
 	return sse
 }
 
-// Connected checks if there's an SSE connection.
-func (c *Context) Connected() bool {
-	return c.getSSE() != nil
-}
-
 // Sync pushes the current view state and signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) Sync() {
