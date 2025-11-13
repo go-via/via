@@ -80,9 +80,8 @@ func main() {
 			`)), h.Script(h.Raw(`
 				function scrollChatToBottom() {
 					const chatHistory = document.querySelector('.chat-history');
-					if (chatHistory) chatHistory.scrollTop = chatHistory.scrollHeight;
+					chatHistory.scrollTop = chatHistory.scrollHeight;
 				}
-				setInterval(scrollChatToBottom, 100);
 			`)),
 	)
 	rooms := NewRooms[Chat, UserInfo]("Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust")
@@ -100,7 +99,10 @@ func main() {
 		var currentRoom *Room[Chat, UserInfo]
 
 		switchRoom := func() {
-			newRoom, _ := rooms.Get(string(roomName.String()))
+			newRoom, ok := rooms.Get(string(roomName.String()))
+			if !ok {
+				return
+			}
 			fmt.Println(">> switchRoom to ", newRoom.Name)
 			if currentRoom != nil && currentRoom != newRoom {
 				fmt.Println("LEAVING old room")
@@ -129,8 +131,8 @@ func main() {
 			if currentRoom != nil {
 				currentRoom.UpdateData(func(chat *Chat) {
 					chat.Entries = append(chat.Entries, ChatEntry{
-						User:    currentUser,
-						Message: msg,
+						user:    currentUser,
+						message: msg,
 					})
 				})
 				statement.SetValue("")
@@ -178,10 +180,10 @@ func main() {
 				})
 				for _, entry := range chat.Entries {
 
-					messageChildren := []h.H{h.Class("chat-message"), entry.User.Avatar()}
+					messageChildren := []h.H{h.Class("chat-message"), entry.user.Avatar()}
 					messageChildren = append(messageChildren,
 						h.Div(h.Class("bubble"),
-							h.P(h.Text(entry.Message)),
+							h.P(h.Text(entry.message)),
 						),
 					)
 
@@ -189,7 +191,10 @@ func main() {
 				}
 			}
 
-			chatHistory := []h.H{h.Class("chat-history")}
+			chatHistory := []h.H{
+				h.Class("chat-history"),
+				h.Script(h.Raw(`new MutationObserver((mutations)=>{scrollChatToBottom()}).observe(document.querySelector('.chat-history'), {childList:true})`)),
+			}
 			chatHistory = append(chatHistory, messages...)
 
 			return h.Main(h.Class("container"),
@@ -205,7 +210,7 @@ func main() {
 						h.Attr("role", "group"),
 						h.Input(
 							h.Type("text"),
-							h.Placeholder(fmt.Sprintf("%s says...", currentUser.Name)),
+							h.Placeholder(currentUser.Name+" says..."),
 							statement.Bind(),
 							h.Attr("autofocus"),
 							say.OnKeyDown("Enter"),
@@ -234,8 +239,8 @@ func (u *UserInfo) Avatar() h.H {
 }
 
 type ChatEntry struct {
-	User    UserInfo
-	Message string
+	user    UserInfo
+	message string
 }
 
 type Chat struct {

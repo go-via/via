@@ -94,7 +94,7 @@ func (r *Room[TR, TU]) Publish() {
 	}
 }
 
-// Get room data. This is a copy.
+// GetData returns a copy of room data.
 // Accepts an optional subset function to transform data before copying.
 func (r *Room[TR, TU]) GetData(subsetFn ...func(*TR) TR) TR {
 	r.dataMu.RLock()
@@ -116,12 +116,6 @@ func (r *Room[TR, TU]) Leave(u *TU) {
 	r.leave <- u
 }
 
-func (r *Room[TR, TU]) MemberCount() int {
-	r.membersMu.RLock()
-	defer r.membersMu.RUnlock()
-	return len(r.members)
-}
-
 func NewRoom[TR any, TU comparable](n string) *Room[TR, TU] {
 	return &Room[TR, TU]{
 		Name:        n,
@@ -135,7 +129,7 @@ func NewRoom[TR any, TU comparable](n string) *Room[TR, TU] {
 
 func (r *Room[TR, TU]) run() {
 	defer close(r.done)
-	publishTicker := time.NewTicker(400 * time.Millisecond)
+	publishTicker := time.NewTicker(250 * time.Millisecond)
 	defer publishTicker.Stop()
 	for {
 		select {
