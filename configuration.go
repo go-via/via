@@ -3,7 +3,8 @@ package via
 type LogLevel int
 
 const (
-	LogLevelError LogLevel = iota
+	undefined LogLevel = iota
+	LogLevelError
 	LogLevelWarn
 	LogLevelInfo
 	LogLevelDebug
