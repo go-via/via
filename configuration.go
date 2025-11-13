@@ -3,7 +3,8 @@ package via
 type LogLevel int
 
 const (
-	LogLevelError LogLevel = iota
+	undefined LogLevel = iota
+	LogLevelError
 	LogLevelWarn
 	LogLevelInfo
 	LogLevelDebug
@@ -12,7 +13,7 @@ const (
 // Plugin is a func that can mutate the given *via.V app runtime. It is useful to integrate popular JS/CSS UI libraries or tools.
 type Plugin func(v *V)
 
-// Config defines configuration options for the via application
+// Config defines configuration options for the via application.
 type Options struct {
 	// The development mode flag. If true, enables server and browser auto-reload on `.go` file changes.
 	DevMode bool
