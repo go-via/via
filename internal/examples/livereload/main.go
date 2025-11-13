@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/go-via/via"
+	"github.com/go-via/via-plugin-picocss/picocss"
 	"github.com/go-via/via/h"
 )
 
@@ -11,9 +12,10 @@ func main() {
 	v := via.New()
 
 	v.Config(via.Options{
-		DocumentTitle: "Live Reload",
+		DocumentTitle: "Live Reload Demo",
 		DevMode:       true,
 		LogLvl:        via.LogLevelDebug,
+		Plugins:       []via.Plugin{picocss.Default},
 	})
 
 	v.Page("/", func(c *via.Context) {
@@ -26,15 +28,17 @@ func main() {
 		})
 
 		c.View(func() h.H {
-			return h.Div(
-				h.H1(h.Text("⚡Via Live Reload!")),
-				h.P(h.Textf("Count: %d", data.Count)),
-				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
-				h.Label(
-					h.Text("Update Step: "),
-					h.Input(h.Type("number"), step.Bind()),
+			return h.Main(h.Class("container"), h.Br(),
+				h.H1(h.Text("⚡Via Live Reload Demo")),
+				h.Hr(),
+				h.Div(
+					h.H2(h.Strong(h.Text("Count - ")), h.Textf("%d", data.Count)),
+					h.H5(h.Strong(h.Text("Step - ")), h.Span(step.Text())),
+					h.Div(h.Role("group"),
+						h.Input(h.Type("number"), step.Bind()),
+						h.Button(h.Text("Increment"), increment.OnClick()),
+					),
 				),
-				h.Button(h.Text("Increment"), increment.OnClick()),
 			)
 		})
 	})

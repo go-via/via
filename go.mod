@@ -1,12 +1,14 @@
 module github.com/go-via/via
 
-go 1.25.3
+go 1.25.4
 
 require maragu.dev/gomponents v1.2.0
 
 require (
 	github.com/CAFxX/httpcompression v0.0.9
 	github.com/andybalholm/brotli v1.2.0
+	github.com/fsnotify/fsnotify v1.9.0
+	github.com/go-via/via-plugin-picocss v0.0.0-20251112183909-4485ba2e31d8
 	github.com/starfederation/datastar-go v1.0.3
 	github.com/stretchr/testify v1.10.0
 )
