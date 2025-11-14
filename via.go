@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/CAFxX/httpcompression"
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
 )
@@ -31,9 +30,8 @@ var datastarJS []byte
 type V struct {
 	cfg                  Options
 	mux                  *http.ServeMux
-	handler              http.Handler
 	contextRegistry      map[string]*Context
-	contextRegistryMutex sync.Mutex
+	contextRegistryMutex sync.RWMutex
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	devModePageInitFnMap map[string]func(*Context)
@@ -149,10 +147,13 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		headElements := v.documentHeadIncludes
 		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
 		headElements = append(headElements, h.Meta(h.Data("init", `window.addEventListener('beforeunload', (evt) => {
-			evt.preventDefault(); evt.returnValue = ''; @post('/_session/close'); return ''; })`)))
+			evt.preventDefault(); evt.returnValue = ''; @get('/_session/close'); return ''; })`)))
 		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
 		bottomBodyElements := []h.H{c.view()}
 		bottomBodyElements = append(bottomBodyElements, v.documentFootIncludes...)
+		if v.cfg.DevMode {
+			bottomBodyElements = append(bottomBodyElements, h.Script(h.Type("module"), h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
+		}
 		view := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,
 			Head:      headElements,
@@ -185,8 +186,8 @@ func (v *V) unregisterCtx(id string) {
 }
 
 func (v *V) getCtx(id string) (*Context, error) {
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
+	v.contextRegistryMutex.RLock()
+	defer v.contextRegistryMutex.RUnlock()
 	if c, ok := v.contextRegistry[id]; ok {
 		return c, nil
 	}
@@ -205,7 +206,7 @@ func (v *V) Start() {
 		v.devModeRestore()
 	}
 	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
-	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.handler))
+	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
 func (v *V) devModePersist(c *Context) {
@@ -273,22 +274,25 @@ func (v *V) devModeRestore() {
 	os.Remove(p)
 }
 
+type patchType int
+
+const (
+	patchTypeElements = iota
+	patchTypeSignals
+	patchTypeScript
+)
+
+type patch struct {
+	typ     patchType
+	content string
+}
+
 // New creates a new *V application with default configuration.
 func New() *V {
 	mux := http.NewServeMux()
 
-	compressionAdapter, err := httpcompression.DefaultAdapter(
-		httpcompression.MinSize(1024),
-		httpcompression.BrotliCompressionLevel(5),
-		httpcompression.ZstandardCompressor(nil),
-	)
-	if err != nil {
-		log.Fatalf("failed to create compression adapter: %v", err)
-	}
-
 	v := &V{
 		mux:                  mux,
-		handler:              compressionAdapter(mux),
 		contextRegistry:      make(map[string]*Context),
 		devModePageInitFnMap: make(map[string]func(*Context)),
 		cfg: Options{
@@ -310,20 +314,53 @@ func New() *V {
 		cID, _ := sigs["via-ctx"].(string)
 		c, err := v.getCtx(cID)
 		if err != nil {
-			v.logErr(nil, "failed to render page: %v", err)
+			v.logErr(nil, "sse stream failed to start: %v", err)
 			return
 		}
-		c.sse = datastar.NewSSE(w, r)
+
+		sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
+
 		v.logDebug(c, "SSE connection established")
-		if v.cfg.DevMode {
-			c.Sync()
-		} else {
-			c.SyncSignals()
+
+		go func() {
+			if v.cfg.DevMode {
+				c.Sync()
+			} else {
+				c.SyncSignals()
+			}
+		}()
+
+		for {
+			select {
+			case <-sse.Context().Done():
+				v.logDebug(c, "SSE context done, exiting handler loop")
+				return
+			case patch, ok := <-c.patchChan:
+				if !ok {
+					v.logDebug(c, "patchChan closed, exiting handler loop")
+					return
+				}
+				switch patch.typ {
+				case patchTypeElements:
+					if err := sse.PatchElements(patch.content); err != nil {
+						v.logErr(c, "PatchElements failed: %v", err)
+						return
+					}
+				case patchTypeSignals:
+					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
+						v.logErr(c, "PatchSignals failed: %v", err)
+						return
+					}
+				case patchTypeScript:
+					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
+						v.logErr(c, "ExecuteScript failed: %v", err)
+						return
+					}
+				}
+			}
 		}
-		<-c.sse.Context().Done()
-		c.sse = nil
-		v.logDebug(c, "SSE connection closed")
 	})
+
 	v.mux.HandleFunc("GET /_action/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actionID := r.PathValue("id")
 		var sigs map[string]any
@@ -345,12 +382,12 @@ func New() *V {
 				v.logErr(c, "action '%s' failed: %v", actionID, r)
 			}
 		}()
-		c.signalsMux.Lock()
-		defer c.signalsMux.Unlock()
+
 		c.injectSignals(sigs)
 		actionFn()
 	})
-	v.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
+
+	v.mux.HandleFunc("GET /_session/close", func(w http.ResponseWriter, r *http.Request) {
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
