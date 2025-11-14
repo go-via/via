@@ -193,6 +193,13 @@ func (v *V) getCtx(id string) (*Context, error) {
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
+// ContextCount returns the number of active contexts/sessions currently tracked by Via.
+func (v *V) ContextCount() int {
+	v.contextRegistryMutex.Lock()
+	defer v.contextRegistryMutex.Unlock()
+	return len(v.contextRegistry)
+}
+
 // HandleFunc registers the HTTP handler function for a given pattern. The handler function panics if
 // in conflict with another registered handler with the same pattern.
 func (v *V) HandleFunc(pattern string, f http.HandlerFunc) {
@@ -351,6 +358,7 @@ func New() *V {
 		actionFn()
 	})
 	v.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("CLOSING SESSION")
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
