@@ -214,6 +214,7 @@ func (c *Context) Sync() {
 		}
 		if sig.changed && sig.err == nil {
 			updatedSigs[id] = fmt.Sprintf("%v", sig.v)
+			sig.changed = false
 		}
 	}
 	if len(updatedSigs) != 0 {
@@ -272,6 +273,7 @@ func (c *Context) SyncSignals() {
 		}
 		if sig.changed && sig.err == nil {
 			updatedSigs[id] = fmt.Sprintf("%v", sig.v)
+			sig.changed = false
 		}
 	}
 	if len(updatedSigs) != 0 {

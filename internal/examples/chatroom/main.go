@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"math/rand"
 
 	"github.com/go-via/via"
@@ -84,6 +83,11 @@ func main() {
 				}
 			`)),
 	)
+	// Uncomment for inspector. Plugin candidate.
+	// v.AppendToFoot(
+	// 	h.Script(h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js"), h.Type("module")),
+	// 	h.Raw("<dataspa-inspector/>"),
+	// )
 	rooms := NewRooms[Chat, UserInfo]("Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust")
 	rooms.Start()
 
@@ -103,9 +107,7 @@ func main() {
 			if !ok {
 				return
 			}
-			fmt.Println(">> switchRoom to ", newRoom.Name)
 			if currentRoom != nil && currentRoom != newRoom {
-				fmt.Println("LEAVING old room")
 				currentRoom.Leave(&currentUser)
 			}
 			newRoom.Join(&UserAndSync[Chat, UserInfo]{user: &currentUser, sync: c})
@@ -136,8 +138,6 @@ func main() {
 					})
 				})
 				statement.SetValue("")
-				// Update the UI right away so feels snappy.
-				c.Sync()
 			}
 		})
 
