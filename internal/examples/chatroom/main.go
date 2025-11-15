@@ -113,11 +113,11 @@ func main() {
 			newRoom.Join(&UserAndSync[Chat, UserInfo]{user: &currentUser, sync: c})
 			currentRoom = newRoom
 			roomNameString = newRoom.Name
-			c.Sync()
 		}
 
 		switchRoomAction := c.Action(func() {
 			switchRoom()
+			c.Sync()
 		})
 
 		switchRoom()

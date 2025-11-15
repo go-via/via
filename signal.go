@@ -51,7 +51,7 @@ func (s *signal) Bind() h.H {
 //
 //	h.Div(mysignal.Text())
 func (s *signal) Text() h.H {
-	return h.Data("text", "$"+s.id)
+	return h.Span(h.Data("text", "$"+s.id))
 }
 
 // SetValue updates the signal’s value and marks it for synchronization with the browser.

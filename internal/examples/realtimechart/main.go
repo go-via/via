@@ -13,6 +13,11 @@ import (
 func main() {
 	v := via.New()
 
+	v.Config(via.Options{
+		LogLvl:  via.LogLevelDebug,
+		DevMode: true,
+	})
+
 	v.AppendToHead(
 		h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
 		h.Script(h.Src("https://unpkg.com/echarts@6.0.0/dist/echarts.min.js")),
@@ -35,7 +40,8 @@ func chartCompFn(c *via.Context) {
 	data := make([]float64, 1000)
 	labels := make([]string, 1000)
 
-	isLive := false
+	isLive := true
+	isLiveSig := c.Signal("on")
 	refreshRate := c.Signal(1)
 	tkr := time.NewTicker(1000 * time.Millisecond)
 
@@ -44,7 +50,7 @@ func chartCompFn(c *via.Context) {
 	})
 
 	toggleIsLive := c.Action(func() {
-		isLive = !isLive
+		isLive = isLiveSig.Bool()
 	})
 
 	go func() {
@@ -71,7 +77,7 @@ func chartCompFn(c *via.Context) {
 		return h.Div(
 			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
 				h.Script(h.Raw(`
-				const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+				var prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
 					backgroundColor: prefersDark.matches ? 'transparent' : '#ffffff',
@@ -140,9 +146,9 @@ func chartCompFn(c *via.Context) {
 						h.Div(h.Class("grid"),
 							h.FieldSet(
 								h.Legend(h.Text("Live Data")),
-								h.Input(h.Type("checkbox"), h.Role("switch"), toggleIsLive.OnChange()),
+								h.Input(h.Type("checkbox"), h.Role("switch"), isLiveSig.Bind(), toggleIsLive.OnChange()),
 							),
-							h.Label(h.ID("refresh-rate-input"), h.Span(h.Text("Refresh Rate  (")), h.Span(refreshRate.Text()), h.Span(h.Text(" Hz)")),
+							h.Label(h.Span(h.Text("Refresh Rate  (")), h.Span(refreshRate.Text()), h.Span(h.Text(" Hz)")),
 								h.Input(h.Type("range"), h.Attr("min", "1"), h.Attr("max", "200"), refreshRate.Bind(), updateRefreshRate.OnChange()),
 							),
 						),
