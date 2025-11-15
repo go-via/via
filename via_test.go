@@ -1,6 +1,7 @@
 package via
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -103,6 +104,5 @@ func TestSyncSignals(t *testing.T) {
 	ctx.SyncSignals()
 
 	patch := <-ctx.patchChan
-	assert.Contains(t, patch.content, sig.ID())
-	assert.Contains(t, patch.content, "updated")
+	assert.Equal(t, patch.content, fmt.Sprintf(`{"%s":"updated"}`, sig.ID()))
 }
