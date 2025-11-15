@@ -84,3 +84,25 @@ func TestConfig(t *testing.T) {
 	v.Config(Options{DocumentTitle: "Test"})
 	assert.Equal(t, "Test", v.cfg.DocumentTitle)
 }
+
+func TestSyncSignals(t *testing.T) {
+	var ctx *Context
+	var sig *signal
+	v := New()
+	v.Page("/", func(c *Context) {
+		ctx = c
+		sig = c.Signal("initial")
+		c.View(func() h.H { return h.Div() })
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	v.mux.ServeHTTP(w, req)
+
+	sig.SetValue("updated")
+	ctx.SyncSignals()
+
+	patch := <-ctx.patchChan
+	assert.Contains(t, patch.content, sig.ID())
+	assert.Contains(t, patch.content, "updated")
+}
