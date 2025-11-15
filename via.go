@@ -153,6 +153,7 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		bottomBodyElements = append(bottomBodyElements, v.documentFootIncludes...)
 		if v.cfg.DevMode {
 			bottomBodyElements = append(bottomBodyElements, h.Script(h.Type("module"), h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
+			bottomBodyElements = append(bottomBodyElements, h.Raw("<dataspa-inspector/>"))
 		}
 		view := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,

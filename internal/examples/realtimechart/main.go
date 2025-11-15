@@ -13,6 +13,11 @@ import (
 func main() {
 	v := via.New()
 
+	v.Config(via.Options{
+		LogLvl:  via.LogLevelDebug,
+		DevMode: true,
+	})
+
 	v.AppendToHead(
 		h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
 		h.Script(h.Src("https://unpkg.com/echarts@6.0.0/dist/echarts.min.js")),
@@ -35,7 +40,7 @@ func chartCompFn(c *via.Context) {
 	data := make([]float64, 1000)
 	labels := make([]string, 1000)
 
-	isLive := false
+	isLive := true
 	refreshRate := c.Signal(1)
 	tkr := time.NewTicker(1000 * time.Millisecond)
 
@@ -71,7 +76,7 @@ func chartCompFn(c *via.Context) {
 		return h.Div(
 			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
 				h.Script(h.Raw(`
-				const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+				prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
 					backgroundColor: prefersDark.matches ? 'transparent' : '#ffffff',

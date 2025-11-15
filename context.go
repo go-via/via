@@ -189,7 +189,7 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	}
 }
 
-func (c *Context) getSSE() chan patch {
+func (c *Context) getPatchChan() chan patch {
 	// components use parent page sse stream
 	var patchChan chan patch
 	if c.isComponent() {
@@ -220,12 +220,13 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 // Sync pushes the current view state and signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) Sync() {
+	patchChan := c.getPatchChan()
 	elemsPatch := bytes.NewBuffer(make([]byte, 0))
 	if err := c.view().Render(elemsPatch); err != nil {
 		c.app.logErr(c, "sync view failed: %v", err)
 		return
 	}
-	c.patchChan <- patch{patchTypeElements, elemsPatch.String()}
+	patchChan <- patch{patchTypeElements, elemsPatch.String()}
 
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
@@ -233,7 +234,7 @@ func (c *Context) Sync() {
 
 	if len(updatedSigs) != 0 {
 		outgoingSigs, _ := json.Marshal(updatedSigs)
-		c.patchChan <- patch{patchTypeSignals, string(outgoingSigs)}
+		patchChan <- patch{patchTypeSignals, string(outgoingSigs)}
 	}
 }
 
@@ -255,11 +256,7 @@ func (c *Context) Sync() {
 // Then, the merge will only occur if the ID of the top level element in the patch
 // matches 'my-element'.
 func (c *Context) SyncElements(elem h.H) {
-	sse := c.getSSE()
-	if sse == nil {
-		c.app.logWarn(c, "elements out of sync: no sse stream")
-		return
-	}
+	patchChan := c.getPatchChan()
 	if c.view == nil {
 		c.app.logErr(c, "sync element failed: viewfn is nil")
 		return
@@ -270,29 +267,29 @@ func (c *Context) SyncElements(elem h.H) {
 	}
 	b := bytes.NewBuffer(make([]byte, 0))
 	_ = elem.Render(b)
-	c.patchChan <- patch{patchTypeElements, b.String()}
+	patchChan <- patch{patchTypeElements, b.String()}
 }
 
 // SyncSignals pushes the current signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) SyncSignals() {
+	patchChan := c.getPatchChan()
 	c.mutex.RLock()
 	updatedSigs := c.prepareSignalsForPatch()
 	defer c.mutex.RUnlock()
 
 	if len(updatedSigs) != 0 {
 		outgoingSignals, _ := json.Marshal(updatedSigs)
-		c.patchChan <- patch{patchTypeSignals, string(outgoingSignals)}
+		patchChan <- patch{patchTypeSignals, string(outgoingSignals)}
 	}
 }
 
 func (c *Context) ExecScript(s string) {
-	sse := c.getSSE()
-	if sse == nil {
-		c.app.logWarn(c, "script out of sync: no sse stream")
+	if s == "" {
 		return
 	}
-	c.patchChan <- patch{patchTypeScript, s}
+	patchChan := c.getPatchChan()
+	patchChan <- patch{patchTypeScript, s}
 }
 
 func newContext(id string, route string, app *V) *Context {
