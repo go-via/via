@@ -193,7 +193,7 @@ func (c *Context) getPatchChan() chan patch {
 	// components use parent page sse stream
 	var patchChan chan patch
 	if c.isComponent() {
-		patchChan = c.parentPageCtx.parentPageCtx.patchChan
+		patchChan = c.parentPageCtx.patchChan
 	} else {
 		patchChan = c.patchChan
 	}
