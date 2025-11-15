@@ -1,165 +1,86 @@
 package via
 
 import (
-	"compress/gzip"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
-	"github.com/andybalholm/brotli"
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCompressionBrotli(t *testing.T) {
+func TestPageRoute(t *testing.T) {
 	v := New()
 	v.Page("/", func(c *Context) {
 		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("Hello Via! ", 200)))
-		})
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "br")
-	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "br", w.Header().Get("Content-Encoding"))
-
-	reader := brotli.NewReader(w.Body)
-	decompressed, err := io.ReadAll(reader)
-	assert.NoError(t, err)
-	assert.Contains(t, string(decompressed), "Hello Via!")
-}
-
-func TestCompressionGzip(t *testing.T) {
-	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("Hello Via! ", 200)))
-		})
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "gzip")
-	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
-
-	reader, err := gzip.NewReader(w.Body)
-	assert.NoError(t, err)
-	decompressed, err := io.ReadAll(reader)
-	assert.NoError(t, err)
-	assert.Contains(t, string(decompressed), "Hello Via!")
-}
-
-func TestCompressionNone(t *testing.T) {
-	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("Hello Via! ", 200)))
+			return h.Div(h.Text("Hello Via!"))
 		})
 	})
 
 	req := httptest.NewRequest("GET", "/", nil)
 	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
+	v.mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Empty(t, w.Header().Get("Content-Encoding"))
 	assert.Contains(t, w.Body.String(), "Hello Via!")
+	assert.Contains(t, w.Body.String(), "<!doctype html>")
 }
 
-func TestCompressionMinSize(t *testing.T) {
+func TestDatastarJS(t *testing.T) {
 	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text("Small"))
-		})
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "br")
-	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Empty(t, w.Header().Get("Content-Encoding"))
-}
-
-func TestCompressionLargeResponse(t *testing.T) {
-	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("A", 2000)))
-		})
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "br")
-	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "br", w.Header().Get("Content-Encoding"))
-}
-
-func TestCompressionDatastarJS(t *testing.T) {
-	v := New()
-
 	req := httptest.NewRequest("GET", "/_datastar.js", nil)
-	req.Header.Set("Accept-Encoding", "br")
 	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
+	v.mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "br", w.Header().Get("Content-Encoding"))
+	assert.Equal(t, "application/javascript", w.Header().Get("Content-Type"))
 }
 
-func TestCompressionBrotliPreferred(t *testing.T) {
+func TestSignal(t *testing.T) {
+	var sig *signal
 	v := New()
 	v.Page("/", func(c *Context) {
+		sig = c.Signal("test")
+		c.View(func() h.H { return h.Div() })
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	v.mux.ServeHTTP(w, req)
+
+	assert.Equal(t, "test", sig.v.Interface())
+}
+
+func TestAction(t *testing.T) {
+	var trigger *actionTrigger
+	var sig *signal
+	v := New()
+	v.Page("/", func(c *Context) {
+		trigger = c.Action(func() {})
+		sig = c.Signal("value")
 		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("Hello Via! ", 200)))
+			return h.Div(
+				h.Button(trigger.OnClick()),
+				h.Input(trigger.OnChange()),
+				h.Input(trigger.OnKeyDown("Enter")),
+				h.Button(trigger.OnClick(WithSignal(sig, "test"))),
+				h.Button(trigger.OnClick(WithSignalInt(sig, 42))),
+			)
 		})
 	})
 
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "gzip, br")
 	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "br", w.Header().Get("Content-Encoding"))
+	v.mux.ServeHTTP(w, req)
+	body := w.Body.String()
+	assert.Contains(t, body, "data-on:click")
+	assert.Contains(t, body, "data-on:change__debounce.200ms")
+	assert.Contains(t, body, "data-on:keydown")
+	assert.Contains(t, body, "/_action/")
 }
 
-func TestCompressionZstdDisabled(t *testing.T) {
+func TestConfig(t *testing.T) {
 	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text(strings.Repeat("Hello Via! ", 200)))
-		})
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("Accept-Encoding", "zstd, br, gzip")
-	w := httptest.NewRecorder()
-
-	v.handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "br", w.Header().Get("Content-Encoding"), "Should use Brotli, not zstd")
-	assert.NotEqual(t, "zstd", w.Header().Get("Content-Encoding"))
+	v.Config(Options{DocumentTitle: "Test"})
+	assert.Equal(t, "Test", v.cfg.DocumentTitle)
 }

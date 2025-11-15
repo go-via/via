@@ -273,13 +273,17 @@ func (c *Context) SyncElements(elem h.H) {
 // SyncSignals pushes the current signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) SyncSignals() {
-	sse := c.getSSE()
-	if sse == nil {
+	patchChan := c.getPatchChan()
+	if patchChan == nil {
 		c.app.logWarn(c, "signals out of sync: no sse stream")
 		return
 	}
 	updatedSigs := make(map[string]any)
-	for id, sig := range c.signals {
+
+	c.signals.Range(func(idAny, val any) bool {
+		// We know the types.
+		sig, _ := val.(*signal) // adjust *Signal to your actual signal type
+		id, _ := val.(string)
 		if sig.err != nil {
 			c.app.logWarn(c, "signal out of sync'%s': %v", sig.id, sig.err)
 		}
@@ -287,7 +291,8 @@ func (c *Context) SyncSignals() {
 			updatedSigs[id] = fmt.Sprintf("%v", sig.v)
 			sig.changed = false
 		}
-	}
+		return true // continue iteration
+	})
 	if len(updatedSigs) != 0 {
 		outgoingSignals, _ := json.Marshal(updatedSigs)
 		patchChan <- patch{patchTypeSignals, string(outgoingSignals)}
