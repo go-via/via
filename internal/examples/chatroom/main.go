@@ -83,11 +83,6 @@ func main() {
 				}
 			`)),
 	)
-	// Uncomment for inspector. Plugin candidate.
-	// v.AppendToFoot(
-	// 	h.Script(h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js"), h.Type("module")),
-	// 	h.Raw("<dataspa-inspector/>"),
-	// )
 	rooms := NewRooms[Chat, UserInfo]("Clojure", "Dotnet", "Go", "Java", "JS", "Kotlin", "Python", "Rust")
 	rooms.Start()
 
@@ -144,24 +139,13 @@ func main() {
 		c.View(func() h.H {
 			var tabs []h.H
 			rooms.Visit(func(n string) {
-				if n == roomNameString {
-					tabs = append(tabs, h.Li(
-						h.A(
-							h.Href(""),
-							h.Attr("aria-current", "page"),
-							h.Text(n),
-							switchRoomAction.OnClick(WithSignal(roomName, n)),
-						),
-					))
-				} else {
-					tabs = append(tabs, h.Li(
-						h.A(
-							h.Href("#"),
-							h.Text(n),
-							switchRoomAction.OnClick(via.WithSignal(roomName, n)),
-						),
-					))
-				}
+				tabs = append(tabs, h.Li(
+					h.A(
+						h.If(n == roomNameString, h.Attr("aria-current", "page")),
+						h.Text(n),
+						switchRoomAction.OnClick(WithSignal(roomName, n)),
+					),
+				))
 			})
 
 			var messages []h.H

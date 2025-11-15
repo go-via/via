@@ -174,6 +174,11 @@ func (v *V) registerCtx(c *Context) {
 	}
 	v.contextRegistry[c.id] = c
 	v.logDebug(c, "new context added to registry")
+	v.summarize()
+}
+
+func (v *V) summarize() {
+	fmt.Println("Have", len(v.contextRegistry), "sessions")
 }
 
 func (v *V) unregisterCtx(id string) {
@@ -184,6 +189,7 @@ func (v *V) unregisterCtx(id string) {
 	}
 	v.logDebug(nil, "ctx '%s' removed from registry", id)
 	delete(v.contextRegistry, id)
+	v.summarize()
 }
 
 func (v *V) getCtx(id string) (*Context, error) {
