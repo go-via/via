@@ -145,24 +145,21 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		if v.cfg.DevMode {
 			v.devModePersist(c)
 		}
-		headElements := v.documentHeadIncludes
-		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
-		unloadJS := fmt.Sprintf(`
-window.addEventListener('beforeunload', (evt) => {
-  navigator.sendBeacon('/_session/close', '%s');
-});`, c.id)
-		headElements = append(headElements, h.Meta(h.Data("init", unloadJS)))
-		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
-		bottomBodyElements := []h.H{c.view()}
-		bottomBodyElements = append(bottomBodyElements, v.documentFootIncludes...)
+		v.AppendToHead(h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
+		v.AppendToHead(h.Meta(h.Data("init", "@get('/_sse')")))
+		v.AppendToHead(h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
+			navigator.sendBeacon('/_session/close', '%s');});`, c.id))))
+		bodyElements := []h.H{c.view()}
+		bodyElements = append(bodyElements, v.documentFootIncludes...)
 		if v.cfg.DevMode {
-			bottomBodyElements = append(bottomBodyElements, h.Script(h.Type("module"), h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
-			bottomBodyElements = append(bottomBodyElements, h.Raw("<dataspa-inspector/>"))
+			bodyElements = append(bodyElements, h.Script(h.Type("module"),
+				h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
+			bodyElements = append(bodyElements, h.Raw("<dataspa-inspector/>"))
 		}
 		view := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,
-			Head:      headElements,
-			Body:      bottomBodyElements,
+			Head:      v.documentHeadIncludes,
+			Body:      bodyElements,
 			HTMLAttrs: []h.H{},
 		})
 		_ = view.Render(w)

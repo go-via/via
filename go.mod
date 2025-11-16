@@ -5,7 +5,6 @@ go 1.25.4
 require maragu.dev/gomponents v1.2.0
 
 require (
-	github.com/andybalholm/brotli v1.2.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-via/via-plugin-picocss v0.1.0
 	github.com/starfederation/datastar-go v1.0.3
@@ -14,6 +13,7 @@ require (
 
 require (
 	github.com/CAFxX/httpcompression v0.0.9 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kr/pretty v0.1.0 // indirect

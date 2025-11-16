@@ -153,9 +153,7 @@ func main() {
 				chat := currentRoom.GetData(func(c *Chat) Chat {
 					n := len(c.Entries)
 					start := n - 50
-					if start < 0 {
-						start = 0
-					}
+					start = max(start, 0)
 					trimmed := make([]ChatEntry, n-start)
 					copy(trimmed, c.Entries[start:])
 					out := *c

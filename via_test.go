@@ -49,7 +49,7 @@ func TestSignal(t *testing.T) {
 	w := httptest.NewRecorder()
 	v.mux.ServeHTTP(w, req)
 
-	assert.Equal(t, "test", sig.v.Interface())
+	assert.Equal(t, "test", sig.String())
 }
 
 func TestAction(t *testing.T) {

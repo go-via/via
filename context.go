@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 	"sync"
 
 	"github.com/go-via/via/h"
@@ -138,18 +137,15 @@ func (c *Context) Signal(v any) *signal {
 	sigID := genRandID()
 	if v == nil {
 		c.app.logErr(c, "failed to bind signal: nil signal value")
-		dummy := "Error"
 		return &signal{
 			id:  sigID,
-			v:   reflect.ValueOf(dummy),
-			t:   reflect.TypeOf(dummy),
+			val: "error",
 			err: fmt.Errorf("context '%s' failed to bind signal '%s': nil signal value", c.id, sigID),
 		}
 	}
 	sig := &signal{
 		id:      sigID,
-		v:       reflect.ValueOf(v),
-		t:       reflect.TypeOf(v),
+		val:     v,
 		changed: true,
 	}
 
@@ -175,15 +171,14 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	for sigID, val := range sigs {
 		if _, ok := c.signals.Load(sigID); !ok {
 			c.signals.Store(sigID, &signal{
-				id: sigID,
-				t:  reflect.TypeOf(val),
-				v:  reflect.ValueOf(val),
+				id:  sigID,
+				val: val,
 			})
 			continue
 		}
 		item, _ := c.signals.Load(sigID)
 		if sig, ok := item.(*signal); ok {
-			sig.v = reflect.ValueOf(val)
+			sig.val = val
 			sig.changed = false
 		}
 	}
@@ -209,7 +204,7 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 				return true
 			}
 			if sig.changed {
-				updatedSigs[sigID.(string)] = fmt.Sprintf("%v", sig.v)
+				updatedSigs[sigID.(string)] = fmt.Sprintf("%v", sig.val)
 			}
 		}
 		return true
@@ -288,7 +283,7 @@ func (c *Context) SyncSignals() {
 			c.app.logWarn(c, "signal out of sync'%s': %v", sig.id, sig.err)
 		}
 		if sig.changed && sig.err == nil {
-			updatedSigs[id] = fmt.Sprintf("%v", sig.v)
+			updatedSigs[id] = fmt.Sprintf("%v", sig.val)
 			sig.changed = false
 		}
 		return true // continue iteration
