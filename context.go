@@ -280,10 +280,10 @@ func (c *Context) SyncSignals() {
 	}
 	updatedSigs := make(map[string]any)
 
-	c.signals.Range(func(idAny, val any) bool {
+	c.signals.Range(func(key, val any) bool {
 		// We know the types.
 		sig, _ := val.(*signal) // adjust *Signal to your actual signal type
-		id, _ := val.(string)
+		id, _ := key.(string)
 		if sig.err != nil {
 			c.app.logWarn(c, "signal out of sync'%s': %v", sig.id, sig.err)
 		}
