@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -146,8 +147,11 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		}
 		headElements := v.documentHeadIncludes
 		headElements = append(headElements, h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
-		headElements = append(headElements, h.Meta(h.Data("init", `window.addEventListener('beforeunload', (evt) => {
-			evt.preventDefault(); evt.returnValue = ''; @get('/_session/close'); return ''; })`)))
+		unloadJS := fmt.Sprintf(`
+window.addEventListener('beforeunload', (evt) => {
+  navigator.sendBeacon('/_session/close', '%s');
+});`, c.id)
+		headElements = append(headElements, h.Meta(h.Data("init", unloadJS)))
 		headElements = append(headElements, h.Meta(h.Data("init", "@get('/_sse')")))
 		bottomBodyElements := []h.H{c.view()}
 		bottomBodyElements = append(bottomBodyElements, v.documentFootIncludes...)
@@ -394,10 +398,15 @@ func New() *V {
 		actionFn()
 	})
 
-	v.mux.HandleFunc("GET /_session/close", func(w http.ResponseWriter, r *http.Request) {
-		var sigs map[string]any
-		_ = datastar.ReadSignals(r, &sigs)
-		cID, _ := sigs["via-ctx"].(string)
+	v.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("Error reading body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		defer r.Body.Close()
+		cID := string(body)
 		c, err := v.getCtx(cID)
 		if err != nil {
 			v.logErr(c, "failed to handle session close: %v", err)
