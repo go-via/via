@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -36,6 +37,10 @@ type V struct {
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	devModePageInitFnMap map[string]func(*Context)
+}
+
+func (v *V) logFatal(format string, a ...any) {
+	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, a...))
 }
 
 func (v *V) logErr(c *Context, format string, a ...any) {
@@ -119,8 +124,8 @@ func (v *V) AppendToFoot(elements ...h.H) {
 	}
 }
 
-// Page registers a route and its associated page handler.
-// The handler receives a *Context to define UI, signals, and actions.
+// Page registers a route and its associated page handler. The handler receives a *Context
+// that defines state, UI, signals, and actions.
 //
 // Example:
 //
@@ -130,6 +135,20 @@ func (v *V) AppendToFoot(elements ...h.H) {
 //		})
 //	})
 func (v *V) Page(route string, initContextFn func(c *Context)) {
+	// check for panics
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				v.logFatal("failed to register page with init func that panics: %v", err)
+				panic(err)
+			}
+		}()
+		c := newContext("", "", v)
+		initContextFn(c)
+		c.view()
+	}()
+
+	// save page init function allows devmode to restore persisted ctx later
 	if v.cfg.DevMode {
 		v.devModePageInitFnMap[route] = initContextFn
 	}
@@ -145,10 +164,15 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		if v.cfg.DevMode {
 			v.devModePersist(c)
 		}
-		v.AppendToHead(h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))))
-		v.AppendToHead(h.Meta(h.Data("init", "@get('/_sse')")))
-		v.AppendToHead(h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
-			navigator.sendBeacon('/_session/close', '%s');});`, c.id))))
+		headElements := []h.H{}
+		headElements = append(headElements, v.documentHeadIncludes...)
+		headElements = append(headElements,
+			h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
+			h.Meta(h.Data("init", "@get('/_sse')")),
+			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
+			navigator.sendBeacon('/_session/close', '%s');});`, c.id))),
+		)
+
 		bodyElements := []h.H{c.view()}
 		bodyElements = append(bodyElements, v.documentFootIncludes...)
 		if v.cfg.DevMode {
@@ -158,7 +182,7 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		}
 		view := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,
-			Head:      v.documentHeadIncludes,
+			Head:      headElements,
 			Body:      bodyElements,
 			HTMLAttrs: []h.H{},
 		})
@@ -175,11 +199,11 @@ func (v *V) registerCtx(c *Context) {
 	}
 	v.contextRegistry[c.id] = c
 	v.logDebug(c, "new context added to registry")
-	v.summarize()
+	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
 }
 
-func (v *V) summarize() {
-	fmt.Println("Have", len(v.contextRegistry), "sessions")
+func (v *V) currSessionNum() int {
+	return len(v.contextRegistry)
 }
 
 func (v *V) unregisterCtx(id string) {
@@ -190,7 +214,7 @@ func (v *V) unregisterCtx(id string) {
 	}
 	v.logDebug(nil, "ctx '%s' removed from registry", id)
 	delete(v.contextRegistry, id)
-	v.summarize()
+	v.currSessionNum()
 }
 
 func (v *V) getCtx(id string) (*Context, error) {
@@ -249,6 +273,37 @@ func (v *V) devModePersist(c *Context) {
 		v.logErr(c, "devmode failed to persist ctx")
 	}
 	v.logDebug(c, "devmode persisted ctx to file")
+}
+
+func (v *V) devModeRemovePersisted(c *Context) {
+	p := filepath.Join(".via", "devmode", "ctx.json")
+
+	// load persisted list from file, or empty list if file not found
+	file, err := os.Open(p)
+	ctxRegMap := make(map[string]string)
+	if err == nil {
+		json.NewDecoder(file).Decode(&ctxRegMap)
+	}
+	file.Close()
+
+	// remove ctx to persisted list
+	if _, ok := ctxRegMap[c.id]; !ok {
+		delete(ctxRegMap, c.id)
+	}
+
+	// write persisted list to file
+	file, err = os.Create(p)
+	if err != nil {
+		v.logErr(c, "devmode failed to remove percisted ctx: %v", err)
+
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(ctxRegMap); err != nil {
+		v.logErr(c, "devmode failed to remove persisted ctx")
+	}
+	v.logDebug(c, "devmode removed persisted ctx from file")
 }
 
 func (v *V) devModeRestore() {
@@ -330,18 +385,16 @@ func New() *V {
 
 		v.logDebug(c, "SSE connection established")
 
-		go func() {
-			if v.cfg.DevMode {
-				c.Sync()
-			} else {
-				c.SyncSignals()
-			}
-		}()
+		if v.cfg.DevMode {
+			c.Sync()
+		} else {
+			c.SyncSignals()
+		}
 
 		for {
 			select {
 			case <-sse.Context().Done():
-				v.logDebug(c, "SSE context done, exiting handler loop")
+				v.logDebug(c, "SSE connection ended")
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
@@ -365,6 +418,8 @@ func New() *V {
 						return
 					}
 				}
+			default:
+				time.Sleep(100 * time.Microsecond)
 			}
 		}
 	})
@@ -410,6 +465,7 @@ func New() *V {
 			return
 		}
 		v.logDebug(c, "session close event triggered")
+		v.devModeRemovePersisted(c)
 		v.unregisterCtx(c.id)
 
 	})

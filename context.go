@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"reflect"
 	"sync"
 
 	"github.com/go-via/via/h"
@@ -32,8 +33,7 @@ type Context struct {
 // Changes to signals or state can be pushed live with Sync().
 func (c *Context) View(f func() h.H) {
 	if f == nil {
-		c.app.logErr(c, "failed to bind view to context: nil func")
-		return
+		panic("nil viewfn")
 	}
 	c.view = func() h.H { return h.Div(h.ID(c.id), f()) }
 }
@@ -141,6 +141,12 @@ func (c *Context) Signal(v any) *signal {
 			id:  sigID,
 			val: "error",
 			err: fmt.Errorf("context '%s' failed to bind signal '%s': nil signal value", c.id, sigID),
+		}
+	}
+	switch reflect.TypeOf(v).Kind() {
+	case reflect.Slice, reflect.Struct:
+		if j, err := json.Marshal(v); err == nil {
+			v = string(j)
 		}
 	}
 	sig := &signal{
@@ -251,13 +257,13 @@ func (c *Context) Sync() {
 // Then, the merge will only occur if the ID of the top level element in the patch
 // matches 'my-element'.
 func (c *Context) SyncElements(elem h.H) {
-	patchChan := c.getPatchChan()
-	if c.view == nil {
-		c.app.logErr(c, "sync element failed: viewfn is nil")
+	if elem == nil {
+		c.app.logErr(c, "sync elements failed: view func is nil")
 		return
 	}
-	if elem == nil {
-		c.app.logErr(c, "sync element failed: view func is nil")
+	patchChan := c.getPatchChan()
+	if patchChan == nil {
+		c.app.logWarn(c, "sync elements failed: no sse stream")
 		return
 	}
 	b := bytes.NewBuffer(make([]byte, 0))
@@ -302,15 +308,15 @@ func (c *Context) ExecScript(s string) {
 	patchChan <- patch{patchTypeScript, s}
 }
 
-func newContext(id string, route string, app *V) *Context {
-	if app == nil {
-		log.Fatalf("create context failed: app pointer is nil")
+func newContext(id string, route string, v *V) *Context {
+	if v == nil {
+		log.Fatal("create context failed: app pointer is nil")
 	}
 
 	return &Context{
 		id:                id,
 		route:             route,
-		app:               app,
+		app:               v,
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           new(sync.Map),

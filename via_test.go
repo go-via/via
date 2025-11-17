@@ -35,6 +35,7 @@ func TestDatastarJS(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/javascript", w.Header().Get("Content-Type"))
+	assert.Contains(t, w.Body.String(), "🖕JS_DS🚀")
 }
 
 func TestSignal(t *testing.T) {
@@ -105,4 +106,11 @@ func TestSyncSignals(t *testing.T) {
 
 	patch := <-ctx.patchChan
 	assert.Equal(t, patch.content, fmt.Sprintf(`{"%s":"updated"}`, sig.ID()))
+}
+
+func TestPage_PanicsOnNoView(t *testing.T) {
+	assert.Panics(t, func() {
+		v := New()
+		v.Page("/", func(c *Context) {})
+	})
 }
