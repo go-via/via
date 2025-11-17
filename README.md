@@ -59,9 +59,9 @@ func main() {
 
 
 ## 🚧 Experimental
-Via is still a newborn.
-- Version `0.1.0` nears.
-- Expect chaos.
+<s>Via is still a newborn.</s> Via is taking its first steps!
+- Version `0.1.0` released.
+- Expect a little less chaos.
 
 ## Contributing
 - Via is intentionally minimal and opinionated — and so is contributing.
