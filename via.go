@@ -398,8 +398,8 @@ func New() *V {
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
-					v.logDebug(c, "patchChan closed, exiting handler loop")
-					return
+					time.Sleep(100 * time.Millisecond)
+					continue
 				}
 				switch patch.typ {
 				case patchTypeElements:

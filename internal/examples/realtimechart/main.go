@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via-plugin-picocss/picocss"
 	"github.com/go-via/via/h"
 )
 
@@ -16,10 +17,12 @@ func main() {
 	v.Config(via.Options{
 		LogLvl:  via.LogLevelDebug,
 		DevMode: true,
+		Plugins: []via.Plugin{
+			picocss.Default,
+		},
 	})
 
 	v.AppendToHead(
-		h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
 		h.Script(h.Src("https://unpkg.com/echarts@6.0.0/dist/echarts.min.js")),
 	)
 
@@ -28,6 +31,16 @@ func main() {
 
 		c.View(func() h.H {
 			return h.Div(h.Class("container"),
+				h.Section(
+					h.Nav(
+						h.Ul(h.Li(h.H3(h.Text("⚡Via")))),
+						h.Ul(
+							h.Li(h.A(h.H5(h.Text("About")), h.Href("https://github.com/go-via/via"))),
+							h.Li(h.A(h.H5(h.Text("Resources")), h.Href("https://github.com/orgs/go-via/repositories"))),
+							h.Li(h.A(h.H5(h.Text("Say hi!")), h.Href("http://github.com/go-via/via/discussions"))),
+						),
+					),
+				),
 				chartComp(),
 			)
 		})
@@ -42,8 +55,8 @@ func chartCompFn(c *via.Context) {
 
 	isLive := true
 	isLiveSig := c.Signal("on")
-	refreshRate := c.Signal(1)
-	tkr := time.NewTicker(1000 * time.Millisecond)
+	refreshRate := c.Signal(24)
+	tkr := time.NewTicker(1000 / time.Duration(refreshRate.Int()) * time.Millisecond)
 
 	updateRefreshRate := c.Action(func() {
 		tkr.Reset(1000 / time.Duration(refreshRate.Int()) * time.Millisecond)
@@ -63,20 +76,22 @@ func chartCompFn(c *via.Context) {
 
 			if isLive {
 				c.ExecScript(fmt.Sprintf(`
-			if (myChart)
-				myChart.setOption({
-					xAxis: [{data: %s}],
-					series:[{data: %s}]
-				},{notMerge:false,lazyUpdate:true});
-			`, labelsTxt, dataTxt))
+					if (myChart)
+						myChart.setOption({
+							xAxis: [{data: %s}],
+							series:[{data: %s}]
+						},{
+							notMerge:false,
+							lazyUpdate:true
+						});
+				`, labelsTxt, dataTxt))
 			}
 		}
 	}()
 
 	c.View(func() h.H {
 		return h.Div(
-			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
-				h.Script(h.Raw(`
+			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"), h.Script(h.Raw(`
 				var prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
@@ -90,7 +105,7 @@ func chartCompFn(c *via.Context) {
 					},
 					title: {
 						left: 'center',
-						text: 'Large Area Chart'
+						text: '📈 Real-Time Chart Example'
 					},
 					xAxis: {
 						type: 'category',
@@ -104,7 +119,7 @@ func chartCompFn(c *via.Context) {
 					dataZoom: [
 						{
 							type: 'inside',
-							start: 80,
+							start: 90,
 							end: 100
 						},
 						{
@@ -119,17 +134,18 @@ func chartCompFn(c *via.Context) {
 							symbol: 'none',
 							sampling: 'lttb',
 							itemStyle: {
-								color: '#1488CC'
+								color: '#e8ae01'
 							},
+							lineStyle: { color: '#e8ae01'},
 							areaStyle: {
 								color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
 									{
 										offset: 0,
-										color: '#1488CC'
+										color: '#fecc63'
 									},
 									{
 										offset: 1,
-										color: '#2B32B2'
+										color: '#c79400'
 									}
 								])
 							},
@@ -138,19 +154,18 @@ func chartCompFn(c *via.Context) {
 					]
 				};
 				option && myChart.setOption(option);
-			`)),
-				h.Section(
-					h.Article(
-						h.H5(h.Text("Controls")),
-						h.Hr(),
-						h.Div(h.Class("grid"),
-							h.FieldSet(
-								h.Legend(h.Text("Live Data")),
-								h.Input(h.Type("checkbox"), h.Role("switch"), isLiveSig.Bind(), toggleIsLive.OnChange()),
-							),
-							h.Label(h.Span(h.Text("Refresh Rate  (")), h.Span(refreshRate.Text()), h.Span(h.Text(" Hz)")),
-								h.Input(h.Type("range"), h.Attr("min", "1"), h.Attr("max", "200"), refreshRate.Bind(), updateRefreshRate.OnChange()),
-							),
+			`))),
+			h.Section(
+				h.Article(
+					h.H5(h.Text("Controls")),
+					h.Hr(),
+					h.Div(h.Class("grid"),
+						h.FieldSet(
+							h.Legend(h.Text("Live Data")),
+							h.Input(h.Type("checkbox"), h.Role("switch"), isLiveSig.Bind(), toggleIsLive.OnChange()),
+						),
+						h.Label(h.Text("Refresh Rate (Hz) ― "), refreshRate.Text(),
+							h.Input(h.Type("range"), h.Attr("min", "1"), h.Attr("max", "200"), refreshRate.Bind(), updateRefreshRate.OnChange()),
 						),
 					),
 				),
