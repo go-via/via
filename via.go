@@ -77,7 +77,7 @@ func (v *V) logDebug(c *Context, format string, a ...any) {
 }
 
 // Config overrides the default configuration with the given options.
-func (v *V) Config(cfg Options) *V {
+func (v *V) Config(cfg Options) {
 	if cfg.LogLvl != undefined {
 		v.cfg.LogLvl = cfg.LogLvl
 	}
@@ -97,18 +97,16 @@ func (v *V) Config(cfg Options) *V {
 	if cfg.ServerAddress != "" {
 		v.cfg.ServerAddress = cfg.ServerAddress
 	}
-	return v
 }
 
 // AppendToHead appends the given h.H nodes to the head of the base HTML document.
 // Useful for including css stylesheets and JS scripts.
-func (v *V) AppendToHead(elements ...h.H) *V {
+func (v *V) AppendToHead(elements ...h.H) {
 	for _, el := range elements {
 		if el != nil {
 			v.documentHeadIncludes = append(v.documentHeadIncludes, el)
 		}
 	}
-	return v
 }
 
 // AppendToFoot appends the given h.H nodes to the end of the base HTML document body.

@@ -49,12 +49,15 @@ func (shakeDB *ShakeDB) Close() {
 }
 
 func main() {
-	v := via.New().Config(via.Options{
+	v := via.New()
+
+	v.Config(via.Options{
 		DevMode:       true,
 		DocumentTitle: "Search",
 		LogLvl:        via.LogLevelWarn,
-		// Plugins:       []via.Plugin{LiveReloadPlugin},
-	}).AppendToHead(
+	})
+
+	v.AppendToHead(
 		h.Link(h.Rel("stylesheet"), h.Href("https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css")),
 		h.StyleEl(h.Raw(".no-wrap { white-space: nowrap; }")),
 	)
