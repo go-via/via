@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -213,6 +212,8 @@ func (v *V) unregisterCtx(id string) {
 		return
 	}
 	v.logDebug(nil, "ctx '%s' removed from registry", id)
+	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
+
 	delete(v.contextRegistry, id)
 	v.currSessionNum()
 }
@@ -334,7 +335,6 @@ func (v *V) devModeRestore() {
 		v.registerCtx(c)
 	}
 	v.logDebug(nil, "devmode restored ctx registry")
-	os.Remove(p)
 }
 
 type patchType int
@@ -398,7 +398,6 @@ func New() *V {
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
-					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 				switch patch.typ {
@@ -418,8 +417,6 @@ func New() *V {
 						return
 					}
 				}
-			default:
-				time.Sleep(100 * time.Microsecond)
 			}
 		}
 	})
@@ -465,7 +462,9 @@ func New() *V {
 			return
 		}
 		v.logDebug(c, "session close event triggered")
-		v.devModeRemovePersisted(c)
+		if v.cfg.DevMode {
+			v.devModeRemovePersisted(c)
+		}
 		v.unregisterCtx(c.id)
 
 	})
