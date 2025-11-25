@@ -10,55 +10,60 @@ import (
 
 func TestSignalReturnAsString(t *testing.T) {
 	testcases := []struct {
+		desc     string
 		given    any
 		expected string
 	}{
-		{"test", "test"},
-		{"another", "another"},
-		{1, "1"},
-		{-99, "-99"},
-		{1.1, "1.1"},
-		{-34.345, "-34.345"},
-		{true, "true"},
-		{false, "false"},
+		{"string", "test", "test"},
+		{"other string", "another", "another"},
+		{"int", 1, "1"},
+		{"negative int", -99, "-99"},
+		{"float", 1.1, "1.1"},
+		{"negative float", -34.345, "-34.345"},
+		{"positive bool", true, "true"},
+		{"negative bool", false, "false"},
 	}
 
 	for _, testcase := range testcases {
-		var sig *signal
-		v := New()
-		v.Page("/", func(c *Context) {
-			c.View(func() h.H { return nil })
-			sig = c.Signal(testcase.given)
+		t.Run(testcase.desc, func(t *testing.T) {
+			t.Parallel()
+			var sig *signal
+			v := New()
+			v.Page("/", func(c *Context) {
+				sig = c.Signal(testcase.given)
+				c.View(func() h.H { return h.Div() })
+			})
+			assert.Equal(t, testcase.expected, sig.String())
 		})
-
-		assert.Equal(t, testcase.expected, sig.String())
 
 	}
 }
 
 func TestSignalReturnAsStringComplexTypes(t *testing.T) {
 	testcases := []struct {
+		desc     string
 		given    any
 		expected string
 	}{
-		{[]string{"test"}, `["test"]`},
-		{[]int{1, 2}, "[1, 2]"},
-		{struct{ Val string }{"test"}, `{"Val": "test"}`},
-		{struct {
+		{"string slice", []string{"test"}, `["test"]`},
+		{"int slice", []int{1, 2}, "[1, 2]"},
+		{"struct1", struct{ Val string }{"test"}, `{"Val": "test"}`},
+		{"struct2", struct {
 			Num        int
 			IsPositive bool
 		}{1, true}, `{"Num": 1, "IsPositive": true}`},
 	}
 
 	for _, testcase := range testcases {
-		var sig *signal
-		v := New()
-		v.Page("/", func(c *Context) {
-			c.View(func() h.H { return nil })
-			sig = c.Signal(testcase.given)
+		t.Run(testcase.desc, func(t *testing.T) {
+			t.Parallel()
+			var sig *signal
+			v := New()
+			v.Page("/", func(c *Context) {
+				c.View(func() h.H { return nil })
+				sig = c.Signal(testcase.given)
+			})
+			assert.JSONEq(t, testcase.expected, sig.String())
 		})
-
-		assert.JSONEq(t, testcase.expected, sig.String())
-
 	}
 }

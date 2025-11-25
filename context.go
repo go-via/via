@@ -171,8 +171,9 @@ func (c *Context) Signal(v any) *signal {
 		changed: true,
 	}
 
-	// components register signals on parent page
-	if c.isComponent() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.isComponent() { // components register signals on parent page
 		c.parentPageCtx.signals.Store(sigID, sig)
 	} else {
 		c.signals.Store(sigID, sig)
@@ -240,11 +241,8 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 // is dropped to prevent runtime blocks.
 func (c *Context) sendPatch(p patch) {
 	patchChan := c.getPatchChan()
-	if patchChan == nil {
-		c.app.logWarn(c, "view out of sync: sse stream closed")
-	}
 	select {
-	case patchChan <- p: //queue patch
+	case patchChan <- p:
 	default: // closed or buffer full - drop patch without blocking
 		c.app.logWarn(c, "view out of sync: sse stream closed or queue is full")
 	}
@@ -318,9 +316,13 @@ func (c *Context) ExecScript(s string) {
 	c.sendPatch(patch{patchTypeScript, s})
 }
 
-// stopAllRoutines safely stops all go routines tied to this Context. Prevents goroutine leakage.
+// stopAllRoutines stops all go routines tied to this Context preventing goroutine leaks.
 func (c *Context) stopAllRoutines() {
-	close(c.ctxDisposedChan)
+	select {
+	case c.ctxDisposedChan <- struct{}{}:
+	default:
+	}
+
 }
 
 func newContext(id string, route string, v *V) *Context {

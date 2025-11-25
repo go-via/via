@@ -207,14 +207,13 @@ func (v *V) currSessionNum() int {
 }
 
 func (v *V) unregisterCtx(c *Context) {
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
 	if c.id == "" {
 		v.logErr(c, "unregister ctx failed: ctx contains empty id")
 		return
 	}
+	v.contextRegistryMutex.Lock()
+	defer v.contextRegistryMutex.Unlock()
 	v.logDebug(c, "ctx removed from registry")
-	c.stopAllRoutines()
 	delete(v.contextRegistry, c.id)
 	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
 }
@@ -463,6 +462,7 @@ func New() *V {
 		defer r.Body.Close()
 		cID := string(body)
 		c, err := v.getCtx(cID)
+		c.stopAllRoutines()
 		if err != nil {
 			v.logErr(c, "failed to handle session close: %v", err)
 			return

@@ -9,13 +9,13 @@ import (
 // Routine allows for defining concurrent goroutines safely. Goroutines started by *Routine
 // are tied to the *Context lifecycle.
 type Routine struct {
-	mu             sync.Mutex
+	mu             sync.RWMutex
 	ctxDisposed    chan struct{}
 	localInterrupt chan struct{}
 	isRunning      atomic.Bool
 	routineFn      func()
 	tckDuration    time.Duration
-	tkr            *time.Ticker
+	updateTkrChan  chan time.Duration
 }
 
 // OnInterval starts a go routine that sets a time.Ticker with the given duration and executes
@@ -27,15 +27,19 @@ func (r *Routine) OnInterval(d time.Duration, fn func()) {
 	}
 	r.tckDuration = d
 	r.routineFn = func() {
-		r.tkr = time.NewTicker(r.tckDuration)
-		defer r.tkr.Stop() // clean up the ticker when routine stops
+		r.mu.RLock()
+		tkr := time.NewTicker(r.tckDuration)
+		r.mu.RUnlock()
+		defer tkr.Stop() // clean up the ticker when routine stops
 		for {
 			select {
 			case <-r.ctxDisposed: // dispose of the routine when ctx is disposed
 				return
 			case <-r.localInterrupt: // dispose of the routine on interrupt signal
 				return
-			case <-r.tkr.C:
+			case d := <-r.updateTkrChan:
+				tkr.Reset(d)
+			case <-tkr.C:
 				fn()
 			}
 		}
@@ -45,8 +49,10 @@ func (r *Routine) OnInterval(d time.Duration, fn func()) {
 // UpdateInterval sets a new interval duration for the internal *time.Ticker. If the provided
 // duration is equal of less than 0, UpdateInterval does nothing.
 func (r *Routine) UpdateInterval(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tckDuration = d
-	r.tkr.Reset(d)
+	r.updateTkrChan <- d
 
 }
 
@@ -72,5 +78,6 @@ func newRoutine(ctxDisposedChan chan struct{}) *Routine {
 	return &Routine{
 		ctxDisposed:    ctxDisposedChan,
 		localInterrupt: make(chan struct{}),
+		updateTkrChan:  make(chan time.Duration),
 	}
 }
