@@ -25,6 +25,7 @@ type Context struct {
 	actionRegistry    map[string]func()
 	signals           *sync.Map
 	mutex             sync.RWMutex
+	ctxDisposedChan   chan struct{}
 }
 
 // View defines the UI rendered by this context.
@@ -58,7 +59,7 @@ func (c *Context) View(f func() h.H) {
 //			)
 //		})
 //	})
-func (c *Context) Component(f func(c *Context)) func() h.H {
+func (c *Context) Component(initCtx func(c *Context)) func() h.H {
 	id := c.id + "/_component/" + genRandID()
 	compCtx := newContext(id, c.route, c.app)
 	if c.isComponent() {
@@ -66,7 +67,7 @@ func (c *Context) Component(f func(c *Context)) func() h.H {
 	} else {
 		compCtx.parentPageCtx = c
 	}
-	f(compCtx)
+	initCtx(compCtx)
 	c.componentRegistry[id] = compCtx
 	return compCtx.view
 }
@@ -112,6 +113,21 @@ func (c *Context) getActionFn(id string) (func(), error) {
 		return f, nil
 	}
 	return nil, fmt.Errorf("action '%s' not found", id)
+}
+
+// Routine uses the given initialization handler to define a safe concurrent goroutine
+// that is tied to *Context. The returned *Routine instance provides methods
+// to start, stop or update the routine.
+func (c *Context) Routine(initRoutine func(*Routine)) *Routine {
+	var cn chan struct{}
+	if c.isComponent() { // components use the chan on the parent page ctx
+		cn = c.parentPageCtx.ctxDisposedChan
+	} else {
+		cn = c.ctxDisposedChan
+	}
+	r := newRoutine(cn)
+	initRoutine(r)
+	return r
 }
 
 // Signal creates a reactive signal and initializes it with the given value.
@@ -202,6 +218,8 @@ func (c *Context) getPatchChan() chan patch {
 }
 
 func (c *Context) prepareSignalsForPatch() map[string]any {
+	c.mutex.RLock()
+	defer c.mutex.RUnlock()
 	updatedSigs := make(map[string]any)
 	c.signals.Range(func(sigID, value any) bool {
 		if sig, ok := value.(*signal); ok {
@@ -218,31 +236,42 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 	return updatedSigs
 }
 
+// sendPatch queues a patch on this *Context sse stream. If the sse is closed or queue is full, the patch
+// is dropped to prevent runtime blocks.
+func (c *Context) sendPatch(p patch) {
+	patchChan := c.getPatchChan()
+	if patchChan == nil {
+		c.app.logWarn(c, "view out of sync: sse stream closed")
+	}
+	select {
+	case patchChan <- p: //queue patch
+	default: // closed or buffer full - drop patch without blocking
+		c.app.logWarn(c, "view out of sync: sse stream closed or queue is full")
+	}
+}
+
 // Sync pushes the current view state and signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) Sync() {
-	patchChan := c.getPatchChan()
 	elemsPatch := bytes.NewBuffer(make([]byte, 0))
 	if err := c.view().Render(elemsPatch); err != nil {
 		c.app.logErr(c, "sync view failed: %v", err)
 		return
 	}
-	patchChan <- patch{patchTypeElements, elemsPatch.String()}
+	c.sendPatch(patch{patchTypeElements, elemsPatch.String()})
 
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
 	updatedSigs := c.prepareSignalsForPatch()
 
 	if len(updatedSigs) != 0 {
 		outgoingSigs, _ := json.Marshal(updatedSigs)
-		patchChan <- patch{patchTypeSignals, string(outgoingSigs)}
+		c.sendPatch(patch{patchTypeSignals, string(outgoingSigs)})
 	}
 }
 
 // SyncElements pushes an immediate html patch over the live SSE stream to the
 // browser that merges with the DOM
 //
-// For the merge to occur, the top level element in the patch needs to have
+// For the merge to occur, each top lever element in the patch needs to have
 // an ID that matches the ID of an element that already sits in the view.
 //
 // Example:
@@ -254,58 +283,44 @@ func (c *Context) Sync() {
 //		h.P(h.Text("Hello from Via!"))
 //	)
 //
-// Then, the merge will only occur if the ID of the top level element in the patch
+// Then, the merge will only occur if the ID of one of the top level elements in the patch
 // matches 'my-element'.
-func (c *Context) SyncElements(elem h.H) {
-	if elem == nil {
-		c.app.logErr(c, "sync elements failed: view func is nil")
-		return
+func (c *Context) SyncElements(elem ...h.H) {
+	b := bytes.NewBuffer(nil)
+	for idx, el := range elem {
+		if el == nil {
+			c.app.logWarn(c, "sync elements failed: element at idx=%d is nil", idx)
+			continue
+		}
+		if err := el.Render(b); err != nil {
+			c.app.logWarn(c, "sync elements failed: element at idx=%d has invalid html", idx)
+			continue
+		}
 	}
-	patchChan := c.getPatchChan()
-	if patchChan == nil {
-		c.app.logWarn(c, "sync elements failed: no sse stream")
-		return
-	}
-	b := bytes.NewBuffer(make([]byte, 0))
-	_ = elem.Render(b)
-	patchChan <- patch{patchTypeElements, b.String()}
+	c.sendPatch(patch{patchTypeElements, b.String()})
 }
 
 // SyncSignals pushes the current signal changes to the browser immediately
 // over the live SSE event stream.
 func (c *Context) SyncSignals() {
-	patchChan := c.getPatchChan()
-	if patchChan == nil {
-		c.app.logWarn(c, "signals out of sync: no sse stream")
-		return
-	}
-	updatedSigs := make(map[string]any)
-
-	c.signals.Range(func(key, val any) bool {
-		// We know the types.
-		sig, _ := val.(*signal) // adjust *Signal to your actual signal type
-		id, _ := key.(string)
-		if sig.err != nil {
-			c.app.logWarn(c, "signal out of sync'%s': %v", sig.id, sig.err)
-		}
-		if sig.changed && sig.err == nil {
-			updatedSigs[id] = fmt.Sprintf("%v", sig.val)
-			sig.changed = false
-		}
-		return true // continue iteration
-	})
+	updatedSigs := c.prepareSignalsForPatch()
 	if len(updatedSigs) != 0 {
 		outgoingSignals, _ := json.Marshal(updatedSigs)
-		patchChan <- patch{patchTypeSignals, string(outgoingSignals)}
+		c.sendPatch(patch{patchTypeSignals, string(outgoingSignals)})
 	}
 }
 
 func (c *Context) ExecScript(s string) {
 	if s == "" {
+		c.app.logWarn(c, "exec script failed: empty script")
 		return
 	}
-	patchChan := c.getPatchChan()
-	patchChan <- patch{patchTypeScript, s}
+	c.sendPatch(patch{patchTypeScript, s})
+}
+
+// stopAllRoutines safely stops all go routines tied to this Context. Prevents goroutine leakage.
+func (c *Context) stopAllRoutines() {
+	close(c.ctxDisposedChan)
 }
 
 func newContext(id string, route string, v *V) *Context {
@@ -320,6 +335,6 @@ func newContext(id string, route string, v *V) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           new(sync.Map),
-		patchChan:         make(chan patch, 100),
+		ctxDisposedChan:   make(chan struct{}),
 	}
 }

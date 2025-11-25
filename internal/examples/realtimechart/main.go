@@ -54,40 +54,50 @@ func chartCompFn(c *via.Context) {
 	labels := make([]string, 1000)
 
 	isLive := true
+
 	isLiveSig := c.Signal("on")
-	refreshRate := c.Signal(24)
-	tkr := time.NewTicker(1000 / time.Duration(refreshRate.Int()) * time.Millisecond)
 
-	updateRefreshRate := c.Action(func() {
-		tkr.Reset(1000 / time.Duration(refreshRate.Int()) * time.Millisecond)
-	})
+	refreshRate := c.Signal("1")
 
-	toggleIsLive := c.Action(func() {
-		isLive = isLiveSig.Bool()
-	})
+	computedTickDuration := func() time.Duration {
+		return 1000 / time.Duration(refreshRate.Int()) * time.Millisecond
+	}
 
-	go func() {
-		defer tkr.Stop()
-		for range tkr.C {
+	updateData := c.Routine(func(r *via.Routine) {
+
+		r.OnInterval(computedTickDuration(), func() {
 			labels = append(labels[1:], time.Now().Format("15:04:05.000"))
 			data = append(data[1:], rand.Float64()*10)
 			labelsTxt, _ := json.Marshal(labels)
 			dataTxt, _ := json.Marshal(data)
 
-			if isLive {
-				c.ExecScript(fmt.Sprintf(`
-					if (myChart)
-						myChart.setOption({
-							xAxis: [{data: %s}],
-							series:[{data: %s}]
-						},{
-							notMerge:false,
-							lazyUpdate:true
-						});
+			c.ExecScript(fmt.Sprintf(`
+				if (myChart)
+					myChart.setOption({
+						xAxis: [{data: %s}],
+						series:[{data: %s}]
+					},{
+						notMerge:false,
+						lazyUpdate:true
+					});
 				`, labelsTxt, dataTxt))
-			}
+		})
+
+	})
+	updateData.Start()
+
+	updateRefreshRate := c.Action(func() {
+		updateData.UpdateInterval(computedTickDuration())
+	})
+
+	toggleIsLive := c.Action(func() {
+		isLive = isLiveSig.Bool()
+		if isLive {
+			updateData.Start()
+		} else {
+			updateData.Stop()
 		}
-	}()
+	})
 
 	c.View(func() h.H {
 		return h.Div(
@@ -96,7 +106,7 @@ func chartCompFn(c *via.Context) {
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
 					backgroundColor: prefersDark.matches ? 'transparent' : '#ffffff',
-					animationDurationUpdate: 0,  //  affects updates/redraws
+					animationDurationUpdate: 0, // affects updates/redraws
 					tooltip: {
 						trigger: 'axis',
 						position: function (pt) {

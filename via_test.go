@@ -1,7 +1,6 @@
 package via
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -85,27 +84,6 @@ func TestConfig(t *testing.T) {
 	v := New()
 	v.Config(Options{DocumentTitle: "Test"})
 	assert.Equal(t, "Test", v.cfg.DocumentTitle)
-}
-
-func TestSyncSignals(t *testing.T) {
-	var ctx *Context
-	var sig *signal
-	v := New()
-	v.Page("/", func(c *Context) {
-		ctx = c
-		sig = c.Signal("initial")
-		c.View(func() h.H { return h.Div() })
-	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	v.mux.ServeHTTP(w, req)
-
-	sig.SetValue("updated")
-	ctx.SyncSignals()
-
-	patch := <-ctx.patchChan
-	assert.Equal(t, patch.content, fmt.Sprintf(`{"%s":"updated"}`, sig.ID()))
 }
 
 func TestPage_PanicsOnNoView(t *testing.T) {

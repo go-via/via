@@ -145,6 +145,7 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		c := newContext("", "", v)
 		initContextFn(c)
 		c.view()
+		c.stopAllRoutines()
 	}()
 
 	// save page init function allows devmode to restore persisted ctx later
@@ -205,17 +206,17 @@ func (v *V) currSessionNum() int {
 	return len(v.contextRegistry)
 }
 
-func (v *V) unregisterCtx(id string) {
+func (v *V) unregisterCtx(c *Context) {
 	v.contextRegistryMutex.Lock()
 	defer v.contextRegistryMutex.Unlock()
-	if id == "" {
+	if c.id == "" {
+		v.logErr(c, "unregister ctx failed: ctx contains empty id")
 		return
 	}
-	v.logDebug(nil, "ctx '%s' removed from registry", id)
+	v.logDebug(c, "ctx removed from registry")
+	c.stopAllRoutines()
+	delete(v.contextRegistry, c.id)
 	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
-
-	delete(v.contextRegistry, id)
-	v.currSessionNum()
 }
 
 func (v *V) getCtx(id string) (*Context, error) {
@@ -385,11 +386,16 @@ func New() *V {
 
 		v.logDebug(c, "SSE connection established")
 
-		if v.cfg.DevMode {
-			c.Sync()
-		} else {
-			c.SyncSignals()
-		}
+		c.patchChan = make(chan patch, 1000)
+		defer close(c.patchChan)
+
+		go func() {
+			if v.cfg.DevMode {
+				c.Sync()
+			} else {
+				c.SyncSignals()
+			}
+		}()
 
 		for {
 			select {
@@ -398,7 +404,7 @@ func New() *V {
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
-					continue
+					return
 				}
 				switch patch.typ {
 				case patchTypeElements:
@@ -465,7 +471,7 @@ func New() *V {
 		if v.cfg.DevMode {
 			v.devModeRemovePersisted(c)
 		}
-		v.unregisterCtx(c.id)
+		v.unregisterCtx(c)
 
 	})
 	return v
