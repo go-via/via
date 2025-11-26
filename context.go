@@ -244,7 +244,6 @@ func (c *Context) sendPatch(p patch) {
 	select {
 	case patchChan <- p:
 	default: // closed or buffer full - drop patch without blocking
-		c.app.logWarn(c, "view out of sync: sse stream closed or queue is full")
 	}
 }
 
@@ -320,11 +319,8 @@ func (c *Context) ExecScript(s string) {
 func (c *Context) stopAllRoutines() {
 	select {
 	case c.ctxDisposedChan <- struct{}{}:
-		c.app.logDebug(c, "stopped all routines")
 	default:
-		c.app.logDebug(c, "did not stop all routines")
 	}
-
 }
 
 func newContext(id string, route string, v *V) *Context {
@@ -339,6 +335,7 @@ func newContext(id string, route string, v *V) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           new(sync.Map),
+		patchChan:         make(chan patch, 100),
 		ctxDisposedChan:   make(chan struct{}, 1),
 	}
 }

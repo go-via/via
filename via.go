@@ -154,7 +154,9 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 	}
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.logDebug(nil, "GET %s", r.URL.String())
-		if strings.Contains(r.URL.Path, "favicon") {
+		if strings.Contains(r.URL.Path, "favicon") ||
+			strings.Contains(r.URL.Path, ".well-known") ||
+			strings.Contains(r.URL.Path, "js.map") {
 			return
 		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
@@ -235,9 +237,6 @@ func (v *V) HandleFunc(pattern string, f http.HandlerFunc) {
 
 // Start starts the Via HTTP server on the given address.
 func (v *V) Start() {
-	if v.cfg.DevMode {
-		v.devModeRestore()
-	}
 	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
@@ -307,7 +306,7 @@ func (v *V) devModeRemovePersisted(c *Context) {
 	v.logDebug(c, "devmode removed persisted ctx from file")
 }
 
-func (v *V) devModeRestore() {
+func (v *V) devModeRestore(cID string) {
 	p := filepath.Join(".via", "devmode", "ctx.json")
 	file, err := os.Open(p)
 	if err != nil {
@@ -324,17 +323,18 @@ func (v *V) devModeRestore() {
 		return
 	}
 	for ctxID, pageRoute := range ctxRegMap {
-		pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
-		if !ok {
-			v.logWarn(nil, "devmode could not restore ctx from file: page init fn for route '%s' not found", pageRoute)
-			continue
+		if ctxID == cID {
+			pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
+			if !ok {
+				v.logWarn(nil, "devmode could not restore ctx from file: page init fn for route '%s' not found", pageRoute)
+				continue
+			}
+			c := newContext(ctxID, pageRoute, v)
+			pageInitFn(c)
+			v.registerCtx(c)
+			v.logDebug(c, "devmode restored ctx")
 		}
-
-		c := newContext(ctxID, pageRoute, v)
-		pageInitFn(c)
-		v.registerCtx(c)
 	}
-	v.logDebug(nil, "devmode restored ctx registry")
 }
 
 type patchType int
@@ -375,6 +375,12 @@ func New() *V {
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
+
+		if v.cfg.DevMode {
+			if _, err := v.getCtx(cID); err != nil {
+				v.devModeRestore(cID)
+			}
+		}
 		c, err := v.getCtx(cID)
 		if err != nil {
 			v.logErr(nil, "sse stream failed to start: %v", err)
@@ -384,9 +390,6 @@ func New() *V {
 		sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
 
 		v.logDebug(c, "SSE connection established")
-
-		c.patchChan = make(chan patch, 1000)
-		defer close(c.patchChan)
 
 		go func() {
 			c.Sync()
