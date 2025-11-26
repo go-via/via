@@ -184,7 +184,7 @@ func (c *Context) Signal(v any) *signal {
 
 func (c *Context) injectSignals(sigs map[string]any) {
 	if sigs == nil {
-		c.app.logErr(c, "signal injection failed: nil signals in ctx")
+		c.app.logErr(c, "signal injection failed: nil signals")
 		return
 	}
 
@@ -320,7 +320,9 @@ func (c *Context) ExecScript(s string) {
 func (c *Context) stopAllRoutines() {
 	select {
 	case c.ctxDisposedChan <- struct{}{}:
+		c.app.logDebug(c, "stopped all routines")
 	default:
+		c.app.logDebug(c, "did not stop all routines")
 	}
 
 }
@@ -337,6 +339,6 @@ func newContext(id string, route string, v *V) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           new(sync.Map),
-		ctxDisposedChan:   make(chan struct{}),
+		ctxDisposedChan:   make(chan struct{}, 1),
 	}
 }

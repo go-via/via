@@ -153,7 +153,7 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		v.devModePageInitFnMap[route] = initContextFn
 	}
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v.logDebug(nil, "GET %s", route)
+		v.logDebug(nil, "GET %s", r.URL.String())
 		if strings.Contains(r.URL.Path, "favicon") {
 			return
 		}
@@ -389,11 +389,7 @@ func New() *V {
 		defer close(c.patchChan)
 
 		go func() {
-			if v.cfg.DevMode {
-				c.Sync()
-			} else {
-				c.SyncSignals()
-			}
+			c.Sync()
 		}()
 
 		for {
@@ -403,23 +399,23 @@ func New() *V {
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
-					return
+					continue
 				}
 				switch patch.typ {
 				case patchTypeElements:
 					if err := sse.PatchElements(patch.content); err != nil {
 						v.logErr(c, "PatchElements failed: %v", err)
-						return
+						continue
 					}
 				case patchTypeSignals:
 					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
 						v.logErr(c, "PatchSignals failed: %v", err)
-						return
+						continue
 					}
 				case patchTypeScript:
 					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
 						v.logErr(c, "ExecuteScript failed: %v", err)
-						return
+						continue
 					}
 				}
 			}
