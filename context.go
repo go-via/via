@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"reflect"
 	"sync"
 	"time"
@@ -20,12 +21,13 @@ type Context struct {
 	route             string
 	app               *V
 	view              func() h.H
+	routeParams       map[string]string
 	componentRegistry map[string]*Context
 	parentPageCtx     *Context
 	patchChan         chan patch
 	actionRegistry    map[string]func()
 	signals           *sync.Map
-	mutex             sync.RWMutex
+	mu                sync.RWMutex
 	ctxDisposedChan   chan struct{}
 }
 
@@ -170,8 +172,8 @@ func (c *Context) Signal(v any) *signal {
 		changed: true,
 	}
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.isComponent() { // components register signals on parent page
 		c.parentPageCtx.signals.Store(sigID, sig)
 	} else {
@@ -187,8 +189,8 @@ func (c *Context) injectSignals(sigs map[string]any) {
 		return
 	}
 
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	for sigID, val := range sigs {
 		if _, ok := c.signals.Load(sigID); !ok {
@@ -218,8 +220,8 @@ func (c *Context) getPatchChan() chan patch {
 }
 
 func (c *Context) prepareSignalsForPatch() map[string]any {
-	c.mutex.RLock()
-	defer c.mutex.RUnlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	updatedSigs := make(map[string]any)
 	c.signals.Range(func(sigID, value any) bool {
 		if sig, ok := value.(*signal); ok {
@@ -322,6 +324,42 @@ func (c *Context) stopAllRoutines() {
 	}
 }
 
+func (c *Context) injectRouteParams(params map[string]string) {
+	if params == nil {
+		return
+	}
+	m := make(map[string]string)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	maps.Copy(m, params)
+	c.routeParams = m
+
+}
+
+// GetPathParam retrieves the value from the page request URL for the given parameter name
+// or an empty string if not found.
+//
+// Example:
+//
+//	v.Page("/users/{user_id}", func(c *via.Context) {
+//
+//			userID := GetPathParam("user_id")
+//
+//			c.View(func() h.H {
+//					return h.Div(
+//							h.H1(h.Textf("User ID: %s", userID)),
+//					)
+//			})
+//	})
+func (c *Context) GetPathParam(param string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if p, ok := c.routeParams[param]; ok {
+		return p
+	}
+	return ""
+}
+
 func newContext(id string, route string, v *V) *Context {
 	if v == nil {
 		log.Fatal("create context failed: app pointer is nil")
@@ -330,6 +368,7 @@ func newContext(id string, route string, v *V) *Context {
 	return &Context{
 		id:                id,
 		route:             route,
+		routeParams:       make(map[string]string),
 		app:               v,
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),

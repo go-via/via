@@ -161,6 +161,8 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
 		c := newContext(id, route, v)
+		routeParams := extractParams(route, r.URL.Path)
+		c.injectRouteParams(routeParams)
 		initContextFn(c)
 		v.registerCtx(c)
 		if v.cfg.DevMode {
@@ -483,4 +485,22 @@ func genRandID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return hex.EncodeToString(b)[:8]
+}
+
+func extractParams(pattern, path string) map[string]string {
+	p := strings.Split(strings.Trim(pattern, "/"), "/")
+	u := strings.Split(strings.Trim(path, "/"), "/")
+	if len(p) != len(u) {
+		return nil
+	}
+	params := make(map[string]string)
+	for i := range p {
+		if strings.HasPrefix(p[i], "{") && strings.HasSuffix(p[i], "}") {
+			key := p[i][1 : len(p[i])-1] // remove {}
+			params[key] = u[i]
+		} else if p[i] != u[i] {
+			continue
+		}
+	}
+	return params
 }

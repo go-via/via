@@ -46,7 +46,8 @@ func (r *OnIntervalRoutine) Stop() {
 	r.localInterrupt <- struct{}{}
 }
 
-func newOnIntervalRoutine(ctxDisposedChan chan struct{}, duration time.Duration, handler func()) *OnIntervalRoutine {
+func newOnIntervalRoutine(ctxDisposedChan chan struct{},
+	duration time.Duration, handler func()) *OnIntervalRoutine {
 	r := &OnIntervalRoutine{
 		ctxDisposed:    ctxDisposedChan,
 		localInterrupt: make(chan struct{}),
