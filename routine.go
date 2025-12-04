@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// Routine allows for defining concurrent goroutines safely. Goroutines started by *Routine
+// OnIntervalRoutine allows for defining concurrent goroutines safely. Goroutines started by *OnIntervalRoutine
 // are tied to the *Context lifecycle.
-type Routine struct {
+type OnIntervalRoutine struct {
 	mu             sync.RWMutex
 	ctxDisposed    chan struct{}
 	localInterrupt chan struct{}
@@ -18,14 +18,41 @@ type Routine struct {
 	updateTkrChan  chan time.Duration
 }
 
-// OnInterval starts a go routine that sets a time.Ticker with the given duration and executes
-// the given func() on every tick. Use *Routine.UpdateInterval to update the interval.
-// If the routine is running, it is stopped.
-func (r *Routine) OnInterval(d time.Duration, fn func()) {
-	if r.isRunning.Load() == true {
-		r.Stop()
-	}
+// UpdateInterval sets a new interval duration for the internal *time.Ticker. If the provided
+// duration is equal of less than 0, UpdateInterval does nothing.
+func (r *OnIntervalRoutine) UpdateInterval(d time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tckDuration = d
+	r.updateTkrChan <- d
+
+}
+
+// Start executes the predifined goroutine. If no predifined goroutine exists, or it already
+// started, Start does nothing.
+func (r *OnIntervalRoutine) Start() {
+	if !r.isRunning.CompareAndSwap(false, true) || r.routineFn == nil {
+		return
+	}
+	go r.routineFn()
+}
+
+// Stop interrupts the predifined goroutine. If no predifined goroutine exists, or it already
+// ustopped, Stop does nothing.
+func (r *OnIntervalRoutine) Stop() {
+	if !r.isRunning.CompareAndSwap(true, false) || r.routineFn == nil {
+		return
+	}
+	r.localInterrupt <- struct{}{}
+}
+
+func newOnIntervalRoutine(ctxDisposedChan chan struct{}, duration time.Duration, handler func()) *OnIntervalRoutine {
+	r := &OnIntervalRoutine{
+		ctxDisposed:    ctxDisposedChan,
+		localInterrupt: make(chan struct{}),
+		updateTkrChan:  make(chan time.Duration),
+	}
+	r.tckDuration = duration
 	r.routineFn = func() {
 		r.mu.RLock()
 		tkr := time.NewTicker(r.tckDuration)
@@ -40,44 +67,9 @@ func (r *Routine) OnInterval(d time.Duration, fn func()) {
 			case d := <-r.updateTkrChan:
 				tkr.Reset(d)
 			case <-tkr.C:
-				fn()
+				handler()
 			}
 		}
 	}
-}
-
-// UpdateInterval sets a new interval duration for the internal *time.Ticker. If the provided
-// duration is equal of less than 0, UpdateInterval does nothing.
-func (r *Routine) UpdateInterval(d time.Duration) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.tckDuration = d
-	r.updateTkrChan <- d
-
-}
-
-// Start executes the predifined goroutine. If no predifined goroutine exists, or it already
-// started, Start does nothing.
-func (r *Routine) Start() {
-	if !r.isRunning.CompareAndSwap(false, true) || r.routineFn == nil {
-		return
-	}
-	go r.routineFn()
-}
-
-// Stop interrupts the predifined goroutine. If no predifined goroutine exists, or it already
-// ustopped, Stop does nothing.
-func (r *Routine) Stop() {
-	if !r.isRunning.CompareAndSwap(true, false) || r.routineFn == nil {
-		return
-	}
-	r.localInterrupt <- struct{}{}
-}
-
-func newRoutine(ctxDisposedChan chan struct{}) *Routine {
-	return &Routine{
-		ctxDisposed:    ctxDisposedChan,
-		localInterrupt: make(chan struct{}),
-		updateTkrChan:  make(chan time.Duration),
-	}
+	return r
 }

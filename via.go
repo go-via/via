@@ -392,7 +392,11 @@ func New() *V {
 		v.logDebug(c, "SSE connection established")
 
 		go func() {
-			c.Sync()
+			if v.cfg.DevMode {
+				c.Sync()
+				return
+			}
+			c.SyncSignals()
 		}()
 
 		for {
@@ -461,17 +465,16 @@ func New() *V {
 		defer r.Body.Close()
 		cID := string(body)
 		c, err := v.getCtx(cID)
-		c.stopAllRoutines()
 		if err != nil {
 			v.logErr(c, "failed to handle session close: %v", err)
 			return
 		}
+		c.stopAllRoutines()
 		v.logDebug(c, "session close event triggered")
 		if v.cfg.DevMode {
 			v.devModeRemovePersisted(c)
 		}
 		v.unregisterCtx(c)
-
 	})
 	return v
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math/rand"
 	"time"
@@ -30,8 +29,8 @@ func main() {
 		chartComp := c.Component(chartCompFn)
 
 		c.View(func() h.H {
-			return h.Div(h.Class("container"),
-				h.Section(
+			return h.Div(h.Style("overflow-x:hidden"),
+				h.Section(h.Class("container"),
 					h.Nav(
 						h.Ul(h.Li(h.H3(h.Text("⚡Via")))),
 						h.Ul(
@@ -50,39 +49,30 @@ func main() {
 }
 
 func chartCompFn(c *via.Context) {
-	data := make([]float64, 1000)
-	labels := make([]string, 1000)
-
 	isLive := true
 
 	isLiveSig := c.Signal("on")
 
-	refreshRate := c.Signal("1")
+	refreshRate := c.Signal("24")
 
 	computedTickDuration := func() time.Duration {
 		return 1000 / time.Duration(refreshRate.Int()) * time.Millisecond
 	}
 
-	updateData := c.Routine(func(r *via.Routine) {
+	updateData := c.OnInterval(computedTickDuration(), func() {
+		ts := time.Now().UnixMilli()
+		val := rand.ExpFloat64() * 10
 
-		r.OnInterval(computedTickDuration(), func() {
-			labels = append(labels[1:], time.Now().Format("15:04:05.000"))
-			data = append(data[1:], rand.Float64()*10)
-			labelsTxt, _ := json.Marshal(labels)
-			dataTxt, _ := json.Marshal(data)
-
-			c.ExecScript(fmt.Sprintf(`
-				if (myChart)
-					myChart.setOption({
-						xAxis: [{data: %s}],
-						series:[{data: %s}]
-					},{
-						notMerge:false,
-						lazyUpdate:true
-					});
-				`, labelsTxt, dataTxt))
-		})
-
+		c.ExecScript(fmt.Sprintf(`
+			if (myChart) {
+				myChart.appendData({seriesIndex: 0, data: [[%d, %f]]});
+				myChart.setOption({
+				},{
+					notMerge:false,
+					lazyUpdate:true
+				});
+			};
+		`, ts, val))
 	})
 	updateData.Start()
 
@@ -100,8 +90,8 @@ func chartCompFn(c *via.Context) {
 	})
 
 	c.View(func() h.H {
-		return h.Div(
-			h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"), h.Script(h.Raw(`
+		return h.Div(h.Div(h.ID("chart"), h.Style("width:100%;height:400px;"),
+			h.Script(h.Raw(`
 				var prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
 				var myChart = echarts.init(document.getElementById('chart'), prefersDark.matches ? 'dark' : 'light');
 				var option = {
@@ -111,25 +101,32 @@ func chartCompFn(c *via.Context) {
 						trigger: 'axis',
 						position: function (pt) {
 							return [pt[0], '10%'];
-						}
+						},
+						syncStrategy: 'closestSampledPoint',
+						backgroundColor: prefersDark.matches ? '#13171fc0' : '#eeeeeec0',
+						extraCssText: 'backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);'
 					},
 					title: {
 						left: 'center',
 						text: '📈 Real-Time Chart Example'
 					},
 					xAxis: {
-						type: 'category',
+						type: 'time',
 						boundaryGap: false,
-						data: [] 
+						axisLabel: {
+							hideOverlap: true
+						}
 					},
 					yAxis: {
 						type: 'value',
-						boundaryGap: [0, '100%']
+						boundaryGap: [0, '100%'],
+						min: 0,
+						max: 100
 					},
 					dataZoom: [
 						{
 							type: 'inside',
-							start: 90,
+							start: 1,
 							end: 100
 						},
 						{
@@ -142,7 +139,7 @@ func chartCompFn(c *via.Context) {
 							name: 'Fake Data',
 							type: 'line',
 							symbol: 'none',
-							sampling: 'lttb',
+							sampling: 'max',
 							itemStyle: {
 								color: '#e8ae01'
 							},
@@ -159,6 +156,7 @@ func chartCompFn(c *via.Context) {
 									}
 								])
 							},
+							large: true,
 							data: []
 						}
 					]

@@ -7,6 +7,7 @@ import (
 	"log"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/go-via/via/h"
 )
@@ -115,18 +116,16 @@ func (c *Context) getActionFn(id string) (func(), error) {
 	return nil, fmt.Errorf("action '%s' not found", id)
 }
 
-// Routine uses the given initialization handler to define a safe concurrent goroutine
-// that is tied to *Context. The returned *Routine instance provides methods
-// to start, stop or update the routine.
-func (c *Context) Routine(initRoutine func(*Routine)) *Routine {
+// OnInterval starts a go routine that sets a time.Ticker with the given duration and executes
+// the given handler func() on every tick. Use *Routine.UpdateInterval to update the interval.
+func (c *Context) OnInterval(duration time.Duration, handler func()) *OnIntervalRoutine {
 	var cn chan struct{}
 	if c.isComponent() { // components use the chan on the parent page ctx
 		cn = c.parentPageCtx.ctxDisposedChan
 	} else {
 		cn = c.ctxDisposedChan
 	}
-	r := newRoutine(cn)
-	initRoutine(r)
+	r := newOnIntervalRoutine(cn, duration, handler)
 	return r
 }
 
@@ -335,7 +334,7 @@ func newContext(id string, route string, v *V) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
 		signals:           new(sync.Map),
-		patchChan:         make(chan patch, 100),
+		patchChan:         make(chan patch, 1),
 		ctxDisposedChan:   make(chan struct{}, 1),
 	}
 }
