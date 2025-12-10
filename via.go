@@ -243,6 +243,12 @@ func (v *V) Start() {
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
+// Handler returns the underlying http.Handler for use with custom servers or testing.
+// This enables integration with test frameworks like gost-dom/browser for SSE/Datastar testing.
+func (v *V) Handler() http.Handler {
+	return v.mux
+}
+
 func (v *V) devModePersist(c *Context) {
 	p := filepath.Join(".via", "devmode", "ctx.json")
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
