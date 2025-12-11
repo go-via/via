@@ -243,6 +243,12 @@ func (v *V) Start() {
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
+// Handler returns the underlying http.Handler for use with custom servers or testing.
+// This enables integration with test frameworks like gost-dom/browser for SSE/Datastar testing.
+func (v *V) Handler() http.Handler {
+	return v.mux
+}
+
 func (v *V) devModePersist(c *Context) {
 	p := filepath.Join(".via", "devmode", "ctx.json")
 	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
@@ -413,17 +419,24 @@ func New() *V {
 				switch patch.typ {
 				case patchTypeElements:
 					if err := sse.PatchElements(patch.content); err != nil {
-						v.logErr(c, "PatchElements failed: %v", err)
+						// Only log if connection wasn't closed (avoids noise during shutdown/tests)
+						if sse.Context().Err() == nil {
+							v.logErr(c, "PatchElements failed: %v", err)
+						}
 						continue
 					}
 				case patchTypeSignals:
 					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
-						v.logErr(c, "PatchSignals failed: %v", err)
+						if sse.Context().Err() == nil {
+							v.logErr(c, "PatchSignals failed: %v", err)
+						}
 						continue
 					}
 				case patchTypeScript:
 					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
-						v.logErr(c, "ExecuteScript failed: %v", err)
+						if sse.Context().Err() == nil {
+							v.logErr(c, "ExecuteScript failed: %v", err)
+						}
 						continue
 					}
 				}
