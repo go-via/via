@@ -37,7 +37,7 @@ func main() {
 }
 
 func PicoCSSPlugin(v *via.V) {
-	v.HandleFunc("GET /_plugins/picocss/assets/style.css", func(w http.ResponseWriter, r *http.Request) {
+	v.HTTPServeMux().HandleFunc("GET /_plugins/picocss/assets/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		_, _ = w.Write(picoCSSFile)
 	})

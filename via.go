@@ -1,5 +1,6 @@
-// Package via provides a reactive web framework for Go.
-// It lets you build live, type-safe web interfaces without JavaScript.
+// Package via provides a reactive, real-time engine for creating Go web
+// applications. It lets you build live, type-safe web interfaces without
+// JavaScript.
 //
 // Via unifies routing, state, and UI reactivity through a simple mental model:
 // Go on the server — HTML in the browser — updated in real time via Datastar.
@@ -231,21 +232,18 @@ func (v *V) getCtx(id string) (*Context, error) {
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
-// HandleFunc registers the HTTP handler function for a given pattern. The handler function panics if
-// in conflict with another registered handler with the same pattern.
-func (v *V) HandleFunc(pattern string, f http.HandlerFunc) {
-	v.mux.HandleFunc(pattern, f)
-}
-
 // Start starts the Via HTTP server on the given address.
 func (v *V) Start() {
 	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
-// Handler returns the underlying http.Handler for use with custom servers or testing.
-// This enables integration with test frameworks like gost-dom/browser for SSE/Datastar testing.
-func (v *V) Handler() http.Handler {
+// HTTPServeMux returns the underlying HTTP request multiplexer to enable user extentions, middleware and
+// plugins. It also enables integration with test frameworks like gost-dom/browser for SSE/Datastar testing.
+//
+// IMPORTANT. The returned *http.ServeMux can only be modified during initialization, before calling via.Start().
+// Concurrent handler registration is not safe.
+func (v *V) HTTPServeMux() *http.ServeMux {
 	return v.mux
 }
 
@@ -423,14 +421,12 @@ func New() *V {
 						if sse.Context().Err() == nil {
 							v.logErr(c, "PatchElements failed: %v", err)
 						}
-						continue
 					}
 				case patchTypeSignals:
 					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
 						if sse.Context().Err() == nil {
 							v.logErr(c, "PatchSignals failed: %v", err)
 						}
-						continue
 					}
 				case patchTypeScript:
 					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {

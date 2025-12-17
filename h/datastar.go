@@ -1,9 +1,13 @@
 package h
 
-import "fmt"
+func DataInit(expression string) H {
+	return Data("init", expression)
+}
 
-type OnClickOpts string
+func DataEffect(expression string) H {
+	return Data("effect", expression)
+}
 
-func OnClick(actionid string, opt ...OnClickOpts) H {
-	return Data("on:click", fmt.Sprintf("@get('/_action/%s')", actionid))
+func DataIgnoreMorph() H {
+	return Attr("data-ignore-morph")
 }

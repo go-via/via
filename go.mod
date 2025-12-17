@@ -6,8 +6,6 @@ require maragu.dev/gomponents v1.2.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/fsnotify/fsnotify v1.9.0
-	github.com/go-via/via-plugin-picocss v0.1.0
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/starfederation/datastar-go v1.0.3
 	github.com/stretchr/testify v1.10.0
@@ -21,7 +19,6 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
