@@ -378,6 +378,10 @@ func New() *V {
 	})
 
 	v.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
+		isReconnect := false
+		if r.Header.Get("last-event-id") == "via" {
+			isReconnect = true
+		}
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
@@ -395,10 +399,13 @@ func New() *V {
 
 		sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
 
+		// use last-event-id to tell if request is a sse reconnect
+		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via"))
+
 		v.logDebug(c, "SSE connection established")
 
 		go func() {
-			if v.cfg.DevMode {
+			if isReconnect || v.cfg.DevMode {
 				c.Sync()
 				return
 			}
@@ -433,7 +440,6 @@ func New() *V {
 						if sse.Context().Err() == nil {
 							v.logErr(c, "ExecuteScript failed: %v", err)
 						}
-						continue
 					}
 				}
 			}
