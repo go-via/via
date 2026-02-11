@@ -1,81 +1,146 @@
 # ⚡Via
-Real-time engine for building reactive web applications in pure Go.
 
+Real-time web applications in pure Go. No JavaScript. No build step. No excuses.
 
-## Why Via?
-Somewhere along the way, the web became tangled in layers of JavaScript, build chains, and frameworks stacked on frameworks.
+## The Web Broke. We Fixed It
 
-Via takes a radical stance:
+Somewhere between jQuery and today's framework circus, the web became an
+absurdist comedy. You write JavaScript to transpile JavaScript to bundle
+JavaScript to hydrate JavaScript. You install 400MB of node_modules to render
+a button. You spend more time configuring Webpack than building features.
 
-- No templates.
-- No JavaScript.
-- No transpilation.
-- No hydration.
-- No front-end fatigue.
-- Single SSE stream.
-- Full reactivity.
-- Built-in Brotli compression.
-- Pure Go.
+**Via says: enough.**
 
+Write Go. Get HTML. Real-time updates via Server-Sent Events. One persistent
+connection. Zero JavaScript. Zero build tools. Zero cognitive overhead.
 
-## Example
+## What You Get
+
+- **No templates** - Type-safe HTML composition in pure Go
+- **No JavaScript** - Not a single line. Not even JSON serialization on your end
+- **No transpilation** - No build step. No bundler. No toolchain hell
+- **No hydration** - Server renders. Browser receives. That's it
+- **Full reactivity** - Real-time UI updates via SSE
+- **Single connection** - One persistent stream, not REST spam
+- **Built-in compression** - Brotli level 5, automatic
+- **Pure Go** - If you know Go, you know Via
+
+## Getting Started
+
+Install Via:
+
+```bash
+go get github.com/go-via/via
+```
+
+Create `main.go`:
+
 ```go
 package main
 
 import (
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
+    "github.com/go-via/via"
+    "github.com/go-via/via/h"
 )
 
-type Counter struct{ Count int }
-
 func main() {
-	v := via.New()
+    v := via.New()
 
-	v.Page("/", func(c *via.Context) {
-		data := Counter{Count: 0}
-		step := c.Signal(1)
+    v.Page("/", func(c *via.Composition) {
+        count := via.State(0)
+        step := via.Signal(c, 1)
 
-		increment := c.Action(func() {
-			data.Count += step.Int()
-			c.Sync()
-		})
+        increment := via.Action(c, func(s *via.Session) {
+            count.Set(s, count.Get(s)+step.Get(s))
+        })
 
-		c.View(func() h.H {
-			return h.Div(
-				h.P(h.Textf("Count: %d", data.Count)),
-				h.Label(
-					h.Text("Update Step: "),
-					h.Input(h.Type("number"), step.Bind()),
-				),
-				h.Button(h.Text("Increment"), increment.OnClick()),
-			)
-		})
-	})
+        c.View(func(s *via.Session) h.H {
+            return h.Div(
+                h.H1(h.Text("Counter Example")),
+                h.P(h.Textf("Count: %d", count.Get(s))),
+                h.Label(h.Text("Step: ")),
+                h.Input(h.Type("number"), h.Name("step"), step.Bind()),
+                h.Button(h.Text("Increment"), increment.OnClick()),
+            )
+        })
+    })
 
-	v.Start()
+    v.Start()
 }
 ```
 
+Run it:
 
-## 🚧 Experimental
-<s>Via is still a newborn.</s> Via is taking its first steps!
-- Version `0.1.0` released.
-- Expect a little less chaos.
+```bash
+go run main.go
+```
+
+Open `http://localhost:3000`. Click the button. Watch the counter update in
+real-time. No JavaScript was written. No build step was run. No frameworks were
+harmed in the making of this application.
+
+That's it. That's the entire stack.
+
+## How It Works
+
+**State** lives on the server. **Signals** sync between browser and server.
+**Actions** mutate state. **Views** render HTML. Changes stream to the browser
+via SSE. The browser morphs the DOM. Everything just works.
+
+You write Go functions. Via handles the rest.
+
+## What About
+
+**"But I need JavaScript for..."** - No, you don't. Via handles forms, real-time
+updates, and interactivity through Datastar. If you truly need custom JS, you
+can still add it. Via doesn't hold you hostage.
+
+**"But React/Vue/Svelte..."** - Great tools. Wrong paradigm. They make you write
+your application twice: once on the server, once on the client. Via makes you
+write it once: on the server. In Go. Where your data already lives.
+
+**"But what about performance?"** - Brotli-compressed SSE streams. Morphdom for
+surgical DOM updates. Go's goroutines for concurrency. It's fast. Faster than
+your SPAs bloated with megabytes of JavaScript.
+
+**"But SEO..."** - Server-rendered HTML. Every page load is pure HTML. Search
+engines don't need to execute JavaScript. They just parse HTML like it's 2005.
+Which it is. But better.
+
+## Status: 🚧 Experimental
+
+Via just took its first steps. Version `0.1.0` is out. The API is stabilizing.
+The examples work. The tests pass. Production? Your call.
+
+Expect rough edges. Expect rapid iteration. Expect breaking changes until `1.0`.
 
 ## Contributing
-- Via is intentionally minimal and opinionated — and so is contributing.
-- If you love Go, simplicity, and meaningful abstractions — Come along for the ride!
-- Fork, branch, build, tinker with things, submit a pull request.
-- Keep every line purposeful.
-- Share feedback: open an issue or start a discussion.
 
+Via is intentionally minimal. Every feature fights for its place. Every
+abstraction earns its keep.
+
+If you love Go, simplicity, and meaningful design:
+
+1. Fork it
+2. Branch it
+3. Build it
+4. Test it
+5. Send a PR
+
+Keep every line purposeful. Share feedback via issues or discussions.
 
 ## Credits
 
-Via builds upon the work of these amazing projects:
+Via stands on the shoulders of giants:
 
-- 🚀 [Datastar](https://data-star.dev) - The hypermedia powerhouse at the core of Via. It powers browser reactivity through Signals and enables real-time HTML/Signal patches over an always-on SSE event stream.
-- 🧩 [Gomponents](https://maragu.dev/gomponents) - The awesome project that gifts Via with Go-native HTML composition superpowers through the `via/h` package.
+- 🚀 [Datastar](https://data-star.dev) - The hypermedia powerhouse behind
+  Via's reactivity. Powers browser signals and SSE-based DOM patching without
+  a single line of JavaScript on your end.
+- 🧩 [Gomponents](https://maragu.dev/gomponents) - The brilliant library that
+  gives Via type-safe, composable HTML generation through the `via/h` package.
 
-> Thank you for building something that doesn’t just function — it inspires. 🫶
+> Thank you for building tools that don't just work — they inspire.
+
+## License
+
+MIT. Build something great.

@@ -10,13 +10,10 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -27,57 +24,46 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
+// session represents internal user session with persistent state
+type session struct {
+	id        string
+	store     *store
+	patchChan chan patch
+	c         *Composition
+}
+
 // V is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
 type V struct {
-	cfg                  Options
-	mux                  *http.ServeMux
-	contextRegistry      map[string]*Context
-	contextRegistryMutex sync.RWMutex
-	documentHeadIncludes []h.H
-	documentFootIncludes []h.H
-	devModePageInitFnMap map[string]func(*Context)
+	cfg                      Options
+	mux                      *http.ServeMux
+	compositionRegistry      map[string]*Composition
+	compositionRegistryMutex sync.RWMutex
+	sessionRegistry          map[string]*session
+	sessionRegistryMutex     sync.RWMutex
+	documentHeadIncludes     []h.H
+	documentFootIncludes     []h.H
 }
 
-func (v *V) logFatal(format string, a ...any) {
-	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, a...))
+func (v *V) logErr(format string, a ...any) {
+	log.Printf("[error] msg=%q", fmt.Sprintf(format, a...))
 }
 
-func (v *V) logErr(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
-	log.Printf("[error] %smsg=%q", cRef, fmt.Sprintf(format, a...))
-}
-
-func (v *V) logWarn(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
+func (v *V) logWarn(format string, a ...any) {
 	if v.cfg.LogLvl >= LogLevelWarn {
-		log.Printf("[warn] %smsg=%q", cRef, fmt.Sprintf(format, a...))
+		log.Printf("[warn] msg=%q", fmt.Sprintf(format, a...))
 	}
 }
 
-func (v *V) logInfo(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
+func (v *V) logInfo(format string, a ...any) {
 	if v.cfg.LogLvl >= LogLevelInfo {
-		log.Printf("[info] %smsg=%q", cRef, fmt.Sprintf(format, a...))
+		log.Printf("[info] msg=%q", fmt.Sprintf(format, a...))
 	}
 }
 
-func (v *V) logDebug(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
+func (v *V) logDebug(format string, a ...any) {
 	if v.cfg.LogLvl == LogLevelDebug {
-		log.Printf("[debug] %smsg=%q", cRef, fmt.Sprintf(format, a...))
+		log.Printf("[debug] msg=%q", fmt.Sprintf(format, a...))
 	}
 }
 
@@ -124,117 +110,149 @@ func (v *V) AppendToFoot(elements ...h.H) {
 	}
 }
 
-// Page registers a route and its associated page handler. The handler receives a *Context
-// that defines state, UI, signals, and actions.
+// Page registers a route and its page composition function.
 //
 // Example:
 //
-//	v.Page("/", func(c *via.Context) {
-//		c.View(func() h.H {
+//	v.Page("/", func(c *via.Composition) {
+//		c.View(func(r *via.R) h.H {
 //			return h.H1(h.Text("Hello, Via!"))
 //		})
 //	})
-func (v *V) Page(route string, initContextFn func(c *Context)) {
+func (v *V) Page(route string, composeFn func(c *Composition)) {
+	c := &Composition{id: genRandID(), route: route}
+	composeFn(c)
+	if c.viewFn == nil {
+		panic("page " + route + " has no view")
+	}
+	v.compositionRegistryMutex.Lock()
+	v.compositionRegistry[c.id] = c
+	v.compositionRegistryMutex.Unlock()
+	v.mux.HandleFunc("GET "+route, v.newPageHTTPHandler(route, c.id, c))
+
 	// check for panics
-	func() {
-		defer func() {
-			if err := recover(); err != nil {
-				v.logFatal("failed to register page with init func that panics: %v", err)
-				panic(err)
-			}
-		}()
-		c := newContext("", "", v)
-		initContextFn(c)
-		c.view()
-		c.stopAllRoutines()
-	}()
+	// func() {
+	// 	defer func() {
+	// 		if err := recover(); err != nil {
+	// 			v.logFatal("failed to register page with init func that panics: %v", err)
+	// 			panic(err)
+	// 		}
+	// 	}()
+	// 	c := newContext("", "", v)
+	// 	initContextFn(c)
+	// 	c.view()
+	// 	c.stopAllRoutines()
+	// }()
 
 	// save page init function allows devmode to restore persisted ctx later
-	if v.cfg.DevMode {
-		v.devModePageInitFnMap[route] = initContextFn
-	}
-	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v.logDebug(nil, "GET %s", r.URL.String())
-		if strings.Contains(r.URL.Path, "favicon") ||
-			strings.Contains(r.URL.Path, ".well-known") ||
-			strings.Contains(r.URL.Path, "js.map") {
-			return
+	// if v.cfg.DevMode {
+	// 	v.devModePageInitFnMap[route] = initContextFn
+	// }
+	// v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// 	v.logDebug( "GET %s", r.URL.String())
+	// 	if strings.Contains(r.URL.Path, "favicon") ||
+	// 		strings.Contains(r.URL.Path, ".well-known") ||
+	// 		strings.Contains(r.URL.Path, "js.map") {
+	// 		return
+	// 	}
+	// 	id := fmt.Sprintf("%s_/%s", route, genRandID())
+	// 	c := newContext(id, route, v)
+	// 	routeParams := extractParams(route, r.URL.Path)
+	// 	c.injectRouteParams(routeParams)
+	// 	initContextFn(c)
+	// 	v.registerCtx(c)
+	// 	if v.cfg.DevMode {
+	// 		v.devModePersist(c)
+	// 	}
+	// 	headElements := []h.H{}
+	// 	headElements = append(headElements, v.documentHeadIncludes...)
+	// 	headElements = append(headElements,
+	// 		h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
+	// 		h.Meta(h.Data("init", "@get('/_sse')")),
+	// 		h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
+	// 		navigator.sendBeacon('/_session/close', '%s');});`, c.id))),
+	// 	)
+	//
+	// 	bodyElements := []h.H{c.view()}
+	// 	bodyElements = append(bodyElements, v.documentFootIncludes...)
+	// 	if v.cfg.DevMode {
+	// 		bodyElements = append(bodyElements, h.Script(h.Type("module"),
+	// 			h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
+	// 		bodyElements = append(bodyElements, h.Raw("<dataspa-inspector/>"))
+	// 	}
+	// 	view := h.HTML5(h.HTML5Props{
+	// 		Title:     v.cfg.DocumentTitle,
+	// 		Head:      headElements,
+	// 		Body:      bodyElements,
+	// 		HTMLAttrs: []h.H{},
+	// 	})
+	// 	_ = view.Render(w)
+	// }))
+}
+
+func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+
+		// Create or get internal session for this page load
+		sess := v.getOrCreateSession(cID)
+		sess.store.pathParams = extractParams(route, r.URL.Path)
+		sess.c = c
+
+		// Create public Session for view (read-only mode)
+		sc := &Session{
+			s:    sess.store,
+			ss:   sess,
+			mode: sessionModeView,
+			warn: v.warnFn(),
 		}
-		id := fmt.Sprintf("%s_/%s", route, genRandID())
-		c := newContext(id, route, v)
-		routeParams := extractParams(route, r.URL.Path)
-		c.injectRouteParams(routeParams)
-		initContextFn(c)
-		v.registerCtx(c)
-		if v.cfg.DevMode {
-			v.devModePersist(c)
-		}
+
 		headElements := []h.H{}
 		headElements = append(headElements, v.documentHeadIncludes...)
-		headElements = append(headElements,
-			h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
-			h.Meta(h.Data("init", "@get('/_sse')")),
-			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
-			navigator.sendBeacon('/_session/close', '%s');});`, c.id))),
-		)
 
-		bodyElements := []h.H{c.view()}
-		bodyElements = append(bodyElements, v.documentFootIncludes...)
-		if v.cfg.DevMode {
-			bodyElements = append(bodyElements, h.Script(h.Type("module"),
-				h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
-			bodyElements = append(bodyElements, h.Raw("<dataspa-inspector/>"))
+		// Build initial signals including via-c, path params, and composition signals
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "{'via-c':'%s'", cID)
+		for key, val := range sess.store.pathParams {
+			fmt.Fprintf(&sb, ", '%s':'%s'", key, val)
 		}
-		view := h.HTML5(h.HTML5Props{
+		// Add composition signal initial values
+		for _, sig := range c.signals {
+			fmt.Fprintf(&sb, ", '%s':", sig.id)
+			switch v := sig.initial.(type) {
+			case string:
+				fmt.Fprintf(&sb, "'%s'", v)
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+				fmt.Fprintf(&sb, "%d", v)
+			case float32, float64:
+				fmt.Fprintf(&sb, "%f", v)
+			case bool:
+				fmt.Fprintf(&sb, "%t", v)
+			}
+		}
+		sb.WriteString("}")
+		initialSignals := sb.String()
+
+		headElements = append(headElements,
+			h.Meta(h.Data("signals", initialSignals)),
+			h.Meta(h.Data("init", "@get('/_sse', {retry: 'always'})")),
+			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', () => { navigator.sendBeacon('/_session/close', '%s'); })`, cID))),
+		)
+		bodyElements := []h.H{c.viewFn(sc)}
+		bodyElements = append(bodyElements, v.documentFootIncludes...)
+		page := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,
 			Head:      headElements,
 			Body:      bodyElements,
 			HTMLAttrs: []h.H{},
 		})
-		_ = view.Render(w)
-	}))
-}
-
-func (v *V) registerCtx(c *Context) {
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
-	if c == nil {
-		v.logErr(c, "failed to add nil context to registry")
-		return
+		_ = page.Render(w)
 	}
-	v.contextRegistry[c.id] = c
-	v.logDebug(c, "new context added to registry")
-	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
-}
-
-func (v *V) currSessionNum() int {
-	return len(v.contextRegistry)
-}
-
-func (v *V) unregisterCtx(c *Context) {
-	if c.id == "" {
-		v.logErr(c, "unregister ctx failed: ctx contains empty id")
-		return
-	}
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
-	v.logDebug(c, "ctx removed from registry")
-	delete(v.contextRegistry, c.id)
-	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
-}
-
-func (v *V) getCtx(id string) (*Context, error) {
-	v.contextRegistryMutex.RLock()
-	defer v.contextRegistryMutex.RUnlock()
-	if c, ok := v.contextRegistry[id]; ok {
-		return c, nil
-	}
-	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
 // Start starts the Via HTTP server on the given address.
 func (v *V) Start() {
-	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
+	v.logInfo("via started at [%s]", v.cfg.ServerAddress)
 	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
 }
 
@@ -247,103 +265,136 @@ func (v *V) HTTPServeMux() *http.ServeMux {
 	return v.mux
 }
 
-func (v *V) devModePersist(c *Context) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-		log.Fatalf("failed to create directory for devmode files: %v", err)
-	}
-
-	// load persisted list from file, or empty list if file not found
-	file, err := os.Open(p)
-	ctxRegMap := make(map[string]string)
-	if err == nil {
-		json.NewDecoder(file).Decode(&ctxRegMap)
-	}
-	file.Close()
-
-	// add ctx to persisted list
-	if _, ok := ctxRegMap[c.id]; !ok {
-		ctxRegMap[c.id] = c.route
-	}
-
-	// write persisted list to file
-	file, err = os.Create(p)
-	if err != nil {
-		v.logErr(c, "devmode failed to percist ctx: %v", err)
-
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(ctxRegMap); err != nil {
-		v.logErr(c, "devmode failed to persist ctx")
-	}
-	v.logDebug(c, "devmode persisted ctx to file")
+func (v *V) datastarJSHTTPHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript")
+	_, _ = w.Write(datastarJS)
 }
 
-func (v *V) devModeRemovePersisted(c *Context) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
+func (v *V) sseHTTPHandler(w http.ResponseWriter, r *http.Request) {
+	var sigs map[string]any
+	_ = datastar.ReadSignals(r, &sigs)
 
-	// load persisted list from file, or empty list if file not found
-	file, err := os.Open(p)
-	ctxRegMap := make(map[string]string)
-	if err == nil {
-		json.NewDecoder(file).Decode(&ctxRegMap)
-	}
-	file.Close()
-
-	// remove ctx to persisted list
-	if _, ok := ctxRegMap[c.id]; !ok {
-		delete(ctxRegMap, c.id)
-	}
-
-	// write persisted list to file
-	file, err = os.Create(p)
-	if err != nil {
-		v.logErr(c, "devmode failed to remove percisted ctx: %v", err)
-
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(ctxRegMap); err != nil {
-		v.logErr(c, "devmode failed to remove persisted ctx")
-	}
-	v.logDebug(c, "devmode removed persisted ctx from file")
-}
-
-func (v *V) devModeRestore(cID string) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
-	file, err := os.Open(p)
-	if err != nil {
-		if os.IsNotExist(err) {
+	sessionID, _ := sigs["via-c"].(string)
+	if sessionID != "" {
+		session, err := v.getSession(sessionID)
+		if err != nil {
+			v.logErr("sse stream failed to start: %v", err)
 			return
 		}
-		v.logErr(nil, "devmode could not restore ctx from file: %v", err)
-		return
-	}
-	defer file.Close()
-	var ctxRegMap map[string]string
-	if err := json.NewDecoder(file).Decode(&ctxRegMap); err != nil {
-		v.logWarn(nil, "devmode could not restore ctx from file: %v", err)
-		return
-	}
-	for ctxID, pageRoute := range ctxRegMap {
-		if ctxID == cID {
-			pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
-			if !ok {
-				v.logWarn(nil, "devmode could not restore ctx from file: page init fn for route '%s' not found", pageRoute)
-				continue
+
+		sse := datastar.NewSSE(w, r, datastar.WithCompression(
+			datastar.WithBrotli(datastar.WithBrotliLevel(5)),
+			datastar.WithGzip(),
+		))
+		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via-sse-reconnect"))
+
+		v.logDebug("SSE connection established for session %s", sessionID)
+
+		for {
+			select {
+			case <-sse.Context().Done():
+				v.logDebug("SSE connection ended for session %s", sessionID)
+				return
+			case patch, ok := <-session.patchChan:
+				if !ok {
+					return
+				}
+				switch patch.typ {
+				case patchTypeElements:
+					if err := sse.PatchElements(patch.content); err != nil {
+						if sse.Context().Err() == nil {
+							v.logErr("PatchElements failed: %v", err)
+						}
+					}
+				case patchTypeSignals:
+					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
+						if sse.Context().Err() == nil {
+							v.logErr("PatchSignals failed: %v", err)
+						}
+					}
+				case patchTypeScript:
+					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
+						if sse.Context().Err() == nil {
+							v.logErr("ExecuteScript failed: %v", err)
+						}
+					}
+				}
 			}
-			c := newContext(ctxID, pageRoute, v)
-			pageInitFn(c)
-			v.registerCtx(c)
-			v.logDebug(c, "devmode restored ctx")
 		}
+	}
+
+}
+
+func (v *V) actionHTTPHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+	actionID := r.PathValue("id")
+	var sigs map[string]any
+	_ = datastar.ReadSignals(r, &sigs)
+
+	// Try new C-based system first
+	cID, _ := sigs["via-c"].(string)
+	if cID != "" {
+		v.compositionRegistryMutex.RLock()
+		c, ok := v.compositionRegistry[cID]
+		v.compositionRegistryMutex.RUnlock()
+		if ok {
+			if actionFn, exists := c.actions[actionID]; exists {
+				// log err if actionFn panics
+				defer func() {
+					if r := recover(); r != nil {
+						v.logErr("action '%s' failed: %v", actionID, r)
+					}
+				}()
+
+				// Get or create internal session for persistent state
+				sess := v.getOrCreateSession(cID)
+				injectSignals(sess.store, sigs)
+
+				// Extract path params from signals based on route pattern
+				pathParamNames := extractParamNames(c.route)
+				pathParams := make(map[string]string)
+				for _, paramName := range pathParamNames {
+					if val, ok := sigs[paramName]; ok {
+						if strVal, ok := val.(string); ok {
+							pathParams[paramName] = strVal
+						}
+					}
+				}
+				sess.store.pathParams = pathParams
+
+				// Create public Session for action (read-write mode)
+				sc := &Session{
+					s:    sess.store,
+					ss:   sess,
+					mode: sessionModeAction,
+					warn: v.warnFn(),
+				}
+				actionFn(sc)
+				return
+			}
+			v.logDebug("action '%s' not found in C", actionID)
+			return
+		}
+		v.logDebug("C with id %q not found", cID)
 	}
 }
 
-type patchType int
+func (v *V) sessionCloseHTTPHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		v.logErr("failed to read session close request body: %v", err)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	sessionID := string(body)
+	v.removeSession(sessionID)
+	v.logDebug("session closed: %s", sessionID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type patchType uint8
 
 const (
 	patchTypeElements = iota
@@ -361,9 +412,9 @@ func New() *V {
 	mux := http.NewServeMux()
 
 	v := &V{
-		mux:                  mux,
-		contextRegistry:      make(map[string]*Context),
-		devModePageInitFnMap: make(map[string]func(*Context)),
+		mux:                 mux,
+		compositionRegistry: make(map[string]*Composition),
+		sessionRegistry:     make(map[string]*session),
 		cfg: Options{
 			DevMode:       false,
 			ServerAddress: ":3000",
@@ -372,127 +423,11 @@ func New() *V {
 		},
 	}
 
-	v.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/javascript")
-		_, _ = w.Write(datastarJS)
-	})
+	v.mux.HandleFunc("GET /_datastar.js", v.datastarJSHTTPHandler)
+	v.mux.HandleFunc("GET /_sse", v.sseHTTPHandler)
+	v.mux.HandleFunc("GET /_action/{id}", v.actionHTTPHandler)
 
-	v.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
-		isReconnect := false
-		if r.Header.Get("last-event-id") == "via" {
-			isReconnect = true
-		}
-		var sigs map[string]any
-		_ = datastar.ReadSignals(r, &sigs)
-		cID, _ := sigs["via-ctx"].(string)
-
-		if v.cfg.DevMode {
-			if _, err := v.getCtx(cID); err != nil {
-				v.devModeRestore(cID)
-			}
-		}
-		c, err := v.getCtx(cID)
-		if err != nil {
-			v.logErr(nil, "sse stream failed to start: %v", err)
-			return
-		}
-
-		sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
-
-		// use last-event-id to tell if request is a sse reconnect
-		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via"))
-
-		v.logDebug(c, "SSE connection established")
-
-		go func() {
-			if isReconnect || v.cfg.DevMode {
-				c.Sync()
-				return
-			}
-			c.SyncSignals()
-		}()
-
-		for {
-			select {
-			case <-sse.Context().Done():
-				v.logDebug(c, "SSE connection ended")
-				return
-			case patch, ok := <-c.patchChan:
-				if !ok {
-					continue
-				}
-				switch patch.typ {
-				case patchTypeElements:
-					if err := sse.PatchElements(patch.content); err != nil {
-						// Only log if connection wasn't closed (avoids noise during shutdown/tests)
-						if sse.Context().Err() == nil {
-							v.logErr(c, "PatchElements failed: %v", err)
-						}
-					}
-				case patchTypeSignals:
-					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
-						if sse.Context().Err() == nil {
-							v.logErr(c, "PatchSignals failed: %v", err)
-						}
-					}
-				case patchTypeScript:
-					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
-						if sse.Context().Err() == nil {
-							v.logErr(c, "ExecuteScript failed: %v", err)
-						}
-					}
-				}
-			}
-		}
-	})
-
-	v.mux.HandleFunc("GET /_action/{id}", func(w http.ResponseWriter, r *http.Request) {
-		actionID := r.PathValue("id")
-		var sigs map[string]any
-		_ = datastar.ReadSignals(r, &sigs)
-		cID, _ := sigs["via-ctx"].(string)
-		c, err := v.getCtx(cID)
-		if err != nil {
-			v.logErr(nil, "action '%s' failed: %v", actionID, err)
-			return
-		}
-		actionFn, err := c.getActionFn(actionID)
-		if err != nil {
-			v.logDebug(c, "action '%s' failed: %v", actionID, err)
-			return
-		}
-		// log err if actionFn panics
-		defer func() {
-			if r := recover(); r != nil {
-				v.logErr(c, "action '%s' failed: %v", actionID, r)
-			}
-		}()
-
-		c.injectSignals(sigs)
-		actionFn()
-	})
-
-	v.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			log.Printf("Error reading body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		defer r.Body.Close()
-		cID := string(body)
-		c, err := v.getCtx(cID)
-		if err != nil {
-			v.logErr(c, "failed to handle session close: %v", err)
-			return
-		}
-		c.stopAllRoutines()
-		v.logDebug(c, "session close event triggered")
-		if v.cfg.DevMode {
-			v.devModeRemovePersisted(c)
-		}
-		v.unregisterCtx(c)
-	})
+	v.mux.HandleFunc("POST /_session/close", v.sessionCloseHTTPHandler)
 	return v
 }
 
@@ -518,4 +453,80 @@ func extractParams(pattern, path string) map[string]string {
 		}
 	}
 	return params
+}
+
+func extractParamNames(pattern string) []string {
+	parts := strings.Split(strings.Trim(pattern, "/"), "/")
+	var names []string
+	for _, part := range parts {
+		if strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}") {
+			names = append(names, part[1:len(part)-1])
+		}
+	}
+	return names
+}
+
+func (v *V) getOrCreateSession(sessionID string) *session {
+	v.sessionRegistryMutex.RLock()
+	if sess, ok := v.sessionRegistry[sessionID]; ok {
+		v.sessionRegistryMutex.RUnlock()
+		return sess
+	}
+	v.sessionRegistryMutex.RUnlock()
+
+	// Create new session
+	v.sessionRegistryMutex.Lock()
+	defer v.sessionRegistryMutex.Unlock()
+
+	// Double-check after acquiring write lock
+	if sess, ok := v.sessionRegistry[sessionID]; ok {
+		return sess
+	}
+
+	s := newStore()
+	s.pathParams = make(map[string]string)
+	sess := &session{
+		id:        sessionID,
+		store:     s,
+		patchChan: make(chan patch, 10),
+	}
+	v.sessionRegistry[sessionID] = sess
+	return sess
+}
+
+func (v *V) getSession(sessionID string) (*session, error) {
+	v.sessionRegistryMutex.RLock()
+	defer v.sessionRegistryMutex.RUnlock()
+	if sess, ok := v.sessionRegistry[sessionID]; ok {
+		return sess, nil
+	}
+	return nil, fmt.Errorf("session '%s' not found", sessionID)
+}
+
+func (v *V) removeSession(sessionID string) {
+	v.sessionRegistryMutex.Lock()
+	defer v.sessionRegistryMutex.Unlock()
+	if sess, ok := v.sessionRegistry[sessionID]; ok {
+		close(sess.patchChan)
+		delete(v.sessionRegistry, sessionID)
+	}
+}
+
+func (v *V) warnFn() func(string, ...any) {
+	return func(format string, args ...any) {
+		v.logWarn(format, args...)
+	}
+}
+
+// Test helpers
+func (v *V) TestGetSession(sessionID string) (*session, error) {
+	return v.getSession(sessionID)
+}
+
+func (s *session) TestGetPatchChan() <-chan patch {
+	return s.patchChan
+}
+
+func (p patch) TestContent() string {
+	return p.content
 }

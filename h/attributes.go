@@ -22,6 +22,10 @@ func Value(v string) H {
 	return gh.Value(v)
 }
 
+func Name(v string) H {
+	return gh.Name(v)
+}
+
 func Placeholder(v string) H {
 	return gh.Placeholder(v)
 }

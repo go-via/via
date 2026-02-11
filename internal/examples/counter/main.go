@@ -5,33 +5,40 @@ import (
 	"github.com/go-via/via/h"
 )
 
-type Counter struct{ Count int }
-
-func main() {
+func NewCounterPage() *via.V {
 	v := via.New()
+	v.Config(via.Options{ServerAddress: ":3000"})
 
-	v.Page("/", func(c *via.Context) {
+	v.Page("/", func(c *via.Composition) {
+		count := via.State(0)
+		step := via.Signal(c, 1)
 
-		data := Counter{Count: 0}
-		step := c.Signal(1)
-
-		increment := c.Action(func() {
-			data.Count += step.Int()
-			c.Sync()
+		increment := via.Action(c, func(s *via.Session) {
+			count.Set(s, count.Get(s)+step.Get(s))
 		})
 
-		c.View(func() h.H {
+		decrement := via.Action(c, func(s *via.Session) {
+			count.Set(s, count.Get(s)-step.Get(s))
+		})
+
+		c.View(func(s *via.Session) h.H {
 			return h.Div(
-				h.P(h.Textf("Count: %d", data.Count)),
-				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
-				h.Label(
-					h.Text("Update Step: "),
-					h.Input(h.Type("number"), step.Bind()),
+				h.H1(h.Text("Counter Example")),
+				h.P(h.Textf("Count: %d", count.Get(s))),
+				h.Label(h.Text("Step: ")),
+				h.Input(h.Type("number"), h.Name("step"), step.Bind()),
+				h.Div(
+					h.Button(h.Text("-"), decrement.OnClick()),
+					h.Button(h.Text("+"), increment.OnClick()),
 				),
-				h.Button(h.Text("Increment"), increment.OnClick()),
 			)
 		})
 	})
 
+	return v
+}
+
+func main() {
+	v := NewCounterPage()
 	v.Start()
 }

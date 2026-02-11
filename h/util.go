@@ -5,6 +5,10 @@ import (
 )
 
 func retype(nodes []H) []g.Node {
+	if len(nodes) == 0 {
+		return nil
+	}
+
 	list := make([]g.Node, len(nodes))
 	for i, node := range nodes {
 		if node == nil {
