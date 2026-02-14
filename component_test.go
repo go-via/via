@@ -521,4 +521,3 @@ func TestComponent_MultipleInstances(t *testing.T) {
 	assert.True(t, strings.Contains(result1, counter1.id))
 	assert.True(t, strings.Contains(result2, counter2.id))
 }
-

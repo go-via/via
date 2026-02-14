@@ -56,4 +56,3 @@ func TestPlugin_Type(t *testing.T) {
 
 	assert.NotNil(t, p)
 }
-

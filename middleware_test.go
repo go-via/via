@@ -249,4 +249,3 @@ func TestAction_GlobalMiddlewareApplies(t *testing.T) {
 	// Note: Full action testing requires session context
 	// Global middleware already applies to /_action/* routes
 }
-

@@ -203,4 +203,3 @@ func TestSessionScopes_CookiePersistence(t *testing.T) {
 	// In a real browser with cookie jar, they'd be the same
 	assert.NotEqual(t, sessionID1, sessionID2, "Without cookie jar, each request gets new session")
 }
-

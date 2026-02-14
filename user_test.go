@@ -187,4 +187,3 @@ func TestUserHandle_Logout_ClearsCookie(t *testing.T) {
 	v.sessionStateMu.RUnlock()
 	assert.False(t, userExists, "User data should be cleared")
 }
-

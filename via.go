@@ -27,8 +27,8 @@ var datastarJS []byte
 
 // session represents internal user session with persistent state
 type session struct {
-	id         string
-	cID        string
+	id         string // tabID - unique per page load/tab
+	sessionID  string // cookie-based session ID - shared across tabs
 	store      *store
 	patchChan  chan patch
 	c          *Composition
@@ -141,9 +141,10 @@ func (v *V) AppendToFoot(elements ...h.H) {
 //	})
 func (v *V) Page(route string, composeFn func(c *Composition)) {
 	c := &Composition{
-		id:      genRandID(),
-		route:   route,
-		actions: make(map[string]func(*Session)),
+		id:           genRandID(),
+		route:        route,
+		actions:      make(map[string]func(*Session)),
+		actionOwners: make(map[string]compOwner),
 	}
 	composeFn(c)
 	if c.viewFn == nil {
@@ -226,35 +227,39 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 
-		// Get session ID from cookie, or use cID as session ID for backward compatibility
-		sessionID := v.getSessionIDFromRequest(r)
+		// Generate tabID first (unique per page load/tab) - this is the session key
+		tabID := genRandID()
+
+		// Get session ID from cookie for session-scoped state (shared across tabs)
+		cookieSessionID := v.getSessionIDFromRequest(r)
 
 		// Check if session is invalidated
-		if sessionID != "" {
+		if cookieSessionID != "" {
 			v.invalidatedSessionsMu.RLock()
-			_, invalidated := v.invalidatedSessions[sessionID]
+			_, invalidated := v.invalidatedSessions[cookieSessionID]
 			v.invalidatedSessionsMu.RUnlock()
 			if invalidated {
 				// Session was invalidated, create new one
-				sessionID = ""
+				cookieSessionID = ""
 			}
 		}
 
-		if sessionID == "" {
+		if cookieSessionID == "" {
 			// Generate new session ID
-			sessionID = genRandID()
+			cookieSessionID = genRandID()
 			// Set session cookie for new sessions
 			http.SetCookie(w, &http.Cookie{
 				Name:     v.cfg.SessionCookieName,
-				Value:    sessionID,
+				Value:    cookieSessionID,
 				MaxAge:   v.cfg.SessionCookieMaxAge,
 				Path:     "/",
 				HttpOnly: true,
 			})
 		}
 
-		// Create or get internal session for this page load
-		sess := v.getOrCreateSession(sessionID)
+		// Create or get internal session keyed by tabID (for tab isolation)
+		sess := v.getOrCreateSession(tabID)
+		sess.sessionID = cookieSessionID // Store cookie-based session ID for session-scoped state
 		sess.store.pathParams = extractParams(route, r.URL.Path)
 		sess.c = c
 
@@ -268,11 +273,11 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 				}
 			case ScopeSession:
 				// Session-scoped state goes to app's session state
-				if v.sessionState[sessionID] == nil {
-					v.sessionState[sessionID] = make(map[string]any)
+				if v.sessionState[cookieSessionID] == nil {
+					v.sessionState[cookieSessionID] = make(map[string]any)
 				}
-				if _, exists := v.sessionState[sessionID][stateReg.id]; !exists {
-					v.sessionState[sessionID][stateReg.id] = stateReg.initial
+				if _, exists := v.sessionState[cookieSessionID][stateReg.id]; !exists {
+					v.sessionState[cookieSessionID][stateReg.id] = stateReg.initial
 				}
 			case ScopeApp:
 				// App-scoped state goes to app's app state
@@ -288,12 +293,9 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 			ss:        sess,
 			mode:      sessionModeView,
 			v:         v,
-			sessionID: sessionID,
+			sessionID: cookieSessionID,
 			warn:      v.warnFn(),
 		}
-
-		// Generate tabID for this page load (used for via-c signal and targeting)
-		tabID := genRandID()
 
 		headElements := []h.H{}
 		headElements = append(headElements, v.documentHeadIncludes...)
@@ -667,10 +669,10 @@ func (v *V) TestGetSession(sessionID string) (*session, error) {
 }
 
 // createSession creates a new internal session (for testing)
-func (v *V) createSession(id string, cID string, store *store) *session {
+func (v *V) createSession(id string, sessionID string, store *store) *session {
 	sess := &session{
 		id:         id,
-		cID:        cID,
+		sessionID:  sessionID,
 		store:      store,
 		lastAccess: time.Now().Unix(),
 	}
@@ -707,6 +709,16 @@ func (v *V) cleanupStaleSessions() {
 		if lastAccess < cutoff {
 			delete(v.sessionState, id)
 			delete(v.sessionLastAccess, id)
+		}
+	}
+
+	// Cleanup invalidated sessions - use SessionCookieMaxAge since invalidation is tied to cookie
+	cutoffInvalidated := time.Now().Unix() - int64(v.cfg.SessionCookieMaxAge)
+	v.invalidatedSessionsMu.Lock()
+	defer v.invalidatedSessionsMu.Unlock()
+	for id, invalidatedAt := range v.invalidatedSessions {
+		if invalidatedAt < cutoffInvalidated {
+			delete(v.invalidatedSessions, id)
 		}
 	}
 }

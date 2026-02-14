@@ -122,4 +122,3 @@ func TestState_AppScope_GetSet(t *testing.T) {
 	assert.Equal(t, "updated", appState.Get(s1))
 	assert.Equal(t, "updated", appState.Get(s2))
 }
-

@@ -174,4 +174,3 @@ func TestGroup_NonExistentRoute404(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
-

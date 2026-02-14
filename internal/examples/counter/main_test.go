@@ -73,4 +73,3 @@ func containsPattern(s, pattern string) bool {
 	matched, _ := regexp.MatchString(pattern, s)
 	return matched
 }
-

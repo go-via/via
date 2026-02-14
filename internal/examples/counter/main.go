@@ -42,4 +42,3 @@ func main() {
 	v := NewCounterPage()
 	v.Start()
 }
-

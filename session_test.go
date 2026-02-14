@@ -27,11 +27,9 @@ func extractTabIDFromBody(t *testing.T, html string) string {
 func TestSession_PersistsState(t *testing.T) {
 	v := New()
 	var stateHandle *StateHandle[int]
-	var cID string
 
 	v.Page("/", func(c *Composition) {
 		stateHandle = State(c, 0)
-		cID = c.id
 
 		increment := Action(c, func(s *Session) {
 			val := stateHandle.Get(s) + 1
@@ -47,7 +45,7 @@ func TestSession_PersistsState(t *testing.T) {
 	})
 
 	// Create a session store (per-tab)
-	session := v.createSession("tab1", cID, nil)
+	session := v.createSession("tab1", "session1", nil)
 	assert.NotNil(t, session)
 	assert.NotNil(t, session.store)
 
@@ -70,8 +68,8 @@ func TestSession_PersistsState(t *testing.T) {
 func TestSession_IsolatedState(t *testing.T) {
 	v := New()
 
-	session1 := v.createSession("tab1", "comp1", nil)
-	session2 := v.createSession("tab2", "comp1", nil)
+	session1 := v.createSession("tab1", "session1", nil)
+	session2 := v.createSession("tab2", "session1", nil)
 
 	// Each session has its own store (different pointers)
 	assert.NotSame(t, session1.store, session2.store)
@@ -230,7 +228,7 @@ func TestSession_TTLCleanup(t *testing.T) {
 	})
 
 	// Create a session
-	session := v.createSession("test-tab", "comp1", nil)
+	session := v.createSession("test-tab", "session1", nil)
 	assert.NotNil(t, session)
 
 	// Verify session exists

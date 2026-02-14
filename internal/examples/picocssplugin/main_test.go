@@ -55,4 +55,3 @@ func TestPicoCSSPluginPageDecrements(t *testing.T) {
 	page.Click("-")
 	page.AssertText(t, "Features: 0")
 }
-

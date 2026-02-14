@@ -86,4 +86,3 @@ func (h *UserHandle[T]) SetUser(s *Session, user T) {
 	s.v.sessionState[s.sessionID][h.id] = user
 	s.v.sessionStateMu.Unlock()
 }
-

@@ -95,4 +95,3 @@ func TestPlugin_HasHeadLinkField(t *testing.T) {
 		t.Error("expected HeadLink to be set after plugin creation")
 	}
 }
-

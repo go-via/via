@@ -368,4 +368,3 @@ func TestSignal_GetInvalidStringReturnsInitial(t *testing.T) {
 	got := signal.Get(s)
 	assert.Equal(t, 42, got, "Should return initial value on invalid string")
 }
-

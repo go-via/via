@@ -58,4 +58,3 @@ func (parent *Composition) Component(composeFn ComposeFn) *CompHandle {
 		viewFn: child.viewFn,
 	}
 }
-

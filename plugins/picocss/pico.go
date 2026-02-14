@@ -239,4 +239,3 @@ func (th *ThemeHandle) ColorClassesLink() h.H {
 		h.Href("/_pico/color-classes"),
 	)
 }
-

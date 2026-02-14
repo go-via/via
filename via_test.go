@@ -571,4 +571,3 @@ func extractCIDFromHTML(t *testing.T, html string) string {
 	end := strings.Index(html[start:], "&#39;")
 	return html[start : start+end]
 }
-

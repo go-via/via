@@ -24,6 +24,9 @@ connection. Zero JavaScript. Zero build tools. Zero cognitive overhead.
 - **Single connection** - One persistent stream, not REST spam
 - **Built-in compression** - Brotli level 5, automatic
 - **Pure Go** - If you know Go, you know Via
+- **State scopes** - Tab, session, or app-wide state
+- **Auth helpers** - Built-in UserHandle for authentication
+- **Testing utilities** - Ergonomic vtest package for integration tests
 
 ## Getting Started
 
@@ -133,6 +136,45 @@ func main() {
 
     v.Start()
 }
+```
+
+## State Scopes
+
+State can have different lifetimes:
+
+```go
+// Tab scope (default) - unique per browser tab
+clicks := via.State(c, 0)
+
+// Session scope - shared across tabs for same user
+preferences := via.State(c, "", via.WithScope(via.ScopeSession))
+
+// App scope - global across all users
+visitorCount := via.State(c, 0, via.WithScope(via.ScopeApp))
+```
+
+## Authentication
+
+Built-in UserHandle for session-scoped user data:
+
+```go
+type User struct {
+    ID   string
+    Name string
+}
+
+user := via.NewUserHandle[User]()
+
+// In action - login
+user.SetUser(s, User{ID: "1", Name: "Alice"})
+
+// In view - check auth
+if u, ok := user.Get(s); ok {
+    // show user info
+}
+
+// In action - logout
+user.Logout(s)  // clears user and invalidates session
 ```
 
 ## How It Works

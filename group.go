@@ -68,4 +68,3 @@ func (g *Group) Page(route string, fn func(*Composition)) {
 
 	g.v.mux.Handle("GET "+fullRoute, handler)
 }
-

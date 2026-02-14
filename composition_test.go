@@ -152,4 +152,3 @@ func TestComposition_TestActionOwners(t *testing.T) {
 	owners := c.TestActionOwners()
 	assert.NotNil(t, owners)
 }
-

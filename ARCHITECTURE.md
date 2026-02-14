@@ -168,7 +168,41 @@ action.OnInit()
 
 Actions are HTTP GET endpoints at `/_action/{id}`.
 
-### 7. Components
+### 7. UserHandle[T]
+
+File: `user.go`
+
+Session-scoped user authentication:
+
+```go
+type User struct {
+    ID   string
+    Name string
+    Role string
+}
+
+// Create at composition time (module level)
+var user = via.NewUserHandle[User]()
+
+// In action - set user
+user.SetUser(s, User{ID: "1", Name: "Alice", Role: "admin"})
+
+// In action - check auth
+if u, ok := user.Get(s); ok {
+    // user is logged in
+}
+
+// In action - logout
+user.Logout(s)  // clears user and invalidates session cookie
+```
+
+UserHandle:
+- Always session-scoped (persists across tabs for same user)
+- Generic type for any user struct
+- Logout invalidates session for security
+- Integrates with Via's session management
+
+### 8. Components
 
 File: `component.go`
 
@@ -279,6 +313,34 @@ h.DataIgnoreMorph()
 - **Creation**: First request generates 32-char hex tabID
 - **Active**: SSE connection streams patches
 - **Cleanup**: `beforeunload` beacon sends close request
+
+## State Scopes
+
+State can have different lifetimes using the `WithScope` option:
+
+```go
+// Tab scope (default) - unique per browser tab
+count := via.State(c, 0)
+
+// Session scope - shared across tabs for same user
+token := via.State(c, "", via.WithScope(via.ScopeSession))
+
+// App scope - global across all users
+visits := via.State(c, 0, via.WithScope(via.ScopeApp))
+```
+
+| Scope | Lifetime | Use Case |
+|-------|----------|----------|
+| `ScopeTab` | Per browser tab | Form inputs, UI state |
+| `ScopeSession` | Per user (cookie) | Auth tokens, preferences |
+| `ScopeApp` | Global | Global counters, config |
+
+### How It Works
+
+- **Tab ID**: Generated per page load, stored in `via-c` signal
+- **Session ID**: Cookie-based (`via_sid`), shared across tabs
+- Actions receive both: `via-c` for tab state, cookie for session state
+- State.Set() automatically uses the correct storage based on scope
 
 ## State vs Signal
 
@@ -446,6 +508,7 @@ Fixed:
 - Added `SessionTTL` option (default 30 min)
 - Added `touch()` method updated on SSE connect
 - Background goroutine cleans stale sessions every TTL/10
+- Cleanup now also removes invalidated sessions (logout) after cookie MaxAge
 
 ### Medium Priority
 

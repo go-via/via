@@ -2,6 +2,14 @@
 
 Package vtest provides ergonomic testing utilities for Via applications with a stateful Page API.
 
+## Features
+
+- **Stateful page model** - Pages maintain session and SSE state
+- **Cookie jar** - Session cookies persist across requests
+- **Action triggering** - Click buttons and trigger actions
+- **SSE support** - Real-time updates captured in tests
+- **Session scopes** - Test tab, session, and app-scoped state
+
 ## Stateful Page API (Recommended)
 
 ```go
@@ -80,3 +88,31 @@ vtest includes minimal Via apps for testing:
 - `NewGreeterApp()` - Greeter with name state
 
 These are used internally for testing vtest and available for your tests.
+
+## Testing Session Scopes
+
+The Page API properly simulates browser cookie behavior, enabling tests for:
+
+```go
+// Test tab scope isolation
+page1 := VisitWith(handler, "/")
+page2 := VisitWith(handler, "/")
+page1.Click("Increment")
+page1.AssertText(t, "Count: 1")
+page2.AssertText(t, "Count: 0") // Tab scope = different state
+
+// Test app scope sharing
+page1.Click("Inc Global")
+page1.AssertText(t, "Total: 1")
+page2.AssertText(t, "Total: 1") // App scope = shared state
+
+// Test authentication
+page := VisitWith(handler, "/")
+page.AssertText(t, "Not logged in")
+page.Click("Login")
+page.AssertText(t, "User: Alice")
+page.Click("Logout")
+page.AssertText(t, "Not logged in")
+```
+
+See `scopes_test.go` for complete examples.
