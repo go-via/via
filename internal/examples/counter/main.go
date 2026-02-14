@@ -10,21 +10,21 @@ func NewCounterPage() *via.V {
 	v.Config(via.Options{ServerAddress: ":3000"})
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 		step := via.Signal(c, 1)
 
-		increment := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)+step.Get(s))
+		increment := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)+step.Get(ctx))
 		})
 
-		decrement := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)-step.Get(s))
+		decrement := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)-step.Get(ctx))
 		})
 
-		c.View(func(s *via.Session) h.H {
+		c.View(func(ctx *via.Context) h.H {
 			return h.Div(
 				h.H1(h.Text("Counter Example")),
-				h.P(h.Textf("Count: %d", count.Get(s))),
+				h.P(h.Textf("Count: %d", count.Get(ctx))),
 				h.Label(h.Text("Step: ")),
 				h.Input(h.Type("number"), h.Name("step"), step.Bind()),
 				h.Div(

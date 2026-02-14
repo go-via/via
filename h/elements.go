@@ -1,6 +1,7 @@
 package h
 
 import (
+	g "maragu.dev/gomponents"
 	gh "maragu.dev/gomponents/html"
 )
 
@@ -180,6 +181,10 @@ func Hr(children ...H) H {
 	return gh.Hr(retype(children)...)
 }
 
+func HGroup(children ...H) H {
+	return gh.HGroup(retype(children)...)
+}
+
 func HTML(children ...H) H {
 	return gh.HTML(retype(children)...)
 }
@@ -302,6 +307,13 @@ func Section(children ...H) H {
 
 func Select(children ...H) H {
 	return gh.Select(retype(children)...)
+}
+
+func SelectWithOptions(attrs []H, options []H) H {
+	children := make([]g.Node, 0, len(attrs)+len(options))
+	children = append(children, retype(attrs)...)
+	children = append(children, retype(options)...)
+	return gh.Select(children...)
 }
 
 func Small(children ...H) H {

@@ -6,9 +6,9 @@ import (
 	"github.com/go-via/via/h"
 )
 
-func Action(c *Composition, fn func(s *Session)) *ActionHandle {
+func Action(c *Composition, fn func(ctx *Context)) *ActionHandle {
 	if c.actions == nil {
-		c.actions = make(map[string]func(*Session))
+		c.actions = make(map[string]func(*Context))
 	}
 	idStr := genRandID()
 	c.actions[idStr] = fn

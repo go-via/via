@@ -14,6 +14,10 @@ type SignalType interface {
 }
 
 func Signal[T SignalType](c *Composition, initial T) *SignalHandle[T] {
+	if c.viewCalled {
+		panic("Signal() called after View() - signals must be registered before View() is called")
+	}
+
 	idStr := genRandID()
 
 	c.signals = append(c.signals, signalRegistration{
@@ -32,11 +36,11 @@ type SignalHandle[T any] struct {
 	initial T
 }
 
-func (sh *SignalHandle[T]) Get(s *Session) T {
-	if s == nil || s.s == nil {
+func (sh *SignalHandle[T]) Get(ctx *Context) T {
+	if ctx == nil || ctx.s == nil {
 		return sh.initial
 	}
-	if val, ok := s.s.signals[sh.id]; ok {
+	if val, ok := ctx.s.signals[sh.id]; ok {
 		// Try direct type assertion first
 		if typedVal, ok := val.(T); ok {
 			return typedVal
@@ -49,7 +53,8 @@ func (sh *SignalHandle[T]) Get(s *Session) T {
 		if strVal, ok := val.(string); ok {
 			return convertStringToType(strVal, sh.initial)
 		}
-		return val.(T) // Will panic if conversion fails
+		// Return initial value if conversion fails (type mismatch)
+		return sh.initial
 	}
 	return sh.initial
 }
@@ -154,16 +159,16 @@ func convertStringToType[T any](s string, initial T) T {
 	return initial
 }
 
-func (sh *SignalHandle[T]) Set(s *Session, value T) {
-	if s == nil || s.s == nil {
+func (sh *SignalHandle[T]) Set(ctx *Context, value T) {
+	if ctx == nil || ctx.s == nil {
 		return
 	}
-	if s.mode == sessionModeView {
-		s.warn("SignalHandle.Set() called during view render; mutation ignored")
+	if ctx.mode == sessionModeView {
+		ctx.warn("SignalHandle.Set() called during view render; mutation ignored")
 		return
 	}
-	s.s.signals[sh.id] = value
-	s.s.changedSignals[sh.id] = value
+	ctx.s.signals[sh.id] = value
+	ctx.s.changedSignals[sh.id] = value
 }
 
 func (sh *SignalHandle[T]) Bind() h.H {

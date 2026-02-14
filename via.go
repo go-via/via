@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -26,11 +27,16 @@ var datastarJS []byte
 
 // session represents internal user session with persistent state
 type session struct {
-	id        string
-	store     *store
-	patchChan chan patch
-	c         *Composition
+	id         string // tabID - unique per page load/tab
+	sessionID  string // cookie-based session ID - shared across tabs
+	store      *store
+	patchChan  chan patch
+	c          *Composition
+	lastAccess int64
 }
+
+// Middleware is a function that wraps an http.Handler.
+type Middleware func(http.Handler) http.Handler
 
 // V is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
@@ -41,8 +47,17 @@ type V struct {
 	compositionRegistryMutex sync.RWMutex
 	sessionRegistry          map[string]*session
 	sessionRegistryMutex     sync.RWMutex
+	sessionState             map[string]map[string]any // sessionID -> state
+	sessionStateMu           sync.RWMutex
+	sessionLastAccess        map[string]int64 // sessionID -> last access timestamp
+	sessionLastAccessMu      sync.RWMutex
+	invalidatedSessions      map[string]int64 // sessionID -> invalidation timestamp
+	invalidatedSessionsMu    sync.RWMutex
+	appState                 map[string]any
+	appStateMu               sync.RWMutex
 	documentHeadIncludes     []h.H
 	documentFootIncludes     []h.H
+	middlewares              []Middleware
 }
 
 func (v *V) logErr(format string, a ...any) {
@@ -90,6 +105,11 @@ func (v *V) Config(cfg Options) {
 	}
 }
 
+// Use adds middleware to the application.
+func (v *V) Use(middleware ...Middleware) {
+	v.middlewares = append(v.middlewares, middleware...)
+}
+
 // AppendToHead appends the given h.H nodes to the head of the base HTML document.
 // Useful for including css stylesheets and JS scripts.
 func (v *V) AppendToHead(elements ...h.H) {
@@ -120,7 +140,12 @@ func (v *V) AppendToFoot(elements ...h.H) {
 //		})
 //	})
 func (v *V) Page(route string, composeFn func(c *Composition)) {
-	c := &Composition{id: genRandID(), route: route}
+	c := &Composition{
+		id:           genRandID(),
+		route:        route,
+		actions:      make(map[string]func(*Context)),
+		actionOwners: make(map[string]compOwner),
+	}
 	composeFn(c)
 	if c.viewFn == nil {
 		panic("page " + route + " has no view")
@@ -128,7 +153,15 @@ func (v *V) Page(route string, composeFn func(c *Composition)) {
 	v.compositionRegistryMutex.Lock()
 	v.compositionRegistry[c.id] = c
 	v.compositionRegistryMutex.Unlock()
-	v.mux.HandleFunc("GET "+route, v.newPageHTTPHandler(route, c.id, c))
+
+	// Register page handler with middleware applied
+	pageHandler := v.newPageHTTPHandler(route, c.id, c)
+	// Apply middleware: last registered runs closest to handler
+	var handler http.Handler = http.HandlerFunc(pageHandler)
+	for i := len(v.middlewares) - 1; i >= 0; i-- {
+		handler = v.middlewares[i](handler)
+	}
+	v.mux.Handle("GET "+route, handler)
 
 	// check for panics
 	// func() {
@@ -194,25 +227,82 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 
-		// Create or get internal session for this page load
-		sess := v.getOrCreateSession(cID)
+		// Generate tabID first (unique per page load/tab) - this is the session key
+		tabID := genRandID()
+
+		// Get session ID from cookie for session-scoped state (shared across tabs)
+		cookieSessionID := v.getSessionIDFromRequest(r)
+
+		// Check if session is invalidated
+		if cookieSessionID != "" {
+			v.invalidatedSessionsMu.RLock()
+			_, invalidated := v.invalidatedSessions[cookieSessionID]
+			v.invalidatedSessionsMu.RUnlock()
+			if invalidated {
+				// Session was invalidated, create new one
+				cookieSessionID = ""
+			}
+		}
+
+		if cookieSessionID == "" {
+			// Generate new session ID
+			cookieSessionID = genRandID()
+			// Set session cookie for new sessions
+			http.SetCookie(w, &http.Cookie{
+				Name:     v.cfg.SessionCookieName,
+				Value:    cookieSessionID,
+				MaxAge:   v.cfg.SessionCookieMaxAge,
+				Path:     "/",
+				HttpOnly: true,
+			})
+		}
+
+		// Create or get internal session keyed by tabID (for tab isolation)
+		sess := v.getOrCreateSession(tabID)
+		sess.sessionID = cookieSessionID // Store cookie-based session ID for session-scoped state
 		sess.store.pathParams = extractParams(route, r.URL.Path)
 		sess.c = c
 
-		// Create public Session for view (read-only mode)
-		sc := &Session{
-			s:    sess.store,
-			ss:   sess,
-			mode: sessionModeView,
-			warn: v.warnFn(),
+		// Seed initial state values in session store
+		for _, stateReg := range c.states {
+			switch stateReg.scope {
+			case ScopeTab:
+				// Tab-scoped state goes in session store
+				if _, exists := sess.store.state[stateReg.id]; !exists {
+					sess.store.state[stateReg.id] = stateReg.initial
+				}
+			case ScopeSession:
+				// Session-scoped state goes to app's session state
+				if v.sessionState[cookieSessionID] == nil {
+					v.sessionState[cookieSessionID] = make(map[string]any)
+				}
+				if _, exists := v.sessionState[cookieSessionID][stateReg.id]; !exists {
+					v.sessionState[cookieSessionID][stateReg.id] = stateReg.initial
+				}
+			case ScopeApp:
+				// App-scoped state goes to app's app state
+				if _, exists := v.appState[stateReg.id]; !exists {
+					v.appState[stateReg.id] = stateReg.initial
+				}
+			}
+		}
+
+		// Create public Context for view (read-only mode)
+		sc := &Context{
+			s:         sess.store,
+			ss:        sess,
+			mode:      sessionModeView,
+			v:         v,
+			sessionID: cookieSessionID,
+			warn:      v.warnFn(),
 		}
 
 		headElements := []h.H{}
 		headElements = append(headElements, v.documentHeadIncludes...)
 
-		// Build initial signals including via-c, path params, and composition signals
+		// Build initial signals including via-c (tabID), path params, and composition signals
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "{'via-c':'%s'", cID)
+		fmt.Fprintf(&sb, "{'via-c':'%s'", tabID)
 		for key, val := range sess.store.pathParams {
 			fmt.Fprintf(&sb, ", '%s':'%s'", key, val)
 		}
@@ -236,7 +326,7 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 		headElements = append(headElements,
 			h.Meta(h.Data("signals", initialSignals)),
 			h.Meta(h.Data("init", "@get('/_sse', {retry: 'always'})")),
-			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', () => { navigator.sendBeacon('/_session/close', '%s'); })`, cID))),
+			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', () => { navigator.sendBeacon('/_session/close', '%s'); })`, tabID))),
 		)
 		bodyElements := []h.H{c.viewFn(sc)}
 		bodyElements = append(bodyElements, v.documentFootIncludes...)
@@ -274,9 +364,9 @@ func (v *V) sseHTTPHandler(w http.ResponseWriter, r *http.Request) {
 	var sigs map[string]any
 	_ = datastar.ReadSignals(r, &sigs)
 
-	sessionID, _ := sigs["via-c"].(string)
-	if sessionID != "" {
-		session, err := v.getSession(sessionID)
+	tabID, _ := sigs["via-c"].(string)
+	if tabID != "" {
+		session, err := v.getSession(tabID)
 		if err != nil {
 			v.logErr("sse stream failed to start: %v", err)
 			return
@@ -288,12 +378,12 @@ func (v *V) sseHTTPHandler(w http.ResponseWriter, r *http.Request) {
 		))
 		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via-sse-reconnect"))
 
-		v.logDebug("SSE connection established for session %s", sessionID)
+		v.logDebug("SSE connection established for tab %s", tabID)
 
 		for {
 			select {
 			case <-sse.Context().Done():
-				v.logDebug("SSE connection ended for session %s", sessionID)
+				v.logDebug("SSE connection ended for tab %s", tabID)
 				return
 			case patch, ok := <-session.patchChan:
 				if !ok {
@@ -331,52 +421,69 @@ func (v *V) actionHTTPHandler(w http.ResponseWriter, r *http.Request) {
 	var sigs map[string]any
 	_ = datastar.ReadSignals(r, &sigs)
 
-	// Try new C-based system first
-	cID, _ := sigs["via-c"].(string)
-	if cID != "" {
-		v.compositionRegistryMutex.RLock()
-		c, ok := v.compositionRegistry[cID]
-		v.compositionRegistryMutex.RUnlock()
-		if ok {
-			if actionFn, exists := c.actions[actionID]; exists {
-				// log err if actionFn panics
-				defer func() {
-					if r := recover(); r != nil {
-						v.logErr("action '%s' failed: %v", actionID, r)
-					}
-				}()
+	// Get tabID from via-c signal (for tab-scoped state and targeting)
+	tabID, _ := sigs["via-c"].(string)
+	if tabID != "" {
+		// Get or create session by tabID (for tab-scoped state)
+		sess := v.getOrCreateSession(tabID)
 
-				// Get or create internal session for persistent state
-				sess := v.getOrCreateSession(cID)
-				injectSignals(sess.store, sigs)
-
-				// Extract path params from signals based on route pattern
-				pathParamNames := extractParamNames(c.route)
-				pathParams := make(map[string]string)
-				for _, paramName := range pathParamNames {
-					if val, ok := sigs[paramName]; ok {
-						if strVal, ok := val.(string); ok {
-							pathParams[paramName] = strVal
-						}
-					}
-				}
-				sess.store.pathParams = pathParams
-
-				// Create public Session for action (read-write mode)
-				sc := &Session{
-					s:    sess.store,
-					ss:   sess,
-					mode: sessionModeAction,
-					warn: v.warnFn(),
-				}
-				actionFn(sc)
-				return
-			}
-			v.logDebug("action '%s' not found in C", actionID)
+		// Get composition from session
+		c := sess.c
+		if c == nil {
+			v.logDebug("session has no composition")
 			return
 		}
-		v.logDebug("C with id %q not found", cID)
+
+		if actionFn, exists := c.actions[actionID]; exists {
+			// log err if actionFn panics
+			defer func() {
+				if r := recover(); r != nil {
+					v.logErr("action '%s' failed: %v", actionID, r)
+				}
+			}()
+
+			injectSignals(sess.store, sigs)
+
+			// Extract path params from signals based on route pattern
+			pathParamNames := extractParamNames(c.route)
+			pathParams := make(map[string]string)
+			for _, paramName := range pathParamNames {
+				if val, ok := sigs[paramName]; ok {
+					if strVal, ok := val.(string); ok {
+						pathParams[paramName] = strVal
+					}
+				}
+			}
+			sess.store.pathParams = pathParams
+
+			// Get session ID from cookie for session-scoped state
+			sessionID := v.getSessionIDFromRequest(r)
+
+			// Create public Context for action (read-write mode)
+			sc := &Context{
+				s:         sess.store,
+				ss:        sess,
+				mode:      sessionModeAction,
+				v:         v,
+				sessionID: sessionID,
+				warn:      v.warnFn(),
+			}
+
+			// Check if action belongs to a component
+			if c.actionOwners != nil {
+				if owner, ok := c.actionOwners[actionID]; ok {
+					sc.compID = owner.id
+					sc.compViewFn = owner.viewFn
+				}
+			}
+
+			actionFn(sc)
+			return
+		}
+		v.logDebug("action '%s' not found in session composition", actionID)
+		return
 	}
+	v.logDebug("session not found for tab %q", tabID)
 }
 
 func (v *V) sessionCloseHTTPHandler(w http.ResponseWriter, r *http.Request) {
@@ -415,26 +522,52 @@ func New() *V {
 		mux:                 mux,
 		compositionRegistry: make(map[string]*Composition),
 		sessionRegistry:     make(map[string]*session),
+		sessionState:        make(map[string]map[string]any),
+		sessionLastAccess:   make(map[string]int64),
+		invalidatedSessions: make(map[string]int64),
+		appState:            make(map[string]any),
 		cfg: Options{
-			DevMode:       false,
-			ServerAddress: ":3000",
-			LogLvl:        LogLevelInfo,
-			DocumentTitle: "⚡ Via",
+			DevMode:             false,
+			ServerAddress:       ":3000",
+			LogLvl:              LogLevelInfo,
+			DocumentTitle:       "⚡ Via",
+			SessionTTL:          1800, // 30 minutes
+			SessionCookieName:   "via_sid",
+			SessionCookieMaxAge: 2592000, // 30 days
 		},
 	}
 
 	v.mux.HandleFunc("GET /_datastar.js", v.datastarJSHTTPHandler)
-	v.mux.HandleFunc("GET /_sse", v.sseHTTPHandler)
-	v.mux.HandleFunc("GET /_action/{id}", v.actionHTTPHandler)
 
-	v.mux.HandleFunc("POST /_session/close", v.sessionCloseHTTPHandler)
+	// Wrap SSE, action, and session handlers with middleware
+	var sseHandler http.Handler = http.HandlerFunc(v.sseHTTPHandler)
+	var actionHandler http.Handler = http.HandlerFunc(v.actionHTTPHandler)
+	var sessionCloseHandler http.Handler = http.HandlerFunc(v.sessionCloseHTTPHandler)
+
+	for i := len(v.middlewares) - 1; i >= 0; i-- {
+		sseHandler = v.middlewares[i](sseHandler)
+		actionHandler = v.middlewares[i](actionHandler)
+		sessionCloseHandler = v.middlewares[i](sessionCloseHandler)
+	}
+
+	v.mux.Handle("GET /_sse", sseHandler)
+	v.mux.Handle("GET /_action/{id}", actionHandler)
+	v.mux.Handle("POST /_session/close", sessionCloseHandler)
 	return v
 }
 
 func genRandID() string {
 	b := make([]byte, 16)
 	rand.Read(b)
-	return hex.EncodeToString(b)[:8]
+	return hex.EncodeToString(b)[:32]
+}
+
+func isValidHexID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(id)
+	return err == nil
 }
 
 func extractParams(pattern, path string) map[string]string {
@@ -466,7 +599,19 @@ func extractParamNames(pattern string) []string {
 	return names
 }
 
+func (v *V) getSessionIDFromRequest(r *http.Request) string {
+	cookie, err := r.Cookie(v.cfg.SessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
+}
+
 func (v *V) getOrCreateSession(sessionID string) *session {
+	if sessionID == "" {
+		sessionID = genRandID()
+	}
+
 	v.sessionRegistryMutex.RLock()
 	if sess, ok := v.sessionRegistry[sessionID]; ok {
 		v.sessionRegistryMutex.RUnlock()
@@ -523,10 +668,78 @@ func (v *V) TestGetSession(sessionID string) (*session, error) {
 	return v.getSession(sessionID)
 }
 
+// createSession creates a new internal session (for testing)
+func (v *V) createSession(id string, sessionID string, store *store) *session {
+	sess := &session{
+		id:         id,
+		sessionID:  sessionID,
+		store:      store,
+		lastAccess: time.Now().Unix(),
+	}
+	if sess.store == nil {
+		sess.store = newStore()
+	}
+	sess.patchChan = make(chan patch, 10)
+	v.sessionRegistryMutex.Lock()
+	v.sessionRegistry[sess.id] = sess
+	v.sessionRegistryMutex.Unlock()
+	return sess
+}
+
+// cleanupStaleSessions removes sessions that haven't been accessed recently
+func (v *V) cleanupStaleSessions() {
+	if v.cfg.SessionTTL <= 0 {
+		return
+	}
+	cutoff := time.Now().Unix() - int64(v.cfg.SessionTTL)
+
+	v.sessionRegistryMutex.Lock()
+	defer v.sessionRegistryMutex.Unlock()
+
+	for id, sess := range v.sessionRegistry {
+		if sess.lastAccess < cutoff {
+			delete(v.sessionRegistry, id)
+		}
+	}
+
+	// Also cleanup session state
+	v.sessionStateMu.Lock()
+	defer v.sessionStateMu.Unlock()
+	for id, lastAccess := range v.sessionLastAccess {
+		if lastAccess < cutoff {
+			delete(v.sessionState, id)
+			delete(v.sessionLastAccess, id)
+		}
+	}
+
+	// Cleanup invalidated sessions - use SessionCookieMaxAge since invalidation is tied to cookie
+	cutoffInvalidated := time.Now().Unix() - int64(v.cfg.SessionCookieMaxAge)
+	v.invalidatedSessionsMu.Lock()
+	defer v.invalidatedSessionsMu.Unlock()
+	for id, invalidatedAt := range v.invalidatedSessions {
+		if invalidatedAt < cutoffInvalidated {
+			delete(v.invalidatedSessions, id)
+		}
+	}
+}
+
 func (s *session) TestGetPatchChan() <-chan patch {
 	return s.patchChan
 }
 
+func (s *session) TestStore() *store {
+	return s.store
+}
+
 func (p patch) TestContent() string {
 	return p.content
+}
+
+// Test helpers for testing
+func TestGenRandID() string {
+	return genRandID()
+}
+
+func TestIsValidHexID(id string) bool {
+	return isValidHexID(id)
 }

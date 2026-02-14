@@ -1,4 +1,4 @@
-# ⚡Via
+# <⚡> Via
 
 Real-time web applications in pure Go. No JavaScript. No build step. No excuses.
 
@@ -24,6 +24,9 @@ connection. Zero JavaScript. Zero build tools. Zero cognitive overhead.
 - **Single connection** - One persistent stream, not REST spam
 - **Built-in compression** - Brotli level 5, automatic
 - **Pure Go** - If you know Go, you know Via
+- **State scopes** - Tab, session, or app-wide state
+- **Auth helpers** - Built-in UserHandle for authentication
+- **Testing utilities** - Ergonomic vtest package for integration tests
 
 ## Getting Started
 
@@ -47,14 +50,14 @@ func main() {
     v := via.New()
 
     v.Page("/", func(c *via.Composition) {
-        count := via.State(0)
+        count := via.State(c, 0)
         step := via.Signal(c, 1)
 
-        increment := via.Action(c, func(s *via.Session) {
+        increment := via.Action(c, func(ctx *via.Context) {
             count.Set(s, count.Get(s)+step.Get(s))
         })
 
-        c.View(func(s *via.Session) h.H {
+        c.View(func(ctx *via.Context) h.H {
             return h.Div(
                 h.H1(h.Text("Counter Example")),
                 h.P(h.Textf("Count: %d", count.Get(s))),
@@ -76,10 +79,103 @@ go run main.go
 ```
 
 Open `http://localhost:3000`. Click the button. Watch the counter update in
-real-time. No JavaScript was written. No build step was run. No frameworks were
-harmed in the making of this application.
+real-time. No JavaScript was written. No build step was run. No frustration was
+needed in the making of this demo.
 
 That's it. That's the entire stack.
+
+## Reusable Components
+
+```go
+package main
+
+import (
+    "github.com/go-via/via"
+    "github.com/go-via/via/h"
+)
+
+type CounterProps struct {
+    Name string
+    Step int
+}
+
+func NewCounter(props CounterProps) via.ComposeFn {
+    return func(c *via.Composition) {
+        count := via.State(c, 0)
+        step := via.Signal(c, props.Step)
+
+        increment := via.Action(c, func(ctx *via.Context) {
+            count.Set(s, count.Get(s)+step.Get(s))
+        })
+
+        c.View(func(ctx *via.Context) h.H {
+            return h.Div(
+                h.H2(h.Text(props.Name)),
+                h.P(h.Textf("Count: %d", count.Get(s))),
+                h.Input(h.Type("number"), step.Bind()),
+                h.Button(h.Text("+"), increment.OnClick()),
+            )
+        })
+    }
+}
+
+func main() {
+    v := via.New()
+
+    v.Page("/", func(c *via.Composition) {
+        counter1 := c.Component(NewCounter(CounterProps{Name: "Clicks", Step: 1}))
+        counter2 := c.Component(NewCounter(CounterProps{Name: "Jumps", Step: 10}))
+
+        c.View(func(ctx *via.Context) h.H {
+            return h.Div(
+                counter1.Mount(s),
+                counter2.Mount(s),
+            )
+        })
+    })
+
+    v.Start()
+}
+```
+
+## State Scopes
+
+State can have different lifetimes:
+
+```go
+// Tab scope (default) - unique per browser tab
+clicks := via.State(c, 0)
+
+// Session scope - shared across tabs for same user
+preferences := via.State(c, "", via.WithScope(via.ScopeSession))
+
+// App scope - global across all users
+visitorCount := via.State(c, 0, via.WithScope(via.ScopeApp))
+```
+
+## Authentication
+
+Built-in UserHandle for session-scoped user data:
+
+```go
+type User struct {
+    ID   string
+    Name string
+}
+
+user := via.NewUserHandle[User]()
+
+// In action - login
+user.SetUser(s, User{ID: "1", Name: "Alice"})
+
+// In view - check auth
+if u, ok := user.Get(s); ok {
+    // show user info
+}
+
+// In action - logout
+user.Logout(s)  // clears user and invalidates session
+```
 
 ## How It Works
 
@@ -139,8 +235,9 @@ Via stands on the shoulders of giants:
 - 🧩 [Gomponents](https://maragu.dev/gomponents) - The brilliant library that
   gives Via type-safe, composable HTML generation through the `via/h` package.
 
-> Thank you for building tools that don't just work — they inspire.
+> Thank you for building tools that don't just work — they inspire 🫶
 
 ## License
 
 MIT. Build something great.
+

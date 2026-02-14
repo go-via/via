@@ -37,6 +37,11 @@ func Visit(path string) *Page {
 	return visitWithHandler(handler, path)
 }
 
+// VisitWith creates a new stateful Page by visiting the given path with a specific handler.
+func VisitWith(handler http.Handler, path string) *Page {
+	return visitWithHandler(handler, path)
+}
+
 func visitWithHandler(handler http.Handler, path string) *Page {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	w := httptest.NewRecorder()
@@ -46,44 +51,85 @@ func visitWithHandler(handler http.Handler, path string) *Page {
 	sessionID := extractSessionID(html)
 	signals := extractSignals(html)
 
+	// Extract session cookie from response
+	jar := newCookieJar()
+	for _, c := range w.Result().Cookies() {
+		jar.SetCookies("http://localhost", []*http.Cookie{c})
+	}
+
 	// Establish SSE connection
 	sse := sseConnect(handler, sessionID)
 
 	return &Page{
-		handler:   handler,
-		sessionID: sessionID,
-		html:      html,
-		sse:       sse,
-		signals:   signals,
+		handler:     handler,
+		sessionID:   sessionID,
+		html:        html,
+		sse:         sse,
+		signals:     signals,
+		jar:         jar,
+		clickCounts: make(map[string]int),
 	}
 }
 
 // Page represents a stateful page that maintains session and current HTML.
 type Page struct {
-	handler   http.Handler
-	sessionID string
-	html      string
-	sse       *SSE
-	signals   map[string]string // Track current signal values
+	handler     http.Handler
+	sessionID   string
+	html        string
+	sse         *SSE
+	signals     map[string]string // Track current signal values
+	jar         *cookieJar        // Cookie jar for session persistence
+	clickCounts map[string]int    // Track click count per button selector
+}
+
+// cookieJar stores cookies to simulate browser cookie behavior
+type cookieJar struct {
+	cookies map[string][]*http.Cookie
+}
+
+func newCookieJar() *cookieJar {
+	return &cookieJar{cookies: make(map[string][]*http.Cookie)}
+}
+
+func (j *cookieJar) SetCookies(uri string, cookies []*http.Cookie) {
+	if j.cookies[uri] == nil {
+		j.cookies[uri] = cookies
+		return
+	}
+	// Merge new cookies with existing ones by name
+	existing := j.cookies[uri]
+	existingMap := make(map[string]*http.Cookie)
+	for _, c := range existing {
+		existingMap[c.Name] = c
+	}
+	for _, c := range cookies {
+		existingMap[c.Name] = c
+	}
+	// Convert back to slice
+	j.cookies[uri] = make([]*http.Cookie, 0, len(existingMap))
+	for _, c := range existingMap {
+		j.cookies[uri] = append(j.cookies[uri], c)
+	}
+}
+
+func (j *cookieJar) GetCookies(uri string) []*http.Cookie {
+	return j.cookies[uri]
 }
 
 // Click triggers an action by button text or selector.
 func (p *Page) Click(selector string) {
-	// Find button by text
-	actionURLs := extractActionURLs(p.html)
-	buttonTexts := extractButtonTexts(p.html)
+	// Find button by text - map button text to action URLs
+	actionButtons := extractActionButtons(p.html)
 
-	var actionURL string
-	for i, text := range buttonTexts {
-		if text == selector && i < len(actionURLs) {
-			actionURL = actionURLs[i]
-			break
-		}
-	}
-
-	if actionURL == "" {
+	urls, ok := actionButtons[selector]
+	if !ok || len(urls) == 0 {
 		return // Silently fail for now
 	}
+
+	// Track click count per button type to handle multiple buttons with same text
+	p.clickCounts[selector]++
+	idx := (p.clickCounts[selector] - 1) % len(urls)
+	actionURL := urls[idx]
 
 	// Trigger action with current signal values
 	signals := map[string]any{"via-c": p.sessionID}
@@ -94,8 +140,17 @@ func (p *Page) Click(selector string) {
 	}
 	signalsJSON, _ := json.Marshal(signals)
 	req := httptest.NewRequest(http.MethodGet, actionURL+"?datastar="+string(signalsJSON), nil)
+	// Add cookies from jar to request
+	for _, c := range p.jar.GetCookies("http://localhost") {
+		req.AddCookie(c)
+	}
 	w := httptest.NewRecorder()
 	p.handler.ServeHTTP(w, req)
+
+	// Update cookie jar with new cookies from response
+	for _, c := range w.Result().Cookies() {
+		p.jar.SetCookies("http://localhost", []*http.Cookie{c})
+	}
 
 	// Wait for SSE patch
 	time.Sleep(100 * time.Millisecond)
@@ -172,6 +227,22 @@ func extractButtonTexts(html string) []string {
 		}
 	}
 	return texts
+}
+
+func extractActionButtons(html string) map[string][]string {
+	re := regexp.MustCompile(`<button[^>]*data-on:click=["']@get\(([^)]+)\)[^>]*>([^<]+)</button>`)
+	matches := re.FindAllStringSubmatch(html, -1)
+
+	result := make(map[string][]string)
+	for _, match := range matches {
+		if len(match) >= 3 {
+			url := strings.ReplaceAll(match[1], "&#39;", "")
+			url = strings.ReplaceAll(url, "'", "")
+			buttonText := match[2]
+			result[buttonText] = append(result[buttonText], url)
+		}
+	}
+	return result
 }
 
 func sseConnect(handler http.Handler, sessionID string) *SSE {

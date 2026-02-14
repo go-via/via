@@ -12,9 +12,7 @@ func TestCounter(t *testing.T) {
 	t.Parallel()
 
 	v := counter.NewCounterPage()
-	vtest.SetHandler(v.HTTPServeMux())
-
-	page := vtest.Visit("/")
+	page := vtest.VisitWith(v.HTTPServeMux(), "/")
 	defer page.Close()
 
 	page.AssertText(t, "Counter Example")
@@ -37,9 +35,7 @@ func TestCounterWithStep(t *testing.T) {
 	t.Parallel()
 
 	v := counter.NewCounterPage()
-	vtest.SetHandler(v.HTTPServeMux())
-
-	page := vtest.Visit("/")
+	page := vtest.VisitWith(v.HTTPServeMux(), "/")
 	defer page.Close()
 
 	page.AssertText(t, "Count: 0")
@@ -66,7 +62,7 @@ func TestCounterHTMLOutput(t *testing.T) {
 	html := resp.Body.String()
 
 	// Verify step input has data-bind attribute (without $ prefix)
-	if !containsPattern(html, `<input[^>]+type="number"[^>]+data-bind="[a-f0-9]{8}"`) {
+	if !containsPattern(html, `<input[^>]+type="number"[^>]+data-bind="[a-f0-9]{32}"`) {
 		t.Errorf("Step input missing data-bind attribute with signal ID")
 	}
 

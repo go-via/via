@@ -12,20 +12,20 @@ func NewCounterApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 
-		increment := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)+1)
+		increment := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)+1)
 		})
 
-		decrement := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)-1)
+		decrement := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)-1)
 		})
 
-		c.View(func(s *via.Session) h.H {
+		c.View(func(ctx *via.Context) h.H {
 			return h.Div(
 				h.H1(h.Text("Counter")),
-				h.P(h.Textf("Count: %d", count.Get(s))),
+				h.P(h.Textf("Count: %d", count.Get(ctx))),
 				h.Button(h.Text("-"), decrement.OnClick()),
 				h.Button(h.Text("+"), increment.OnClick()),
 			)
@@ -41,21 +41,21 @@ func NewCounterWithStepApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 		step := via.Signal(c, 1)
 
-		increment := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)+step.Get(s))
+		increment := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)+step.Get(ctx))
 		})
 
-		decrement := via.Action(c, func(s *via.Session) {
-			count.Set(s, count.Get(s)-step.Get(s))
+		decrement := via.Action(c, func(ctx *via.Context) {
+			count.Set(ctx, count.Get(ctx)-step.Get(ctx))
 		})
 
-		c.View(func(s *via.Session) h.H {
+		c.View(func(ctx *via.Context) h.H {
 			return h.Div(
 				h.H1(h.Text("Counter with Step")),
-				h.P(h.Textf("Count: %d", count.Get(s))),
+				h.P(h.Textf("Count: %d", count.Get(ctx))),
 				h.P(h.Text("Step: "), h.Span(step.Text())),
 				h.Input(h.Type("number"), h.Name("step"), step.Bind()),
 				h.Button(h.Text("-"), decrement.OnClick()),
@@ -72,19 +72,19 @@ func NewTodoApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		todos := via.State([]string{})
+		todos := via.State(c, []string{})
 
-		addTodo := via.Action(c, func(s *via.Session) {
-			current := todos.Get(s)
-			todos.Set(s, append(current, "New todo"))
+		addTodo := via.Action(c, func(ctx *via.Context) {
+			current := todos.Get(ctx)
+			todos.Set(ctx, append(current, "New todo"))
 		})
 
-		clearAll := via.Action(c, func(s *via.Session) {
-			todos.Set(s, []string{})
+		clearAll := via.Action(c, func(ctx *via.Context) {
+			todos.Set(ctx, []string{})
 		})
 
-		c.View(func(s *via.Session) h.H {
-			items := todos.Get(s)
+		c.View(func(ctx *via.Context) h.H {
+			items := todos.Get(ctx)
 
 			listItems := []h.H{}
 			for _, todo := range items {
@@ -109,22 +109,102 @@ func NewGreeterApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		name := via.State("World")
+		name := via.State(c, "World")
 
-		greet := via.Action(c, func(s *via.Session) {
-			name.Set(s, "Alice")
+		greet := via.Action(c, func(ctx *via.Context) {
+			name.Set(ctx, "Alice")
 		})
 
-		reset := via.Action(c, func(s *via.Session) {
-			name.Set(s, "World")
+		reset := via.Action(c, func(ctx *via.Context) {
+			name.Set(ctx, "World")
 		})
 
-		c.View(func(s *via.Session) h.H {
+		c.View(func(ctx *via.Context) h.H {
 			return h.Div(
 				h.H1(h.Text("Greeter")),
-				h.P(h.Textf("Hello, %s!", name.Get(s))),
+				h.P(h.Textf("Hello, %s!", name.Get(ctx))),
 				h.Button(h.Text("Greet"), greet.OnClick()),
 				h.Button(h.Text("Reset"), reset.OnClick()),
+			)
+		})
+	})
+
+	return v.HTTPServeMux()
+}
+
+// NewComponentCounterApp creates a counter app using components for testing.
+func NewComponentCounterApp() http.Handler {
+	v := via.New()
+
+	v.Page("/", func(c *via.Composition) {
+		makeCounter := func(label string) via.ComposeFn {
+			return func(c *via.Composition) {
+				count := via.State(c, 0)
+				increment := via.Action(c, func(ctx *via.Context) {
+					count.Set(ctx, count.Get(ctx)+1)
+				})
+				c.View(func(ctx *via.Context) h.H {
+					return h.Div(
+						h.P(h.Textf("%s: %d", label, count.Get(ctx))),
+						h.Button(h.Text("+"), increment.OnClick()),
+					)
+				})
+			}
+		}
+
+		counter := c.Component(makeCounter("Count"))
+
+		c.View(func(ctx *via.Context) h.H {
+			return h.Div(
+				h.H1(h.Text("Component Counter")),
+				counter.Mount(ctx),
+			)
+		})
+	})
+
+	return v.HTTPServeMux()
+}
+
+// NewNestedComponentApp creates a nested component app for testing.
+func NewNestedComponentApp() http.Handler {
+	v := via.New()
+
+	v.Page("/", func(c *via.Composition) {
+		makeCounter := func(label string) via.ComposeFn {
+			return func(c *via.Composition) {
+				count := via.State(c, 0)
+				increment := via.Action(c, func(ctx *via.Context) {
+					count.Set(ctx, count.Get(ctx)+1)
+				})
+				c.View(func(ctx *via.Context) h.H {
+					return h.Div(
+						h.P(h.Textf("%s: %d", label, count.Get(ctx))),
+						h.Button(h.Text("+"), increment.OnClick()),
+					)
+				})
+			}
+		}
+
+		makePanel := func() via.ComposeFn {
+			return func(c *via.Composition) {
+				counterA := c.Component(makeCounter("Counter A"))
+				counterB := c.Component(makeCounter("Counter B"))
+				c.View(func(ctx *via.Context) h.H {
+					return h.Div(
+						h.H2(h.Text("Panel")),
+						counterA.Mount(ctx),
+						counterB.Mount(ctx),
+					)
+				})
+			}
+		}
+
+		panel := c.Component(makePanel())
+
+		c.View(func(ctx *via.Context) h.H {
+			return h.Div(
+				h.H1(h.Text("Nested Components")),
+				panel.Mount(ctx),
 			)
 		})
 	})

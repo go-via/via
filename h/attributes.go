@@ -46,3 +46,19 @@ func Role(v string) H {
 func Data(name, v string) H {
 	return gh.Data(name, v)
 }
+
+func For(v string) H {
+	return gh.For(v)
+}
+
+func Selected() H {
+	return gh.Selected()
+}
+
+func DataOnChange(v string) H {
+	return gh.Data("on:change", v)
+}
+
+func DataOnClick(v string) H {
+	return gh.Data("on:click", v)
+}

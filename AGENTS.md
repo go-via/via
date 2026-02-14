@@ -94,13 +94,13 @@ Via separates **composition-time** (defining the page) from **runtime**
 ```go
 v.Page("/counter/{id}", func(c *via.Composition) { // Composition = page definition
     count := via.State(0)                          // Server-side state
-    step := c.Signal(1).(*via.SignalHandle[int])   // Client-side signal
+    step := via.Signal(c, 1)                       // Client-side signal
 
-    increment := c.Action(func(s *via.Session) {   // Session = runtime context
+    increment := via.Action(c, func(ctx *via.Context) { // Session = runtime context
         count.Set(s, count.Get(s) + step.Get(s))
     })
 
-    c.View(func(s *via.Session) h.H {              // View = read-only by convention
+    c.View(func(ctx *via.Context) h.H {              // View = read-only by convention
         return h.Div(
             h.P(h.Textf("Count: %d", count.Get(s))),
             h.Input(h.Type("number"), h.Name("step"), step.Bind()),
@@ -110,7 +110,7 @@ v.Page("/counter/{id}", func(c *via.Composition) { // Composition = page definit
 })
 ```
 
-**Runtime safety:** `State.Set()` warns if called during view render.
+**Context safety:** `State.Set()` warns if called during view render.
 Actions run in action mode, views in view mode. Mutations in views are
 ignored with warnings.
 
@@ -138,20 +138,20 @@ func main() {
         count := via.State(0)
 
         // Actions have Session (read + write access)
-        increment := c.Action(func(s *via.Session) {
+        increment := via.Action(c, func(ctx *via.Context) {
             count.Set(s, count.Get(s) + 1)
         })
 
-        decrement := c.Action(func(s *via.Session) {
+        decrement := via.Action(c, func(ctx *via.Context) {
             count.Set(s, count.Get(s) - 1)
         })
 
-        reset := c.Action(func(s *via.Session) {
+        reset := via.Action(c, func(ctx *via.Context) {
             count.Set(s, 0)
         })
 
         // View has Session (read access by convention)
-        c.View(func(s *via.Session) h.H {
+        c.View(func(ctx *via.Context) h.H {
             id := s.PathParam("id")
 
             return h.Div(
@@ -175,7 +175,7 @@ func main() {
 - State created at composition-time, accessed at runtime
 - Actions modify state via `State.Set(s, value)`
 - Views read state via `State.Get(s)` (mutations warned)
-- Path parameters available on both `r.Reader` and `rw.Reader`
+- Path parameters accessed via `s.PathParam("name")` on Session
 - `OnClick()` attaches action to button click events
 - Real-time updates happen automatically via SSE
 
@@ -185,7 +185,7 @@ func main() {
 | ------------------- | ---------------------------------------------- |
 | **V**               | Root application, manages routing and sessions |
 | **Composition**     | Page composition (`View()`, `Action()`)        |
-| **Session**         | Runtime context for views and actions          |
+| **Context**         | Runtime context for views and actions          |
 | **StateHandle[T]**  | Server-side reactive state                     |
 | **SignalHandle[T]** | Client-side reactive values (browser state)    |
 | **h.H**             | HTML node interface                            |
@@ -196,6 +196,7 @@ func main() {
 | ---------------- | ---------------------------------------------------------- |
 | `via.go`         | Root `V` type, routing, SSE infrastructure                 |
 | `composition.go` | `Composition` struct, `Action()`, `View()`, `Signal()`     |
+| `component.go`   | `ComposeFn`, `CompHandle`, `c.Component()` for reusability |
 | `state.go`       | `StateHandle[T]` generic server-side reactive state        |
 | `signal.go`      | `SignalHandle[T]` generic client-side reactive signals     |
 | `action.go`      | `ActionHandle` and event handlers (OnClick, OnChange, etc) |
@@ -213,6 +214,110 @@ func main() {
 All elements return `h.H`: `h.Div(...)`, `h.P(...)`, `h.Button(...)`,
 `h.Text()`, `h.Data()` for Datastar attrs, `h.HTML5()` for template.
 
+### Components
+
+Components are self-contained, reusable UI elements that compose exactly like
+pages. They use the same `c.View()`, `via.State()`, `via.Signal()`, and
+`via.Action()` API.
+
+**Key types:**
+
+- `ComposeFn` - Function signature for component composition: `func(c *Composition)`
+- `*CompHandle` - Handle returned by `c.Component()` with `Mount(s *Context) h.H` method
+
+**Basic component:**
+
+```go
+func makeCounter(label string) via.ComposeFn {
+    return func(c *via.Composition) {
+        count := via.State(0)
+        increment := via.Action(c, func(ctx *via.Context) {
+            count.Set(s, count.Get(s)+1)
+        })
+        c.View(func(ctx *via.Context) h.H {
+            return h.Div(
+                h.P(h.Textf("%s: %d", label, count.Get(s))),
+                h.Button(h.Text("+"), increment.OnClick()),
+            )
+        })
+    }
+}
+
+// Usage in page
+v.Page("/", func(c *via.Composition) {
+    counter := c.Component(makeCounter("Hits"))
+    c.View(func(ctx *via.Context) h.H {
+        return h.Div(counter.Mount(s))
+    })
+})
+```
+
+**How components work:**
+
+1. `c.Component(composeFn)` creates a child `Composition` with unique ID
+2. Calls `composeFn(child)` to configure component
+3. Merges child's actions and signals into parent (bubble up)
+4. Returns `*CompHandle{id, viewFn}`
+5. `handle.Mount(s)` wraps component in `<div id="...">` (not `<main>`)
+
+**Props via closure:**
+
+```go
+type CounterProps struct {
+    Name  string
+    Step  int
+}
+
+func NewCounter(props CounterProps) via.ComposeFn {
+    return func(c *via.Composition) {
+        count := via.State(0)
+        step := via.Signal(c, props.Step)
+        increment := via.Action(c, func(ctx *via.Context) {
+            count.Set(s, count.Get(s)+step.Get(s))
+        })
+        c.View(func(ctx *via.Context) h.H {
+            return h.Div(
+                h.H2(h.Text(props.Name)),
+                h.P(h.Textf("Count: %d", count.Get(s))),
+                h.Button(h.Text("+"), increment.OnClick()),
+            )
+        })
+    }
+}
+
+// Usage
+counter1 := c.Component(NewCounter(CounterProps{Name: "A", Step: 1}))
+counter2 := c.Component(NewCounter(CounterProps{Name: "B", Step: 10}))
+```
+
+**Nesting:**
+
+Components can nest other components via `c.Component()` inside `ComposeFn`.
+Actions and signals bubble up through the merge chain.
+
+```go
+makePanel := func(c *via.Composition) {
+    counterA := c.Component(makeCounter("Counter A"))
+    counterB := c.Component(makeCounter("Counter B"))
+    c.View(func(ctx *via.Context) h.H {
+        return h.Div(
+            h.H2(h.Text("Panel")),
+            counterA.Mount(s),
+            counterB.Mount(s),
+        )
+    })
+}
+
+panel := c.Component(makePanel)
+```
+
+**Key differences from pages:**
+
+- Pages wrap in `<main id="...">`, components wrapped by `Mount()` in `<div id="...">`
+- Component `View()` stores raw viewFn, page `View()` wraps in `<main>`
+- Components share parent's SSE patchChan
+- Multiple instances have independent state (separate IDs)
+
 ## Common Tasks
 
 **Adding HTML DSL elements:** Add to `h/elements.go`, returns `h.H` interface.
@@ -220,12 +325,12 @@ All elements return `h.H`: `h.Div(...)`, `h.P(...)`, `h.Button(...)`,
 **Adding server-side state:** `State(initial)` in composition. Read with
 `state.Get(s)`, write with `state.Set(s, value)` (in actions).
 
-**Adding client-side signals:** `c.Signal(initial)` in composition. Read with
+**Adding client-side signals:** `via.Signal(c, initial)` in composition. Read with
 `signal.Get(s)`, write with `signal.Set(s, value)` (in actions). Use `signal.Bind()`
 for input binding and `signal.Text()` for reactive display.
 
-**Creating action handlers:** `c.Action(func(rw *via.RW) { ... })`, attach with
-`trigger.OnClick()`, access params with `rw.PathParam("name")`.
+**Creating action handlers:** `via.Action(c, func(ctx *via.Context) { ... })`, attach with
+`trigger.OnClick()`, access params with `s.PathParam("name")`.
 
 **Testing:** Use `httptest` to exercise full HTTP stack. See existing tests
 in `via_test.go` for patterns.
@@ -236,3 +341,4 @@ in `via_test.go` for patterns.
 2. **Type safety** — Use generics to prevent errors at compile time
 3. **Zero JS** — Write Go, get real-time web apps
 4. **Two performance zones** — Hot paths: zero-allocation; API: ergonomics
+

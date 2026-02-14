@@ -13,12 +13,12 @@ func TestAction_TypeSafe(t *testing.T) {
 
 	v.Page("/", func(c *Composition) {
 		// Clean API - no method receiver
-		action := Action(c, func(s *Session) {})
+		action := Action(c, func(ctx *Context) {})
 
 		assert.NotNil(t, action)
 		assert.NotEmpty(t, action.ID())
 
-		c.View(func(s *Session) h.H {
+		c.View(func(ctx *Context) h.H {
 			return h.Div()
 		})
 	})
@@ -26,10 +26,10 @@ func TestAction_TypeSafe(t *testing.T) {
 
 // TestAction_ReturnsHandle verifies action registration
 func TestAction_ReturnsHandle(t *testing.T) {
-	c := &Composition{actions: make(map[string]func(*Session))}
+	c := &Composition{actions: make(map[string]func(*Context))}
 	var executed bool
 
-	action := Action(c, func(s *Session) {
+	action := Action(c, func(ctx *Context) {
 		executed = true
 	})
 
@@ -42,15 +42,15 @@ func TestAction_ReturnsHandle(t *testing.T) {
 	assert.NotNil(t, actionFn)
 
 	// Execute action
-	s := NewSession()
-	actionFn(s)
+	ctx := NewContext(nil)
+	actionFn(ctx)
 	assert.True(t, executed)
 }
 
 // TestAction_OnClickHelper verifies event binding
 func TestAction_OnClickHelper(t *testing.T) {
-	c := &Composition{actions: make(map[string]func(*Session))}
-	action := Action(c, func(s *Session) {})
+	c := &Composition{actions: make(map[string]func(*Context))}
+	action := Action(c, func(ctx *Context) {})
 
 	onClick := action.OnClick()
 	rendered := renderToString(onClick)
@@ -62,8 +62,8 @@ func TestAction_OnClickHelper(t *testing.T) {
 
 // TestAction_OnChangeHelper verifies input change binding
 func TestAction_OnChangeHelper(t *testing.T) {
-	c := &Composition{actions: make(map[string]func(*Session))}
-	action := Action(c, func(s *Session) {})
+	c := &Composition{actions: make(map[string]func(*Context))}
+	action := Action(c, func(ctx *Context) {})
 
 	onChange := action.OnChange()
 	rendered := renderToString(onChange)
@@ -74,8 +74,8 @@ func TestAction_OnChangeHelper(t *testing.T) {
 
 // TestAction_OnKeyDownHelper verifies keyboard binding
 func TestAction_OnKeyDownHelper(t *testing.T) {
-	c := &Composition{actions: make(map[string]func(*Session))}
-	action := Action(c, func(s *Session) {})
+	c := &Composition{actions: make(map[string]func(*Context))}
+	action := Action(c, func(ctx *Context) {})
 
 	onEnter := action.OnKeyDown("Enter")
 	rendered := renderToString(onEnter)
@@ -89,8 +89,8 @@ func TestAction_OnKeyDownHelper(t *testing.T) {
 
 // TestAction_OnInitHelper verifies page load binding
 func TestAction_OnInitHelper(t *testing.T) {
-	c := &Composition{actions: make(map[string]func(*Session))}
-	action := Action(c, func(s *Session) {})
+	c := &Composition{actions: make(map[string]func(*Context))}
+	action := Action(c, func(ctx *Context) {})
 
 	onInit := action.OnInit()
 	rendered := renderToString(onInit)
