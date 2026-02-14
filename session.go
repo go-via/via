@@ -1,6 +1,10 @@
 package via
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/go-via/via/h"
+)
 
 type store struct {
 	state          map[string]any
@@ -17,10 +21,14 @@ const (
 )
 
 type Session struct {
-	s    *store
-	ss   *session // internal session (lowercase, defined in via.go)
-	mode sessionMode
-	warn func(string, ...any)
+	s          *store
+	ss         *session // internal session (lowercase, defined in via.go)
+	mode       sessionMode
+	v          *V                 // reference to the app for accessing app/session state
+	sessionID  string             // the session ID (from cookie)
+	compID     string             // component ID for component actions
+	compViewFn func(*Session) h.H // component view function for component actions
+	warn       func(string, ...any)
 }
 
 func newStore() *store {
@@ -31,12 +39,17 @@ func newStore() *store {
 	}
 }
 
-func NewSession() *Session {
+func NewSession(v *V) *Session {
 	return &Session{
 		s:    newStore(),
 		mode: sessionModeAction,
+		v:    v,
 		warn: func(string, ...any) {},
 	}
+}
+
+func (s *Session) SessionID() string {
+	return s.sessionID
 }
 
 func (s *Session) PathParam(id string) string {
@@ -69,7 +82,17 @@ func (s *Session) Sync() {
 		s.warn("Sync() called during view render; no-op")
 		return
 	}
-	if s.ss == nil || s.ss.c == nil {
+	if s.ss == nil {
+		return
+	}
+
+	// If in component context, sync only the component fragment
+	if s.compViewFn != nil {
+		s.SyncFragment(s.compViewFn(s))
+		return
+	}
+
+	if s.ss.c == nil {
 		return
 	}
 
@@ -93,6 +116,43 @@ func (s *Session) Sync() {
 	if len(s.s.changedSignals) > 0 {
 		s.syncSignals()
 		// Clear changed signals after sync
+		s.s.changedSignals = make(map[string]any)
+	}
+}
+
+// SyncFragment syncs only a component fragment, not the whole page
+func (s *Session) SyncFragment(viewHTML h.H) {
+	if s.mode == sessionModeView {
+		s.warn("SyncFragment() called during view render; no-op")
+		return
+	}
+
+	// If we have a component context, wrap with component ID
+	if s.compViewFn != nil {
+		viewHTML = h.Div(h.ID(s.compID), s.compViewFn(s))
+	} else if viewHTML != nil {
+		// Use the provided fragment directly (manual call)
+		// viewHTML is already set
+	} else {
+		return // No fragment to sync
+	}
+
+	// Render to buffer
+	buf := make([]byte, 0, 1024)
+	writer := &bufferWriter{buf: buf}
+	if err := viewHTML.Render(writer); err != nil {
+		return
+	}
+
+	// Send element patch
+	select {
+	case s.ss.patchChan <- patch{patchTypeElements, string(writer.buf)}:
+	default: // Non-blocking
+	}
+
+	// Send signal patches if any signals changed
+	if len(s.s.changedSignals) > 0 {
+		s.syncSignals()
 		s.s.changedSignals = make(map[string]any)
 	}
 }

@@ -37,6 +37,11 @@ func Visit(path string) *Page {
 	return visitWithHandler(handler, path)
 }
 
+// VisitWith creates a new stateful Page by visiting the given path with a specific handler.
+func VisitWith(handler http.Handler, path string) *Page {
+	return visitWithHandler(handler, path)
+}
+
 func visitWithHandler(handler http.Handler, path string) *Page {
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	w := httptest.NewRecorder()

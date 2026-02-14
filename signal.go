@@ -14,6 +14,10 @@ type SignalType interface {
 }
 
 func Signal[T SignalType](c *Composition, initial T) *SignalHandle[T] {
+	if c.viewCalled {
+		panic("Signal() called after View() - signals must be registered before View() is called")
+	}
+
 	idStr := genRandID()
 
 	c.signals = append(c.signals, signalRegistration{
@@ -49,7 +53,8 @@ func (sh *SignalHandle[T]) Get(s *Session) T {
 		if strVal, ok := val.(string); ok {
 			return convertStringToType(strVal, sh.initial)
 		}
-		return val.(T) // Will panic if conversion fails
+		// Return initial value if conversion fails (type mismatch)
+		return sh.initial
 	}
 	return sh.initial
 }

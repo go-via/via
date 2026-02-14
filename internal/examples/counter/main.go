@@ -10,7 +10,7 @@ func NewCounterPage() *via.V {
 	v.Config(via.Options{ServerAddress: ":3000"})
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 		step := via.Signal(c, 1)
 
 		increment := via.Action(c, func(s *via.Session) {
@@ -42,3 +42,4 @@ func main() {
 	v := NewCounterPage()
 	v.Start()
 }
+

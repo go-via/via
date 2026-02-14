@@ -1,4 +1,4 @@
-# ⚡Via
+# <⚡> Via
 
 Real-time web applications in pure Go. No JavaScript. No build step. No excuses.
 
@@ -47,7 +47,7 @@ func main() {
     v := via.New()
 
     v.Page("/", func(c *via.Composition) {
-        count := via.State(0)
+        count := via.State(c, 0)
         step := via.Signal(c, 1)
 
         increment := via.Action(c, func(s *via.Session) {
@@ -76,10 +76,64 @@ go run main.go
 ```
 
 Open `http://localhost:3000`. Click the button. Watch the counter update in
-real-time. No JavaScript was written. No build step was run. No frameworks were
-harmed in the making of this application.
+real-time. No JavaScript was written. No build step was run. No frustration was
+needed in the making of this demo.
 
 That's it. That's the entire stack.
+
+## Reusable Components
+
+```go
+package main
+
+import (
+    "github.com/go-via/via"
+    "github.com/go-via/via/h"
+)
+
+type CounterProps struct {
+    Name string
+    Step int
+}
+
+func NewCounter(props CounterProps) via.ComposeFn {
+    return func(c *via.Composition) {
+        count := via.State(c, 0)
+        step := via.Signal(c, props.Step)
+
+        increment := via.Action(c, func(s *via.Session) {
+            count.Set(s, count.Get(s)+step.Get(s))
+        })
+
+        c.View(func(s *via.Session) h.H {
+            return h.Div(
+                h.H2(h.Text(props.Name)),
+                h.P(h.Textf("Count: %d", count.Get(s))),
+                h.Input(h.Type("number"), step.Bind()),
+                h.Button(h.Text("+"), increment.OnClick()),
+            )
+        })
+    }
+}
+
+func main() {
+    v := via.New()
+
+    v.Page("/", func(c *via.Composition) {
+        counter1 := c.Component(NewCounter(CounterProps{Name: "Clicks", Step: 1}))
+        counter2 := c.Component(NewCounter(CounterProps{Name: "Jumps", Step: 10}))
+
+        c.View(func(s *via.Session) h.H {
+            return h.Div(
+                counter1.Mount(s),
+                counter2.Mount(s),
+            )
+        })
+    })
+
+    v.Start()
+}
+```
 
 ## How It Works
 
@@ -139,8 +193,9 @@ Via stands on the shoulders of giants:
 - 🧩 [Gomponents](https://maragu.dev/gomponents) - The brilliant library that
   gives Via type-safe, composable HTML generation through the `via/h` package.
 
-> Thank you for building tools that don't just work — they inspire.
+> Thank you for building tools that don't just work — they inspire 🫶
 
 ## License
 
 MIT. Build something great.
+

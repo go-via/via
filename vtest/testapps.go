@@ -12,7 +12,7 @@ func NewCounterApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 
 		increment := via.Action(c, func(s *via.Session) {
 			count.Set(s, count.Get(s)+1)
@@ -41,7 +41,7 @@ func NewCounterWithStepApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		count := via.State(0)
+		count := via.State(c, 0)
 		step := via.Signal(c, 1)
 
 		increment := via.Action(c, func(s *via.Session) {
@@ -72,7 +72,7 @@ func NewTodoApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		todos := via.State([]string{})
+		todos := via.State(c, []string{})
 
 		addTodo := via.Action(c, func(s *via.Session) {
 			current := todos.Get(s)
@@ -109,7 +109,7 @@ func NewGreeterApp() http.Handler {
 	v := via.New()
 
 	v.Page("/", func(c *via.Composition) {
-		name := via.State("World")
+		name := via.State(c, "World")
 
 		greet := via.Action(c, func(s *via.Session) {
 			name.Set(s, "Alice")
@@ -125,6 +125,86 @@ func NewGreeterApp() http.Handler {
 				h.P(h.Textf("Hello, %s!", name.Get(s))),
 				h.Button(h.Text("Greet"), greet.OnClick()),
 				h.Button(h.Text("Reset"), reset.OnClick()),
+			)
+		})
+	})
+
+	return v.HTTPServeMux()
+}
+
+// NewComponentCounterApp creates a counter app using components for testing.
+func NewComponentCounterApp() http.Handler {
+	v := via.New()
+
+	v.Page("/", func(c *via.Composition) {
+		makeCounter := func(label string) via.ComposeFn {
+			return func(c *via.Composition) {
+				count := via.State(c, 0)
+				increment := via.Action(c, func(s *via.Session) {
+					count.Set(s, count.Get(s)+1)
+				})
+				c.View(func(s *via.Session) h.H {
+					return h.Div(
+						h.P(h.Textf("%s: %d", label, count.Get(s))),
+						h.Button(h.Text("+"), increment.OnClick()),
+					)
+				})
+			}
+		}
+
+		counter := c.Component(makeCounter("Count"))
+
+		c.View(func(s *via.Session) h.H {
+			return h.Div(
+				h.H1(h.Text("Component Counter")),
+				counter.Mount(s),
+			)
+		})
+	})
+
+	return v.HTTPServeMux()
+}
+
+// NewNestedComponentApp creates a nested component app for testing.
+func NewNestedComponentApp() http.Handler {
+	v := via.New()
+
+	v.Page("/", func(c *via.Composition) {
+		makeCounter := func(label string) via.ComposeFn {
+			return func(c *via.Composition) {
+				count := via.State(c, 0)
+				increment := via.Action(c, func(s *via.Session) {
+					count.Set(s, count.Get(s)+1)
+				})
+				c.View(func(s *via.Session) h.H {
+					return h.Div(
+						h.P(h.Textf("%s: %d", label, count.Get(s))),
+						h.Button(h.Text("+"), increment.OnClick()),
+					)
+				})
+			}
+		}
+
+		makePanel := func() via.ComposeFn {
+			return func(c *via.Composition) {
+				counterA := c.Component(makeCounter("Counter A"))
+				counterB := c.Component(makeCounter("Counter B"))
+				c.View(func(s *via.Session) h.H {
+					return h.Div(
+						h.H2(h.Text("Panel")),
+						counterA.Mount(s),
+						counterB.Mount(s),
+					)
+				})
+			}
+		}
+
+		panel := c.Component(makePanel())
+
+		c.View(func(s *via.Session) h.H {
+			return h.Div(
+				h.H1(h.Text("Nested Components")),
+				panel.Mount(s),
 			)
 		})
 	})

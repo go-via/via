@@ -27,6 +27,18 @@ type Options struct {
 	// The title of the HTML document.
 	DocumentTitle string
 
+	// SessionTTL is the duration after which inactive sessions are cleaned up.
+	// Default is 30 minutes. Set to 0 to disable automatic cleanup.
+	SessionTTL int
+
+	// SessionCookieName is the name of the session cookie.
+	// Default is "via_sid".
+	SessionCookieName string
+
+	// SessionCookieMaxAge is the max age of the session cookie in seconds.
+	// Default is 30 days (2592000 seconds).
+	SessionCookieMaxAge int
+
 	// Plugins to extend the capabilities of the `Via` application.
 	Plugins []Plugin
 }

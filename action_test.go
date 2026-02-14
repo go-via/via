@@ -42,7 +42,7 @@ func TestAction_ReturnsHandle(t *testing.T) {
 	assert.NotNil(t, actionFn)
 
 	// Execute action
-	s := NewSession()
+	s := NewSession(nil)
 	actionFn(s)
 	assert.True(t, executed)
 }
