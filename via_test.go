@@ -44,6 +44,44 @@ func TestDatastarJS(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "🖕JS_DS🚀")
 }
 
+func TestAppendHTMLAttr(t *testing.T) {
+	v := via.New()
+	v.AppendHTMLAttr(h.Attr("data-theme", "dark"))
+
+	v.Page("/", func(c *via.Composition) {
+		c.View(func(ctx *via.Context) h.H {
+			return h.H1(h.Text("Hello Via!"))
+		})
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	v.HTTPServeMux().ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), `<html data-theme="dark">`)
+}
+
+// mockPlugin is a test implementation of the Plugin interface
+type mockPlugin struct {
+	registered bool
+}
+
+func (m *mockPlugin) Register(v *via.V) {
+	m.registered = true
+}
+
+func TestPluginInterface(t *testing.T) {
+	mock := &mockPlugin{}
+
+	v := via.New()
+	v.Config(via.Options{
+		Plugins: []via.Plugin{mock},
+	})
+
+	assert.True(t, mock.registered, "Plugin.Register should have been called")
+}
+
 func TestPageRouteParams(t *testing.T) {
 	v := via.New()
 	v.Page("/test/{myID}", func(c *via.Composition) {

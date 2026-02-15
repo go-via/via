@@ -1,8 +1,6 @@
 package main
 
 import (
-	"log"
-
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/picocss"
@@ -29,17 +27,14 @@ var allFeatures = []Feature{
 }
 
 func main() {
-	v := NewPicoCSSPluginPage()
-	log.Println("PicoCSSPlugin example: http://localhost:3000")
-	v.Start()
-}
 
-func NewPicoCSSPluginPage() *via.V {
 	v := via.New()
 
 	plugin := picocss.New(picocss.Options{
 		Themes:       picocss.AllThemes,
 		DefaultTheme: "blue",
+		ColorClasses: true,
+		DarkMode:     true,
 	})
 	plugin.Register(v)
 
@@ -47,12 +42,7 @@ func NewPicoCSSPluginPage() *via.V {
 		theme := picocss.Theme(c, picocss.Options{
 			Themes:       picocss.AllThemes,
 			DefaultTheme: "blue",
-		})
-
-		darkMode := via.Signal(c, true)
-
-		toggleDarkMode := via.Action(c, func(ctx *via.Context) {
-			darkMode.Set(ctx, !darkMode.Get(ctx))
+			ColorClasses: true,
 		})
 
 		featureCount := via.State(c, 3)
@@ -94,12 +84,6 @@ func NewPicoCSSPluginPage() *via.V {
 			return h.Body(
 				h.Header(
 					h.Class("hero"),
-					h.Attr("data-theme", func() string {
-						if darkMode.Get(ctx) {
-							return "dark"
-						}
-						return "light"
-					}()),
 					h.Nav(
 						h.Class("container"),
 						h.Ul(
@@ -114,14 +98,9 @@ func NewPicoCSSPluginPage() *via.V {
 						h.Ul(
 							h.Li(
 								h.Button(
-									func() h.H {
-										if darkMode.Get(ctx) {
-											return h.Text("☀️")
-										}
-										return h.Text("🌙")
-									}(),
-									toggleDarkMode.OnClick(),
+									h.Data("on:click", "$_picoDarkMode = !$_picoDarkMode"),
 									h.Attr("aria-label", "Toggle dark mode"),
+									h.Text("☀️"),
 								),
 							),
 						),
@@ -140,12 +119,12 @@ func NewPicoCSSPluginPage() *via.V {
 					h.Article(
 						h.H2(h.Text("Choose Theme")),
 						h.Div(
-							h.Class("grid"),
+							h.Style("display: flex; flex-wrap: wrap; gap: 0.5rem;"),
 							h.Map(picocss.AllThemes, func(themeName string) h.H {
 								return h.Button(
-									h.Class(themeName),
+									h.Class("pico-background-"+themeName),
 									h.DataOnClick("$_picoTheme = '"+themeName+"'"),
-									h.Text(themeName),
+									h.Textf("%s", themeName),
 								)
 							}),
 						),
@@ -183,5 +162,5 @@ func NewPicoCSSPluginPage() *via.V {
 		})
 	})
 
-	return v
+	v.Start()
 }

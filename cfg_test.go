@@ -51,8 +51,14 @@ func TestLogLevel_Order(t *testing.T) {
 }
 
 func TestPlugin_Type(t *testing.T) {
-	var p Plugin
-	p = func(v *V) {}
+	// Create a test plugin that implements the Plugin interface
+	testPlugin := &testPluginImpl{}
 
+	var p Plugin = testPlugin
 	assert.NotNil(t, p)
 }
+
+// testPluginImpl is a test implementation of the Plugin interface
+type testPluginImpl struct{}
+
+func (t *testPluginImpl) Register(v *V) {}

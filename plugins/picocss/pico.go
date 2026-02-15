@@ -1,3 +1,35 @@
+// Package picocss provides a PicoCSS plugin for the Via framework.
+//
+// # Quick Start
+//
+//	v := via.New()
+//	plugin := picocss.New(picocss.Options{
+//	    Themes:       picocss.AllThemes,
+//	    DefaultTheme: "blue",
+//	    ColorClasses: true,
+//	    DarkMode:     true,
+//	})
+//	plugin.Register(v)
+//
+// # Changing Theme
+//
+// In your page view, change the $_picoTheme signal to switch colors:
+//
+//	h.Button(
+//	    h.Text("Purple Theme"),
+//	    h.DataOnClick("$_picoTheme = 'purple'"),
+//	)
+//
+// # Dark Mode
+//
+// Toggle the $_picoDarkMode signal to switch between light/dark:
+//
+//	h.Button(
+//	    h.Text("Toggle Dark Mode"),
+//	    h.DataOnClick("$_picoDarkMode = !$_picoDarkMode"),
+//	)
+//
+// The data-theme attribute on <html> is automatically bound to $_picoDarkMode.
 package picocss
 
 import (
@@ -16,13 +48,22 @@ var AllThemes = []string{
 	"pumpkin", "purple", "red", "sand", "slate", "violet", "yellow", "zinc",
 }
 
+// Options configures the PicoCSS plugin.
+//
+// Themes: List of available theme names (default: AllThemes)
+// DefaultTheme: Initial theme on page load (default: "blue")
+// Classless: Use classless PicoCSS version (default: false)
+// ColorClasses: Enable pico-background-COLOR utility classes (default: false)
+// DarkMode: Enable dark/light mode toggle with $_picoDarkMode signal (default: false)
 type Options struct {
 	Themes       []string
 	DefaultTheme string
 	Classless    bool
 	ColorClasses bool
+	DarkMode     bool
 }
 
+// Plugin wraps PicoCSS configuration and serves theme CSS.
 type Plugin struct {
 	opts         Options
 	themes       []string
@@ -32,6 +73,7 @@ type Plugin struct {
 	HeadLink     h.H
 }
 
+// New creates a new PicoCSS plugin with the given options.
 func New(opts Options) *Plugin {
 	if opts.DefaultTheme == "" {
 		opts.DefaultTheme = "blue"
@@ -140,6 +182,7 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(css))
 }
 
+// Register adds the PicoCSS plugin to the Via app.
 func (p *Plugin) Register(v *via.V) {
 	if err := p.FetchThemes(); err != nil {
 		panic("pico: failed to fetch themes: " + err.Error())
@@ -150,7 +193,13 @@ func (p *Plugin) Register(v *via.V) {
 	v.HTTPServeMux().Handle("GET /_pico/theme/", http.HandlerFunc(p.ServeHTTP))
 
 	if p.opts.ColorClasses {
+		v.AppendToHead(p.ColorClassesLink())
 		v.HTTPServeMux().Handle("GET /_pico/color-classes", http.HandlerFunc(p.ServeColorClasses))
+	}
+
+	if p.opts.DarkMode {
+		v.AppendToHead(h.Div(h.Data("signals", "{_picoDarkMode: true}")))
+		v.AppendHTMLAttr(h.Attr("data-attr:data-theme", "$_picoDarkMode ? 'dark' : 'light'"))
 	}
 }
 
@@ -158,6 +207,17 @@ func (p *Plugin) ServeColorClasses(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/css")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write([]byte(p.colorClasses))
+}
+
+func (p *Plugin) ColorClassesLink() h.H {
+	if p.colorClasses == "" {
+		return nil
+	}
+	return h.Link(
+		h.ID("pico-color-classes"),
+		h.Rel("stylesheet"),
+		h.Href("/_pico/color-classes"),
+	)
 }
 
 type ThemeHandle struct {
@@ -238,4 +298,8 @@ func (th *ThemeHandle) ColorClassesLink() h.H {
 		h.Rel("stylesheet"),
 		h.Href("/_pico/color-classes"),
 	)
+}
+
+func (th *ThemeHandle) HTMLAttr() h.H {
+	return h.Attr("data-theme", "$_picoTheme")
 }

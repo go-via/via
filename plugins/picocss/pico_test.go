@@ -2,6 +2,9 @@ package picocss
 
 import (
 	"testing"
+
+	"github.com/go-via/via"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAllThemes_ContainsExpected(t *testing.T) {
@@ -94,4 +97,112 @@ func TestPlugin_HasHeadLinkField(t *testing.T) {
 	if p.HeadLink == nil {
 		t.Error("expected HeadLink to be set after plugin creation")
 	}
+}
+
+func TestTheme_DefaultOptions(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{})
+
+	if th.opts.DefaultTheme != "blue" {
+		t.Errorf("expected default theme blue, got %s", th.opts.DefaultTheme)
+	}
+
+	if len(th.opts.Themes) != len(AllThemes) {
+		t.Errorf("expected all themes, got %d", len(th.opts.Themes))
+	}
+}
+
+func TestTheme_CustomOptions(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{
+		Themes:       []string{"red", "green"},
+		DefaultTheme: "red",
+	})
+
+	if th.opts.DefaultTheme != "red" {
+		t.Errorf("expected red, got %s", th.opts.DefaultTheme)
+	}
+
+	if len(th.opts.Themes) != 2 {
+		t.Errorf("expected 2 themes, got %d", len(th.opts.Themes))
+	}
+}
+
+func TestThemeHandle_Link(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{DefaultTheme: "blue"})
+	link := th.Link()
+
+	if link == nil {
+		t.Error("expected Link to return non-nil")
+	}
+}
+
+func TestThemeHandle_SignalDefinition(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{DefaultTheme: "blue"})
+	sigDef := th.SignalDefinition()
+
+	if sigDef == nil {
+		t.Error("expected SignalDefinition to return non-nil")
+	}
+}
+
+func TestThemeHandle_HTMLAttr(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{DefaultTheme: "blue"})
+	htmlAttr := th.HTMLAttr()
+
+	if htmlAttr == nil {
+		t.Error("expected HTMLAttr to return non-nil")
+	}
+}
+
+func TestThemeHandle_ColorClassesLink_WhenEnabled(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{ColorClasses: true})
+	link := th.ColorClassesLink()
+
+	if link == nil {
+		t.Error("expected ColorClassesLink to return non-nil when ColorClasses is true")
+	}
+}
+
+func TestThemeHandle_ColorClassesLink_WhenDisabled(t *testing.T) {
+	c := &via.Composition{}
+	th := Theme(c, Options{ColorClasses: false})
+	link := th.ColorClassesLink()
+
+	if link != nil {
+		t.Error("expected ColorClassesLink to return nil when ColorClasses is false")
+	}
+}
+
+func TestPlugin_ColorClassesLink_NotSet(t *testing.T) {
+	p := New(Options{ColorClasses: false, Themes: []string{"blue"}})
+	link := p.ColorClassesLink()
+
+	if link != nil {
+		t.Error("expected ColorClassesLink to return nil when ColorClasses is false")
+	}
+}
+
+func TestPlugin_ColorClassesLink_EmptyBeforeFetch(t *testing.T) {
+	p := New(Options{ColorClasses: true, Themes: []string{"blue"}})
+	link := p.ColorClassesLink()
+
+	if link != nil {
+		t.Error("expected ColorClassesLink to return nil before FetchThemes is called")
+	}
+}
+
+// Test that Plugin implements via.Plugin interface
+func TestPlugin_ImplementsViaPlugin(t *testing.T) {
+	p := New(Options{Themes: []string{"blue"}})
+
+	// This will fail at compile time if Plugin doesn't implement via.Plugin
+	var _ via.Plugin = p
+
+	// Verify the Register method exists and can be called
+	assert.NotNil(t, p.Register)
 }

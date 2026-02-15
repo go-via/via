@@ -57,6 +57,7 @@ type V struct {
 	appStateMu               sync.RWMutex
 	documentHeadIncludes     []h.H
 	documentFootIncludes     []h.H
+	documentHTMLAttrs        []h.H
 	middlewares              []Middleware
 }
 
@@ -93,7 +94,7 @@ func (v *V) Config(cfg Options) {
 	if cfg.Plugins != nil {
 		for _, plugin := range cfg.Plugins {
 			if plugin != nil {
-				plugin(v)
+				plugin.Register(v)
 			}
 		}
 	}
@@ -126,6 +127,15 @@ func (v *V) AppendToFoot(elements ...h.H) {
 	for _, el := range elements {
 		if el != nil {
 			v.documentFootIncludes = append(v.documentFootIncludes, el)
+		}
+	}
+}
+
+// AppendHTMLAttr appends the given h.H nodes as attributes to the HTML element.
+func (v *V) AppendHTMLAttr(elements ...h.H) {
+	for _, el := range elements {
+		if el != nil {
+			v.documentHTMLAttrs = append(v.documentHTMLAttrs, el)
 		}
 	}
 }
@@ -334,7 +344,7 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 			Title:     v.cfg.DocumentTitle,
 			Head:      headElements,
 			Body:      bodyElements,
-			HTMLAttrs: []h.H{},
+			HTMLAttrs: v.documentHTMLAttrs,
 		})
 		_ = page.Render(w)
 	}

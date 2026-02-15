@@ -10,8 +10,11 @@ const (
 	LogLevelDebug
 )
 
-// Plugin is a func that can mutate the given *via.V app runtime. It is useful to integrate popular JS/CSS UI libraries or tools.
-type Plugin func(v *V)
+// Plugin is an interface that Via plugins must implement.
+// Plugins register themselves with the Via app via the Register method.
+type Plugin interface {
+	Register(v *V)
+}
 
 // Options defines configuration options for the via application
 type Options struct {
