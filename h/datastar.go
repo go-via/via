@@ -11,3 +11,7 @@ func DataEffect(expression string) H {
 func DataIgnoreMorph() H {
 	return Attr("data-ignore-morph")
 }
+
+func DataShow(expression string) H {
+	return Data("show", expression)
+}

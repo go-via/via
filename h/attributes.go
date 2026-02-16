@@ -62,3 +62,35 @@ func DataOnChange(v string) H {
 func DataOnClick(v string) H {
 	return gh.Data("on:click", v)
 }
+
+func Aria(name, v string) H {
+	return gh.Aria(name, v)
+}
+
+func AriaLabel(v string) H {
+	return gh.Aria("label", v)
+}
+
+func AriaHidden() H {
+	return gh.Aria("hidden", "true")
+}
+
+func AriaExpanded(v string) H {
+	return gh.Aria("expanded", v)
+}
+
+func AriaDisabled() H {
+	return gh.Aria("disabled", "true")
+}
+
+func AriaChecked() H {
+	return gh.Aria("checked", "true")
+}
+
+func AriaControls(v string) H {
+	return gh.Aria("controls", v)
+}
+
+func AriaDescribedBy(v string) H {
+	return gh.Aria("describedby", v)
+}

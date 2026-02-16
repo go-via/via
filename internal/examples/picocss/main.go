@@ -34,16 +34,10 @@ func main() {
 		Themes:       picocss.AllThemes,
 		DefaultTheme: "blue",
 		ColorClasses: true,
-		DarkMode:     true,
 	})
 	plugin.Register(v)
 
 	v.Page("/", func(c *via.Composition) {
-		theme := picocss.Theme(c, picocss.Options{
-			Themes:       picocss.AllThemes,
-			DefaultTheme: "blue",
-			ColorClasses: true,
-		})
 
 		featureCount := via.State(c, 3)
 
@@ -56,7 +50,7 @@ func main() {
 
 		decrementFeature := via.Action(c, func(ctx *via.Context) {
 			current := featureCount.Get(ctx)
-			if current > 0 {
+			if current > 1 {
 				featureCount.Set(ctx, current-1)
 			}
 		})
@@ -98,9 +92,16 @@ func main() {
 						h.Ul(
 							h.Li(
 								h.Button(
-									h.Data("on:click", "$_picoDarkMode = !$_picoDarkMode"),
-									h.Attr("aria-label", "Toggle dark mode"),
-									h.Text("☀️"),
+									h.DataOnClick("$_picoDarkMode = !$_picoDarkMode"),
+									h.AriaLabel("Toggle dark mode"),
+									h.Span(
+										h.DataShow("$_picoDarkMode"),
+										h.Text("🌙"),
+									),
+									h.Span(
+										h.DataShow("!$_picoDarkMode"),
+										h.Text("☀️"),
+									),
 								),
 							),
 						),
@@ -120,10 +121,10 @@ func main() {
 						h.H2(h.Text("Choose Theme")),
 						h.Div(
 							h.Style("display: flex; flex-wrap: wrap; gap: 0.5rem;"),
-							h.Map(picocss.AllThemes, func(themeName string) h.H {
+							h.Map(picocss.AllThemes, func(themeName picocss.ThemeName) h.H {
 								return h.Button(
-									h.Class("pico-background-"+themeName),
-									h.DataOnClick("$_picoTheme = '"+themeName+"'"),
+									h.Class("pico-background-"+string(themeName)),
+									h.DataOnClick("$_picoTheme = '"+string(themeName)+"'"),
 									h.Textf("%s", themeName),
 								)
 							}),
@@ -156,8 +157,6 @@ func main() {
 						h.A(h.Text("Pico CSS"), h.Href("https://picocss.com")),
 					),
 				),
-
-				theme.SignalDefinition(),
 			)
 		})
 	})

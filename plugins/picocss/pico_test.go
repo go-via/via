@@ -8,7 +8,7 @@ import (
 )
 
 func TestAllThemes_ContainsExpected(t *testing.T) {
-	expected := []string{"amber", "blue", "cyan", "fuchsia", "green", "grey", "indigo", "jade", "lime", "orange", "pink", "pumpkin", "purple", "red", "sand", "slate", "violet", "yellow", "zinc"}
+	expected := []ThemeName{ThemeAmber, ThemeBlue, ThemeCyan, ThemeFuchsia, ThemeGreen, ThemeGrey, ThemeIndigo, ThemeJade, ThemeLime, ThemeOrange, ThemePink, ThemePumpkin, ThemePurple, ThemeRed, ThemeSand, ThemeSlate, ThemeViolet, ThemeYellow, ThemeZinc}
 
 	if len(AllThemes) != len(expected) {
 		t.Errorf("expected %d themes, got %d", len(expected), len(AllThemes))
@@ -28,7 +28,7 @@ func TestOptions_Defaults(t *testing.T) {
 	opts := Options{}
 	p := New(opts)
 
-	if p.opts.DefaultTheme != "blue" {
+	if p.opts.DefaultTheme != ThemeBlue {
 		t.Errorf("expected default theme blue, got %s", p.opts.DefaultTheme)
 	}
 
@@ -39,12 +39,12 @@ func TestOptions_Defaults(t *testing.T) {
 
 func TestOptions_CustomTheme(t *testing.T) {
 	opts := Options{
-		Themes:       []string{"purple", "amber"},
-		DefaultTheme: "purple",
+		Themes:       []ThemeName{ThemePurple, ThemeAmber},
+		DefaultTheme: ThemePurple,
 	}
 	p := New(opts)
 
-	if p.opts.DefaultTheme != "purple" {
+	if p.opts.DefaultTheme != ThemePurple {
 		t.Errorf("expected default theme purple, got %s", p.opts.DefaultTheme)
 	}
 
@@ -55,20 +55,20 @@ func TestOptions_CustomTheme(t *testing.T) {
 
 func TestOptions_InvalidDefaultTheme(t *testing.T) {
 	opts := Options{
-		Themes:       []string{"blue", "purple"},
+		Themes:       []ThemeName{ThemeBlue, ThemePurple},
 		DefaultTheme: "invalid-theme",
 	}
 	p := New(opts)
 
-	if p.opts.DefaultTheme != "blue" {
+	if p.opts.DefaultTheme != ThemeBlue {
 		t.Errorf("expected default to fall back to first theme, got %s", p.opts.DefaultTheme)
 	}
 }
 
 func TestOptions_Classless(t *testing.T) {
 	opts := Options{
-		Themes:       []string{"blue"},
-		DefaultTheme: "blue",
+		Themes:       []ThemeName{ThemeBlue},
+		DefaultTheme: ThemeBlue,
 		Classless:    true,
 	}
 	p := New(opts)
@@ -80,8 +80,8 @@ func TestOptions_Classless(t *testing.T) {
 
 func TestOptions_ColorClasses(t *testing.T) {
 	opts := Options{
-		Themes:       []string{"blue"},
-		DefaultTheme: "blue",
+		Themes:       []ThemeName{ThemeBlue},
+		DefaultTheme: ThemeBlue,
 		ColorClasses: true,
 	}
 	p := New(opts)
@@ -92,7 +92,7 @@ func TestOptions_ColorClasses(t *testing.T) {
 }
 
 func TestPlugin_HasHeadLinkField(t *testing.T) {
-	p := New(Options{Themes: []string{"blue"}})
+	p := New(Options{Themes: []ThemeName{ThemeBlue}})
 
 	if p.HeadLink == nil {
 		t.Error("expected HeadLink to be set after plugin creation")
@@ -103,7 +103,7 @@ func TestTheme_DefaultOptions(t *testing.T) {
 	c := &via.Composition{}
 	th := Theme(c, Options{})
 
-	if th.opts.DefaultTheme != "blue" {
+	if th.opts.DefaultTheme != ThemeBlue {
 		t.Errorf("expected default theme blue, got %s", th.opts.DefaultTheme)
 	}
 
@@ -115,11 +115,11 @@ func TestTheme_DefaultOptions(t *testing.T) {
 func TestTheme_CustomOptions(t *testing.T) {
 	c := &via.Composition{}
 	th := Theme(c, Options{
-		Themes:       []string{"red", "green"},
-		DefaultTheme: "red",
+		Themes:       []ThemeName{ThemeRed, ThemeGreen},
+		DefaultTheme: ThemeRed,
 	})
 
-	if th.opts.DefaultTheme != "red" {
+	if th.opts.DefaultTheme != ThemeRed {
 		t.Errorf("expected red, got %s", th.opts.DefaultTheme)
 	}
 
@@ -130,7 +130,7 @@ func TestTheme_CustomOptions(t *testing.T) {
 
 func TestThemeHandle_Link(t *testing.T) {
 	c := &via.Composition{}
-	th := Theme(c, Options{DefaultTheme: "blue"})
+	th := Theme(c, Options{DefaultTheme: ThemeBlue})
 	link := th.Link()
 
 	if link == nil {
@@ -140,7 +140,7 @@ func TestThemeHandle_Link(t *testing.T) {
 
 func TestThemeHandle_SignalDefinition(t *testing.T) {
 	c := &via.Composition{}
-	th := Theme(c, Options{DefaultTheme: "blue"})
+	th := Theme(c, Options{DefaultTheme: ThemeBlue})
 	sigDef := th.SignalDefinition()
 
 	if sigDef == nil {
@@ -150,7 +150,7 @@ func TestThemeHandle_SignalDefinition(t *testing.T) {
 
 func TestThemeHandle_HTMLAttr(t *testing.T) {
 	c := &via.Composition{}
-	th := Theme(c, Options{DefaultTheme: "blue"})
+	th := Theme(c, Options{DefaultTheme: ThemeBlue})
 	htmlAttr := th.HTMLAttr()
 
 	if htmlAttr == nil {
@@ -179,7 +179,7 @@ func TestThemeHandle_ColorClassesLink_WhenDisabled(t *testing.T) {
 }
 
 func TestPlugin_ColorClassesLink_NotSet(t *testing.T) {
-	p := New(Options{ColorClasses: false, Themes: []string{"blue"}})
+	p := New(Options{ColorClasses: false, Themes: []ThemeName{ThemeBlue}})
 	link := p.ColorClassesLink()
 
 	if link != nil {
@@ -188,7 +188,7 @@ func TestPlugin_ColorClassesLink_NotSet(t *testing.T) {
 }
 
 func TestPlugin_ColorClassesLink_EmptyBeforeFetch(t *testing.T) {
-	p := New(Options{ColorClasses: true, Themes: []string{"blue"}})
+	p := New(Options{ColorClasses: true, Themes: []ThemeName{ThemeBlue}})
 	link := p.ColorClassesLink()
 
 	if link != nil {
@@ -196,13 +196,10 @@ func TestPlugin_ColorClassesLink_EmptyBeforeFetch(t *testing.T) {
 	}
 }
 
-// Test that Plugin implements via.Plugin interface
 func TestPlugin_ImplementsViaPlugin(t *testing.T) {
-	p := New(Options{Themes: []string{"blue"}})
+	p := New(Options{Themes: []ThemeName{ThemeBlue}})
 
-	// This will fail at compile time if Plugin doesn't implement via.Plugin
 	var _ via.Plugin = p
 
-	// Verify the Register method exists and can be called
 	assert.NotNil(t, p.Register)
 }

@@ -4,10 +4,8 @@
 //
 //	v := via.New()
 //	plugin := picocss.New(picocss.Options{
-//	    Themes:       picocss.AllThemes,
-//	    DefaultTheme: "blue",
+//	    DefaultTheme: picocss.ThemeBlue,
 //	    ColorClasses: true,
-//	    DarkMode:     true,
 //	})
 //	plugin.Register(v)
 //
@@ -19,64 +17,83 @@
 //	    h.Text("Purple Theme"),
 //	    h.DataOnClick("$_picoTheme = 'purple'"),
 //	)
-//
-// # Dark Mode
-//
-// Toggle the $_picoDarkMode signal to switch between light/dark:
-//
-//	h.Button(
-//	    h.Text("Toggle Dark Mode"),
-//	    h.DataOnClick("$_picoDarkMode = !$_picoDarkMode"),
-//	)
-//
-// The data-theme attribute on <html> is automatically bound to $_picoDarkMode.
 package picocss
 
 import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 )
 
-var AllThemes = []string{
-	"amber", "blue", "cyan", "fuchsia", "green",
-	"grey", "indigo", "jade", "lime", "orange", "pink",
-	"pumpkin", "purple", "red", "sand", "slate", "violet", "yellow", "zinc",
+func title(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+type ThemeName string
+
+const (
+	ThemeAmber   ThemeName = "amber"
+	ThemeBlue    ThemeName = "blue"
+	ThemeCyan    ThemeName = "cyan"
+	ThemeFuchsia ThemeName = "fuchsia"
+	ThemeGreen   ThemeName = "green"
+	ThemeGrey    ThemeName = "grey"
+	ThemeIndigo  ThemeName = "indigo"
+	ThemeJade    ThemeName = "jade"
+	ThemeLime    ThemeName = "lime"
+	ThemeOrange  ThemeName = "orange"
+	ThemePink    ThemeName = "pink"
+	ThemePumpkin ThemeName = "pumpkin"
+	ThemePurple  ThemeName = "purple"
+	ThemeRed     ThemeName = "red"
+	ThemeSand    ThemeName = "sand"
+	ThemeSlate   ThemeName = "slate"
+	ThemeViolet  ThemeName = "violet"
+	ThemeYellow  ThemeName = "yellow"
+	ThemeZinc    ThemeName = "zinc"
+)
+
+var AllThemes = []ThemeName{
+	ThemeAmber, ThemeBlue, ThemeCyan, ThemeFuchsia, ThemeGreen,
+	ThemeGrey, ThemeIndigo, ThemeJade, ThemeLime, ThemeOrange, ThemePink,
+	ThemePumpkin, ThemePurple, ThemeRed, ThemeSand, ThemeSlate, ThemeViolet, ThemeYellow, ThemeZinc,
 }
 
 // Options configures the PicoCSS plugin.
 //
 // Themes: List of available theme names (default: AllThemes)
-// DefaultTheme: Initial theme on page load (default: "blue")
+// DefaultTheme: Initial theme on page load (default: ThemeBlue)
 // Classless: Use classless PicoCSS version (default: false)
-// ColorClasses: Enable pico-background-COLOR utility classes (default: false)
-// DarkMode: Enable dark/light mode toggle with $_picoDarkMode signal (default: false)
+// ColorClasses: Enable pico color utility classes (default: false)
 type Options struct {
-	Themes       []string
-	DefaultTheme string
+	Themes       []ThemeName
+	DefaultTheme ThemeName
 	Classless    bool
 	ColorClasses bool
-	DarkMode     bool
 }
 
 // Plugin wraps PicoCSS configuration and serves theme CSS.
 type Plugin struct {
 	opts         Options
-	themes       []string
-	themeCSS     map[string]string
+	themes       []ThemeName
+	themeCSS     map[ThemeName]string
 	themeURL     string
 	colorClasses string
 	HeadLink     h.H
 }
 
-// New creates a new PicoCSS plugin with the given options.
+// New creates a new PicoCSS plugin with given options.
 func New(opts Options) *Plugin {
 	if opts.DefaultTheme == "" {
-		opts.DefaultTheme = "blue"
+		opts.DefaultTheme = ThemeBlue
 	}
 	if len(opts.Themes) == 0 {
 		opts.Themes = AllThemes
@@ -85,23 +102,17 @@ func New(opts Options) *Plugin {
 	p := &Plugin{
 		opts:         opts,
 		themes:       opts.Themes,
-		themeCSS:     make(map[string]string),
+		themeCSS:     make(map[ThemeName]string),
 		themeURL:     "/_pico/theme/",
 		colorClasses: "",
 	}
 
-	validDefault := false
-	for _, t := range p.themes {
-		if t == p.opts.DefaultTheme {
-			validDefault = true
-			break
-		}
-	}
+	validDefault := slices.Contains(p.themes, p.opts.DefaultTheme)
 	if !validDefault {
 		p.opts.DefaultTheme = p.themes[0]
 	}
 
-	themePath := p.opts.DefaultTheme
+	themePath := string(p.opts.DefaultTheme)
 	if p.opts.Classless {
 		themePath = "classless/" + themePath
 	}
@@ -125,7 +136,7 @@ func (p *Plugin) FetchThemes() error {
 	}
 
 	for _, theme := range p.themes {
-		url := strings.ReplaceAll(baseURL, "%s", theme)
+		url := strings.ReplaceAll(baseURL, "%s", string(theme))
 		resp, err := http.Get(url)
 		if err != nil {
 			return err
@@ -167,11 +178,9 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle classless themes: "classless/blue" -> "blue"
-	if strings.HasPrefix(theme, "classless/") {
-		theme = strings.TrimPrefix(theme, "classless/")
-	}
+	theme, _ = strings.CutPrefix(theme, "classless/")
 
-	css, ok := p.themeCSS[theme]
+	css, ok := p.themeCSS[ThemeName(theme)]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -197,10 +206,8 @@ func (p *Plugin) Register(v *via.V) {
 		v.HTTPServeMux().Handle("GET /_pico/color-classes", http.HandlerFunc(p.ServeColorClasses))
 	}
 
-	if p.opts.DarkMode {
-		v.AppendToHead(h.Div(h.Data("signals", "{_picoDarkMode: true}")))
-		v.AppendHTMLAttr(h.Attr("data-attr:data-theme", "$_picoDarkMode ? 'dark' : 'light'"))
-	}
+	v.AppendToHead(h.Div(h.Data("signals", "{_picoDarkMode: true}")))
+	v.AppendHTMLAttr(h.Attr("data-attr:data-theme", "$_picoDarkMode ? 'dark' : 'light'"))
 }
 
 func (p *Plugin) ServeColorClasses(w http.ResponseWriter, r *http.Request) {
@@ -227,19 +234,13 @@ type ThemeHandle struct {
 
 func Theme(c *via.Composition, opts Options) *ThemeHandle {
 	if opts.DefaultTheme == "" {
-		opts.DefaultTheme = "blue"
+		opts.DefaultTheme = ThemeBlue
 	}
 	if len(opts.Themes) == 0 {
 		opts.Themes = AllThemes
 	}
 
-	validDefault := false
-	for _, t := range opts.Themes {
-		if t == opts.DefaultTheme {
-			validDefault = true
-			break
-		}
-	}
+	validDefault := slices.Contains(opts.Themes, opts.DefaultTheme)
 	if !validDefault {
 		opts.DefaultTheme = opts.Themes[0]
 	}
@@ -250,7 +251,7 @@ func Theme(c *via.Composition, opts Options) *ThemeHandle {
 }
 
 func (th *ThemeHandle) Link() h.H {
-	themePath := th.opts.DefaultTheme
+	themePath := string(th.opts.DefaultTheme)
 	if th.opts.Classless {
 		themePath = "classless/" + themePath
 	}
@@ -275,12 +276,12 @@ func (th *ThemeHandle) Buttons() []h.H {
 	themes := th.opts.Themes
 
 	for _, theme := range themes {
-		themeName := strings.Title(theme)
+		themeName := title(string(theme))
 		buttons = append(buttons,
 			h.Button(
 				h.Text(themeName),
 				h.Data("on:click", fmt.Sprintf("$%s = '%s'", th.signalName, theme)),
-				h.Attr("data-theme", theme),
+				h.Attr("data-theme", string(theme)),
 				h.Class("theme-btn"),
 			),
 		)
