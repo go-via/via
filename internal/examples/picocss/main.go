@@ -27,18 +27,17 @@ var allFeatures = []Feature{
 }
 
 func main() {
-
 	v := via.New()
 
-	plugin := picocss.New(picocss.Options{
-		Themes:       picocss.AllThemes,
-		DefaultTheme: "blue",
-		ColorClasses: true,
-	})
-	plugin.Register(v)
+	pico := picocss.New(
+		picocss.WithThemes(picocss.AllPicoThemes),
+		picocss.WithDefaultTheme(picocss.PicoThemeAmber),
+		picocss.WithColorClasses(),
+		picocss.WithDarkmodeEnabled(),
+	)
+	pico.Register(v)
 
 	v.Page("/", func(c *via.Composition) {
-
 		featureCount := via.State(c, 3)
 
 		incrementFeature := via.Action(c, func(ctx *via.Context) {
@@ -92,14 +91,15 @@ func main() {
 						h.Ul(
 							h.Li(
 								h.Button(
-									h.DataOnClick("$_picoDarkMode = !$_picoDarkMode"),
+									h.Class("outline"),
+									h.DataOnClick("%s = !%s", "$_picoDarkMode", "$_picoDarkMode"),
 									h.AriaLabel("Toggle dark mode"),
 									h.Span(
-										h.DataShow("$_picoDarkMode"),
+										h.DataShow("%s", "$_picoDarkMode"),
 										h.Text("🌙"),
 									),
 									h.Span(
-										h.DataShow("!$_picoDarkMode"),
+										h.DataShow("%s", "!$_picoDarkMode"),
 										h.Text("☀️"),
 									),
 								),
@@ -121,10 +121,10 @@ func main() {
 						h.H2(h.Text("Choose Theme")),
 						h.Div(
 							h.Style("display: flex; flex-wrap: wrap; gap: 0.5rem;"),
-							h.Map(picocss.AllThemes, func(themeName picocss.ThemeName) h.H {
+							h.Map(picocss.AllPicoThemes, func(themeName picocss.PicoTheme) h.H {
 								return h.Button(
-									h.Class("pico-background-"+string(themeName)),
-									h.DataOnClick("$_picoTheme = '"+string(themeName)+"'"),
+									h.Class("outline pico-color-"+themeName.String()),
+									h.DataOnClick("$_picoTheme = '%s'", themeName.String()),
 									h.Textf("%s", themeName),
 								)
 							}),
