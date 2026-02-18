@@ -132,9 +132,9 @@ func (p *Page) Click(selector string) {
 	actionURL := urls[idx]
 
 	// Trigger action with current signal values
-	signals := map[string]any{"via-c": p.sessionID}
+	signals := map[string]any{"via-ctx": p.sessionID}
 	for k, v := range p.signals {
-		if k != "via-c" {
+		if k != "via-ctx" {
 			signals[k] = v
 		}
 	}
@@ -246,7 +246,7 @@ func extractActionButtons(html string) map[string][]string {
 }
 
 func sseConnect(handler http.Handler, sessionID string) *SSE {
-	req := httptest.NewRequest(http.MethodGet, "/_sse?datastar=%7B%22via-c%22%3A%22"+sessionID+"%22%7D", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_sse?datastar=%7B%22via-ctx%22%3A%22"+sessionID+"%22%7D", nil)
 	req.Header.Set("Accept", "text/event-stream")
 
 	w := &syncedResponseWriter{ResponseRecorder: httptest.NewRecorder()}
@@ -364,7 +364,7 @@ func (r *Response) TriggerAction(t any, index int) *Response {
 	}
 
 	actionURL := actionURLs[index]
-	req := httptest.NewRequest(http.MethodGet, actionURL+"?datastar=%7B%22via-c%22%3A%22"+r.sessionID+"%22%7D", nil)
+	req := httptest.NewRequest(http.MethodGet, actionURL+"?datastar=%7B%22via-ctx%22%3A%22"+r.sessionID+"%22%7D", nil)
 	w := httptest.NewRecorder()
 	r.tester.handler.ServeHTTP(w, req)
 
@@ -378,7 +378,7 @@ func (r *Response) TriggerAction(t any, index int) *Response {
 
 func extractSessionID(html string) string {
 	signals := extractSignals(html)
-	return signals["via-c"]
+	return signals["via-ctx"]
 }
 
 func extractSignals(html string) map[string]string {
@@ -448,7 +448,7 @@ type SSE struct {
 
 // SSE establishes an SSE connection for the given session.
 func (t *Tester) SSE(sessionID string) *SSE {
-	req := httptest.NewRequest(http.MethodGet, "/_sse?datastar=%7B%22via-c%22%3A%22"+sessionID+"%22%7D", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_sse?datastar=%7B%22via-ctx%22%3A%22"+sessionID+"%22%7D", nil)
 	req.Header.Set("Accept", "text/event-stream")
 
 	w := &syncedResponseWriter{ResponseRecorder: httptest.NewRecorder()}

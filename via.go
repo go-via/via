@@ -78,7 +78,7 @@ func (v *V) logInfo(format string, a ...any) {
 }
 
 func (v *V) logDebug(format string, a ...any) {
-	if v.cfg.LogLvl == LogLevelDebug {
+	if v.cfg.LogLvl == LogLvlDEBUG {
 		log.Printf("[debug] msg=%q", fmt.Sprintf(format, a...))
 	}
 }
@@ -210,7 +210,7 @@ func (v *V) Page(route string, composeFn func(c *Composition)) {
 	// 	headElements := []h.H{}
 	// 	headElements = append(headElements, v.documentHeadIncludes...)
 	// 	headElements = append(headElements,
-	// 		h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
+	// 		h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctxtx':'%s'}", id))),
 	// 		h.Meta(h.Data("init", "@get('/_sse')")),
 	// 		h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
 	// 		navigator.sendBeacon('/_session/close', '%s');});`, c.id))),
@@ -304,15 +304,16 @@ func (v *V) newPageHTTPHandler(route string, cID string, c *Composition) http.Ha
 			mode:      sessionModeView,
 			v:         v,
 			sessionID: cookieSessionID,
+			ctxID:     tabID,
 			warn:      v.warnFn(),
 		}
 
 		headElements := []h.H{}
 		headElements = append(headElements, v.documentHeadIncludes...)
 
-		// Build initial signals including via-c (tabID), path params, and composition signals
+		// Build initial signals including via-ctx (tabID), path params, and composition signals
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "{'via-c':'%s'", tabID)
+		fmt.Fprintf(&sb, "{'via-ctx':'%s'", tabID)
 		for key, val := range sess.store.pathParams {
 			fmt.Fprintf(&sb, ", '%s':'%s'", key, val)
 		}
@@ -374,7 +375,7 @@ func (v *V) sseHTTPHandler(w http.ResponseWriter, r *http.Request) {
 	var sigs map[string]any
 	_ = datastar.ReadSignals(r, &sigs)
 
-	tabID, _ := sigs["via-c"].(string)
+	tabID, _ := sigs["via-ctx"].(string)
 	if tabID != "" {
 		session, err := v.getSession(tabID)
 		if err != nil {
@@ -431,8 +432,8 @@ func (v *V) actionHTTPHandler(w http.ResponseWriter, r *http.Request) {
 	var sigs map[string]any
 	_ = datastar.ReadSignals(r, &sigs)
 
-	// Get tabID from via-c signal (for tab-scoped state and targeting)
-	tabID, _ := sigs["via-c"].(string)
+	// Get tabID from via-ctx signal (for tab-scoped state and targeting)
+	tabID, _ := sigs["via-ctx"].(string)
 	if tabID != "" {
 		// Get or create session by tabID (for tab-scoped state)
 		sess := v.getOrCreateSession(tabID)
@@ -476,6 +477,7 @@ func (v *V) actionHTTPHandler(w http.ResponseWriter, r *http.Request) {
 				mode:      sessionModeAction,
 				v:         v,
 				sessionID: sessionID,
+				ctxID:     tabID,
 				warn:      v.warnFn(),
 			}
 

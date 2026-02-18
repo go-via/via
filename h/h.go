@@ -82,11 +82,3 @@ func HTML5(p HTML5Props) H {
 	gp.Head = append(gp.Head, Script(Type("module"), Src("/_datastar.js")))
 	return gc.HTML5(gp)
 }
-
-// JoinAttrs with the given name only on the first level of the given nodes. This means that
-// attributes on non-direct descendants are ignored. Attribute values are joined by spaces.
-//
-// Note that this renders all first-level attributes to check whether they should be processed.
-func JoinAttrs(name string, children ...H) H {
-	return gc.JoinAttrs(name, retype(children)...)
-}

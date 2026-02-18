@@ -27,6 +27,7 @@ type Context struct {
 	v          *V
 	sessionID  string
 	compID     string
+	ctxID      string
 	compViewFn func(*Context) h.H
 	warn       func(string, ...any)
 }
@@ -52,6 +53,10 @@ func (ctx *Context) SessionID() string {
 	return ctx.sessionID
 }
 
+func (ctx *Context) CtxID() string {
+	return ctx.ctxID
+}
+
 func (ctx *Context) PathParam(id string) string {
 	if ctx.s == nil {
 		return ""
@@ -68,8 +73,8 @@ func injectSignals(st *store, sigs map[string]any) {
 	}
 	// Inject browser-provided signal values into store
 	for k, v := range sigs {
-		// Skip via-c and path params (they're not signals)
-		if k == "via-c" {
+		// Skip via-ctx and path params (they're not signals)
+		if k == "via-ctx" {
 			continue
 		}
 		st.signals[k] = v

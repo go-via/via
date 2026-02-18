@@ -53,7 +53,7 @@ func (c *Composition) View(viewFn func(ctx *Context) h.H) {
 		c.viewFn = viewFn
 	} else {
 		c.viewFn = func(ctx *Context) h.H {
-			return h.Main(h.ID(c.id), viewFn(ctx))
+			return h.Main(h.ID(ctx.CtxID()), viewFn(ctx))
 		}
 	}
 }

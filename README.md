@@ -1,4 +1,4 @@
-# <⚡> Via
+# ⚡Via
 
 Real-time web applications in pure Go. No JavaScript. No build step. No excuses.
 
@@ -240,4 +240,3 @@ Via stands on the shoulders of giants:
 ## License
 
 MIT. Build something great.
-

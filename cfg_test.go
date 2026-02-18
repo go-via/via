@@ -20,14 +20,14 @@ func TestOptions_CustomValues(t *testing.T) {
 	opts := Options{
 		DevMode:       true,
 		ServerAddress: ":8080",
-		LogLvl:        LogLevelDebug,
+		LogLvl:        LogLvlDEBUG,
 		DocumentTitle: "My App",
 		SessionTTL:    3600,
 	}
 
 	assert.True(t, opts.DevMode)
 	assert.Equal(t, ":8080", opts.ServerAddress)
-	assert.Equal(t, LogLevelDebug, opts.LogLvl)
+	assert.Equal(t, LogLvlDEBUG, opts.LogLvl)
 	assert.Equal(t, "My App", opts.DocumentTitle)
 	assert.Equal(t, 3600, opts.SessionTTL)
 }
@@ -47,7 +47,7 @@ func TestLogLevel_Order(t *testing.T) {
 	assert.Equal(t, LogLevel(1), LogLevelError)
 	assert.Equal(t, LogLevel(2), LogLevelWarn)
 	assert.Equal(t, LogLevel(3), LogLevelInfo)
-	assert.Equal(t, LogLevel(4), LogLevelDebug)
+	assert.Equal(t, LogLevel(4), LogLvlDEBUG)
 }
 
 func TestPlugin_Type(t *testing.T) {

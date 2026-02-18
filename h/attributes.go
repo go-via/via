@@ -1,6 +1,10 @@
 package h
 
-import gh "maragu.dev/gomponents/html"
+import (
+	"fmt"
+
+	gh "maragu.dev/gomponents/html"
+)
 
 func Href(v string) H {
 	return gh.Href(v)
@@ -47,20 +51,17 @@ func Data(name, v string) H {
 	return gh.Data(name, v)
 }
 
+// DataF creates a data attribute with fmt.Sprintf formatting.
+func DataF(name, format string, args ...any) H {
+	return gh.Data(name, fmt.Sprintf(format, args...))
+}
+
 func For(v string) H {
 	return gh.For(v)
 }
 
 func Selected() H {
 	return gh.Selected()
-}
-
-func DataOnChange(v string) H {
-	return gh.Data("on:change", v)
-}
-
-func DataOnClick(v string) H {
-	return gh.Data("on:click", v)
 }
 
 func Aria(name, v string) H {

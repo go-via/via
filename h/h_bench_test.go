@@ -14,7 +14,7 @@ func BenchmarkRetype(b *testing.B) {
 		Text("test5"),
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = retype(nodes)
 	}
 }
@@ -22,7 +22,7 @@ func BenchmarkRetype(b *testing.B) {
 func BenchmarkSimpleDiv(b *testing.B) {
 	var buf bytes.Buffer
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		node := Div(Text("Hello"))
 		_ = node.Render(&buf)
@@ -32,7 +32,7 @@ func BenchmarkSimpleDiv(b *testing.B) {
 func BenchmarkNestedElements(b *testing.B) {
 	var buf bytes.Buffer
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		node := Div(
 			H1(Text("Title")),
@@ -49,10 +49,10 @@ func BenchmarkNestedElements(b *testing.B) {
 func BenchmarkLargeDocument(b *testing.B) {
 	var buf bytes.Buffer
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		items := make([]H, 100)
-		for j := 0; j < 100; j++ {
+		for j := range 100 {
 			items[j] = Li(Textf("Item %d", j))
 		}
 		node := Div(
@@ -66,7 +66,7 @@ func BenchmarkLargeDocument(b *testing.B) {
 func BenchmarkAttributes(b *testing.B) {
 	var buf bytes.Buffer
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		node := Div(
 			ID("test"),
@@ -88,7 +88,7 @@ func BenchmarkRetypeWithNils(b *testing.B) {
 		Text("test3"),
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = retype(nodes)
 	}
 }
@@ -98,7 +98,6 @@ func BenchmarkRealisticViewRender(b *testing.B) {
 	var buf bytes.Buffer
 	count := 0
 
-	// Simulate a typical Via view function
 	viewFn := func() H {
 		return Div(
 			H1(Text("Counter Example")),
@@ -111,7 +110,7 @@ func BenchmarkRealisticViewRender(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		count++
 		node := viewFn()
@@ -119,7 +118,6 @@ func BenchmarkRealisticViewRender(b *testing.B) {
 	}
 }
 
-// Benchmark realistic view with more elements (like a real app)
 func BenchmarkRealisticComplexView(b *testing.B) {
 	var buf bytes.Buffer
 	items := []string{"Item 1", "Item 2", "Item 3", "Item 4", "Item 5"}
@@ -147,7 +145,7 @@ func BenchmarkRealisticComplexView(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		buf.Reset()
 		node := viewFn()
 		_ = node.Render(&buf)

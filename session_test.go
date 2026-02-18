@@ -14,11 +14,11 @@ import (
 
 func extractTabIDFromBody(t *testing.T, html string) string {
 	t.Helper()
-	start := strings.Index(html, "&#39;via-c&#39;:&#39;")
+	start := strings.Index(html, "&#39;via-ctx&#39;:&#39;")
 	if start == -1 {
-		t.Fatal("via-c not found in HTML")
+		t.Fatal("via-ctx not found in HTML")
 	}
-	start += len("&#39;via-c&#39;:&#39;")
+	start += len("&#39;via-ctx&#39;:&#39;")
 	end := strings.Index(html[start:], "&#39;")
 	return html[start : start+end]
 }
@@ -193,7 +193,7 @@ func TestSessionClose_RemovesSession(t *testing.T) {
 		})
 	})
 
-	// Load page to create session (tabID is in HTML via-c signal)
+	// Load page to create session (tabID is in HTML via-ctx signal)
 	req1 := httptest.NewRequest("GET", "/", nil)
 	w1 := httptest.NewRecorder()
 	v.HTTPServeMux().ServeHTTP(w1, req1)

@@ -144,7 +144,7 @@ func TestState_SetAutoSyncs(t *testing.T) {
 	// Trigger action (auto-syncs) using tabID
 	actionURL := fmt.Sprintf("/_action/%s", trigger.ID())
 	req2 := httptest.NewRequest("GET", actionURL, nil)
-	signals := map[string]any{"via-c": tabID}
+	signals := map[string]any{"via-ctx": tabID}
 	signalsJSON, _ := json.Marshal(signals)
 	req2.URL.RawQuery = "datastar=" + url.QueryEscape(string(signalsJSON))
 	w2 := httptest.NewRecorder()
@@ -218,7 +218,7 @@ func TestAction_ExecutesViaPOST(t *testing.T) {
 	// Second request: trigger the action via GET with tabID
 	actionURL := fmt.Sprintf("/_action/%s", trigger.ID())
 	req2 := httptest.NewRequest("GET", actionURL, nil)
-	signals := map[string]any{"via-c": tabID}
+	signals := map[string]any{"via-ctx": tabID}
 	signalsJSON, _ := json.Marshal(signals)
 	req2.URL.RawQuery = "datastar=" + url.QueryEscape(string(signalsJSON))
 	w2 := httptest.NewRecorder()
@@ -309,7 +309,7 @@ func TestRW_PathParam(t *testing.T) {
 	actionURL := fmt.Sprintf("/_action/%s", trigger.ID())
 	req2 := httptest.NewRequest("GET", actionURL, nil)
 	// Include path params in signals (simulating what Datastar does)
-	signals := map[string]any{"via-c": cID, "id": "123"}
+	signals := map[string]any{"via-ctx": cID, "id": "123"}
 	signalsJSON, _ := json.Marshal(signals)
 	req2.URL.RawQuery = "datastar=" + url.QueryEscape(string(signalsJSON))
 	w2 := httptest.NewRecorder()
@@ -386,7 +386,7 @@ func TestSession_PerTabIsolation(t *testing.T) {
 	assert.NotSame(t, session1, session2)
 }
 
-// TestSession_TabIDInSignals verifies the via-c signal contains the tabID (not cID).
+// TestSession_TabIDInSignals verifies the via-ctx signal contains the tabID (not cID).
 func TestSession_TabIDInSignals(t *testing.T) {
 	v := via.New()
 	var cID string
@@ -405,7 +405,7 @@ func TestSession_TabIDInSignals(t *testing.T) {
 	tabID := extractTabIDFromHTML(t, w.Body.String())
 
 	// tabID must differ from cID (tab-specific, not composition-wide)
-	assert.NotEqual(t, cID, tabID, "via-c signal must contain tabID, not cID")
+	assert.NotEqual(t, cID, tabID, "via-ctx signal must contain tabID, not cID")
 
 	// The session must be registered under tabID
 	session, err := v.TestGetSession(tabID)
@@ -417,7 +417,7 @@ func TestSession_TabIDInSignals(t *testing.T) {
 	assert.Error(t, err, "session should NOT be registered under cID")
 }
 
-// TestSession_ActionUsesTabID verifies actions route through tabID from via-c signal.
+// TestSession_ActionUsesTabID verifies actions route through tabID from via-ctx signal.
 func TestSession_ActionUsesTabID(t *testing.T) {
 	v := via.New()
 	var executed bool
@@ -443,16 +443,16 @@ func TestSession_ActionUsesTabID(t *testing.T) {
 
 	tabID := extractTabIDFromHTML(t, w1.Body.String())
 
-	// Trigger action with tabID in via-c (as browser would send)
+	// Trigger action with tabID in via-ctx (as browser would send)
 	actionURL := fmt.Sprintf("/_action/%s", trigger.ID())
 	req2 := httptest.NewRequest("GET", actionURL, nil)
-	signals := map[string]any{"via-c": tabID}
+	signals := map[string]any{"via-ctx": tabID}
 	signalsJSON, _ := json.Marshal(signals)
 	req2.URL.RawQuery = "datastar=" + url.QueryEscape(string(signalsJSON))
 	w2 := httptest.NewRecorder()
 	v.HTTPServeMux().ServeHTTP(w2, req2)
 
-	assert.True(t, executed, "action must execute when via-c contains tabID")
+	assert.True(t, executed, "action must execute when via-ctx contains tabID")
 
 	// Verify state was set in the correct session
 	session, err := v.TestGetSession(tabID)
@@ -520,8 +520,8 @@ func TestSession_SSEUsesTabID(t *testing.T) {
 	assert.NotNil(t, session)
 }
 
-// extractTabIDFromHTML extracts the tab session ID from the via-c signal in rendered HTML.
-// After per-tab sessions, via-c contains the tabID (not cID).
+// extractTabIDFromHTML extracts the tab session ID from the via-ctx signal in rendered HTML.
+// After per-tab sessions, via-ctx contains the tabID (not cID).
 func extractTabIDFromHTML(t *testing.T, html string) string {
 	return extractCIDFromHTML(t, html)
 }
@@ -569,7 +569,7 @@ func TestAction_RejectsNonHexTabID(t *testing.T) {
 	// Inject a malicious session ID
 	actionURL := fmt.Sprintf("/_action/%s", trigger.ID())
 	req2 := httptest.NewRequest("GET", actionURL, nil)
-	signals := map[string]any{"via-c": "<script>alert(1)</script>"}
+	signals := map[string]any{"via-ctx": "<script>alert(1)</script>"}
 	signalsJSON, _ := json.Marshal(signals)
 	req2.URL.RawQuery = "datastar=" + url.QueryEscape(string(signalsJSON))
 	w2 := httptest.NewRecorder()
@@ -600,12 +600,12 @@ func TestGenRandID_FullEntropy(t *testing.T) {
 }
 
 func extractCIDFromHTML(t *testing.T, html string) string {
-	// Extract via-c from data-signals meta tag (HTML-escaped quotes)
-	start := strings.Index(html, "&#39;via-c&#39;:&#39;")
+	// Extract via-ctx from data-signals meta tag (HTML-escaped quotes)
+	start := strings.Index(html, "&#39;via-ctx&#39;:&#39;")
 	if start == -1 {
-		t.Fatal("via-c not found in HTML")
+		t.Fatal("via-ctx not found in HTML")
 	}
-	start += len("&#39;via-c&#39;:&#39;")
+	start += len("&#39;via-ctx&#39;:&#39;")
 	end := strings.Index(html[start:], "&#39;")
 	return html[start : start+end]
 }

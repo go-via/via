@@ -92,5 +92,5 @@ func (a *ActionHandle) OnKeyDown(key string, options ...ActionHandleOption) h.H 
 
 // OnInit returns a via.h attribute that triggers after the page loads.
 func (a *ActionHandle) OnInit() h.H {
-	return h.DataInit(actionURL(a.id))
+	return h.DataInit("%s", actionURL(a.id))
 }
