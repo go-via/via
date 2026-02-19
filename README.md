@@ -25,7 +25,7 @@ connection. Zero JavaScript. Zero build tools. Zero cognitive overhead.
 - **Built-in compression** - Brotli level 5, automatic
 - **Pure Go** - If you know Go, you know Via
 - **State scopes** - Tab, session, or app-wide state
-- **Auth helpers** - Built-in UserHandle for authentication
+- **Session data handles** - Access session-scoped data from anywhere
 - **Testing utilities** - Ergonomic vtest package for integration tests
 
 ## Getting Started
@@ -153,9 +153,9 @@ preferences := via.State(c, "", via.WithScope(via.ScopeSession))
 visitorCount := via.State(c, 0, via.WithScope(via.ScopeApp))
 ```
 
-## Authentication
+## Session Data Handles
 
-Built-in UserHandle for session-scoped user data:
+Access session-scoped data from middleware, actions, or views:
 
 ```go
 type User struct {
@@ -163,19 +163,22 @@ type User struct {
     Name string
 }
 
-user := via.NewUserHandle[User]()
+// Create handle (typically at module level)
+userHandle := via.NewSessionDataHandle[User]()
 
-// In action - login
-user.SetUser(s, User{ID: "1", Name: "Alice"})
+// In middleware - set data
+userHandle.Set(ctx, User{ID: "1", Name: "Alice"})
 
-// In view - check auth
-if u, ok := user.Get(s); ok {
-    // show user info
+// In action or view - retrieve data
+if user, ok := userHandle.Get(ctx); ok {
+    // use user
 }
 
-// In action - logout
-user.Logout(s)  // clears user and invalidates session
+// Clear data and invalidate session
+userHandle.Clear(ctx)
 ```
+
+**Key distinction:** Session data handles are for cross-cutting concerns set in middleware (auth, config). For reactive state that triggers UI updates, use `State` with `ScopeSession`.
 
 ## How It Works
 

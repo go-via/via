@@ -79,9 +79,9 @@ func (s *StateHandle[T]) Get(ctx *Context) T {
 		if ctx.v == nil || ctx.sessionID == "" {
 			return s.initial
 		}
-		ctx.v.sessionStateMu.RLock()
-		defer ctx.v.sessionStateMu.RUnlock()
-		if sessionData, ok := ctx.v.sessionState[ctx.sessionID]; ok {
+		ctx.v.sessions.stateMu.RLock()
+		defer ctx.v.sessions.stateMu.RUnlock()
+		if sessionData, ok := ctx.v.sessions.state[ctx.sessionID]; ok {
 			if val, ok := sessionData[s.id]; ok {
 				return val.(T)
 			}
@@ -90,10 +90,10 @@ func (s *StateHandle[T]) Get(ctx *Context) T {
 	case ScopeTab:
 		fallthrough
 	default:
-		if ctx.s == nil {
+		if ctx.store == nil {
 			return s.initial
 		}
-		if val, ok := ctx.s.state[s.id]; ok {
+		if val, ok := ctx.store.state[s.id]; ok {
 			return val.(T)
 		}
 		return s.initial
@@ -126,20 +126,20 @@ func (s *StateHandle[T]) Set(ctx *Context, value T) {
 		if ctx.v == nil || ctx.sessionID == "" {
 			return
 		}
-		ctx.v.sessionStateMu.Lock()
-		if ctx.v.sessionState[ctx.sessionID] == nil {
-			ctx.v.sessionState[ctx.sessionID] = make(map[string]any)
+		ctx.v.sessions.stateMu.Lock()
+		if ctx.v.sessions.state[ctx.sessionID] == nil {
+			ctx.v.sessions.state[ctx.sessionID] = make(map[string]any)
 		}
-		ctx.v.sessionState[ctx.sessionID][s.id] = value
-		ctx.v.sessionStateMu.Unlock()
+		ctx.v.sessions.state[ctx.sessionID][s.id] = value
+		ctx.v.sessions.stateMu.Unlock()
 		ctx.Sync()
 	case ScopeTab:
 		fallthrough
 	default:
-		if ctx.s == nil {
+		if ctx.store == nil {
 			return
 		}
-		ctx.s.state[s.id] = value
+		ctx.store.state[s.id] = value
 		ctx.Sync()
 	}
 }

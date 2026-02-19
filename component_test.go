@@ -255,10 +255,10 @@ func TestComponent_ActionSyncsFragment(t *testing.T) {
 	}
 
 	sc := &Context{
-		s:    sess.store,
-		ss:   sess,
-		mode: sessionModeAction,
-		warn: func(string, ...any) {},
+		store:   sess.store,
+		session: sess,
+		mode:    sessionModeAction,
+		warn:    func(string, ...any) {},
 	}
 
 	// Set component context like actionHTTPHandler does
@@ -337,10 +337,10 @@ func TestComponent_ActionSyncsFragment_NestedComponent(t *testing.T) {
 	}
 
 	sc := &Context{
-		s:    sess.store,
-		ss:   sess,
-		mode: sessionModeAction,
-		warn: func(string, ...any) {},
+		store:   sess.store,
+		session: sess,
+		mode:    sessionModeAction,
+		warn:    func(string, ...any) {},
 	}
 
 	// Set component context like actionHTTPHandler does
@@ -404,10 +404,10 @@ func TestComponent_PageActionStillSyncsFullPage(t *testing.T) {
 	}
 
 	sc := &Context{
-		s:    sess.store,
-		ss:   sess,
-		mode: sessionModeAction,
-		warn: func(string, ...any) {},
+		store:   sess.store,
+		session: sess,
+		mode:    sessionModeAction,
+		warn:    func(string, ...any) {},
 	}
 
 	actionFn := c.actions[pageAction.ID()]
@@ -444,10 +444,10 @@ func TestComponent_SyncFragment_ManualCall(t *testing.T) {
 	}
 
 	sc := &Context{
-		s:    sess.store,
-		ss:   sess,
-		mode: sessionModeAction,
-		warn: func(string, ...any) {},
+		store:   sess.store,
+		session: sess,
+		mode:    sessionModeAction,
+		warn:    func(string, ...any) {},
 	}
 
 	fragment := h.Div(h.ID("my-fragment"), h.Text("partial update"))
@@ -469,9 +469,9 @@ func TestComponent_SyncFragment_ManualCall(t *testing.T) {
 func TestComponent_SyncFragment_ViewModeWarns(t *testing.T) {
 	var warned bool
 	sc := &Context{
-		s:    newStore(),
-		mode: sessionModeView,
-		warn: func(string, ...any) { warned = true },
+		store: newStore(),
+		mode:  sessionModeView,
+		warn:  func(string, ...any) { warned = true },
 	}
 
 	sc.SyncFragment(h.Div(h.Text("nope")))

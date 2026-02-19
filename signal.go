@@ -37,10 +37,10 @@ type SignalHandle[T any] struct {
 }
 
 func (sh *SignalHandle[T]) Get(ctx *Context) T {
-	if ctx == nil || ctx.s == nil {
+	if ctx == nil || ctx.store == nil {
 		return sh.initial
 	}
-	if val, ok := ctx.s.signals[sh.id]; ok {
+	if val, ok := ctx.store.signals[sh.id]; ok {
 		// Try direct type assertion first
 		if typedVal, ok := val.(T); ok {
 			return typedVal
@@ -160,15 +160,15 @@ func convertStringToType[T any](s string, initial T) T {
 }
 
 func (sh *SignalHandle[T]) Set(ctx *Context, value T) {
-	if ctx == nil || ctx.s == nil {
+	if ctx == nil || ctx.store == nil {
 		return
 	}
 	if ctx.mode == sessionModeView {
 		ctx.warn("SignalHandle.Set() called during view render; mutation ignored")
 		return
 	}
-	ctx.s.signals[sh.id] = value
-	ctx.s.changedSignals[sh.id] = value
+	ctx.store.signals[sh.id] = value
+	ctx.store.changedSignals[sh.id] = value
 }
 
 func (sh *SignalHandle[T]) Bind() h.H {

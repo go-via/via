@@ -51,12 +51,12 @@ func (g *Group) Page(route string, fn func(*Composition)) {
 		panic("page " + fullRoute + " has no view")
 	}
 
-	g.v.compositionRegistryMutex.Lock()
+	g.v.compositionMu.Lock()
 	g.v.compositionRegistry[c.id] = c
-	g.v.compositionRegistryMutex.Unlock()
+	g.v.compositionMu.Unlock()
 
 	// Apply middleware: global outermost, then group (last registered runs closest to handler)
-	var handler http.Handler = g.v.newPageHTTPHandler(fullRoute, c.id, c)
+	var handler http.Handler = g.v.newPageHTTPHandler(fullRoute, c)
 	// Apply group middleware first (closer to handler)
 	for i := len(g.middlewares) - 1; i >= 0; i-- {
 		handler = g.middlewares[i](handler)

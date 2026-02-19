@@ -52,7 +52,7 @@ func TestSession_PersistsState(t *testing.T) {
 	// Initial state should be 0
 	val, ok := session.store.state[stateHandle.id]
 	assert.False(t, ok) // No value yet, uses initial
-	sc := &Context{s: session.store, mode: sessionModeAction, warn: func(string, ...any) {}}
+	sc := &Context{store: session.store, mode: sessionModeAction, warn: func(string, ...any) {}}
 	assert.Equal(t, 0, stateHandle.Get(sc))
 
 	// Modify state
@@ -99,9 +99,9 @@ func TestSession_SetInViewModeWarns(t *testing.T) {
 	}
 
 	ctx := &Context{
-		s:    newStore(),
-		mode: sessionModeView,
-		warn: warnFn,
+		store: newStore(),
+		mode:  sessionModeView,
+		warn:  warnFn,
 	}
 	state := State(c, 0)
 
@@ -125,9 +125,9 @@ func TestSession_SyncInViewModeWarns(t *testing.T) {
 	}
 
 	s := &Context{
-		s:    newStore(),
-		mode: sessionModeView,
-		warn: warnFn,
+		store: newStore(),
+		mode:  sessionModeView,
+		warn:  warnFn,
 	}
 
 	s.Sync()
@@ -146,9 +146,9 @@ func TestSession_SyncFragmentInViewModeWarns(t *testing.T) {
 	}
 
 	s := &Context{
-		s:    newStore(),
-		mode: sessionModeView,
-		warn: warnFn,
+		store: newStore(),
+		mode:  sessionModeView,
+		warn:  warnFn,
 	}
 
 	s.SyncFragment(h.Div(h.Text("test")))
@@ -361,7 +361,7 @@ func TestState_SessionScope_PersistsAcrossRequests(t *testing.T) {
 
 	// Create new tab session with session ID from cookie
 	s1 := NewContext(v)
-	s1.ss = &session{id: "tab1"}
+	s1.session = &session{id: "tab1"}
 	s1.sessionID = sessionCookie.Value
 
 	// Set session-scoped value
@@ -372,7 +372,7 @@ func TestState_SessionScope_PersistsAcrossRequests(t *testing.T) {
 
 	// Create another tab with same session ID
 	s2 := NewContext(v)
-	s2.ss = &session{id: "tab2"}
+	s2.session = &session{id: "tab2"}
 	s2.sessionID = sessionCookie.Value
 
 	// Should see same value
@@ -392,44 +392,44 @@ func TestSessionState_CleanupAfterTTL(t *testing.T) {
 
 	// Simulate session access tracking
 	sessionID := "test-session-id"
-	v.sessionLastAccessMu.Lock()
-	v.sessionLastAccess[sessionID] = time.Now().Unix() - 10 // 10 seconds ago
-	v.sessionLastAccessMu.Unlock()
+	v.sessions.lastAccessMu.Lock()
+	v.sessions.lastAccess[sessionID] = time.Now().Unix() - 10 // 10 seconds ago
+	v.sessions.lastAccessMu.Unlock()
 
 	// Add some session-scoped state
-	v.sessionStateMu.Lock()
-	v.sessionState[sessionID] = map[string]any{"key": "value"}
-	v.sessionStateMu.Unlock()
+	v.sessions.stateMu.Lock()
+	v.sessions.state[sessionID] = map[string]any{"key": "value"}
+	v.sessions.stateMu.Unlock()
 
 	// Verify state exists
-	v.sessionStateMu.RLock()
-	_, exists := v.sessionState[sessionID]
-	v.sessionStateMu.RUnlock()
+	v.sessions.stateMu.RLock()
+	_, exists := v.sessions.state[sessionID]
+	v.sessions.stateMu.RUnlock()
 	assert.True(t, exists, "Session state should exist before cleanup")
 
 	// Run cleanup
 	v.cleanupStaleSessions()
 
 	// Verify state was cleaned up
-	v.sessionStateMu.RLock()
-	_, exists = v.sessionState[sessionID]
-	v.sessionStateMu.RUnlock()
+	v.sessions.stateMu.RLock()
+	_, exists = v.sessions.state[sessionID]
+	v.sessions.stateMu.RUnlock()
 	assert.False(t, exists, "Session state should be cleaned up after TTL")
 
 	// Verify last access tracking was cleaned up
-	v.sessionLastAccessMu.RLock()
-	_, exists = v.sessionLastAccess[sessionID]
-	v.sessionLastAccessMu.RUnlock()
+	v.sessions.lastAccessMu.RLock()
+	_, exists = v.sessions.lastAccess[sessionID]
+	v.sessions.lastAccessMu.RUnlock()
 	assert.False(t, exists, "Session last access should be cleaned up after TTL")
 }
 
 // Test that logout invalidates the session
 func TestSession_InvalidatedOnLogout(t *testing.T) {
 	v := New()
-	var userHandle *UserHandle[TestUser]
+	var sessionData *SessionDataHandle[TestUser]
 
 	v.Page("/", func(c *Composition) {
-		userHandle = NewUserHandle[TestUser]()
+		sessionData = NewSessionDataHandle[TestUser]()
 		c.View(func(ctx *Context) h.H {
 			return h.Div(h.Text("Test"))
 		})
@@ -450,19 +450,19 @@ func TestSession_InvalidatedOnLogout(t *testing.T) {
 	}
 	assert.NotNil(t, sessionCookie)
 
-	// Set user data
+	// Set data
 	ctx := NewContext(v)
 	ctx.sessionID = sessionCookie.Value
-	userHandle.SetUser(ctx, TestUser{ID: "123", Name: "Alice"})
+	sessionData.Set(ctx, TestUser{ID: "123", Name: "Alice"})
 
-	// Logout
-	userHandle.Logout(ctx)
+	// Clear
+	sessionData.Clear(ctx)
 
 	// Verify session is in invalidation list
-	v.invalidatedSessionsMu.RLock()
-	_, invalidated := v.invalidatedSessions[sessionCookie.Value]
-	v.invalidatedSessionsMu.RUnlock()
-	assert.True(t, invalidated, "Session should be in invalidation list after logout")
+	v.sessions.invalidatedMu.RLock()
+	_, invalidated := v.sessions.invalidated[sessionCookie.Value]
+	v.sessions.invalidatedMu.RUnlock()
+	assert.True(t, invalidated, "Session should be in invalidation list after clear")
 }
 
 // Test that invalidated sessions are rejected and new session created
@@ -484,9 +484,9 @@ func TestSession_InvalidatedSessionRejected(t *testing.T) {
 	originalSessionID := sessionCookie.Value
 
 	// Invalidate the session
-	v.invalidatedSessionsMu.Lock()
-	v.invalidatedSessions[originalSessionID] = time.Now().Unix()
-	v.invalidatedSessionsMu.Unlock()
+	v.sessions.invalidatedMu.Lock()
+	v.sessions.invalidated[originalSessionID] = time.Now().Unix()
+	v.sessions.invalidatedMu.Unlock()
 
 	// Second request with invalidated cookie
 	req2 := httptest.NewRequest("GET", "/", nil)
@@ -521,22 +521,22 @@ func TestSession_InvalidatedSessionsCleanup(t *testing.T) {
 	sessionID := "test-invalidated-session"
 
 	// Add to invalidation list with old timestamp
-	v.invalidatedSessionsMu.Lock()
-	v.invalidatedSessions[sessionID] = time.Now().Unix() - 10 // 10 seconds ago
-	v.invalidatedSessionsMu.Unlock()
+	v.sessions.invalidatedMu.Lock()
+	v.sessions.invalidated[sessionID] = time.Now().Unix() - 10 // 10 seconds ago
+	v.sessions.invalidatedMu.Unlock()
 
 	// Verify exists
-	v.invalidatedSessionsMu.RLock()
-	_, exists := v.invalidatedSessions[sessionID]
-	v.invalidatedSessionsMu.RUnlock()
+	v.sessions.invalidatedMu.RLock()
+	_, exists := v.sessions.invalidated[sessionID]
+	v.sessions.invalidatedMu.RUnlock()
 	assert.True(t, exists, "Invalidated session should exist before cleanup")
 
 	// Run cleanup
 	v.cleanupStaleSessions()
 
 	// Verify cleaned up
-	v.invalidatedSessionsMu.RLock()
-	_, exists = v.invalidatedSessions[sessionID]
-	v.invalidatedSessionsMu.RUnlock()
+	v.sessions.invalidatedMu.RLock()
+	_, exists = v.sessions.invalidated[sessionID]
+	v.sessions.invalidatedMu.RUnlock()
 	assert.False(t, exists, "Old invalidated session should be cleaned up")
 }

@@ -168,11 +168,11 @@ action.OnInit()
 
 Actions are HTTP GET endpoints at `/_action/{id}`.
 
-### 7. UserHandle[T]
+### 7. SessionDataHandle[T]
 
-File: `user.go`
+File: `sessiondata.go`
 
-Session-scoped user authentication:
+Cross-cutting session data access (non-reactive):
 
 ```go
 type User struct {
@@ -181,26 +181,31 @@ type User struct {
     Role string
 }
 
-// Create at composition time (module level)
-var user = via.NewUserHandle[User]()
+// Create handle (typically at module level)
+var userHandle = via.NewSessionDataHandle[User]()
 
-// In action - set user
-user.SetUser(s, User{ID: "1", Name: "Alice", Role: "admin"})
+// In middleware - set data
+userHandle.Set(ctx, User{ID: "1", Name: "Alice", Role: "admin"})
 
-// In action - check auth
-if u, ok := user.Get(s); ok {
-    // user is logged in
+// In action or view - retrieve data
+if user, ok := userHandle.Get(ctx); ok {
+    // user is authenticated
 }
 
-// In action - logout
-user.Logout(s)  // clears user and invalidates session cookie
+// In action - clear data
+userHandle.Clear(ctx)  // clears data and invalidates session cookie
 ```
 
-UserHandle:
-- Always session-scoped (persists across tabs for same user)
-- Generic type for any user struct
-- Logout invalidates session for security
-- Integrates with Via's session management
+SessionDataHandle vs State (ScopeSession):
+- **SessionDataHandle**: Non-reactive, cross-cutting, set in middleware
+- **State with ScopeSession**: Reactive, composition-specific, triggers UI updates
+
+SessionDataHandle:
+- Always session-scoped (persists across tabs for same session)
+- Generic type for any data struct
+- NOT reactive - changes don't trigger SSE updates
+- Designed for auth, config, and other middleware-set data
+- Clear invalidates session for security
 
 ### 8. Components
 

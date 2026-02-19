@@ -38,7 +38,7 @@ func TestState_GetWithNilSession(t *testing.T) {
 
 	assert.Equal(t, 7, count.Get(nil))
 
-	ctx := &Context{s: nil, mode: sessionModeAction, warn: func(string, ...any) {}}
+	ctx := &Context{store: nil, mode: sessionModeAction, warn: func(string, ...any) {}}
 	assert.Equal(t, 7, count.Get(ctx))
 }
 

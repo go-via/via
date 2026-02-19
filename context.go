@@ -21,13 +21,13 @@ const (
 )
 
 type Context struct {
-	s          *store
-	ss         *session
+	store      *store
+	session    *session
 	mode       sessionMode
 	v          *V
 	sessionID  string
 	compID     string
-	ctxID      string
+	tabID      string
 	compViewFn func(*Context) h.H
 	warn       func(string, ...any)
 }
@@ -42,10 +42,10 @@ func newStore() *store {
 
 func NewContext(v *V) *Context {
 	return &Context{
-		s:    newStore(),
-		mode: sessionModeAction,
-		v:    v,
-		warn: func(string, ...any) {},
+		store: newStore(),
+		mode:  sessionModeAction,
+		v:     v,
+		warn:  func(string, ...any) {},
 	}
 }
 
@@ -54,14 +54,14 @@ func (ctx *Context) SessionID() string {
 }
 
 func (ctx *Context) CtxID() string {
-	return ctx.ctxID
+	return ctx.tabID
 }
 
 func (ctx *Context) PathParam(id string) string {
-	if ctx.s == nil {
+	if ctx.store == nil {
 		return ""
 	}
-	if param, ok := ctx.s.pathParams[id]; ok {
+	if param, ok := ctx.store.pathParams[id]; ok {
 		return param
 	}
 	return ""
@@ -87,7 +87,7 @@ func (ctx *Context) Sync() {
 		ctx.warn("Sync() called during view render; no-op")
 		return
 	}
-	if ctx.ss == nil {
+	if ctx.session == nil {
 		return
 	}
 
@@ -97,12 +97,12 @@ func (ctx *Context) Sync() {
 		return
 	}
 
-	if ctx.ss.c == nil {
+	if ctx.session.c == nil {
 		return
 	}
 
 	// Re-render view with current state
-	viewHTML := ctx.ss.c.viewFn(ctx)
+	viewHTML := ctx.session.c.viewFn(ctx)
 
 	// Render to buffer
 	buf := make([]byte, 0, 1024)
@@ -113,15 +113,15 @@ func (ctx *Context) Sync() {
 
 	// Send element patch
 	select {
-	case ctx.ss.patchChan <- patch{patchTypeElements, string(writer.buf)}:
+	case ctx.session.patchChan <- patch{patchTypeElements, string(writer.buf)}:
 	default: // Non-blocking
 	}
 
 	// Send signal patches if any signals changed
-	if len(ctx.s.changedSignals) > 0 {
+	if len(ctx.store.changedSignals) > 0 {
 		ctx.syncSignals()
 		// Clear changed signals after sync
-		ctx.s.changedSignals = make(map[string]any)
+		ctx.store.changedSignals = make(map[string]any)
 	}
 }
 
@@ -151,19 +151,19 @@ func (ctx *Context) SyncFragment(viewHTML h.H) {
 
 	// Send element patch
 	select {
-	case ctx.ss.patchChan <- patch{patchTypeElements, string(writer.buf)}:
+	case ctx.session.patchChan <- patch{patchTypeElements, string(writer.buf)}:
 	default: // Non-blocking
 	}
 
 	// Send signal patches if any signals changed
-	if len(ctx.s.changedSignals) > 0 {
+	if len(ctx.store.changedSignals) > 0 {
 		ctx.syncSignals()
-		ctx.s.changedSignals = make(map[string]any)
+		ctx.store.changedSignals = make(map[string]any)
 	}
 }
 
 func (ctx *Context) syncSignals() {
-	if len(ctx.s.changedSignals) == 0 {
+	if len(ctx.store.changedSignals) == 0 {
 		return
 	}
 
@@ -171,7 +171,7 @@ func (ctx *Context) syncSignals() {
 	// Format: {"sig_1": 5, "sig_2": "value"}
 	signalJSON := "{"
 	first := true
-	for k, v := range ctx.s.changedSignals {
+	for k, v := range ctx.store.changedSignals {
 		if !first {
 			signalJSON += ","
 		}
@@ -212,7 +212,7 @@ func (ctx *Context) syncSignals() {
 
 	// Send signal patch
 	select {
-	case ctx.ss.patchChan <- patch{patchTypeSignals, signalJSON}:
+	case ctx.session.patchChan <- patch{patchTypeSignals, signalJSON}:
 	default:
 	}
 }

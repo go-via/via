@@ -19,7 +19,7 @@ func TestSessionScopes_Example(t *testing.T) {
 	v := via.New()
 
 	// User handle for authentication (session-scoped)
-	user := via.NewUserHandle[User]()
+	user := via.NewSessionDataHandle[User]()
 
 	v.Page("/", func(c *via.Composition) {
 		// Tab-scoped state (default) - unique per browser tab
@@ -45,12 +45,12 @@ func TestSessionScopes_Example(t *testing.T) {
 		})
 
 		login := via.Action(c, func(ctx *via.Context) {
-			user.SetUser(ctx, User{ID: "user-1", Name: "Alice", Role: "admin"})
+			user.Set(ctx, User{ID: "user-1", Name: "Alice", Role: "admin"})
 			ctx.Sync() // Sync to update the view
 		})
 
 		logout := via.Action(c, func(ctx *via.Context) {
-			user.Logout(ctx)
+			user.Clear(ctx)
 			ctx.Sync() // Sync to update the view
 		})
 
@@ -154,8 +154,8 @@ func TestSessionScopes_Example(t *testing.T) {
 		assert.NotEqual(t, page1.sessionID, page2.sessionID)
 	})
 
-	// Test 4: UserHandle authentication
-	t.Run("UserHandle authentication", func(t *testing.T) {
+	// Test 4: SessionData authentication
+	t.Run("SessionData authentication", func(t *testing.T) {
 		page := VisitWith(v.HTTPServeMux(), "/")
 		defer page.Close()
 

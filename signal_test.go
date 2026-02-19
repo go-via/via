@@ -160,9 +160,9 @@ func TestSignal_SetInViewModeWarns(t *testing.T) {
 	}
 
 	ctx := &Context{
-		s:    newStore(),
-		mode: sessionModeView,
-		warn: warnFn,
+		store: newStore(),
+		mode:  sessionModeView,
+		warn:  warnFn,
 	}
 
 	c := &Composition{
@@ -189,7 +189,7 @@ func TestSignal_GetInvalidTypeReturnsInitial(t *testing.T) {
 
 	ctx := NewContext(nil)
 	// Manually inject an invalid type (a struct instead of int)
-	ctx.s.signals[signal.id] = struct{}{}
+	ctx.store.signals[signal.id] = struct{}{}
 
 	// Should return initial value, not panic
 	got := signal.Get(ctx)
@@ -230,43 +230,43 @@ func TestSignal_GetFloat64Conversion(t *testing.T) {
 			ctx := NewContext(nil)
 			switch sig := tt.signal.(type) {
 			case *SignalHandle[int]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int8]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int16]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint8]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint16]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[float32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[float64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[bool]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			}
 		})
@@ -307,46 +307,46 @@ func TestSignal_GetStringConversion(t *testing.T) {
 			ctx := NewContext(nil)
 			switch sig := tt.signal.(type) {
 			case *SignalHandle[int]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int8]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int16]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[int64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint8]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint16]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[uint64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[float32]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[float64]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[bool]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			case *SignalHandle[string]:
-				ctx.s.signals[sig.id] = tt.input
+				ctx.store.signals[sig.id] = tt.input
 				assert.Equal(t, tt.expected, sig.Get(ctx))
 			}
 		})
@@ -362,7 +362,7 @@ func TestSignal_GetInvalidStringReturnsInitial(t *testing.T) {
 
 	ctx := NewContext(nil)
 	// Inject invalid string for int
-	ctx.s.signals[signal.id] = "not-a-number"
+	ctx.store.signals[signal.id] = "not-a-number"
 
 	// Should return initial value, not panic or zero
 	got := signal.Get(ctx)

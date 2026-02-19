@@ -548,7 +548,7 @@ func TestPage_InitializesAllMaps(t *testing.T) {
 
 func TestGenRandID_IsHexOnly(t *testing.T) {
 	for range 100 {
-		id := via.TestGenRandID()
+		id := via.GenRandIDForTest()
 		assert.Regexp(t, `^[0-9a-f]{32}$`, id)
 	}
 }
@@ -580,16 +580,16 @@ func TestAction_RejectsNonHexTabID(t *testing.T) {
 }
 
 func TestValidateHexID_RejectsNonHex(t *testing.T) {
-	assert.False(t, via.TestIsValidHexID(""))
-	assert.False(t, via.TestIsValidHexID("<script>alert(1)</script>"))
-	assert.False(t, via.TestIsValidHexID("abc123XY"))
-	assert.False(t, via.TestIsValidHexID("abc"))
-	assert.True(t, via.TestIsValidHexID(via.TestGenRandID()))
+	assert.False(t, via.IsValidHexIDForTest(""))
+	assert.False(t, via.IsValidHexIDForTest("<script>alert(1)</script>"))
+	assert.False(t, via.IsValidHexIDForTest("abc123XY"))
+	assert.False(t, via.IsValidHexIDForTest("abc"))
+	assert.True(t, via.IsValidHexIDForTest(via.GenRandIDForTest()))
 }
 
 func TestGenRandID_FullEntropy(t *testing.T) {
-	id1 := via.TestGenRandID()
-	id2 := via.TestGenRandID()
+	id1 := via.GenRandIDForTest()
+	id2 := via.GenRandIDForTest()
 
 	// Must be 32 hex chars (128 bits)
 	assert.Len(t, id1, 32)
