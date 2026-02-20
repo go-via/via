@@ -18,7 +18,9 @@ func TestCounterWithStepSignal(t *testing.T) {
 	page.AssertText(t, "Step: 1")
 
 	// Increment by default step (1)
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 1")
 
 	// Change step to 5
@@ -26,15 +28,21 @@ func TestCounterWithStepSignal(t *testing.T) {
 	page.AssertText(t, "Step: 5")
 
 	// Increment by 5
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 6")
 
 	// Increment by 5 again
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 11")
 
 	// Decrement by 5
-	page.Click("-")
+	if err := page.Click("-"); err != nil {
+		t.Fatalf("click - failed: %v", err)
+	}
 	page.AssertText(t, "Count: 6")
 
 	// Change step to 10
@@ -42,6 +50,8 @@ func TestCounterWithStepSignal(t *testing.T) {
 	page.AssertText(t, "Step: 10")
 
 	// Decrement by 10
-	page.Click("-")
+	if err := page.Click("-"); err != nil {
+		t.Fatalf("click - failed: %v", err)
+	}
 	page.AssertText(t, "Count: -4")
 }

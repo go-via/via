@@ -16,16 +16,24 @@ func TestPageCounter(t *testing.T) {
 
 	page.AssertText(t, "Count: 0")
 
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 1")
 
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 2")
 
-	page.Click("-")
+	if err := page.Click("-"); err != nil {
+		t.Fatalf("click - failed: %v", err)
+	}
 	page.AssertText(t, "Count: 1")
 
-	page.Click("-")
+	if err := page.Click("-"); err != nil {
+		t.Fatalf("click - failed: %v", err)
+	}
 	page.AssertText(t, "Count: 0")
 }
 
@@ -40,14 +48,20 @@ func TestPageTodoList(t *testing.T) {
 	page.AssertText(t, "Todo List")
 	page.AssertText(t, "Items: 0")
 
-	page.Click("Add")
+	if err := page.Click("Add"); err != nil {
+		t.Fatalf("click Add failed: %v", err)
+	}
 	page.AssertText(t, "Items: 1")
 	page.AssertText(t, "New todo")
 
-	page.Click("Add")
+	if err := page.Click("Add"); err != nil {
+		t.Fatalf("click Add failed: %v", err)
+	}
 	page.AssertText(t, "Items: 2")
 
-	page.Click("Clear")
+	if err := page.Click("Clear"); err != nil {
+		t.Fatalf("click Clear failed: %v", err)
+	}
 	page.AssertText(t, "Items: 0")
 }
 
@@ -61,9 +75,13 @@ func TestPageGreeter(t *testing.T) {
 
 	page.AssertText(t, "Hello, World!")
 
-	page.Click("Greet")
+	if err := page.Click("Greet"); err != nil {
+		t.Fatalf("click Greet failed: %v", err)
+	}
 	page.AssertText(t, "Hello, Alice!")
 
-	page.Click("Reset")
+	if err := page.Click("Reset"); err != nil {
+		t.Fatalf("click Reset failed: %v", err)
+	}
 	page.AssertText(t, "Hello, World!")
 }

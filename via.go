@@ -90,7 +90,7 @@ func (v *V) logInfo(format string, a ...any) {
 }
 
 func (v *V) logDebug(format string, a ...any) {
-	if v.cfg.LogLvl == LogLvlDEBUG {
+	if v.cfg.LogLvl == LogLvlDebug {
 		log.Printf("[debug] msg=%q", fmt.Sprintf(format, a...))
 	}
 }
@@ -386,6 +386,12 @@ func (v *V) sseHTTPHandler(w http.ResponseWriter, r *http.Request) {
 							v.logErr("ExecuteScript failed: %v", err)
 						}
 					}
+				case patchTypeRedirect:
+					if err := sse.Redirect(patch.content); err != nil {
+						if sse.Context().Err() == nil {
+							v.logErr("Redirect failed: %v", err)
+						}
+					}
 				}
 			}
 		}
@@ -486,6 +492,7 @@ const (
 	patchTypeElements = iota
 	patchTypeSignals
 	patchTypeScript
+	patchTypeRedirect
 )
 
 type patch struct {

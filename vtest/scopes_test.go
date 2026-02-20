@@ -108,7 +108,9 @@ func TestSessionScopes_Example(t *testing.T) {
 		page2.AssertText(t, "Tab Counter: 0")
 
 		// Increment page1
-		page1.Click("Inc Tab")
+		if err := page1.Click("Inc Tab"); err != nil {
+			t.Fatalf("click Inc Tab failed: %v", err)
+		}
 		page1.AssertText(t, "Tab Counter: 1")
 
 		// Page2 should still be 0 (tab scope)
@@ -127,11 +129,15 @@ func TestSessionScopes_Example(t *testing.T) {
 		page1.AssertText(t, "Total Visits:")
 
 		// Increment from page1
-		page1.Click("Inc Global")
+		if err := page1.Click("Inc Global"); err != nil {
+			t.Fatalf("click Inc Global failed: %v", err)
+		}
 
 		// Both pages should see the update (app scope)
 		page1.AssertText(t, "Total Visits: 1")
-		page2.Click("Inc Global")
+		if err := page2.Click("Inc Global"); err != nil {
+			t.Fatalf("click Inc Global failed: %v", err)
+		}
 		page2.AssertText(t, "Total Visits: 2")
 	})
 
@@ -141,7 +147,9 @@ func TestSessionScopes_Example(t *testing.T) {
 		defer page1.Close()
 
 		// Set session token
-		page1.Click("Set Token")
+		if err := page1.Click("Set Token"); err != nil {
+			t.Fatalf("click Set Token failed: %v", err)
+		}
 		page1.AssertText(t, "Token: auth-token-123")
 
 		// Create new page with same session (simulated by sharing session state)
@@ -163,12 +171,16 @@ func TestSessionScopes_Example(t *testing.T) {
 		page.AssertText(t, "Not logged in")
 
 		// Login
-		page.Click("Login")
+		if err := page.Click("Login"); err != nil {
+			t.Fatalf("click Login failed: %v", err)
+		}
 		page.AssertText(t, "User: Alice")
 		page.AssertText(t, "Role: admin")
 
 		// Logout
-		page.Click("Logout")
+		if err := page.Click("Logout"); err != nil {
+			t.Fatalf("click Logout failed: %v", err)
+		}
 		page.AssertText(t, "Not logged in")
 	})
 }

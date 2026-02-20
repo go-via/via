@@ -34,6 +34,7 @@ type triggerOpts struct {
 	hasSignal bool
 	signalID  string
 	value     string
+	prevent   bool
 }
 
 type withSignalOpt struct {
@@ -47,11 +48,29 @@ func (o withSignalOpt) apply(opts *triggerOpts) {
 	opts.value = o.value
 }
 
+type withPrevent bool
+
+func (o withPrevent) apply(opts *triggerOpts) {
+	opts.prevent = bool(o)
+}
+
+// ActionOptionWithPrevent is an option that adds preventDefault() to the event handler.
+func ActionOptionWithPrevent() ActionHandleOption {
+	return withPrevent(true)
+}
+
 func buildOnExpr(base string, opts *triggerOpts) string {
-	if !opts.hasSignal {
-		return base
+	var result string
+
+	// Add signal assignment if present
+	if opts.hasSignal {
+		result += fmt.Sprintf("$%s=%s;", opts.signalID, opts.value)
 	}
-	return fmt.Sprintf("$%s=%s;%s", opts.signalID, opts.value, base)
+
+	// Add the base action
+	result += base
+
+	return result
 }
 
 func applyOptions(options ...ActionHandleOption) triggerOpts {
@@ -69,13 +88,21 @@ func actionURL(id string) string {
 // OnClick returns a via.h DOM attribute that triggers on click.
 func (a *ActionHandle) OnClick(options ...ActionHandleOption) h.H {
 	opts := applyOptions(options...)
-	return h.Data("on:click", buildOnExpr(actionURL(a.id), &opts))
+	event := "on:click"
+	if opts.prevent {
+		event += ".prevent"
+	}
+	return h.Data(event, buildOnExpr(actionURL(a.id), &opts))
 }
 
 // OnChange returns a via.h DOM attribute that triggers on input change.
 func (a *ActionHandle) OnChange(options ...ActionHandleOption) h.H {
 	opts := applyOptions(options...)
-	return h.Data("on:change__debounce.200ms", buildOnExpr(actionURL(a.id), &opts))
+	event := "on:change__debounce.200ms"
+	if opts.prevent {
+		event += ".prevent"
+	}
+	return h.Data(event, buildOnExpr(actionURL(a.id), &opts))
 }
 
 // OnKeyDown returns a via.h DOM attribute that triggers when a key is pressed.
@@ -87,7 +114,11 @@ func (a *ActionHandle) OnKeyDown(key string, options ...ActionHandleOption) h.H 
 	if key != "" {
 		condition = fmt.Sprintf("evt.key==='%s' &&", key)
 	}
-	return h.Data("on:keydown", fmt.Sprintf("%s%s", condition, buildOnExpr(actionURL(a.id), &opts)))
+	event := "on:keydown"
+	if opts.prevent {
+		event += ".prevent"
+	}
+	return h.Data(event, fmt.Sprintf("%s%s", condition, buildOnExpr(actionURL(a.id), &opts)))
 }
 
 // OnInit returns a via.h attribute that triggers after the page loads.

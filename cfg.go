@@ -7,7 +7,7 @@ const (
 	LogLevelError
 	LogLevelWarn
 	LogLevelInfo
-	LogLvlDEBUG
+	LogLvlDebug
 )
 
 // Plugin is an interface that Via plugins must implement.

@@ -16,10 +16,14 @@ func TestComponentCounter(t *testing.T) {
 	page.AssertText(t, "Count")
 	page.AssertText(t, "Count: 0")
 
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 1")
 
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Count: 2")
 }
 
@@ -36,6 +40,8 @@ func TestNestedComponents(t *testing.T) {
 	page.AssertText(t, "Counter A: 0")
 
 	// Click should increment first counter
-	page.Click("+")
+	if err := page.Click("+"); err != nil {
+		t.Fatalf("click + failed: %v", err)
+	}
 	page.AssertText(t, "Counter A: 1")
 }

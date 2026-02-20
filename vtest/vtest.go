@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+// Timing constants for SSE operations (configurable for test environments)
+var (
+	sseConnectDelay = 50 * time.Millisecond
+	sseWaitDelay    = 100 * time.Millisecond
+	sseEventsDelay  = 200 * time.Millisecond
+)
+
+// Precompiled regexes for getVisibleText
+var (
+	dataTextRegex   = regexp.MustCompile(`<([^>]+)\s+data-text=["']\$([^"']+)["'][^>]*>([^<]*)</[^>]+>`)
+	htmlTagRegex    = regexp.MustCompile(`<[^>]+>`)
+	whitespaceRegex = regexp.MustCompile(`\s+`)
+)
+
 var (
 	defaultHandler   http.Handler
 	defaultHandlerMu sync.RWMutex
@@ -117,13 +131,13 @@ func (j *cookieJar) GetCookies(uri string) []*http.Cookie {
 }
 
 // Click triggers an action by button text or selector.
-func (p *Page) Click(selector string) {
+func (p *Page) Click(selector string) error {
 	// Find button by text - map button text to action URLs
 	actionButtons := extractActionButtons(p.html)
 
 	urls, ok := actionButtons[selector]
 	if !ok || len(urls) == 0 {
-		return // Silently fail for now
+		return fmt.Errorf("button %q not found", selector)
 	}
 
 	// Track click count per button type to handle multiple buttons with same text
@@ -153,10 +167,12 @@ func (p *Page) Click(selector string) {
 	}
 
 	// Wait for SSE patch
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(sseWaitDelay)
 
 	// Update page HTML from SSE
 	p.updateFromSSE()
+
+	return nil
 }
 
 // AssertText asserts the page contains the given text.
@@ -178,13 +194,12 @@ func (p *Page) getVisibleText() string {
 	html := p.html
 
 	// Replace data-text elements with their signal values
-	// Match: <span data-text="$sig_1"></span> -> replace with signal value
-	re := regexp.MustCompile(`<[^>]*data-text=["']\$([^"']+)["'][^>]*></[^>]+>`)
-	matches := re.FindAllStringSubmatch(html, -1)
+	// Pattern: <tag data-text="$signalID">content</tag> -> replace with signal value
+	matches := dataTextRegex.FindAllStringSubmatch(html, -1)
 
 	for _, match := range matches {
-		if len(match) >= 2 {
-			sigID := match[1]
+		if len(match) >= 3 {
+			sigID := match[2]
 			if sigVal, ok := p.signals[sigID]; ok {
 				// Replace the entire element with just the signal value
 				html = strings.Replace(html, match[0], sigVal, 1)
@@ -193,9 +208,9 @@ func (p *Page) getVisibleText() string {
 	}
 
 	// Strip remaining HTML tags for text extraction
-	html = regexp.MustCompile(`<[^>]+>`).ReplaceAllString(html, "")
+	html = htmlTagRegex.ReplaceAllString(html, "")
 	// Collapse whitespace
-	html = regexp.MustCompile(`\s+`).ReplaceAllString(html, " ")
+	html = whitespaceRegex.ReplaceAllString(html, " ")
 	html = strings.TrimSpace(html)
 
 	return html
@@ -257,7 +272,7 @@ func sseConnect(handler http.Handler, sessionID string) *SSE {
 		done <- true
 	}()
 
-	time.Sleep(50 * time.Millisecond) // Wait for SSE to establish
+	time.Sleep(sseConnectDelay) // Wait for SSE to establish
 
 	return &SSE{
 		recorder:  w,
@@ -459,7 +474,7 @@ func (t *Tester) SSE(sessionID string) *SSE {
 		done <- true
 	}()
 
-	time.Sleep(100 * time.Millisecond) // Wait for SSE to establish
+	time.Sleep(sseWaitDelay) // Wait for SSE to establish
 
 	return &SSE{
 		recorder:  w,
@@ -470,7 +485,7 @@ func (t *Tester) SSE(sessionID string) *SSE {
 
 // WaitForEvents waits for the given number of SSE events and returns them.
 func (s *SSE) WaitForEvents(count int) []string {
-	time.Sleep(200 * time.Millisecond) // Wait for events
+	time.Sleep(sseEventsDelay) // Wait for events
 
 	body := s.recorder.safeBodyString()
 

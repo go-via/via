@@ -53,7 +53,7 @@ func (ctx *Context) SessionID() string {
 	return ctx.sessionID
 }
 
-func (ctx *Context) CtxID() string {
+func (ctx *Context) TabID() string {
 	return ctx.tabID
 }
 
@@ -214,6 +214,22 @@ func (ctx *Context) syncSignals() {
 	select {
 	case ctx.session.patchChan <- patch{patchTypeSignals, signalJSON}:
 	default:
+	}
+}
+
+// Redirect redirects the browser to the given route using Datastar's Redirect SSE event
+func (ctx *Context) Redirect(route string) {
+	if ctx.session == nil {
+		return
+	}
+
+	// Send redirect event through the patch channel
+	select {
+	case ctx.session.patchChan <- patch{patchTypeRedirect, route}:
+		return
+	default:
+		// Non-blocking: if channel is full, just return
+		return
 	}
 }
 
