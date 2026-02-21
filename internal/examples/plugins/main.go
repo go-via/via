@@ -18,7 +18,7 @@ func main() {
 	v := via.New()
 	v.Config(via.Options{
 		DocumentTitle: "Via With PicoCSS Plugin",
-		Plugins:       []via.Plugin{PicoCSSPlugin},
+		Plugins:       []via.Plugin{picoCSSPlugin{}},
 	})
 
 	v.Page("/", func(c *via.Context) {
@@ -36,7 +36,9 @@ func main() {
 	v.Start()
 }
 
-func PicoCSSPlugin(v *via.V) {
+type picoCSSPlugin struct{}
+
+func (picoCSSPlugin) Register(v *via.V) {
 	v.HTTPServeMux().HandleFunc("GET /_plugins/picocss/assets/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		_, _ = w.Write(picoCSSFile)

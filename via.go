@@ -36,6 +36,7 @@ type V struct {
 	contextRegistryMutex sync.RWMutex
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
+	documentHTMLAttrs    []h.H
 	devModePageInitFnMap map[string]func(*Context)
 }
 
@@ -92,7 +93,7 @@ func (v *V) Config(cfg Options) {
 	if cfg.Plugins != nil {
 		for _, plugin := range cfg.Plugins {
 			if plugin != nil {
-				plugin(v)
+				plugin.Register(v)
 			}
 		}
 	}
@@ -110,6 +111,16 @@ func (v *V) AppendToHead(elements ...h.H) {
 	for _, el := range elements {
 		if el != nil {
 			v.documentHeadIncludes = append(v.documentHeadIncludes, el)
+		}
+	}
+}
+
+// AppendAttrToHTML appends attributes to the <html> element of every page.
+// Useful for plugins that need to bind data to the root element (e.g. data-theme).
+func (v *V) AppendAttrToHTML(attrs ...h.H) {
+	for _, attr := range attrs {
+		if attr != nil {
+			v.documentHTMLAttrs = append(v.documentHTMLAttrs, attr)
 		}
 	}
 }
@@ -189,7 +200,7 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 			Title:     v.cfg.DocumentTitle,
 			Head:      headElements,
 			Body:      bodyElements,
-			HTMLAttrs: []h.H{},
+			HTMLAttrs: v.documentHTMLAttrs,
 		})
 		_ = view.Render(w)
 	}))
