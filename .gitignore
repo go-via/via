@@ -37,13 +37,7 @@ go.work.sum
 # Air artifacts
 *tmp/
 
-# binaries
-internal/examples/chatroom/chatroom
-internal/examples/counter/counter
-internal/examples/countercomp/countercomp
-internal/examples/greeter/greeter
-internal/examples/livereload/livereload
-internal/examples/picocss/picocss
-internal/examples/plugins/plugins
-internal/examples/realtimechart/realtimechart
-internal/examples/shakespeare/shakespeare
+# Example binaries (no extension)
+internal/examples/pathparams/pathparams
+picocss
+

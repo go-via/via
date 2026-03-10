@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestPageRoute verifies basic page serving works.
+// This guards against regressions in the core routing/serving pipeline.
 func TestPageRoute(t *testing.T) {
 	v := New()
 	v.Page("/", func(c *Context) {
@@ -26,6 +28,8 @@ func TestPageRoute(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "<!doctype html>")
 }
 
+// TestDatastarJS ensures the embedded Datastar JS is served correctly.
+// This guards against accidentally breaking client-side reactivity by embedding stale/broken JS.
 func TestDatastarJS(t *testing.T) {
 	v := New()
 	req := httptest.NewRequest("GET", "/_datastar.js", nil)
@@ -37,6 +41,8 @@ func TestDatastarJS(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "🖕JS_DS🚀")
 }
 
+// TestSignal verifies Signal creates a signal and its value is retrievable.
+// This guards against signal lifecycle issues where signals might be lost or return nil.
 func TestSignal(t *testing.T) {
 	var sig *signal
 	v := New()
@@ -52,6 +58,8 @@ func TestSignal(t *testing.T) {
 	assert.Equal(t, "test", sig.String())
 }
 
+// TestAction verifies actions are registered and rendered as Datastar attributes.
+// This guards against broken event binding that would prevent user interactions from reaching server handlers.
 func TestAction(t *testing.T) {
 	var trigger *actionTrigger
 	var sig *signal
@@ -80,12 +88,16 @@ func TestAction(t *testing.T) {
 	assert.Contains(t, body, "/_action/")
 }
 
+// TestConfig verifies Options.Config correctly overrides defaults.
+// This guards against silent config failures where users expect overrides to take effect.
 func TestConfig(t *testing.T) {
 	v := New()
 	v.Config(Options{DocumentTitle: "Test"})
 	assert.Equal(t, "Test", v.cfg.DocumentTitle)
 }
 
+// TestPage_PanicsOnNoView ensures Page panics when no View is provided.
+// This guards against silent failures where pages would render nothing without any error.
 func TestPage_PanicsOnNoView(t *testing.T) {
 	assert.Panics(t, func() {
 		v := New()

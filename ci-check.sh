@@ -30,7 +30,7 @@ if [ -d "internal/examples" ]; then
   while IFS= read -r -d '' mainfile; do
     dir="$(dirname "$mainfile")"
     echo "Building $dir"
-    if ! (cd "$dir" && go build); then
+    if ! (cd "$dir" && go build -o /tmp); then
       echo "ERROR: example build failed: $dir"
       exit 1
     fi
@@ -40,7 +40,7 @@ if [ -d "internal/examples" ]; then
   if [ "$count" -eq 0 ]; then
     echo "NOTE: no example main.go files found under internal/examples"
   else
-    echo "OK: built $count example(s)"
+    echo "OK: built $count example(s) to /tmp"
   fi
 else
   echo "NOTE: internal/examples not found, skipping example builds"

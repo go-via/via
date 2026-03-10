@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestSignalReturnAsString ensures Signal correctly converts primitive values to string.
+// This guards against silent type coercion bugs where non-string types might behave unexpectedly.
 func TestSignalReturnAsString(t *testing.T) {
 	testcases := []struct {
 		desc     string
@@ -39,6 +41,8 @@ func TestSignalReturnAsString(t *testing.T) {
 	}
 }
 
+// TestSignalReturnAsStringComplexTypes verifies Signal handles slices and structs.
+// This guards against JSON marshaling edge cases where complex types could produce invalid output.
 func TestSignalReturnAsStringComplexTypes(t *testing.T) {
 	testcases := []struct {
 		desc     string
