@@ -37,7 +37,4 @@ go.work.sum
 # Air artifacts
 *tmp/
 
-# Example binaries (no extension)
-internal/examples/pathparams/pathparams
-picocss
 
