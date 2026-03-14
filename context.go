@@ -8,7 +8,6 @@ import (
 	"maps"
 	"reflect"
 	"sync"
-	"time"
 
 	"github.com/go-via/via/h"
 )
@@ -28,7 +27,6 @@ type Context struct {
 	actionRegistry    map[string]func()
 	signals           *sync.Map
 	mu                sync.RWMutex
-	ctxDisposedChan   chan struct{}
 }
 
 // View defines the UI rendered by this context.
@@ -116,19 +114,6 @@ func (c *Context) getActionFn(id string) (func(), error) {
 		return f, nil
 	}
 	return nil, fmt.Errorf("action '%s' not found", id)
-}
-
-// OnInterval starts a go routine that sets a time.Ticker with the given duration and executes
-// the given handler func() on every tick. Use *Routine.UpdateInterval to update the interval.
-func (c *Context) OnInterval(duration time.Duration, handler func()) *OnIntervalRoutine {
-	var cn chan struct{}
-	if c.isComponent() { // components use the chan on the parent page ctx
-		cn = c.parentPageCtx.ctxDisposedChan
-	} else {
-		cn = c.ctxDisposedChan
-	}
-	r := newOnIntervalRoutine(cn, duration, handler)
-	return r
 }
 
 // Signal creates a reactive signal and initializes it with the given value.
@@ -316,14 +301,6 @@ func (c *Context) ExecScript(s string) {
 	c.sendPatch(patch{patchTypeScript, s})
 }
 
-// stopAllRoutines stops all go routines tied to this Context preventing goroutine leaks.
-func (c *Context) stopAllRoutines() {
-	select {
-	case c.ctxDisposedChan <- struct{}{}:
-	default:
-	}
-}
-
 func (c *Context) injectRouteParams(params map[string]string) {
 	if params == nil {
 		return
@@ -372,8 +349,7 @@ func newContext(id string, route string, v *V) *Context {
 		app:               v,
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
-		signals:           new(sync.Map),
-		patchChan:         make(chan patch, 1),
-		ctxDisposedChan:   make(chan struct{}, 1),
+		signals:   new(sync.Map),
+		patchChan: make(chan patch, 1),
 	}
 }

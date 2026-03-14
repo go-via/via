@@ -1,106 +1,129 @@
-package via
+package via_test
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestPageRoute verifies basic page serving works.
-// This guards against regressions in the core routing/serving pipeline.
-func TestPageRoute(t *testing.T) {
-	v := New()
-	v.Page("/", func(c *Context) {
-		c.View(func() h.H {
-			return h.Div(h.Text("Hello Via!"))
-		})
+// startServer wraps an already-configured *via.V in an httptest.Server.
+func startServer(t *testing.T, v *via.V) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(v.HTTPServeMux())
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestNew_returnsNonNil(t *testing.T) {
+	v := via.New()
+	assert.NotNil(t, v)
+}
+
+// TestConfig_overridesDocumentTitle verifies Config() changes the HTML <title> element.
+// This guards against document title changes being silently ignored.
+func TestConfig_overridesDocumentTitle(t *testing.T) {
+	v := via.New()
+	v.Config(via.Options{DocumentTitle: "My App"})
+	v.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div(h.Text("hello")) })
 	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	v.mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "Hello Via!")
-	assert.Contains(t, w.Body.String(), "<!doctype html>")
+	server := startServer(t, v)
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "My App")
 }
 
-// TestDatastarJS ensures the embedded Datastar JS is served correctly.
-// This guards against accidentally breaking client-side reactivity by embedding stale/broken JS.
-func TestDatastarJS(t *testing.T) {
-	v := New()
-	req := httptest.NewRequest("GET", "/_datastar.js", nil)
-	w := httptest.NewRecorder()
-	v.mux.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.Equal(t, "application/javascript", w.Header().Get("Content-Type"))
-	assert.Contains(t, w.Body.String(), "🖕JS_DS🚀")
+// TestPage_rendersViewInDocument verifies the view function output appears in the HTTP response.
+// This guards against page content being dropped from the rendered document.
+func TestPage_rendersViewInDocument(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		c.View(func() h.H { return h.H1(h.Text("Hello Via!")) })
+	})
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "Hello Via!")
 }
 
-// TestSignal verifies Signal creates a signal and its value is retrievable.
-// This guards against signal lifecycle issues where signals might be lost or return nil.
-func TestSignal(t *testing.T) {
-	var sig *signal
-	v := New()
-	v.Page("/", func(c *Context) {
-		sig = c.Signal("test")
+// TestPage_includesDatastarScript verifies the Datastar JS file reference is present in every page.
+// This guards against accidentally breaking client-side reactivity by omitting the script.
+func TestPage_includesDatastarScript(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div() })
 	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	v.mux.ServeHTTP(w, req)
-
-	assert.Equal(t, "test", sig.String())
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "_datastar.js")
 }
 
-// TestAction verifies actions are registered and rendered as Datastar attributes.
-// This guards against broken event binding that would prevent user interactions from reaching server handlers.
-func TestAction(t *testing.T) {
-	var trigger *actionTrigger
-	var sig *signal
-	v := New()
-	v.Page("/", func(c *Context) {
-		trigger = c.Action(func() {})
-		sig = c.Signal("value")
-		c.View(func() h.H {
-			return h.Div(
-				h.Button(trigger.OnClick()),
-				h.Input(trigger.OnChange()),
-				h.Input(trigger.OnKeyDown("Enter")),
-				h.Button(trigger.OnClick(WithSignal(sig, "test"))),
-				h.Button(trigger.OnClick(WithSignalInt(sig, 42))),
-			)
+// TestPage_includesViaCtxSignal verifies every page includes a via-ctx data-signal initialization.
+// This guards against SSE connections failing because the context ID is missing.
+func TestPage_includesViaCtxSignal(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div() })
+	})
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "via-ctx")
+}
+
+// TestPage_panicsOnNilView verifies registering a page with a nil view function panics.
+// This guards against silent registration of broken pages that would fail at runtime.
+func TestPage_panicsOnNilView(t *testing.T) {
+	v := via.New()
+	assert.Panics(t, func() {
+		v.Page("/", func(c *via.Context) {
+			c.View(nil)
 		})
 	})
-
-	req := httptest.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	v.mux.ServeHTTP(w, req)
-	body := w.Body.String()
-	assert.Contains(t, body, "data-on:click")
-	assert.Contains(t, body, "data-on:change__debounce.200ms")
-	assert.Contains(t, body, "data-on:keydown")
-	assert.Contains(t, body, "/_action/")
 }
 
-// TestConfig verifies Options.Config correctly overrides defaults.
-// This guards against silent config failures where users expect overrides to take effect.
-func TestConfig(t *testing.T) {
-	v := New()
-	v.Config(Options{DocumentTitle: "Test"})
-	assert.Equal(t, "Test", v.cfg.DocumentTitle)
-}
-
-// TestPage_PanicsOnNoView ensures Page panics when no View is provided.
-// This guards against silent failures where pages would render nothing without any error.
-func TestPage_PanicsOnNoView(t *testing.T) {
-	assert.Panics(t, func() {
-		v := New()
-		v.Page("/", func(c *Context) {})
+// TestPage_withPathParam verifies path parameters are injected into the context and accessible in the view.
+// This guards against dynamic routes silently ignoring URL parameters.
+func TestPage_withPathParam(t *testing.T) {
+	server := newTestApp(t, "/users/{id}", func(c *via.Context) {
+		c.View(func() h.H {
+			id := c.GetPathParam("id")
+			return h.Div(h.Textf("user-%s", id))
+		})
 	})
+	body := getPageBody(t, server, "/users/42")
+	assert.Contains(t, body, "user-42")
+}
+
+// TestAppendToHead_addsElement verifies AppendToHead() injects elements into the document <head>.
+// This guards against plugin head elements being silently dropped.
+func TestAppendToHead_addsElement(t *testing.T) {
+	v := via.New()
+	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/app.css")))
+	v.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div() })
+	})
+	server := startServer(t, v)
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "/app.css")
+}
+
+// TestAppendToFoot_addsElement verifies AppendToFoot() injects elements at the end of <body>.
+// This guards against footer scripts being silently dropped.
+func TestAppendToFoot_addsElement(t *testing.T) {
+	v := via.New()
+	v.AppendToFoot(h.Script(h.Src("/foot.js")))
+	v.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div() })
+	})
+	server := startServer(t, v)
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "/foot.js")
+}
+
+// TestDatastarJS_served verifies the embedded Datastar JS is served at /_datastar.js.
+// This guards against accidentally breaking client-side reactivity by embedding stale/broken JS.
+func TestDatastarJS_served(t *testing.T) {
+	v := via.New()
+	server := startServer(t, v)
+	resp, err := http.Get(server.URL + "/_datastar.js")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }

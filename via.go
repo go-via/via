@@ -10,13 +10,10 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -37,7 +34,6 @@ type V struct {
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H
-	devModePageInitFnMap map[string]func(*Context)
 }
 
 func (v *V) logFatal(format string, a ...any) {
@@ -97,9 +93,6 @@ func (v *V) Config(cfg Options) {
 			}
 		}
 	}
-	if cfg.DevMode != v.cfg.DevMode {
-		v.cfg.DevMode = cfg.DevMode
-	}
 	if cfg.ServerAddress != "" {
 		v.cfg.ServerAddress = cfg.ServerAddress
 	}
@@ -157,13 +150,8 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		c := newContext("", "", v)
 		initContextFn(c)
 		c.view()
-		c.stopAllRoutines()
 	}()
 
-	// save page init function allows devmode to restore persisted ctx later
-	if v.cfg.DevMode {
-		v.devModePageInitFnMap[route] = initContextFn
-	}
 	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		v.logDebug(nil, "GET %s", r.URL.String())
 		if strings.Contains(r.URL.Path, "favicon") ||
@@ -177,9 +165,6 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		c.injectRouteParams(routeParams)
 		initContextFn(c)
 		v.registerCtx(c)
-		if v.cfg.DevMode {
-			v.devModePersist(c)
-		}
 		headElements := []h.H{}
 		headElements = append(headElements, v.documentHeadIncludes...)
 		headElements = append(headElements,
@@ -191,11 +176,6 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 
 		bodyElements := []h.H{c.view()}
 		bodyElements = append(bodyElements, v.documentFootIncludes...)
-		if v.cfg.DevMode {
-			bodyElements = append(bodyElements, h.Script(h.Type("module"),
-				h.Src("https://cdn.jsdelivr.net/gh/dataSPA/dataSPA-inspector@latest/dataspa-inspector.bundled.js")))
-			bodyElements = append(bodyElements, h.Raw("<dataspa-inspector/>"))
-		}
 		view := h.HTML5(h.HTML5Props{
 			Title:     v.cfg.DocumentTitle,
 			Head:      headElements,
@@ -258,102 +238,6 @@ func (v *V) HTTPServeMux() *http.ServeMux {
 	return v.mux
 }
 
-func (v *V) devModePersist(c *Context) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-		log.Fatalf("failed to create directory for devmode files: %v", err)
-	}
-
-	// load persisted list from file, or empty list if file not found
-	file, err := os.Open(p)
-	ctxRegMap := make(map[string]string)
-	if err == nil {
-		json.NewDecoder(file).Decode(&ctxRegMap)
-	}
-	file.Close()
-
-	// add ctx to persisted list
-	if _, ok := ctxRegMap[c.id]; !ok {
-		ctxRegMap[c.id] = c.route
-	}
-
-	// write persisted list to file
-	file, err = os.Create(p)
-	if err != nil {
-		v.logErr(c, "devmode failed to percist ctx: %v", err)
-
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(ctxRegMap); err != nil {
-		v.logErr(c, "devmode failed to persist ctx")
-	}
-	v.logDebug(c, "devmode persisted ctx to file")
-}
-
-func (v *V) devModeRemovePersisted(c *Context) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
-
-	// load persisted list from file, or empty list if file not found
-	file, err := os.Open(p)
-	ctxRegMap := make(map[string]string)
-	if err == nil {
-		json.NewDecoder(file).Decode(&ctxRegMap)
-	}
-	file.Close()
-
-	// remove ctx to persisted list
-	if _, ok := ctxRegMap[c.id]; !ok {
-		delete(ctxRegMap, c.id)
-	}
-
-	// write persisted list to file
-	file, err = os.Create(p)
-	if err != nil {
-		v.logErr(c, "devmode failed to remove percisted ctx: %v", err)
-
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	if err := encoder.Encode(ctxRegMap); err != nil {
-		v.logErr(c, "devmode failed to remove persisted ctx")
-	}
-	v.logDebug(c, "devmode removed persisted ctx from file")
-}
-
-func (v *V) devModeRestore(cID string) {
-	p := filepath.Join(".via", "devmode", "ctx.json")
-	file, err := os.Open(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		v.logErr(nil, "devmode could not restore ctx from file: %v", err)
-		return
-	}
-	defer file.Close()
-	var ctxRegMap map[string]string
-	if err := json.NewDecoder(file).Decode(&ctxRegMap); err != nil {
-		v.logWarn(nil, "devmode could not restore ctx from file: %v", err)
-		return
-	}
-	for ctxID, pageRoute := range ctxRegMap {
-		if ctxID == cID {
-			pageInitFn, ok := v.devModePageInitFnMap[pageRoute]
-			if !ok {
-				v.logWarn(nil, "devmode could not restore ctx from file: page init fn for route '%s' not found", pageRoute)
-				continue
-			}
-			c := newContext(ctxID, pageRoute, v)
-			pageInitFn(c)
-			v.registerCtx(c)
-			v.logDebug(c, "devmode restored ctx")
-		}
-	}
-}
-
 type patchType int
 
 const (
@@ -372,11 +256,9 @@ func New() *V {
 	mux := http.NewServeMux()
 
 	v := &V{
-		mux:                  mux,
-		contextRegistry:      make(map[string]*Context),
-		devModePageInitFnMap: make(map[string]func(*Context)),
+		mux:             mux,
+		contextRegistry: make(map[string]*Context),
 		cfg: Options{
-			DevMode:       false,
 			ServerAddress: ":3000",
 			LogLvl:        LogLevelInfo,
 			DocumentTitle: "⚡ Via",
@@ -397,11 +279,6 @@ func New() *V {
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
 
-		if v.cfg.DevMode {
-			if _, err := v.getCtx(cID); err != nil {
-				v.devModeRestore(cID)
-			}
-		}
 		c, err := v.getCtx(cID)
 		if err != nil {
 			v.logErr(nil, "sse stream failed to start: %v", err)
@@ -416,7 +293,7 @@ func New() *V {
 		v.logDebug(c, "SSE connection established")
 
 		go func() {
-			if isReconnect || v.cfg.DevMode {
+			if isReconnect {
 				c.Sync()
 				return
 			}
@@ -497,11 +374,7 @@ func New() *V {
 			v.logErr(c, "failed to handle session close: %v", err)
 			return
 		}
-		c.stopAllRoutines()
 		v.logDebug(c, "session close event triggered")
-		if v.cfg.DevMode {
-			v.devModeRemovePersisted(c)
-		}
 		v.unregisterCtx(c)
 	})
 	return v

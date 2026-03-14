@@ -46,6 +46,13 @@ else
   echo "NOTE: internal/examples not found, skipping example builds"
 fi
 
+echo "== CI: Lint markdown =="
+if ! markdownlint "**/*.md"; then
+  echo "ERROR: markdownlint failed."
+  exit 1
+fi
+echo "OK: markdownlint passed"
+
 echo "== CI: Run tests =="
 if ! go test ./... 2>&1 | grep -v '\[no test files\]'; then
   echo "ERROR: tests failed."

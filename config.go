@@ -18,9 +18,6 @@ type Plugin interface {
 
 // Options defines configuration options for the via application
 type Options struct {
-	// The development mode flag. If true, enables server and browser auto-reload on `.go` file changes.
-	DevMode bool
-
 	// The http server address. e.g. ':3000'
 	ServerAddress string
 
