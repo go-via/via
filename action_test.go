@@ -50,7 +50,7 @@ func TestAction_withSignalSetsValueBeforeAction(t *testing.T) {
 	v := via.New()
 	var out string
 	v.Page("/", func(c *via.Context) {
-		sig := c.Signal("initial")
+		sig := via.Signal(c, "initial")
 		act := c.Action(func() {})
 		node := h.Button(act.OnClick(via.WithSignal(sig, "clicked")))
 		out = renderH(t, node)
@@ -66,7 +66,7 @@ func TestAction_withSignalIntSetsIntValue(t *testing.T) {
 	v := via.New()
 	var out string
 	v.Page("/", func(c *via.Context) {
-		sig := c.Signal(0)
+		sig := via.Signal(c, 0)
 		act := c.Action(func() {})
 		node := h.Button(act.OnClick(via.WithSignalInt(sig, 99)))
 		out = renderH(t, node)

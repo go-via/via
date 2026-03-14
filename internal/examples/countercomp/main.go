@@ -27,10 +27,10 @@ func main() {
 
 func counterCompFn(c *via.Context) {
 	count := 0
-	step := c.Signal(1)
+	step := via.Signal(c, 1)
 
 	increment := c.Action(func() {
-		count += step.Int()
+		count += step.Get(c)
 		c.Sync()
 	})
 

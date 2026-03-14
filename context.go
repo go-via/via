@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"reflect"
 	"sync"
 
 	"github.com/go-via/via/h"
@@ -116,58 +115,6 @@ func (c *Context) getActionFn(id string) (func(), error) {
 	return nil, fmt.Errorf("action '%s' not found", id)
 }
 
-// Signal creates a reactive signal and initializes it with the given value.
-// Use Bind() to link the value of input elements to the signal and Text() to
-// display the signal value and watch the UI update live as the input changes.
-//
-// Example:
-//
-//	mysignal := c.Signal("world")
-//
-//	c.View(func() h.H {
-//		return h.Div(
-//			h.P(h.Span(h.Text("Hello, ")), h.Span(mysignal.Text())),
-//			h.Input(mysignal.Bind()),
-//		)
-//	})
-//
-// Signals are 'alive' only in the browser, but Via always injects their values into
-// the Context before each action call.
-// If any signal value is updated by the server, the update is automatically sent to the
-// browser when using Sync() or SyncSignsls().
-func (c *Context) Signal(v any) *signal {
-	sigID := genRandID()
-	if v == nil {
-		c.app.logErr(c, "failed to bind signal: nil signal value")
-		return &signal{
-			id:  sigID,
-			val: "error",
-			err: fmt.Errorf("context '%s' failed to bind signal '%s': nil signal value", c.id, sigID),
-		}
-	}
-	switch reflect.TypeOf(v).Kind() {
-	case reflect.Slice, reflect.Struct:
-		if j, err := json.Marshal(v); err == nil {
-			v = string(j)
-		}
-	}
-	sig := &signal{
-		id:      sigID,
-		val:     v,
-		changed: true,
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.isComponent() { // components register signals on parent page
-		c.parentPageCtx.signals.Store(sigID, sig)
-	} else {
-		c.signals.Store(sigID, sig)
-	}
-	return sig
-
-}
-
 func (c *Context) injectSignals(sigs map[string]any) {
 	if sigs == nil {
 		c.app.logErr(c, "signal injection failed: nil signals")
@@ -178,17 +125,28 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	defer c.mu.Unlock()
 
 	for sigID, val := range sigs {
-		if _, ok := c.signals.Load(sigID); !ok {
-			c.signals.Store(sigID, &signal{
-				id:  sigID,
-				val: val,
-			})
+		// Fast path: lookup by map key (== signal id when no tag)
+		if item, ok := c.signals.Load(sigID); ok {
+			if entry, ok := item.(signalEntry); ok {
+				entry.setRawValue(val)
+			}
 			continue
 		}
-		item, _ := c.signals.Load(sigID)
-		if sig, ok := item.(*signal); ok {
-			sig.val = val
-			sig.changed = false
+		// Slow path: find by displayID (for tagged signals)
+		var found signalEntry
+		c.signals.Range(func(_, value any) bool {
+			if entry, ok := value.(signalEntry); ok {
+				if entry.displayID() == sigID {
+					found = entry
+					return false
+				}
+			}
+			return true
+		})
+		if found != nil {
+			found.setRawValue(val)
+		} else {
+			c.signals.Store(sigID, &signalOf[any]{id: sigID, val: val})
 		}
 	}
 }
@@ -208,15 +166,17 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	updatedSigs := make(map[string]any)
-	c.signals.Range(func(sigID, value any) bool {
-		if sig, ok := value.(*signal); ok {
-			if sig.err != nil {
-				c.app.logWarn(c, "signal '%s' is out of sync: %v", sig.id, sig.err)
-				return true
-			}
-			if sig.changed {
-				updatedSigs[sigID.(string)] = fmt.Sprintf("%v", sig.val)
-			}
+	c.signals.Range(func(_, value any) bool {
+		entry, ok := value.(signalEntry)
+		if !ok {
+			return true
+		}
+		if entry.hasError() {
+			c.app.logWarn(c, "signal '%s' is out of sync: %v", entry.getID(), entry.getErr())
+			return true
+		}
+		if entry.isChanged() {
+			updatedSigs[entry.displayID()] = entry.rawValue()
 		}
 		return true
 	})
@@ -249,6 +209,12 @@ func (c *Context) Sync() {
 		outgoingSigs, _ := json.Marshal(updatedSigs)
 		c.sendPatch(patch{patchTypeSignals, string(outgoingSigs)})
 	}
+}
+
+// autoSync is called automatically after each action. It calls Sync() so that
+// view and signal state are pushed to the browser without requiring an explicit c.Sync() call.
+func (c *Context) autoSync() {
+	c.Sync()
 }
 
 // SyncElements pushes an immediate html patch over the live SSE stream to the

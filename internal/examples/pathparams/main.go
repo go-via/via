@@ -17,10 +17,10 @@ func main() {
 		startAtStep, _ := strconv.Atoi(c.GetPathParam("start_at_step"))
 
 		count := 0
-		step := c.Signal(startAtStep)
+		step := via.Signal(c, startAtStep)
 
 		increment := c.Action(func() {
-			count += step.Int()
+			count += step.Get(c)
 			c.Sync()
 		})
 

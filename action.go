@@ -34,18 +34,23 @@ func (o withSignalOpt) apply(opts *triggerOpts) {
 	opts.value = o.value
 }
 
+// signalIDer is satisfied by any signal type that exposes a display ID.
+type signalIDer interface {
+	displayID() string
+}
+
 // WithSignal sets a signal value before triggering the action.
-func WithSignal(sig *signal, value string) ActionTriggerOption {
+func WithSignal(sig signalIDer, value string) ActionTriggerOption {
 	return withSignalOpt{
-		signalID: sig.ID(),
+		signalID: sig.displayID(),
 		value:    fmt.Sprintf("'%s'", value),
 	}
 }
 
 // WithSignalInt sets a signal to an int value before triggering the action.
-func WithSignalInt(sig *signal, value int) ActionTriggerOption {
+func WithSignalInt(sig signalIDer, value int) ActionTriggerOption {
 	return withSignalOpt{
-		signalID: sig.ID(),
+		signalID: sig.displayID(),
 		value:    strconv.Itoa(value),
 	}
 }

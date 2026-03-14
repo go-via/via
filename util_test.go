@@ -111,20 +111,16 @@ func renderH(t *testing.T, node h.H) string {
 	return buf.String()
 }
 
-// signalT is a local interface matching the exported methods of *signal.
-// Used in tests because signal is an unexported type.
+// signalT is the test interface covering the UI/identity methods of any signal.
+// Get() is excluded because its return type is generic — use concrete signal types for Get tests.
 type signalT interface {
 	ID() string
 	Err() error
 	Bind() h.H
 	Text() h.H
-	SetValue(v any)
-	String() string
-	Bool() bool
-	Int() int
-	Int64() int64
-	Float() float64
-	Bytes() []byte
+	Show() h.H
+	Ref() string
+	Tag(string)
 }
 
 // captureSignal creates a throwaway via app, runs initFn eagerly via v.Page, and returns the captured signal.

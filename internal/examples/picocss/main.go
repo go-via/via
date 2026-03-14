@@ -33,24 +33,24 @@ func main() {
 	)
 
 	v.Page("/", func(c *via.Context) {
-		count := c.Signal(len(allFeatures))
+		count := via.Signal(c, len(allFeatures))
 
 		increment := c.Action(func() {
-			if count.Int() < len(allFeatures) {
-				count.SetValue(count.Int() + 1)
+			if count.Get(c) < len(allFeatures) {
+				count.SetValue(count.Get(c) + 1)
 				c.Sync()
 			}
 		})
 
 		decrement := c.Action(func() {
-			if count.Int() > 1 {
-				count.SetValue(count.Int() - 1)
+			if count.Get(c) > 1 {
+				count.SetValue(count.Get(c) - 1)
 				c.Sync()
 			}
 		})
 
 		c.View(func() h.H {
-			visible := allFeatures[:count.Int()]
+			visible := allFeatures[:count.Get(c)]
 
 			items := make([]h.H, len(visible))
 			for i, f := range visible {

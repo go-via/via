@@ -11,14 +11,12 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 
 	"github.com/go-via/via/h"
-	"github.com/starfederation/datastar-go/datastar"
 )
 
 //go:embed datastar.js
@@ -34,6 +32,7 @@ type App struct {
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H
+	appStateStore        *sync.Map
 }
 
 func (a *App) logFatal(format string, args ...any) {
@@ -151,7 +150,7 @@ func (a *App) Page(route string, initContextFn func(c *Context)) {
 			h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
 			h.Meta(h.Data("init", "@get('/_sse')")),
 			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
-			navigator.sendBeacon('/_session/close', '%s');});`, c.id))),
+			navigator.sendBeacon('/_sse/close', '%s');});`, c.id))),
 		)
 
 		bodyElements := []h.H{c.view()}
@@ -218,19 +217,6 @@ func (a *App) HTTPServeMux() *http.ServeMux {
 	return a.mux
 }
 
-type patchType int
-
-const (
-	patchTypeElements = iota
-	patchTypeSignals
-	patchTypeScript
-)
-
-type patch struct {
-	typ     patchType
-	content string
-}
-
 // New creates a new *App with default configuration.
 func New(opts ...Option) *App {
 	mux := http.NewServeMux()
@@ -238,6 +224,7 @@ func New(opts ...Option) *App {
 	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Context),
+		appStateStore:   new(sync.Map),
 		cfg: config{
 			addr:     ":3000",
 			logLevel: LogWarn,
@@ -260,113 +247,9 @@ func New(opts ...Option) *App {
 		_, _ = w.Write(datastarJS)
 	})
 
-	a.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
-		isReconnect := false
-		if r.Header.Get("last-event-id") == "via" {
-			isReconnect = true
-		}
-		var sigs map[string]any
-		_ = datastar.ReadSignals(r, &sigs)
-		cID, _ := sigs["via-ctx"].(string)
-
-		c, err := a.getCtx(cID)
-		if err != nil {
-			a.logErr(nil, "sse stream failed to start: %v", err)
-			return
-		}
-
-		sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
-
-		// use last-event-id to tell if request is a sse reconnect
-		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via"))
-
-		a.logDebug(c, "SSE connection established")
-
-		go func() {
-			if isReconnect {
-				c.Sync()
-				return
-			}
-			c.SyncSignals()
-		}()
-
-		for {
-			select {
-			case <-sse.Context().Done():
-				a.logDebug(c, "SSE connection ended")
-				return
-			case patch, ok := <-c.patchChan:
-				if !ok {
-					continue
-				}
-				switch patch.typ {
-				case patchTypeElements:
-					if err := sse.PatchElements(patch.content); err != nil {
-						// Only log if connection wasn't closed (avoids noise during shutdown/tests)
-						if sse.Context().Err() == nil {
-							a.logErr(c, "PatchElements failed: %v", err)
-						}
-					}
-				case patchTypeSignals:
-					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
-						if sse.Context().Err() == nil {
-							a.logErr(c, "PatchSignals failed: %v", err)
-						}
-					}
-				case patchTypeScript:
-					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
-						if sse.Context().Err() == nil {
-							a.logErr(c, "ExecuteScript failed: %v", err)
-						}
-					}
-				}
-			}
-		}
-	})
-
-	a.mux.HandleFunc("GET /_action/{id}", func(w http.ResponseWriter, r *http.Request) {
-		actionID := r.PathValue("id")
-		var sigs map[string]any
-		_ = datastar.ReadSignals(r, &sigs)
-		cID, _ := sigs["via-ctx"].(string)
-		c, err := a.getCtx(cID)
-		if err != nil {
-			a.logErr(nil, "action '%s' failed: %v", actionID, err)
-			return
-		}
-		actionFn, err := c.getActionFn(actionID)
-		if err != nil {
-			a.logDebug(c, "action '%s' failed: %v", actionID, err)
-			return
-		}
-		// log err if actionFn panics
-		defer func() {
-			if r := recover(); r != nil {
-				a.logErr(c, "action '%s' failed: %v", actionID, r)
-			}
-		}()
-
-		c.injectSignals(sigs)
-		actionFn()
-	})
-
-	a.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			log.Printf("Error reading body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		defer r.Body.Close()
-		cID := string(body)
-		c, err := a.getCtx(cID)
-		if err != nil {
-			a.logErr(c, "failed to handle session close: %v", err)
-			return
-		}
-		a.logDebug(c, "session close event triggered")
-		a.unregisterCtx(c)
-	})
+	a.mux.HandleFunc("GET /_sse", a.handleSSE)
+	a.mux.HandleFunc("GET /_action/{id}", a.handleAction)
+	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 	return a
 }
 

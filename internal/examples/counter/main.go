@@ -13,10 +13,10 @@ func main() {
 	v.Page("/", func(c *via.Context) {
 
 		data := Counter{Count: 0}
-		step := c.Signal(1)
+		step := via.Signal(c, 1)
 
 		increment := c.Action(func() {
-			data.Count += step.Int()
+			data.Count += step.Get(c)
 			c.Sync()
 		})
 

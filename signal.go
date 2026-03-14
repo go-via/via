@@ -1,106 +1,138 @@
 package via
 
 import (
+	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
+	"reflect"
 
 	"github.com/go-via/via/h"
 )
 
-// Signal represents a value that is reactive in the browser. Signals
-// are synct with the server right before an action triggers.
-//
-// Use Bind() to connect a signal to an input and Text() to display it
-// reactively on an html element.
-type signal struct {
+// signalEntry is the internal interface for homogeneous signal storage in sync.Map.
+type signalEntry interface {
+	getID() string
+	displayID() string
+	rawValue() any
+	setRawValue(v any)
+	isChanged() bool
+	markSynced()
+	hasError() bool
+	getErr() error
+}
+
+// signalOf is the generic signal implementation.
+// Construct with the Signal free function.
+type signalOf[T any] struct {
 	id      string
-	val     any
+	tag     string
+	val     T
 	changed bool
 	err     error
 }
 
-// ID returns the signal ID
-func (s *signal) ID() string {
+// signalEntry implementation
+
+func (s *signalOf[T]) getID() string { return s.id }
+
+func (s *signalOf[T]) displayID() string {
+	if s.tag != "" {
+		return s.tag + "_" + s.id
+	}
 	return s.id
 }
 
-// Err returns a signal error or nil if it contains no error.
-//
-// It is useful to check for errors after updating signals with
-// dinamic values.
-func (s *signal) Err() error {
-	return s.err
+func (s *signalOf[T]) rawValue() any {
+	rv := reflect.ValueOf(any(s.val))
+	if rv.IsValid() {
+		switch rv.Kind() {
+		case reflect.Slice, reflect.Struct:
+			if j, err := json.Marshal(s.val); err == nil {
+				return string(j)
+			}
+		}
+	}
+	return fmt.Sprintf("%v", s.val)
 }
 
-// Bind binds this signal to an input element. When the input changes
-// its value the signal updates in real-time in the browser.
-//
-// Example:
-//
-//	h.Input(h.Type("number"), mysignal.Bind())
-func (s *signal) Bind() h.H {
-	return h.Data("bind", s.id)
+func (s *signalOf[T]) setRawValue(v any) {
+	if typed, ok := v.(T); ok {
+		s.val = typed
+	}
+	s.changed = false
+	s.err = nil
 }
 
-// Text binds the signal value to an html span element as text.
-//
-// Example:
-//
-//	h.Div(mysignal.Text())
-func (s *signal) Text() h.H {
-	return h.Span(h.Data("text", "$"+s.id))
-}
+func (s *signalOf[T]) isChanged() bool { return s.changed }
+func (s *signalOf[T]) markSynced()     { s.changed = false }
+func (s *signalOf[T]) hasError() bool  { return s.err != nil }
+func (s *signalOf[T]) getErr() error   { return s.err }
 
-// SetValue updates the signal’s value and marks it for synchronization with the browser.
-// The change will be propagated to the browser using *Context.Sync() or *Context.SyncSignals().
-func (s *signal) SetValue(v any) {
+// ID returns the signal's unique identifier.
+func (s *signalOf[T]) ID() string { return s.id }
+
+// Ref returns "$<displayID>" for use in datastar expressions.
+func (s *signalOf[T]) Ref() string { return "$" + s.displayID() }
+
+// Tag sets a human-readable prefix for the signal display ID.
+// Must be called before rendering. Affects Bind(), Text(), Show(), and Ref().
+func (s *signalOf[T]) Tag(name string) { s.tag = name }
+
+// Get returns the current typed value of the signal.
+func (s *signalOf[T]) Get(_ *Context) T { return s.val }
+
+// SetValue updates the signal value and marks it dirty for the next sync.
+func (s *signalOf[T]) SetValue(v T) {
 	s.val = v
 	s.changed = true
 	s.err = nil
 }
 
-// String return the signal value as a string.
-func (s *signal) String() string {
-	return fmt.Sprintf("%v", s.val)
+// Bind returns a data-bind attribute for connecting this signal to an input element.
+func (s *signalOf[T]) Bind() h.H {
+	return h.Data("bind", s.displayID())
 }
 
-// Bool tries to read the signal value as a bool.
-// Returns the value or false on failure.
-func (s *signal) Bool() bool {
-	val := strings.ToLower(s.String())
-	return val == "true" || val == "1" || val == "yes" || val == "on"
+// Text returns a span element with a data-text attribute referencing this signal.
+func (s *signalOf[T]) Text() h.H {
+	return h.Span(h.Data("text", "$"+s.displayID()))
 }
 
-// Int tries to read the signal value as an int.
-// Returns the value or 0 on failure.
-func (s *signal) Int() int {
-	if n, err := strconv.Atoi(s.String()); err == nil {
-		return n
+// Show returns a data-show attribute for conditional element visibility.
+func (s *signalOf[T]) Show() h.H {
+	return h.Data("show", "$"+s.displayID())
+}
+
+// Err returns any error associated with this signal.
+func (s *signalOf[T]) Err() error { return s.err }
+
+// Signal creates a typed reactive signal with the given initial value.
+// Type is inferred: via.Signal(c, 0) creates a signal of type int.
+func Signal[T any](c *Context, initial T) *signalOf[T] {
+	sigID := genRandID()
+
+	// Check for nil initial value (handles interface/pointer nil)
+	if rv := reflect.ValueOf(any(initial)); !rv.IsValid() {
+		c.app.logErr(c, "failed to bind signal: nil signal value")
+		var zero T
+		return &signalOf[T]{
+			id:  sigID,
+			val: zero,
+			err: fmt.Errorf("context '%s' failed to bind signal '%s': nil signal value", c.id, sigID),
+		}
 	}
-	return 0
-}
 
-// Int64 tries to read the signal value as an int64.
-// Returns the value or 0 on failure.
-func (s *signal) Int64() int64 {
-	if n, err := strconv.ParseInt(s.String(), 10, 64); err == nil {
-		return n
+	sig := &signalOf[T]{
+		id:      sigID,
+		val:     initial,
+		changed: true,
 	}
-	return 0
-}
 
-// Float64 tries to read the signal value as a float64.
-// Returns the value or 0.0 on failure.
-func (s *signal) Float() float64 {
-	if n, err := strconv.ParseFloat(s.String(), 64); err == nil {
-		return n
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.isComponent() {
+		c.parentPageCtx.signals.Store(sigID, sig)
+	} else {
+		c.signals.Store(sigID, sig)
 	}
-	return 0.0
-}
-
-// Bytes tries to read the signal value as a []byte
-// Returns the value or an empty []byte on failure.
-func (s *signal) Bytes() []byte {
-	return []byte(s.String())
+	return sig
 }

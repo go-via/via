@@ -9,7 +9,7 @@ func main() {
 	v := via.New()
 
 	v.Page("/", func(c *via.Context) {
-		greeting := c.Signal("Hello...")
+		greeting := via.Signal(c, "Hello...")
 
 		greetBob := c.Action(func() {
 			greeting.SetValue("Hello Bob!")
