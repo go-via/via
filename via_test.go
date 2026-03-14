@@ -36,7 +36,6 @@ func TestNew_withTitle(t *testing.T) {
 	assert.Contains(t, body, "My App")
 }
 
-// TestNew_defaultTitle verifies the default document title is "Via".
 func TestNew_defaultTitle(t *testing.T) {
 	app := via.New()
 	app.Page("/", func(c *via.Context) {

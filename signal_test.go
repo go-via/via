@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSignal_createsWithInitialValue verifies Get() returns the initial value on construction.
 func TestSignal_createsWithInitialValue(t *testing.T) {
 	v := via.New()
 	var got string
@@ -21,7 +20,6 @@ func TestSignal_createsWithInitialValue(t *testing.T) {
 	assert.Equal(t, "hello", got)
 }
 
-// TestSignal_getReturnsTypedValue verifies type inference and typed Get() for int signals.
 func TestSignal_getReturnsTypedValue(t *testing.T) {
 	v := via.New()
 	var got int
@@ -33,7 +31,6 @@ func TestSignal_getReturnsTypedValue(t *testing.T) {
 	assert.Equal(t, 42, got)
 }
 
-// TestSignal_idReturnsNonEmpty verifies every signal gets a unique non-empty ID.
 func TestSignal_idReturnsNonEmpty(t *testing.T) {
 	v := via.New()
 	var idA, idB string
@@ -49,7 +46,6 @@ func TestSignal_idReturnsNonEmpty(t *testing.T) {
 	assert.NotEqual(t, idA, idB)
 }
 
-// TestSignal_sliceSerializesForTransport verifies slice signals work with typed Get().
 func TestSignal_sliceSerializesForTransport(t *testing.T) {
 	v := via.New()
 	var got []string
@@ -96,7 +92,6 @@ func TestSignal_tagPrependsLabel(t *testing.T) {
 	assert.Contains(t, sig.Ref(), "search")
 }
 
-// TestSignal_refReturnsDollarID verifies Ref() returns "$<id>" when no tag is set.
 func TestSignal_refReturnsDollarID(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT { return via.Signal(c, "x") })
 	assert.Equal(t, "$"+sig.ID(), sig.Ref())
@@ -113,7 +108,6 @@ func TestSignal_tagAffectsBindID(t *testing.T) {
 	assert.Contains(t, out, "myfield")
 }
 
-// TestSignal_setValueUpdatesGet verifies SetValue changes what Get() returns.
 func TestSignal_setValueUpdatesGet(t *testing.T) {
 	v := via.New()
 	var got string

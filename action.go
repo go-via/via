@@ -2,7 +2,6 @@ package via
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/go-via/via/h"
 )
@@ -39,19 +38,19 @@ type signalIDer interface {
 	displayID() string
 }
 
-// WithSignal sets a signal value before triggering the action.
-func WithSignal(sig signalIDer, value string) ActionTriggerOption {
-	return withSignalOpt{
-		signalID: sig.displayID(),
-		value:    fmt.Sprintf("'%s'", value),
+// ActionWithSetSignal sets a signal value before triggering the action.
+// Type-safe: value T must match the signal's type.
+func ActionWithSetSignal[T any](sig signalIDer, value T) ActionTriggerOption {
+	var strVal string
+	switch v := any(value).(type) {
+	case string:
+		strVal = fmt.Sprintf("'%s'", v)
+	default:
+		strVal = fmt.Sprintf("%v", v)
 	}
-}
-
-// WithSignalInt sets a signal to an int value before triggering the action.
-func WithSignalInt(sig signalIDer, value int) ActionTriggerOption {
 	return withSignalOpt{
 		signalID: sig.displayID(),
-		value:    strconv.Itoa(value),
+		value:    strVal,
 	}
 }
 

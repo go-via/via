@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestState_getReturnsInitialValue verifies Get() returns the value passed at construction.
 func TestState_getReturnsInitialValue(t *testing.T) {
 	v := via.New()
 	var got int
@@ -23,7 +22,6 @@ func TestState_getReturnsInitialValue(t *testing.T) {
 	assert.Equal(t, 0, got)
 }
 
-// TestState_setUpdatesGet verifies Set() changes the value returned by Get().
 func TestState_setUpdatesGet(t *testing.T) {
 	v := via.New()
 	var got int
@@ -36,7 +34,6 @@ func TestState_setUpdatesGet(t *testing.T) {
 	assert.Equal(t, 5, got)
 }
 
-// TestState_dirtyAfterSet verifies the dirty flag is set after a Set() call.
 func TestState_dirtyAfterSet(t *testing.T) {
 	v := via.New()
 	v.Page("/", func(c *via.Context) {
