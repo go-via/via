@@ -24,10 +24,10 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
-// V is the root application.
+// App is the root application.
 // It manages page routing, user sessions, and SSE connections for live updates.
-type V struct {
-	cfg                  Options
+type App struct {
+	cfg                  config
 	mux                  *http.ServeMux
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.RWMutex
@@ -36,94 +36,74 @@ type V struct {
 	documentHTMLAttrs    []h.H
 }
 
-func (v *V) logFatal(format string, a ...any) {
-	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, a...))
+func (a *App) logFatal(format string, args ...any) {
+	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, args...))
 }
 
-func (v *V) logErr(c *Context, format string, a ...any) {
+func (a *App) logErr(c *Context, format string, args ...any) {
 	cRef := ""
 	if c != nil && c.id != "" {
 		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
 	}
-	log.Printf("[error] %smsg=%q", cRef, fmt.Sprintf(format, a...))
+	log.Printf("[error] %smsg=%q", cRef, fmt.Sprintf(format, args...))
 }
 
-func (v *V) logWarn(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
-	if v.cfg.LogLvl >= LogLevelWarn {
-		log.Printf("[warn] %smsg=%q", cRef, fmt.Sprintf(format, a...))
-	}
-}
-
-func (v *V) logInfo(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
-	if v.cfg.LogLvl >= LogLevelInfo {
-		log.Printf("[info] %smsg=%q", cRef, fmt.Sprintf(format, a...))
-	}
-}
-
-func (v *V) logDebug(c *Context, format string, a ...any) {
-	cRef := ""
-	if c != nil && c.id != "" {
-		cRef = fmt.Sprintf("via-ctx=%q ", c.id)
-	}
-	if v.cfg.LogLvl == LogLevelDebug {
-		log.Printf("[debug] %smsg=%q", cRef, fmt.Sprintf(format, a...))
-	}
-}
-
-// Config overrides the default configuration with the given options.
-func (v *V) Config(cfg Options) {
-	if cfg.LogLvl != undefined {
-		v.cfg.LogLvl = cfg.LogLvl
-	}
-	if cfg.DocumentTitle != "" {
-		v.cfg.DocumentTitle = cfg.DocumentTitle
-	}
-	if cfg.Plugins != nil {
-		for _, plugin := range cfg.Plugins {
-			if plugin != nil {
-				plugin.Register(v)
-			}
+func (a *App) logWarn(c *Context, format string, args ...any) {
+	if a.cfg.logLevel <= LogWarn {
+		cRef := ""
+		if c != nil && c.id != "" {
+			cRef = fmt.Sprintf("via-ctx=%q ", c.id)
 		}
+		log.Printf("[warn] %smsg=%q", cRef, fmt.Sprintf(format, args...))
 	}
-	if cfg.ServerAddress != "" {
-		v.cfg.ServerAddress = cfg.ServerAddress
+}
+
+func (a *App) logInfo(c *Context, format string, args ...any) {
+	if a.cfg.logLevel <= LogInfo {
+		cRef := ""
+		if c != nil && c.id != "" {
+			cRef = fmt.Sprintf("via-ctx=%q ", c.id)
+		}
+		log.Printf("[info] %smsg=%q", cRef, fmt.Sprintf(format, args...))
+	}
+}
+
+func (a *App) logDebug(c *Context, format string, args ...any) {
+	if a.cfg.logLevel <= LogDebug {
+		cRef := ""
+		if c != nil && c.id != "" {
+			cRef = fmt.Sprintf("via-ctx=%q ", c.id)
+		}
+		log.Printf("[debug] %smsg=%q", cRef, fmt.Sprintf(format, args...))
 	}
 }
 
 // AppendToHead appends the given h.H nodes to the head of the base HTML document.
 // Useful for including css stylesheets and JS scripts.
-func (v *V) AppendToHead(elements ...h.H) {
+func (a *App) AppendToHead(elements ...h.H) {
 	for _, el := range elements {
 		if el != nil {
-			v.documentHeadIncludes = append(v.documentHeadIncludes, el)
+			a.documentHeadIncludes = append(a.documentHeadIncludes, el)
 		}
 	}
 }
 
 // AppendAttrToHTML appends attributes to the <html> element of every page.
 // Useful for plugins that need to bind data to the root element (e.g. data-theme).
-func (v *V) AppendAttrToHTML(attrs ...h.H) {
+func (a *App) AppendAttrToHTML(attrs ...h.H) {
 	for _, attr := range attrs {
 		if attr != nil {
-			v.documentHTMLAttrs = append(v.documentHTMLAttrs, attr)
+			a.documentHTMLAttrs = append(a.documentHTMLAttrs, attr)
 		}
 	}
 }
 
 // AppendToFoot appends the given h.H nodes to the end of the base HTML document body.
 // Useful for including JS scripts.
-func (v *V) AppendToFoot(elements ...h.H) {
+func (a *App) AppendToFoot(elements ...h.H) {
 	for _, el := range elements {
 		if el != nil {
-			v.documentFootIncludes = append(v.documentFootIncludes, el)
+			a.documentFootIncludes = append(a.documentFootIncludes, el)
 		}
 	}
 }
@@ -133,40 +113,40 @@ func (v *V) AppendToFoot(elements ...h.H) {
 //
 // Example:
 //
-//	v.Page("/", func(c *via.Context) {
+//	app.Page("/", func(c *via.Context) {
 //		c.View(func() h.H {
 //			return h.H1(h.Text("Hello, Via!"))
 //		})
 //	})
-func (v *V) Page(route string, initContextFn func(c *Context)) {
+func (a *App) Page(route string, initContextFn func(c *Context)) {
 	// check for panics
 	func() {
 		defer func() {
 			if err := recover(); err != nil {
-				v.logFatal("failed to register page with init func that panics: %v", err)
+				a.logFatal("failed to register page with init func that panics: %v", err)
 				panic(err)
 			}
 		}()
-		c := newContext("", "", v)
+		c := newContext("", "", a)
 		initContextFn(c)
 		c.view()
 	}()
 
-	v.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		v.logDebug(nil, "GET %s", r.URL.String())
+	a.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.logDebug(nil, "GET %s", r.URL.String())
 		if strings.Contains(r.URL.Path, "favicon") ||
 			strings.Contains(r.URL.Path, ".well-known") ||
 			strings.Contains(r.URL.Path, "js.map") {
 			return
 		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
-		c := newContext(id, route, v)
+		c := newContext(id, route, a)
 		routeParams := extractParams(route, r.URL.Path)
 		c.injectRouteParams(routeParams)
 		initContextFn(c)
-		v.registerCtx(c)
+		a.registerCtx(c)
 		headElements := []h.H{}
-		headElements = append(headElements, v.documentHeadIncludes...)
+		headElements = append(headElements, a.documentHeadIncludes...)
 		headElements = append(headElements,
 			h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
 			h.Meta(h.Data("init", "@get('/_sse')")),
@@ -175,58 +155,58 @@ func (v *V) Page(route string, initContextFn func(c *Context)) {
 		)
 
 		bodyElements := []h.H{c.view()}
-		bodyElements = append(bodyElements, v.documentFootIncludes...)
+		bodyElements = append(bodyElements, a.documentFootIncludes...)
 		view := h.HTML5(h.HTML5Props{
-			Title:     v.cfg.DocumentTitle,
+			Title:     a.cfg.title,
 			Head:      headElements,
 			Body:      bodyElements,
-			HTMLAttrs: v.documentHTMLAttrs,
+			HTMLAttrs: a.documentHTMLAttrs,
 		})
 		_ = view.Render(w)
 	}))
 }
 
-func (v *V) registerCtx(c *Context) {
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
+func (a *App) registerCtx(c *Context) {
+	a.contextRegistryMutex.Lock()
+	defer a.contextRegistryMutex.Unlock()
 	if c == nil {
-		v.logErr(c, "failed to add nil context to registry")
+		a.logErr(c, "failed to add nil context to registry")
 		return
 	}
-	v.contextRegistry[c.id] = c
-	v.logDebug(c, "new context added to registry")
-	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
+	a.contextRegistry[c.id] = c
+	a.logDebug(c, "new context added to registry")
+	a.logDebug(nil, "number of sessions in registry: %d", a.currSessionNum())
 }
 
-func (v *V) currSessionNum() int {
-	return len(v.contextRegistry)
+func (a *App) currSessionNum() int {
+	return len(a.contextRegistry)
 }
 
-func (v *V) unregisterCtx(c *Context) {
+func (a *App) unregisterCtx(c *Context) {
 	if c.id == "" {
-		v.logErr(c, "unregister ctx failed: ctx contains empty id")
+		a.logErr(c, "unregister ctx failed: ctx contains empty id")
 		return
 	}
-	v.contextRegistryMutex.Lock()
-	defer v.contextRegistryMutex.Unlock()
-	v.logDebug(c, "ctx removed from registry")
-	delete(v.contextRegistry, c.id)
-	v.logDebug(nil, "number of sessions in registry: %d", v.currSessionNum())
+	a.contextRegistryMutex.Lock()
+	defer a.contextRegistryMutex.Unlock()
+	a.logDebug(c, "ctx removed from registry")
+	delete(a.contextRegistry, c.id)
+	a.logDebug(nil, "number of sessions in registry: %d", a.currSessionNum())
 }
 
-func (v *V) getCtx(id string) (*Context, error) {
-	v.contextRegistryMutex.RLock()
-	defer v.contextRegistryMutex.RUnlock()
-	if c, ok := v.contextRegistry[id]; ok {
+func (a *App) getCtx(id string) (*Context, error) {
+	a.contextRegistryMutex.RLock()
+	defer a.contextRegistryMutex.RUnlock()
+	if c, ok := a.contextRegistry[id]; ok {
 		return c, nil
 	}
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
-// Start starts the Via HTTP server on the given address.
-func (v *V) Start() {
-	v.logInfo(nil, "via started at [%s]", v.cfg.ServerAddress)
-	log.Fatalf("[fatal] %v", http.ListenAndServe(v.cfg.ServerAddress, v.mux))
+// Start starts the Via HTTP server on the configured address.
+func (a *App) Start() {
+	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
+	log.Fatalf("[fatal] %v", http.ListenAndServe(a.cfg.addr, a.mux))
 }
 
 // HTTPServeMux returns the underlying HTTP request multiplexer to enable user extentions, middleware and
@@ -234,8 +214,8 @@ func (v *V) Start() {
 //
 // IMPORTANT. The returned *http.ServeMux can only be modified during initialization, before calling via.Start().
 // Concurrent handler registration is not safe.
-func (v *V) HTTPServeMux() *http.ServeMux {
-	return v.mux
+func (a *App) HTTPServeMux() *http.ServeMux {
+	return a.mux
 }
 
 type patchType int
@@ -251,26 +231,36 @@ type patch struct {
 	content string
 }
 
-// New creates a new *V application with default configuration.
-func New() *V {
+// New creates a new *App with default configuration.
+func New(opts ...Option) *App {
 	mux := http.NewServeMux()
 
-	v := &V{
+	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Context),
-		cfg: Options{
-			ServerAddress: ":3000",
-			LogLvl:        LogLevelInfo,
-			DocumentTitle: "⚡ Via",
+		cfg: config{
+			addr:     ":3000",
+			logLevel: LogWarn,
+			title:    "Via",
 		},
 	}
 
-	v.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {
+	for _, opt := range opts {
+		opt(&a.cfg)
+	}
+
+	for _, plugin := range a.cfg.plugins {
+		if plugin != nil {
+			plugin.Register(a)
+		}
+	}
+
+	a.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(datastarJS)
 	})
 
-	v.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
+	a.mux.HandleFunc("GET /_sse", func(w http.ResponseWriter, r *http.Request) {
 		isReconnect := false
 		if r.Header.Get("last-event-id") == "via" {
 			isReconnect = true
@@ -279,9 +269,9 @@ func New() *V {
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
 
-		c, err := v.getCtx(cID)
+		c, err := a.getCtx(cID)
 		if err != nil {
-			v.logErr(nil, "sse stream failed to start: %v", err)
+			a.logErr(nil, "sse stream failed to start: %v", err)
 			return
 		}
 
@@ -290,7 +280,7 @@ func New() *V {
 		// use last-event-id to tell if request is a sse reconnect
 		sse.Send(datastar.EventTypePatchElements, []string{}, datastar.WithSSEEventId("via"))
 
-		v.logDebug(c, "SSE connection established")
+		a.logDebug(c, "SSE connection established")
 
 		go func() {
 			if isReconnect {
@@ -303,7 +293,7 @@ func New() *V {
 		for {
 			select {
 			case <-sse.Context().Done():
-				v.logDebug(c, "SSE connection ended")
+				a.logDebug(c, "SSE connection ended")
 				return
 			case patch, ok := <-c.patchChan:
 				if !ok {
@@ -314,19 +304,19 @@ func New() *V {
 					if err := sse.PatchElements(patch.content); err != nil {
 						// Only log if connection wasn't closed (avoids noise during shutdown/tests)
 						if sse.Context().Err() == nil {
-							v.logErr(c, "PatchElements failed: %v", err)
+							a.logErr(c, "PatchElements failed: %v", err)
 						}
 					}
 				case patchTypeSignals:
 					if err := sse.PatchSignals([]byte(patch.content)); err != nil {
 						if sse.Context().Err() == nil {
-							v.logErr(c, "PatchSignals failed: %v", err)
+							a.logErr(c, "PatchSignals failed: %v", err)
 						}
 					}
 				case patchTypeScript:
 					if err := sse.ExecuteScript(patch.content, datastar.WithExecuteScriptAutoRemove(true)); err != nil {
 						if sse.Context().Err() == nil {
-							v.logErr(c, "ExecuteScript failed: %v", err)
+							a.logErr(c, "ExecuteScript failed: %v", err)
 						}
 					}
 				}
@@ -334,25 +324,25 @@ func New() *V {
 		}
 	})
 
-	v.mux.HandleFunc("GET /_action/{id}", func(w http.ResponseWriter, r *http.Request) {
+	a.mux.HandleFunc("GET /_action/{id}", func(w http.ResponseWriter, r *http.Request) {
 		actionID := r.PathValue("id")
 		var sigs map[string]any
 		_ = datastar.ReadSignals(r, &sigs)
 		cID, _ := sigs["via-ctx"].(string)
-		c, err := v.getCtx(cID)
+		c, err := a.getCtx(cID)
 		if err != nil {
-			v.logErr(nil, "action '%s' failed: %v", actionID, err)
+			a.logErr(nil, "action '%s' failed: %v", actionID, err)
 			return
 		}
 		actionFn, err := c.getActionFn(actionID)
 		if err != nil {
-			v.logDebug(c, "action '%s' failed: %v", actionID, err)
+			a.logDebug(c, "action '%s' failed: %v", actionID, err)
 			return
 		}
 		// log err if actionFn panics
 		defer func() {
 			if r := recover(); r != nil {
-				v.logErr(c, "action '%s' failed: %v", actionID, r)
+				a.logErr(c, "action '%s' failed: %v", actionID, r)
 			}
 		}()
 
@@ -360,7 +350,7 @@ func New() *V {
 		actionFn()
 	})
 
-	v.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
+	a.mux.HandleFunc("POST /_session/close", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			log.Printf("Error reading body: %v", err)
@@ -369,15 +359,15 @@ func New() *V {
 		}
 		defer r.Body.Close()
 		cID := string(body)
-		c, err := v.getCtx(cID)
+		c, err := a.getCtx(cID)
 		if err != nil {
-			v.logErr(c, "failed to handle session close: %v", err)
+			a.logErr(c, "failed to handle session close: %v", err)
 			return
 		}
-		v.logDebug(c, "session close event triggered")
-		v.unregisterCtx(c)
+		a.logDebug(c, "session close event triggered")
+		a.unregisterCtx(c)
 	})
-	return v
+	return a
 }
 
 func genRandID() string {

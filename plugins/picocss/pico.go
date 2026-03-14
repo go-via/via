@@ -2,14 +2,13 @@
 //
 // # Quick Start
 //
-//	v := via.New()
-//	v.Config(via.Options{Plugins: []via.Plugin{
+//	app := via.New(via.WithPlugins(
 //	    picocss.New(
 //	        picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemePurple}),
 //	        picocss.WithDefaultTheme(picocss.PicoThemeBlue),
 //	        picocss.WithColorClasses(),
 //	    ),
-//	}})
+//	))
 //
 // # Changing Theme
 //
@@ -359,7 +358,7 @@ func (p *plugin) servePluginAssets(w http.ResponseWriter, r *http.Request) {
 
 // --- Register ---
 
-func (p *plugin) Register(v *via.V) {
+func (p *plugin) Register(v *via.App) {
 	if err := p.fetchThemes(); err != nil {
 		panic("pico: failed to fetch themes: " + err.Error())
 	}

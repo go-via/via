@@ -15,11 +15,10 @@ import (
 var picoCSSFile []byte
 
 func main() {
-	v := via.New()
-	v.Config(via.Options{
-		DocumentTitle: "Via With PicoCSS Plugin",
-		Plugins:       []via.Plugin{picoCSSPlugin{}},
-	})
+	v := via.New(
+		via.WithTitle("Via With PicoCSS Plugin"),
+		via.WithPlugins(picoCSSPlugin{}),
+	)
 
 	v.Page("/", func(c *via.Context) {
 		c.View(func() h.H {
@@ -38,7 +37,7 @@ func main() {
 
 type picoCSSPlugin struct{}
 
-func (picoCSSPlugin) Register(v *via.V) {
+func (picoCSSPlugin) Register(v *via.App) {
 	v.HTTPServeMux().HandleFunc("GET /_plugins/picocss/assets/style.css", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		_, _ = w.Write(picoCSSFile)

@@ -9,11 +9,7 @@ import (
 )
 
 func main() {
-	v := via.New()
-
-	v.Config(via.Options{
-		Plugins: []via.Plugin{picocss.New()},
-	})
+	v := via.New(via.WithPlugins(picocss.New()))
 
 	v.Page("/counters/{counter_id}/{start_at_step}", func(c *via.Context) {
 

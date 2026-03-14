@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// startServer wraps an already-configured *via.V in an httptest.Server.
-func startServer(t *testing.T, v *via.V) *httptest.Server {
+// startServer wraps an already-configured *via.App in an httptest.Server.
+func startServer(t *testing.T, app *via.App) *httptest.Server {
 	t.Helper()
-	server := httptest.NewServer(v.HTTPServeMux())
+	server := httptest.NewServer(app.HTTPServeMux())
 	t.Cleanup(server.Close)
 	return server
 }
@@ -24,17 +24,27 @@ func TestNew_returnsNonNil(t *testing.T) {
 	assert.NotNil(t, v)
 }
 
-// TestConfig_overridesDocumentTitle verifies Config() changes the HTML <title> element.
+// TestNew_withTitle verifies WithTitle() sets the HTML <title> element.
 // This guards against document title changes being silently ignored.
-func TestConfig_overridesDocumentTitle(t *testing.T) {
-	v := via.New()
-	v.Config(via.Options{DocumentTitle: "My App"})
-	v.Page("/", func(c *via.Context) {
+func TestNew_withTitle(t *testing.T) {
+	app := via.New(via.WithTitle("My App"))
+	app.Page("/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div(h.Text("hello")) })
 	})
-	server := startServer(t, v)
+	server := startServer(t, app)
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "My App")
+}
+
+// TestNew_defaultTitle verifies the default document title is "Via".
+func TestNew_defaultTitle(t *testing.T) {
+	app := via.New()
+	app.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div(h.Text("hello")) })
+	})
+	server := startServer(t, app)
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "Via")
 }
 
 // TestPage_rendersViewInDocument verifies the view function output appears in the HTTP response.

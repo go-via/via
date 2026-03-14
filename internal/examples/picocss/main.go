@@ -21,18 +21,16 @@ var allFeatures = []Feature{
 }
 
 func main() {
-	v := via.New()
-
-	v.Config(via.Options{
-		DocumentTitle: "Via + Pico CSS",
-		Plugins: []via.Plugin{
+	v := via.New(
+		via.WithTitle("Via + Pico CSS"),
+		via.WithPlugins(
 			picocss.New(
 				picocss.WithThemes(picocss.AllPicoThemes),
 				picocss.WithDefaultTheme(picocss.PicoThemeAmber),
 				picocss.WithColorClasses(),
 			),
-		},
-	})
+		),
+	)
 
 	v.Page("/", func(c *via.Context) {
 		count := c.Signal(len(allFeatures))

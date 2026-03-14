@@ -190,7 +190,7 @@ func TestNew_RepeatedOptions(t *testing.T) {
 
 // --- Integration (CDN fetch required) ---
 
-func registerPlugin(opts ...picocss.PicoOption) (*via.V, *httptest.Server) {
+func registerPlugin(opts ...picocss.PicoOption) (*via.App, *httptest.Server) {
 	v := via.New()
 	v.Page("/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div(h.Text("x")) })

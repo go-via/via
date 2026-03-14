@@ -24,8 +24,7 @@ func TestPlugin_ReturnsViaPlugin(t *testing.T) {
 // TestNewChart_WithOptions verifies ChartOption configuration is applied correctly.
 // This guards against config drift where options are silently ignored.
 func TestNewChart_WithOptions(t *testing.T) {
-	v := via.New()
-	v.Config(via.Options{Plugins: []via.Plugin{echarts.Plugin()}})
+	_ = via.New(via.WithPlugins(echarts.Plugin()))
 
 	chart := echarts.NewChart(
 		echarts.WithElementID("my-chart"),
@@ -47,8 +46,7 @@ func TestNewChart_WithOptions(t *testing.T) {
 }
 
 func TestChart_AppendData(t *testing.T) {
-	v := via.New()
-	v.Config(via.Options{Plugins: []via.Plugin{echarts.Plugin()}})
+	_ = via.New(via.WithPlugins(echarts.Plugin()))
 
 	// Create a minimal page with chart to get context
 	var ctx *via.Context

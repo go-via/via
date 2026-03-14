@@ -246,7 +246,7 @@ type plugin struct {
 	theme   EChartsTheme
 }
 
-func (p *plugin) Register(v *via.V) {
+func (p *plugin) Register(v *via.App) {
 	// Load ECharts from CDN with configured version
 	v.AppendToHead(h.Script(h.Src(fmt.Sprintf(cdnBase, p.opts.version))))
 }

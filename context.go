@@ -18,7 +18,7 @@ import (
 type Context struct {
 	id                string
 	route             string
-	app               *V
+	app               *App
 	view              func() h.H
 	routeParams       map[string]string
 	componentRegistry map[string]*Context
@@ -337,8 +337,8 @@ func (c *Context) GetPathParam(param string) string {
 	return ""
 }
 
-func newContext(id string, route string, v *V) *Context {
-	if v == nil {
+func newContext(id string, route string, a *App) *Context {
+	if a == nil {
 		log.Fatal("create context failed: app pointer is nil")
 	}
 
@@ -346,10 +346,10 @@ func newContext(id string, route string, v *V) *Context {
 		id:                id,
 		route:             route,
 		routeParams:       make(map[string]string),
-		app:               v,
+		app:               a,
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func()),
-		signals:   new(sync.Map),
-		patchChan: make(chan patch, 1),
+		signals:           new(sync.Map),
+		patchChan:         make(chan patch, 1),
 	}
 }
