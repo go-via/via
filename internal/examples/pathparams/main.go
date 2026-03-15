@@ -19,9 +19,10 @@ func main() {
 		count := 0
 		step := via.Signal(c, startAtStep)
 
-		increment := c.Action(func() {
+		increment := c.Action(func() error {
 			count += step.Get(c)
 			c.Sync()
+			return nil
 		})
 
 		c.View(func() H {

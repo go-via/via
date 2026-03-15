@@ -35,18 +35,20 @@ func main() {
 	v.Page("/", func(c *via.Context) {
 		count := via.Signal(c, len(allFeatures))
 
-		increment := c.Action(func() {
+		increment := c.Action(func() error {
 			if count.Get(c) < len(allFeatures) {
 				count.SetValue(count.Get(c) + 1)
 				c.Sync()
 			}
+			return nil
 		})
 
-		decrement := c.Action(func() {
+		decrement := c.Action(func() error {
 			if count.Get(c) > 1 {
 				count.SetValue(count.Get(c) - 1)
 				c.Sync()
 			}
+			return nil
 		})
 
 		c.View(func() h.H {

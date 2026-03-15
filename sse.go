@@ -102,11 +102,16 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if r := recover(); r != nil {
 			a.logErr(c, "action '%s' failed: %v", actionID, r)
+			c.ExecScript(`alert('Something went wrong')`)
 		}
 	}()
 
 	c.injectSignals(sigs)
-	actionFn()
+	if err := actionFn(); err != nil {
+		c.ExecScript(`alert('` + err.Error() + `')`)
+		c.autoSync()
+		return
+	}
 	c.autoSync()
 }
 

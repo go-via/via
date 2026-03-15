@@ -35,6 +35,33 @@ func triggerAction(t *testing.T, serverURL, ctxID, actionID string) {
 	resp.Body.Close()
 }
 
+// triggerActionWithSignal fires a GET to /_action/{id} passing signal values in the datastar query param.
+func triggerActionWithSignal(t *testing.T, serverURL, ctxID, actionID, sigID, sigValue string) {
+	t.Helper()
+	sigsJSON := `{"via-ctx":"` + ctxID + `","` + sigID + `":"` + sigValue + `"}`
+	resp, err := http.Get(serverURL + "/_action/" + actionID + "?datastar=" + sigsJSON)
+	require.NoError(t, err)
+	resp.Body.Close()
+}
+
+// extractSignalID parses a signal ID from page HTML by looking for the signal ID in data attributes.
+// The signal ID appears in data-bind, data-text, or data-show attributes.
+func extractSignalID(t *testing.T, body string) string {
+	t.Helper()
+	markers := []string{`data-bind="`, `data-text="`, `data-show="`}
+	for _, marker := range markers {
+		idx := strings.Index(body, marker)
+		if idx != -1 {
+			start := idx + len(marker)
+			end := strings.Index(body[start:], `"`)
+			require.NotEqual(t, -1, end, "signal ID not terminated")
+			return body[start : start+end]
+		}
+	}
+	t.Fatal("signal ID not found in page body")
+	return ""
+}
+
 // TestSSE_connectionEstablished verifies opening an SSE stream for a valid context ID succeeds.
 // This guards against the SSE handshake silently failing for new page contexts.
 func TestSSE_connectionEstablished(t *testing.T) {
@@ -56,8 +83,9 @@ func TestSSE_connectionEstablished(t *testing.T) {
 // This guards against element patches being dropped instead of forwarded to the browser.
 func TestSSE_syncElementsSendsElementPatch(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
-		syncAct := c.Action(func() {
+		syncAct := c.Action(func() error {
 			c.SyncElements(h.Div(h.ID("box"), h.Text("updated")))
+			return nil
 		})
 		c.View(func() h.H {
 			return h.Div(
@@ -92,8 +120,9 @@ func TestSSE_syncElementsSendsElementPatch(t *testing.T) {
 // This guards against script execution patches being dropped.
 func TestSSE_execScriptSendsScriptEvent(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
-		scriptAct := c.Action(func() {
+		scriptAct := c.Action(func() error {
 			c.ExecScript("console.log('hello')")
+			return nil
 		})
 		c.View(func() h.H {
 			return h.Div(scriptAct.OnClick())
@@ -125,9 +154,10 @@ func TestSSE_execScriptSendsScriptEvent(t *testing.T) {
 func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
 	n := 0
 	server := newTestApp(t, "/", func(c *via.Context) {
-		act := c.Action(func() {
+		act := c.Action(func() error {
 			n++
 			c.Sync()
+			return nil
 		})
 		c.View(func() h.H {
 			return h.Div(h.Textf("n=%d", n), act.OnClick())
@@ -153,4 +183,56 @@ func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
 	assert.Equal(t, "datastar-patch-elements", ev.eventType)
 	// The incremented counter should appear in the patched HTML.
 	assert.Contains(t, ev.data, "n=1")
+}
+
+// TestSSE_actionReceivesInjectedSignal verifies that signals injected via datastar query param
+// are accessible to the action handler via sig.Get(c).
+// This guards against signal injection being skipped and action handlers reading stale values.
+func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		sig := via.Signal(c, "initial")
+		act := c.Action(func() error {
+			// The signal should have the injected value, not "initial"
+			val := sig.Get(c)
+			if val != "injected" {
+				c.ExecScript(`alert('expected injected, got ' + arguments.callee)`)
+			}
+			return nil
+		})
+		c.View(func() h.H {
+			return h.Div(
+				h.Input(sig.Bind()),
+				h.Textf("val=%s", sig.Get(c)),
+				act.OnClick(),
+			)
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	readSSEEvent(t, stream, sseTimeout)
+	time.Sleep(500 * time.Millisecond)
+
+	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
+
+	// Read multiple events until we find one with injected value
+	// The first event might be from the initial connection
+	var ev sseEvent
+	for i := 0; i < 3; i++ {
+		ev = readSSEEvent(t, stream, sseTimeout)
+		t.Logf("Event %d: type=%s, data=%s", i, ev.eventType, ev.data)
+		if strings.Contains(ev.data, "injected") {
+			break
+		}
+	}
+	// Debug: show event type and data
+	t.Logf("SSE event: type=%s, data=%s", ev.eventType, ev.data)
+	// If signal injection worked, we should see the patched value
+	assert.Contains(t, ev.data, "val=injected")
 }

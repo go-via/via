@@ -11,14 +11,16 @@ func main() {
 	v.Page("/", func(c *via.Context) {
 		greeting := via.Signal(c, "Hello...")
 
-		greetBob := c.Action(func() {
+		greetBob := c.Action(func() error {
 			greeting.SetValue("Hello Bob!")
 			c.SyncSignals()
+			return nil
 		})
 
-		greetAlice := c.Action(func() {
+		greetAlice := c.Action(func() error {
 			greeting.SetValue("Hello Alice!")
 			c.SyncSignals()
+			return nil
 		})
 
 		c.View(func() h.H {

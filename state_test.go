@@ -49,8 +49,9 @@ func TestState_dirtyAfterSet(t *testing.T) {
 func TestAction_autoSyncsAfterExecution(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		s := via.State(c, 0)
-		act := c.Action(func() {
+		act := c.Action(func() error {
 			s.Set(c, 42)
+			return nil
 			// no c.Sync() — relying on autoSync
 		})
 		c.View(func() h.H {
@@ -82,9 +83,10 @@ func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 	v := via.New()
 	v.Page("/", func(c *via.Context) {
 		s := via.State(c, 0, via.WithScopeApp())
-		act := c.Action(func() {
+		act := c.Action(func() error {
 			s.Set(c, s.Get(c)+1)
 			c.Sync()
+			return nil
 		})
 		c.View(func() h.H {
 			return h.Div(h.Textf("n=%d", s.Get(c)), act.OnClick())
@@ -114,7 +116,7 @@ func TestState_appScopeMutexProtected(t *testing.T) {
 	v := via.New()
 	v.Page("/", func(c *via.Context) {
 		s := via.State(c, 0, via.WithScopeApp())
-		c.Action(func() { s.Set(c, s.Get(c)+1) })
+		c.Action(func() error { s.Set(c, s.Get(c)+1); return nil })
 		c.View(func() h.H { return h.Div() })
 	})
 	server := startServer(t, v)

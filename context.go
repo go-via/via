@@ -23,7 +23,7 @@ type Context struct {
 	componentRegistry map[string]*Context
 	parentPageCtx     *Context
 	patchChan         chan patch
-	actionRegistry    map[string]func()
+	actionRegistry    map[string]func() error
 	signals           *sync.Map
 	mu                sync.RWMutex
 }
@@ -93,7 +93,7 @@ func (c *Context) isComponent() bool {
 //		 	 	h.Button(h.Text("Increment n"), increment.OnClick()),
 //		 )
 //	})
-func (c *Context) Action(f func()) *actionTrigger {
+func (c *Context) Action(f func() error) *actionTrigger {
 	id := genRandID()
 	if f == nil {
 		c.app.logErr(c, "failed to bind action '%s' to context: nil func", id)
@@ -108,7 +108,7 @@ func (c *Context) Action(f func()) *actionTrigger {
 	return &actionTrigger{id}
 }
 
-func (c *Context) getActionFn(id string) (func(), error) {
+func (c *Context) getActionFn(id string) (func() error, error) {
 	if f, ok := c.actionRegistry[id]; ok {
 		return f, nil
 	}
@@ -125,6 +125,10 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	defer c.mu.Unlock()
 
 	for sigID, val := range sigs {
+		// Skip via-ctx
+		if sigID == "via-ctx" {
+			continue
+		}
 		// Fast path: lookup by map key (== signal id when no tag)
 		if item, ok := c.signals.Load(sigID); ok {
 			if entry, ok := item.(signalEntry); ok {
@@ -314,8 +318,8 @@ func newContext(id string, route string, a *App) *Context {
 		routeParams:       make(map[string]string),
 		app:               a,
 		componentRegistry: make(map[string]*Context),
-		actionRegistry:    make(map[string]func()),
+		actionRegistry:    make(map[string]func() error),
 		signals:           new(sync.Map),
-		patchChan:         make(chan patch, 1),
+		patchChan:         make(chan patch, 64),
 	}
 }

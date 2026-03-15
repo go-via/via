@@ -58,7 +58,7 @@ func (s *signalOf[T]) setRawValue(v any) {
 	if typed, ok := v.(T); ok {
 		s.val = typed
 	}
-	s.changed = false
+	s.changed = true
 	s.err = nil
 }
 
