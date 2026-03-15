@@ -44,6 +44,10 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	a.logDebug(c, "SSE connection established")
 
 	go func() {
+		if !c.initialized && c.initFn != nil {
+			c.initialized = true
+			c.initFn()
+		}
 		if isReconnect {
 			c.Sync()
 			return
@@ -128,6 +132,14 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logErr(c, "failed to handle session close: %v", err)
 		return
+	}
+	for _, comp := range c.componentRegistry {
+		if comp.disposeFn != nil {
+			comp.disposeFn()
+		}
+	}
+	if c.disposeFn != nil {
+		c.disposeFn()
 	}
 	a.logDebug(c, "session close event triggered")
 	a.unregisterCtx(c)

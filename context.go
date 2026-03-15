@@ -26,6 +26,9 @@ type Context struct {
 	actionRegistry    map[string]func() error
 	signals           *sync.Map
 	mu                sync.RWMutex
+	initFn            func()
+	disposeFn         func()
+	initialized       bool
 }
 
 // View defines the UI rendered by this context.
@@ -74,6 +77,18 @@ func (c *Context) Component(initCtx func(c *Context)) func() h.H {
 
 func (c *Context) isComponent() bool {
 	return c.parentPageCtx != nil
+}
+
+// Init registers a callback to run once when the first SSE connection is established.
+// This is useful for component initialization.
+func (c *Context) Init(fn func()) {
+	c.initFn = fn
+}
+
+// Dispose registers a callback to run when the session closes.
+// This is useful for component cleanup.
+func (c *Context) Dispose(fn func()) {
+	c.disposeFn = fn
 }
 
 // Action registers an event handler and returns a trigger to that event that
