@@ -44,10 +44,6 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	a.logDebug(c, "SSE connection established")
 
 	go func() {
-		if !c.initialized && c.initFn != nil {
-			c.initialized = true
-			c.initFn()
-		}
 		if isReconnect {
 			c.Sync()
 			return

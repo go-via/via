@@ -28,7 +28,6 @@ type Context struct {
 	mu                sync.RWMutex
 	initFn            func()
 	disposeFn         func()
-	initialized       bool
 }
 
 // View defines the UI rendered by this context.
@@ -71,6 +70,9 @@ func (c *Context) Component(initCtx func(c *Context)) func() h.H {
 		compCtx.parentPageCtx = c
 	}
 	initCtx(compCtx)
+	if compCtx.initFn != nil {
+		compCtx.initFn()
+	}
 	c.componentRegistry[id] = compCtx
 	return compCtx.view
 }

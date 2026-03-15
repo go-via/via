@@ -50,7 +50,7 @@ func TestGetPathParam_returnsEmpty_forMissingParam(t *testing.T) {
 	assert.Equal(t, "", got)
 }
 
-// TestComponent_initCallback verifies the Init callback runs when the component first renders.
+// TestComponent_initCallback verifies the Init callback runs when the component is created.
 // This guards against init callbacks being silently ignored.
 func TestComponent_initCallback(t *testing.T) {
 	initCalled := false
@@ -62,6 +62,8 @@ func TestComponent_initCallback(t *testing.T) {
 		c.View(func() h.H { return h.Div(comp()) })
 	})
 
+	assert.True(t, initCalled, "init should run when component is created during page load")
+
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
 
@@ -69,12 +71,7 @@ func TestComponent_initCallback(t *testing.T) {
 	defer cancel()
 
 	readSSEEvent(t, stream, sseTimeout)
-	assert.False(t, initCalled, "init should not run on page load")
-
-	stream2, cancel2 := connectSSE(t, server, ctxID)
-	defer cancel2()
-	readSSEEvent(t, stream2, sseTimeout)
-	assert.False(t, initCalled, "init should not run on subsequent connections")
+	assert.True(t, initCalled, "init should persist across SSE connections")
 }
 
 // TestComponent_disposeCallback verifies the Dispose callback runs when session closes.
