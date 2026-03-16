@@ -70,13 +70,16 @@ func (s *stateOf[T]) Get(_ *Context) T {
 }
 
 // Set updates the state value and marks it dirty.
-func (s *stateOf[T]) Set(_ *Context, v T) {
+func (s *stateOf[T]) Set(c *Context, v T) {
 	if s.scope == ScopeApp {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
 	s.val = v
 	s.dirty = true
+	if c != nil {
+		c.markStateModified()
+	}
 }
 
 // State creates a new State with the given initial value.

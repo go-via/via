@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestView_rendersInDivWithContextID verifies the view is wrapped in a div with the context ID as its HTML id.
-// This guards against Datastar element patching failing to find the target element.
 func TestView_rendersInDivWithContextID(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.P(h.Text("content")) })
@@ -23,8 +21,6 @@ func TestView_rendersInDivWithContextID(t *testing.T) {
 	assert.Contains(t, body, "content")
 }
 
-// TestComponent_rendersNestedInView verifies a registered component's output appears inside the page view.
-// This guards against component registration silently dropping component output.
 func TestComponent_rendersNestedInView(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		compView := c.Component(func(comp *via.Context) {
@@ -38,8 +34,6 @@ func TestComponent_rendersNestedInView(t *testing.T) {
 	assert.Contains(t, body, "from-component")
 }
 
-// TestGetPathParam_returnsEmpty_forMissingParam verifies GetPathParam returns an empty string for unknown keys.
-// This guards against nil-map panics on routes without declared parameters.
 func TestGetPathParam_returnsEmpty_forMissingParam(t *testing.T) {
 	v := via.New()
 	var got string
@@ -50,8 +44,6 @@ func TestGetPathParam_returnsEmpty_forMissingParam(t *testing.T) {
 	assert.Equal(t, "", got)
 }
 
-// TestComponent_initCallback verifies the Init callback runs when the component is created.
-// This guards against init callbacks being silently ignored.
 func TestComponent_initCallback(t *testing.T) {
 	initCalled := false
 	server := newTestApp(t, "/", func(c *via.Context) {
@@ -74,8 +66,27 @@ func TestComponent_initCallback(t *testing.T) {
 	assert.True(t, initCalled, "init should persist across SSE connections")
 }
 
-// TestComponent_disposeCallback verifies the Dispose callback runs when session closes.
-// This guards against dispose callbacks being silently ignored on session termination.
+func TestViewMode_mutationsRejectedDuringViewRender(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(c *via.Context) {
+		s := via.State(c, 0)
+
+		act := c.Action(func() error {
+			return nil
+		})
+
+		c.View(func() h.H {
+			return h.Div(
+				h.Textf("val=%d", s.Get(c)),
+				act.OnClick(),
+			)
+		})
+	})
+
+	_ = server
+}
+
 func TestComponent_disposeCallback(t *testing.T) {
 	disposeCalled := false
 	server := newTestApp(t, "/", func(c *via.Context) {

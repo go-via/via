@@ -70,7 +70,7 @@ func applyOptions(options ...ActionTriggerOption) triggerOpts {
 }
 
 func actionURL(id string) string {
-	return fmt.Sprintf("@get('/_action/%s')", id)
+	return fmt.Sprintf("@post('/_action/%s')", id)
 }
 
 // OnClick returns a via.h DOM attribute that triggers on click. It can be added

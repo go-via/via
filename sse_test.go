@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"bufio"
 	"net/http"
 	"strings"
 	"testing"
@@ -26,20 +27,75 @@ func extractActionID(t *testing.T, body string) string {
 	return body[start : start+end]
 }
 
-// triggerAction fires a GET to /_action/{id} with the given ctxID signal.
+// extractActionIDs extracts all action IDs from page HTML.
+func extractActionIDs(t *testing.T, body string) []string {
+	t.Helper()
+	var ids []string
+	const prefix = "/_action/"
+	searchStart := 0
+	for {
+		idx := strings.Index(body[searchStart:], prefix)
+		if idx == -1 {
+			break
+		}
+		idx += searchStart
+		start := idx + len(prefix)
+		end := strings.IndexAny(body[start:], "'&#\"")
+		if end == -1 {
+			break
+		}
+		ids = append(ids, body[start:start+end])
+		searchStart = start + end
+	}
+	require.NotEmpty(t, ids, "no action IDs found in page body")
+	return ids
+}
+
+// collectEventOrTimeout reads an event from the stream with a timeout.
+// Returns a bool indicating if an event was read, and the event itself.
+func collectEventOrTimeout(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (bool, sseEvent) {
+	resultCh := make(chan sseEvent, 1)
+	go func() {
+		var ev sseEvent
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "event:") {
+				ev.eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			} else if strings.HasPrefix(line, "data:") {
+				d := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+				if ev.data == "" {
+					ev.data = d
+				} else {
+					ev.data += "\n" + d
+				}
+			} else if line == "" && ev.eventType != "" {
+				resultCh <- ev
+				return
+			}
+		}
+	}()
+	select {
+	case ev := <-resultCh:
+		return true, ev
+	case <-time.After(timeout):
+		return false, sseEvent{}
+	}
+}
+
+// triggerAction fires a POST to /_action/{id} with the given ctxID signal.
 func triggerAction(t *testing.T, serverURL, ctxID, actionID string) {
 	t.Helper()
 	sigsJSON := `{"via-ctx":"` + ctxID + `"}`
-	resp, err := http.Get(serverURL + "/_action/" + actionID + "?datastar=" + sigsJSON)
+	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 }
 
-// triggerActionWithSignal fires a GET to /_action/{id} passing signal values in the datastar query param.
+// triggerActionWithSignal fires a POST to /_action/{id} with signal values in the body.
 func triggerActionWithSignal(t *testing.T, serverURL, ctxID, actionID, sigID, sigValue string) {
 	t.Helper()
 	sigsJSON := `{"via-ctx":"` + ctxID + `","` + sigID + `":"` + sigValue + `"}`
-	resp, err := http.Get(serverURL + "/_action/" + actionID + "?datastar=" + sigsJSON)
+	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 }
@@ -62,8 +118,6 @@ func extractSignalID(t *testing.T, body string) string {
 	return ""
 }
 
-// TestSSE_connectionEstablished verifies opening an SSE stream for a valid context ID succeeds.
-// This guards against the SSE handshake silently failing for new page contexts.
 func TestSSE_connectionEstablished(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div(h.Text("hi")) })
@@ -79,8 +133,6 @@ func TestSSE_connectionEstablished(t *testing.T) {
 	assert.Equal(t, "datastar-patch-elements", ev.eventType)
 }
 
-// TestSSE_syncElementsSendsElementPatch verifies SyncElements() sends a patch-elements SSE event.
-// This guards against element patches being dropped instead of forwarded to the browser.
 func TestSSE_syncElementsSendsElementPatch(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		syncAct := c.Action(func() error {
@@ -115,9 +167,6 @@ func TestSSE_syncElementsSendsElementPatch(t *testing.T) {
 	assert.Contains(t, ev.data, "updated")
 }
 
-// TestSSE_execScriptSendsScriptEvent verifies ExecScript() sends a script via a patch-elements event.
-// ExecScript wraps the script in a <script> tag and sends it using PatchElements internally.
-// This guards against script execution patches being dropped.
 func TestSSE_execScriptSendsScriptEvent(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		scriptAct := c.Action(func() error {
@@ -149,8 +198,6 @@ func TestSSE_execScriptSendsScriptEvent(t *testing.T) {
 	assert.Contains(t, ev.data, "console.log")
 }
 
-// TestSSE_actionTriggersSyncUpdate verifies triggering an action over HTTP sends element and signal patches.
-// This guards against the action → sync → SSE pipeline being broken end to end.
 func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
 	n := 0
 	server := newTestApp(t, "/", func(c *via.Context) {
@@ -185,18 +232,11 @@ func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
 	assert.Contains(t, ev.data, "n=1")
 }
 
-// TestSSE_actionReceivesInjectedSignal verifies that signals injected via datastar query param
-// are accessible to the action handler via sig.Get(c).
-// This guards against signal injection being skipped and action handlers reading stale values.
 func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		sig := via.Signal(c, "initial")
 		act := c.Action(func() error {
-			// The signal should have the injected value, not "initial"
-			val := sig.Get(c)
-			if val != "injected" {
-				c.ExecScript(`alert('expected injected, got ' + arguments.callee)`)
-			}
+			assert.Equal(t, "injected", sig.Get(c))
 			return nil
 		})
 		c.View(func() h.H {
@@ -216,8 +256,8 @@ func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
 
-	readSSEEvent(t, stream, sseTimeout)
-	time.Sleep(500 * time.Millisecond)
+	initialEv := readSSEEvent(t, stream, sseTimeout)
+	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
 
@@ -235,4 +275,86 @@ func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 	t.Logf("SSE event: type=%s, data=%s", ev.eventType, ev.data)
 	// If signal injection worked, we should see the patched value
 	assert.Contains(t, ev.data, "val=injected")
+}
+
+func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		sig := via.Signal(c, "initial")
+		act := c.Action(func() error {
+			val := sig.Get(c)
+			t.Logf("Action read: %s", val)
+			return nil
+		})
+		c.View(func() h.H {
+			return h.Div(
+				h.Input(sig.Bind()),
+				h.Textf("val=%s", sig.Get(c)),
+				act.OnClick(),
+			)
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	initialEv := readSSEEvent(t, stream, sseTimeout)
+	t.Logf("Initial event: type=%s", initialEv.eventType)
+	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
+
+	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
+
+	for {
+		ev := readSSEEvent(t, stream, sseTimeout)
+		t.Logf("Event after action: type=%s, data=%s", ev.eventType, ev.data)
+
+		if ev.eventType == "datastar-patch-signals" {
+			t.Fatal("Should not receive signal patch when signal was not modified in action")
+		}
+		if ev.eventType == "datastar-patch-elements" {
+			break
+		}
+	}
+}
+
+func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
+	counter := 0
+	server := newTestApp(t, "/", func(c *via.Context) {
+		sig := via.Signal(c, "original")
+		act := c.Action(func() error {
+			counter++
+			return nil
+		})
+		c.View(func() h.H {
+			return h.Div(
+				h.Textf("val=%s", sig.Get(c)),
+				act.OnClick(),
+			)
+		})
+	})
+
+	require.Equal(t, 0, counter)
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	initialEv := readSSEEvent(t, stream, sseTimeout)
+	t.Logf("Initial event: type=%s", initialEv.eventType)
+	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
+
+	triggerAction(t, server.URL, ctxID, actionID)
+
+	gotEvent, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+
+	t.Logf("After action - event: type=%s, data=%s, counter=%d", ev.eventType, ev.data, counter)
+
+	assert.False(t, gotEvent, "no patch should be sent when signal is unchanged")
 }

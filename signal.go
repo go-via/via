@@ -124,7 +124,7 @@ func Signal[T any](c *Context, initial T) *signalOf[T] {
 	sig := &signalOf[T]{
 		id:      sigID,
 		val:     initial,
-		changed: true,
+		changed: false,
 	}
 
 	c.mu.Lock()

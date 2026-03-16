@@ -248,7 +248,7 @@ func New(opts ...Option) *App {
 	})
 
 	a.mux.HandleFunc("GET /_sse", a.handleSSE)
-	a.mux.HandleFunc("GET /_action/{id}", a.handleAction)
+	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 	return a
 }

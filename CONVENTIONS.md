@@ -1,13 +1,5 @@
 # Conventions
 
-## Feature Names
-
-Reasoning: Behavioral names describe what the system does, making specs
-scannable and searchable.
-
-Rule: Feature names must be behavioral — describe the action or
-transformation, not the module.
-
 ## Test Names
 
 Reasoning: Consistent naming makes tests discoverable and clarifies what
@@ -16,9 +8,9 @@ each test verifies.
 Rule: Use `Test` + camelCase with present tense verbs. Use underscores to
 separate subject from behavior.
 
-- ✅ `TestSignalReturnAsString`
-- ✅ `TestPage_PanicsOnNoView`
-- ✅ `TestPlugin_ServesGzipWhenAccepted`
+- ✅ `TestSignal_returnAsString`
+- ✅ `TestPage_panicsOnNoView`
+- ✅ `TestPlugin_servesGzipWhenAccepted`
 - ❌ `TestSignal` (vague — what about it?)
 - ❌ `Test_signal_return_as_string` (wrong casing)
 
@@ -31,8 +23,7 @@ Reasoning: Writing the test first forces you to define the contract before
 the implementation, and ensures every behavior has a corresponding test.
 
 Rule: No implementation before a failing test. The sequence is always:
-write test → confirm it fails to compile or fails at runtime → implement →
-confirm it passes.
+write test → confirm it fails correctly → implement → confirm it passes.
 
 ## Test Scope: Outside-In Through the Public API
 
@@ -142,35 +133,3 @@ Rule: Use `github.com/stretchr/testify/assert` for all assertions.
 - Use `assert.Contains` for partial string/slice membership.
 - Do not use raw `t.Error`, `t.Fatal`, or `t.Log` for assertion failures —
   use testify.
-
-## Test Comments
-
-Reasoning: Explanatory comments are valuable when tests cover complex,
-non-obvious, or surprising behavior.
-
-Rule: Add a comment block above each test that:
-
-1. States what behavior is being verified (one line).
-2. States what regression it guards against (one line, prefixed with
-   "This guards against...").
-
-Skip comments for trivial tests where the name already conveys everything.
-Do not add comments that restate the test name verbatim.
-
-```go
-// TestDatastarJS ensures the embedded Datastar JS is served correctly.
-// This guards against accidentally breaking client-side reactivity by
-// embedding stale/broken JS.
-func TestDatastarJS(t *testing.T) { ... }
-```
-
-## Behavioral Descriptions
-
-Reasoning: Specs should describe observable behavior without implementation
-details. Simple terms ensure clarity.
-
-Rule: No implementation details in behavior descriptions.
-
-- ✅ A page with a view renders HTML when requested
-- ❌ Route handler sets response status to 200 and writes HTML body
-  (implementation detail)

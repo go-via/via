@@ -9,8 +9,6 @@ import (
 	"github.com/go-via/via/plugins/echarts"
 )
 
-// TestPlugin_ReturnsViaPlugin verifies the plugin factory returns a valid plugin.
-// This guards against broken plugin initialization that would fail at runtime.
 func TestPlugin_ReturnsViaPlugin(t *testing.T) {
 	p := echarts.Plugin()
 	if p == nil {
@@ -21,8 +19,6 @@ func TestPlugin_ReturnsViaPlugin(t *testing.T) {
 	var _ via.Plugin = p
 }
 
-// TestNewChart_WithOptions verifies ChartOption configuration is applied correctly.
-// This guards against config drift where options are silently ignored.
 func TestNewChart_WithOptions(t *testing.T) {
 	_ = via.New(via.WithPlugins(echarts.Plugin()))
 

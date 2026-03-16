@@ -24,8 +24,6 @@ func TestNew_returnsNonNil(t *testing.T) {
 	assert.NotNil(t, v)
 }
 
-// TestNew_withTitle verifies WithTitle() sets the HTML <title> element.
-// This guards against document title changes being silently ignored.
 func TestNew_withTitle(t *testing.T) {
 	app := via.New(via.WithTitle("My App"))
 	app.Page("/", func(c *via.Context) {
@@ -46,8 +44,6 @@ func TestNew_defaultTitle(t *testing.T) {
 	assert.Contains(t, body, "Via")
 }
 
-// TestPage_rendersViewInDocument verifies the view function output appears in the HTTP response.
-// This guards against page content being dropped from the rendered document.
 func TestPage_rendersViewInDocument(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.H1(h.Text("Hello Via!")) })
@@ -56,8 +52,6 @@ func TestPage_rendersViewInDocument(t *testing.T) {
 	assert.Contains(t, body, "Hello Via!")
 }
 
-// TestPage_includesDatastarScript verifies the Datastar JS file reference is present in every page.
-// This guards against accidentally breaking client-side reactivity by omitting the script.
 func TestPage_includesDatastarScript(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div() })
@@ -66,8 +60,6 @@ func TestPage_includesDatastarScript(t *testing.T) {
 	assert.Contains(t, body, "_datastar.js")
 }
 
-// TestPage_includesViaCtxSignal verifies every page includes a via-ctx data-signal initialization.
-// This guards against SSE connections failing because the context ID is missing.
 func TestPage_includesViaCtxSignal(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		c.View(func() h.H { return h.Div() })
@@ -76,8 +68,6 @@ func TestPage_includesViaCtxSignal(t *testing.T) {
 	assert.Contains(t, body, "via-ctx")
 }
 
-// TestPage_panicsOnNilView verifies registering a page with a nil view function panics.
-// This guards against silent registration of broken pages that would fail at runtime.
 func TestPage_panicsOnNilView(t *testing.T) {
 	v := via.New()
 	assert.Panics(t, func() {
@@ -87,8 +77,6 @@ func TestPage_panicsOnNilView(t *testing.T) {
 	})
 }
 
-// TestPage_withPathParam verifies path parameters are injected into the context and accessible in the view.
-// This guards against dynamic routes silently ignoring URL parameters.
 func TestPage_withPathParam(t *testing.T) {
 	server := newTestApp(t, "/users/{id}", func(c *via.Context) {
 		c.View(func() h.H {
@@ -100,8 +88,6 @@ func TestPage_withPathParam(t *testing.T) {
 	assert.Contains(t, body, "user-42")
 }
 
-// TestAppendToHead_addsElement verifies AppendToHead() injects elements into the document <head>.
-// This guards against plugin head elements being silently dropped.
 func TestAppendToHead_addsElement(t *testing.T) {
 	v := via.New()
 	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/app.css")))
@@ -113,8 +99,6 @@ func TestAppendToHead_addsElement(t *testing.T) {
 	assert.Contains(t, body, "/app.css")
 }
 
-// TestAppendToFoot_addsElement verifies AppendToFoot() injects elements at the end of <body>.
-// This guards against footer scripts being silently dropped.
 func TestAppendToFoot_addsElement(t *testing.T) {
 	v := via.New()
 	v.AppendToFoot(h.Script(h.Src("/foot.js")))
@@ -126,8 +110,6 @@ func TestAppendToFoot_addsElement(t *testing.T) {
 	assert.Contains(t, body, "/foot.js")
 }
 
-// TestDatastarJS_served verifies the embedded Datastar JS is served at /_datastar.js.
-// This guards against accidentally breaking client-side reactivity by embedding stale/broken JS.
 func TestDatastarJS_served(t *testing.T) {
 	v := via.New()
 	server := startServer(t, v)

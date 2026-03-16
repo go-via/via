@@ -25,6 +25,7 @@ type Context struct {
 	patchChan         chan patch
 	actionRegistry    map[string]func() error
 	signals           *sync.Map
+	stateModified     bool
 	mu                sync.RWMutex
 	initFn            func()
 	disposeFn         func()
@@ -198,6 +199,7 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 		}
 		if entry.isChanged() {
 			updatedSigs[entry.displayID()] = entry.rawValue()
+			entry.markSynced()
 		}
 		return true
 	})
@@ -230,12 +232,22 @@ func (c *Context) Sync() {
 		outgoingSigs, _ := json.Marshal(updatedSigs)
 		c.sendPatch(patch{patchTypeSignals, string(outgoingSigs)})
 	}
+
+	c.clearStateModified()
+}
+
+func (c *Context) clearStateModified() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stateModified = false
 }
 
 // autoSync is called automatically after each action. It calls Sync() so that
 // view and signal state are pushed to the browser without requiring an explicit c.Sync() call.
 func (c *Context) autoSync() {
-	c.Sync()
+	if c.hasModifications() {
+		c.Sync()
+	}
 }
 
 // SyncElements pushes an immediate html patch over the live SSE stream to the
@@ -337,6 +349,38 @@ func newContext(id string, route string, a *App) *Context {
 		componentRegistry: make(map[string]*Context),
 		actionRegistry:    make(map[string]func() error),
 		signals:           new(sync.Map),
+		stateModified:     false,
 		patchChan:         make(chan patch, 64),
 	}
+}
+
+// markStateModified records that State was modified in this action.
+// Called by State.Set() when state changes.
+func (c *Context) markStateModified() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stateModified = true
+}
+
+// hasModifications returns true if State or Signals have been modified since last sync.
+func (c *Context) hasModifications() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.stateModified || c.hasChangedSignals()
+}
+
+func (c *Context) hasChangedSignals() bool {
+	hasChanged := false
+	c.signals.Range(func(_, value any) bool {
+		entry, ok := value.(signalEntry)
+		if !ok {
+			return true
+		}
+		if entry.isChanged() {
+			hasChanged = true
+			return false
+		}
+		return true
+	})
+	return hasChanged
 }

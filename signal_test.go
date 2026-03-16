@@ -57,7 +57,6 @@ func TestSignal_sliceSerializesForTransport(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, got)
 }
 
-// TestSignal_bindRendersDataBindAttr verifies Bind() produces a data-bind attribute referencing the signal ID.
 func TestSignal_bindRendersDataBindAttr(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT { return via.Signal(c, "x") })
 	out := renderH(t, h.Input(sig.Bind()))
@@ -65,7 +64,6 @@ func TestSignal_bindRendersDataBindAttr(t *testing.T) {
 	assert.Contains(t, out, sig.ID())
 }
 
-// TestSignal_textRendersDataTextSpan verifies Text() produces a span with data-text referencing the signal ID.
 func TestSignal_textRendersDataTextSpan(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT { return via.Signal(c, "world") })
 	out := renderH(t, h.Div(sig.Text()))
@@ -74,7 +72,6 @@ func TestSignal_textRendersDataTextSpan(t *testing.T) {
 	assert.Contains(t, out, sig.ID())
 }
 
-// TestSignal_showRendersDataShowAttr verifies Show() produces a data-show attribute.
 func TestSignal_showRendersDataShowAttr(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT { return via.Signal(c, true) })
 	out := renderH(t, h.Div(sig.Show()))
@@ -82,7 +79,6 @@ func TestSignal_showRendersDataShowAttr(t *testing.T) {
 	assert.Contains(t, out, sig.ID())
 }
 
-// TestSignal_tagPrependsLabel verifies Tag() affects Ref() output.
 func TestSignal_tagPrependsLabel(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT {
 		s := via.Signal(c, "")
@@ -97,7 +93,6 @@ func TestSignal_refReturnsDollarID(t *testing.T) {
 	assert.Equal(t, "$"+sig.ID(), sig.Ref())
 }
 
-// TestSignal_tagAffectsBindID verifies that after Tag(), Bind() uses the display ID not the raw ID.
 func TestSignal_tagAffectsBindID(t *testing.T) {
 	sig := captureSignal(func(c *via.Context) signalT {
 		s := via.Signal(c, "")
@@ -120,7 +115,6 @@ func TestSignal_setValueUpdatesGet(t *testing.T) {
 	assert.Equal(t, "new", got)
 }
 
-// TestSignal_nilInitialCreatesError verifies that a nil initial value produces an error signal.
 func TestSignal_nilInitialCreatesError(t *testing.T) {
 	v := via.New()
 	var errVal error
