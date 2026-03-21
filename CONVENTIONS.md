@@ -122,6 +122,62 @@ Rule:
 - Use setup helpers (e.g. `registerPlugin(...)`) to reduce repetition,
   not `TestMain` unless truly necessary.
 
+## Unexported Types, Exported Factories
+
+Reasoning: Callers should work with behavior, not struct fields. Keeping
+concrete types unexported prevents direct construction and field access,
+making the public API surface deliberately narrow.
+
+Rule: Generic types are unexported. Callers obtain instances only through
+exported factory functions that validate and initialize state.
+
+```go
+// ✅ Unexported concrete type, exported factory
+type signalOf[T any] struct { ... }
+func Signal[T any](c *Context, initial T) *signalOf[T] { ... }
+
+// ❌ Exported struct handed directly to callers
+type Signal[T any] struct { ID string; Val T }
+```
+
+## Functional Options
+
+Reasoning: Optional configuration passed as variadic arguments keeps
+call sites clean and avoids boolean-laden signatures. Conflicting options
+are a programming error, not a runtime condition.
+
+Rule: Optional config uses the `func(*cfg)` pattern. When two options
+are mutually exclusive, the second one panics — fail at construction time
+rather than silently overriding or returning an error.
+
+```go
+type StateOption func(*stateConfig)
+
+func WithScopeApp() StateOption {
+    return func(cfg *stateConfig) {
+        if cfg.scopeSet {
+            panic("conflicting scopes: multiple scope options provided")
+        }
+        cfg.scope = ScopeApp
+        cfg.scopeSet = true
+    }
+}
+```
+
+## Panic on Invalid Registration
+
+Reasoning: Errors during page or plugin registration are programming
+mistakes, not recoverable runtime conditions. Panicking at startup makes
+misconfiguration impossible to miss and impossible to ship.
+
+Rule: Validation that runs once at registration time (inside `Page(...)`,
+`Plugin(...)`, etc.) panics on invalid input. Do not return errors from
+registration functions.
+
+- ✅ Panic if `View` is never set, if conflicting options are passed, if
+  required arguments are zero values.
+- ❌ Return `error` from `Page(...)` and let callers ignore it.
+
 ## Assertions
 
 Rule: Use `github.com/stretchr/testify/assert` for all assertions.
@@ -133,3 +189,71 @@ Rule: Use `github.com/stretchr/testify/assert` for all assertions.
 - Use `assert.Contains` for partial string/slice membership.
 - Do not use raw `t.Error`, `t.Fatal`, or `t.Log` for assertion failures —
   use testify.
+
+## Comments
+
+Comments explain **why**, never **what**. If a comment restates what the
+code already says, delete it.
+
+### Exported symbols
+
+Document every exported type, function, method, and constant with a godoc
+comment. The comment must add information beyond the name — if the name is
+fully self-explanatory, one sentence stating the contract or caveat is
+enough. Omit filler like "X is a…" when the sentence reads better without
+it.
+
+```go
+// ✅ Adds information the name doesn't
+// mustJSON marshals v to JSON, returning "null" on error.
+func mustJSON(v any) string
+
+// ✅ States a non-obvious contract
+// AppendData drops the update silently when the SSE buffer is full.
+func (c *Chart) AppendData(ctx *via.Context, data [][]any)
+
+// ❌ Restates the name
+// WithTitle sets the chart title.
+func WithTitle(title string) ChartOption
+```
+
+### Unexported symbols and inner logic
+
+Omit comments on unexported types, fields, and functions whose purpose is
+clear from their name and context. Add a comment only when the logic would
+otherwise require the reader to reconstruct non-obvious reasoning:
+
+- A constraint imposed by an external system or protocol
+- A subtle invariant that must be preserved across edits
+- A deliberate choice that looks wrong but isn't (with a pointer to why)
+
+```go
+// ✅ Non-obvious invariant
+// underscore prefix keeps the name a valid JS identifier; dots are not allowed.
+return fmt.Sprintf("echart_%d", c.seq)
+
+// ❌ Obvious from context
+// increment the counter
+chartCounter.Add(1)
+```
+
+### Tests
+
+Test functions are named as behavioral claims — that name is the comment.
+Do not add a prose comment above a test function. Do not add inline
+comments that describe what an assertion checks; the assertion itself and
+the `assert` message parameter serve that purpose.
+
+Add a comment inside a test only when the **setup** involves a non-obvious
+precondition whose absence would make the test logic misleading:
+
+```go
+// ✅ Non-obvious precondition
+// Two charts share a page; both must render without ID collision.
+c1 := echarts.NewChart()
+c2 := echarts.NewChart()
+
+// ❌ Describes what the next line already says
+// Create a new chart with a line type.
+chart := echarts.NewChart(echarts.WithChartType(echarts.TypeLine))
+```

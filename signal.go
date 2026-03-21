@@ -51,12 +51,19 @@ func (s *signalOf[T]) rawValue() any {
 			}
 		}
 	}
-	return fmt.Sprintf("%v", s.val)
+	return s.val
 }
 
 func (s *signalOf[T]) setRawValue(v any) {
 	if typed, ok := v.(T); ok {
 		s.val = typed
+	} else if rv := reflect.ValueOf(v); rv.IsValid() {
+		var zero T
+		target := reflect.ValueOf(&zero).Elem()
+		if rv.Type().ConvertibleTo(target.Type()) {
+			target.Set(rv.Convert(target.Type()))
+			s.val = zero
+		}
 	}
 	s.changed = true
 	s.err = nil

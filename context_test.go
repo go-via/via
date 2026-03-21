@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -64,6 +65,33 @@ func TestComponent_initCallback(t *testing.T) {
 
 	readSSEEvent(t, stream, sseTimeout)
 	assert.True(t, initCalled, "init should persist across SSE connections")
+}
+
+
+func TestContext_initCallback_runsOnSSEConnect(t *testing.T) {
+	initDone := make(chan struct{})
+	server := newTestApp(t, "/", func(c *via.Context) {
+		c.Init(func() { close(initDone) })
+		c.View(func() h.H { return h.Div(h.Text("page")) })
+	})
+
+	body := getPageBody(t, server, "/")
+	select {
+	case <-initDone:
+		t.Fatal("init must not run before SSE connects")
+	default:
+	}
+
+	ctxID := extractCtxID(t, body)
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	readSSEEvent(t, stream, sseTimeout) // wait for connection established
+	select {
+	case <-initDone:
+	case <-time.After(sseTimeout):
+		t.Fatal("init must run when SSE connects")
+	}
 }
 
 func TestViewMode_mutationsRejectedDuringViewRender(t *testing.T) {

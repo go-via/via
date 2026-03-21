@@ -1,7 +1,10 @@
 package echarts
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
+	"sync/atomic"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -42,7 +45,6 @@ const (
 // chartOptions holds plugin configuration options.
 type chartOptions struct {
 	version string
-	theme   EChartsTheme
 }
 
 // PluginOption configures the Echarts plugin.
@@ -59,24 +61,23 @@ func WithVersion(version string) PluginOption {
 	return pluginOptionFunc(func(p *plugin) { p.opts.version = version })
 }
 
-// WithTheme sets the default theme for charts.
-func WithTheme(theme EChartsTheme) PluginOption {
-	return pluginOptionFunc(func(p *plugin) { p.opts.theme = theme })
-}
+// chartCounter provides deterministic, unique IDs across chart instances.
+var chartCounter atomic.Uint64
 
 // Chart represents an ECharts component configuration.
-// VarName defaults to a unique ID if not set.
 type Chart struct {
-	elementID  string
-	chartType  ChartType
-	data       [][]any
-	varName    string       // JavaScript variable name, defaults to unique ID
-	title      string       // chart title
-	xAxisLabel string       // x-axis label
-	yAxisLabel string       // y-axis label
-	width      string       // container width (e.g., "100%", "600px")
-	height     string       // container height (e.g., "400px", "50vh")
-	theme      EChartsTheme // chart theme override
+	seq              uint64
+	elementID        string
+	chartType        ChartType
+	data             [][]any
+	varName          string       // JavaScript variable name, defaults to unique ID
+	title            string       // chart title
+	xAxisLabel       string       // x-axis label
+	yAxisLabel       string       // y-axis label
+	width            string       // container width (e.g., "100%", "600px")
+	height           string       // container height (e.g., "400px", "50vh")
+	theme            EChartsTheme // chart theme override
+	updateDurationMs int          // animationDurationUpdate override; 0 = use default (950)
 }
 
 // ChartOption configures a Chart.
@@ -124,6 +125,14 @@ func WithYAxisLabel(label string) ChartOption {
 	return chartOptionFunc(func(c *Chart) { c.yAxisLabel = label })
 }
 
+// WithAnimationDuration sets animationDurationUpdate in milliseconds.
+// Animation on full dataset replacement looks wrong — only use this when appending
+// small numbers of points where ECharts can meaningfully interpolate between frames.
+// Defaults to 0 (no animation).
+func WithAnimationDuration(ms int) ChartOption {
+	return chartOptionFunc(func(c *Chart) { c.updateDurationMs = ms })
+}
+
 // WithDimensions sets container width and height.
 // Example: WithDimensions("100%", "400px")
 func WithDimensions(width, height string) ChartOption {
@@ -139,16 +148,26 @@ func WithThemeOverride(theme EChartsTheme) ChartOption {
 }
 
 // NewChart creates a new Chart with options.
-// If no element ID is provided, one is auto-generated.
+// If no element ID is provided, one is auto-generated using a monotonic counter.
 func NewChart(opts ...ChartOption) *Chart {
 	c := &Chart{}
+	c.seq = chartCounter.Add(1)
 	for _, opt := range opts {
 		opt.apply(c)
 	}
 	if c.elementID == "" {
-		c.elementID = fmt.Sprintf("chart%p", c)
+		c.elementID = fmt.Sprintf("echart-%d", c.seq)
 	}
 	return c
+}
+
+// mustJSON marshals v to JSON, returning "null" on error.
+func mustJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "null"
+	}
+	return string(b)
 }
 
 // InitJS returns JavaScript to initialize the chart on page load.
@@ -159,79 +178,134 @@ func (c *Chart) InitJS() string {
 		theme = string(c.theme)
 	}
 
+	varName := c.getVarName()
+	updateDuration := c.updateDurationMs
 	return fmt.Sprintf(`
-		var %s = echarts.init(document.getElementById('%s'), '%s');
+		var %s = echarts.init(document.getElementById(%s), %s);
 		%s.setOption({
-			title: {text: '%s'},
-			xAxis: {name: '%s', type: 'category'},
-			yAxis: {name: '%s'},
+			animationDurationUpdate: %d,
+			animationEasingUpdate: "linear",
+			title: {text: %s},
+			xAxis: {name: %s, type: 'category'},
+			yAxis: {name: %s},
 			series: [{
-				type: '%s',
-				data: %v
+				type: %s,
+				data: %s
 			}]
 		});
-	`, c.getVarName(), c.elementID, theme, c.getVarName(), c.title, c.xAxisLabel, c.yAxisLabel, c.chartType, c.data)
+		new ResizeObserver(()=>%s.resize()).observe(document.getElementById(%s));
+	`,
+		varName,
+		mustJSON(c.elementID),
+		mustJSON(theme),
+		varName,
+		updateDuration,
+		mustJSON(c.title),
+		mustJSON(c.xAxisLabel),
+		mustJSON(c.yAxisLabel),
+		mustJSON(string(c.chartType)),
+		mustJSON(c.data),
+		varName,
+		mustJSON(c.elementID),
+	)
 }
 
 // AppendData sends new data points to the chart via SSE.
 // Each data point is appended to series index 0.
+// Updates may be dropped silently if the SSE send buffer is full.
 func (c *Chart) AppendData(ctx *via.Context, data [][]any) {
 	if ctx == nil || len(data) == 0 {
 		return
 	}
-	js := fmt.Sprintf(`if(%s){%s.appendData({seriesIndex:0,data:%v})}`, c.getVarName(), c.getVarName(), data)
-	ctx.ExecScript(js)
+	var sb strings.Builder
+	varName := c.getVarName()
+	sb.WriteString("if(")
+	sb.WriteString(varName)
+	sb.WriteString("){")
+	sb.WriteString(varName)
+	sb.WriteString(".appendData({seriesIndex:0,data:")
+	sb.WriteString(mustJSON(data))
+	sb.WriteString("})}")
+	ctx.ExecScript(sb.String())
+}
+
+// AppendDataBatch sends multiple data arrays to the chart in a single SSE patch.
+// Prefer this over calling AppendData in a loop to reduce per-update overhead.
+// Updates may be dropped silently if the SSE send buffer is full.
+func (c *Chart) AppendDataBatch(ctx *via.Context, batches ...[][]any) {
+	if ctx == nil || len(batches) == 0 {
+		return
+	}
+	varName := c.getVarName()
+	var sb strings.Builder
+	sb.WriteString("if(")
+	sb.WriteString(varName)
+	sb.WriteString("){")
+	for _, data := range batches {
+		if len(data) == 0 {
+			continue
+		}
+		sb.WriteString(varName)
+		sb.WriteString(".appendData({seriesIndex:0,data:")
+		sb.WriteString(mustJSON(data))
+		sb.WriteString("});")
+	}
+	sb.WriteString("}")
+	ctx.ExecScript(sb.String())
 }
 
 // SetOption sends option updates to the chart via SSE.
+// Updates may be dropped silently if the SSE send buffer is full.
 func (c *Chart) SetOption(ctx *via.Context, opts map[string]any) {
 	if ctx == nil {
 		return
 	}
-	js := fmt.Sprintf(`if(%s){%s.setOption(%v)}`, c.getVarName(), c.getVarName(), opts)
-	ctx.ExecScript(js)
+	varName := c.getVarName()
+	var sb strings.Builder
+	sb.WriteString("if(")
+	sb.WriteString(varName)
+	sb.WriteString("){")
+	sb.WriteString(varName)
+	sb.WriteString(".setOption(")
+	sb.WriteString(mustJSON(opts))
+	sb.WriteString(")}")
+	ctx.ExecScript(sb.String())
 }
 
-// getVarName returns the JS variable name, generating a default if empty.
+// getVarName returns the JS variable name, generating a deterministic default if empty.
 func (c *Chart) getVarName() string {
 	if c.varName != "" {
 		return c.varName
 	}
-	return "chart" + fmt.Sprintf("%p", c)[2:]
+	return fmt.Sprintf("echart_%d", c.seq)
 }
 
 // Mount returns an h.H element representing this chart.
 // It includes the initialization script inline for page load.
 func (c *Chart) Mount() h.H {
-	div := h.Div(
+	children := []h.H{
 		h.ID(c.elementID),
-		h.Script(h.Raw(c.InitJS())),
-	)
-	if c.width != "" || c.height != "" {
-		var style string
-		if c.width != "" && c.height != "" {
-			style = fmt.Sprintf("width:%s;height:%s", c.width, c.height)
-		} else if c.width != "" {
-			style = fmt.Sprintf("width:%s", c.width)
-		} else {
-			style = fmt.Sprintf("height:%s", c.height)
-		}
-		return h.Div(
-			h.ID(c.elementID),
-			h.Style(style),
-			h.Script(h.Raw(c.InitJS())),
-		)
+		h.DataIgnoreMorph(),
 	}
-	return div
+	width := c.width
+	if width == "" {
+		width = "100%"
+	}
+	height := c.height
+	if height == "" {
+		height = "300px"
+	}
+	children = append(children, h.Style(fmt.Sprintf("width:%s;height:%s", width, height)))
+	children = append(children, h.Script(h.Raw(c.InitJS())))
+	return h.Div(children...)
 }
 
 // Plugin creates a new Echarts plugin with default settings.
-// Use WithVersion() and WithTheme() to customize.
+// Use WithVersion() to customize.
 func Plugin(opts ...PluginOption) via.Plugin {
 	p := &plugin{
 		opts: chartOptions{
 			version: defaultVersion,
-			theme:   ThemeLight,
 		},
 	}
 	for _, opt := range opts {
@@ -241,9 +315,7 @@ func Plugin(opts ...PluginOption) via.Plugin {
 }
 
 type plugin struct {
-	opts    chartOptions
-	version string // cached version for use in Register
-	theme   EChartsTheme
+	opts chartOptions
 }
 
 func (p *plugin) Register(v *via.App) {

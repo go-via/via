@@ -48,6 +48,9 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 			c.Sync()
 			return
 		}
+		if c.initFn != nil {
+			c.initFn()
+		}
 		c.SyncSignals()
 	}()
 

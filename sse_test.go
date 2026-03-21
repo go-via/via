@@ -242,7 +242,7 @@ func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 		c.View(func() h.H {
 			return h.Div(
 				h.Input(sig.Bind()),
-				h.Textf("val=%s", sig.Get(c)),
+				sig.Text(),
 				act.OnClick(),
 			)
 		})
@@ -256,39 +256,26 @@ func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
 
-	initialEv := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
+	readSSEEvent(t, stream, sseTimeout) // initial connect event
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
 
-	// Read multiple events until we find one with injected value
-	// The first event might be from the initial connection
-	var ev sseEvent
-	for i := 0; i < 3; i++ {
-		ev = readSSEEvent(t, stream, sseTimeout)
-		t.Logf("Event %d: type=%s, data=%s", i, ev.eventType, ev.data)
-		if strings.Contains(ev.data, "injected") {
-			break
-		}
-	}
-	// Debug: show event type and data
-	t.Logf("SSE event: type=%s, data=%s", ev.eventType, ev.data)
-	// If signal injection worked, we should see the patched value
-	assert.Contains(t, ev.data, "val=injected")
+	// Browser updates reactively via sig.Text(); no server re-render or signal echo expected.
+	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	assert.False(t, got, "no SSE event expected when action does not modify state, got: %s %s", ev.eventType, ev.data)
 }
 
 func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
 	server := newTestApp(t, "/", func(c *via.Context) {
 		sig := via.Signal(c, "initial")
 		act := c.Action(func() error {
-			val := sig.Get(c)
-			t.Logf("Action read: %s", val)
+			t.Logf("Action read: %s", sig.Get(c))
 			return nil
 		})
 		c.View(func() h.H {
 			return h.Div(
 				h.Input(sig.Bind()),
-				h.Textf("val=%s", sig.Get(c)),
+				sig.Text(),
 				act.OnClick(),
 			)
 		})
@@ -302,23 +289,40 @@ func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
 
-	initialEv := readSSEEvent(t, stream, sseTimeout)
-	t.Logf("Initial event: type=%s", initialEv.eventType)
-	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
+	readSSEEvent(t, stream, sseTimeout) // initial connect event
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
 
-	for {
-		ev := readSSEEvent(t, stream, sseTimeout)
-		t.Logf("Event after action: type=%s, data=%s", ev.eventType, ev.data)
+	// Action only reads the signal — no state modification, no echo expected.
+	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	assert.False(t, got, "no SSE event expected when signal is not modified in action, got: %s %s", ev.eventType, ev.data)
+}
 
-		if ev.eventType == "datastar-patch-signals" {
-			t.Fatal("Should not receive signal patch when signal was not modified in action")
-		}
-		if ev.eventType == "datastar-patch-elements" {
-			break
-		}
-	}
+func TestSSE_injectedSignalNotEchoedBack(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		sig := via.Signal(c, "original")
+		act := c.Action(func() error { return nil })
+		c.View(func() h.H {
+			return h.Div(h.Input(sig.Bind()), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	readSSEEvent(t, stream, sseTimeout) // initial connect event
+
+	// Simulate slider/input change: browser sends new signal value with the action.
+	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "newvalue")
+
+	// The action does nothing — no sync should be sent back.
+	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	assert.False(t, got, "injected signal must not be echoed back to the browser, got event: %s %s", ev.eventType, ev.data)
 }
 
 func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {

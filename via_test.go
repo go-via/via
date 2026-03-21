@@ -110,6 +110,17 @@ func TestAppendToFoot_addsElement(t *testing.T) {
 	assert.Contains(t, body, "/foot.js")
 }
 
+func TestPage_embedsInitialSignalValuesInHTML(t *testing.T) {
+	server := newTestApp(t, "/", func(c *via.Context) {
+		s := via.Signal(c, 42)
+		s.Tag("count")
+		c.View(func() h.H { return h.Div(s.Text()) })
+	})
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, `count_`, "signal display ID must appear in initial HTML")
+	assert.Contains(t, body, `42`, "signal initial value must appear in initial HTML")
+}
+
 func TestDatastarJS_served(t *testing.T) {
 	v := via.New()
 	server := startServer(t, v)

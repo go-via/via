@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -146,8 +147,11 @@ func (a *App) Page(route string, initContextFn func(c *Context)) {
 		a.registerCtx(c)
 		headElements := []h.H{}
 		headElements = append(headElements, a.documentHeadIncludes...)
+		initialSigs := c.allSignalValues()
+		initialSigs["via-ctx"] = id
+		initialSigsJSON, _ := json.Marshal(initialSigs)
 		headElements = append(headElements,
-			h.Meta(h.Data("signals", fmt.Sprintf("{'via-ctx':'%s'}", id))),
+			h.Meta(h.Data("signals", string(initialSigsJSON))),
 			h.Meta(h.Data("init", "@get('/_sse')")),
 			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
 			navigator.sendBeacon('/_sse/close', '%s');});`, c.id))),

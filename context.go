@@ -151,6 +151,7 @@ func (c *Context) injectSignals(sigs map[string]any) {
 		if item, ok := c.signals.Load(sigID); ok {
 			if entry, ok := item.(signalEntry); ok {
 				entry.setRawValue(val)
+				entry.markSynced()
 			}
 			continue
 		}
@@ -167,6 +168,7 @@ func (c *Context) injectSignals(sigs map[string]any) {
 		})
 		if found != nil {
 			found.setRawValue(val)
+			found.markSynced()
 		} else {
 			c.signals.Store(sigID, &signalOf[any]{id: sigID, val: val})
 		}
@@ -182,6 +184,21 @@ func (c *Context) getPatchChan() chan patch {
 		patchChan = c.patchChan
 	}
 	return patchChan
+}
+
+// allSignalValues returns all signal values regardless of changed state,
+// for embedding into the initial HTML so the browser has them before SSE connects.
+func (c *Context) allSignalValues() map[string]any {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make(map[string]any)
+	c.signals.Range(func(_, value any) bool {
+		if entry, ok := value.(signalEntry); ok && !entry.hasError() {
+			result[entry.displayID()] = entry.rawValue()
+		}
+		return true
+	})
+	return result
 }
 
 func (c *Context) prepareSignalsForPatch() map[string]any {

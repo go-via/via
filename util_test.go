@@ -36,14 +36,14 @@ func getPageBody(t *testing.T, server *httptest.Server, route string) string {
 }
 
 // extractCtxID parses the via-ctx value from the page HTML (data-signals meta tag).
-// Single quotes in attribute values are HTML-escaped to &#39; by the renderer.
+// Double quotes in JSON attribute values are HTML-escaped to &#34; by the renderer.
 func extractCtxID(t *testing.T, body string) string {
 	t.Helper()
-	const marker = "&#39;via-ctx&#39;:&#39;"
+	const marker = "&#34;via-ctx&#34;:&#34;"
 	idx := strings.Index(body, marker)
 	require.NotEqual(t, -1, idx, "via-ctx not found in page body")
 	start := idx + len(marker)
-	end := strings.Index(body[start:], "&#39;")
+	end := strings.Index(body[start:], "&#34;")
 	require.NotEqual(t, -1, end, "via-ctx value not terminated")
 	return body[start : start+end]
 }
