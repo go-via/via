@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"strconv"
 
 	"github.com/go-via/via"
@@ -62,5 +63,7 @@ func main() {
 
 	})
 
-	v.Start()
+	if err := v.Start(); err != nil {
+		log.Fatal(err)
+	}
 }

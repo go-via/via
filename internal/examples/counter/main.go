@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"log"
 )
 
 type Counter struct{ Count int }
@@ -34,5 +35,7 @@ func main() {
 		})
 	})
 
-	v.Start()
+	if err := v.Start(); err != nil {
+		log.Fatal(err)
+	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"strconv"
@@ -479,5 +480,7 @@ func main() {
 		})
 	})
 
-	v.Start()
+	if err := v.Start(); err != nil {
+		log.Fatal(err)
+	}
 }

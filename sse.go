@@ -61,7 +61,7 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case patch, ok := <-c.patchChan:
 			if !ok {
-				continue
+				return
 			}
 			switch patch.typ {
 			case patchTypeElements:
@@ -132,14 +132,7 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 		a.logErr(c, "failed to handle session close: %v", err)
 		return
 	}
-	for _, comp := range c.componentRegistry {
-		if comp.disposeFn != nil {
-			comp.disposeFn()
-		}
-	}
-	if c.disposeFn != nil {
-		c.disposeFn()
-	}
+	a.disposeCtx(c)
 	a.logDebug(c, "session close event triggered")
 	a.unregisterCtx(c)
 }

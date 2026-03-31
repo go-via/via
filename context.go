@@ -23,6 +23,7 @@ type Context struct {
 	componentRegistry map[string]*Context
 	parentPageCtx     *Context
 	patchChan         chan patch
+	patchChanOnce     sync.Once
 	actionRegistry    map[string]func() error
 	signals           *sync.Map
 	stateModified     bool
@@ -175,6 +176,10 @@ func (c *Context) injectSignals(sigs map[string]any) {
 	}
 }
 
+func (c *Context) closePatchChan() {
+	c.patchChanOnce.Do(func() { close(c.patchChan) })
+}
+
 func (c *Context) getPatchChan() chan patch {
 	// components use parent page sse stream
 	var patchChan chan patch
@@ -226,6 +231,9 @@ func (c *Context) prepareSignalsForPatch() map[string]any {
 // sendPatch queues a patch on this *Context sse stream. If the sse is closed or queue is full, the patch
 // is dropped to prevent runtime blocks.
 func (c *Context) sendPatch(p patch) {
+	// Recover from send on a closed channel, which can happen if Shutdown races
+	// with an in-flight action that calls Sync.
+	defer func() { recover() }() //nolint:errcheck
 	patchChan := c.getPatchChan()
 	select {
 	case patchChan <- p:

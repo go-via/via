@@ -4,6 +4,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/picocss"
+	"log"
 )
 
 type Feature struct {
@@ -97,5 +98,7 @@ func main() {
 		})
 	})
 
-	v.Start()
+	if err := v.Start(); err != nil {
+		log.Fatal(err)
+	}
 }

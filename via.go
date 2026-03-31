@@ -7,6 +7,7 @@
 package via
 
 import (
+	"context"
 	"crypto/rand"
 	_ "embed"
 	"encoding/hex"
@@ -14,8 +15,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/go-via/via/h"
 )
@@ -28,6 +33,7 @@ var datastarJS []byte
 type App struct {
 	cfg                  config
 	mux                  *http.ServeMux
+	server               *http.Server
 	contextRegistry      map[string]*Context
 	contextRegistryMutex sync.RWMutex
 	documentHeadIncludes []h.H
@@ -206,10 +212,61 @@ func (a *App) getCtx(id string) (*Context, error) {
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
-// Start starts the Via HTTP server on the configured address.
-func (a *App) Start() {
+func (a *App) disposeCtx(c *Context) {
+	for _, comp := range c.componentRegistry {
+		if comp.disposeFn != nil {
+			comp.disposeFn()
+		}
+	}
+	if c.disposeFn != nil {
+		c.disposeFn()
+	}
+	c.closePatchChan()
+}
+
+// Shutdown gracefully shuts down the application. It disposes all active
+// contexts, closes SSE connections, and stops the HTTP server if running.
+func (a *App) Shutdown(ctx context.Context) error {
+	a.contextRegistryMutex.Lock()
+	contexts := make([]*Context, 0, len(a.contextRegistry))
+	for _, c := range a.contextRegistry {
+		contexts = append(contexts, c)
+	}
+	a.contextRegistry = make(map[string]*Context)
+	a.contextRegistryMutex.Unlock()
+
+	for _, c := range contexts {
+		a.disposeCtx(c)
+	}
+
+	if a.server != nil {
+		return a.server.Shutdown(ctx)
+	}
+	return nil
+}
+
+// Start starts the Via HTTP server on the configured address. It blocks until
+// the server stops. On SIGTERM or SIGINT it drains active sessions and shuts
+// down cleanly, returning nil. Any other listen error is returned directly.
+func (a *App) Start() error {
+	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.mux}
 	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
-	log.Fatalf("[fatal] %v", http.ListenAndServe(a.cfg.addr, a.mux))
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.shutdownTimeout)
+		defer cancel()
+		if err := a.Shutdown(ctx); err != nil {
+			a.logErr(nil, "shutdown error: %v", err)
+		}
+	}()
+
+	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
 }
 
 // HTTPServeMux returns the underlying HTTP request multiplexer to enable user extentions, middleware and
@@ -230,9 +287,10 @@ func New(opts ...Option) *App {
 		contextRegistry: make(map[string]*Context),
 		appStateStore:   new(sync.Map),
 		cfg: config{
-			addr:     ":3000",
-			logLevel: LogWarn,
-			title:    "Via",
+			addr:            ":3000",
+			logLevel:        LogWarn,
+			title:           "Via",
+			shutdownTimeout: 5 * time.Second,
 		},
 	}
 

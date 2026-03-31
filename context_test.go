@@ -67,7 +67,6 @@ func TestComponent_initCallback(t *testing.T) {
 	assert.True(t, initCalled, "init should persist across SSE connections")
 }
 
-
 func TestContext_initCallback_runsOnSSEConnect(t *testing.T) {
 	initDone := make(chan struct{})
 	server := newTestApp(t, "/", func(c *via.Context) {

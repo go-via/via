@@ -12,11 +12,12 @@ const (
 )
 
 type config struct {
-	addr       string
-	title      string
-	logLevel   LogLevel
-	sessionTTL time.Duration
-	plugins    []Plugin
+	addr            string
+	title           string
+	logLevel        LogLevel
+	sessionTTL      time.Duration
+	plugins         []Plugin
+	shutdownTimeout time.Duration
 }
 
 // Option configures a Via App.
@@ -40,6 +41,12 @@ func WithLogLevel(level LogLevel) Option {
 // WithSessionTTL sets the idle session TTL.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) { c.sessionTTL = d }
+}
+
+// WithShutdownTimeout sets the graceful shutdown timeout for draining connections.
+// Defaults to 5 seconds.
+func WithShutdownTimeout(d time.Duration) Option {
+	return func(c *config) { c.shutdownTimeout = d }
 }
 
 // WithPlugins registers plugins with the App.

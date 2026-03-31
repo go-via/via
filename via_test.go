@@ -1,9 +1,11 @@
 package via_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -119,6 +121,106 @@ func TestPage_embedsInitialSignalValuesInHTML(t *testing.T) {
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, `count_`, "signal display ID must appear in initial HTML")
 	assert.Contains(t, body, `42`, "signal initial value must appear in initial HTML")
+}
+
+func TestNew_acceptsShutdownTimeout(t *testing.T) {
+	v := via.New(via.WithShutdownTimeout(10 * time.Second))
+	assert.NotNil(t, v)
+}
+
+func TestShutdown_disposesActiveContexts(t *testing.T) {
+	t.Parallel()
+	disposed := make(chan struct{})
+	app := via.New()
+	app.Page("/", func(c *via.Context) {
+		c.Dispose(func() { close(disposed) })
+		c.View(func() h.H { return h.Div() })
+	})
+	server := startServer(t, app)
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	err := app.Shutdown(context.Background())
+	assert.NoError(t, err)
+
+	select {
+	case <-disposed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispose callback not called after Shutdown")
+	}
+}
+
+func TestShutdown_disposesComponentsOfActiveContexts(t *testing.T) {
+	t.Parallel()
+	disposed := make(chan struct{})
+	app := via.New()
+	app.Page("/", func(c *via.Context) {
+		c.Component(func(comp *via.Context) {
+			comp.Dispose(func() { close(disposed) })
+			comp.View(func() h.H { return h.Span() })
+		})
+		c.View(func() h.H { return h.Div() })
+	})
+	server := startServer(t, app)
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	require.NoError(t, app.Shutdown(context.Background()))
+
+	select {
+	case <-disposed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("component dispose callback not called after Shutdown")
+	}
+}
+
+func TestShutdown_closesSSEStream(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	app.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div() })
+	})
+	server := startServer(t, app)
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	scanner, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	// Drain the initial SSE event so the stream is open and reading.
+	readSSEEvent(t, scanner, 2*time.Second)
+
+	require.NoError(t, app.Shutdown(context.Background()))
+
+	// After Shutdown closes the patch channel, the SSE loop exits and the
+	// server closes the response body — scanner.Scan() returns false.
+	done := make(chan struct{})
+	go func() {
+		for scanner.Scan() {
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE stream did not close after Shutdown")
+	}
+}
+
+func TestShutdown_succeedsWithNoActiveContexts(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	app.Page("/", func(c *via.Context) {
+		c.View(func() h.H { return h.Div() })
+	})
+	err := app.Shutdown(context.Background())
+	assert.NoError(t, err)
 }
 
 func TestDatastarJS_served(t *testing.T) {

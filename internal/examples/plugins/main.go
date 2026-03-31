@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"log"
 	"net/http"
 
 	"github.com/go-via/via"
@@ -32,7 +33,9 @@ func main() {
 			)
 		})
 	})
-	v.Start()
+	if err := v.Start(); err != nil {
+		log.Fatal(err)
+	}
 }
 
 type picoCSSPlugin struct{}
