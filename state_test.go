@@ -15,22 +15,22 @@ import (
 func TestState_dirtyTrackingIsActionScoped(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(c *via.Context) {
-		s := via.State(c, 0)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
 
-		modifyAction := c.Action(func() error {
-			s.Set(c, 10)
+		modifyAction := cmp.Action(func(ctx *via.Ctx) error {
+			s.Set(ctx, 10)
 			return nil
 		})
 
-		readAction := c.Action(func() error {
-			_ = s.Get(c)
+		readAction := cmp.Action(func(ctx *via.Ctx) error {
+			_ = s.Get(ctx)
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.Textf("count=%d", s.Get(c)),
+				h.Textf("count=%d", s.Get(ctx)),
 				modifyAction.OnClick(),
 				readAction.OnClick(),
 			)
@@ -43,7 +43,6 @@ func TestState_dirtyTrackingIsActionScoped(t *testing.T) {
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
-	readSSEEvent(t, stream, sseTimeout)
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -56,19 +55,19 @@ func TestState_dirtyTrackingIsActionScoped(t *testing.T) {
 func TestState_batchMutationsProduceSingleRender(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(c *via.Context) {
-		s := via.State(c, 0)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
 
-		act := c.Action(func() error {
-			s.Set(c, 1)
-			s.Set(c, 2)
-			s.Set(c, 3)
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			s.Set(ctx, 1)
+			s.Set(ctx, 2)
+			s.Set(ctx, 3)
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.Textf("val=%d", s.Get(c)),
+				h.Textf("val=%d", s.Get(ctx)),
 				act.OnClick(),
 			)
 		})
@@ -80,7 +79,6 @@ func TestState_batchMutationsProduceSingleRender(t *testing.T) {
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
-	readSSEEvent(t, stream, sseTimeout)
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -111,19 +109,19 @@ func TestState_batchMutationsProduceSingleRender(t *testing.T) {
 func TestState_onlyModifiedStateTriggersSync(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(c *via.Context) {
-		stateA := via.State(c, "a")
-		stateB := via.State(c, "b")
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		stateA := via.State(cmp, "a")
+		stateB := via.State(cmp, "b")
 
-		act := c.Action(func() error {
-			stateA.Set(c, "modified")
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			stateA.Set(ctx, "modified")
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.Textf("a=%s", stateA.Get(c)),
-				h.Textf("b=%s", stateB.Get(c)),
+				h.Textf("a=%s", stateA.Get(ctx)),
+				h.Textf("b=%s", stateB.Get(ctx)),
 				act.OnClick(),
 			)
 		})
@@ -135,8 +133,6 @@ func TestState_onlyModifiedStateTriggersSync(t *testing.T) {
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
-	initialEv := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", initialEv.eventType)
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -150,16 +146,16 @@ func TestState_onlyModifiedStateTriggersSync(t *testing.T) {
 func TestState_unmodifiedStateDoesNotTriggerRender(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(c *via.Context) {
-		state := via.State(c, 0)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		state := via.State(cmp, 0)
 
-		act := c.Action(func() error {
+		act := cmp.Action(func(ctx *via.Ctx) error {
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.Textf("count=%d", state.Get(c)),
+				h.Textf("count=%d", state.Get(ctx)),
 				act.OnClick(),
 			)
 		})
@@ -171,7 +167,6 @@ func TestState_unmodifiedStateDoesNotTriggerRender(t *testing.T) {
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
-	readSSEEvent(t, stream, sseTimeout)
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -184,22 +179,21 @@ func TestState_unmodifiedStateDoesNotTriggerRender(t *testing.T) {
 func TestState_dirtyFlagClearedAfterSync(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(c *via.Context) {
-		s := via.State(c, 0)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
 
-		act1 := c.Action(func() error {
-			s.Set(c, 1)
-			c.Sync()
+		act1 := cmp.Action(func(ctx *via.Ctx) error {
+			s.Set(ctx, 1)
 			return nil
 		})
 
-		act2 := c.Action(func() error {
+		act2 := cmp.Action(func(ctx *via.Ctx) error {
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.Textf("val=%d", s.Get(c)),
+				h.Textf("val=%d", s.Get(ctx)),
 				act1.OnClick(),
 				act2.OnClick(),
 			)
@@ -212,7 +206,6 @@ func TestState_dirtyFlagClearedAfterSync(t *testing.T) {
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
-	readSSEEvent(t, stream, sseTimeout)
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -225,10 +218,12 @@ func TestState_dirtyFlagClearedAfterSync(t *testing.T) {
 func TestState_getReturnsInitialValue(t *testing.T) {
 	v := via.New()
 	var got int
-	v.Page("/", func(c *via.Context) {
-		s := via.State(c, 0)
-		got = s.Get(c)
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
+		cmp.View(func(ctx *via.Ctx) h.H {
+			got = s.Get(ctx)
+			return h.Div()
+		})
 	})
 	assert.Equal(t, 0, got)
 }
@@ -236,37 +231,40 @@ func TestState_getReturnsInitialValue(t *testing.T) {
 func TestState_setUpdatesGet(t *testing.T) {
 	v := via.New()
 	var got int
-	v.Page("/", func(c *via.Context) {
-		s := via.State(c, 0)
-		s.Set(c, 5)
-		got = s.Get(c)
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
+		cmp.View(func(ctx *via.Ctx) h.H {
+			s.Set(ctx, 5)
+			got = s.Get(ctx)
+			return h.Div()
+		})
 	})
 	assert.Equal(t, 5, got)
 }
 
 func TestState_dirtyAfterSet(t *testing.T) {
 	v := via.New()
-	v.Page("/", func(c *via.Context) {
-		s := via.State(c, 0)
-		assert.False(t, s.Dirty())
-		s.Set(c, 1)
-		assert.True(t, s.Dirty())
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0)
+		cmp.View(func(ctx *via.Ctx) h.H {
+			assert.False(t, s.Dirty())
+			s.Set(ctx, 1)
+			assert.True(t, s.Dirty())
+			return h.Div()
+		})
 	})
 }
 
 func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 	v := via.New()
-	v.Page("/", func(c *via.Context) {
-		s := via.State(c, 0, via.WithScopeApp())
-		act := c.Action(func() error {
-			s.Set(c, s.Get(c)+1)
-			c.Sync()
+	v.Page("/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0, via.WithScopeApp())
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			s.Set(ctx, s.Get(ctx)+1)
 			return nil
 		})
-		c.View(func() h.H {
-			return h.Div(h.Textf("n=%d", s.Get(c)), act.OnClick())
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("n=%d", s.Get(ctx)), act.OnClick())
 		})
 	})
 	server := startServer(t, v)
@@ -278,7 +276,6 @@ func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 
 	stream1, cancel1 := connectSSE(t, server, ctxID1)
 	defer cancel1()
-	readSSEEvent(t, stream1, sseTimeout)
 	time.Sleep(20 * time.Millisecond)
 	triggerAction(t, server.URL, ctxID1, actionID1)
 	readSSEEvent(t, stream1, sseTimeout) // consume update
@@ -290,10 +287,10 @@ func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 
 func TestState_appScopeMutexProtected(t *testing.T) {
 	v := via.New()
-	v.Page("/", func(c *via.Context) {
-		s := via.State(c, 0, via.WithScopeApp())
-		c.Action(func() error { s.Set(c, s.Get(c)+1); return nil })
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		s := via.State(cmp, 0, via.WithScopeApp())
+		cmp.Action(func(ctx *via.Ctx) error { s.Set(ctx, s.Get(ctx)+1); return nil })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 	server := startServer(t, v)
 
@@ -311,9 +308,9 @@ func TestState_appScopeMutexProtected(t *testing.T) {
 func TestState_sessionScopePanics(t *testing.T) {
 	v := via.New()
 	assert.Panics(t, func() {
-		v.Page("/", func(c *via.Context) {
-			via.State(c, 0, via.WithScopeSession())
-			c.View(func() h.H { return h.Div() })
+		v.Page("/", func(cmp *via.Cmp) {
+			via.State(cmp, 0, via.WithScopeSession())
+			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 		})
 	})
 }
@@ -321,9 +318,9 @@ func TestState_sessionScopePanics(t *testing.T) {
 func TestState_conflictingScopesPanics(t *testing.T) {
 	v := via.New()
 	assert.Panics(t, func() {
-		v.Page("/", func(c *via.Context) {
-			via.State(c, 0, via.WithScopeApp(), via.WithScopeSession())
-			c.View(func() h.H { return h.Div() })
+		v.Page("/", func(cmp *via.Cmp) {
+			via.State(cmp, 0, via.WithScopeApp(), via.WithScopeSession())
+			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 		})
 	})
 }
@@ -331,9 +328,9 @@ func TestState_conflictingScopesPanics(t *testing.T) {
 func TestState_conflictingAppSessionPanics(t *testing.T) {
 	v := via.New()
 	assert.Panics(t, func() {
-		v.Page("/", func(c *via.Context) {
-			via.State(c, 0, via.WithScopeSession(), via.WithScopeApp())
-			c.View(func() h.H { return h.Div() })
+		v.Page("/", func(cmp *via.Cmp) {
+			via.State(cmp, 0, via.WithScopeSession(), via.WithScopeApp())
+			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 		})
 	})
 }

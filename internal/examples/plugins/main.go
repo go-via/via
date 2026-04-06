@@ -21,8 +21,8 @@ func main() {
 		via.WithPlugins(picoCSSPlugin{}),
 	)
 
-	v.Page("/", func(c *via.Context) {
-		c.View(func() h.H {
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Section(h.Class("container"),
 
 				h.H1(h.Text("Hello from ⚡Via")),

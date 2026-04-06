@@ -106,6 +106,27 @@ func TestChart_InitJS_containsExpectedOutput(t *testing.T) {
 	}
 }
 
+func TestChart_InitJS_defaultsToLightTheme(t *testing.T) {
+	t.Parallel()
+	chart := echarts.NewChart()
+	js := chart.InitJS()
+	assert.Contains(t, js, `"light"`)
+}
+
+func TestChart_InitJS_respectsThemeOverride(t *testing.T) {
+	t.Parallel()
+	chart := echarts.NewChart(echarts.WithThemeOverride(echarts.ThemeDark))
+	js := chart.InitJS()
+	assert.Contains(t, js, `"dark"`, "chart must init with dark theme when overridden")
+}
+
+func TestChart_InitJS_setsTransparentBackground(t *testing.T) {
+	t.Parallel()
+	chart := echarts.NewChart()
+	js := chart.InitJS()
+	assert.Contains(t, js, "transparent", "chart must always use transparent background")
+}
+
 func TestChart_InitJS_setsUpdateAnimation(t *testing.T) {
 	t.Parallel()
 	chart := echarts.NewChart()

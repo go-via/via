@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newTestApp(t *testing.T, route string, initFn func(*via.Context)) *httptest.Server {
+func newTestApp(t *testing.T, route string, initFn func(*via.Cmp)) *httptest.Server {
 	t.Helper()
 	v := via.New()
 	v.Page(route, initFn)
@@ -35,16 +36,16 @@ func getPageBody(t *testing.T, server *httptest.Server, route string) string {
 	return string(body)
 }
 
-// extractCtxID parses the via-ctx value from the page HTML (data-signals meta tag).
+// extractCtxID parses the via_tab value from the page HTML (data-signals meta tag).
 // Double quotes in JSON attribute values are HTML-escaped to &#34; by the renderer.
 func extractCtxID(t *testing.T, body string) string {
 	t.Helper()
-	const marker = "&#34;via-ctx&#34;:&#34;"
+	const marker = "&#34;via_tab&#34;:&#34;"
 	idx := strings.Index(body, marker)
-	require.NotEqual(t, -1, idx, "via-ctx not found in page body")
+	require.NotEqual(t, -1, idx, "via_tab not found in page body")
 	start := idx + len(marker)
 	end := strings.Index(body[start:], "&#34;")
-	require.NotEqual(t, -1, end, "via-ctx value not terminated")
+	require.NotEqual(t, -1, end, "via_tab value not terminated")
 	return body[start : start+end]
 }
 
@@ -53,7 +54,7 @@ func extractCtxID(t *testing.T, body string) string {
 func connectSSE(t *testing.T, server *httptest.Server, ctxID string) (*bufio.Scanner, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	sigsJSON := `{"via-ctx":"` + ctxID + `"}`
+	sigsJSON := `{"via_tab":"` + ctxID + `"}`
 	req, err := http.NewRequestWithContext(ctx, "GET", server.URL+"/_sse?datastar="+sigsJSON, nil)
 	require.NoError(t, err)
 	// No Accept-Encoding header → uncompressed response
@@ -124,12 +125,12 @@ type signalT interface {
 }
 
 // captureSignal creates a throwaway via app, runs initFn eagerly via v.Page, and returns the captured signal.
-func captureSignal(initFn func(c *via.Context) signalT) signalT {
+func captureSignal(initFn func(cmp *via.Cmp) signalT) signalT {
 	v := via.New()
 	var sig signalT
-	v.Page("/", func(c *via.Context) {
-		sig = initFn(c)
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		sig = initFn(cmp)
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 	return sig
 }
@@ -142,12 +143,21 @@ type actionT interface {
 }
 
 // captureAction creates a throwaway via app, runs initFn eagerly via v.Page, and returns the captured action trigger.
-func captureAction(initFn func(c *via.Context) actionT) actionT {
+func captureAction(initFn func(cmp *via.Cmp) actionT) actionT {
 	v := via.New()
 	var act actionT
-	v.Page("/", func(c *via.Context) {
-		act = initFn(c)
-		c.View(func() h.H { return h.Div() })
+	v.Page("/", func(cmp *via.Cmp) {
+		act = initFn(cmp)
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 	return act
+}
+
+// postSignal sends an action request with a signal value as a proper JSON number/value.
+func postSignal(t *testing.T, serverURL, ctxID, actionID, sigID string, value any) {
+	t.Helper()
+	sigsJSON := fmt.Sprintf(`{"via_tab":%q,%q:%v}`, ctxID, sigID, value)
+	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
+	require.NoError(t, err)
+	resp.Body.Close()
 }

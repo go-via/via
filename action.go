@@ -2,6 +2,7 @@ package via
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-via/via/h"
 )
@@ -44,7 +45,7 @@ func ActionWithSetSignal[T any](sig signalIDer, value T) ActionTriggerOption {
 	var strVal string
 	switch v := any(value).(type) {
 	case string:
-		strVal = fmt.Sprintf("'%s'", v)
+		strVal = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "\\'"))
 	default:
 		strVal = fmt.Sprintf("%v", v)
 	}
@@ -94,7 +95,7 @@ func (a *actionTrigger) OnKeyDown(key string, options ...ActionTriggerOption) h.
 	opts := applyOptions(options...)
 	var condition string
 	if key != "" {
-		condition = fmt.Sprintf("evt.key==='%s' &&", key)
+		condition = fmt.Sprintf("evt.key==='%s' &&", strings.ReplaceAll(key, "'", "\\'"))
 	}
 	return h.Data("on:keydown", fmt.Sprintf("%s%s", condition, buildOnExpr(actionURL(a.id), &opts)))
 }

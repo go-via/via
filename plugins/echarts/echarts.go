@@ -170,6 +170,14 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
+// themeColors returns (textColor, axisLabelColor, axisLineColor) for the given theme.
+func themeColors(theme EChartsTheme) (string, string, string) {
+	if theme == ThemeDark {
+		return "#ccc", "#aaa", "rgba(255,255,255,0.3)"
+	}
+	return "#222", "#666", "rgba(0,0,0,0.3)"
+}
+
 // InitJS returns JavaScript to initialize the chart on page load.
 // It creates the echarts instance and sets initial options.
 func (c *Chart) InitJS() string {
@@ -178,16 +186,20 @@ func (c *Chart) InitJS() string {
 		theme = string(c.theme)
 	}
 
+	textColor, labelColor, lineColor := themeColors(EChartsTheme(theme))
+
 	varName := c.getVarName()
 	updateDuration := c.updateDurationMs
 	return fmt.Sprintf(`
 		var %s = echarts.init(document.getElementById(%s), %s);
 		%s.setOption({
+			backgroundColor: 'transparent',
+			textStyle: {color: %s},
 			animationDurationUpdate: %d,
 			animationEasingUpdate: "linear",
 			title: {text: %s},
-			xAxis: {name: %s, type: 'category'},
-			yAxis: {name: %s},
+			xAxis: {name: %s, type: 'category', splitLine: {lineStyle:{color:'rgba(128,128,128,0.25)'}}, axisLabel:{color:%s}, axisLine:{lineStyle:{color:%s}}},
+			yAxis: {name: %s, splitLine: {lineStyle:{color:'rgba(128,128,128,0.25)'}}, axisLabel:{color:%s}, axisLine:{lineStyle:{color:%s}}},
 			series: [{
 				type: %s,
 				data: %s
@@ -199,10 +211,11 @@ func (c *Chart) InitJS() string {
 		mustJSON(c.elementID),
 		mustJSON(theme),
 		varName,
+		mustJSON(textColor),
 		updateDuration,
 		mustJSON(c.title),
-		mustJSON(c.xAxisLabel),
-		mustJSON(c.yAxisLabel),
+		mustJSON(c.xAxisLabel), mustJSON(labelColor), mustJSON(lineColor),
+		mustJSON(c.yAxisLabel), mustJSON(labelColor), mustJSON(lineColor),
 		mustJSON(string(c.chartType)),
 		mustJSON(c.data),
 		varName,
@@ -213,7 +226,7 @@ func (c *Chart) InitJS() string {
 // AppendData sends new data points to the chart via SSE.
 // Each data point is appended to series index 0.
 // Updates may be dropped silently if the SSE send buffer is full.
-func (c *Chart) AppendData(ctx *via.Context, data [][]any) {
+func (c *Chart) AppendData(ctx *via.Ctx, data [][]any) {
 	if ctx == nil || len(data) == 0 {
 		return
 	}
@@ -232,7 +245,7 @@ func (c *Chart) AppendData(ctx *via.Context, data [][]any) {
 // AppendDataBatch sends multiple data arrays to the chart in a single SSE patch.
 // Prefer this over calling AppendData in a loop to reduce per-update overhead.
 // Updates may be dropped silently if the SSE send buffer is full.
-func (c *Chart) AppendDataBatch(ctx *via.Context, batches ...[][]any) {
+func (c *Chart) AppendDataBatch(ctx *via.Ctx, batches ...[][]any) {
 	if ctx == nil || len(batches) == 0 {
 		return
 	}
@@ -256,7 +269,7 @@ func (c *Chart) AppendDataBatch(ctx *via.Context, batches ...[][]any) {
 
 // SetOption sends option updates to the chart via SSE.
 // Updates may be dropped silently if the SSE send buffer is full.
-func (c *Chart) SetOption(ctx *via.Context, opts map[string]any) {
+func (c *Chart) SetOption(ctx *via.Ctx, opts map[string]any) {
 	if ctx == nil {
 		return
 	}
@@ -270,6 +283,28 @@ func (c *Chart) SetOption(ctx *via.Context, opts map[string]any) {
 	sb.WriteString(mustJSON(opts))
 	sb.WriteString(")}")
 	ctx.ExecScript(sb.String())
+}
+
+// SetTheme disposes and re-creates the chart with a new theme, preserving the current options.
+func (c *Chart) SetTheme(ctx *via.Ctx, theme EChartsTheme) {
+	if ctx == nil {
+		return
+	}
+	varName := c.getVarName()
+	elemID := mustJSON(c.elementID)
+	textColor, labelColor, lineColor := themeColors(theme)
+	// Reset axis colors that the previous theme may have baked in.
+	// Without this, switching from dark→light keeps the dark theme's
+	// near-white axis label/line colors, making them invisible on white.
+	ctx.ExecScript(fmt.Sprintf(
+		`if(%s){var _o=%s.getOption();_o.backgroundColor='transparent';_o.textStyle=[{color:%s}];`+
+			`var _ax={axisLabel:{color:%s},axisLine:{lineStyle:{color:%s}},splitLine:{lineStyle:{color:'rgba(128,128,128,0.25)'}}};`+
+			`if(_o.xAxis){for(var i=0;i<_o.xAxis.length;i++){Object.assign(_o.xAxis[i],_ax)}}`+
+			`if(_o.yAxis){for(var i=0;i<_o.yAxis.length;i++){Object.assign(_o.yAxis[i],_ax)}}`+
+			`%s.dispose();%s=echarts.init(document.getElementById(%s),%s);%s.setOption(_o)}`,
+		varName, varName, mustJSON(textColor), mustJSON(labelColor), mustJSON(lineColor),
+		varName, varName, elemID, mustJSON(string(theme)), varName,
+	))
 }
 
 // getVarName returns the JS variable name, generating a deterministic default if empty.

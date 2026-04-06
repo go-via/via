@@ -10,11 +10,8 @@ import (
 type Scope int
 
 const (
-	// ScopeTab is the default scope — state is local to a single browser tab/session.
 	ScopeTab Scope = iota
-	// ScopeSession scopes state to a user session across tabs (not yet implemented).
 	ScopeSession
-	// ScopeApp scopes state globally across all sessions and tabs.
 	ScopeApp
 )
 
@@ -61,7 +58,7 @@ type stateOf[T any] struct {
 func (s *stateOf[T]) Dirty() bool { return s.dirty }
 
 // Get returns the current value of the state.
-func (s *stateOf[T]) Get(_ *Context) T {
+func (s *stateOf[T]) Get(ctx *Ctx) T {
 	if s.scope == ScopeApp {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -70,21 +67,20 @@ func (s *stateOf[T]) Get(_ *Context) T {
 }
 
 // Set updates the state value and marks it dirty.
-func (s *stateOf[T]) Set(c *Context, v T) {
+func (s *stateOf[T]) Set(ctx *Ctx, v T) {
 	if s.scope == ScopeApp {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 	}
 	s.val = v
 	s.dirty = true
-	if c != nil {
-		c.markStateModified()
+	if ctx != nil {
+		ctx.markStateModified()
 	}
 }
 
 // State creates a new State with the given initial value.
-// Default scope is ScopeTab (local to this browser tab).
-func State[T any](c *Context, initial T, opts ...StateOption) *stateOf[T] {
+func State[T any](cmp *Cmp, initial T, opts ...StateOption) *stateOf[T] {
 	cfg := &stateConfig{scope: ScopeTab}
 	for _, opt := range opts {
 		opt(cfg)
@@ -95,12 +91,11 @@ func State[T any](c *Context, initial T, opts ...StateOption) *stateOf[T] {
 	}
 
 	if cfg.scope == ScopeApp {
-		// Use caller's PC as a stable key so all page instances share the same state.
 		var pcs [1]uintptr
 		runtime.Callers(2, pcs[:])
 		key := pcs[0]
 
-		if existing, ok := c.app.appStateStore.Load(key); ok {
+		if existing, ok := cmp.appStateStore.Load(key); ok {
 			return existing.(*stateOf[T])
 		}
 		s := &stateOf[T]{
@@ -108,11 +103,10 @@ func State[T any](c *Context, initial T, opts ...StateOption) *stateOf[T] {
 			val:   initial,
 			scope: ScopeApp,
 		}
-		actual, _ := c.app.appStateStore.LoadOrStore(key, s)
+		actual, _ := cmp.appStateStore.LoadOrStore(key, s)
 		return actual.(*stateOf[T])
 	}
 
-	// ScopeTab — state is owned by the closure, no storage needed on context.
 	return &stateOf[T]{
 		id:    genRandID(),
 		val:   initial,

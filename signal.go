@@ -8,31 +8,29 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// signalEntry is the internal interface for homogeneous signal storage in sync.Map.
-type signalEntry interface {
-	getID() string
+// signalMeta is the runtime interface for signal metadata on Cmp.
+type signalMeta interface {
 	displayID() string
-	rawValue() any
-	setRawValue(v any)
-	isChanged() bool
-	markSynced()
+	initialRawValue() any
+	coerce(v any) any
 	hasError() bool
-	getErr() error
 }
 
-// signalOf is the generic signal implementation.
-// Construct with the Signal free function.
+// signalValue holds the per-tab runtime state for one signal.
+type signalValue struct {
+	raw     any
+	changed bool
+}
+
+// signalOf is a typed handle created at definition time, shared across all tabs.
 type signalOf[T any] struct {
 	id      string
 	tag     string
-	val     T
-	changed bool
+	initial T
 	err     error
 }
 
-// signalEntry implementation
-
-func (s *signalOf[T]) getID() string { return s.id }
+// --- signalMeta implementation (consumed by runtime) ---
 
 func (s *signalOf[T]) displayID() string {
 	if s.tag != "" {
@@ -41,105 +39,110 @@ func (s *signalOf[T]) displayID() string {
 	return s.id
 }
 
-func (s *signalOf[T]) rawValue() any {
-	rv := reflect.ValueOf(any(s.val))
+func (s *signalOf[T]) initialRawValue() any {
+	rv := reflect.ValueOf(any(s.initial))
 	if rv.IsValid() {
 		switch rv.Kind() {
 		case reflect.Slice, reflect.Struct:
-			if j, err := json.Marshal(s.val); err == nil {
+			if j, err := json.Marshal(s.initial); err == nil {
 				return string(j)
 			}
 		}
 	}
-	return s.val
+	return s.initial
 }
 
-func (s *signalOf[T]) setRawValue(v any) {
-	if typed, ok := v.(T); ok {
-		s.val = typed
-	} else if rv := reflect.ValueOf(v); rv.IsValid() {
+func (s *signalOf[T]) coerce(v any) any {
+	if _, ok := v.(T); ok {
+		return v
+	}
+	// JSON numbers arrive as float64; coerce to the signal's concrete type.
+	if f64, ok := v.(float64); ok {
 		var zero T
-		target := reflect.ValueOf(&zero).Elem()
-		if rv.Type().ConvertibleTo(target.Type()) {
-			target.Set(rv.Convert(target.Type()))
-			s.val = zero
+		switch any(zero).(type) {
+		case int:
+			return int(f64)
+		case int64:
+			return int64(f64)
 		}
 	}
-	s.changed = true
-	s.err = nil
+	return v
 }
 
-func (s *signalOf[T]) isChanged() bool { return s.changed }
-func (s *signalOf[T]) markSynced()     { s.changed = false }
-func (s *signalOf[T]) hasError() bool  { return s.err != nil }
-func (s *signalOf[T]) getErr() error   { return s.err }
+func (s *signalOf[T]) hasError() bool { return s.err != nil }
 
-// ID returns the signal's unique identifier.
+// --- public API (consumed by user code) ---
+
+// ID returns the unique identifier for this signal.
 func (s *signalOf[T]) ID() string { return s.id }
 
-// Ref returns "$<displayID>" for use in datastar expressions.
-func (s *signalOf[T]) Ref() string { return "$" + s.displayID() }
-
-// Tag sets a human-readable prefix for the signal display ID.
-// Must be called before rendering. Affects Bind(), Text(), Show(), and Ref().
+// Tag prepends a label to the signal's display ID.
 func (s *signalOf[T]) Tag(name string) { s.tag = name }
 
-// Get returns the current typed value of the signal.
-func (s *signalOf[T]) Get(_ *Context) T { return s.val }
-
-// SetValue updates the signal value and marks it dirty for the next sync.
-func (s *signalOf[T]) SetValue(v T) {
-	s.val = v
-	s.changed = true
-	s.err = nil
+// Get returns the current typed value of the signal for this tab.
+func (s *signalOf[T]) Get(ctx *Ctx) T {
+	if ctx != nil {
+		if sv, ok := ctx.signalValues[s.id]; ok {
+			if typed, ok := sv.raw.(T); ok {
+				return typed
+			}
+		}
+	}
+	return s.initial
 }
 
-// Bind returns a data-bind attribute for connecting this signal to an input element.
-func (s *signalOf[T]) Bind() h.H {
-	return h.Data("bind", s.displayID())
-}
-
-// Text returns a span element with a data-text attribute referencing this signal.
-func (s *signalOf[T]) Text() h.H {
-	return h.Span(h.Data("text", "$"+s.displayID()))
-}
-
-// Show returns a data-show attribute for conditional element visibility.
-func (s *signalOf[T]) Show() h.H {
-	return h.Data("show", "$"+s.displayID())
+// SetValue updates the signal value for this tab and marks it dirty for sync.
+func (s *signalOf[T]) SetValue(ctx *Ctx, v T) {
+	sv := ctx.signalValues[s.id]
+	if sv == nil {
+		ctx.signalValues[s.id] = &signalValue{raw: v, changed: true}
+		return
+	}
+	sv.raw = v
+	sv.changed = true
 }
 
 // Err returns any error associated with this signal.
 func (s *signalOf[T]) Err() error { return s.err }
 
-// Signal creates a typed reactive signal with the given initial value.
-// Type is inferred: via.Signal(c, 0) creates a signal of type int.
-func Signal[T any](c *Context, initial T) *signalOf[T] {
-	sigID := genRandID()
+// Bind returns an h.H attribute that binds this signal to an input element.
+func (s *signalOf[T]) Bind() h.H {
+	return h.Data("bind", s.displayID())
+}
 
-	// Check for nil initial value (handles interface/pointer nil)
+// Text returns an h.H element that displays the signal value reactively.
+func (s *signalOf[T]) Text() h.H {
+	return h.Span(h.Data("text", "$"+s.displayID()))
+}
+
+// Show returns an h.H attribute that toggles visibility based on the signal value.
+func (s *signalOf[T]) Show() h.H {
+	return h.Data("show", "$"+s.displayID())
+}
+
+// Ref returns the signal reference string for use in datastar expressions.
+func (s *signalOf[T]) Ref() string {
+	return "$" + s.displayID()
+}
+
+// Signal creates a typed reactive signal with the given initial value.
+func Signal[T any](cmp *Cmp, initial T) *signalOf[T] {
+	sigID := "via_" + genRandID()
+
 	if rv := reflect.ValueOf(any(initial)); !rv.IsValid() {
-		c.app.logErr(c, "failed to bind signal: nil signal value")
 		var zero T
 		return &signalOf[T]{
-			id:  sigID,
-			val: zero,
-			err: fmt.Errorf("context '%s' failed to bind signal '%s': nil signal value", c.id, sigID),
+			id:      sigID,
+			initial: zero,
+			err:     fmt.Errorf("failed to bind signal '%s': nil signal value", sigID),
 		}
 	}
 
 	sig := &signalOf[T]{
 		id:      sigID,
-		val:     initial,
-		changed: false,
+		initial: initial,
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.isComponent() {
-		c.parentPageCtx.signals.Store(sigID, sig)
-	} else {
-		c.signals.Store(sigID, sig)
-	}
+	cmp.signals[sigID] = sig
 	return sig
 }

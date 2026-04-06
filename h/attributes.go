@@ -38,6 +38,18 @@ func Role(v string) H {
 	return gh.Role(v)
 }
 
+func Min(v string) H {
+	return gh.Min(v)
+}
+
+func Max(v string) H {
+	return gh.Max(v)
+}
+
+func Step(v string) H {
+	return gh.Step(v)
+}
+
 // Data attributes automatically have their name prefixed with "data-".
 func Data(name, v string) H {
 	return gh.Data(name, v)

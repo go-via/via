@@ -9,16 +9,16 @@ import (
 func main() {
 	v := via.New()
 
-	v.Page("/", func(c *via.Context) {
-		counterComp1 := c.Component(counterCompFn)
-		counterComp2 := c.Component(counterCompFn)
+	v.Page("/", func(cmp *via.Cmp) {
+		counterComp1 := cmp.Component(counterCompFn)
+		counterComp2 := cmp.Component(counterCompFn)
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
 				h.H1(h.Text("Counter 1")),
-				counterComp1(),
+				counterComp1(ctx),
 				h.H1(h.Text("Counter 2")),
-				counterComp2(),
+				counterComp2(ctx),
 			)
 		})
 	})
@@ -28,19 +28,18 @@ func main() {
 	}
 }
 
-func counterCompFn(c *via.Context) {
-	count := 0
-	step := via.Signal(c, 1)
+func counterCompFn(cmp *via.Cmp) {
+	count := via.State(cmp, 0)
+	step := via.Signal(cmp, 1)
 
-	increment := c.Action(func() error {
-		count += step.Get(c)
-		c.Sync()
+	increment := cmp.Action(func(ctx *via.Ctx) error {
+		count.Set(ctx, count.Get(ctx)+step.Get(ctx))
 		return nil
 	})
 
-	c.View(func() h.H {
+	cmp.View(func(ctx *via.Ctx) h.H {
 		return h.Div(
-			h.P(h.Textf("Count: %d", count)),
+			h.P(h.Textf("Count: %d", count.Get(ctx))),
 			h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
 			h.Label(
 				h.Text("Update Step: "),

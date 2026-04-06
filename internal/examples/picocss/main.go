@@ -33,27 +33,25 @@ func main() {
 		),
 	)
 
-	v.Page("/", func(c *via.Context) {
-		count := via.Signal(c, len(allFeatures))
+	v.Page("/", func(cmp *via.Cmp) {
+		count := via.State(cmp, len(allFeatures))
 
-		increment := c.Action(func() error {
-			if count.Get(c) < len(allFeatures) {
-				count.SetValue(count.Get(c) + 1)
-				c.Sync()
+		increment := cmp.Action(func(ctx *via.Ctx) error {
+			if count.Get(ctx) < len(allFeatures) {
+				count.Set(ctx, count.Get(ctx)+1)
 			}
 			return nil
 		})
 
-		decrement := c.Action(func() error {
-			if count.Get(c) > 1 {
-				count.SetValue(count.Get(c) - 1)
-				c.Sync()
+		decrement := cmp.Action(func(ctx *via.Ctx) error {
+			if count.Get(ctx) > 1 {
+				count.Set(ctx, count.Get(ctx)-1)
 			}
 			return nil
 		})
 
-		c.View(func() h.H {
-			visible := allFeatures[:count.Get(c)]
+		cmp.View(func(ctx *via.Ctx) h.H {
+			visible := allFeatures[:count.Get(ctx)]
 
 			items := make([]h.H, len(visible))
 			for i, f := range visible {

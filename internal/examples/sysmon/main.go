@@ -1,19 +1,20 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"math"
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/echarts"
 	"github.com/go-via/via/plugins/picocss"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/net"
 )
 
 const (
@@ -21,157 +22,69 @@ const (
 	maxPoints      = 200
 )
 
-// --- metric types ---
+// --- metric readers ---
 
-type cpuStat struct{ user, nice, system, idle, iowait, irq, softirq, steal uint64 }
-
-func (s cpuStat) total() uint64 {
-	return s.user + s.nice + s.system + s.idle + s.iowait + s.irq + s.softirq + s.steal
-}
-func (s cpuStat) active() uint64 { return s.total() - s.idle - s.iowait }
-
-type diskStat struct {
-	readSectors, writeSectors uint64
-	t                         time.Time
-}
-
-type netStat struct {
-	rxBytes, txBytes uint64
-	t                time.Time
-}
-
-// --- /proc readers ---
-
-func readCPU() (cpuStat, error) {
-	f, err := os.Open("/proc/stat")
-	if err != nil {
-		return cpuStat{}, err
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, "cpu ") {
-			continue
-		}
-		fields := strings.Fields(line)
-		var nums [8]uint64
-		for i := 0; i < 8 && i+1 < len(fields); i++ {
-			nums[i], _ = strconv.ParseUint(fields[i+1], 10, 64)
-		}
-		return cpuStat{nums[0], nums[1], nums[2], nums[3], nums[4], nums[5], nums[6], nums[7]}, nil
-	}
-	return cpuStat{}, fmt.Errorf("cpu line not found in /proc/stat")
-}
-
-func cpuPercent(prev, cur cpuStat) float64 {
-	dTotal := float64(cur.total() - prev.total())
-	if dTotal == 0 {
+func readCPUPercent() float64 {
+	pcts, err := cpu.Percent(0, false)
+	if err != nil || len(pcts) == 0 {
 		return 0
 	}
-	return math.Round(float64(cur.active()-prev.active())/dTotal*1000) / 10
+	return math.Round(pcts[0]*10) / 10
 }
 
-func readMem() (float64, error) {
-	f, err := os.Open("/proc/meminfo")
+func readMemPercent() float64 {
+	m, err := mem.VirtualMemory()
 	if err != nil {
-		return 0, err
+		return 0
 	}
-	defer f.Close()
-	var total, available uint64
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 2 {
-			continue
-		}
-		v, _ := strconv.ParseUint(fields[1], 10, 64)
-		switch fields[0] {
-		case "MemTotal:":
-			total = v
-		case "MemAvailable:":
-			available = v
-		}
-	}
-	if total == 0 {
-		return 0, fmt.Errorf("MemTotal missing from /proc/meminfo")
-	}
-	return math.Round(float64(total-available)/float64(total)*1000) / 10, nil
+	return math.Round(m.UsedPercent*10) / 10
 }
 
-func isWholeDisk(name string) bool {
-	if strings.HasPrefix(name, "nvme") {
-		return !strings.Contains(name[4:], "p")
-	}
-	last := name[len(name)-1]
-	return last >= 'a' && last <= 'z'
+type diskSnapshot struct {
+	read, write uint64
+	t           time.Time
 }
 
-func readDisk() (diskStat, error) {
-	f, err := os.Open("/proc/diskstats")
+func readDiskCounters() diskSnapshot {
+	counters, err := disk.IOCountersWithContext(context.Background())
 	if err != nil {
-		return diskStat{}, err
+		return diskSnapshot{t: time.Now()}
 	}
-	defer f.Close()
-	var rs, ws uint64
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 14 || !isWholeDisk(fields[2]) {
-			continue
-		}
-		r, _ := strconv.ParseUint(fields[5], 10, 64)
-		w, _ := strconv.ParseUint(fields[9], 10, 64)
-		rs += r
-		ws += w
+	var r, w uint64
+	for _, c := range counters {
+		r += c.ReadBytes
+		w += c.WriteBytes
 	}
-	return diskStat{rs, ws, time.Now()}, nil
+	return diskSnapshot{r, w, time.Now()}
 }
 
-func diskBPS(prev, cur diskStat) (readBPS, writeBPS float64) {
+func diskBPS(prev, cur diskSnapshot) (float64, float64) {
 	dt := cur.t.Sub(prev.t).Seconds()
 	if dt <= 0 {
 		return 0, 0
 	}
-	return float64((cur.readSectors-prev.readSectors)*512) / dt,
-		float64((cur.writeSectors-prev.writeSectors)*512) / dt
+	return float64(cur.read-prev.read) / dt, float64(cur.write-prev.write) / dt
 }
 
-func readNet() (netStat, error) {
-	f, err := os.Open("/proc/net/dev")
-	if err != nil {
-		return netStat{}, err
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Scan() // header 1
-	sc.Scan() // header 2
-	var rx, tx uint64
-	for sc.Scan() {
-		line := sc.Text()
-		col := strings.Index(line, ":")
-		if col < 0 || strings.TrimSpace(line[:col]) == "lo" {
-			continue
-		}
-		fields := strings.Fields(line[col+1:])
-		if len(fields) < 9 {
-			continue
-		}
-		r, _ := strconv.ParseUint(fields[0], 10, 64)
-		t, _ := strconv.ParseUint(fields[8], 10, 64)
-		rx += r
-		tx += t
-	}
-	return netStat{rx, tx, time.Now()}, nil
+type netSnapshot struct {
+	rx, tx uint64
+	t      time.Time
 }
 
-func netBPS(prev, cur netStat) (rxBPS, txBPS float64) {
+func readNetCounters() netSnapshot {
+	counters, err := net.IOCountersWithContext(context.Background(), false)
+	if err != nil || len(counters) == 0 {
+		return netSnapshot{t: time.Now()}
+	}
+	return netSnapshot{counters[0].BytesRecv, counters[0].BytesSent, time.Now()}
+}
+
+func netBPS(prev, cur netSnapshot) (float64, float64) {
 	dt := cur.t.Sub(prev.t).Seconds()
 	if dt <= 0 {
 		return 0, 0
 	}
-	return float64(cur.rxBytes-prev.rxBytes) / dt,
-		float64(cur.txBytes-prev.txBytes) / dt
+	return float64(cur.rx-prev.rx) / dt, float64(cur.tx-prev.tx) / dt
 }
 
 // --- helpers ---
@@ -218,23 +131,29 @@ func timeAxisOpt(yName string, series ...map[string]any) map[string]any {
 	}
 	return map[string]any{
 		"tooltip": map[string]any{"trigger": "axis"},
-		"xAxis":   map[string]any{"type": "time", "name": ""},
-		"yAxis":   map[string]any{"name": yName},
-		"series":  s,
+		"xAxis": map[string]any{
+			"type":        "time",
+			"minInterval": 2000,
+			"axisLabel":   map[string]any{"hideOverlap": true, "formatter": "{HH}:{mm}:{ss}"},
+		},
+		"yAxis":  map[string]any{"name": yName},
+		"series": s,
 	}
 }
 
 func lineSeries(name string, data [][]any) map[string]any {
 	return map[string]any{
-		"type":   "line",
-		"name":   name,
-		"symbol": "none",
-		"smooth": false,
-		"data":   data,
+		"type":     "line",
+		"name":     name,
+		"symbol":   "none",
+		"smooth":   false,
+		"sampling": "lttb",
+		"large":    true,
+		"data":     data,
 	}
 }
 
-// --- view helpers (accept h.H to avoid referencing unexported signalOf) ---
+// --- view helpers ---
 
 func metricCard(title string, valElem h.H, chart h.H) h.H {
 	return h.Article(
@@ -242,7 +161,7 @@ func metricCard(title string, valElem h.H, chart h.H) h.H {
 			h.Div(h.Class("grid"),
 				h.Strong(h.Text(title)),
 				h.Span(
-					h.Attr("style", "text-align:right;font-size:1.4rem;font-weight:bold"),
+					h.Style( "text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"),
 					valElem,
 				),
 			),
@@ -252,15 +171,19 @@ func metricCard(title string, valElem h.H, chart h.H) h.H {
 }
 
 func dualMetricCard(title, label1 string, val1 h.H, label2 string, val2 h.H, chart h.H) h.H {
+	valSpan := func(label string, val h.H) h.H {
+		return h.Span(
+			h.Style( "font-variant-numeric:tabular-nums;white-space:nowrap"),
+			h.Small(h.Text(label+": ")), val,
+		)
+	}
 	return h.Article(
 		h.Header(
-			h.Div(h.Class("grid"),
+			h.Div(h.Style( "display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
 				h.Strong(h.Text(title)),
-				h.Span(
-					h.Attr("style", "text-align:right"),
-					h.Small(h.Text(label1+": ")), val1,
-					h.Text("  ·  "),
-					h.Small(h.Text(label2+": ")), val2,
+				h.Div(h.Style( "display:flex;gap:1rem"),
+					valSpan(label1, val1),
+					valSpan(label2, val2),
 				),
 			),
 		),
@@ -275,17 +198,17 @@ func main() {
 		via.WithTitle("System Monitor"),
 		via.WithPlugins(
 			picocss.New(
-				picocss.WithDefaultTheme(picocss.PicoThemeSlate),
-				picocss.WithColorClasses(),
+				picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeSlate}),
+				picocss.WithDarkMode(),
 			),
 			echarts.Plugin(),
 		),
 	)
 
-	v.Page("/", func(c *via.Context) {
+	v.Page("/", func(cmp *via.Cmp) {
 		// control signals
-		intervalMs := via.Signal(c, int(updateInterval/time.Millisecond))
-		running := via.Signal(c, true)
+		intervalMs := via.Signal(cmp, int(updateInterval/time.Millisecond))
+		running := via.Signal(cmp, true)
 
 		type settings struct {
 			intervalMs int
@@ -293,39 +216,57 @@ func main() {
 		}
 		settingsCh := make(chan settings, 1)
 
-		applyControls := c.Action(func() error {
+		applyControls := cmp.Action(func(ctx *via.Ctx) error {
 			settingsCh <- settings{
-				intervalMs: intervalMs.Get(c),
-				running:    running.Get(c),
+				intervalMs: intervalMs.Get(ctx),
+				running:    running.Get(ctx),
 			}
 			return nil
 		})
-		toggleRunning := c.Action(func() error {
-			newVal := !running.Get(c)
-			running.SetValue(newVal)
+		toggleRunning := cmp.Action(func(ctx *via.Ctx) error {
+			newVal := !running.Get(ctx)
+			running.SetValue(ctx, newVal)
 			settingsCh <- settings{
-				intervalMs: intervalMs.Get(c),
+				intervalMs: intervalMs.Get(ctx),
 				running:    newVal,
 			}
 			return nil
 		})
 
+		darkMode := via.Signal(cmp, true)
+
 		// current-value state (pre-formatted strings)
-		cpuVal := via.State(c, "--")
-		ramVal := via.State(c, "--")
-		diskR := via.State(c, "--")
-		diskW := via.State(c, "--")
-		netRX := via.State(c, "--")
-		netTX := via.State(c, "--")
+		cpuVal := via.State(cmp, "--")
+		ramVal := via.State(cmp, "--")
+		diskR := via.State(cmp, "--")
+		diskW := via.State(cmp, "--")
+		netRX := via.State(cmp, "--")
+		netTX := via.State(cmp, "--")
 
-		// charts (dimensions fixed at creation; Mount() needs no args)
+		// charts
 		dims := echarts.WithDimensions("100%", "220px")
-		cpuChart := echarts.NewChart(echarts.WithElementID("chart-cpu"), dims)
-		ramChart := echarts.NewChart(echarts.WithElementID("chart-ram"), dims)
-		diskChart := echarts.NewChart(echarts.WithElementID("chart-disk"), dims)
-		netChart := echarts.NewChart(echarts.WithElementID("chart-net"), dims)
+		dark := echarts.WithThemeOverride(echarts.ThemeDark)
+		cpuChart := echarts.NewChart(echarts.WithElementID("chart-cpu"), dims, dark)
+		ramChart := echarts.NewChart(echarts.WithElementID("chart-ram"), dims, dark)
+		diskChart := echarts.NewChart(echarts.WithElementID("chart-disk"), dims, dark)
+		netChart := echarts.NewChart(echarts.WithElementID("chart-net"), dims, dark)
 
-		// history buffers pre-filled with nil so the full time window shows immediately
+		toggleDarkMode := cmp.Action(func(ctx *via.Ctx) error {
+			isDark := !darkMode.Get(ctx)
+			darkMode.SetValue(ctx, isDark)
+			theme := echarts.ThemeLight
+			if isDark {
+				theme = echarts.ThemeDark
+			}
+			ctx.MarshalAndPatchSignals(map[string]any{"_picoDarkMode": isDark})
+			cpuChart.SetTheme(ctx, theme)
+			ramChart.SetTheme(ctx, theme)
+			diskChart.SetTheme(ctx, theme)
+			netChart.SetTheme(ctx, theme)
+			return nil
+		})
+
+		// history buffers pre-filled so the full time window shows immediately
 		cpuBuf := newHistBuf()
 		ramBuf := newHistBuf()
 		diskRBuf := newHistBuf()
@@ -333,25 +274,20 @@ func main() {
 		netRXBuf := newHistBuf()
 		netTXBuf := newHistBuf()
 
-		done := make(chan struct{})
-		c.Dispose(func() { close(done) })
-		c.Init(func() {
-			// Configure all charts: time axis, correct series count, no animation.
-			cpuChart.SetOption(c, timeAxisOpt("%", lineSeries("CPU", nil)))
-			ramChart.SetOption(c, timeAxisOpt("%", lineSeries("RAM", nil)))
-			diskChart.SetOption(c, timeAxisOpt("B/s",
+		cmp.Init(func(ctx *via.Ctx) {
+			cpuChart.SetOption(ctx, timeAxisOpt("%", lineSeries("CPU", nil)))
+			ramChart.SetOption(ctx, timeAxisOpt("%", lineSeries("RAM", nil)))
+			diskChart.SetOption(ctx, timeAxisOpt("KB/s",
 				lineSeries("Read", nil),
 				lineSeries("Write", nil),
 			))
-			netChart.SetOption(c, timeAxisOpt("B/s",
+			netChart.SetOption(ctx, timeAxisOpt("KB/s",
 				lineSeries("RX", nil),
 				lineSeries("TX", nil),
 			))
 
-			// Seed initial readings for delta-based metrics.
-			prevCPU, _ := readCPU()
-			prevDisk, _ := readDisk()
-			prevNet, _ := readNet()
+			prevDisk := readDiskCounters()
+			prevNet := readNetCounters()
 
 			ticker := time.NewTicker(updateInterval)
 			go func() {
@@ -359,7 +295,7 @@ func main() {
 				paused := false
 				for {
 					select {
-					case <-done:
+					case <-ctx.Done():
 						return
 					case s := <-settingsCh:
 						paused = !s.running
@@ -374,57 +310,45 @@ func main() {
 
 					now := time.Now().UnixMilli()
 
-					curCPU, err := readCPU()
-					cpu := 0.0
-					if err == nil {
-						cpu = cpuPercent(prevCPU, curCPU)
-						prevCPU = curCPU
-					}
+					cpuPct := readCPUPercent()
+					ramPct := readMemPercent()
 
-					ram, _ := readMem()
+					curDisk := readDiskCounters()
+					dr, dw := diskBPS(prevDisk, curDisk)
+					prevDisk = curDisk
 
-					curDisk, err := readDisk()
-					dr, dw := 0.0, 0.0
-					if err == nil {
-						dr, dw = diskBPS(prevDisk, curDisk)
-						prevDisk = curDisk
-					}
+					curNet := readNetCounters()
+					rx, tx := netBPS(prevNet, curNet)
+					prevNet = curNet
 
-					curNet, err := readNet()
-					rx, tx := 0.0, 0.0
-					if err == nil {
-						rx, tx = netBPS(prevNet, curNet)
-						prevNet = curNet
-					}
+					cpuBuf.push(now, cpuPct)
+					ramBuf.push(now, ramPct)
+					diskRBuf.push(now, dr/1e3)
+					diskWBuf.push(now, dw/1e3)
+					netRXBuf.push(now, rx/1e3)
+					netTXBuf.push(now, tx/1e3)
 
-					cpuBuf.push(now, cpu)
-					ramBuf.push(now, ram)
-					diskRBuf.push(now, dr)
-					diskWBuf.push(now, dw)
-					netRXBuf.push(now, rx)
-					netTXBuf.push(now, tx)
+					cpuVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
+					ramVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
+					diskR.Set(ctx, fmtBytes(dr))
+					diskW.Set(ctx, fmtBytes(dw))
+					netRX.Set(ctx, fmtBytes(rx))
+					netTX.Set(ctx, fmtBytes(tx))
+					ctx.Sync()
 
-					cpuVal.Set(c, fmt.Sprintf("%.1f%%", cpu))
-					ramVal.Set(c, fmt.Sprintf("%.1f%%", ram))
-					diskR.Set(c, fmtBytes(dr))
-					diskW.Set(c, fmtBytes(dw))
-					netRX.Set(c, fmtBytes(rx))
-					netTX.Set(c, fmtBytes(tx))
-					c.Sync()
-
-					cpuChart.SetOption(c, map[string]any{
+					cpuChart.SetOption(ctx, map[string]any{
 						"series": []any{lineSeries("CPU", cpuBuf.pts)},
 					})
-					ramChart.SetOption(c, map[string]any{
+					ramChart.SetOption(ctx, map[string]any{
 						"series": []any{lineSeries("RAM", ramBuf.pts)},
 					})
-					diskChart.SetOption(c, map[string]any{
+					diskChart.SetOption(ctx, map[string]any{
 						"series": []any{
 							lineSeries("Read", diskRBuf.pts),
 							lineSeries("Write", diskWBuf.pts),
 						},
 					})
-					netChart.SetOption(c, map[string]any{
+					netChart.SetOption(ctx, map[string]any{
 						"series": []any{
 							lineSeries("RX", netRXBuf.pts),
 							lineSeries("TX", netTXBuf.pts),
@@ -434,14 +358,14 @@ func main() {
 			}()
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Body(
 				h.Nav(h.Class("container-fluid"),
 					h.Ul(h.Li(h.Strong(h.Text("System Monitor")))),
 					h.Ul(h.Li(
 						h.Button(
 							h.Class("outline secondary"),
-							h.Data("on:click", "$_picoDarkMode=!$_picoDarkMode"),
+							toggleDarkMode.OnClick(),
 							h.Text("Toggle dark mode"),
 						),
 					)),
@@ -453,10 +377,10 @@ func main() {
 								h.Text("Sample interval: "),
 								intervalMs.Text(), h.Text("ms"),
 								h.Input(
-									h.Attr("type", "range"),
-									h.Attr("min", "50"),
-									h.Attr("max", "2000"),
-									h.Attr("step", "50"),
+									h.Type("range"),
+									h.Min("50"),
+									h.Max("2000"),
+									h.Step("50"),
 									intervalMs.Bind(),
 									applyControls.OnChange(),
 								),
@@ -467,14 +391,10 @@ func main() {
 							),
 						),
 					),
-					h.Div(h.Class("grid"),
-						metricCard("CPU Load", h.Text(cpuVal.Get(c)), cpuChart.Mount()),
-						metricCard("RAM Usage", h.Text(ramVal.Get(c)), ramChart.Mount()),
-					),
-					h.Div(h.Class("grid"),
-						dualMetricCard("Disk I/O", "Read", h.Text(diskR.Get(c)), "Write", h.Text(diskW.Get(c)), diskChart.Mount()),
-						dualMetricCard("Network", "RX", h.Text(netRX.Get(c)), "TX", h.Text(netTX.Get(c)), netChart.Mount()),
-					),
+					metricCard("CPU Load", h.Text(cpuVal.Get(ctx)), cpuChart.Mount()),
+					metricCard("RAM Usage", h.Text(ramVal.Get(ctx)), ramChart.Mount()),
+					dualMetricCard("Disk I/O", "Read", h.Text(diskR.Get(ctx)), "Write", h.Text(diskW.Get(ctx)), diskChart.Mount()),
+					dualMetricCard("Network", "RX", h.Text(netRX.Get(ctx)), "TX", h.Text(netTX.Get(ctx)), netChart.Mount()),
 				),
 			)
 		})

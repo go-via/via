@@ -6,25 +6,21 @@ import (
 	"log"
 )
 
-type Counter struct{ Count int }
-
 func main() {
 	v := via.New()
 
-	v.Page("/", func(c *via.Context) {
+	v.Page("/", func(cmp *via.Cmp) {
+		count := via.State(cmp, 0)
+		step := via.Signal(cmp, 1)
 
-		data := Counter{Count: 0}
-		step := via.Signal(c, 1)
-
-		increment := c.Action(func() error {
-			data.Count += step.Get(c)
-			c.Sync()
+		increment := cmp.Action(func(ctx *via.Ctx) error {
+			count.Set(ctx, count.Get(ctx)+step.Get(ctx))
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
-				h.P(h.Textf("Count: %d", data.Count)),
+				h.P(h.Textf("Count: %d", count.Get(ctx))),
 				h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
 				h.Label(
 					h.Text("Update Step: "),

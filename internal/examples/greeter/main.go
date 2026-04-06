@@ -9,22 +9,20 @@ import (
 func main() {
 	v := via.New()
 
-	v.Page("/", func(c *via.Context) {
-		greeting := via.Signal(c, "Hello...")
+	v.Page("/", func(cmp *via.Cmp) {
+		greeting := via.Signal(cmp, "Hello...")
 
-		greetBob := c.Action(func() error {
-			greeting.SetValue("Hello Bob!")
-			c.SyncSignals()
+		greetBob := cmp.Action(func(ctx *via.Ctx) error {
+			greeting.SetValue(ctx, "Hello Bob!")
 			return nil
 		})
 
-		greetAlice := c.Action(func() error {
-			greeting.SetValue("Hello Alice!")
-			c.SyncSignals()
+		greetAlice := cmp.Action(func(ctx *via.Ctx) error {
+			greeting.SetValue(ctx, "Hello Alice!")
 			return nil
 		})
 
-		c.View(func() h.H {
+		cmp.View(func(ctx *via.Ctx) h.H {
 			return h.Div(
 				h.P(h.Span(h.Text("Greeting: ")), h.Span(greeting.Text())),
 				h.Button(h.Text("Greet Bob"), greetBob.OnClick()),

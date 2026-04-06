@@ -12,21 +12,21 @@ import (
 func main() {
 	v := via.New(via.WithPlugins(picocss.New()))
 
-	v.Page("/counters/{counter_id}/{start_at_step}", func(c *via.Context) {
+	v.Page("/counters/{counter_id}/{start_at_step}", func(cmp *via.Cmp) {
+		count := via.State(cmp, 0)
+		step := via.Signal(cmp, 1)
 
-		counterID := c.GetPathParam("counter_id")
-		startAtStep, _ := strconv.Atoi(c.GetPathParam("start_at_step"))
-
-		count := 0
-		step := via.Signal(c, startAtStep)
-
-		increment := c.Action(func() error {
-			count += step.Get(c)
-			c.Sync()
+		increment := cmp.Action(func(ctx *via.Ctx) error {
+			count.Set(ctx, count.Get(ctx)+step.Get(ctx))
 			return nil
 		})
 
-		c.View(func() H {
+		cmp.View(func(ctx *via.Ctx) H {
+			counterID := ctx.GetPathParam("counter_id")
+			startAtStepStr := ctx.GetPathParam("start_at_step")
+			startAtStep, _ := strconv.Atoi(startAtStepStr)
+			_ = startAtStep
+
 			return Main(Class("container"),
 
 				Nav(
@@ -50,7 +50,7 @@ func main() {
 					Article(
 						H3(Text(counterID)),
 						Hr(),
-						H5(Textf("Count %d", count)),
+						H5(Textf("Count %d", count.Get(ctx))),
 						H6(Text("Step "), step.Text()),
 						FieldSet(Role("group"),
 							Input(Type("number"), step.Bind()),

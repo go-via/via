@@ -192,8 +192,8 @@ func TestNew_RepeatedOptions(t *testing.T) {
 
 func registerPlugin(opts ...picocss.PicoOption) (*via.App, *httptest.Server) {
 	v := via.New()
-	v.Page("/", func(c *via.Context) {
-		c.View(func() h.H { return h.Div(h.Text("x")) })
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
 	})
 	picocss.New(opts...).Register(v)
 	server := httptest.NewServer(v.HTTPServeMux())

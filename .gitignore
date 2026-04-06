@@ -41,4 +41,5 @@ go.work.sum
 # Air artifacts
 *tmp/
 
-
+# Compiled example binaries
+sysmon

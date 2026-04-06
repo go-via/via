@@ -15,7 +15,6 @@ type config struct {
 	addr            string
 	title           string
 	logLevel        LogLevel
-	sessionTTL      time.Duration
 	plugins         []Plugin
 	shutdownTimeout time.Duration
 }
@@ -36,11 +35,6 @@ func WithTitle(title string) Option {
 // WithLogLevel sets the minimum log level to write to stdout.
 func WithLogLevel(level LogLevel) Option {
 	return func(c *config) { c.logLevel = level }
-}
-
-// WithSessionTTL sets the idle session TTL.
-func WithSessionTTL(d time.Duration) Option {
-	return func(c *config) { c.sessionTTL = d }
 }
 
 // WithShutdownTimeout sets the graceful shutdown timeout for draining connections.
