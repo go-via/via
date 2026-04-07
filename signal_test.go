@@ -301,6 +301,294 @@ func TestSignal_setValueWritesToCtx(t *testing.T) {
 	}
 }
 
+func TestSignal_coercesJSONFloatToInt64(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan int64, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, int64(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, 999)
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, int64(999), got)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_coercesJSONFloatToFloat32(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan float32, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, float32(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, 3.14)
+
+	select {
+	case got := <-gotCh:
+		assert.InDelta(t, float32(3.14), got, 0.01)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_coercesJSONFloatToUint(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan uint, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, uint(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, 42)
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, uint(42), got)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_coerceFallsBackWhenTypeDoesNotMatch(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan string, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, "default")
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "updated")
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, "updated", got)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_structInitialSerializesAsJSON(t *testing.T) {
+	t.Parallel()
+
+	type point struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+	}
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, point{X: 1, Y: 2})
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
+	})
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "{\\&#34;x\\&#34;:1,\\&#34;y\\&#34;:2}", "struct signal should be JSON-serialized in page HTML")
+}
+
+func TestSignal_coercesJSONFloatToInt32(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan int32, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, int32(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, -77)
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, int32(-77), got)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_coercesJSONFloatToUint64(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan uint64, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, uint64(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, 12345)
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, uint64(12345), got)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_coercesJSONFloatToFloat64(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan float64, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, float64(0))
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(sig.Bind(), act.OnChange())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+	sigID := extractSignalID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	postSignal(t, server.URL, ctxID, actionID, sigID, 2.718)
+
+	select {
+	case got := <-gotCh:
+		assert.InDelta(t, 2.718, got, 0.001)
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
+func TestSignal_setValueOverwritesExistingValue(t *testing.T) {
+	t.Parallel()
+
+	gotCh := make(chan int, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, 0)
+		setAct := cmp.Action(func(ctx *via.Ctx) error {
+			sig.SetValue(ctx, 10)
+			sig.SetValue(ctx, 20)
+			gotCh <- sig.Get(ctx)
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(setAct.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
+
+	select {
+	case got := <-gotCh:
+		assert.Equal(t, 20, got, "second SetValue must overwrite the first")
+	case <-time.After(sseTimeout):
+		t.Fatal("timed out waiting for action")
+	}
+}
+
 func TestSignal_nilInitialCreatesError(t *testing.T) {
 	v := via.New()
 	var errVal error

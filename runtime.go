@@ -236,7 +236,7 @@ func initSignalValues(cmp *Cmp) map[string]*signalValue {
 	vals := make(map[string]*signalValue, len(cmp.signals))
 	for id, sig := range cmp.signals {
 		if sm, ok := sig.(signalMeta); ok {
-			vals[id] = &signalValue{raw: sm.initialRawValue()}
+			vals[id] = &signalValue{raw: sm.initialTypedValue()}
 		}
 	}
 	return vals

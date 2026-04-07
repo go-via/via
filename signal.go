@@ -11,6 +11,7 @@ import (
 // signalMeta is the runtime interface for signal metadata on Cmp.
 type signalMeta interface {
 	displayID() string
+	initialTypedValue() any
 	initialRawValue() any
 	coerce(v any) any
 	hasError() bool
@@ -39,11 +40,13 @@ func (s *signalOf[T]) displayID() string {
 	return s.id
 }
 
+func (s *signalOf[T]) initialTypedValue() any { return s.initial }
+
 func (s *signalOf[T]) initialRawValue() any {
 	rv := reflect.ValueOf(any(s.initial))
 	if rv.IsValid() {
 		switch rv.Kind() {
-		case reflect.Slice, reflect.Struct:
+		case reflect.Slice, reflect.Map, reflect.Struct, reflect.Pointer:
 			if j, err := json.Marshal(s.initial); err == nil {
 				return string(j)
 			}
