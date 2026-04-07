@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"log"
 )
 
 func main() {
@@ -31,7 +30,5 @@ func main() {
 		})
 	})
 
-	if err := v.Start(); err != nil {
-		log.Fatal(err)
-	}
+	v.Start()
 }

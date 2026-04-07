@@ -10,8 +10,8 @@ import (
 type Scope int
 
 const (
-	ScopeTab Scope = iota
-	ScopeApp
+	ScopeTab Scope = iota // Each browser tab owns an independent copy.
+	ScopeApp              // Shared across all tabs and sessions.
 )
 
 // StateOption configures a State at construction time.
@@ -38,12 +38,8 @@ type stateOf[T any] struct {
 	id    string
 	val   T
 	scope Scope
-	dirty bool
 	mu    sync.Mutex
 }
-
-// Dirty reports whether the state has been modified since construction.
-func (s *stateOf[T]) Dirty() bool { return s.dirty }
 
 // Get returns the current value of the state.
 func (s *stateOf[T]) Get(ctx *Ctx) T {
@@ -61,7 +57,6 @@ func (s *stateOf[T]) Set(ctx *Ctx, v T) {
 		defer s.mu.Unlock()
 	}
 	s.val = v
-	s.dirty = true
 	if ctx != nil {
 		ctx.markStateModified()
 	}

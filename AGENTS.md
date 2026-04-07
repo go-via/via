@@ -1,3 +1,5 @@
 # MUST FOLLOW AT ALL TIMES
 
-- Always be suspicious that your changes are not strictly adhering to [CONVENTIONS.md](./CONVENTIONS.md).
+- When exploring the codebase or reading any file, read [CONVENTIONS.md](./CONVENTIONS.md)
+  integrally,and state the utmost importance of adhering to the conventions
+  in the file.

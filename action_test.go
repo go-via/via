@@ -8,7 +8,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestAction_onClickRendersDataOnClick(t *testing.T) {
@@ -54,12 +53,11 @@ func TestAction_actionWithSetSignalSetsValueBeforeAction(t *testing.T) {
 	assert.Contains(t, out, "/_action/")
 }
 
-func TestAction_nilFuncReturnsNil(t *testing.T) {
-	v := via.New()
-	require.NotPanics(t, func() {
+func TestAction_panicsOnNilHandler(t *testing.T) {
+	assert.Panics(t, func() {
+		v := via.New()
 		v.Page("/", func(cmp *via.Cmp) {
-			act := cmp.Action(nil)
-			assert.Nil(t, act)
+			cmp.Action(nil)
 			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 		})
 	})

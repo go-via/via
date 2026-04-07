@@ -30,7 +30,7 @@ type App struct {
 	documentHTMLAttrs    []h.H
 }
 
-func (a *App) logFatal(format string, args ...any) {
+func (a *App) logPanic(format string, args ...any) {
 	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, args...))
 }
 
@@ -179,7 +179,8 @@ func (a *App) Shutdown(ctx context.Context) error {
 }
 
 // Start starts the Via HTTP server on the configured address.
-func (a *App) Start() error {
+// Panics if the server cannot bind to the address.
+func (a *App) Start() {
 	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.mux}
 	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
 
@@ -195,9 +196,8 @@ func (a *App) Start() error {
 	}()
 
 	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+		panic(fmt.Sprintf("via: %v", err))
 	}
-	return nil
 }
 
 // HTTPServeMux returns the underlying HTTP request multiplexer.

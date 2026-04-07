@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
@@ -32,7 +31,7 @@ func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
 	func() {
 		defer func() {
 			if err := recover(); err != nil {
-				a.logFatal("failed to register page with init func that panics: %v", err)
+				a.logPanic("failed to register page with init func that panics: %v", err)
 				panic(err)
 			}
 		}()
@@ -62,17 +61,23 @@ func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
 		}
 	}()
 
+	paramNames := extractParamNames(route)
+
 	a.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.logDebug(nil, "GET %s", r.URL.String())
-		if strings.Contains(r.URL.Path, "favicon") ||
-			strings.Contains(r.URL.Path, ".well-known") ||
-			strings.Contains(r.URL.Path, "js.map") {
+		if r.URL.Path == "/favicon.ico" ||
+			strings.HasPrefix(r.URL.Path, "/.well-known/") ||
+			strings.HasSuffix(r.URL.Path, ".js.map") {
 			return
+		}
+		params := make(map[string]string, len(paramNames))
+		for _, name := range paramNames {
+			params[name] = r.PathValue(name)
 		}
 		id := fmt.Sprintf("%s_/%s", route, genRandID())
 		ctx := &Ctx{
 			id:           id,
-			routeParams:  extractParams(route, r.URL.Path),
+			routeParams:  params,
 			cmp:          cmp,
 			patchChan:    make(chan patch, 64),
 			doneChan:     make(chan struct{}),
@@ -241,7 +246,7 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
-		log.Printf("Error reading body: %v", err)
+		a.logErr(nil, "sse close: failed to read body: %v", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
@@ -255,20 +260,12 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	a.unregisterCtx(cID)
 }
 
-func extractParams(pattern, path string) map[string]string {
-	p := strings.Split(strings.Trim(pattern, "/"), "/")
-	u := strings.Split(strings.Trim(path, "/"), "/")
-	if len(p) != len(u) {
-		return nil
-	}
-	params := make(map[string]string)
-	for i := range p {
-		if strings.HasPrefix(p[i], "{") && strings.HasSuffix(p[i], "}") {
-			key := p[i][1 : len(p[i])-1]
-			params[key] = u[i]
-		} else if p[i] != u[i] {
-			return nil
+func extractParamNames(pattern string) []string {
+	var names []string
+	for _, seg := range strings.Split(pattern, "/") {
+		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
+			names = append(names, seg[1:len(seg)-1])
 		}
 	}
-	return params
+	return names
 }

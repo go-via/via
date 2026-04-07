@@ -62,8 +62,28 @@ func (s *signalOf[T]) coerce(v any) any {
 		switch any(zero).(type) {
 		case int:
 			return int(f64)
+		case int8:
+			return int8(f64)
+		case int16:
+			return int16(f64)
+		case int32:
+			return int32(f64)
 		case int64:
 			return int64(f64)
+		case uint:
+			return uint(f64)
+		case uint8:
+			return uint8(f64)
+		case uint16:
+			return uint16(f64)
+		case uint32:
+			return uint32(f64)
+		case uint64:
+			return uint64(f64)
+		case float32:
+			return float32(f64)
+		case float64:
+			return f64
 		}
 	}
 	return v

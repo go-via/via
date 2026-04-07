@@ -10,13 +10,12 @@ build chains, and frameworks stacked on frameworks.
 Via takes a radical stance:
 
 - No templates.
-- No JavaScript.
+- No hand-written JavaScript.
 - No transpilation.
 - No hydration.
 - No front-end fatigue.
-- Single SSE stream.
+- Single Brotli-compressed SSE stream.
 - Full reactivity.
-- Built-in Brotli compression.
 - Pure Go.
 
 ## Quick Start
@@ -25,8 +24,6 @@ Via takes a radical stance:
 package main
 
 import (
-  "log"
-
   "github.com/go-via/via"
   "github.com/go-via/via/h"
 )
@@ -56,9 +53,7 @@ func main() {
     })
   })
 
-  if err := v.Start(); err != nil {
-    log.Fatal(err)
-  }
+  v.Start()
 }
 ```
 
@@ -70,7 +65,8 @@ Via has two reactive primitives, both generic and type-safe:
 
 - **State** — server-side values. Mutating state re-renders the view and
   pushes an HTML patch over SSE.
-- **Signal** — client-side values bound to DOM inputs. The browser owns the
+- **Signal** — client-side reactive values. Bind them to inputs, display them
+  with `Text()`, or toggle visibility with `Show()`. The browser owns the
   value; the server reads it on actions and can push updates back.
 
 ```go
@@ -94,12 +90,13 @@ submit := cmp.Action(func(ctx *via.Ctx) error {
 // In the view:
 h.Button(h.Text("Submit"), submit.OnClick())
 h.Input(query.Bind(), submit.OnChange())
-h.Input(submit.OnKeyDown("Enter"))
+h.Input(query.Bind(), submit.OnKeyDown("Enter"))
 ```
 
 ### Components
 
-Reusable UI pieces with their own state, signals, and actions:
+Reusable UI pieces that encapsulate state, signals, and actions within a
+parent page:
 
 ```go
 v.Page("/", func(cmp *via.Cmp) {
@@ -130,6 +127,8 @@ func counterComponent(cmp *via.Cmp) {
 
 ```go
 v.Page("/dashboard", func(cmp *via.Cmp) {
+  data := via.State(cmp, "")
+
   // Init runs once when the browser connects via SSE.
   // Use it to start background work (polling, tickers, streams).
   cmp.Init(func(ctx *via.Ctx) {

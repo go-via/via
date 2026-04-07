@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestState_dirtyTrackingIsActionScoped(t *testing.T) {
+func TestState_readOnlyActionDoesNotSync(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -176,7 +176,7 @@ func TestState_unmodifiedStateDoesNotTriggerRender(t *testing.T) {
 	assert.False(t, gotEvent, "no patch should be sent when state not modified")
 }
 
-func TestState_dirtyFlagClearedAfterSync(t *testing.T) {
+func TestState_syncDoesNotRetriggerOnNextAction(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -240,19 +240,6 @@ func TestState_setUpdatesGet(t *testing.T) {
 		})
 	})
 	assert.Equal(t, 5, got)
-}
-
-func TestState_dirtyAfterSet(t *testing.T) {
-	v := via.New()
-	v.Page("/", func(cmp *via.Cmp) {
-		s := via.State(cmp, 0)
-		cmp.View(func(ctx *via.Ctx) h.H {
-			assert.False(t, s.Dirty())
-			s.Set(ctx, 1)
-			assert.True(t, s.Dirty())
-			return h.Div()
-		})
-	})
 }
 
 func TestState_appScopeSharedAcrossContexts(t *testing.T) {

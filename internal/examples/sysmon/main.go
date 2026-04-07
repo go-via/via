@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"time"
 
@@ -400,7 +399,5 @@ func main() {
 		})
 	})
 
-	if err := v.Start(); err != nil {
-		log.Fatal(err)
-	}
+	v.Start()
 }

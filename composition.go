@@ -28,11 +28,12 @@ func (c *Cmp) View(f func(ctx *Ctx) h.H) {
 }
 
 // Action registers an event handler and returns a trigger for use in the view.
+// Panics if f is nil — actions must have a handler.
 func (c *Cmp) Action(f func(ctx *Ctx) error) *actionTrigger {
-	id := genRandID()
 	if f == nil {
-		return nil
+		panic("nil action handler")
 	}
+	id := genRandID()
 	c.actionFns[id] = f
 	return &actionTrigger{id}
 }

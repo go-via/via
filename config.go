@@ -2,6 +2,7 @@ package via
 
 import "time"
 
+// LogLevel controls the minimum severity written to stdout.
 type LogLevel int
 
 const (

@@ -102,6 +102,7 @@ func (ctx *Ctx) sendPatch(p patch) {
 	select {
 	case ctx.patchChan <- p:
 	default:
+		ctx.cmp.app.logWarn(ctx, "patch dropped: channel buffer full")
 	}
 }
 
