@@ -11,7 +11,6 @@ type Scope int
 
 const (
 	ScopeTab Scope = iota
-	ScopeSession
 	ScopeApp
 )
 
@@ -30,17 +29,6 @@ func WithScopeApp() StateOption {
 			panic("conflicting scopes: multiple scope options provided")
 		}
 		cfg.scope = ScopeApp
-		cfg.scopeSet = true
-	}
-}
-
-// WithScopeSession makes the state scoped to a user session (not yet implemented).
-func WithScopeSession() StateOption {
-	return func(cfg *stateConfig) {
-		if cfg.scopeSet {
-			panic("conflicting scopes: multiple scope options provided")
-		}
-		cfg.scope = ScopeSession
 		cfg.scopeSet = true
 	}
 }
@@ -84,10 +72,6 @@ func State[T any](cmp *Cmp, initial T, opts ...StateOption) *stateOf[T] {
 	cfg := &stateConfig{scope: ScopeTab}
 	for _, opt := range opts {
 		opt(cfg)
-	}
-
-	if cfg.scope == ScopeSession {
-		panic("ScopeSession is not yet implemented (deferred to design 07)")
 	}
 
 	if cfg.scope == ScopeApp {

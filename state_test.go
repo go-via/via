@@ -305,32 +305,3 @@ func TestState_appScopeMutexProtected(t *testing.T) {
 	wg.Wait()
 }
 
-func TestState_sessionScopePanics(t *testing.T) {
-	v := via.New()
-	assert.Panics(t, func() {
-		v.Page("/", func(cmp *via.Cmp) {
-			via.State(cmp, 0, via.WithScopeSession())
-			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-		})
-	})
-}
-
-func TestState_conflictingScopesPanics(t *testing.T) {
-	v := via.New()
-	assert.Panics(t, func() {
-		v.Page("/", func(cmp *via.Cmp) {
-			via.State(cmp, 0, via.WithScopeApp(), via.WithScopeSession())
-			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-		})
-	})
-}
-
-func TestState_conflictingAppSessionPanics(t *testing.T) {
-	v := via.New()
-	assert.Panics(t, func() {
-		v.Page("/", func(cmp *via.Cmp) {
-			via.State(cmp, 0, via.WithScopeSession(), via.WithScopeApp())
-			cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-		})
-	})
-}
