@@ -1,6 +1,9 @@
 package via
 
-import "time"
+import (
+	"net/http/httptest"
+	"time"
+)
 
 // LogLevel controls the minimum severity written to stdout.
 type LogLevel int
@@ -18,6 +21,7 @@ type config struct {
 	logLevel        LogLevel
 	plugins         []Plugin
 	shutdownTimeout time.Duration
+	testServer      **httptest.Server
 }
 
 // Option configures a Via App.
@@ -47,6 +51,12 @@ func WithShutdownTimeout(d time.Duration) Option {
 // WithPlugins registers plugins with the App.
 func WithPlugins(plugins ...Plugin) Option {
 	return func(c *config) { c.plugins = append(c.plugins, plugins...) }
+}
+
+// WithTestServer creates an httptest.Server backed by the app's mux and writes
+// it to *server before New returns. The caller must call (*server).Close.
+func WithTestServer(server **httptest.Server) Option {
+	return func(c *config) { c.testServer = server }
 }
 
 // Plugin integrates with the Via app runtime. Implement Register to inject

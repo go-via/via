@@ -14,34 +14,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func startServer(t *testing.T, app *via.App) *httptest.Server {
-	t.Helper()
-	server := httptest.NewServer(app.HTTPServeMux())
-	t.Cleanup(server.Close)
-	return server
-}
-
 func TestNew_returnsNonNil(t *testing.T) {
 	v := via.New()
 	assert.NotNil(t, v)
 }
 
 func TestNew_appliesTitle(t *testing.T) {
-	app := via.New(via.WithTitle("My App"))
+	var server *httptest.Server
+	app := via.New(via.WithTitle("My App"), via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("hello")) })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "My App")
 }
 
 func TestNew_usesDefaultTitle(t *testing.T) {
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("hello")) })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "Via")
 }
@@ -91,23 +86,25 @@ func TestPage_rendersPathParam(t *testing.T) {
 }
 
 func TestAppendToHead_addsElement(t *testing.T) {
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/app.css")))
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, v)
+	defer server.Close()
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "/app.css")
 }
 
 func TestAppendToFoot_addsElement(t *testing.T) {
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.AppendToFoot(h.Script(h.Src("/foot.js")))
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, v)
+	defer server.Close()
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "/foot.js")
 }
@@ -131,12 +128,13 @@ func TestNew_acceptsShutdownTimeout(t *testing.T) {
 func TestShutdown_disposesActiveContexts(t *testing.T) {
 	t.Parallel()
 	disposed := make(chan struct{})
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.Dispose(func() { close(disposed) })
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
@@ -156,7 +154,8 @@ func TestShutdown_disposesActiveContexts(t *testing.T) {
 func TestShutdown_disposesComponentsOfActiveContexts(t *testing.T) {
 	t.Parallel()
 	disposed := make(chan struct{})
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.Component(func(comp *via.Cmp) {
 			comp.Dispose(func() { close(disposed) })
@@ -164,7 +163,7 @@ func TestShutdown_disposesComponentsOfActiveContexts(t *testing.T) {
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
@@ -182,11 +181,12 @@ func TestShutdown_disposesComponentsOfActiveContexts(t *testing.T) {
 
 func TestShutdown_closesSSEStream(t *testing.T) {
 	t.Parallel()
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
@@ -214,12 +214,13 @@ func TestDispose_shutdownAfterSSECloseDoesNotPanic(t *testing.T) {
 	t.Parallel()
 
 	disposeCount := 0
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.Dispose(func() { disposeCount++ })
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
@@ -249,12 +250,13 @@ func TestDispose_shutdownAfterSSECloseDoesNotPanic(t *testing.T) {
 func TestDispose_panickingCallbackDoesNotCrashServer(t *testing.T) {
 	t.Parallel()
 
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		cmp.Dispose(func() { panic("boom") })
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
@@ -287,8 +289,9 @@ func TestShutdown_succeedsWithNoActiveContexts(t *testing.T) {
 }
 
 func TestDatastarJS_served(t *testing.T) {
-	v := via.New()
-	server := startServer(t, v)
+	var server *httptest.Server
+	via.New(via.WithTestServer(&server))
+	defer server.Close()
 	resp, err := http.Get(server.URL + "/_datastar.js")
 	require.NoError(t, err)
 	defer resp.Body.Close()

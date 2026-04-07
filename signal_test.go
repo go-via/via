@@ -3,6 +3,7 @@ package via_test
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -191,7 +192,8 @@ func TestSignal_valuesArePerTab(t *testing.T) {
 	gotCh1 := make(chan int, 1)
 	gotCh2 := make(chan int, 1)
 
-	app := via.New()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -206,7 +208,7 @@ func TestSignal_valuesArePerTab(t *testing.T) {
 			return h.Div(sig.Bind(), act.OnClick(), readAct.OnClick())
 		})
 	})
-	server := startServer(t, app)
+	defer server.Close()
 
 	// Tab 1: inject signal = 100
 	body1 := getPageBody(t, server, "/")

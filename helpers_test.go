@@ -19,9 +19,9 @@ import (
 
 func newTestApp(t *testing.T, route string, initFn func(*via.Cmp)) *httptest.Server {
 	t.Helper()
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.Page(route, initFn)
-	server := httptest.NewServer(v.HTTPServeMux())
 	t.Cleanup(server.Close)
 	return server
 }

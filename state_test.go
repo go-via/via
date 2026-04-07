@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -243,7 +244,8 @@ func TestState_setUpdatesGet(t *testing.T) {
 }
 
 func TestState_appScopeSharedAcrossContexts(t *testing.T) {
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.Page("/", func(cmp *via.Cmp) {
 		s := via.State(cmp, 0, via.WithScopeApp())
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -254,7 +256,7 @@ func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 			return h.Div(h.Textf("n=%d", s.Get(ctx)), act.OnClick())
 		})
 	})
-	server := startServer(t, v)
+	defer server.Close()
 
 	// First visit: trigger increment action.
 	body1 := getPageBody(t, server, "/")
@@ -273,13 +275,14 @@ func TestState_appScopeSharedAcrossContexts(t *testing.T) {
 }
 
 func TestState_appScopeMutexProtected(t *testing.T) {
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.Page("/", func(cmp *via.Cmp) {
 		s := via.State(cmp, 0, via.WithScopeApp())
 		cmp.Action(func(ctx *via.Ctx) error { s.Set(ctx, s.Get(ctx)+1); return nil })
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
-	server := startServer(t, v)
+	defer server.Close()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {

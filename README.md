@@ -199,7 +199,7 @@ type myPlugin struct{}
 
 func (p myPlugin) Register(app *via.App) {
   app.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/style.css")))
-  app.HTTPServeMux().HandleFunc("GET /api/health", healthHandler)
+  app.HandleFunc("GET /api/health", healthHandler)
 }
 ```
 

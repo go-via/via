@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/signal"
 	"sync"
@@ -200,9 +201,9 @@ func (a *App) Start() {
 	}
 }
 
-// HTTPServeMux returns the underlying HTTP request multiplexer.
-func (a *App) HTTPServeMux() *http.ServeMux {
-	return a.mux
+// HandleFunc registers an HTTP handler on the app's request multiplexer.
+func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	a.mux.HandleFunc(pattern, handler)
 }
 
 // New creates a new *App with default configuration.
@@ -238,5 +239,10 @@ func New(opts ...Option) *App {
 	a.mux.HandleFunc("GET /_sse", a.handleSSE)
 	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
+
+	if a.cfg.testServer != nil {
+		*a.cfg.testServer = httptest.NewServer(a.mux)
+	}
+
 	return a
 }

@@ -191,12 +191,12 @@ func TestNew_RepeatedOptions(t *testing.T) {
 // --- Integration (CDN fetch required) ---
 
 func registerPlugin(opts ...picocss.PicoOption) (*via.App, *httptest.Server) {
-	v := via.New()
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
 	})
 	picocss.New(opts...).Register(v)
-	server := httptest.NewServer(v.HTTPServeMux())
 	return v, server
 }
 

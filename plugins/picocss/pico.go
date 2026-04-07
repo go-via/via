@@ -393,8 +393,8 @@ func (p *plugin) Register(v *via.App) {
 		))
 	}
 
-	v.HTTPServeMux().Handle("GET "+themePath, http.HandlerFunc(p.servePluginAssets))
+	v.HandleFunc("GET "+themePath, p.servePluginAssets)
 	if p.opts.colorClasses {
-		v.HTTPServeMux().Handle("GET "+colorClassesPath, http.HandlerFunc(p.servePluginAssets))
+		v.HandleFunc("GET "+colorClassesPath, p.servePluginAssets)
 	}
 }
