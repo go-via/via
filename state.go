@@ -10,8 +10,9 @@ import (
 type Scope int
 
 const (
-	ScopeTab Scope = iota // Each browser tab owns an independent copy.
-	ScopeApp              // Shared across all tabs and sessions.
+	ScopeTab  Scope = iota // Each browser tab owns an independent copy.
+	ScopeUser              // Shared across tabs in the same session.
+	ScopeApp               // Shared across all tabs and sessions.
 )
 
 // StateOption configures a State at construction time.
@@ -20,6 +21,18 @@ type StateOption func(*stateConfig)
 type stateConfig struct {
 	scope    Scope
 	scopeSet bool
+}
+
+// WithScopeUser makes the state scoped to the user session, shared across
+// tabs belonging to the same session but isolated between different sessions.
+func WithScopeUser() StateOption {
+	return func(cfg *stateConfig) {
+		if cfg.scopeSet {
+			panic("conflicting scopes: multiple scope options provided")
+		}
+		cfg.scope = ScopeUser
+		cfg.scopeSet = true
+	}
 }
 
 // WithScopeApp makes the state shared across all sessions and tabs.
@@ -43,6 +56,15 @@ type stateOf[T any] struct {
 
 // Get returns the current value of the state.
 func (s *stateOf[T]) Get(ctx *Ctx) T {
+	if s.scope == ScopeUser {
+		if ctx == nil || ctx.session == nil {
+			return s.val
+		}
+		if v, ok := ctx.session.data.Load(s.id); ok {
+			return v.(T)
+		}
+		return s.val
+	}
 	if s.scope == ScopeApp {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -52,6 +74,13 @@ func (s *stateOf[T]) Get(ctx *Ctx) T {
 
 // Set updates the state value and marks it dirty.
 func (s *stateOf[T]) Set(ctx *Ctx, v T) {
+	if s.scope == ScopeUser {
+		if ctx != nil && ctx.session != nil {
+			ctx.session.data.Store(s.id, v)
+			ctx.markStateModified()
+		}
+		return
+	}
 	if s.scope == ScopeApp {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -67,6 +96,23 @@ func State[T any](cmp *Cmp, initial T, opts ...StateOption) *stateOf[T] {
 	cfg := &stateConfig{scope: ScopeTab}
 	for _, opt := range opts {
 		opt(cfg)
+	}
+
+	if cfg.scope == ScopeUser {
+		var pcs [1]uintptr
+		runtime.Callers(2, pcs[:])
+		key := pcs[0]
+
+		if existing, ok := cmp.appStateStore.Load(key); ok {
+			return existing.(*stateOf[T])
+		}
+		s := &stateOf[T]{
+			id:    fmt.Sprintf("su_%x", key),
+			val:   initial,
+			scope: ScopeUser,
+		}
+		actual, _ := cmp.appStateStore.LoadOrStore(key, s)
+		return actual.(*stateOf[T])
 	}
 
 	if cfg.scope == ScopeApp {

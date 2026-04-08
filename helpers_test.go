@@ -36,6 +36,48 @@ func getPageBody(t *testing.T, server *httptest.Server, route string) string {
 	return string(body)
 }
 
+func getPageBodyWithCookies(t *testing.T, server *httptest.Server, route string, cookies []*http.Cookie) string {
+	t.Helper()
+	req, _ := http.NewRequest("GET", server.URL+route, nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(body)
+}
+
+func connectSSEWithCookies(t *testing.T, server *httptest.Server, ctxID string, cookies []*http.Cookie) (*bufio.Scanner, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	sigsJSON := `{"via_tab":"` + ctxID + `"}`
+	req, err := http.NewRequestWithContext(ctx, "GET", server.URL+"/_sse?datastar="+sigsJSON, nil)
+	require.NoError(t, err)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return bufio.NewScanner(resp.Body), cancel
+}
+
+func triggerActionWithCookies(t *testing.T, serverURL, ctxID, actionID string, cookies []*http.Cookie) {
+	t.Helper()
+	sigsJSON := `{"via_tab":"` + ctxID + `"}`
+	req, _ := http.NewRequest("POST", serverURL+"/_action/"+actionID, strings.NewReader(sigsJSON))
+	req.Header.Set("Content-Type", "application/json")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+}
+
 // extractCtxID parses the via_tab value from the page HTML (data-signals meta tag).
 // Double quotes in JSON attribute values are HTML-escaped to &#34; by the renderer.
 func extractCtxID(t *testing.T, body string) string {

@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type session struct {
-	id   string
-	data sync.Map
+	id         string
+	data       sync.Map
+	lastAccess atomic.Int64
 }
 
 type sessContextKey struct{}
@@ -18,16 +21,19 @@ type sessAppContextKey struct{}
 
 // getOrCreateSession looks up the session by cookie or creates a new one.
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
+	now := time.Now().UnixNano()
 	if c, err := r.Cookie("via_session"); err == nil {
 		a.sessionsMu.RLock()
 		sess, ok := a.sessions[c.Value]
 		a.sessionsMu.RUnlock()
 		if ok {
+			sess.lastAccess.Store(now)
 			return sess
 		}
 	}
 
 	sess := &session{id: genRandID()}
+	sess.lastAccess.Store(now)
 
 	a.sessionsMu.Lock()
 	a.sessions[sess.id] = sess
@@ -100,6 +106,34 @@ func SetSess[T any](w http.ResponseWriter, r *http.Request, val T) {
 	}
 	key := reflect.TypeFor[T]()
 	sess.data.Store(key, val)
+}
+
+func (a *App) sweepExpiredSessions() {
+	interval := a.cfg.sessionTTL / 2
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopSweep:
+			return
+		case <-ticker.C:
+			a.removeExpiredSessions()
+		}
+	}
+}
+
+func (a *App) removeExpiredSessions() {
+	cutoff := time.Now().Add(-a.cfg.sessionTTL).UnixNano()
+	a.sessionsMu.Lock()
+	for id, sess := range a.sessions {
+		if sess.lastAccess.Load() < cutoff {
+			delete(a.sessions, id)
+		}
+	}
+	a.sessionsMu.Unlock()
 }
 
 // ClearSess destroys the session and expires the cookie. No-op with warning if w or r is nil.

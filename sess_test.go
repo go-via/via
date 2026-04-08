@@ -272,6 +272,175 @@ func TestGetSess_worksWithHTTPRequest(t *testing.T) {
 	}
 }
 
+func TestSession_sweepsExpiredSessions(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSessionTTL(100*time.Millisecond))
+
+	v.HandleFunc("POST /set-user", func(w http.ResponseWriter, r *http.Request) {
+		via.SetSess(w, r, testUser{Name: "ephemeral"})
+	})
+
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
+			user := via.GetSess[testUser](ctx)
+			return h.Div(h.Text(user.Name))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	// Get session cookie
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+	jar := collectCookies(t, server.URL, resp.Cookies())
+
+	// Set session data
+	req, _ := http.NewRequest("POST", server.URL+"/set-user", nil)
+	addCookies(req, jar)
+	resp2, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp2.Body.Close()
+	jar = mergeCookies(jar, resp2.Cookies())
+
+	// Wait for sweep (interval = TTL/2 = 50ms; need TTL + interval = 150ms)
+	time.Sleep(200 * time.Millisecond)
+
+	// Revisit — session should have been swept, data gone
+	req2, _ := http.NewRequest("GET", server.URL+"/", nil)
+	addCookies(req2, jar)
+	resp3, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp3.Body)
+	require.NoError(t, err)
+	resp3.Body.Close()
+
+	assert.NotContains(t, string(body), "ephemeral", "session data should be swept after TTL expires")
+}
+
+func TestSession_refreshesTTLOnAccess(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSessionTTL(150*time.Millisecond))
+
+	v.HandleFunc("POST /set-user", func(w http.ResponseWriter, r *http.Request) {
+		via.SetSess(w, r, testUser{Name: r.URL.Query().Get("name")})
+	})
+
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
+			user := via.GetSess[testUser](ctx)
+			return h.Div(h.Text(user.Name))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	// Session A: will be kept alive with regular access
+	respA, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	respA.Body.Close()
+	jarA := collectCookies(t, server.URL, respA.Cookies())
+
+	reqA, _ := http.NewRequest("POST", server.URL+"/set-user?name=alive", nil)
+	addCookies(reqA, jarA)
+	respA2, err := http.DefaultClient.Do(reqA)
+	require.NoError(t, err)
+	respA2.Body.Close()
+	jarA = mergeCookies(jarA, respA2.Cookies())
+
+	// Session B: will be abandoned after setup
+	respB, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	respB.Body.Close()
+	jarB := collectCookies(t, server.URL, respB.Cookies())
+
+	reqB, _ := http.NewRequest("POST", server.URL+"/set-user?name=abandoned", nil)
+	addCookies(reqB, jarB)
+	respB2, err := http.DefaultClient.Do(reqB)
+	require.NoError(t, err)
+	respB2.Body.Close()
+	jarB = mergeCookies(jarB, respB2.Cookies())
+
+	// Keep session A alive every 50ms for 300ms (past the 150ms TTL)
+	for i := 0; i < 6; i++ {
+		time.Sleep(50 * time.Millisecond)
+		req, _ := http.NewRequest("GET", server.URL+"/", nil)
+		addCookies(req, jarA)
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+		jarA = mergeCookies(jarA, resp.Cookies())
+	}
+
+	// Session A should still have its data
+	reqA3, _ := http.NewRequest("GET", server.URL+"/", nil)
+	addCookies(reqA3, jarA)
+	respA3, err := http.DefaultClient.Do(reqA3)
+	require.NoError(t, err)
+	bodyA, err := io.ReadAll(respA3.Body)
+	require.NoError(t, err)
+	respA3.Body.Close()
+	assert.Contains(t, string(bodyA), "alive", "regularly accessed session should survive past TTL")
+
+	// Session B should have been swept (abandoned for 300ms, TTL is 150ms)
+	reqB3, _ := http.NewRequest("GET", server.URL+"/", nil)
+	addCookies(reqB3, jarB)
+	respB3, err := http.DefaultClient.Do(reqB3)
+	require.NoError(t, err)
+	bodyB, err := io.ReadAll(respB3.Body)
+	require.NoError(t, err)
+	respB3.Body.Close()
+	assert.NotContains(t, string(bodyB), "abandoned", "abandoned session should be swept after TTL expires")
+}
+
+func TestSession_zeroTTLDisablesSweep(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSessionTTL(0))
+
+	v.HandleFunc("POST /set-user", func(w http.ResponseWriter, r *http.Request) {
+		via.SetSess(w, r, testUser{Name: "forever"})
+	})
+
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
+			user := via.GetSess[testUser](ctx)
+			return h.Div(h.Text(user.Name))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	// Get session and set data
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+	jar := collectCookies(t, server.URL, resp.Cookies())
+
+	req, _ := http.NewRequest("POST", server.URL+"/set-user", nil)
+	addCookies(req, jar)
+	resp2, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp2.Body.Close()
+	jar = mergeCookies(jar, resp2.Cookies())
+
+	// Wait a while
+	time.Sleep(200 * time.Millisecond)
+
+	// Data should still be there — no sweep with TTL=0
+	req2, _ := http.NewRequest("GET", server.URL+"/", nil)
+	addCookies(req2, jar)
+	resp3, err := http.DefaultClient.Do(req2)
+	require.NoError(t, err)
+	body, err := io.ReadAll(resp3.Body)
+	require.NoError(t, err)
+	resp3.Body.Close()
+
+	assert.Contains(t, string(body), "forever", "session should never expire with TTL=0")
+}
+
 func TestSetSess_preservesMultipleTypesInSameSession(t *testing.T) {
 	t.Parallel()
 

@@ -29,6 +29,8 @@ type App struct {
 	contextRegistryMutex sync.RWMutex
 	sessions             map[string]*session
 	sessionsMu           sync.RWMutex
+	stopSweep            chan struct{}
+	stopSweepOnce        sync.Once
 	middleware           []Middleware
 	layoutFn func(cmp *Cmp)
 	documentHeadIncludes []h.H
@@ -178,6 +180,12 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.disposeCtx(c)
 	}
 
+	a.stopSweepOnce.Do(func() {
+		if a.stopSweep != nil {
+			close(a.stopSweep)
+		}
+	})
+
 	a.sessionsMu.Lock()
 	a.sessions = make(map[string]*session)
 	a.sessionsMu.Unlock()
@@ -257,6 +265,11 @@ func New(opts ...Option) *App {
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 
 	a.handler = a.withSession(a.mux)
+
+	if a.cfg.sessionTTL > 0 {
+		a.stopSweep = make(chan struct{})
+		go a.sweepExpiredSessions()
+	}
 
 	if a.cfg.testServer != nil {
 		*a.cfg.testServer = httptest.NewServer(a.handler)
