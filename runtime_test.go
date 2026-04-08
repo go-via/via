@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -110,6 +111,8 @@ func extractSignalID(t *testing.T, body string) string {
 	t.Fatal("signal ID not found in page body")
 	return ""
 }
+
+// --- SSE tests ---
 
 func TestSSE_reconnectAfterDisconnect(t *testing.T) {
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -490,6 +493,8 @@ func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
 	assert.False(t, gotEvent, "no patch should be sent when signal is unchanged")
 }
 
+// --- View tests ---
+
 func TestView_rendersInDivWithContextID(t *testing.T) {
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.P(h.Text("content")) })
@@ -498,6 +503,8 @@ func TestView_rendersInDivWithContextID(t *testing.T) {
 	assert.Contains(t, body, `<div id=`)
 	assert.Contains(t, body, "content")
 }
+
+// --- Component tests ---
 
 func TestComponent_rendersNestedInView(t *testing.T) {
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -510,18 +517,6 @@ func TestComponent_rendersNestedInView(t *testing.T) {
 	})
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "from-component")
-}
-
-func TestGetPathParam_returnsEmptyForMissingParam(t *testing.T) {
-	v := via.New()
-	var got string
-	v.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H {
-			got = ctx.GetPathParam("missing")
-			return h.Div()
-		})
-	})
-	assert.Equal(t, "", got)
 }
 
 func TestComponent_runsInitOnPageLoad(t *testing.T) {
@@ -546,7 +541,46 @@ func TestComponent_runsInitOnPageLoad(t *testing.T) {
 	assert.True(t, initCalled, "init should persist across SSE connections")
 }
 
-func TestContext_runsInitOnSSEConnect(t *testing.T) {
+func TestComponent_disposeCallback(t *testing.T) {
+	disposeCalled := false
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.Dispose(func() { disposeCalled = true })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+
+	time.Sleep(20 * time.Millisecond)
+	assert.False(t, disposeCalled, "dispose should not run before close")
+
+	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	assert.True(t, disposeCalled, "dispose should run after session close")
+}
+
+// --- Ctx tests ---
+
+func TestGetPathParam_returnsEmptyForMissingParam(t *testing.T) {
+	v := via.New()
+	var got string
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
+			got = ctx.GetPathParam("missing")
+			return h.Div()
+		})
+	})
+	assert.Equal(t, "", got)
+}
+
+func TestCtx_runsInitOnSSEConnect(t *testing.T) {
 	initDone := make(chan struct{})
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) { close(initDone) })
@@ -571,7 +605,7 @@ func TestContext_runsInitOnSSEConnect(t *testing.T) {
 	}
 }
 
-func TestContext_syncReRendersAndPushesView(t *testing.T) {
+func TestCtx_syncReRendersAndPushesView(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -599,7 +633,7 @@ func TestContext_syncReRendersAndPushesView(t *testing.T) {
 	assert.Contains(t, ev.data, "val=after", "Sync must re-render and push the updated view")
 }
 
-func TestContext_syncFlushesSignalPatches(t *testing.T) {
+func TestCtx_syncFlushesSignalPatches(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -629,7 +663,7 @@ func TestContext_syncFlushesSignalPatches(t *testing.T) {
 	assert.Contains(t, ev2.data, "pushed")
 }
 
-func TestContext_marshalAndPatchSignalsPushesArbitrarySignals(t *testing.T) {
+func TestCtx_marshalAndPatchSignalsPushesArbitrarySignals(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -661,7 +695,7 @@ func TestContext_marshalAndPatchSignalsPushesArbitrarySignals(t *testing.T) {
 	assert.Contains(t, ev.data, "_theme")
 }
 
-func TestContext_doneClosedOnDispose(t *testing.T) {
+func TestCtx_doneClosedOnDispose(t *testing.T) {
 	t.Parallel()
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
@@ -686,7 +720,7 @@ func TestContext_doneClosedOnDispose(t *testing.T) {
 	resp.Body.Close()
 }
 
-func TestContext_doneNotClosedBeforeDispose(t *testing.T) {
+func TestCtx_doneNotClosedBeforeDispose(t *testing.T) {
 	t.Parallel()
 
 	doneClosed := make(chan struct{})
@@ -726,11 +760,52 @@ func TestContext_doneNotClosedBeforeDispose(t *testing.T) {
 	}
 }
 
-func TestComponent_disposeCallback(t *testing.T) {
-	disposeCalled := false
+func TestCtx_exposeWAndRDuringAction(t *testing.T) {
+	t.Parallel()
+
+	type result struct{ hasW, hasR bool }
+	gotCh := make(chan result, 1)
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Dispose(func() { disposeCalled = true })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(act.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
+
+	select {
+	case r := <-gotCh:
+		assert.True(t, r.hasW, "ctx.W should be set during action")
+		assert.True(t, r.hasR, "ctx.R should be set during action")
+	case <-time.After(sseTimeout):
+		require.Fail(t, "timed out waiting for action")
+	}
+}
+
+func TestCtx_WAndRAreNilDuringInit(t *testing.T) {
+	t.Parallel()
+
+	type result struct{ hasW, hasR bool }
+	gotCh := make(chan result, 1)
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+		})
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 
 	body := getPageBody(t, server, "/")
@@ -739,14 +814,198 @@ func TestComponent_disposeCallback(t *testing.T) {
 	_, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
 
+	select {
+	case r := <-gotCh:
+		assert.False(t, r.hasW, "ctx.W should be nil during Init")
+		assert.False(t, r.hasR, "ctx.R should be nil during Init")
+	case <-time.After(sseTimeout):
+		require.Fail(t, "timed out waiting for init")
+	}
+}
+
+func TestCtx_actionsSerializedPerCtx(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var concurrent int
+	var maxConcurrent int
+	enterCh := make(chan struct{}, 3)
+	proceedCh := make(chan struct{})
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			mu.Lock()
+			concurrent++
+			if concurrent > maxConcurrent {
+				maxConcurrent = concurrent
+			}
+			mu.Unlock()
+
+			enterCh <- struct{}{}
+			<-proceedCh
+
+			mu.Lock()
+			concurrent--
+			mu.Unlock()
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(act.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
 	time.Sleep(20 * time.Millisecond)
-	assert.False(t, disposeCalled, "dispose should not run before close")
 
-	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			triggerAction(t, server.URL, ctxID, actionID)
+		}()
+	}
 
-	assert.True(t, disposeCalled, "dispose should run after session close")
+	select {
+	case <-enterCh:
+	case <-time.After(sseTimeout):
+		require.Fail(t, "no action entered")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	mu.Lock()
+	max := maxConcurrent
+	mu.Unlock()
+
+	close(proceedCh)
+	wg.Wait()
+
+	assert.Equal(t, 1, max, "actions should be serialized (max 1 concurrent)")
+}
+
+func TestCtx_WAndRClearedAfterActionPanics(t *testing.T) {
+	t.Parallel()
+
+	type result struct{ hasW, hasR bool }
+	gotCh := make(chan result, 1)
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		panicAct := cmp.Action(func(ctx *via.Ctx) error {
+			panic("boom")
+		})
+		checkAct := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(panicAct.OnClick(), checkAct.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionIDs := extractActionIDs(t, body)
+	require.Len(t, actionIDs, 2)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// Fire the panicking action
+	triggerAction(t, server.URL, ctxID, actionIDs[0])
+	time.Sleep(50 * time.Millisecond)
+
+	// Fire the check action — W/R must be freshly set, not stale
+	triggerAction(t, server.URL, ctxID, actionIDs[1])
+
+	select {
+	case r := <-gotCh:
+		assert.True(t, r.hasW, "ctx.W should be set for action after panic")
+		assert.True(t, r.hasR, "ctx.R should be set for action after panic")
+	case <-time.After(sseTimeout):
+		require.Fail(t, "check action never ran — mutex likely stuck after panic")
+	}
+}
+
+func TestCtx_redirectSendsScriptPatchDuringAction(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			ctx.Redirect("/dashboard")
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(act.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	stream, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
+
+	ev := readSSEEvent(t, stream, sseTimeout)
+	assert.Equal(t, "datastar-patch-elements", ev.eventType)
+	assert.Contains(t, ev.data, "/dashboard")
+	assert.Contains(t, ev.data, "<script")
+}
+
+func TestCtx_WAndRAreNilAfterActionCompletes(t *testing.T) {
+	t.Parallel()
+
+	type result struct{ hasW, hasR bool }
+	gotCh := make(chan result, 1)
+	actionDone := make(chan struct{})
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			close(actionDone)
+			return nil
+		})
+		act2 := cmp.Action(func(ctx *via.Ctx) error {
+			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(act.OnClick(), act2.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionIDs := extractActionIDs(t, body)
+	require.Len(t, actionIDs, 2)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// Trigger first action and wait for it to complete
+	triggerAction(t, server.URL, ctxID, actionIDs[0])
+	select {
+	case <-actionDone:
+	case <-time.After(sseTimeout):
+		require.Fail(t, "first action never completed")
+	}
+
+	// Trigger second action — W/R must be set fresh (not leftover nil from first)
+	triggerAction(t, server.URL, ctxID, actionIDs[1])
+	select {
+	case r := <-gotCh:
+		assert.True(t, r.hasW, "ctx.W should be set for each action invocation")
+		assert.True(t, r.hasR, "ctx.R should be set for each action invocation")
+	case <-time.After(sseTimeout):
+		require.Fail(t, "second action never ran")
+	}
 }

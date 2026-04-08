@@ -1,11 +1,13 @@
 package via
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -17,6 +19,7 @@ const (
 	patchTypeElements = iota
 	patchTypeSignals
 	patchTypeScript
+	patchTypeRedirect
 )
 
 type patch struct {
@@ -24,7 +27,158 @@ type patch struct {
 	content string
 }
 
-// Page registers a route and its associated page handler.
+// Ctx is the execution context — created per request, passed to view and action functions.
+type Ctx struct {
+	mux          sync.RWMutex
+	id           string
+	routeParams  map[string]string
+	cmp          *Cmp
+	patchChan    chan patch
+	doneChan     chan struct{}
+	signalValues map[string]*signalValue
+	stateMod     bool
+	disposed     bool
+	initialized  bool
+	session      *session
+	actionMu     sync.Mutex
+
+	// W and R are escape hatches for raw HTTP access. Set during action
+	// execution, nil otherwise.
+	W http.ResponseWriter
+	R *http.Request
+}
+
+// GetPathParam returns the value of a named path parameter from the request URL.
+func (ctx *Ctx) GetPathParam(name string) string {
+	ctx.mux.RLock()
+	defer ctx.mux.RUnlock()
+	return ctx.routeParams[name]
+}
+
+// SyncElements sends HTML element patches to the browser immediately.
+func (ctx *Ctx) SyncElements(elem ...h.H) {
+	b := bytes.NewBuffer(nil)
+	for _, el := range elem {
+		if el == nil {
+			continue
+		}
+		_ = el.Render(b)
+	}
+	ctx.sendPatch(patch{patchTypeElements, b.String()})
+}
+
+// Redirect navigates the browser to the given URL.
+func (ctx *Ctx) Redirect(url string) {
+	if url == "" {
+		return
+	}
+	ctx.sendPatch(patch{patchTypeRedirect, url})
+}
+
+// ExecScript sends a JavaScript snippet to the browser for execution.
+func (ctx *Ctx) ExecScript(s string) {
+	if s == "" {
+		return
+	}
+	ctx.sendPatch(patch{patchTypeScript, s})
+}
+
+// Sync explicitly re-renders the view and flushes all pending patches to the browser.
+func (ctx *Ctx) Sync() {
+	ctx.stateMod = true
+	ctx.flushPatches()
+}
+
+// MarshalAndPatchSignals marshals the given key-value pairs and pushes them
+// to the browser as a signal patch. Use this for signals outside via's scope
+// (e.g. plugin-owned frontend signals like _picoDarkMode).
+func (ctx *Ctx) MarshalAndPatchSignals(signals map[string]any) {
+	if len(signals) == 0 {
+		return
+	}
+	out, _ := json.Marshal(signals)
+	ctx.sendPatch(patch{patchTypeSignals, string(out)})
+}
+
+// Done returns a channel that is closed when the context is disposed.
+func (ctx *Ctx) Done() <-chan struct{} {
+	return ctx.doneChan
+}
+
+func (ctx *Ctx) flushPatches() {
+	cmp := ctx.cmp
+	if cmp == nil || cmp.viewFn == nil {
+		return
+	}
+
+	if ctx.stateMod {
+		ctx.stateMod = false
+		elemsPatch := &bytes.Buffer{}
+		wrapped := h.Div(h.ID(ctx.id), cmp.viewFn(ctx))
+		if err := wrapped.Render(elemsPatch); err != nil {
+			return
+		}
+		ctx.sendPatch(patch{patchTypeElements, elemsPatch.String()})
+	}
+
+	updatedSigs := ctx.prepareSignalsForPatch()
+	if len(updatedSigs) != 0 {
+		outgoingSigs, _ := json.Marshal(updatedSigs)
+		ctx.sendPatch(patch{patchTypeSignals, string(outgoingSigs)})
+	}
+}
+
+func (ctx *Ctx) hasSignalChanges() bool {
+	for _, sv := range ctx.signalValues {
+		if sv.changed {
+			return true
+		}
+	}
+	return false
+}
+
+func (ctx *Ctx) sendPatch(p patch) {
+	select {
+	case ctx.patchChan <- p:
+	default:
+		ctx.cmp.app.logWarn(ctx, "patch dropped: channel buffer full")
+	}
+}
+
+func (ctx *Ctx) markStateModified() {
+	ctx.stateMod = true
+}
+
+func (ctx *Ctx) injectSignals(sigs map[string]any) {
+	if sigs == nil {
+		return
+	}
+	for incomingID, val := range sigs {
+		if incomingID == "via_tab" {
+			continue
+		}
+		for sigID, sig := range ctx.cmp.signals {
+			if sm, ok := sig.(signalMeta); ok && sm.displayID() == incomingID {
+				ctx.signalValues[sigID] = &signalValue{raw: sm.coerce(val)}
+				break
+			}
+		}
+	}
+}
+
+func (ctx *Ctx) prepareSignalsForPatch() map[string]any {
+	updatedSigs := make(map[string]any)
+	for sigID, sig := range ctx.cmp.signals {
+		if sm, ok := sig.(signalMeta); ok {
+			if sv, exists := ctx.signalValues[sigID]; exists && sv.changed {
+				updatedSigs[sm.displayID()] = sv.raw
+				sv.changed = false
+			}
+		}
+	}
+	return updatedSigs
+}
+
 // Page registers a route and its associated page handler.
 func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
 	a.pageWithOptions(route, initCmpFn, nil, a.layoutFn)
@@ -203,6 +357,8 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 				sse.PatchSignals([]byte(p.content))
 			case patchTypeScript:
 				sse.ExecuteScript(p.content)
+			case patchTypeRedirect:
+				sse.Redirect(p.content)
 			}
 		}
 	}
@@ -228,6 +384,17 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		a.logDebug(ctx, "action '%s' failed: not found", actionID)
 		return
 	}
+
+	// Serialize actions per Ctx to prevent data races on W/R, signals, state
+	ctx.actionMu.Lock()
+	ctx.W = w
+	ctx.R = r
+	defer func() {
+		ctx.W = nil
+		ctx.R = nil
+		ctx.actionMu.Unlock()
+	}()
+
 	defer func() {
 		if r := recover(); r != nil {
 			a.logErr(ctx, "action '%s' failed: %v", actionID, r)
@@ -249,46 +416,6 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (ctx *Ctx) injectSignals(sigs map[string]any) {
-	if sigs == nil {
-		return
-	}
-	for incomingID, val := range sigs {
-		if incomingID == "via_tab" {
-			continue
-		}
-		for sigID, sig := range ctx.cmp.signals {
-			if sm, ok := sig.(signalMeta); ok && sm.displayID() == incomingID {
-				ctx.signalValues[sigID] = &signalValue{raw: sm.coerce(val)}
-				break
-			}
-		}
-	}
-}
-
-func (ctx *Ctx) prepareSignalsForPatch() map[string]any {
-	updatedSigs := make(map[string]any)
-	for sigID, sig := range ctx.cmp.signals {
-		if sm, ok := sig.(signalMeta); ok {
-			if sv, exists := ctx.signalValues[sigID]; exists && sv.changed {
-				updatedSigs[sm.displayID()] = sv.raw
-				sv.changed = false
-			}
-		}
-	}
-	return updatedSigs
-}
-
-func initSignalValues(cmp *Cmp) map[string]*signalValue {
-	vals := make(map[string]*signalValue, len(cmp.signals))
-	for id, sig := range cmp.signals {
-		if sm, ok := sig.(signalMeta); ok {
-			vals[id] = &signalValue{raw: sm.initialTypedValue()}
-		}
-	}
-	return vals
-}
-
 func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
@@ -305,6 +432,16 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	}
 	a.disposeCtx(ctx)
 	a.unregisterCtx(cID)
+}
+
+func initSignalValues(cmp *Cmp) map[string]*signalValue {
+	vals := make(map[string]*signalValue, len(cmp.signals))
+	for id, sig := range cmp.signals {
+		if sm, ok := sig.(signalMeta); ok {
+			vals[id] = &signalValue{raw: sm.initialTypedValue()}
+		}
+	}
+	return vals
 }
 
 func extractParamNames(pattern string) []string {
