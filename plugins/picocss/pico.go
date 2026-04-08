@@ -3,7 +3,7 @@
 // # Quick Start
 //
 //	app := via.New(via.WithPlugins(
-//	    picocss.New(
+//	    picocss.Plugin(
 //	        picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemePurple}),
 //	        picocss.WithDefaultTheme(picocss.PicoThemeBlue),
 //	        picocss.WithColorClasses(),
@@ -127,7 +127,7 @@ type plugin struct {
 	colorClassesETag    string
 }
 
-// New creates a PicoCSS plugin with the given options.
+// Plugin creates a PicoCSS plugin with the given options.
 //
 // Default configuration (no options):
 //   - Themes: [PicoThemeAmber]
@@ -135,7 +135,7 @@ type plugin struct {
 //   - Dark mode: system preference (prefers-color-scheme)
 //   - Classless: disabled
 //   - Color classes: disabled
-func New(opts ...PicoOption) via.Plugin {
+func Plugin(opts ...PicoOption) via.Plugin {
 	p := &plugin{
 		opts: pluginOptions{
 			themes:       []PicoTheme{PicoThemeAmber},

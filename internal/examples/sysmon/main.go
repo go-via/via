@@ -196,7 +196,7 @@ func main() {
 	v := via.New(
 		via.WithTitle("System Monitor"),
 		via.WithPlugins(
-			picocss.New(
+			picocss.Plugin(
 				picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeSlate}),
 				picocss.WithDarkMode(),
 			),

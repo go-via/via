@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	v := via.New(via.WithPlugins(picocss.New()))
+	v := via.New(via.WithPlugins(picocss.Plugin()))
 
 	v.Page("/counters/{counter_id}/{start_at_step}", func(cmp *via.Cmp) {
 		count := via.State(cmp, 0)

@@ -24,7 +24,7 @@ func main() {
 	v := via.New(
 		via.WithTitle("Via + Pico CSS"),
 		via.WithPlugins(
-			picocss.New(
+			picocss.Plugin(
 				picocss.WithThemes(picocss.AllPicoThemes),
 				picocss.WithDefaultTheme(picocss.PicoThemeAmber),
 				picocss.WithColorClasses(),

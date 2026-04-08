@@ -95,49 +95,49 @@ func TestAllPicoThemes_NoDuplicates(t *testing.T) {
 
 // --- Constructor ---
 
-func TestNew_ReturnsViaPlugin(t *testing.T) {
-	p := picocss.New()
+func TestPlugin_ReturnsViaPlugin(t *testing.T) {
+	p := picocss.Plugin()
 	assert.NotNil(t, p)
 	var _ via.Plugin = p
 }
 
-func TestNew_Defaults(t *testing.T) {
-	p := picocss.New()
+func TestPlugin_Defaults(t *testing.T) {
+	p := picocss.Plugin()
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithThemes(t *testing.T) {
-	p := picocss.New(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemePurple, picocss.PicoThemeAmber}))
+func TestPlugin_WithThemes(t *testing.T) {
+	p := picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemePurple, picocss.PicoThemeAmber}))
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithDefaultTheme(t *testing.T) {
-	p := picocss.New(picocss.WithDefaultTheme(picocss.PicoThemePurple))
+func TestPlugin_WithDefaultTheme(t *testing.T) {
+	p := picocss.Plugin(picocss.WithDefaultTheme(picocss.PicoThemePurple))
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithClassless(t *testing.T) {
-	p := picocss.New(picocss.WithClassless())
+func TestPlugin_WithClassless(t *testing.T) {
+	p := picocss.Plugin(picocss.WithClassless())
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithColorClasses(t *testing.T) {
-	p := picocss.New(picocss.WithColorClasses())
+func TestPlugin_WithColorClasses(t *testing.T) {
+	p := picocss.Plugin(picocss.WithColorClasses())
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithDarkMode(t *testing.T) {
-	p := picocss.New(picocss.WithDarkMode())
+func TestPlugin_WithDarkMode(t *testing.T) {
+	p := picocss.Plugin(picocss.WithDarkMode())
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithLightMode(t *testing.T) {
-	p := picocss.New(picocss.WithLightMode())
+func TestPlugin_WithLightMode(t *testing.T) {
+	p := picocss.Plugin(picocss.WithLightMode())
 	assert.NotNil(t, p)
 }
 
-func TestNew_WithMultipleOptions(t *testing.T) {
-	p := picocss.New(
+func TestPlugin_WithMultipleOptions(t *testing.T) {
+	p := picocss.Plugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed, picocss.PicoThemeGreen}),
 		picocss.WithDefaultTheme(picocss.PicoThemeRed),
 		picocss.WithClassless(),
@@ -146,8 +146,8 @@ func TestNew_WithMultipleOptions(t *testing.T) {
 	assert.NotNil(t, p)
 }
 
-func TestNew_AllOptions(t *testing.T) {
-	p := picocss.New(
+func TestPlugin_AllOptions(t *testing.T) {
+	p := picocss.Plugin(
 		picocss.WithThemes(picocss.AllPicoThemes),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue),
 		picocss.WithClassless(),
@@ -157,31 +157,31 @@ func TestNew_AllOptions(t *testing.T) {
 	assert.NotNil(t, p)
 }
 
-func TestNew_OnlyColorClasses(t *testing.T) {
-	assert.NotNil(t, picocss.New(picocss.WithColorClasses()))
+func TestPlugin_OnlyColorClasses(t *testing.T) {
+	assert.NotNil(t, picocss.Plugin(picocss.WithColorClasses()))
 }
 
-func TestNew_OnlyClassless(t *testing.T) {
-	assert.NotNil(t, picocss.New(picocss.WithClassless()))
+func TestPlugin_OnlyClassless(t *testing.T) {
+	assert.NotNil(t, picocss.Plugin(picocss.WithClassless()))
 }
 
-func TestNew_SingleTheme(t *testing.T) {
-	assert.NotNil(t, picocss.New(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed})))
+func TestPlugin_SingleTheme(t *testing.T) {
+	assert.NotNil(t, picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed})))
 }
 
-func TestNew_DifferentDefaultThemes(t *testing.T) {
+func TestPlugin_DifferentDefaultThemes(t *testing.T) {
 	for _, theme := range []picocss.PicoTheme{
 		picocss.PicoThemeAmber, picocss.PicoThemeBlue, picocss.PicoThemePurple,
 	} {
 		t.Run(string(theme), func(t *testing.T) {
-			assert.NotNil(t, picocss.New(picocss.WithDefaultTheme(theme)))
+			assert.NotNil(t, picocss.Plugin(picocss.WithDefaultTheme(theme)))
 		})
 	}
 }
 
-func TestNew_RepeatedOptions(t *testing.T) {
+func TestPlugin_RepeatedOptions(t *testing.T) {
 	// Last call wins for same option type
-	p := picocss.New(
+	p := picocss.Plugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed}),
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemeGreen}),
 	)
@@ -196,11 +196,11 @@ func registerPlugin(opts ...picocss.PicoOption) (*via.App, *httptest.Server) {
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
 	})
-	picocss.New(opts...).Register(v)
+	picocss.Plugin(opts...).Register(v)
 	return v, server
 }
 
-func TestNew_NoOptionsDefaultsToSingleAmber(t *testing.T) {
+func TestPlugin_NoOptionsDefaultsToSingleAmber(t *testing.T) {
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -215,7 +215,7 @@ func TestNew_NoOptionsDefaultsToSingleAmber(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
 }
 
-func TestNew_EmptyThemesList_DefaultsToSingleAmber(t *testing.T) {
+func TestPlugin_EmptyThemesList_DefaultsToSingleAmber(t *testing.T) {
 	_, server := registerPlugin(picocss.WithThemes([]picocss.PicoTheme{}))
 	defer server.Close()
 
@@ -225,7 +225,7 @@ func TestNew_EmptyThemesList_DefaultsToSingleAmber(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestNew_WithInvalidDefaultTheme(t *testing.T) {
+func TestPlugin_WithInvalidDefaultTheme(t *testing.T) {
 	_, server := registerPlugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed, picocss.PicoThemeGreen}),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue), // not in list
@@ -243,7 +243,7 @@ func TestNew_WithInvalidDefaultTheme(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp2.StatusCode)
 }
 
-func TestNew_RepeatedThemes_Deduplicated(t *testing.T) {
+func TestPlugin_RepeatedThemes_Deduplicated(t *testing.T) {
 	_, server := registerPlugin(picocss.WithThemes([]picocss.PicoTheme{
 		picocss.PicoThemeBlue, picocss.PicoThemeBlue, picocss.PicoThemeRed, picocss.PicoThemeBlue,
 	}))
@@ -262,7 +262,7 @@ func TestNew_RepeatedThemes_Deduplicated(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-func TestNew_DuplicateThemesWithDefaultInDuplicates(t *testing.T) {
+func TestPlugin_DuplicateThemesWithDefaultInDuplicates(t *testing.T) {
 	_, server := registerPlugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemeBlue, picocss.PicoThemeRed}),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue),

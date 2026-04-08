@@ -143,6 +143,22 @@ func Signal[T any](c *Context, initial T) *signalOf[T] { ... }
 type Signal[T any] struct { ID string; Val T }
 ```
 
+## Plugin Constructor Naming
+
+Reasoning: A uniform constructor name across all plugin packages makes the
+API predictable and call sites consistent.
+
+Rule: Every plugin package exposes `Plugin(...)` as its public constructor,
+not `New(...)`. This keeps `via.WithPlugins(...)` call sites uniform.
+
+```go
+// ✅
+via.WithPlugins(picocss.Plugin(), echarts.Plugin())
+
+// ❌
+via.WithPlugins(picocss.New(), echarts.Plugin())
+```
+
 ## Functional Options
 
 Reasoning: Optional configuration passed as variadic arguments keeps

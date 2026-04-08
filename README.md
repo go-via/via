@@ -165,7 +165,7 @@ v := via.New(
   via.WithTitle("My App"),
   via.WithLogLevel(via.LogDebug),
   via.WithShutdownTimeout(10 * time.Second),
-  via.WithPlugins(picocss.New(), echarts.Plugin()),
+  via.WithPlugins(picocss.Plugin(), echarts.Plugin()),
 )
 ```
 
@@ -187,7 +187,7 @@ elements, or modify the HTML document.
 ```go
 // Using built-in plugins
 v := via.New(via.WithPlugins(
-  picocss.New(
+  picocss.Plugin(
     picocss.WithThemes(picocss.AllPicoThemes),
     picocss.WithDefaultTheme(picocss.PicoThemeAmber),
   ),
