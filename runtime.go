@@ -25,7 +25,12 @@ type patch struct {
 }
 
 // Page registers a route and its associated page handler.
+// Page registers a route and its associated page handler.
 func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
+	a.pageWithOptions(route, initCmpFn, nil, a.layoutFn)
+}
+
+func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []Middleware, layoutFn func(cmp *Cmp)) {
 	var cmp *Cmp
 	// Definition phase: run once at startup to register page
 	func() {
@@ -35,16 +40,48 @@ func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
 				panic(err)
 			}
 		}()
-		cmp = &Cmp{
-			app:       a,
-			route:     route,
-			actionFns: make(map[string]func(ctx *Ctx) error),
-			signals:   make(map[string]any),
+
+		if layoutFn != nil {
+			// Layout wraps the page: shared action/signal maps
+			layoutCmp := &Cmp{
+				app:       a,
+				route:     route,
+				actionFns: make(map[string]func(ctx *Ctx) error),
+				signals:   make(map[string]any),
+			}
+			pageCmp := &Cmp{
+				app:       a,
+				route:     route,
+				actionFns: layoutCmp.actionFns,
+				signals:   layoutCmp.signals,
+			}
+			initCmpFn(pageCmp)
+			if pageCmp.viewFn == nil {
+				panic("composition has no view")
+			}
+			contentID := "via_content_" + genRandID()
+			layoutCmp.contentFn = func(ctx *Ctx) h.H {
+				return h.Div(h.ID(contentID), pageCmp.viewFn(ctx))
+			}
+			layoutFn(layoutCmp)
+			if layoutCmp.viewFn == nil {
+				panic("layout has no view")
+			}
+			layoutCmp.components = append(layoutCmp.components, pageCmp)
+			cmp = layoutCmp
+		} else {
+			cmp = &Cmp{
+				app:       a,
+				route:     route,
+				actionFns: make(map[string]func(ctx *Ctx) error),
+				signals:   make(map[string]any),
+			}
+			initCmpFn(cmp)
+			if cmp.viewFn == nil {
+				panic("composition has no view")
+			}
 		}
-		initCmpFn(cmp)
-		if cmp.viewFn == nil {
-			panic("composition has no view")
-		}
+
 		// Call view during definition phase to run any side effects
 		defCtx := &Ctx{
 			cmp:          cmp,
@@ -70,46 +107,56 @@ func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
 			strings.HasSuffix(r.URL.Path, ".js.map") {
 			return
 		}
-		params := make(map[string]string, len(paramNames))
-		for _, name := range paramNames {
-			params[name] = r.PathValue(name)
-		}
-		id := fmt.Sprintf("%s_/%s", route, genRandID())
-		ctx := &Ctx{
-			id:           id,
-			routeParams:  params,
-			cmp:          cmp,
-			patchChan:    make(chan patch, 64),
-			doneChan:     make(chan struct{}),
-			signalValues: initSignalValues(cmp),
-		}
-		a.registerCtx(id, ctx)
 
-		headElements := []h.H{}
-		headElements = append(headElements, a.documentHeadIncludes...)
-		initialSigs := map[string]any{"via_tab": id}
-		for _, sig := range cmp.signals {
-			if sm, ok := sig.(signalMeta); ok && !sm.hasError() {
-				initialSigs[sm.displayID()] = sm.initialRawValue()
+		// Build middleware chain: global → group
+		mwChain := append([]Middleware{}, a.middleware...)
+		mwChain = append(mwChain, groupMW...)
+
+		final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			params := make(map[string]string, len(paramNames))
+			for _, name := range paramNames {
+				params[name] = r.PathValue(name)
 			}
-		}
-		initialSigsJSON, _ := json.Marshal(initialSigs)
-		headElements = append(headElements,
-			h.Meta(h.Data("signals", string(initialSigsJSON))),
-			h.Meta(h.Data("init", "@get('/_sse')")),
-			h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
-			navigator.sendBeacon('/_sse/close', '%s');});`, id))),
-		)
+			id := fmt.Sprintf("%s_/%s", route, genRandID())
+			ctx := &Ctx{
+				id:           id,
+				routeParams:  params,
+				cmp:          cmp,
+				patchChan:    make(chan patch, 64),
+				doneChan:     make(chan struct{}),
+				signalValues: initSignalValues(cmp),
+				session:      sessionFromRequest(r),
+			}
+			a.registerCtx(id, ctx)
 
-		bodyElements := []h.H{h.Div(h.ID(id), cmp.viewFn(ctx))}
-		bodyElements = append(bodyElements, a.documentFootIncludes...)
-		view := h.HTML5(h.HTML5Props{
-			Title:     a.cfg.title,
-			Head:      headElements,
-			Body:      bodyElements,
-			HTMLAttrs: a.documentHTMLAttrs,
+			headElements := []h.H{}
+			headElements = append(headElements, a.documentHeadIncludes...)
+			initialSigs := map[string]any{"via_tab": id}
+			for _, sig := range cmp.signals {
+				if sm, ok := sig.(signalMeta); ok && !sm.hasError() {
+					initialSigs[sm.displayID()] = sm.initialRawValue()
+				}
+			}
+			initialSigsJSON, _ := json.Marshal(initialSigs)
+			headElements = append(headElements,
+				h.Meta(h.Data("signals", string(initialSigsJSON))),
+				h.Meta(h.Data("init", "@get('/_sse')")),
+				h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
+				navigator.sendBeacon('/_sse/close', '%s');});`, id))),
+			)
+
+			bodyElements := []h.H{h.Div(h.ID(id), cmp.viewFn(ctx))}
+			bodyElements = append(bodyElements, a.documentFootIncludes...)
+			view := h.HTML5(h.HTML5Props{
+				Title:     a.cfg.title,
+				Head:      headElements,
+				Body:      bodyElements,
+				HTMLAttrs: a.documentHTMLAttrs,
+			})
+			_ = view.Render(w)
 		})
-		_ = view.Render(w)
+
+		runMiddleware(mwChain, w, r, final)
 	}))
 }
 

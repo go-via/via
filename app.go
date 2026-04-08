@@ -23,9 +23,14 @@ var datastarJS []byte
 type App struct {
 	cfg                  config
 	mux                  *http.ServeMux
+	handler              http.Handler
 	server               *http.Server
 	contextRegistry      map[string]*Ctx
 	contextRegistryMutex sync.RWMutex
+	sessions             map[string]*session
+	sessionsMu           sync.RWMutex
+	middleware           []Middleware
+	layoutFn func(cmp *Cmp)
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H
@@ -173,6 +178,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.disposeCtx(c)
 	}
 
+	a.sessionsMu.Lock()
+	a.sessions = make(map[string]*session)
+	a.sessionsMu.Unlock()
+
 	if a.server != nil {
 		return a.server.Shutdown(ctx)
 	}
@@ -182,7 +191,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 // Start starts the Via HTTP server on the configured address.
 // Panics if the server cannot bind to the address.
 func (a *App) Start() {
-	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.mux}
+	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.handler}
 	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
 
 	stop := make(chan os.Signal, 1)
@@ -201,6 +210,11 @@ func (a *App) Start() {
 	}
 }
 
+// Layout sets the default layout for all pages.
+func (a *App) Layout(layoutFn func(cmp *Cmp)) {
+	a.layoutFn = layoutFn
+}
+
 // HandleFunc registers an HTTP handler on the app's request multiplexer.
 func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	a.mux.HandleFunc(pattern, handler)
@@ -213,11 +227,13 @@ func New(opts ...Option) *App {
 	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
+		sessions:        make(map[string]*session),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
 			title:           "Via",
 			shutdownTimeout: 5 * time.Second,
+			sessionTTL:      30 * time.Minute,
 		},
 	}
 
@@ -240,8 +256,10 @@ func New(opts ...Option) *App {
 	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 
+	a.handler = a.withSession(a.mux)
+
 	if a.cfg.testServer != nil {
-		*a.cfg.testServer = httptest.NewServer(a.mux)
+		*a.cfg.testServer = httptest.NewServer(a.handler)
 	}
 
 	return a

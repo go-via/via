@@ -17,6 +17,7 @@ type Cmp struct {
 	components    []*Cmp
 	appStateStore sync.Map
 	signals       map[string]any
+	contentFn func(ctx *Ctx) h.H
 }
 
 // View registers the render function for this composition.
@@ -46,6 +47,14 @@ func (c *Cmp) Init(f func(ctx *Ctx)) {
 // Dispose registers a callback that runs when the session/tab ends.
 func (c *Cmp) Dispose(f func()) {
 	c.disposeFn = f
+}
+
+// Content renders the child page within a layout. Panics if called on a non-layout composition.
+func (c *Cmp) Content(ctx *Ctx) h.H {
+	if c.contentFn == nil {
+		panic("Content called on non-layout composition")
+	}
+	return c.contentFn(ctx)
 }
 
 // Component registers a child composition and returns a render function for use in the view.

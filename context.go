@@ -20,6 +20,7 @@ type Ctx struct {
 	stateMod     bool
 	disposed     bool
 	initialized  bool
+	session      *session
 }
 
 // GetPathParam returns the value of a named path parameter from the request URL.

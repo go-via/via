@@ -21,6 +21,7 @@ type config struct {
 	logLevel        LogLevel
 	plugins         []Plugin
 	shutdownTimeout time.Duration
+	sessionTTL      time.Duration
 	testServer      **httptest.Server
 }
 
@@ -46,6 +47,11 @@ func WithLogLevel(level LogLevel) Option {
 // Defaults to 5 seconds.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(c *config) { c.shutdownTimeout = d }
+}
+
+// WithSessionTTL sets the session expiry duration. Defaults to 30 minutes.
+func WithSessionTTL(d time.Duration) Option {
+	return func(c *config) { c.sessionTTL = d }
 }
 
 // WithPlugins registers plugins with the App.
