@@ -33,17 +33,12 @@ func main() {
 
 		cmp.Init(func(ctx *via.Ctx) {
 			user := via.GetSess[User](ctx)
-			if user.Email == "" {
-				return
+			if user.Email != "" {
+				if p, ok := getPrefs(user.Email); ok {
+					picocss.SetDarkMode(ctx, p.DarkMode)
+					picocss.SetTheme(ctx, p.Theme)
+				}
 			}
-			p, ok := getPrefs(user.Email)
-			if !ok {
-				return // no saved prefs — keep browser defaults
-			}
-			applyDarkMode(ctx, p.DarkMode)
-			ctx.MarshalAndPatchSignals(map[string]any{
-				"_picoTheme": p.Theme,
-			})
 		})
 
 		cmp.View(func(ctx *via.Ctx) h.H {
@@ -53,7 +48,7 @@ func main() {
 			return h.Div(
 				h.Nav(h.Class("container"),
 					h.Ul(
-						h.Li(h.A(h.Href("/"), h.Class("secondary"), h.Strong(h.Text("⚡ Via Auth")))),
+						h.Li(h.A(h.Href("/"), h.Strong(h.Text("⚡ Via Auth")))),
 					),
 					h.Ul(
 						h.Li(h.A(h.Href("/about"), h.Text("About"))),
@@ -64,7 +59,7 @@ func main() {
 							logout.OnClick(),
 						))),
 						h.If(!loggedIn, h.Li(h.A(h.Href("/login"), h.Text("Login")))),
-						h.If(!loggedIn, h.Li(h.A(h.Href("/register"), h.Attr("role", "button"), h.Text("Register")))),
+						h.If(!loggedIn, h.Li(h.A(h.Href("/register"), h.Role("button"), h.Text("Register")))),
 					),
 				),
 				h.Main(h.Class("container"), cmp.Content(ctx)),

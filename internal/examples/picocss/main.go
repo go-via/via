@@ -72,7 +72,7 @@ func main() {
 					h.Ul(
 						h.Li(h.Button(
 							h.Class("outline secondary"),
-							h.Data("on:click", "$_picoDarkMode=!$_picoDarkMode"),
+							h.Data("on:click", "$_picoDarkMode=$_picoDarkMode==='dark'?'light':'dark'"),
 							h.Text("Toggle dark mode"),
 						)),
 					),

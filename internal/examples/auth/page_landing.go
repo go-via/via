@@ -23,7 +23,7 @@ func landingPage(cmp *via.Cmp) {
 			)),
 
 			h.H1(h.Text("Zero JavaScript. Full power.")),
-			h.P(h.Text("Via is a reactive Go web framework that doesn't need a single line of JavaScript. Yes, really. No npm, no node_modules, no build step, no webpack config that makes you question your career choices.")),
+			h.P(h.Text("Via is a reactive Go web engine that doesn't need you to write a single line of JavaScript. Yes, really. No npm, no node_modules, no build step, no webpack config that makes you question your career choices.")),
 
 			h.If(loggedIn, h.P(
 				h.Text("Welcome back, "+user.Name+"! "),

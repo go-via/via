@@ -29,21 +29,27 @@ func profilePage(cmp *via.Cmp) {
 	darkMode := via.Signal(cmp, "system")
 	theme := via.Signal(cmp, "amber")
 
-	applyPrefs := cmp.Action(func(ctx *via.Ctx) error {
+	setDarkMode := cmp.Action(func(ctx *via.Ctx) error {
 		user := via.GetSess[User](ctx)
 		if user.Email == "" {
 			return nil
 		}
-		p := Prefs{
-			DarkMode: darkMode.Get(ctx),
-			Theme:    theme.Get(ctx),
-		}
+		p, _ := getPrefs(user.Email)
+		p.DarkMode = darkMode.Get(ctx)
 		setPrefs(user.Email, p)
-		applyDarkMode(ctx, p.DarkMode)
-		ctx.MarshalAndPatchSignals(map[string]any{"_picoTheme": p.Theme})
-		if p.DarkMode == "system" {
-			ctx.Redirect("/profile") // reload to let picocss re-init from browser preference
+		picocss.SetDarkMode(ctx, p.DarkMode)
+		return nil
+	})
+
+	setTheme := cmp.Action(func(ctx *via.Ctx) error {
+		user := via.GetSess[User](ctx)
+		if user.Email == "" {
+			return nil
 		}
+		p, _ := getPrefs(user.Email)
+		p.Theme = theme.Get(ctx)
+		setPrefs(user.Email, p)
+		picocss.SetTheme(ctx, p.Theme)
 		return nil
 	})
 
@@ -53,6 +59,11 @@ func profilePage(cmp *via.Cmp) {
 		if p.DarkMode == "" {
 			p.DarkMode = "system"
 		}
+		if p.Theme == "" {
+			p.Theme = "amber"
+		}
+		darkMode.SetValue(ctx, p.DarkMode)
+		theme.SetValue(ctx, p.Theme)
 
 		dmOptions := make([]h.H, len(darkModes))
 		for i, dm := range darkModes {
@@ -80,11 +91,11 @@ func profilePage(cmp *via.Cmp) {
 			h.H3(h.Text("Preferences")),
 
 			h.Label(h.Text("Dark mode"),
-				h.Select(append(dmOptions, darkMode.Bind(), applyPrefs.OnChange())...),
+				h.Select(append(dmOptions, darkMode.Bind(), setDarkMode.OnChange())...),
 			),
 
 			h.Label(h.Text("Theme"),
-				h.Select(append(themeOptions, theme.Bind(), applyPrefs.OnChange())...),
+				h.Select(append(themeOptions, theme.Bind(), setTheme.OnChange())...),
 			),
 		)
 	})

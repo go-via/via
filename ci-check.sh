@@ -54,7 +54,7 @@ fi
 echo "OK: markdownlint passed"
 
 echo "== CI: Run tests =="
-if ! go test ./... 2>&1 | grep -v '\[no test files\]'; then
+if ! go test -race ./... 2>&1 | grep -v '\[no test files\]'; then
   echo "ERROR: tests failed."
   exit 1
 fi

@@ -12,7 +12,9 @@ type Group struct {
 	parent     *Group
 }
 
-// Group creates a route group with the given path prefix.
+// Group creates a route group under prefix. Middleware and layout registered
+// on the group apply to all pages within it. Use an empty prefix to scope
+// middleware and layout without changing the route path.
 func (a *App) Group(prefix string) *Group {
 	return &Group{app: a, prefix: prefix}
 }

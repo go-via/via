@@ -3,8 +3,6 @@ package main
 import (
 	"errors"
 	"sync"
-
-	"github.com/go-via/via"
 )
 
 type User struct {
@@ -69,12 +67,3 @@ func setPrefs(email string, p Prefs) {
 	prefs[email] = p
 }
 
-func applyDarkMode(ctx *via.Ctx, mode string) {
-	switch mode {
-	case "light":
-		ctx.MarshalAndPatchSignals(map[string]any{"_picoDarkMode": false})
-	case "dark":
-		ctx.MarshalAndPatchSignals(map[string]any{"_picoDarkMode": true})
-	}
-	// "system": no-op — browser default applies on next page load
-}

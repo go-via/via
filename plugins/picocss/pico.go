@@ -1,4 +1,4 @@
-// Package picocss provides a PicoCSS plugin for the Via framework.
+// Package picocss provides a PicoCSS plugin for the Via engine.
 //
 // # Quick Start
 //
@@ -21,15 +21,16 @@
 //
 // # Dark Mode
 //
-// Toggle $_picoDarkMode to switch between light/dark:
+// $_picoDarkMode accepts "system", "dark", or "light". "system" resolves to
+// the browser's prefers-color-scheme at runtime. Use WithDarkMode() or
+// WithLightMode() to override the default ("system").
 //
-//	h.Button(
-//	    h.Text("Toggle"),
-//	    h.Data("on-click", "$_picoDarkMode = !$_picoDarkMode"),
+//	h.Select(
+//	    h.Option(h.Value("system"), h.Text("System")),
+//	    h.Option(h.Value("dark"),   h.Text("Dark")),
+//	    h.Option(h.Value("light"),  h.Text("Light")),
+//	    h.Data("model", "$_picoDarkMode"),
 //	)
-//
-// By default the initial value comes from the browser's prefers-color-scheme
-// media query. Use WithDarkMode() or WithLightMode() to override.
 package picocss
 
 import (
@@ -41,6 +42,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -114,7 +116,7 @@ type pluginOptions struct {
 	defaultTheme PicoTheme
 	classless    bool
 	colorClasses bool
-	darkMode     *bool // nil = system preference, true = dark, false = light
+	darkMode string // "system" (default), "dark", or "light"
 }
 
 type plugin struct {
@@ -140,7 +142,7 @@ func Plugin(opts ...PicoOption) via.Plugin {
 		opts: pluginOptions{
 			themes:       []PicoTheme{PicoThemeAmber},
 			defaultTheme: PicoThemeAmber,
-			darkMode:     nil,
+			darkMode: "system",
 		},
 		themeCSS:     make(map[PicoTheme][]byte),
 		themeCSSGzip: make(map[PicoTheme][]byte),
@@ -191,15 +193,15 @@ func (o *withColorClassesOpt) apply(p *plugin) { p.opts.colorClasses = true }
 // WithColorClasses enables pico-color-* utility classes.
 func WithColorClasses() PicoOption { return &withColorClassesOpt{} }
 
-type withDarkModeOpt struct{ dark bool }
+type withDarkModeOpt struct{ mode string }
 
-func (o *withDarkModeOpt) apply(p *plugin) { p.opts.darkMode = &o.dark }
+func (o *withDarkModeOpt) apply(p *plugin) { p.opts.darkMode = o.mode }
 
-// WithDarkMode forces dark mode on ($_picoDarkMode = true).
-func WithDarkMode() PicoOption { return &withDarkModeOpt{dark: true} }
+// WithDarkMode forces dark mode on ($_picoDarkMode = "dark").
+func WithDarkMode() PicoOption { return &withDarkModeOpt{mode: "dark"} }
 
-// WithLightMode forces light mode on ($_picoDarkMode = false).
-func WithLightMode() PicoOption { return &withDarkModeOpt{dark: false} }
+// WithLightMode forces light mode on ($_picoDarkMode = "light").
+func WithLightMode() PicoOption { return &withDarkModeOpt{mode: "light"} }
 
 // --- Helpers ---
 
@@ -243,16 +245,12 @@ func acceptsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
-// darkModeExpr returns the JS expression for $_picoDarkMode initialization.
-func darkModeExpr(override *bool) string {
-	if override == nil {
-		return "window.matchMedia('(prefers-color-scheme: dark)').matches"
-	}
-	if *override {
-		return "true"
-	}
-	return "false"
-}
+// darkModeBindExpr returns the Datastar expression that resolves $_picoDarkMode
+// to a data-theme value. "system" evaluates the browser's prefers-color-scheme
+// at runtime; "dark" and "light" are used as-is.
+const darkModeBindExpr = `$_picoDarkMode==='system'` +
+	`?(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')` +
+	`:$_picoDarkMode`
 
 // --- Fetch ---
 
@@ -356,6 +354,28 @@ func (p *plugin) servePluginAssets(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+const (
+	darkModeSignalID = "_picoDarkMode"
+	themeSignalID    = "_picoTheme"
+)
+
+var (
+	sigDarkMode atomic.Pointer[via.AppSignalHandle[string]]
+	sigTheme    atomic.Pointer[via.AppSignalHandle[string]]
+)
+
+// SetDarkMode sets the dark mode value for this tab's context.
+func SetDarkMode(ctx *via.Ctx, mode string) { sigDarkMode.Load().SetValue(ctx, mode) }
+
+// GetDarkMode returns the current dark mode value for this tab's context.
+func GetDarkMode(ctx *via.Ctx) string { return sigDarkMode.Load().Get(ctx) }
+
+// SetTheme sets the theme value for this tab's context.
+func SetTheme(ctx *via.Ctx, theme string) { sigTheme.Load().SetValue(ctx, theme) }
+
+// GetTheme returns the current theme value for this tab's context.
+func GetTheme(ctx *via.Ctx) string { return sigTheme.Load().Get(ctx) }
+
 // --- Register ---
 
 func (p *plugin) Register(v *via.App) {
@@ -363,28 +383,39 @@ func (p *plugin) Register(v *via.App) {
 		panic("pico: failed to fetch themes: " + err.Error())
 	}
 
-	// Initialize signals. data-signals is evaluated as JS by Datastar,
-	// so JS expressions are valid as values (not strict JSON).
-	v.AppendToHead(h.Meta(h.Data("signals",
-		fmt.Sprintf(`{_picoTheme: "%s", _picoDarkMode: %s}`,
-			p.opts.defaultTheme,
-			darkModeExpr(p.opts.darkMode),
-		),
-	)))
+	sigDarkMode.Store(via.AppSignal(v, darkModeSignalID, p.opts.darkMode))
+	sigTheme.Store(via.AppSignal(v, themeSignalID, string(p.opts.defaultTheme)))
 
 	// Reactively bind data-theme on <html> to the dark mode signal.
-	v.AppendAttrToHTML(h.Data("attr:data-theme", "$_picoDarkMode?'dark':'light'"))
+	v.AppendAttrToHTML(h.Data("attr:data-theme", darkModeBindExpr))
 
-	// Dynamic stylesheet — href attribute bound to theme signal.
-	themeURL := themePath + string(p.opts.defaultTheme)
+	themePrefix := themePath
 	if p.opts.classless {
-		themeURL = themePath + "classless/" + string(p.opts.defaultTheme)
+		themePrefix = themePath + "classless/"
 	}
+
+	// Stylesheet with no static href — the blocking script below sets it.
 	v.AppendToHead(h.Link(
 		h.Rel("stylesheet"),
-		h.Href(themeURL),
-		h.Data("attr:href", "'/_plugins/picocss/theme/'+$_picoTheme"),
+		h.ID("_picoThemeLink"),
+		h.Data("attr:href", fmt.Sprintf("'%s'+$_picoTheme", themePrefix)),
 	))
+
+	// Blocking script: runs after the <link> is in the DOM but before the
+	// browser renders. Reads signals from the preceding <meta>, resolves
+	// dark mode and theme, and sets both data-theme and the stylesheet href
+	// synchronously — zero flash.
+	v.AppendToHead(h.Script(h.Raw(fmt.Sprintf(`(function(){`+
+		`var m=document.querySelector('meta[data-signals]');`+
+		`if(!m)return;`+
+		`try{var s=JSON.parse(m.getAttribute('data-signals'));`+
+		`var dm=s._picoDarkMode;`+
+		`if(dm==='dark'||dm==='light')document.documentElement.setAttribute('data-theme',dm);`+
+		`else if(dm==='system')document.documentElement.setAttribute('data-theme',`+
+		`window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');`+
+		`var t=s._picoTheme;`+
+		`if(t)document.getElementById('_picoThemeLink').setAttribute('href','%s'+t);`+
+		`}catch(e){}})();`, themePrefix))))
 
 	if p.opts.colorClasses {
 		v.AppendToHead(h.Link(

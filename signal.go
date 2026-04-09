@@ -13,6 +13,7 @@ type signalMeta interface {
 	displayID() string
 	initialTypedValue() any
 	initialRawValue() any
+	rawValueOf(v any) any
 	coerce(v any) any
 	hasError() bool
 }
@@ -27,6 +28,7 @@ type signalValue struct {
 type signalOf[T any] struct {
 	id      string
 	tag     string
+	display string
 	initial T
 	err     error
 }
@@ -34,6 +36,9 @@ type signalOf[T any] struct {
 // --- signalMeta implementation (consumed by runtime) ---
 
 func (s *signalOf[T]) displayID() string {
+	if s.display != "" {
+		return s.display
+	}
 	if s.tag != "" {
 		return s.tag + "_" + s.id
 	}
@@ -43,16 +48,20 @@ func (s *signalOf[T]) displayID() string {
 func (s *signalOf[T]) initialTypedValue() any { return s.initial }
 
 func (s *signalOf[T]) initialRawValue() any {
-	rv := reflect.ValueOf(any(s.initial))
+	return s.rawValueOf(any(s.initial))
+}
+
+func (s *signalOf[T]) rawValueOf(v any) any {
+	rv := reflect.ValueOf(v)
 	if rv.IsValid() {
 		switch rv.Kind() {
 		case reflect.Slice, reflect.Map, reflect.Struct, reflect.Pointer:
-			if j, err := json.Marshal(s.initial); err == nil {
+			if j, err := json.Marshal(v); err == nil {
 				return string(j)
 			}
 		}
 	}
-	return s.initial
+	return v
 }
 
 func (s *signalOf[T]) coerce(v any) any {
@@ -102,10 +111,25 @@ func (s *signalOf[T]) ID() string { return s.id }
 // Tag prepends a label to the signal's display ID.
 func (s *signalOf[T]) Tag(name string) { s.tag = name }
 
+// resolveID returns the internal signal ID to use for ctx.signalValues.
+// For app-level signals (display set), the handle may belong to a different
+// app registration, so we look up the actual ID by display name.
+func (s *signalOf[T]) resolveID(ctx *Ctx) string {
+	if s.display == "" || ctx == nil || ctx.cmp == nil {
+		return s.id
+	}
+	for sigID, sig := range ctx.cmp.app.signals {
+		if sm, ok := sig.(signalMeta); ok && sm.displayID() == s.display {
+			return sigID
+		}
+	}
+	return s.id
+}
+
 // Get returns the current typed value of the signal for this tab.
 func (s *signalOf[T]) Get(ctx *Ctx) T {
 	if ctx != nil {
-		if sv, ok := ctx.signalValues[s.id]; ok {
+		if sv, ok := ctx.signalValues[s.resolveID(ctx)]; ok {
 			if typed, ok := sv.raw.(T); ok {
 				return typed
 			}
@@ -116,9 +140,10 @@ func (s *signalOf[T]) Get(ctx *Ctx) T {
 
 // SetValue updates the signal value for this tab and marks it dirty for sync.
 func (s *signalOf[T]) SetValue(ctx *Ctx, v T) {
-	sv := ctx.signalValues[s.id]
+	id := s.resolveID(ctx)
+	sv := ctx.signalValues[id]
 	if sv == nil {
-		ctx.signalValues[s.id] = &signalValue{raw: v, changed: true}
+		ctx.signalValues[id] = &signalValue{raw: v, changed: true}
 		return
 	}
 	sv.raw = v
@@ -147,6 +172,23 @@ func (s *signalOf[T]) Show() h.H {
 func (s *signalOf[T]) Ref() string {
 	return "$" + s.displayID()
 }
+
+// AppSignalHandle is the exported type for app-level signal handles.
+type AppSignalHandle[T any] = signalOf[T]
+
+// AppSignal creates a typed reactive signal scoped to the app.
+// The displayID is the exact key that appears in the browser's signal store.
+func AppSignal[T any](app *App, displayID string, initial T) *AppSignalHandle[T] {
+	sigID := "via_" + genRandID()
+	sig := &signalOf[T]{
+		id:      sigID,
+		display: displayID,
+		initial: initial,
+	}
+	app.signals[sigID] = sig
+	return sig
+}
+
 
 // Signal creates a typed reactive signal with the given initial value.
 func Signal[T any](cmp *Cmp, initial T) *signalOf[T] {

@@ -11,6 +11,8 @@ import (
 )
 
 func TestAction_onClickRendersDataOnClick(t *testing.T) {
+	t.Parallel()
+
 	act := captureAction(func(cmp *via.Cmp) actionT {
 		return cmp.Action(func(ctx *via.Ctx) error { return nil })
 	})
@@ -20,6 +22,8 @@ func TestAction_onClickRendersDataOnClick(t *testing.T) {
 }
 
 func TestAction_onChangeRendersDataOnChange(t *testing.T) {
+	t.Parallel()
+
 	act := captureAction(func(cmp *via.Cmp) actionT {
 		return cmp.Action(func(ctx *via.Ctx) error { return nil })
 	})
@@ -29,6 +33,8 @@ func TestAction_onChangeRendersDataOnChange(t *testing.T) {
 }
 
 func TestAction_onKeyDownRendersKeyCondition(t *testing.T) {
+	t.Parallel()
+
 	act := captureAction(func(cmp *via.Cmp) actionT {
 		return cmp.Action(func(ctx *via.Ctx) error { return nil })
 	})
@@ -39,6 +45,8 @@ func TestAction_onKeyDownRendersKeyCondition(t *testing.T) {
 }
 
 func TestAction_actionWithSetSignalSetsValueBeforeAction(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var out string
 	v.Page("/", func(cmp *via.Cmp) {
@@ -54,6 +62,8 @@ func TestAction_actionWithSetSignalSetsValueBeforeAction(t *testing.T) {
 }
 
 func TestAction_panicsOnNilHandler(t *testing.T) {
+	t.Parallel()
+
 	assert.Panics(t, func() {
 		v := via.New()
 		v.Page("/", func(cmp *via.Cmp) {
@@ -64,6 +74,8 @@ func TestAction_panicsOnNilHandler(t *testing.T) {
 }
 
 func TestAction_errorReturnsAlert(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		act := cmp.Action(func(ctx *via.Ctx) error {
 			return errors.New("test error")
@@ -90,6 +102,8 @@ func TestAction_errorReturnsAlert(t *testing.T) {
 }
 
 func TestAction_panicShowsGenericAlert(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		act := cmp.Action(func(ctx *via.Ctx) error {
 			panic("boom")
@@ -116,6 +130,8 @@ func TestAction_panicShowsGenericAlert(t *testing.T) {
 }
 
 func TestAction_autoSyncsAfterExecution(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		s := via.State(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -144,6 +160,8 @@ func TestAction_autoSyncsAfterExecution(t *testing.T) {
 }
 
 func TestAction_autoSyncPatchIncludesIDSoDatastarCanMorph(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		s := via.State(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {

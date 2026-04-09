@@ -1,10 +1,9 @@
 package via_test
 
 import (
-	"bufio"
 	"bytes"
 	"net/http"
-	"strings"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -15,106 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const sseTimeout = 3 * time.Second
-
-func extractActionID(t *testing.T, body string) string {
-	t.Helper()
-	const prefix = "/_action/"
-	idx := strings.Index(body, prefix)
-	require.NotEqual(t, -1, idx, "action URL not found in page body")
-	start := idx + len(prefix)
-	end := strings.IndexAny(body[start:], "'&#\"")
-	require.NotEqual(t, -1, end)
-	return body[start : start+end]
-}
-
-func extractActionIDs(t *testing.T, body string) []string {
-	t.Helper()
-	var ids []string
-	const prefix = "/_action/"
-	searchStart := 0
-	for {
-		idx := strings.Index(body[searchStart:], prefix)
-		if idx == -1 {
-			break
-		}
-		idx += searchStart
-		start := idx + len(prefix)
-		end := strings.IndexAny(body[start:], "'&#\"")
-		if end == -1 {
-			break
-		}
-		ids = append(ids, body[start:start+end])
-		searchStart = start + end
-	}
-	require.NotEmpty(t, ids, "no action IDs found in page body")
-	return ids
-}
-
-func collectEventOrTimeout(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) (bool, sseEvent) {
-	resultCh := make(chan sseEvent, 1)
-	go func() {
-		var ev sseEvent
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "event:") {
-				ev.eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			} else if strings.HasPrefix(line, "data:") {
-				d := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-				if ev.data == "" {
-					ev.data = d
-				} else {
-					ev.data += "\n" + d
-				}
-			} else if line == "" && ev.eventType != "" {
-				resultCh <- ev
-				return
-			}
-		}
-	}()
-	select {
-	case ev := <-resultCh:
-		return true, ev
-	case <-time.After(timeout):
-		return false, sseEvent{}
-	}
-}
-
-func triggerAction(t *testing.T, serverURL, ctxID, actionID string) {
-	t.Helper()
-	sigsJSON := `{"via_tab":"` + ctxID + `"}`
-	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
-	require.NoError(t, err)
-	resp.Body.Close()
-}
-
-func triggerActionWithSignal(t *testing.T, serverURL, ctxID, actionID, sigID, sigValue string) {
-	t.Helper()
-	sigsJSON := `{"via_tab":"` + ctxID + `","` + sigID + `":"` + sigValue + `"}`
-	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
-	require.NoError(t, err)
-	resp.Body.Close()
-}
-
-func extractSignalID(t *testing.T, body string) string {
-	t.Helper()
-	markers := []string{`data-bind="`, `data-text="`, `data-show="`}
-	for _, marker := range markers {
-		idx := strings.Index(body, marker)
-		if idx != -1 {
-			start := idx + len(marker)
-			end := strings.Index(body[start:], `"`)
-			require.NotEqual(t, -1, end, "signal ID not terminated")
-			return body[start : start+end]
-		}
-	}
-	t.Fatal("signal ID not found in page body")
-	return ""
-}
-
 // --- SSE tests ---
 
 func TestSSE_reconnectAfterDisconnect(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		n := via.State(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -147,6 +51,8 @@ func TestSSE_reconnectAfterDisconnect(t *testing.T) {
 }
 
 func TestSSE_establishesConnection(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		n := via.State(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -174,6 +80,8 @@ func TestSSE_establishesConnection(t *testing.T) {
 }
 
 func TestSSE_elementPatchUsesDatastarWireFormat(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		syncAct := cmp.Action(func(ctx *via.Ctx) error {
 			ctx.SyncElements(h.Div(h.ID("box"), h.Text("updated")))
@@ -204,6 +112,8 @@ func TestSSE_elementPatchUsesDatastarWireFormat(t *testing.T) {
 }
 
 func TestSSE_execScriptWrapsInScriptTag(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		scriptAct := cmp.Action(func(ctx *via.Ctx) error {
 			ctx.ExecScript("console.log('hello')")
@@ -272,6 +182,8 @@ func TestSSE_signalPatchUsesDatastarWireFormat(t *testing.T) {
 }
 
 func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		n := via.State(cmp, 0)
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -334,11 +246,13 @@ func TestSSE_injectedSignalNotEchoedWhenStateMutated(t *testing.T) {
 	assert.Equal(t, "datastar-patch-elements", ev.eventType)
 	assert.Contains(t, ev.data, "val=1")
 
-	gotSigPatch, sigEv := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	gotSigPatch, sigEv := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.False(t, gotSigPatch, "signal injected from browser must not be echoed back, got: %s %s", sigEv.eventType, sigEv.data)
 }
 
 func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "initial")
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -366,11 +280,13 @@ func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
 
-	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.False(t, got, "no SSE event expected when action does not modify state, got: %s %s", ev.eventType, ev.data)
 }
 
 func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "initial")
 		act := cmp.Action(func(ctx *via.Ctx) error {
@@ -398,7 +314,7 @@ func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
 
-	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.False(t, got, "no SSE event expected when signal is not modified in action, got: %s %s", ev.eventType, ev.data)
 }
 
@@ -433,6 +349,8 @@ func TestSSE_signalOnlyMutationSendsSignalPatchWithoutElementPatch(t *testing.T)
 }
 
 func TestSSE_injectedSignalNotEchoedBack(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "original")
 		act := cmp.Action(func(ctx *via.Ctx) error { return nil })
@@ -453,11 +371,13 @@ func TestSSE_injectedSignalNotEchoedBack(t *testing.T) {
 
 	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "newvalue")
 
-	got, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.False(t, got, "injected signal must not be echoed back to the browser, got event: %s %s", ev.eventType, ev.data)
 }
 
 func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
+	t.Parallel()
+
 	counter := 0
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "original")
@@ -486,7 +406,7 @@ func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
 
 	triggerAction(t, server.URL, ctxID, actionID)
 
-	gotEvent, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	gotEvent, ev := tryReadEvent(t, stream, 50*time.Millisecond)
 
 	t.Logf("After action - event: type=%s, data=%s, counter=%d", ev.eventType, ev.data, counter)
 
@@ -496,6 +416,8 @@ func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
 // --- View tests ---
 
 func TestView_rendersInDivWithContextID(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.P(h.Text("content")) })
 	})
@@ -507,6 +429,8 @@ func TestView_rendersInDivWithContextID(t *testing.T) {
 // --- Component tests ---
 
 func TestComponent_rendersNestedInView(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		compView := cmp.Component(func(comp *via.Cmp) {
 			comp.View(func(ctx *via.Ctx) h.H { return h.Span(h.Text("from-component")) })
@@ -520,6 +444,8 @@ func TestComponent_rendersNestedInView(t *testing.T) {
 }
 
 func TestComponent_runsInitOnPageLoad(t *testing.T) {
+	t.Parallel()
+
 	initCalled := false
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Component(func(comp *via.Cmp) {
@@ -542,6 +468,8 @@ func TestComponent_runsInitOnPageLoad(t *testing.T) {
 }
 
 func TestComponent_disposeCallback(t *testing.T) {
+	t.Parallel()
+
 	disposeCalled := false
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Dispose(func() { disposeCalled = true })
@@ -569,6 +497,8 @@ func TestComponent_disposeCallback(t *testing.T) {
 // --- Ctx tests ---
 
 func TestGetPathParam_returnsEmptyForMissingParam(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got string
 	v.Page("/", func(cmp *via.Cmp) {
@@ -580,29 +510,20 @@ func TestGetPathParam_returnsEmptyForMissingParam(t *testing.T) {
 	assert.Equal(t, "", got)
 }
 
-func TestCtx_runsInitOnSSEConnect(t *testing.T) {
-	initDone := make(chan struct{})
+func TestCtx_runsInitOnPageLoad(t *testing.T) {
+	t.Parallel()
+
+	initRanCount := 0
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) { close(initDone) })
+		cmp.Init(func(ctx *via.Ctx) { initRanCount++ })
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
 	})
 
-	body := getPageBody(t, server, "/")
-	select {
-	case <-initDone:
-		t.Fatal("init must not run before SSE connects")
-	default:
-	}
+	getPageBody(t, server, "/")
+	assert.Equal(t, 1, initRanCount, "init must run on first page load")
 
-	ctxID := extractCtxID(t, body)
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	select {
-	case <-initDone:
-	case <-time.After(sseTimeout):
-		t.Fatal("init must run when SSE connects")
-	}
+	getPageBody(t, server, "/")
+	assert.Equal(t, 2, initRanCount, "init must run on every page load")
 }
 
 func TestCtx_syncReRendersAndPushesView(t *testing.T) {
@@ -611,22 +532,27 @@ func TestCtx_syncReRendersAndPushesView(t *testing.T) {
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		s := via.State(cmp, "before")
 
-		cmp.Init(func(ctx *via.Ctx) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
 			s.Set(ctx, "after")
 			ctx.Sync()
+			return nil
 		})
 
 		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("val=%s", s.Get(ctx)))
+			return h.Div(h.Textf("val=%s", s.Get(ctx)), act.OnClick())
 		})
 	})
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
 	assert.Contains(t, body, "val=before")
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
 
 	ev := readSSEEvent(t, stream, sseTimeout)
 	assert.Equal(t, "datastar-patch-elements", ev.eventType)
@@ -639,21 +565,26 @@ func TestCtx_syncFlushesSignalPatches(t *testing.T) {
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "original")
 
-		cmp.Init(func(ctx *via.Ctx) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
 			sig.SetValue(ctx, "pushed")
 			ctx.Sync()
+			return nil
 		})
 
 		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Text())
+			return h.Div(sig.Text(), act.OnClick())
 		})
 	})
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
 
 	stream, cancel := connectSSE(t, server, ctxID)
 	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
 
 	ev1 := readSSEEvent(t, stream, sseTimeout)
 	assert.Equal(t, "datastar-patch-elements", ev1.eventType)
@@ -698,10 +629,12 @@ func TestCtx_marshalAndPatchSignalsPushesArbitrarySignals(t *testing.T) {
 func TestCtx_doneClosedOnDispose(t *testing.T) {
 	t.Parallel()
 
+	doneClosed := make(chan struct{})
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
 			go func() {
 				<-ctx.Done()
+				close(doneClosed)
 			}()
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
@@ -710,14 +643,16 @@ func TestCtx_doneClosedOnDispose(t *testing.T) {
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
 
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
 	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
+
+	select {
+	case <-doneClosed:
+	case <-time.After(sseTimeout):
+		t.Fatal("Done() must close on dispose")
+	}
 }
 
 func TestCtx_doneNotClosedBeforeDispose(t *testing.T) {
@@ -736,10 +671,6 @@ func TestCtx_doneNotClosedBeforeDispose(t *testing.T) {
 
 	body := getPageBody(t, server, "/")
 	ctxID := extractCtxID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	select {
 	case <-doneClosed:
@@ -799,28 +730,19 @@ func TestCtx_WAndRAreNilDuringInit(t *testing.T) {
 	t.Parallel()
 
 	type result struct{ hasW, hasR bool }
-	gotCh := make(chan result, 1)
+	var got result
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			got = result{hasW: ctx.W != nil, hasR: ctx.R != nil}
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
+	getPageBody(t, server, "/")
 
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	select {
-	case r := <-gotCh:
-		assert.False(t, r.hasW, "ctx.W should be nil during Init")
-		assert.False(t, r.hasR, "ctx.R should be nil during Init")
-	case <-time.After(sseTimeout):
-		require.Fail(t, "timed out waiting for init")
-	}
+	assert.False(t, got.hasW, "ctx.W should be nil during Init")
+	assert.False(t, got.hasR, "ctx.R should be nil during Init")
 }
 
 func TestCtx_actionsSerializedPerCtx(t *testing.T) {
@@ -1009,3 +931,101 @@ func TestCtx_WAndRAreNilAfterActionCompletes(t *testing.T) {
 		require.Fail(t, "second action never ran")
 	}
 }
+
+func TestCtx_signalSetValueInViewAppearsInInitialHTML(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		s := via.Signal(cmp, "default_val")
+		cmp.View(func(ctx *via.Ctx) h.H {
+			s.SetValue(ctx, "overridden_val")
+			return h.Div(h.Text("page"))
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "overridden_val", "signal set during view should appear in initial HTML")
+	assert.NotContains(t, body, "default_val", "compile-time default should be replaced")
+}
+
+func TestAppSignal_appearsInInitialHTML(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	s := via.AppSignal(app, "_customSig", "default_val")
+	app.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("val=%s", s.Get(ctx)))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, `"_customSig":"default_val"`)
+}
+
+func TestAppSignal_setValueInInitAppearsInHTML(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	s := via.AppSignal(app, "_mode", "default")
+	app.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			s.SetValue(ctx, "custom")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("mode=%s", s.Get(ctx)))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, `"_mode":"custom"`)
+	assert.Contains(t, body, "mode=custom")
+}
+
+func TestInit_runsOnPageLoad(t *testing.T) {
+	t.Parallel()
+
+	initRan := make(chan struct{}, 1)
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			select {
+			case initRan <- struct{}{}:
+			default:
+			}
+		})
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
+	})
+
+	getPageBody(t, server, "/")
+
+	select {
+	case <-initRan:
+	case <-time.After(sseTimeout):
+		t.Fatal("init must run on page load")
+	}
+}
+
+func TestInit_runsBeforeView(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	s := via.AppSignal(app, "_pref", "default")
+	app.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			s.SetValue(ctx, "from_init")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("pref=%s", s.Get(ctx)))
+		})
+	})
+	t.Cleanup(server.Close)
+
+	body := getPageBody(t, server, "/")
+	assert.Contains(t, body, "pref=from_init", "init must run before view")
+}
+

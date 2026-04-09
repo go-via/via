@@ -106,11 +106,12 @@ for _, tt := range tests {
 
 Reasoning: Parallel execution surfaces data races and speeds up the suite.
 
-Rule: Call `t.Parallel()` at the top of every subtest that does not share
-mutable state (package-level variables, shared servers, test databases,
-on-disk fixtures). Top-level tests may also be parallel when they don't
-depend on global state. When in doubt, don't parallelize — a correct slow
-test beats a flaky fast one.
+Rule: Call `t.Parallel()` at the top of every test and subtest that does
+not share mutable state (package-level variables, shared servers, test
+databases, on-disk fixtures). When in doubt, don't parallelize — a correct
+slow test beats a flaky fast one.
+
+Always run tests with `-race` (`go test -race ./...`).
 
 ## Test Helpers
 

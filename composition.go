@@ -39,7 +39,7 @@ func (c *Cmp) Action(f func(ctx *Ctx) error) *actionTrigger {
 	return &actionTrigger{id}
 }
 
-// Init registers a callback that runs once when the tab connects via SSE.
+// Init registers a callback that runs on each page load, before the view renders.
 func (c *Cmp) Init(f func(ctx *Ctx)) {
 	c.initFn = f
 }

@@ -364,7 +364,7 @@ func TestSession_refreshesTTLOnAccess(t *testing.T) {
 	jarB = mergeCookies(jarB, respB2.Cookies())
 
 	// Keep session A alive every 50ms for 300ms (past the 150ms TTL)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		time.Sleep(50 * time.Millisecond)
 		req, _ := http.NewRequest("GET", server.URL+"/", nil)
 		addCookies(req, jarA)
@@ -500,30 +500,3 @@ func TestSetSess_preservesMultipleTypesInSameSession(t *testing.T) {
 	}
 }
 
-// Cookie helpers for test — manual jar since http.Client default has no jar.
-
-func collectCookies(t *testing.T, _ string, cookies []*http.Cookie) []*http.Cookie {
-	t.Helper()
-	return cookies
-}
-
-func mergeCookies(existing []*http.Cookie, fresh []*http.Cookie) []*http.Cookie {
-	merged := make(map[string]*http.Cookie)
-	for _, c := range existing {
-		merged[c.Name] = c
-	}
-	for _, c := range fresh {
-		merged[c.Name] = c
-	}
-	out := make([]*http.Cookie, 0, len(merged))
-	for _, c := range merged {
-		out = append(out, c)
-	}
-	return out
-}
-
-func addCookies(req *http.Request, cookies []*http.Cookie) {
-	for _, c := range cookies {
-		req.AddCookie(c)
-	}
-}

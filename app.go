@@ -36,6 +36,7 @@ type App struct {
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H
+	signals              map[string]any
 }
 
 func (a *App) logPanic(format string, args ...any) {
@@ -236,6 +237,7 @@ func New(opts ...Option) *App {
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
 		sessions:        make(map[string]*session),
+		signals:         make(map[string]any),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,

@@ -15,15 +15,19 @@ import (
 )
 
 func TestNew_returnsNonNil(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	assert.NotNil(t, v)
 }
 
 func TestNew_appliesTitle(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	app := via.New(via.WithTitle("My App"), via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("hello")) })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 	defer server.Close()
 	body := getPageBody(t, server, "/")
@@ -31,10 +35,12 @@ func TestNew_appliesTitle(t *testing.T) {
 }
 
 func TestNew_usesDefaultTitle(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("hello")) })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
 	defer server.Close()
 	body := getPageBody(t, server, "/")
@@ -42,6 +48,8 @@ func TestNew_usesDefaultTitle(t *testing.T) {
 }
 
 func TestPage_rendersViewInDocument(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.H1(h.Text("Hello Via!")) })
 	})
@@ -50,6 +58,8 @@ func TestPage_rendersViewInDocument(t *testing.T) {
 }
 
 func TestPage_includesDatastarScript(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
@@ -58,6 +68,8 @@ func TestPage_includesDatastarScript(t *testing.T) {
 }
 
 func TestPage_includesViaCtxSignal(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
@@ -66,6 +78,8 @@ func TestPage_includesViaCtxSignal(t *testing.T) {
 }
 
 func TestPage_panicsOnNilView(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	assert.Panics(t, func() {
 		v.Page("/", func(cmp *via.Cmp) {
@@ -75,6 +89,8 @@ func TestPage_panicsOnNilView(t *testing.T) {
 }
 
 func TestPage_rendersPathParam(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/users/{id}", func(cmp *via.Cmp) {
 		cmp.View(func(ctx *via.Ctx) h.H {
 			id := ctx.GetPathParam("id")
@@ -86,6 +102,8 @@ func TestPage_rendersPathParam(t *testing.T) {
 }
 
 func TestAppendToHead_addsElement(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	v := via.New(via.WithTestServer(&server))
 	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/app.css")))
@@ -98,6 +116,8 @@ func TestAppendToHead_addsElement(t *testing.T) {
 }
 
 func TestAppendToFoot_addsElement(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	v := via.New(via.WithTestServer(&server))
 	v.AppendToFoot(h.Script(h.Src("/foot.js")))
@@ -110,6 +130,8 @@ func TestAppendToFoot_addsElement(t *testing.T) {
 }
 
 func TestPage_embedsInitialSignalValuesInHTML(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		s := via.Signal(cmp, 42)
 		s.Tag("count")
@@ -121,6 +143,8 @@ func TestPage_embedsInitialSignalValuesInHTML(t *testing.T) {
 }
 
 func TestNew_acceptsShutdownTimeout(t *testing.T) {
+	t.Parallel()
+
 	v := via.New(via.WithShutdownTimeout(10 * time.Second))
 	assert.NotNil(t, v)
 }
@@ -289,6 +313,8 @@ func TestShutdown_succeedsWithNoActiveContexts(t *testing.T) {
 }
 
 func TestDatastarJS_served(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	via.New(via.WithTestServer(&server))
 	defer server.Close()

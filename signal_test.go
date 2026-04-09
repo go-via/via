@@ -15,6 +15,8 @@ import (
 )
 
 func TestSignal_createsWithInitialValue(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got string
 	v.Page("/", func(cmp *via.Cmp) {
@@ -28,6 +30,8 @@ func TestSignal_createsWithInitialValue(t *testing.T) {
 }
 
 func TestSignal_getReturnsTypedValue(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got int
 	v.Page("/", func(cmp *via.Cmp) {
@@ -41,6 +45,8 @@ func TestSignal_getReturnsTypedValue(t *testing.T) {
 }
 
 func TestSignal_idReturnsNonEmpty(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var idA, idB string
 	v.Page("/", func(cmp *via.Cmp) {
@@ -56,6 +62,8 @@ func TestSignal_idReturnsNonEmpty(t *testing.T) {
 }
 
 func TestSignal_sliceSerializesForTransport(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got []string
 	v.Page("/", func(cmp *via.Cmp) {
@@ -69,6 +77,8 @@ func TestSignal_sliceSerializesForTransport(t *testing.T) {
 }
 
 func TestSignal_bindRendersDataBindAttr(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
 	out := renderH(t, h.Input(sig.Bind()))
 	assert.Contains(t, out, "data-bind")
@@ -76,6 +86,8 @@ func TestSignal_bindRendersDataBindAttr(t *testing.T) {
 }
 
 func TestSignal_textUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "world") })
 	out := renderH(t, h.Div(sig.Text()))
 	assert.Contains(t, out, "<span")
@@ -84,6 +96,8 @@ func TestSignal_textUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
 }
 
 func TestSignal_showUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, true) })
 	out := renderH(t, h.Div(sig.Show()))
 	assert.Contains(t, out, "data-show")
@@ -91,6 +105,8 @@ func TestSignal_showUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
 }
 
 func TestSignal_tagPrependsLabel(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT {
 		s := via.Signal(cmp, "")
 		s.Tag("search")
@@ -100,11 +116,15 @@ func TestSignal_tagPrependsLabel(t *testing.T) {
 }
 
 func TestSignal_refReturnsDollarID(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
 	assert.Equal(t, "$"+sig.ID(), sig.Ref())
 }
 
 func TestSignal_tagAffectsBindID(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT {
 		s := via.Signal(cmp, "")
 		s.Tag("myfield")
@@ -115,6 +135,8 @@ func TestSignal_tagAffectsBindID(t *testing.T) {
 }
 
 func TestSignal_intGetAfterNumericJSONInjection(t *testing.T) {
+	t.Parallel()
+
 	gotCh := make(chan int, 1)
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, 1000)
@@ -150,22 +172,28 @@ func TestSignal_intGetAfterNumericJSONInjection(t *testing.T) {
 }
 
 func TestSignal_intInitialValueSerializesAsJSONNumber(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, 1000)
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
 	})
 	body := getPageBody(t, server, "/")
 	sigID := extractSignalID(t, body)
-	numericEntry := "&#34;" + sigID + "&#34;:1000"
+	numericEntry := `"` + sigID + `":1000`
 	assert.Contains(t, body, numericEntry, "int signal should be encoded as a JSON number, not a string")
 }
 
 func TestSignal_idHasViaPrefix(t *testing.T) {
+	t.Parallel()
+
 	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
 	assert.True(t, strings.HasPrefix(sig.ID(), "via_"), "signal ID %q must start with via_", sig.ID())
 }
 
 func TestSignal_displayIDHasViaPrefixWhenUntagged(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "hello")
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
@@ -176,6 +204,8 @@ func TestSignal_displayIDHasViaPrefixWhenUntagged(t *testing.T) {
 }
 
 func TestSignal_displayIDHasViaPrefixWhenTagged(t *testing.T) {
+	t.Parallel()
+
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		sig := via.Signal(cmp, "hello")
 		sig.Tag("search")
@@ -449,7 +479,7 @@ func TestSignal_structInitialSerializesAsJSON(t *testing.T) {
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
 	})
 	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "{\\&#34;x\\&#34;:1,\\&#34;y\\&#34;:2}", "struct signal should be JSON-serialized in page HTML")
+	assert.Contains(t, body, `{\"x\":1,\"y\":2}`, "struct signal should be JSON-serialized in page HTML")
 }
 
 func TestSignal_coercesJSONFloatToInt32(t *testing.T) {
@@ -590,6 +620,8 @@ func TestSignal_setValueOverwritesExistingValue(t *testing.T) {
 }
 
 func TestSignal_nilInitialCreatesError(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var errVal error
 	v.Page("/", func(cmp *via.Cmp) {

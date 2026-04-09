@@ -58,14 +58,14 @@ func TestNewChart_uniqueIDsUnderConcurrency(t *testing.T) {
 	t.Parallel()
 	const n = 100
 	ids := make(chan string, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		go func() {
 			c := echarts.NewChart()
 			ids <- c.InitJS()
 		}()
 	}
 	seen := make(map[string]bool, n)
-	for i := 0; i < n; i++ {
+	for range n {
 		js := <-ids
 		assert.False(t, seen[js], "duplicate InitJS output detected")
 		seen[js] = true
@@ -318,7 +318,7 @@ func BenchmarkChart_AppendData(b *testing.B) {
 	data := [][]any{{1, 100}, {2, 200}}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if b.Loop() {
 		chart.AppendData(nil, data)
 	}
 }
@@ -330,7 +330,7 @@ func BenchmarkChart_AppendDataBatch(b *testing.B) {
 	d3 := [][]any{{3, 300}}
 	b.ReportAllocs()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	if b.Loop() {
 		chart.AppendDataBatch(nil, d1, d2, d3)
 	}
 }

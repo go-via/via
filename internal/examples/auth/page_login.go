@@ -24,15 +24,6 @@ func loginPage(cmp *via.Cmp) {
 
 		via.SetSess(ctx.W, ctx.R, user)
 		via.SetSess(ctx.W, ctx.R, regFlash(false))
-
-		// Apply saved preferences if any
-		if prefs, ok := getPrefs(user.Email); ok {
-			applyDarkMode(ctx, prefs.DarkMode)
-			ctx.MarshalAndPatchSignals(map[string]any{
-				"_picoTheme": prefs.Theme,
-			})
-		}
-
 		ctx.Redirect("/profile")
 		return nil
 	})

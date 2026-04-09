@@ -2,9 +2,12 @@ package picocss_test
 
 import (
 	"compress/gzip"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-via/via"
@@ -13,9 +16,31 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// fakeCDNTransport intercepts CDN requests and returns fake CSS,
+// eliminating network I/O from tests.
+type fakeCDNTransport struct{ real http.RoundTripper }
+
+func (f *fakeCDNTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(req.URL.Host, "cdn.jsdelivr.net") {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/css"}},
+			Body:       io.NopCloser(strings.NewReader("/* fake pico css */")),
+		}, nil
+	}
+	return f.real.RoundTrip(req)
+}
+
+func TestMain(m *testing.M) {
+	http.DefaultTransport = &fakeCDNTransport{real: http.DefaultTransport}
+	os.Exit(m.Run())
+}
+
 // --- Theme type ---
 
 func TestPicoTheme_Constants(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		constant picocss.PicoTheme
@@ -49,17 +74,23 @@ func TestPicoTheme_Constants(t *testing.T) {
 }
 
 func TestPicoTheme_Type(t *testing.T) {
+	t.Parallel()
+
 	var theme picocss.PicoTheme = picocss.PicoThemeBlue
 	assert.Equal(t, "blue", string(theme))
 }
 
 func TestPicoTheme_StringConversion(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "amber", string(picocss.PicoThemeAmber))
 	assert.Equal(t, "blue", string(picocss.PicoThemeBlue))
 	assert.Equal(t, "zinc", string(picocss.PicoThemeZinc))
 }
 
 func TestPicoTheme_StringMethod(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, "amber", picocss.PicoThemeAmber.String())
 	assert.Equal(t, "blue", picocss.PicoThemeBlue.String())
 	assert.Equal(t, "purple", picocss.PicoThemePurple.String())
@@ -68,6 +99,8 @@ func TestPicoTheme_StringMethod(t *testing.T) {
 }
 
 func TestAllPicoThemes_ContainsAllThemes(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, 19, len(picocss.AllPicoThemes))
 	expected := []picocss.PicoTheme{
 		picocss.PicoThemeAmber, picocss.PicoThemeBlue, picocss.PicoThemeCyan,
@@ -82,10 +115,14 @@ func TestAllPicoThemes_ContainsAllThemes(t *testing.T) {
 }
 
 func TestAllPicoThemes_Count(t *testing.T) {
+	t.Parallel()
+
 	assert.Equal(t, 19, len(picocss.AllPicoThemes))
 }
 
 func TestAllPicoThemes_NoDuplicates(t *testing.T) {
+	t.Parallel()
+
 	seen := make(map[string]bool)
 	for _, theme := range picocss.AllPicoThemes {
 		assert.False(t, seen[string(theme)], "duplicate theme: %s", theme)
@@ -96,47 +133,65 @@ func TestAllPicoThemes_NoDuplicates(t *testing.T) {
 // --- Constructor ---
 
 func TestPlugin_ReturnsViaPlugin(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin()
 	assert.NotNil(t, p)
 	var _ via.Plugin = p
 }
 
 func TestPlugin_Defaults(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin()
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithThemes(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemePurple, picocss.PicoThemeAmber}))
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithDefaultTheme(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithDefaultTheme(picocss.PicoThemePurple))
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithClassless(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithClassless())
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithColorClasses(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithColorClasses())
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithDarkMode(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithDarkMode())
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithLightMode(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(picocss.WithLightMode())
 	assert.NotNil(t, p)
 }
 
 func TestPlugin_WithMultipleOptions(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed, picocss.PicoThemeGreen}),
 		picocss.WithDefaultTheme(picocss.PicoThemeRed),
@@ -147,6 +202,8 @@ func TestPlugin_WithMultipleOptions(t *testing.T) {
 }
 
 func TestPlugin_AllOptions(t *testing.T) {
+	t.Parallel()
+
 	p := picocss.Plugin(
 		picocss.WithThemes(picocss.AllPicoThemes),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue),
@@ -158,18 +215,26 @@ func TestPlugin_AllOptions(t *testing.T) {
 }
 
 func TestPlugin_OnlyColorClasses(t *testing.T) {
+	t.Parallel()
+
 	assert.NotNil(t, picocss.Plugin(picocss.WithColorClasses()))
 }
 
 func TestPlugin_OnlyClassless(t *testing.T) {
+	t.Parallel()
+
 	assert.NotNil(t, picocss.Plugin(picocss.WithClassless()))
 }
 
 func TestPlugin_SingleTheme(t *testing.T) {
+	t.Parallel()
+
 	assert.NotNil(t, picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed})))
 }
 
 func TestPlugin_DifferentDefaultThemes(t *testing.T) {
+	t.Parallel()
+
 	for _, theme := range []picocss.PicoTheme{
 		picocss.PicoThemeAmber, picocss.PicoThemeBlue, picocss.PicoThemePurple,
 	} {
@@ -180,6 +245,8 @@ func TestPlugin_DifferentDefaultThemes(t *testing.T) {
 }
 
 func TestPlugin_RepeatedOptions(t *testing.T) {
+	t.Parallel()
+
 	// Last call wins for same option type
 	p := picocss.Plugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed}),
@@ -201,6 +268,8 @@ func registerPlugin(opts ...picocss.PicoOption) (*via.App, *httptest.Server) {
 }
 
 func TestPlugin_NoOptionsDefaultsToSingleAmber(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -216,6 +285,8 @@ func TestPlugin_NoOptionsDefaultsToSingleAmber(t *testing.T) {
 }
 
 func TestPlugin_EmptyThemesList_DefaultsToSingleAmber(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithThemes([]picocss.PicoTheme{}))
 	defer server.Close()
 
@@ -226,6 +297,8 @@ func TestPlugin_EmptyThemesList_DefaultsToSingleAmber(t *testing.T) {
 }
 
 func TestPlugin_WithInvalidDefaultTheme(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeRed, picocss.PicoThemeGreen}),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue), // not in list
@@ -244,6 +317,8 @@ func TestPlugin_WithInvalidDefaultTheme(t *testing.T) {
 }
 
 func TestPlugin_RepeatedThemes_Deduplicated(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithThemes([]picocss.PicoTheme{
 		picocss.PicoThemeBlue, picocss.PicoThemeBlue, picocss.PicoThemeRed, picocss.PicoThemeBlue,
 	}))
@@ -263,6 +338,8 @@ func TestPlugin_RepeatedThemes_Deduplicated(t *testing.T) {
 }
 
 func TestPlugin_DuplicateThemesWithDefaultInDuplicates(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemeBlue, picocss.PicoThemeRed}),
 		picocss.WithDefaultTheme(picocss.PicoThemeBlue),
@@ -276,6 +353,8 @@ func TestPlugin_DuplicateThemesWithDefaultInDuplicates(t *testing.T) {
 }
 
 func TestPlugin_ServesDefaultTheme(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -287,6 +366,8 @@ func TestPlugin_ServesDefaultTheme(t *testing.T) {
 }
 
 func TestPlugin_InvalidThemeReturns404(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -297,6 +378,8 @@ func TestPlugin_InvalidThemeReturns404(t *testing.T) {
 }
 
 func TestPlugin_WithThemes_ServesOnlyConfiguredThemes(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemeRed}))
 	defer server.Close()
 
@@ -322,10 +405,12 @@ func pageBody(server *httptest.Server) string {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	return string(body)
+	return html.UnescapeString(string(body))
 }
 
 func TestPlugin_InitializesSignals(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -336,6 +421,8 @@ func TestPlugin_InitializesSignals(t *testing.T) {
 }
 
 func TestPlugin_DefaultThemeInSignal(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(
 		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemePurple, picocss.PicoThemeAmber}),
 		picocss.WithDefaultTheme(picocss.PicoThemePurple),
@@ -348,6 +435,8 @@ func TestPlugin_DefaultThemeInSignal(t *testing.T) {
 }
 
 func TestPlugin_BindsDataThemeToDarkModeSignal(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -359,6 +448,8 @@ func TestPlugin_BindsDataThemeToDarkModeSignal(t *testing.T) {
 }
 
 func TestPlugin_DataThemeUsesLight(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -370,37 +461,41 @@ func TestPlugin_DataThemeUsesLight(t *testing.T) {
 // --- Dark mode options ---
 
 func TestPlugin_DefaultDarkMode_UsesSystemPreference(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
 	body := pageBody(server)
+	assert.Contains(t, body, `"_picoDarkMode":"system"`)
 	assert.Contains(t, body, `prefers-color-scheme`)
-	assert.Contains(t, body, `_picoDarkMode`)
 }
 
-func TestPlugin_WithDarkMode_SignalIsTrue(t *testing.T) {
+func TestPlugin_WithDarkMode_SignalIsDark(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithDarkMode())
 	defer server.Close()
 
 	body := pageBody(server)
-	assert.Contains(t, body, `_picoDarkMode`)
-	assert.Contains(t, body, `true`)
-	assert.NotContains(t, body, `prefers-color-scheme`)
+	assert.Contains(t, body, `"_picoDarkMode":"dark"`)
 }
 
-func TestPlugin_WithLightMode_SignalIsFalse(t *testing.T) {
+func TestPlugin_WithLightMode_SignalIsLight(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithLightMode())
 	defer server.Close()
 
 	body := pageBody(server)
-	assert.Contains(t, body, `_picoDarkMode`)
-	assert.Contains(t, body, `false`)
-	assert.NotContains(t, body, `prefers-color-scheme`)
+	assert.Contains(t, body, `"_picoDarkMode":"light"`)
 }
 
 // --- ETag ---
 
 func TestPlugin_ThemeAsset_HasETagHeader(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -411,6 +506,8 @@ func TestPlugin_ThemeAsset_HasETagHeader(t *testing.T) {
 }
 
 func TestPlugin_ThemeAsset_Returns304ForMatchingETag(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -431,6 +528,8 @@ func TestPlugin_ThemeAsset_Returns304ForMatchingETag(t *testing.T) {
 // --- Gzip ---
 
 func TestPlugin_ThemeAsset_ServesGzipWhenAccepted(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -452,6 +551,8 @@ func TestPlugin_ThemeAsset_ServesGzipWhenAccepted(t *testing.T) {
 }
 
 func TestPlugin_ThemeAsset_ServesPlainWhenGzipNotAccepted(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin()
 	defer server.Close()
 
@@ -467,6 +568,8 @@ func TestPlugin_ThemeAsset_ServesPlainWhenGzipNotAccepted(t *testing.T) {
 // --- Color classes ---
 
 func TestPlugin_ColorClassesAsset_HasETagHeader(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithColorClasses())
 	defer server.Close()
 
@@ -478,6 +581,8 @@ func TestPlugin_ColorClassesAsset_HasETagHeader(t *testing.T) {
 }
 
 func TestPlugin_ColorClassesAsset_ServesGzipWhenAccepted(t *testing.T) {
+	t.Parallel()
+
 	_, server := registerPlugin(picocss.WithColorClasses())
 	defer server.Close()
 
@@ -489,4 +594,86 @@ func TestPlugin_ColorClassesAsset_ServesGzipWhenAccepted(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+}
+
+// --- Get/Set API ---
+
+func TestPlugin_SetDarkModeInInitAppearsInHTML(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	picocss.Plugin().Register(v)
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			picocss.SetDarkMode(ctx, "dark")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
+	})
+	defer server.Close()
+
+	body := pageBody(server)
+	assert.Contains(t, body, `"_picoDarkMode":"dark"`)
+}
+
+func TestPlugin_SetThemeInInitAppearsInHTML(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	picocss.Plugin(
+		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue, picocss.PicoThemeAmber}),
+	).Register(v)
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			picocss.SetTheme(ctx, "blue")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
+	})
+	defer server.Close()
+
+	body := pageBody(server)
+	assert.Contains(t, body, `"_picoTheme":"blue"`)
+}
+
+func TestPlugin_GetDarkModeReturnsSetValue(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	picocss.Plugin().Register(v)
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			picocss.SetDarkMode(ctx, "light")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("dm=%s", picocss.GetDarkMode(ctx)))
+		})
+	})
+	defer server.Close()
+
+	body := pageBody(server)
+	assert.Contains(t, body, "dm=light")
+}
+
+func TestPlugin_GetThemeReturnsSetValue(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	picocss.Plugin(
+		picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemePurple, picocss.PicoThemeAmber}),
+	).Register(v)
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Init(func(ctx *via.Ctx) {
+			picocss.SetTheme(ctx, "purple")
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("theme=%s", picocss.GetTheme(ctx)))
+		})
+	})
+	defer server.Close()
+
+	body := pageBody(server)
+	assert.Contains(t, body, "theme=purple")
 }

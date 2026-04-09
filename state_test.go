@@ -50,7 +50,7 @@ func TestState_readOnlyActionDoesNotSync(t *testing.T) {
 
 	triggerAction(t, server.URL, ctxID, actionIDs[1])
 
-	_, ev := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	_, ev := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.Equal(t, "", ev.eventType, "read-only action should not trigger sync")
 }
 
@@ -174,7 +174,7 @@ func TestState_unmodifiedStateDoesNotTriggerRender(t *testing.T) {
 
 	triggerAction(t, server.URL, ctxID, actionID)
 
-	gotEvent, _ := collectEventOrTimeout(t, stream, 50*time.Millisecond)
+	gotEvent, _ := tryReadEvent(t, stream, 50*time.Millisecond)
 	assert.False(t, gotEvent, "no patch should be sent when state not modified")
 }
 
@@ -218,6 +218,8 @@ func TestState_syncDoesNotRetriggerOnNextAction(t *testing.T) {
 }
 
 func TestState_getReturnsInitialValue(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got int
 	v.Page("/", func(cmp *via.Cmp) {
@@ -231,6 +233,8 @@ func TestState_getReturnsInitialValue(t *testing.T) {
 }
 
 func TestState_setUpdatesGet(t *testing.T) {
+	t.Parallel()
+
 	v := via.New()
 	var got int
 	v.Page("/", func(cmp *via.Cmp) {
@@ -245,6 +249,8 @@ func TestState_setUpdatesGet(t *testing.T) {
 }
 
 func TestState_appScopeSharedAcrossContexts(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	v := via.New(via.WithTestServer(&server))
 	v.Page("/", func(cmp *via.Cmp) {
@@ -420,6 +426,8 @@ func TestState_conflictingUserAndAppScopesPanics(t *testing.T) {
 }
 
 func TestState_appScopeMutexProtected(t *testing.T) {
+	t.Parallel()
+
 	var server *httptest.Server
 	v := via.New(via.WithTestServer(&server))
 	v.Page("/", func(cmp *via.Cmp) {
@@ -430,7 +438,7 @@ func TestState_appScopeMutexProtected(t *testing.T) {
 	defer server.Close()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

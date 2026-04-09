@@ -38,7 +38,6 @@ type Ctx struct {
 	signalValues map[string]*signalValue
 	stateMod     bool
 	disposed     bool
-	initialized  bool
 	session      *session
 	actionMu     sync.Mutex
 
@@ -157,9 +156,16 @@ func (ctx *Ctx) injectSignals(sigs map[string]any) {
 		if incomingID == "via_tab" {
 			continue
 		}
-		for sigID, sig := range ctx.cmp.signals {
-			if sm, ok := sig.(signalMeta); ok && sm.displayID() == incomingID {
-				ctx.signalValues[sigID] = &signalValue{raw: sm.coerce(val)}
+		for _, sigMap := range []map[string]any{ctx.cmp.app.signals, ctx.cmp.signals} {
+			found := false
+			for sigID, sig := range sigMap {
+				if sm, ok := sig.(signalMeta); ok && sm.displayID() == incomingID {
+					ctx.signalValues[sigID] = &signalValue{raw: sm.coerce(val)}
+					found = true
+					break
+				}
+			}
+			if found {
 				break
 			}
 		}
@@ -168,11 +174,13 @@ func (ctx *Ctx) injectSignals(sigs map[string]any) {
 
 func (ctx *Ctx) prepareSignalsForPatch() map[string]any {
 	updatedSigs := make(map[string]any)
-	for sigID, sig := range ctx.cmp.signals {
-		if sm, ok := sig.(signalMeta); ok {
-			if sv, exists := ctx.signalValues[sigID]; exists && sv.changed {
-				updatedSigs[sm.displayID()] = sv.raw
-				sv.changed = false
+	for _, sigMap := range []map[string]any{ctx.cmp.app.signals, ctx.cmp.signals} {
+		for sigID, sig := range sigMap {
+			if sm, ok := sig.(signalMeta); ok {
+				if sv, exists := ctx.signalValues[sigID]; exists && sv.changed {
+					updatedSigs[sm.displayID()] = sv.raw
+					sv.changed = false
+				}
 			}
 		}
 	}
@@ -241,7 +249,7 @@ func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []
 			cmp:          cmp,
 			patchChan:    make(chan patch, 1),
 			doneChan:     make(chan struct{}),
-			signalValues: initSignalValues(cmp),
+			signalValues: initSignalValues(a, cmp),
 		}
 		cmp.viewFn(defCtx)
 		// Run component init during definition phase
@@ -278,28 +286,50 @@ func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []
 				cmp:          cmp,
 				patchChan:    make(chan patch, 64),
 				doneChan:     make(chan struct{}),
-				signalValues: initSignalValues(cmp),
+				signalValues: initSignalValues(a, cmp),
 				session:      sessionFromRequest(r),
 			}
 			a.registerCtx(id, ctx)
 
-			headElements := []h.H{}
-			headElements = append(headElements, a.documentHeadIncludes...)
-			initialSigs := map[string]any{"via_tab": id}
-			for _, sig := range cmp.signals {
-				if sm, ok := sig.(signalMeta); ok && !sm.hasError() {
-					initialSigs[sm.displayID()] = sm.initialRawValue()
+			if cmp.initFn != nil {
+				cmp.initFn(ctx)
+			}
+			for _, comp := range cmp.components {
+				if comp.initFn != nil {
+					comp.initFn(ctx)
 				}
+			}
+
+			bodyElements := []h.H{h.Div(h.ID(id), cmp.viewFn(ctx))}
+
+			headElements := []h.H{}
+			initialSigs := map[string]any{"via_tab": id}
+			for _, sigMap := range []map[string]any{a.signals, cmp.signals} {
+				for sigID, sig := range sigMap {
+					if sm, ok := sig.(signalMeta); ok && !sm.hasError() {
+						if sv, ok := ctx.signalValues[sigID]; ok {
+							initialSigs[sm.displayID()] = sm.rawValueOf(sv.raw)
+						} else {
+							initialSigs[sm.displayID()] = sm.initialRawValue()
+						}
+					}
+				}
+			}
+			// Reset changed flags so the first action doesn't re-send
+			// values that are already in the initial HTML.
+			for _, sv := range ctx.signalValues {
+				sv.changed = false
 			}
 			initialSigsJSON, _ := json.Marshal(initialSigs)
 			headElements = append(headElements,
 				h.Meta(h.Data("signals", string(initialSigsJSON))),
+			)
+			headElements = append(headElements, a.documentHeadIncludes...)
+			headElements = append(headElements,
 				h.Meta(h.Data("init", "@get('/_sse')")),
 				h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
 				navigator.sendBeacon('/_sse/close', '%s');});`, id))),
 			)
-
-			bodyElements := []h.H{h.Div(h.ID(id), cmp.viewFn(ctx))}
 			bodyElements = append(bodyElements, a.documentFootIncludes...)
 			view := h.HTML5(h.HTML5Props{
 				Title:     a.cfg.title,
@@ -328,19 +358,6 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
 
 	a.logDebug(ctx, "SSE connection established")
-
-	ctx.mux.Lock()
-	firstConnect := !ctx.initialized
-	ctx.initialized = true
-	ctx.mux.Unlock()
-
-	if firstConnect {
-		go func() {
-			if ctx.cmp.initFn != nil {
-				ctx.cmp.initFn(ctx)
-			}
-		}()
-	}
 
 	for {
 		select {
@@ -434,8 +451,13 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	a.unregisterCtx(cID)
 }
 
-func initSignalValues(cmp *Cmp) map[string]*signalValue {
-	vals := make(map[string]*signalValue, len(cmp.signals))
+func initSignalValues(app *App, cmp *Cmp) map[string]*signalValue {
+	vals := make(map[string]*signalValue, len(app.signals)+len(cmp.signals))
+	for id, sig := range app.signals {
+		if sm, ok := sig.(signalMeta); ok {
+			vals[id] = &signalValue{raw: sm.initialTypedValue()}
+		}
+	}
 	for id, sig := range cmp.signals {
 		if sm, ok := sig.(signalMeta); ok {
 			vals[id] = &signalValue{raw: sm.initialTypedValue()}
