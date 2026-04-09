@@ -441,6 +441,49 @@ func TestSession_zeroTTLDisablesSweep(t *testing.T) {
 	assert.Contains(t, string(body), "forever", "session should never expire with TTL=0")
 }
 
+func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	var sessCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "via_session" {
+			sessCookie = c
+		}
+	}
+	require.NotNil(t, sessCookie)
+	assert.Len(t, sessCookie.Value, 64, "session ID should be 64 hex chars (256 bits)")
+}
+
+func TestSess_sessionIDsAreUnique(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+
+	seen := make(map[string]struct{}, 50)
+	for range 50 {
+		resp, err := http.Get(server.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+		for _, c := range resp.Cookies() {
+			if c.Name == "via_session" {
+				_, dup := seen[c.Value]
+				assert.False(t, dup, "duplicate session ID: %s", c.Value)
+				seen[c.Value] = struct{}{}
+			}
+		}
+	}
+}
+
 func TestSetSess_preservesMultipleTypesInSameSession(t *testing.T) {
 	t.Parallel()
 

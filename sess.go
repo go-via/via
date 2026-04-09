@@ -32,7 +32,7 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 		}
 	}
 
-	sess := &session{id: genRandID()}
+	sess := &session{id: genSecureID()}
 	sess.lastAccess.Store(now)
 
 	a.sessionsMu.Lock()

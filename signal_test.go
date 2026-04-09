@@ -61,6 +61,20 @@ func TestSignal_idReturnsNonEmpty(t *testing.T) {
 	assert.NotEqual(t, idA, idB)
 }
 
+func TestSignal_idHas64BitsOfEntropy(t *testing.T) {
+	t.Parallel()
+
+	v := via.New()
+	var id string
+	v.Page("/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, "x")
+		id = sig.ID()
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	// "via_" prefix (4 chars) + 16 hex chars (64 bits)
+	assert.Len(t, id, 20, "signal ID should be via_ prefix + 16 hex chars (64 bits)")
+}
+
 func TestSignal_sliceSerializesForTransport(t *testing.T) {
 	t.Parallel()
 
