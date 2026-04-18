@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type User struct {
@@ -18,10 +20,10 @@ type Prefs struct {
 type regFlash bool
 
 var (
-	users     = map[string]User{}
-	passwords = map[string]string{}
-	prefs     = map[string]Prefs{}
-	storeMu   sync.RWMutex
+	users          = map[string]User{}
+	passwordHashes = map[string][]byte{}
+	prefs          = map[string]Prefs{}
+	storeMu        sync.RWMutex
 )
 
 var (
@@ -34,24 +36,32 @@ func register(name, email, password string) error {
 	if name == "" || email == "" || password == "" {
 		return errAllFieldsRequired
 	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
 	storeMu.Lock()
 	defer storeMu.Unlock()
-	if _, exists := passwords[email]; exists {
+	if _, exists := passwordHashes[email]; exists {
 		return errEmailAlreadyExists
 	}
 	users[email] = User{Name: name, Email: email}
-	passwords[email] = password
+	passwordHashes[email] = hash
 	return nil
 }
 
 func authenticate(email, password string) (User, error) {
 	storeMu.RLock()
-	defer storeMu.RUnlock()
-	stored, exists := passwords[email]
-	if !exists || stored != password {
+	hash, exists := passwordHashes[email]
+	user := users[email]
+	storeMu.RUnlock()
+	if !exists {
 		return User{}, errInvalidCredentials
 	}
-	return users[email], nil
+	if err := bcrypt.CompareHashAndPassword(hash, []byte(password)); err != nil {
+		return User{}, errInvalidCredentials
+	}
+	return user, nil
 }
 
 func getPrefs(email string) (Prefs, bool) {
@@ -66,4 +76,3 @@ func setPrefs(email string, p Prefs) {
 	defer storeMu.Unlock()
 	prefs[email] = p
 }
-

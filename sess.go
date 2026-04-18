@@ -44,6 +44,7 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 		Value:    sess.id,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   a.cfg.secureCookies,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -146,7 +147,9 @@ func ClearSess(w http.ResponseWriter, r *http.Request) {
 	if sess == nil {
 		return
 	}
+	var secure bool
 	if a, ok := r.Context().Value(sessAppContextKey{}).(*App); ok {
+		secure = a.cfg.secureCookies
 		a.sessionsMu.Lock()
 		delete(a.sessions, sess.id)
 		a.sessionsMu.Unlock()
@@ -156,6 +159,7 @@ func ClearSess(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

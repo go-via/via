@@ -22,6 +22,7 @@ type config struct {
 	plugins         []Plugin
 	shutdownTimeout time.Duration
 	sessionTTL      time.Duration
+	secureCookies   bool
 	testServer      **httptest.Server
 }
 
@@ -52,6 +53,12 @@ func WithShutdownTimeout(d time.Duration) Option {
 // WithSessionTTL sets the session expiry duration. Defaults to 30 minutes.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) { c.sessionTTL = d }
+}
+
+// WithSecureCookies marks the session cookie as Secure so browsers only send
+// it over HTTPS. Enable this in production behind TLS.
+func WithSecureCookies() Option {
+	return func(c *config) { c.secureCookies = true }
 }
 
 // WithPlugins registers plugins with the App.

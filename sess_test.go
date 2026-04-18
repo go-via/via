@@ -441,6 +441,87 @@ func TestSession_zeroTTLDisablesSweep(t *testing.T) {
 	assert.Contains(t, string(body), "forever", "session should never expire with TTL=0")
 }
 
+func TestSess_cookieIsNotSecureByDefault(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	var sessCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "via_session" {
+			sessCookie = c
+		}
+	}
+	require.NotNil(t, sessCookie)
+	assert.False(t, sessCookie.Secure, "session cookie should not be Secure without WithSecureCookies")
+}
+
+func TestSess_cookieIsSecureWithOption(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSecureCookies())
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	var sessCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "via_session" {
+			sessCookie = c
+		}
+	}
+	require.NotNil(t, sessCookie)
+	assert.True(t, sessCookie.Secure, "session cookie should be Secure with WithSecureCookies")
+}
+
+func TestClearSess_cookieIsSecureWithOption(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSecureCookies())
+
+	v.HandleFunc("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		via.ClearSess(w, r)
+	})
+
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+	jar := collectCookies(t, server.URL, resp.Cookies())
+
+	req, _ := http.NewRequest("POST", server.URL+"/logout", nil)
+	addCookies(req, jar)
+	resp2, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	resp2.Body.Close()
+
+	var cleared *http.Cookie
+	for _, c := range resp2.Cookies() {
+		if c.Name == "via_session" {
+			cleared = c
+		}
+	}
+	require.NotNil(t, cleared)
+	assert.True(t, cleared.Secure, "clearing cookie should also be Secure to match original attributes")
+}
+
 func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
 	t.Parallel()
 
