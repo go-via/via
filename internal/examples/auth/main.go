@@ -26,7 +26,7 @@ func main() {
 
 	app.Layout(func(cmp *via.Cmp) {
 		logout := cmp.Action(func(ctx *via.Ctx) error {
-			via.ClearSess(ctx.W, ctx.R)
+			via.ClearSess(ctx.Writer(), ctx.Request())
 			ctx.Redirect("/")
 			return nil
 		})

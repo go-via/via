@@ -22,8 +22,8 @@ func loginPage(cmp *via.Cmp) {
 			return nil
 		}
 
-		via.SetSess(ctx.W, ctx.R, user)
-		via.SetSess(ctx.W, ctx.R, regFlash(false))
+		via.SetSess(ctx.Writer(), ctx.Request(), user)
+		via.SetSess(ctx.Writer(), ctx.Request(), regFlash(false))
 		ctx.Redirect("/profile")
 		return nil
 	})

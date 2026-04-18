@@ -699,7 +699,7 @@ func TestCtx_exposeWAndRDuringAction(t *testing.T) {
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
 			return nil
 		})
 		cmp.View(func(ctx *via.Ctx) h.H {
@@ -726,6 +726,44 @@ func TestCtx_exposeWAndRDuringAction(t *testing.T) {
 	}
 }
 
+func TestCtx_WriterAndRequestAreNilAfterActionReturns(t *testing.T) {
+	t.Parallel()
+
+	type result struct{ hasW, hasR bool }
+	gotCh := make(chan result, 1)
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
+			}()
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(act.OnClick())
+		})
+	})
+
+	body := getPageBody(t, server, "/")
+	ctxID := extractCtxID(t, body)
+	actionID := extractActionID(t, body)
+
+	_, cancel := connectSSE(t, server, ctxID)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	triggerAction(t, server.URL, ctxID, actionID)
+
+	select {
+	case r := <-gotCh:
+		assert.False(t, r.hasW, "Writer() must return nil from a goroutine that outlives the action")
+		assert.False(t, r.hasR, "Request() must return nil from a goroutine that outlives the action")
+	case <-time.After(sseTimeout):
+		require.Fail(t, "timed out waiting for late goroutine")
+	}
+}
+
 func TestCtx_WAndRAreNilDuringInit(t *testing.T) {
 	t.Parallel()
 
@@ -734,7 +772,7 @@ func TestCtx_WAndRAreNilDuringInit(t *testing.T) {
 
 	server := newTestApp(t, "/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			got = result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			got = result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
 	})
@@ -821,7 +859,7 @@ func TestCtx_WAndRClearedAfterActionPanics(t *testing.T) {
 			panic("boom")
 		})
 		checkAct := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
 			return nil
 		})
 		cmp.View(func(ctx *via.Ctx) h.H {
@@ -896,7 +934,7 @@ func TestCtx_WAndRAreNilAfterActionCompletes(t *testing.T) {
 			return nil
 		})
 		act2 := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.W != nil, hasR: ctx.R != nil}
+			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
 			return nil
 		})
 		cmp.View(func(ctx *via.Ctx) h.H {

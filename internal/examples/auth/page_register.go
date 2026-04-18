@@ -23,7 +23,7 @@ func registerPage(cmp *via.Cmp) {
 			return nil
 		}
 
-		via.SetSess(ctx.W, ctx.R, regFlash(true))
+		via.SetSess(ctx.Writer(), ctx.Request(), regFlash(true))
 		ctx.Redirect("/")
 		return nil
 	})

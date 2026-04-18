@@ -77,10 +77,36 @@ type Ctx struct {
 	lastAccess   atomic.Int64
 	actionMu     sync.Mutex
 
-	// W and R are escape hatches for raw HTTP access. Set during action
-	// execution, nil otherwise.
-	W http.ResponseWriter
-	R *http.Request
+	// w and r hold raw HTTP access during action execution. Read via the
+	// Writer / Request accessors, which guard against stale reads from
+	// goroutines that outlive the action.
+	w http.ResponseWriter
+	r *http.Request
+}
+
+// Writer returns the raw http.ResponseWriter for the currently executing
+// action, or nil if called outside of action scope (for example from a
+// goroutine that outlived the action). A nil read is logged at warn level.
+func (ctx *Ctx) Writer() http.ResponseWriter {
+	ctx.mux.RLock()
+	w := ctx.w
+	ctx.mux.RUnlock()
+	if w == nil && ctx.cmp != nil && ctx.cmp.app != nil {
+		ctx.cmp.app.logWarn(ctx, "Writer() called outside action scope; returning nil")
+	}
+	return w
+}
+
+// Request returns the raw *http.Request for the currently executing action,
+// or nil if called outside of action scope.
+func (ctx *Ctx) Request() *http.Request {
+	ctx.mux.RLock()
+	r := ctx.r
+	ctx.mux.RUnlock()
+	if r == nil && ctx.cmp != nil && ctx.cmp.app != nil {
+		ctx.cmp.app.logWarn(ctx, "Request() called outside action scope; returning nil")
+	}
+	return r
 }
 
 func (ctx *Ctx) touch() {
@@ -538,11 +564,15 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 
 	// Serialize actions per Ctx to prevent data races on W/R, signals, state
 	ctx.actionMu.Lock()
-	ctx.W = w
-	ctx.R = r
+	ctx.mux.Lock()
+	ctx.w = w
+	ctx.r = r
+	ctx.mux.Unlock()
 	defer func() {
-		ctx.W = nil
-		ctx.R = nil
+		ctx.mux.Lock()
+		ctx.w = nil
+		ctx.r = nil
+		ctx.mux.Unlock()
 		ctx.actionMu.Unlock()
 	}()
 
