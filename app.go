@@ -178,7 +178,11 @@ func (a *App) disposeCtx(ctx *Ctx) {
 	}
 	ctx.disposed = true
 	close(ctx.doneChan)
-	close(ctx.patchChan)
+	if ctx.queue != nil {
+		ctx.queue.mu.Lock()
+		ctx.queue.disposed = true
+		ctx.queue.mu.Unlock()
+	}
 	ctx.mux.Unlock()
 	if ctx.cmp != nil {
 		a.safeDispose(ctx, ctx.cmp.disposeFn)

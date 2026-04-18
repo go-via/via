@@ -29,13 +29,46 @@ type patch struct {
 	content string
 }
 
+const maxPendingScriptBytes = 256 * 1024
+
+// patchQueue coalesces outgoing patches so bursts do not lose state. Elements
+// use a last-wins slot (each element patch is a full re-render, so only the
+// latest is observable). Signals merge by key into a map (latest value wins
+// per signal). Scripts concatenate into one buffer with per-script try/catch
+// wrapping to preserve order without losing siblings on a single failure.
+// Redirects use a last-wins slot and, when set, preempt every other pending
+// patch on drain so the client does not apply work to a page about to navigate.
+type patchQueue struct {
+	mu              sync.Mutex
+	pendingElems    string
+	hasElems        bool
+	pendingSignals  map[string]any
+	pendingScripts  strings.Builder
+	scriptOverflow  bool
+	pendingRedirect string
+	hasRedirect     bool
+	disposed        bool
+	wake            chan struct{}
+}
+
+func newPatchQueue() *patchQueue {
+	return &patchQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *patchQueue) notify() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
 // Ctx is the execution context — created per request, passed to view and action functions.
 type Ctx struct {
 	mux          sync.RWMutex
 	id           string
 	routeParams  map[string]string
 	cmp          *Cmp
-	patchChan    chan patch
+	queue        *patchQueue
 	doneChan     chan struct{}
 	signalValues map[string]*signalValue
 	stateMod     bool
@@ -144,11 +177,47 @@ func (ctx *Ctx) hasSignalChanges() bool {
 }
 
 func (ctx *Ctx) sendPatch(p patch) {
-	select {
-	case ctx.patchChan <- p:
-	default:
-		ctx.cmp.app.logWarn(ctx, "patch dropped: channel buffer full")
+	q := ctx.queue
+	if q == nil {
+		return
 	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.disposed {
+		return
+	}
+	switch p.typ {
+	case patchTypeElements:
+		q.pendingElems = p.content
+		q.hasElems = true
+	case patchTypeSignals:
+		var incoming map[string]any
+		if err := json.Unmarshal([]byte(p.content), &incoming); err != nil {
+			ctx.cmp.app.logErr(ctx, "signal patch unmarshal failed: %v", err)
+			return
+		}
+		if q.pendingSignals == nil {
+			q.pendingSignals = make(map[string]any, len(incoming))
+		}
+		for k, v := range incoming {
+			q.pendingSignals[k] = v
+		}
+	case patchTypeScript:
+		const prefix = "try{"
+		const suffix = "}catch(e){console.error(e)};"
+		if q.pendingScripts.Len()+len(prefix)+len(p.content)+len(suffix) > maxPendingScriptBytes {
+			q.scriptOverflow = true
+			ctx.cmp.app.logErr(ctx, "script buffer overflow: patch dropped")
+			break
+		}
+		q.pendingScripts.WriteString(prefix)
+		q.pendingScripts.WriteString(p.content)
+		q.pendingScripts.WriteString(suffix)
+	case patchTypeRedirect:
+		q.pendingRedirect = p.content
+		q.hasRedirect = true
+	}
+	q.notify()
 }
 
 func (ctx *Ctx) markStateModified() {
@@ -254,7 +323,7 @@ func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []
 		// Call view during definition phase to run any side effects
 		defCtx := &Ctx{
 			cmp:          cmp,
-			patchChan:    make(chan patch, 1),
+			queue:        newPatchQueue(),
 			doneChan:     make(chan struct{}),
 			signalValues: initSignalValues(a, cmp),
 		}
@@ -291,7 +360,7 @@ func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []
 				id:           id,
 				routeParams:  params,
 				cmp:          cmp,
-				patchChan:    make(chan patch, 64),
+				queue:        newPatchQueue(),
 				doneChan:     make(chan struct{}),
 				signalValues: initSignalValues(a, cmp),
 				session:      sessionFromRequest(r),
@@ -383,28 +452,62 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-sse.Context().Done():
 			return
+		case <-ctx.doneChan:
+			return
 		case <-heartbeat:
 			if err := sse.PatchSignals([]byte("{}")); err != nil {
 				return
 			}
 			ctx.touch()
-		case p, ok := <-ctx.patchChan:
-			if !ok {
+		case <-ctx.queue.wake:
+			if err := drainPatchQueue(sse, ctx); err != nil {
 				return
 			}
 			ctx.touch()
-			switch p.typ {
-			case patchTypeElements:
-				sse.PatchElements(p.content)
-			case patchTypeSignals:
-				sse.PatchSignals([]byte(p.content))
-			case patchTypeScript:
-				sse.ExecuteScript(p.content)
-			case patchTypeRedirect:
-				sse.Redirect(p.content)
-			}
 		}
 	}
+}
+
+func drainPatchQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
+	q := ctx.queue
+	q.mu.Lock()
+	elems, hasElems := q.pendingElems, q.hasElems
+	signals := q.pendingSignals
+	scripts := q.pendingScripts.String()
+	redirect, hasRedirect := q.pendingRedirect, q.hasRedirect
+	overflow := q.scriptOverflow
+	q.pendingElems = ""
+	q.hasElems = false
+	q.pendingSignals = nil
+	q.pendingScripts.Reset()
+	q.pendingRedirect = ""
+	q.hasRedirect = false
+	q.scriptOverflow = false
+	q.mu.Unlock()
+
+	if hasRedirect {
+		return sse.Redirect(redirect)
+	}
+	if hasElems {
+		if err := sse.PatchElements(elems); err != nil {
+			return err
+		}
+	}
+	if len(signals) > 0 {
+		sigBytes, _ := json.Marshal(signals)
+		if err := sse.PatchSignals(sigBytes); err != nil {
+			return err
+		}
+	}
+	if scripts != "" {
+		if err := sse.ExecuteScript(scripts); err != nil {
+			return err
+		}
+	}
+	if overflow {
+		_ = sse.ExecuteScript(`console.error("via: script buffer overflowed; some updates were dropped")`)
+	}
+	return nil
 }
 
 func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {

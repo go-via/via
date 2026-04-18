@@ -675,6 +675,67 @@ func TestSSE_heartbeatTouchesContextLastAccess(t *testing.T) {
 	}
 }
 
+func TestPatchQueue_concatenatesMultipleScriptsIntoOneEvent(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			ctx.ExecScript("console.log('a')")
+			ctx.ExecScript("console.log('b')")
+			ctx.ExecScript("console.log('c')")
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Button(h.Text("go"), act.OnClick())
+		})
+	})
+
+	tc := newTestClientFromServer(t, server, "/").connect()
+	tc.fire(tc.actionID())
+
+	ev := tc.readEvent()
+	assert.Equal(t, "datastar-patch-elements", ev.eventType)
+	assert.Contains(t, ev.data, "console.log('a')")
+	assert.Contains(t, ev.data, "console.log('b')")
+	assert.Contains(t, ev.data, "console.log('c')")
+	idxA := strings.Index(ev.data, "console.log('a')")
+	idxB := strings.Index(ev.data, "console.log('b')")
+	idxC := strings.Index(ev.data, "console.log('c')")
+	assert.Less(t, idxA, idxB, "script order must be preserved")
+	assert.Less(t, idxB, idxC, "script order must be preserved")
+	assert.Contains(t, ev.data, "try{", "each script must be wrapped in try/catch")
+
+	// No further event should arrive for this action's scripts
+	ok, _ := tc.tryReadEvent(200 * time.Millisecond)
+	assert.False(t, ok, "scripts should be concatenated into exactly one event")
+}
+
+func TestPatchQueue_redirectPreemptsOtherPatches(t *testing.T) {
+	t.Parallel()
+
+	server := newTestApp(t, "/", func(cmp *via.Cmp) {
+		sig := via.Signal(cmp, "original")
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			sig.SetValue(ctx, "changed")
+			ctx.Redirect("/dashboard")
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Div(h.Textf("val=%s", sig.Get(ctx)), act.OnClick())
+		})
+	})
+
+	tc := newTestClientFromServer(t, server, "/").connect()
+	tc.fire(tc.actionID())
+
+	ev := tc.readEvent()
+	assert.Equal(t, "datastar-patch-elements", ev.eventType)
+	assert.Contains(t, ev.data, "location", "redirect must use script-based location change")
+
+	ok, other := tc.tryReadEvent(200 * time.Millisecond)
+	assert.False(t, ok, "redirect must preempt subsequent element/signal patches, got %q", other.eventType)
+}
+
 func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
 	t.Parallel()
 

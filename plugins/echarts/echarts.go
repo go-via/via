@@ -225,7 +225,6 @@ func (c *Chart) InitJS() string {
 
 // AppendData sends new data points to the chart via SSE.
 // Each data point is appended to series index 0.
-// Updates may be dropped silently if the SSE send buffer is full.
 func (c *Chart) AppendData(ctx *via.Ctx, data [][]any) {
 	if ctx == nil || len(data) == 0 {
 		return
@@ -244,7 +243,6 @@ func (c *Chart) AppendData(ctx *via.Ctx, data [][]any) {
 
 // AppendDataBatch sends multiple data arrays to the chart in a single SSE patch.
 // Prefer this over calling AppendData in a loop to reduce per-update overhead.
-// Updates may be dropped silently if the SSE send buffer is full.
 func (c *Chart) AppendDataBatch(ctx *via.Ctx, batches ...[][]any) {
 	if ctx == nil || len(batches) == 0 {
 		return
@@ -268,7 +266,6 @@ func (c *Chart) AppendDataBatch(ctx *via.Ctx, batches ...[][]any) {
 }
 
 // SetOption sends option updates to the chart via SSE.
-// Updates may be dropped silently if the SSE send buffer is full.
 func (c *Chart) SetOption(ctx *via.Ctx, opts map[string]any) {
 	if ctx == nil {
 		return
