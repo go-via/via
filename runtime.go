@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
@@ -39,12 +41,17 @@ type Ctx struct {
 	stateMod     bool
 	disposed     bool
 	session      *session
+	lastAccess   atomic.Int64
 	actionMu     sync.Mutex
 
 	// W and R are escape hatches for raw HTTP access. Set during action
 	// execution, nil otherwise.
 	W http.ResponseWriter
 	R *http.Request
+}
+
+func (ctx *Ctx) touch() {
+	ctx.lastAccess.Store(time.Now().UnixNano())
 }
 
 // GetPathParam returns the value of a named path parameter from the request URL.
@@ -289,6 +296,7 @@ func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []
 				signalValues: initSignalValues(a, cmp),
 				session:      sessionFromRequest(r),
 			}
+			ctx.touch()
 			a.registerCtx(id, ctx)
 
 			if cmp.initFn != nil {
@@ -358,6 +366,7 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 		a.logErr(nil, "sse stream failed: session mismatch for ctx '%s'", cID)
 		return
 	}
+	ctx.touch()
 
 	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
 
@@ -371,6 +380,7 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			ctx.touch()
 			switch p.typ {
 			case patchTypeElements:
 				sse.PatchElements(p.content)
@@ -399,6 +409,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		a.logErr(nil, "action '%s' failed: session mismatch for ctx '%s'", actionID, cID)
 		return
 	}
+	ctx.touch()
 	cmp := ctx.cmp
 	if cmp == nil || cmp.actionFns == nil {
 		a.logDebug(ctx, "action '%s' failed: composition not found", actionID)

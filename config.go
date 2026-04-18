@@ -22,6 +22,7 @@ type config struct {
 	plugins         []Plugin
 	shutdownTimeout time.Duration
 	sessionTTL      time.Duration
+	contextTTL      time.Duration
 	secureCookies   bool
 	testServer      **httptest.Server
 }
@@ -53,6 +54,13 @@ func WithShutdownTimeout(d time.Duration) Option {
 // WithSessionTTL sets the session expiry duration. Defaults to 30 minutes.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) { c.sessionTTL = d }
+}
+
+// WithContextTTL sets the idle timeout for per-tab contexts (Ctx). A context
+// is swept when it hasn't been touched by an SSE event, action, or registration
+// for longer than d. Use 0 to disable the sweep. Defaults to 15 minutes.
+func WithContextTTL(d time.Duration) Option {
+	return func(c *config) { c.contextTTL = d }
 }
 
 // WithSecureCookies marks the session cookie as Secure so browsers only send

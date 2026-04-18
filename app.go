@@ -134,6 +134,39 @@ func (a *App) getCtx(id string) (*Ctx, error) {
 	return nil, fmt.Errorf("ctx '%s' not found", id)
 }
 
+func (a *App) sweepExpiredContexts() {
+	interval := a.cfg.contextTTL / 2
+	if interval <= 0 {
+		interval = time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopSweep:
+			return
+		case <-ticker.C:
+			a.removeExpiredContexts()
+		}
+	}
+}
+
+func (a *App) removeExpiredContexts() {
+	cutoff := time.Now().Add(-a.cfg.contextTTL).UnixNano()
+	a.contextRegistryMutex.Lock()
+	expired := make([]*Ctx, 0)
+	for id, ctx := range a.contextRegistry {
+		if ctx.lastAccess.Load() < cutoff {
+			expired = append(expired, ctx)
+			delete(a.contextRegistry, id)
+		}
+	}
+	a.contextRegistryMutex.Unlock()
+	for _, ctx := range expired {
+		a.disposeCtx(ctx)
+	}
+}
+
 func (a *App) disposeCtx(ctx *Ctx) {
 	if ctx == nil {
 		return
@@ -244,6 +277,7 @@ func New(opts ...Option) *App {
 			title:           "Via",
 			shutdownTimeout: 5 * time.Second,
 			sessionTTL:      30 * time.Minute,
+			contextTTL:      15 * time.Minute,
 		},
 	}
 
@@ -268,9 +302,14 @@ func New(opts ...Option) *App {
 
 	a.handler = a.withSession(a.mux)
 
-	if a.cfg.sessionTTL > 0 {
+	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
 		a.stopSweep = make(chan struct{})
-		go a.sweepExpiredSessions()
+		if a.cfg.sessionTTL > 0 {
+			go a.sweepExpiredSessions()
+		}
+		if a.cfg.contextTTL > 0 {
+			go a.sweepExpiredContexts()
+		}
 	}
 
 	if a.cfg.testServer != nil {

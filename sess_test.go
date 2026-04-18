@@ -524,6 +524,86 @@ func TestClearSess_cookieIsSecureWithOption(t *testing.T) {
 	assert.True(t, cleared.Secure, "clearing cookie should also be Secure to match original attributes")
 }
 
+func TestContext_sweepsIdleContexts(t *testing.T) {
+	t.Parallel()
+
+	disposeCh := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithContextTTL(100*time.Millisecond))
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Dispose(func() { disposeCh <- struct{}{} })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	// Render page to create a ctx, but never open SSE and never fire any
+	// action — ctx sits idle in the registry.
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	// Wait for sweep: TTL + interval (TTL/2) + slack
+	select {
+	case <-disposeCh:
+	case <-time.After(sseTimeout):
+		require.Fail(t, "idle ctx should have been swept and disposed")
+	}
+}
+
+func TestContext_activeSSEExtendsTTL(t *testing.T) {
+	t.Parallel()
+
+	disposeCh := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithContextTTL(300*time.Millisecond))
+	v.Page("/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error { return nil })
+		cmp.Dispose(func() { disposeCh <- struct{}{} })
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Button(h.Text("go"), act.OnClick())
+		})
+	})
+	t.Cleanup(server.Close)
+
+	tc := newTestClientFromServer(t, server, "/")
+	tc.connect()
+
+	// Fire actions every 100ms for 450ms to keep ctx alive past TTL.
+	for range 5 {
+		time.Sleep(90 * time.Millisecond)
+		tc.fire(tc.actionID())
+	}
+
+	select {
+	case <-disposeCh:
+		require.Fail(t, "active ctx should not have been swept")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestContext_zeroTTLDisablesSweep(t *testing.T) {
+	t.Parallel()
+
+	disposeCh := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithContextTTL(0))
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Dispose(func() { disposeCh <- struct{}{} })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	select {
+	case <-disposeCh:
+		require.Fail(t, "ctx must not be swept when TTL is 0")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
 	t.Parallel()
 
