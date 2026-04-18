@@ -372,10 +372,22 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	a.logDebug(ctx, "SSE connection established")
 
+	var heartbeat <-chan time.Time
+	if a.cfg.sseHeartbeat > 0 {
+		t := time.NewTicker(a.cfg.sseHeartbeat)
+		defer t.Stop()
+		heartbeat = t.C
+	}
+
 	for {
 		select {
 		case <-sse.Context().Done():
 			return
+		case <-heartbeat:
+			if err := sse.PatchSignals([]byte("{}")); err != nil {
+				return
+			}
+			ctx.touch()
 		case p, ok := <-ctx.patchChan:
 			if !ok {
 				return

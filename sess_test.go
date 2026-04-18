@@ -604,6 +604,77 @@ func TestContext_zeroTTLDisablesSweep(t *testing.T) {
 	}
 }
 
+func TestSSE_sendsHeartbeatAtInterval(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSSEHeartbeat(50*time.Millisecond))
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	tc := newTestClientFromServer(t, server, "/").connect()
+
+	// Expect at least one heartbeat within ~200ms (3+ ticks at 50ms)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var gotHeartbeat bool
+	for time.Now().Before(deadline) {
+		ok, ev := tc.tryReadEvent(150 * time.Millisecond)
+		if !ok {
+			break
+		}
+		if ev.eventType == "datastar-patch-signals" && strings.Contains(ev.data, "{}") {
+			gotHeartbeat = true
+			break
+		}
+	}
+	assert.True(t, gotHeartbeat, "expected at least one heartbeat signal-patch event")
+}
+
+func TestSSE_zeroHeartbeatDisablesIt(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server), via.WithSSEHeartbeat(0))
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	tc := newTestClientFromServer(t, server, "/").connect()
+
+	ok, _ := tc.tryReadEvent(300 * time.Millisecond)
+	assert.False(t, ok, "no events expected when heartbeat is disabled")
+}
+
+func TestSSE_heartbeatTouchesContextLastAccess(t *testing.T) {
+	t.Parallel()
+
+	disposeCh := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(
+		via.WithTestServer(&server),
+		via.WithSSEHeartbeat(50*time.Millisecond),
+		via.WithContextTTL(200*time.Millisecond),
+	)
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.Dispose(func() { disposeCh <- struct{}{} })
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	tc := newTestClientFromServer(t, server, "/").connect()
+	_ = tc
+
+	// Heartbeats should keep lastAccess fresh past the TTL window.
+	select {
+	case <-disposeCh:
+		require.Fail(t, "ctx disposed despite heartbeats refreshing lastAccess")
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
 func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
 	t.Parallel()
 

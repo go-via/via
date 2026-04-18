@@ -278,6 +278,7 @@ func New(opts ...Option) *App {
 			shutdownTimeout: 5 * time.Second,
 			sessionTTL:      30 * time.Minute,
 			contextTTL:      15 * time.Minute,
+			sseHeartbeat:    25 * time.Second,
 		},
 	}
 

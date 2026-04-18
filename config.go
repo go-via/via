@@ -23,6 +23,7 @@ type config struct {
 	shutdownTimeout time.Duration
 	sessionTTL      time.Duration
 	contextTTL      time.Duration
+	sseHeartbeat    time.Duration
 	secureCookies   bool
 	testServer      **httptest.Server
 }
@@ -61,6 +62,13 @@ func WithSessionTTL(d time.Duration) Option {
 // for longer than d. Use 0 to disable the sweep. Defaults to 15 minutes.
 func WithContextTTL(d time.Duration) Option {
 	return func(c *config) { c.contextTTL = d }
+}
+
+// WithSSEHeartbeat sets the interval between no-op SSE frames sent to keep
+// the connection alive through reverse proxies and to detect dead sockets.
+// Use 0 to disable. Defaults to 25 seconds.
+func WithSSEHeartbeat(d time.Duration) Option {
+	return func(c *config) { c.sseHeartbeat = d }
 }
 
 // WithSecureCookies marks the session cookie as Secure so browsers only send
