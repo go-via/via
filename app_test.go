@@ -255,7 +255,7 @@ func TestDispose_shutdownAfterSSECloseDoesNotPanic(t *testing.T) {
 
 	// Close via beacon first
 	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	r, _ := http.DefaultClient.Do(req)
+	r, _ := clientFor(server.URL).Do(req)
 	if r != nil {
 		r.Body.Close()
 	}
@@ -291,7 +291,7 @@ func TestDispose_panickingCallbackDoesNotCrashServer(t *testing.T) {
 
 	// Close session — dispose panics but server must survive
 	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clientFor(server.URL).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 

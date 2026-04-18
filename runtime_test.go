@@ -487,7 +487,7 @@ func TestComponent_disposeCallback(t *testing.T) {
 
 	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
 	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clientFor(server.URL).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -644,7 +644,7 @@ func TestCtx_doneClosedOnDispose(t *testing.T) {
 	ctxID := extractCtxID(t, body)
 
 	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clientFor(server.URL).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -680,7 +680,7 @@ func TestCtx_doneNotClosedBeforeDispose(t *testing.T) {
 
 	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
 	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clientFor(server.URL).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 

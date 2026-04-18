@@ -1,9 +1,11 @@
 package via_test
 
 import (
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -541,6 +543,142 @@ func TestSess_sessionIDHas256BitsOfEntropy(t *testing.T) {
 	}
 	require.NotNil(t, sessCookie)
 	assert.Len(t, sessCookie.Value, 64, "session ID should be 64 hex chars (256 bits)")
+}
+
+func TestAction_rejectsMismatchedSession(t *testing.T) {
+	t.Parallel()
+
+	fired := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	v.Page("/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			fired <- struct{}{}
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Button(h.Text("go"), act.OnClick())
+		})
+	})
+	t.Cleanup(server.Close)
+
+	// Session A: render page, get cookies + tab ID + action ID
+	respA, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	rawA, _ := io.ReadAll(respA.Body)
+	respA.Body.Close()
+	bodyA := html.UnescapeString(string(rawA))
+	cookiesA := respA.Cookies()
+	tabA := extractCtxID(t, string(bodyA))
+	actionA := extractActionID(t, string(bodyA))
+
+	// Session B: fresh session, tries to fire session A's action using A's tab ID
+	respB, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	respB.Body.Close()
+	cookiesB := respB.Cookies()
+	require.NotEqual(t, cookiesA[0].Value, cookiesB[0].Value, "sessions must differ")
+
+	triggerActionWithCookies(t, server.URL, tabA, actionA, cookiesB)
+
+	select {
+	case <-fired:
+		require.Fail(t, "action fired despite session mismatch")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	// Session A should still be able to fire its own action
+	triggerActionWithCookies(t, server.URL, tabA, actionA, cookiesA)
+	select {
+	case <-fired:
+	case <-time.After(sseTimeout):
+		require.Fail(t, "owning session could not fire action")
+	}
+}
+
+func TestSSE_rejectsMismatchedSession(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	v.Page("/", func(cmp *via.Cmp) {
+		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
+	})
+	t.Cleanup(server.Close)
+
+	respA, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	rawA, _ := io.ReadAll(respA.Body)
+	respA.Body.Close()
+	bodyA := html.UnescapeString(string(rawA))
+	tabA := extractCtxID(t, string(bodyA))
+
+	// Fresh session B tries to open SSE for tab A
+	respB, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	respB.Body.Close()
+	cookiesB := respB.Cookies()
+
+	sigsJSON := `{"via_tab":"` + tabA + `"}`
+	req, _ := http.NewRequest("GET", server.URL+"/_sse?datastar="+sigsJSON, nil)
+	for _, c := range cookiesB {
+		req.AddCookie(c)
+	}
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.NotEqual(t, "text/event-stream", resp.Header.Get("Content-Type"),
+		"SSE stream should not start on session mismatch")
+}
+
+func TestSSEClose_rejectsMismatchedSession(t *testing.T) {
+	t.Parallel()
+
+	fired := make(chan struct{}, 1)
+	var server *httptest.Server
+	v := via.New(via.WithTestServer(&server))
+	v.Page("/", func(cmp *via.Cmp) {
+		act := cmp.Action(func(ctx *via.Ctx) error {
+			fired <- struct{}{}
+			return nil
+		})
+		cmp.View(func(ctx *via.Ctx) h.H {
+			return h.Button(h.Text("go"), act.OnClick())
+		})
+	})
+	t.Cleanup(server.Close)
+
+	respA, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	rawA, _ := io.ReadAll(respA.Body)
+	respA.Body.Close()
+	bodyA := html.UnescapeString(string(rawA))
+	cookiesA := respA.Cookies()
+	tabA := extractCtxID(t, string(bodyA))
+	actionA := extractActionID(t, string(bodyA))
+
+	respB, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	respB.Body.Close()
+	cookiesB := respB.Cookies()
+
+	// Session B attempts to dispose session A's ctx
+	reqClose, _ := http.NewRequest("POST", server.URL+"/_sse/close", strings.NewReader(tabA))
+	for _, c := range cookiesB {
+		reqClose.AddCookie(c)
+	}
+	respClose, err := http.DefaultClient.Do(reqClose)
+	require.NoError(t, err)
+	respClose.Body.Close()
+
+	// Session A's ctx should still be alive: action still fires
+	triggerActionWithCookies(t, server.URL, tabA, actionA, cookiesA)
+	select {
+	case <-fired:
+	case <-time.After(sseTimeout):
+		require.Fail(t, "ctx was disposed by a different session")
+	}
 }
 
 func TestSess_sessionIDsAreUnique(t *testing.T) {

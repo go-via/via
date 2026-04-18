@@ -8,8 +8,10 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +22,21 @@ import (
 )
 
 const sseTimeout = 3 * time.Second
+
+// clientFor returns a per-server http.Client with a cookie jar so the session
+// cookie set on the first page GET flows into subsequent action/SSE calls.
+// Tests use unique httptest.Server instances, so jar state is isolated per test.
+var testClientJars sync.Map // server URL -> *http.Client
+
+func clientFor(serverURL string) *http.Client {
+	if v, ok := testClientJars.Load(serverURL); ok {
+		return v.(*http.Client)
+	}
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	actual, _ := testClientJars.LoadOrStore(serverURL, c)
+	return actual.(*http.Client)
+}
 
 // --- testClient ---
 
@@ -49,7 +66,13 @@ func newTestClient(t *testing.T, route string, initFn func(*via.Cmp)) *testClien
 func newTestClientFromServer(t *testing.T, server *httptest.Server, route string) *testClient {
 	t.Helper()
 	tc := &testClient{t: t, server: server, route: route}
-	tc.body = getPageBody(t, server, route)
+	resp, err := http.Get(server.URL + route)
+	require.NoError(t, err)
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	resp.Body.Close()
+	tc.cookies = resp.Cookies()
+	tc.body = html.UnescapeString(string(raw))
 	tc.ctxID = extractCtxID(t, tc.body)
 	return tc
 }
@@ -132,7 +155,7 @@ func newTestApp(t *testing.T, route string, initFn func(*via.Cmp)) *httptest.Ser
 
 func getPageBody(t *testing.T, server *httptest.Server, route string) string {
 	t.Helper()
-	resp, err := http.Get(server.URL + route)
+	resp, err := clientFor(server.URL).Get(server.URL + route)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -230,7 +253,7 @@ func connectSSE(t *testing.T, server *httptest.Server, ctxID string) (*bufio.Sca
 	sigsJSON := `{"via_tab":"` + ctxID + `"}`
 	req, err := http.NewRequestWithContext(ctx, "GET", server.URL+"/_sse?datastar="+sigsJSON, nil)
 	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := clientFor(server.URL).Do(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { resp.Body.Close() })
 	return bufio.NewScanner(resp.Body), cancel
@@ -296,7 +319,7 @@ func readSSEEvent(t *testing.T, scanner *bufio.Scanner, timeout time.Duration) s
 func triggerAction(t *testing.T, serverURL, ctxID, actionID string) {
 	t.Helper()
 	sigsJSON := `{"via_tab":"` + ctxID + `"}`
-	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
+	resp, err := clientFor(serverURL).Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 }
@@ -317,7 +340,7 @@ func triggerActionWithCookies(t *testing.T, serverURL, ctxID, actionID string, c
 func triggerActionWithSignal(t *testing.T, serverURL, ctxID, actionID, sigID, sigValue string) {
 	t.Helper()
 	sigsJSON := `{"via_tab":"` + ctxID + `","` + sigID + `":"` + sigValue + `"}`
-	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
+	resp, err := clientFor(serverURL).Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 }
@@ -325,7 +348,7 @@ func triggerActionWithSignal(t *testing.T, serverURL, ctxID, actionID, sigID, si
 func postSignal(t *testing.T, serverURL, ctxID, actionID, sigID string, value any) {
 	t.Helper()
 	sigsJSON := fmt.Sprintf(`{"via_tab":%q,%q:%v}`, ctxID, sigID, value)
-	resp, err := http.Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
+	resp, err := clientFor(serverURL).Post(serverURL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 }

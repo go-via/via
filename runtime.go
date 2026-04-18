@@ -354,6 +354,10 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 		a.logErr(nil, "sse stream failed to start: %v", err)
 		return
 	}
+	if ctx.session != sessionFromRequest(r) {
+		a.logErr(nil, "sse stream failed: session mismatch for ctx '%s'", cID)
+		return
+	}
 
 	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
 
@@ -389,6 +393,10 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	ctx, err := a.getCtx(cID)
 	if err != nil {
 		a.logErr(nil, "action '%s' failed: %v", actionID, err)
+		return
+	}
+	if ctx.session != sessionFromRequest(r) {
+		a.logErr(nil, "action '%s' failed: session mismatch for ctx '%s'", actionID, cID)
 		return
 	}
 	cmp := ctx.cmp
@@ -445,6 +453,10 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	ctx, err := a.getCtx(cID)
 	if err != nil {
 		a.logErr(ctx, "failed to handle session close: %v", err)
+		return
+	}
+	if ctx.session != sessionFromRequest(r) {
+		a.logErr(ctx, "sse close: session mismatch for ctx '%s'", cID)
 		return
 	}
 	a.disposeCtx(ctx)

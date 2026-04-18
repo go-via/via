@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -173,7 +172,7 @@ func TestSignal_intGetAfterNumericJSONInjection(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	sigsJSON := fmt.Sprintf(`{"via_tab":%q,%q:500}`, ctxID, sigID)
-	resp, err := http.Post(server.URL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
+	resp, err := clientFor(server.URL).Post(server.URL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
 	require.NoError(t, err)
 	resp.Body.Close()
 
