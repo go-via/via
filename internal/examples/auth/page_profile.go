@@ -37,7 +37,7 @@ func profilePage(cmp *via.Cmp) {
 		p, _ := getPrefs(user.Email)
 		p.DarkMode = darkMode.Get(ctx)
 		setPrefs(user.Email, p)
-		picocss.SetDarkMode(ctx, p.DarkMode)
+		picocss.DarkModeSig().SetValue(ctx, p.DarkMode)
 		return nil
 	})
 
@@ -49,7 +49,7 @@ func profilePage(cmp *via.Cmp) {
 		p, _ := getPrefs(user.Email)
 		p.Theme = theme.Get(ctx)
 		setPrefs(user.Email, p)
-		picocss.SetTheme(ctx, p.Theme)
+		picocss.ThemeSig().SetValue(ctx, p.Theme)
 		return nil
 	})
 
@@ -69,7 +69,7 @@ func profilePage(cmp *via.Cmp) {
 		for i, dm := range darkModes {
 			attrs := []h.H{h.Value(dm.Value), h.Text(dm.Label)}
 			if dm.Value == p.DarkMode {
-				attrs = append(attrs, h.Attr("selected", "selected"))
+				attrs = append(attrs, h.Selected())
 			}
 			dmOptions[i] = h.Option(attrs...)
 		}
@@ -78,7 +78,7 @@ func profilePage(cmp *via.Cmp) {
 		for i, t := range themes {
 			attrs := []h.H{h.Value(t.String()), h.Text(strings.Title(t.String()))}
 			if t.String() == p.Theme {
-				attrs = append(attrs, h.Attr("selected", "selected"))
+				attrs = append(attrs, h.Selected())
 			}
 			themeOptions[i] = h.Option(attrs...)
 		}

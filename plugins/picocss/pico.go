@@ -364,17 +364,11 @@ var (
 	sigTheme    atomic.Pointer[via.AppSignalHandle[string]]
 )
 
-// SetDarkMode sets the dark mode value for this tab's context.
-func SetDarkMode(ctx *via.Ctx, mode string) { sigDarkMode.Load().SetValue(ctx, mode) }
+// ThemeSig returns the app-level theme signal handle.
+func ThemeSig() *via.AppSignalHandle[string] { return sigTheme.Load() }
 
-// GetDarkMode returns the current dark mode value for this tab's context.
-func GetDarkMode(ctx *via.Ctx) string { return sigDarkMode.Load().Get(ctx) }
-
-// SetTheme sets the theme value for this tab's context.
-func SetTheme(ctx *via.Ctx, theme string) { sigTheme.Load().SetValue(ctx, theme) }
-
-// GetTheme returns the current theme value for this tab's context.
-func GetTheme(ctx *via.Ctx) string { return sigTheme.Load().Get(ctx) }
+// DarkModeSig returns the app-level dark mode signal handle.
+func DarkModeSig() *via.AppSignalHandle[string] { return sigDarkMode.Load() }
 
 // --- Register ---
 

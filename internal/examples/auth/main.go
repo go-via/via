@@ -35,8 +35,8 @@ func main() {
 			user := via.GetSess[User](ctx)
 			if user.Email != "" {
 				if p, ok := getPrefs(user.Email); ok {
-					picocss.SetDarkMode(ctx, p.DarkMode)
-					picocss.SetTheme(ctx, p.Theme)
+					picocss.DarkModeSig().SetValue(ctx, p.DarkMode)
+					picocss.ThemeSig().SetValue(ctx, p.Theme)
 				}
 			}
 		})

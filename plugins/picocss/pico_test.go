@@ -606,7 +606,7 @@ func TestPlugin_SetDarkModeInInitAppearsInHTML(t *testing.T) {
 	picocss.Plugin().Register(v)
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			picocss.SetDarkMode(ctx, "dark")
+			picocss.DarkModeSig().SetValue(ctx, "dark")
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
 	})
@@ -626,7 +626,7 @@ func TestPlugin_SetThemeInInitAppearsInHTML(t *testing.T) {
 	).Register(v)
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			picocss.SetTheme(ctx, "blue")
+			picocss.ThemeSig().SetValue(ctx, "blue")
 		})
 		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("x")) })
 	})
@@ -644,10 +644,10 @@ func TestPlugin_GetDarkModeReturnsSetValue(t *testing.T) {
 	picocss.Plugin().Register(v)
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			picocss.SetDarkMode(ctx, "light")
+			picocss.DarkModeSig().SetValue(ctx, "light")
 		})
 		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("dm=%s", picocss.GetDarkMode(ctx)))
+			return h.Div(h.Textf("dm=%s", picocss.DarkModeSig().Get(ctx)))
 		})
 	})
 	defer server.Close()
@@ -666,10 +666,10 @@ func TestPlugin_GetThemeReturnsSetValue(t *testing.T) {
 	).Register(v)
 	v.Page("/", func(cmp *via.Cmp) {
 		cmp.Init(func(ctx *via.Ctx) {
-			picocss.SetTheme(ctx, "purple")
+			picocss.ThemeSig().SetValue(ctx, "purple")
 		})
 		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("theme=%s", picocss.GetTheme(ctx)))
+			return h.Div(h.Textf("theme=%s", picocss.ThemeSig().Get(ctx)))
 		})
 	})
 	defer server.Close()
