@@ -180,6 +180,10 @@ func Hr(children ...H) H {
 	return gh.Hr(retype(children)...)
 }
 
+func HGroup(children ...H) H {
+	return gh.HGroup(retype(children)...)
+}
+
 func HTML(children ...H) H {
 	return gh.HTML(retype(children)...)
 }

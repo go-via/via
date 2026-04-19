@@ -1,6 +1,10 @@
 package h
 
-import gh "maragu.dev/gomponents/html"
+import (
+	"fmt"
+
+	gh "maragu.dev/gomponents/html"
+)
 
 func Href(v string) H {
 	return gh.Href(v)
@@ -20,6 +24,10 @@ func ID(v string) H {
 
 func Value(v string) H {
 	return gh.Value(v)
+}
+
+func Name(v string) H {
+	return gh.Name(v)
 }
 
 func Placeholder(v string) H {
@@ -53,4 +61,49 @@ func Step(v string) H {
 // Data attributes automatically have their name prefixed with "data-".
 func Data(name, v string) H {
 	return gh.Data(name, v)
+}
+
+// DataF creates a data attribute with fmt.Sprintf formatting.
+func DataF(name, format string, args ...any) H {
+	return gh.Data(name, fmt.Sprintf(format, args...))
+}
+
+func For(v string) H {
+	return gh.For(v)
+}
+
+func Selected() H {
+	return gh.Selected()
+}
+
+func Aria(name, v string) H {
+	return gh.Aria(name, v)
+}
+
+func AriaLabel(v string) H {
+	return gh.Aria("label", v)
+}
+
+func AriaHidden() H {
+	return gh.Aria("hidden", "true")
+}
+
+func AriaExpanded(v string) H {
+	return gh.Aria("expanded", v)
+}
+
+func AriaDisabled() H {
+	return gh.Aria("disabled", "true")
+}
+
+func AriaChecked() H {
+	return gh.Aria("checked", "true")
+}
+
+func AriaControls(v string) H {
+	return gh.Aria("controls", v)
+}
+
+func AriaDescribedBy(v string) H {
+	return gh.Aria("describedby", v)
 }

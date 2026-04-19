@@ -62,7 +62,7 @@ func landingPage(cmp *via.Cmp) {
 			h.If(!loggedIn, h.Article(
 				h.H3(h.Text("Still reading?")),
 				h.P(h.Text("Register an account and try the profile preferences. It's all server-rendered, real-time, and there's not a single useEffect in sight.")),
-				h.A(h.Href("/register"), h.Attr("role", "button"), h.Text("Convince me")),
+				h.A(h.Href("/register"), h.Role("button"), h.Text("Convince me")),
 			)),
 		)
 	})
