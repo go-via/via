@@ -11,7 +11,9 @@ func retype(nodes []H) []g.Node {
 			list[i] = nil
 			continue
 		}
-		list[i] = node.(g.Node)
+		if gnode, ok := node.(g.Node); ok {
+			list[i] = gnode
+		}
 	}
 	return list
 }

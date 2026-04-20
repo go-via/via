@@ -1,9 +1,11 @@
-# Via v1: Compositions as Types
+# Via: Compositions as Types
 
-> This document describes the new **v1 API** for Via — a complete rewrite
+> This document describes the new **typed composition API** for Via — a complete rewrite
 > where compositions are typed structs, signals/state are struct fields,
-> and actions are methods. The v1 API lives in `github.com/go-via/via/v1`.
-> The current root package (`github.com/go-via/via`) remains as v0.2.x.
+> and actions are methods.
+>
+> Reference: `github.com/go-via/via/internal/viaold` (v0.2.x)
+> Implementation: `github.com/go-via/via` (new, built from scratch)
 
 ## Context
 
@@ -27,7 +29,7 @@ from `runtime.Callers` stack frames, action IDs are random strings, per-request
 work lives in fresh maps, and the render path fully re-executes the view closure
 on every state change. No `sync.Pool` exists anywhere.
 
-The goal of v1 is to replace that model with one where **a composition is a
+The goal is to replace that model with one where **a composition is a
 Go struct the user defines**, signals/state are **typed struct fields**,
 actions are **methods**, and IDs are **deterministic** (field/method names).
 Along the way we cash in the allocation wins that the old closure-driven
@@ -39,53 +41,53 @@ design blocked:
 4. Pre-flattened middleware chain per descriptor.
 5. `sync.Pool[*bytes.Buffer]` on every write path.
 
-Target feel: reading a `v1` composition should feel like reading a normal Go struct with methods. Decisions confirmed with the user:
+Target feel: reading a composition should feel like reading a normal Go struct with methods. Decisions confirmed with the user:
 
-- **Fully replace** the old API in v1 (delete `Cmp` as a runtime object handed to user closures, `App.Page(func(*Cmp))`, `runtime.Callers` ID trick, `genRandID`, functional `Signal(cmp, init)` / `State(cmp, init)`).
+- **Fully replace** the old API (delete `Cmp` as a runtime object handed to user closures, `App.Page(func(*Cmp))`, `runtime.Callers` ID trick, `genRandID`, functional `Signal(cmp, init)` / `State(cmp, init)`).
 - **Typed + pooled arena** runtime (no pre-compiled render plan in this branch — that's a follow-up once the shape settles; the API is designed to permit it later).
-- **Field name as key, tag overrides** (`N v1.Signal[int]` → key `"n"`; add `` `v1:"count"` `` to override).
-- **One type name, two roles**: `v1.Composition` is the interface; mounting at a route makes it "a page"; nesting inside another's view makes it "a component". No separate `Page` type.
+- **Field name as key, tag overrides** (`N via.Signal[int]` → key `"n"`; add `` `via:"count"` `` to override).
+- **One type name, two roles**: `via.Composition` is the interface; mounting at a route makes it "a page"; nesting inside another's view makes it "a component". No separate `Page` type.
 
 ## Final shape (user-facing)
 
 ```go
 package ui
 
-import "github.com/go-via/via/v1"
+import "github.com/go-via/via"
 
 type Counter struct {
     ID    int `path:"id"`                     // decoded from /counter/{id}
 
-    N    v1.Signal[int]                      // client-side, key "n"
-    Step v1.Signal[int] `v1:"step,init=1"`    // client-side with initial
-    Hits v1.State[int]                      // tab-scoped server state, key "hits"
+    N    via.Signal[int]                      // client-side, key "n"
+    Step via.Signal[int] `via:"step,init=1"`    // client-side with initial
+    Hits via.State[int]                      // tab-scoped server state, key "hits"
 
     // Nested compositions as fields. Parent passes signals/state into them
     // by shared field handles (untagged -> pass-through).
     Chart Chart
 }
 
-func (c *Counter) Init(ctx *v1.Ctx) error { /* optional */ return nil }
+func (c *Counter) Init(ctx *via.Ctx) error { /* optional */ return nil }
 
-func (c *Counter) Inc(ctx *v1.Ctx) error {
+func (c *Counter) Inc(ctx *via.Ctx) error {
     c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
     return nil
 }
 
-func (c *Counter) View(ctx *v1.Ctx) h.H {
+func (c *Counter) View(ctx *via.Ctx) h.H {
     return h.Div(
         h.H1(h.Text("Counter")),
         h.P(h.Text("Count: "), c.Hits.Text()),
         h.Input(h.Type("number"), c.Step.Bind()),
-        h.Button(h.Text("+"), v1.OnClick(c.Inc)),
+        h.Button(h.Text("+"), via.OnClick(c.Inc)),
         c.Chart.View(ctx),
     )
 }
 
 // wire:
 func main() {
-    app := v1.New()
-    v1.Mount[ui.Counter](app, "/counter/{id}")
+    app := via.New()
+    via.Mount[ui.Counter](app, "/counter/{id}")
     app.Start()
 }
 ```
@@ -94,9 +96,9 @@ func main() {
 
 ### The `Composition` type
 
-- `v1.Composition` — exported interface requiring `View(ctx *Ctx) h.H`. Pages and components both satisfy it; there is no second type.
+- `via.Composition` — exported interface requiring `View(ctx *Ctx) h.H`. Pages and components both satisfy it; there is no second type.
 - Optional hooks detected by interface assertion at registration: `Init(ctx *Ctx) error`, `Dispose(ctx *Ctx)`.
-- `v1.Mount[C any](app *App, route string)` and `v1.MountOn[C any](g *Group, route string)` — generic factories that mount a root composition at a route. `C` must be a struct; the constraint is `*C` satisfies `Composition`. Panics at registration if `View` is missing, if a `path:"x"` tag has no matching route segment, or if a field type is disallowed.
+- `via.Mount[C any](app *App, route string)` and `via.MountOn[C any](g *Group, route string)` — generic factories that mount a root composition at a route. `C` must be a struct; the constraint is `*C` satisfies `Composition`. Panics at registration if `View` is missing, if a `path:"x"` tag has no matching route segment, or if a field type is disallowed.
 - **Fresh `*C` per request**: root compositions are pooled via `sync.Pool` keyed by the `cmpDescriptor`. Fields are reset to zero (except typed signal/state handles whose internal pointer is re-bound to the per-request arena).
 - **Nested compositions (a.k.a. "components")** are the same interface. A parent holds a child as a field (value or pointer) and calls `child.View(ctx)` inside its own `View`. Child signal/state fields that are **untagged** act as pass-through handles to whatever the parent assigned; **tagged** fields register the child's own reactive state. Child descriptors are built recursively at `Mount` time by walking composition-typed fields.
 
@@ -169,9 +171,9 @@ func (s Signal[T]) Show() h.H        // data-show attr
 
 ### Actions as methods
 
-- At `Mount`, enumerate exported methods on `*C` with signature `func(*v1.Ctx) error`. Each becomes an `actionSlot` with a reflect-built thunk `invoke(cmp unsafe.Pointer, ctx *Ctx) error`. Methods on nested composition types get their own descriptors' action tables.
-- `v1.OnClick(m)` / `v1.OnChange(m)` / `v1.OnKeyDown(key, m)` / `v1.OnSubmit(m)` take `func(*v1.Ctx) error` as a method value. Implementation: `runtime.FuncForPC(reflect.ValueOf(m).Pointer()).Name()` → strip to method name → look up `actionByID[name]` on the owning descriptor. Panics at render time if the method wasn't registered (unexported, wrong signature).
-- Testing calls the method directly: `c := &Counter{}; ctx := v1.NewTestCtx(t, c); require.NoError(t, c.Inc(ctx)); assert.Equal(t, 1, c.Hits.Get())`.
+- At `Mount`, enumerate exported methods on `*C` with signature `func(*via.Ctx) error`. Each becomes an `actionSlot` with a reflect-built thunk `invoke(cmp unsafe.Pointer, ctx *Ctx) error`. Methods on nested composition types get their own descriptors' action tables.
+- `via.OnClick(m)` / `via.OnChange(m)` / `via.OnKeyDown(key, m)` / `via.OnSubmit(m)` take `func(*via.Ctx) error` as a method value. Implementation: `runtime.FuncForPC(reflect.ValueOf(m).Pointer()).Name()` → strip to method name → look up `actionByID[name]` on the owning descriptor. Panics at render time if the method wasn't registered (unexported, wrong signature).
+- Testing calls the method directly: `c := &Counter{}; ctx := via.NewTestCtx(t, c); require.NoError(t, c.Inc(ctx)); assert.Equal(t, 1, c.Hits.Get())`.
 - Wire path: `POST /_action/{cmpID}/{methodName}`. One map lookup per request for dispatch (acceptable — network-bounded).
 
 ### Per-request arena (`*requestState`)
@@ -234,25 +236,25 @@ type patchQueue struct {
 
 ### Exported surface: organized by concern (sub-packages)
 
-A single flat `v1.*` namespace crowds fast. The new surface splits along themes so every call-site reads like prose. Each sub-package is small, focused, and the import line pays for itself by giving the dev short names at the point of use:
+A single flat `via.*` namespace crowds fast. The new surface splits along themes so every call-site reads like prose. Each sub-package is small, focused, and the import line pays for itself by giving the dev short names at the point of use:
 
 ```go
 import (
-    "github.com/go-via/via/v1"
-    "github.com/go-via/via/v1/on"
-    "github.com/go-via/via/v1/scope"
+    "github.com/go-via/via"
+    "github.com/go-via/via/on"
+    "github.com/go-via/via/scope"
     "github.com/go-via/via/h"
 )
 ```
 
-**`v1` (root) — the things every composition file touches**
+**`via` (root) — the things every composition file touches**
 
 - Types: `Composition` (interface), `Ctx`, `Signal[T]`, `State[T]` (tab-scoped — the common case), `App`, `Plugin`.
 - Factories: `New(opts ...Option) *App`, `Mount[C any](app *App, route string)`, `MountOn[C any](g *Group, route string)`.
 - App options: `WithPlugins(...)`, plus existing app-level helpers.
 - App methods retained: `Use`, `Group`, `AppendToHead`, `AppendToFoot`, `AppendAttrToHTML`, `HandleFunc`, `Start`, `Shutdown`.
 
-**`v1/on` — event bindings**
+**`via/on` — event bindings**
 
 Short verbs at the call-site; `on.Click(c.Inc)` reads like HTML:
 
@@ -263,19 +265,19 @@ Short verbs at the call-site; `on.Click(c.Inc)` reads like HTML:
 - `on.Key(key string, m, opts ...TriggerOption) h.H`
 - `on.SetSignal[T any](sig Signal[T], v T) TriggerOption` — trigger option for bundled signal writes.
 
-**`v1/scope` — non-tab state scopes**
+**`via/scope` — non-tab state scopes**
 
-Tab-scoped state is the default (lives at `v1.State[T]`). Wider scopes are explicit:
+Tab-scoped state is the default (lives at `via.State[T]`). Wider scopes are explicit:
 
 - `scope.User[T any]` — session-scoped state, survives across tabs in one session.
 - `scope.App[T any]` — app-scoped state, shared across all sessions.
 
-`c.Hits.Set(...)` is already scope-typed — swapping `v1.State[int]` for `scope.User[int]` is a one-token change and a compile-time scope check.
+`c.Hits.Set(...)` is already scope-typed — swapping `via.State[int]` for `scope.User[int]` is a one-token change and a compile-time scope check.
 
-**`v1/test` — testing helpers**
+**`via/test` — testing helpers**
 
-- `test.NewCtx(t testing.TB, c v1.Composition, opts ...CtxOption) *v1.Ctx` — direct-method testing.
-- `test.Client(t testing.TB, app *v1.App, opts ...ClientOption) *Client` — replaces the ad-hoc `testclient` with a name-addressed client: `tc.Action("Inc").Fire()`, `tc.Signal("step").Set(3)`.
+- `test.NewCtx(t testing.TB, c via.Composition, opts ...CtxOption) *via.Ctx` — direct-method testing.
+- `test.Client(t testing.TB, app *via.App, opts ...ClientOption) *Client` — replaces the ad-hoc `testclient` with a name-addressed client: `tc.Action("Inc").Fire()`, `tc.Signal("step").Set(3)`.
 - `test.WithPathParams(...)`, `test.WithSession(...)` — option helpers.
 
 **`h` — HTML builder (unchanged)**
@@ -284,28 +286,28 @@ Stays as-is. `Signal[T]` gains `.Bind()`, `.Text()`, `.Show()` methods that retu
 
 **Plugin constructors (unchanged convention)**
 
-Every plugin package exposes `Plugin()` as its public constructor (per CONVENTIONS.md). Usage stays `v1.New(v1.WithPlugins(picocss.Plugin(), echarts.Plugin()))`.
+Every plugin package exposes `Plugin()` as its public constructor (per CONVENTIONS.md). Usage stays `via.New(via.WithPlugins(picocss.Plugin(), echarts.Plugin()))`.
 
 **Read like a Go dev who's never seen it**
 
 ```go
 import (
-    "github.com/go-via/via/v1"
-    "github.com/go-via/via/v1/on"
+    "github.com/go-via/via"
+    "github.com/go-via/via/on"
     "github.com/go-via/via/h"
 )
 
 type Counter struct {
-    Hits v1.State[int]
-    Step v1.Signal[int] `v1:"step,init=1"`
+    Hits via.State[int]
+    Step via.Signal[int] `via:"step,init=1"`
 }
 
-func (c *Counter) Inc(ctx *v1.Ctx) error {
+func (c *Counter) Inc(ctx *via.Ctx) error {
     c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
     return nil
 }
 
-func (c *Counter) View(ctx *v1.Ctx) h.H {
+func (c *Counter) View(ctx *via.Ctx) h.H {
     return h.Div(
         h.P(h.Text("Count: "), c.Hits.Text()),
         h.Input(h.Type("number"), c.Step.Bind()),
@@ -322,56 +324,56 @@ func (c *Counter) View(ctx *v1.Ctx) h.H {
 - `runtime.Callers`-based state ID deduplication.
 - `genRandID` for signals/actions.
 - `ctx.GetPathParam` (replaced by struct-tag decode).
-- Options like `WithScopeApp`, `WithScopeUser` (scope is now the handle type in `v1/scope`).
-- Root-level `v1.OnClick`/`OnChange`/`OnInput`/`OnKeyDown`/`OnSubmit`/`ActionWithSetSignal` (moved under `v1/on`).
-- Root-level `v1.UserState[T]`/`v1.AppState[T]` (moved under `v1/scope` as `scope.User[T]`/`scope.App[T]`).
-- Root-level `v1.NewTestCtx` (moved under `v1/test`).
+- Options like `WithScopeApp`, `WithScopeUser` (scope is now the handle type in `via/scope`).
+- Root-level `via.OnClick`/`OnChange`/`OnInput`/`OnKeyDown`/`OnSubmit`/`ActionWithSetSignal` (moved under `via/on`).
+- Root-level `via.UserState[T]`/`via.AppState[T]` (moved under `via/scope` as `scope.User[T]`/`scope.App[T]`).
+- Root-level `via.NewTestCtx` (moved under `via/test`).
 
 ## Critical files
 
-**v1 package files** (new directory `v1/`):
+**via package files** (root package `via/`):
 
-- `v1/composition.go` — `Composition` interface, `cmpDescriptor`, reflection walk, pool setup, child-slot rendering, field-path qualified ids.
-- `v1/signal.go` — typed `Signal[T]` handle + cell storage.
-- `v1/state.go` — typed `State[T]` (tab only). User/App scopes live in `v1/scope`.
-- `v1/action.go` — action-slot dispatch + `TriggerOption` type used by `v1/on`.
-- `v1/runtime.go` — `requestState`, pools, bitset patch queue, descriptor-driven mount.
-- `v1/app.go` — registry of descriptors, numeric `id` context registry, pool wiring.
-- `v1/group.go` — `MountOn[C]` + middleware flatten.
-- `v1/middleware.go` — no per-request copy; descriptor holds flat chain.
-- `v1/config.go` — drop scope options.
+- `composition.go` — `Composition` interface, `cmpDescriptor`, reflection walk, pool setup, child-slot rendering, field-path qualified ids.
+- `signal.go` — typed `Signal[T]` handle + cell storage.
+- `state.go` — typed `State[T]` (tab only). User/App scopes live in `scope`.
+- `action.go` — action-slot dispatch + `TriggerOption` type used by `on`.
+- `runtime.go` — `requestState`, pools, bitset patch queue, descriptor-driven mount.
+- `app.go` — registry of descriptors, numeric `id` context registry, pool wiring.
+- `group.go` — `MountOn[C]` + middleware flatten.
+- `middleware.go` — no per-request copy; descriptor holds flat chain.
+- `config.go` — drop scope options.
 
-**New sub-packages within v1/:**
+**New sub-packages within via/:**
 
-- `v1/on/on.go` — `Click`, `Change`, `Input`, `Submit`, `Key`, `SetSignal`.
-- `v1/scope/scope.go` — `User[T]` and `App[T]` scoped state handles.
-- `v1/test/test.go` — `NewCtx`, `Client`, `WithPathParams`, `WithSession`.
+- `on/on.go` — `Click`, `Change`, `Input`, `Submit`, `Key`, `SetSignal`.
+- `scope/scope.go` — `User[T]` and `App[T]` scoped state handles.
+- `test/test.go` — `NewCtx`, `Client`, `WithPathParams`, `WithSession`.
 
-**New internal files within v1/:**
+**New internal files:**
 
 - `arena.go` — `requestState` + `sync.Pool` lifecycle.
 - `bench_test.go` — `-benchmem` ceilings gated in `ci-check.sh`.
-- `internal/shared/` — shared cell/encoder primitives used by both v1/state and v1/scope.
+- `internal/shared/` — shared cell/encoder primitives used by both state and scope.
 
-**Tests migrated:**
+**Tests written from scratch:**
 
-- All existing `*_test.go` files in v1/ get ported to the new API.
+- All tests written new against the new API; `internal/viaold` used as behavioral reference.
 
 **Touched but not restructured:**
 
-- `h/` — unchanged surface; adapts `Signal.Text()` / `Signal.Bind()` callers.
-- `plugins/picocss/` and `plugins/echarts/` — port to typed API.
-- `sess.go` — keep; `UserState[T]` builds on it.
+- `h/` — unchanged surface; `Signal.Text()` / `Signal.Bind()` callers.
+- `plugins/picocss/` and `plugins/echarts/` — port to new typed API.
+- `sess.go` — keep; `scope.User[T]` builds on it.
 
 ## Implementation order (test-first, per CONVENTIONS.md)
 
 Each step: write failing test against the public API → implement → green → commit.
 
-1. Create `v1/` sub-package. Copy current `*_test.go` files as baseline.
+1. Create `via/` package from scratch (reference `internal/viaold` for behavioral equivalence).
 2. `Composition` interface + `Mount[C]` happy path with a struct that has only `View`. Descriptor build + pooled `*C` per request. Test: `TestMount_rendersComposition`.
 3. `path:"x"` tag decoding for `int`, `string`. Test: `TestMount_decodesPathParams`.
 4. `Signal[T]` typed read/write with field-offset storage; scalar encoder. Test: `TestSignal_typedGetSet`, `TestSignal_initFromTag`.
-5. Action method discovery + `v1.OnClick(method)`. Test: `TestAction_firesMethodByName`.
+5. Action method discovery + `via.OnClick(method)`. Test: `TestAction_firesMethodByName`.
 6. `State[T]` tab-scoped + reactive re-render on `Set`. Test: `TestState_reRendersOnSet`.
 7. `UserState[T]`, `AppState[T]`. Test: scope coherence across tabs/sessions.
 8. Nested compositions as fields; pass-through signal handles. Test: `TestComposition_childInheritsParentSignal`.
@@ -380,14 +382,15 @@ Each step: write failing test against the public API → implement → green →
 11. Composite-typed signal with cached encoder. Bench: `BenchmarkCompositeSignal_encodesOncePerChange`.
 12. Lifecycle: `Init`/`Dispose` detection + tab disposal hooks. Test: `TestComposition_disposeRunsOnTabClose`.
 13. Port `picocss` and `echarts` plugins. Integration test: existing plugin behavioral tests pass against new API.
-14. Port existing examples in `internal/examples/**` (counter, counter-comp, etc.).
+14. New examples in `internal/examples/**` (counter, counter-comp, etc.) — verify behavior matches `internal/viaold/examples/**`.
 15. Replace `testclient` surface with name-addressed helpers. Migrate all `*_test.go` files to new addressing.
 16. Delete dead code: old `Cmp` runtime handle, `App.Page(func(*Cmp))`, functional `Signal/State` constructors, `runtime.Callers` ID logic, `genRandID`. Confirm `go vet ./...` + `go test -race ./...` stay green.
 17. Add `-benchmem` thresholds to `ci-check.sh`. Any regression past target fails CI.
 
 ## Verification
 
-- `go test -race ./...` — full suite green; all existing behavioral coverage ported to the new API (test names follow the `TestSubject_behavior` convention).
+- `go test -race ./...` — full suite green; all new tests written from scratch (test names follow the `TestSubject_behavior` convention).
+- Behavioral equivalence: new tests match `internal/viaold` behavior, not ported from it.
 - `go test -bench=. -benchmem ./...` — `BenchmarkCounterAction_zeroAllocs` asserts **0 allocs/op** for a scalar-signal bump in steady state; `BenchmarkCounterRender` asserts bounded allocs/op (buffer rental only).
 - Manual smoke: run `internal/examples/counter` and `internal/examples/countercomp`, open two browser tabs, confirm tab-scoped and app-scoped state behave per the expected differentiation.
 - Plugin smoke: run an example that uses `picocss` and `echarts`; confirm theme switching + chart updates work end-to-end.
