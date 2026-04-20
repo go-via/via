@@ -3,7 +3,7 @@ package via
 import (
 	"sync"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold/h"
 )
 
 // Cmp is the composition — created once per route at startup, shared by all requests.

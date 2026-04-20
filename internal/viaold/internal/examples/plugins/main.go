@@ -4,8 +4,8 @@ import (
 	_ "embed"
 	"net/http"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
 )
 
 // Example of a Via application with a plugin that adds PicoCSS. The plugin

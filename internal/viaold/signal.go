@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold/h"
 )
 
 // signalMeta is the runtime interface for signal metadata on Cmp.

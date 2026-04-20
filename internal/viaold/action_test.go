@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
 	"github.com/stretchr/testify/assert"
 )
 

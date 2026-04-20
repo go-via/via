@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold/h"
 )
 
 //go:embed datastar.js

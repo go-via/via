@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
-	"github.com/go-via/via/plugins/picocss"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
+	"github.com/go-via/via/internal/viaold/plugins/picocss"
 )
 
 type Feature struct {
@@ -81,7 +81,7 @@ func main() {
 				h.Nav(h.Class("container-fluid"),
 					h.Ul(h.Li(h.Strong(h.Text("⚡ Via + Pico CSS")))),
 					h.Ul(h.Li(h.A(
-						h.Href("https://github.com/go-via/via/blob/main/internal/examples/picocss/main.go"),
+						h.Href("https://github.com/go-via/via/internal/viaold/blob/main/internal/examples/picocss/main.go"),
 						h.Attr("target", "_blank"),
 						h.Rel("noopener"),
 						h.AriaLabel("View source on GitHub"),

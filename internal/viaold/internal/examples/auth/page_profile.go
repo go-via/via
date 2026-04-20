@@ -3,9 +3,9 @@ package main
 import (
 	"strings"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
-	"github.com/go-via/via/plugins/picocss"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
+	"github.com/go-via/via/internal/viaold/plugins/picocss"
 )
 
 var themes = []picocss.PicoTheme{
@@ -76,7 +76,7 @@ func profilePage(cmp *via.Cmp) {
 
 		themeOptions := make([]h.H, len(themes))
 		for i, t := range themes {
-			attrs := []h.H{h.Value(t.String()), h.Text(strings.Title(t.String()))}
+			attrs := []h.H{h.Value(t.String()), h.Text(strings.ToTitle(t.String()))}
 			if t.String() == p.Theme {
 				attrs = append(attrs, h.Selected())
 			}

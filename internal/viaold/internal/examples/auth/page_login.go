@@ -3,8 +3,8 @@ package main
 import (
 	"strings"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
 )
 
 func loginPage(cmp *via.Cmp) {

@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
-	"github.com/go-via/via/plugins/echarts"
+	"github.com/go-via/via/internal/viaold"
+	"github.com/go-via/via/internal/viaold/h"
+	"github.com/go-via/via/internal/viaold/plugins/echarts"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/viaold/h"
 	"github.com/starfederation/datastar-go/datastar"
 )
 

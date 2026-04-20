@@ -142,6 +142,7 @@ type Dashboard struct {
 ```
 
 Rules:
+
 - The wire key for a slot is `<parentFieldPath>.<localID>` where the root has no parent path. At the root, `N via.Signal[int]` stays just `"n"` — short keys are preserved for the common flat case.
 - **Untagged pass-through fields on a child** (e.g. `Series via.Signal[int]` with the parent assigning `child.Series = parent.Visits`) are **not re-registered** — the child borrows the parent's slot, same wire key, no new cell.
 - Depth is a compile-time-known property of the struct tree, so the qualified id is computed once at `Mount`, cached on the slot, and written as a constant byte slice on every SSE frame (no per-request string concat).
@@ -284,11 +285,11 @@ Tab-scoped state is the default (lives at `via.State[T]`). Wider scopes are expl
 
 Stays as-is. `Signal[T]` gains `.Bind()`, `.Text()`, `.Show()` methods that return `h.H` so the builder and the reactive primitives compose without a third package.
 
-**Plugin constructors (unchanged convention)**
+### Plugin constructors (unchanged convention)
 
 Every plugin package exposes `Plugin()` as its public constructor (per CONVENTIONS.md). Usage stays `via.New(via.WithPlugins(picocss.Plugin(), echarts.Plugin()))`.
 
-**Read like a Go dev who's never seen it**
+### Read like a Go dev who's never seen it
 
 ```go
 import (
