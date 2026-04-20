@@ -189,7 +189,6 @@ func AppSignal[T any](app *App, displayID string, initial T) *AppSignalHandle[T]
 	return sig
 }
 
-
 // Signal creates a typed reactive signal with the given initial value.
 func Signal[T any](cmp *Cmp, initial T) *signalOf[T] {
 	sigID := "via_" + genRandID()

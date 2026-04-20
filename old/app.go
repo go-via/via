@@ -32,7 +32,7 @@ type App struct {
 	stopSweep            chan struct{}
 	stopSweepOnce        sync.Once
 	middleware           []Middleware
-	layoutFn func(cmp *Cmp)
+	layoutFn             func(cmp *Cmp)
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H

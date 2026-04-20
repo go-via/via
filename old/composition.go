@@ -17,7 +17,7 @@ type Cmp struct {
 	components    []*Cmp
 	appStateStore sync.Map
 	signals       map[string]any
-	contentFn func(ctx *Ctx) h.H
+	contentFn     func(ctx *Ctx) h.H
 }
 
 // View registers the render function for this composition.

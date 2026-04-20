@@ -103,7 +103,7 @@ func (tc *testClient) connect() *testClient {
 	return tc
 }
 
-func (tc *testClient) actionID() string   { return extractActionID(tc.t, tc.body) }
+func (tc *testClient) actionID() string    { return extractActionID(tc.t, tc.body) }
 func (tc *testClient) actionIDs() []string { return extractActionIDs(tc.t, tc.body) }
 func (tc *testClient) signalID() string    { return extractSignalID(tc.t, tc.body) }
 

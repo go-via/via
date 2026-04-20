@@ -973,4 +973,3 @@ func TestSetSess_preservesMultipleTypesInSameSession(t *testing.T) {
 		require.Fail(t, "view did not read multiple session types")
 	}
 }
-

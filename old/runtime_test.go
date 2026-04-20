@@ -1066,4 +1066,3 @@ func TestInit_runsBeforeView(t *testing.T) {
 	body := getPageBody(t, server, "/")
 	assert.Contains(t, body, "pref=from_init", "init must run before view")
 }
-

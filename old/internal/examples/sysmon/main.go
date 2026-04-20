@@ -160,7 +160,7 @@ func metricCard(title string, valElem h.H, chart h.H) h.H {
 			h.Div(h.Class("grid"),
 				h.Strong(h.Text(title)),
 				h.Span(
-					h.Style( "text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"),
+					h.Style("text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"),
 					valElem,
 				),
 			),
@@ -172,15 +172,15 @@ func metricCard(title string, valElem h.H, chart h.H) h.H {
 func dualMetricCard(title, label1 string, val1 h.H, label2 string, val2 h.H, chart h.H) h.H {
 	valSpan := func(label string, val h.H) h.H {
 		return h.Span(
-			h.Style( "font-variant-numeric:tabular-nums;white-space:nowrap"),
+			h.Style("font-variant-numeric:tabular-nums;white-space:nowrap"),
 			h.Small(h.Text(label+": ")), val,
 		)
 	}
 	return h.Article(
 		h.Header(
-			h.Div(h.Style( "display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
+			h.Div(h.Style("display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
 				h.Strong(h.Text(title)),
-				h.Div(h.Style( "display:flex;gap:1rem"),
+				h.Div(h.Style("display:flex;gap:1rem"),
 					valSpan(label1, val1),
 					valSpan(label2, val2),
 				),

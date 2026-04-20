@@ -116,7 +116,7 @@ type pluginOptions struct {
 	defaultTheme PicoTheme
 	classless    bool
 	colorClasses bool
-	darkMode string // "system" (default), "dark", or "light"
+	darkMode     string // "system" (default), "dark", or "light"
 }
 
 type plugin struct {
@@ -142,7 +142,7 @@ func Plugin(opts ...PicoOption) via.Plugin {
 		opts: pluginOptions{
 			themes:       []PicoTheme{PicoThemeAmber},
 			defaultTheme: PicoThemeAmber,
-			darkMode: "system",
+			darkMode:     "system",
 		},
 		themeCSS:     make(map[PicoTheme][]byte),
 		themeCSSGzip: make(map[PicoTheme][]byte),

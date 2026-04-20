@@ -447,4 +447,3 @@ func TestState_appScopeMutexProtected(t *testing.T) {
 	}
 	wg.Wait()
 }
-
