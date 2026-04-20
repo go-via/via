@@ -345,3 +345,22 @@ that change for different reasons. Don't split preemptively.
 Rule: Use `internal/` for code that must not be imported by consumers
 but is shared across packages within the module. Do not use `internal/`
 as a dumping ground — the same responsibility rules apply.
+
+## Markdown
+
+Reasoning: Consistent markdown style improves readability and enables linting.
+
+### Line Length
+
+Rule: Keep lines to 80 characters or fewer. Break long lines at logical
+points — especially in lists, code examples, and bullet points.
+
+### Lists
+
+Rule: Surround lists with blank lines. Lists preceded by a paragraph need
+a blank line before the first item.
+
+### Headings
+
+Rule: Use headings (`##`) instead of emphasis (`**text**`) to introduce
+sections. Reserve emphasis for inline content within paragraphs.
