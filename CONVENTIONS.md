@@ -353,7 +353,9 @@ Reasoning: Consistent markdown style improves readability and enables linting.
 ### Line Length
 
 Rule: Keep lines to 80 characters or fewer. Break long lines at logical
-points — especially in lists, code examples, and bullet points.
+points — especially in lists, code examples, and bullet points. Avoid tables
+for large data representations; they force excessive line wrapping or violate
+the limit. Use lists, prose, or code blocks instead.
 
 ### Lists
 
