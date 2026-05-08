@@ -81,6 +81,12 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 }
 ```
 
+Inside actions and `via.Stream` callbacks the flush is automatic. From a
+raw goroutine you started yourself, call `ctx.Flush()` (no-op when nothing
+is dirty) to push pending Set values to the browser, or `ctx.Sync()` to
+force a re-render even if no signal/state changed. Both serialise with
+in-flight action handlers via the per-tab action mutex.
+
 ## Actions
 
 A method on `*Composition` of signature `func(*via.Ctx) error` — or
