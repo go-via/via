@@ -365,6 +365,11 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	applyMiddleware(ctx.desc.groupMW, stream).ServeHTTP(w, r)
 }
 
+// sseLevel is the brotli compression level applied to SSE streams.
+// Level 5 trades a bit of CPU for noticeable bandwidth savings on the
+// repetitive HTML element patches via emits — same as viaold.
+const sseLevel = 5
+
 func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
 	// that hit GET without ever opening the SSE never see this fire, so
@@ -388,7 +393,8 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		}
 	})
 
-	sse := datastar.NewSSE(w, r)
+	sse := datastar.NewSSE(w, r,
+		datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(sseLevel))))
 
 	// Force-drain anything queued while the previous SSE was
 	// disconnected — patches accumulated during the gap have no wake
