@@ -80,6 +80,54 @@ func SessionStore(ctx *Ctx, key string, value any) {
 	ctx.markStateDirty()
 }
 
+// RotateSession issues a fresh session id, copies the existing session's
+// data into it, and points the current Ctx + the cookie on the in-flight
+// response at the new session. Use after authentication state changes
+// (login, privilege elevation, password reset) so any captured pre-auth
+// session id can no longer impersonate the user.
+//
+// Must be called from inside an action handler — Writer() must be non-nil.
+// Returns the new session id, or "" if the rotation could not be performed.
+func RotateSession(ctx *Ctx) string {
+	if ctx == nil || ctx.app == nil {
+		return ""
+	}
+	old := ctx.session
+	app := ctx.app
+
+	fresh := &session{id: genSecureID()}
+	fresh.lastAccess.Store(nowNano())
+
+	if old != nil {
+		old.data.Range(func(k, v any) bool {
+			fresh.data.Store(k, v)
+			return true
+		})
+	}
+
+	app.sessionsMu.Lock()
+	app.sessions[fresh.id] = fresh
+	if old != nil {
+		delete(app.sessions, old.id)
+	}
+	app.sessionsMu.Unlock()
+
+	ctx.session = fresh
+
+	w := ctx.Writer()
+	if w != nil {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "via_session",
+			Value:    fresh.id,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   app.cfg.secureCookies,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+	return fresh.id
+}
+
 // AppLoad reads a value from the per-app store. Backs scope.App[T].
 func AppLoad(ctx *Ctx, key string) (any, bool) {
 	if ctx == nil || ctx.app == nil {
