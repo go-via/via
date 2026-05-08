@@ -63,6 +63,32 @@ func (q *patchQueue) notify() {
 	}
 }
 
+// SyncElements pushes one or more h.H trees to the client as element
+// patches at the next flush. Useful for action-driven, targeted DOM
+// updates that bypass the full view re-render. Each element should carry
+// h.ID("...") so the client knows where to morph it.
+func (ctx *Ctx) SyncElements(elements ...h.H) {
+	if ctx == nil || ctx.queue == nil || len(elements) == 0 {
+		return
+	}
+	buf := getRenderBuf()
+	defer putRenderBuf(buf)
+	for _, el := range elements {
+		if el == nil {
+			continue
+		}
+		_ = el.Render(buf)
+	}
+	if buf.Len() == 0 {
+		return
+	}
+	ctx.queue.mu.Lock()
+	ctx.queue.elements = buf.String()
+	ctx.queue.hasElems = true
+	ctx.queue.mu.Unlock()
+	ctx.queue.notify()
+}
+
 // renderPage handles GET on a Mount-ed route. Allocates a fresh *C, decodes
 // path params + initial signal values, optionally calls Init, renders the
 // view inside the HTML5 envelope.

@@ -106,6 +106,17 @@ func (ctx *Ctx) ExecScript(s string) {
 	enqueueScript(ctx, s)
 }
 
+// ExecScriptf is ExecScript with fmt-style formatting:
+//
+//	ctx.ExecScriptf("alert(%q)", err.Error())
+func (ctx *Ctx) ExecScriptf(format string, args ...any) {
+	if ctx == nil || format == "" {
+		return
+	}
+	enqueueScript(ctx, sprintfFmt(format, args...))
+}
+
+
 // Redirect sends a client-side navigation to url at the next flush.
 func (ctx *Ctx) Redirect(url string) {
 	if ctx == nil || url == "" || ctx.queue == nil {
