@@ -19,6 +19,8 @@ const (
 type config struct {
 	addr               string
 	title              string
+	lang               string
+	description        string
 	logLevel           LogLevel
 	plugins            []Plugin
 	shutdownTimeout    time.Duration
@@ -46,6 +48,14 @@ func WithAddr(addr string) Option { return func(c *config) { c.addr = addr } }
 
 // WithTitle sets the rendered <title> on every page.
 func WithTitle(title string) Option { return func(c *config) { c.title = title } }
+
+// WithLang sets the <html lang="…"> attribute. Required for screen
+// readers and language-aware browser features.
+func WithLang(lang string) Option { return func(c *config) { c.lang = lang } }
+
+// WithDescription sets the <meta name="description"> tag included in
+// every rendered page. Search engines and link previews use it.
+func WithDescription(d string) Option { return func(c *config) { c.description = d } }
 
 // WithLogLevel sets the minimum log severity.
 func WithLogLevel(level LogLevel) Option { return func(c *config) { c.logLevel = level } }

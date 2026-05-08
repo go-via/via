@@ -238,10 +238,12 @@ func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 	bodyEls = append(bodyEls, a.documentFootIncludes...)
 
 	doc := h.HTML5(h.HTML5Props{
-		Title:     a.cfg.title,
-		Head:      head,
-		Body:      bodyEls,
-		HTMLAttrs: a.documentHTMLAttrs,
+		Title:       a.cfg.title,
+		Language:    a.cfg.lang,
+		Description: a.cfg.description,
+		Head:        head,
+		Body:        bodyEls,
+		HTMLAttrs:   a.documentHTMLAttrs,
 	})
 	_ = doc.Render(w)
 }
