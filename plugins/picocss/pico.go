@@ -311,6 +311,18 @@ const (
 	themeSignalID    = "_picoTheme"
 )
 
+// ThemeRef returns the Datastar reference for the current theme signal,
+// e.g. "$_picoTheme". Use it inline in expressions:
+//
+//	h.Button(
+//	    h.Text("Blue"),
+//	    h.Data("on-click", picocss.ThemeRef()+" = 'blue'"),
+//	)
+func ThemeRef() string { return "$" + themeSignalID }
+
+// DarkModeRef returns the Datastar reference for the dark-mode signal.
+func DarkModeRef() string { return "$" + darkModeSignalID }
+
 func (p *plugin) Register(v *via.App) {
 	if err := p.fetchThemes(); err != nil {
 		panic("pico: failed to fetch themes: " + err.Error())
