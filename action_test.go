@@ -4,11 +4,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
+	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,4 +65,80 @@ func TestMethodName_resolvesBoundMethod(t *testing.T) {
 
 	c := &counterPage{}
 	assert.Equal(t, "Inc", via.MethodName(c.Inc))
+}
+
+type erroringActionPage struct{}
+
+func (p *erroringActionPage) Save(ctx *via.Ctx) error {
+	return assertSaveErr("validation: email required")
+}
+
+func (p *erroringActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+type assertSaveErr string
+
+func (e assertSaveErr) Error() string { return string(e) }
+
+func TestAction_defaultErrorPathAlertsTheBrowser(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[erroringActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE(t)
+	defer cancel()
+	require.Equal(t, 200, tc.Action("Save").Fire())
+
+	// The default action-error handler queues alert("…"). The script
+	// arrives in the SSE stream as a datastar-execute-script event.
+	deadline := time.After(2 * time.Second)
+	got := strings.Builder{}
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatalf("SSE closed early; got %q", got.String())
+			}
+			got.WriteString(f)
+			if strings.Contains(got.String(), `alert("validation: email required")`) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("did not see alert in SSE; got %q", got.String())
+		}
+	}
+}
+
+type customErrPage struct{}
+
+func (p *customErrPage) Save(ctx *via.Ctx) error {
+	return assertSaveErr("nope")
+}
+
+func (p *customErrPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
+	t.Parallel()
+
+	var seenErr atomic.Pointer[string]
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
+			s := err.Error()
+			seenErr.Store(&s)
+		}),
+	)
+	via.Mount[customErrPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Save").Fire())
+
+	got := seenErr.Load()
+	require.NotNil(t, got, "WithActionErrorHandler should fire on errored action")
+	assert.Equal(t, "nope", *got)
 }

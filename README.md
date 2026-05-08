@@ -152,6 +152,33 @@ func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
 }
 ```
 
+## Middleware
+
+```go
+app := via.New()
+via.Defaults(app)               // RequestID + AccessLog + Recover
+app.Use(via.StrictCSP())        // strict CSP with per-request nonce
+app.Use(requireAuth)            // your own
+```
+
+Built-in factories under `via`:
+
+| Factory                          | What it does                                  |
+|----------------------------------|-----------------------------------------------|
+| `Defaults(app)`                  | install RequestID + AccessLog + Recover       |
+| `RequestID()`                    | stamp X-Request-ID + plant on r.Context       |
+| `AccessLog(app)`                 | one info-line per request, with rid + status  |
+| `Recover(app)`                   | panic → 500 + error log; goroutine survives   |
+| `StrictCSP(extra…)`              | strict CSP header + nonce on r.Context        |
+
+Read it back inside actions / handlers:
+
+```go
+via.RequestIDFrom(r)             // string or ""
+via.Log(ctx).Log(via.LogInfo, "checkout", "amount", n)
+ctx.CSPNonce()                   // matches header set by StrictCSP
+```
+
 ## Routing & groups
 
 ```go
