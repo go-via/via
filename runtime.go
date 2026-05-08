@@ -161,6 +161,17 @@ func (ctx *Ctx) SyncElements(elements ...h.H) {
 // path params + initial signal values, optionally calls Init, renders the
 // view inside the HTML5 envelope.
 func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Request) {
+	if cap := a.cfg.maxContexts; cap > 0 {
+		a.contextRegistryMutex.RLock()
+		live := len(a.contextRegistry)
+		a.contextRegistryMutex.RUnlock()
+		if live >= cap {
+			a.logWarn(nil, "max contexts reached (%d); rejecting page render", cap)
+			http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	cmpVal := reflect.New(d.typ)
 	cmpAny := cmpVal.Interface()
 

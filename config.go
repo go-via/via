@@ -35,6 +35,7 @@ type config struct {
 	writeTimeout       time.Duration
 	idleTimeout        time.Duration
 	maxRequestBody     int64
+	maxContexts        int
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
@@ -119,6 +120,12 @@ func WithIdleTimeout(d time.Duration) Option {
 // WithMaxRequestBody caps body bytes for action and close requests.
 // Default 1 MiB.
 func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestBody = n } }
+
+// WithMaxContexts caps the number of concurrent live tabs. New page
+// renders past the cap return 503 instead of registering a Ctx — a
+// crude but effective floor against tab-spam DoS. Default 0 (no
+// cap). Tune to (expected peak users × tabs per user × 2).
+func WithMaxContexts(n int) Option { return func(c *config) { c.maxContexts = n } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
 // callback for action errors and panics. The error from a panic is wrapped
