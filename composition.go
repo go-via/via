@@ -71,6 +71,12 @@ type paramSlot struct {
 	kind      reflect.Kind
 }
 
+type querySlot struct {
+	fieldPath []int
+	name      string
+	kind      reflect.Kind
+}
+
 type actionSlot struct {
 	name        string
 	methodIndex int
@@ -89,6 +95,7 @@ type cmpDescriptor struct {
 	signalSlots  []signalSlot
 	scopeSlots   []scopeSlot
 	paramSlots   []paramSlot
+	querySlots   []querySlot
 	actionSlots  []actionSlot
 	actionByName map[string]int
 	childSlots   []childSlot
@@ -207,7 +214,12 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 	descriptorMu.Lock()
 	descriptorCache[typ] = desc
 	descriptorMu.Unlock()
-	return desc
+	// Return a clone so the caller (e.g. MountOn writing groupMW) doesn't
+	// race with concurrent buildDescriptor reads on the cached entry.
+	clone := *desc
+	clone.route = route
+	clone.app = app
+	return &clone
 }
 
 // expected method signatures for lifecycle hooks; Mount validates against
@@ -277,6 +289,7 @@ const (
 	roleScopeUser
 	roleScopeApp
 	roleParam
+	roleQuery
 	roleChild
 )
 
@@ -329,6 +342,12 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 				name:      f.Tag.Get("path"),
 				kind:      f.Type.Kind(),
 			})
+		case roleQuery:
+			d.querySlots = append(d.querySlots, querySlot{
+				fieldPath: fieldPath,
+				name:      f.Tag.Get("query"),
+				kind:      f.Type.Kind(),
+			})
 		case roleChild:
 			child := f.Type
 			if child.Kind() == reflect.Ptr {
@@ -349,6 +368,9 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 func classifyField(f reflect.StructField) fieldRole {
 	if _, ok := f.Tag.Lookup("path"); ok {
 		return roleParam
+	}
+	if _, ok := f.Tag.Lookup("query"); ok {
+		return roleQuery
 	}
 	if isSignalType(f.Type) {
 		return roleSignal

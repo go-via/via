@@ -181,6 +181,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	bindScopeKeys(cmpVal, d)
 	applyInits(ctx, cmpVal, d)
 	decodePathParams(cmpVal, r, d)
+	decodeQueryParams(cmpVal, r, d)
 
 	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
 	ctxArg := ctx.reflectArgs[:]
@@ -306,6 +307,21 @@ func decodePathParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for _, p := range d.paramSlots {
 		raw := r.PathValue(p.name)
+		decodeParam(fieldByPath(elem, p.fieldPath), p.kind, raw)
+	}
+}
+
+func decodeQueryParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
+	if len(d.querySlots) == 0 {
+		return
+	}
+	q := r.URL.Query()
+	elem := cmpVal.Elem()
+	for _, p := range d.querySlots {
+		raw := q.Get(p.name)
+		if raw == "" {
+			continue
+		}
 		decodeParam(fieldByPath(elem, p.fieldPath), p.kind, raw)
 	}
 }
