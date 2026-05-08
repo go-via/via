@@ -29,9 +29,10 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) {
 				return
 			case t := <-ticker.C:
 				safeStreamFn(ctx, t, fn)
-				if ctx.stateDirty || ctx.dirtySignals.any() {
-					flushDirty(ctx)
-				}
+				// Flush is a no-op when nothing is dirty and serialises
+				// with concurrent action handlers, so the ticker
+				// doesn't race a POST mid-flight.
+				ctx.Flush()
 			}
 		}
 	}()

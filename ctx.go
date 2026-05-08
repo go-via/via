@@ -239,12 +239,35 @@ func joinSemi(parts []string) string {
 	return out
 }
 
-// Sync explicitly re-renders the view and flushes pending patches.
+// Sync forces a view re-render and flushes pending patches. Marks the
+// composition dirty even if nothing changed since the last flush —
+// use it when an external (non-State) source of truth changed and you
+// need the rendered HTML to reflect it. For "flush whatever's dirty
+// now," use Flush.
+//
+// Safe to call from any goroutine: serialized against in-flight action
+// handlers via the per-Ctx action mutex.
 func (ctx *Ctx) Sync() {
 	if ctx == nil {
 		return
 	}
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
 	ctx.markStateDirty()
+	flushDirty(ctx)
+}
+
+// Flush sends any State / Signal mutations queued since the last
+// flush, but doesn't force a re-render if nothing is dirty. Use it
+// from raw goroutines that just want their Sets to reach the browser
+// without paying for an unnecessary re-render. Safe to call from any
+// goroutine.
+func (ctx *Ctx) Flush() {
+	if ctx == nil {
+		return
+	}
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
 	flushDirty(ctx)
 }
 
