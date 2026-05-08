@@ -179,6 +179,35 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	assert.True(t, logged, "Recover should log an error record on panic")
 }
 
+func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithTestServer(&server),
+		// LogLevel defaults to LogWarn — no info/debug records should leak.
+	)
+	via.Defaults(app)
+	via.Mount[accessLogPage](app, "/")
+	defer server.Close()
+
+	for i := 0; i < 5; i++ {
+		resp, err := http.Get(server.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+	}
+
+	// Healthy renders + the AccessLog info records they produce should
+	// be filtered out at WarnLevel; the captureLogger ends empty.
+	for _, r := range cap.snapshot() {
+		if r.level < via.LogWarn {
+			t.Errorf("unexpected info/debug record leaked at WarnLevel default: %+v", r)
+		}
+	}
+}
+
 type ridLogPage struct{}
 
 func (p *ridLogPage) Trace(ctx *via.Ctx) error {
