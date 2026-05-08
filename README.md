@@ -176,6 +176,7 @@ Built-in factories under `via`:
 | `AccessLog(app)`                 | one info-line per request, with rid + status  |
 | `Recover(app)`                   | panic → 500 + error log; goroutine survives   |
 | `StrictCSP(extra…)`              | strict CSP header + nonce on r.Context        |
+| `HSTS(opts…)`                    | Strict-Transport-Security for HTTPS deploys   |
 
 Read it back inside actions / handlers:
 
@@ -200,6 +201,29 @@ app.Routes()                 // []RouteInfo for boot logging
 Mounting two routes at the same path panics at registration with the
 offending pattern + the original registrar tag. `WithNotFound(h)`
 installs a custom 404 handler.
+
+### Production wiring
+
+```go
+app := via.New(
+    via.WithLang("en"),
+    via.WithSecureCookies(),
+    via.WithLogger(via.SlogLogger(slog.Default())),
+    via.WithMaxRequestBody(1<<20),
+    via.WithMaxContexts(10000),
+    via.WithSSEHeartbeat(25*time.Second),
+)
+via.Defaults(app)
+app.Use(via.HSTS())
+app.Use(via.StrictCSP())
+
+via.Mount[Home](app, "/")
+api := app.Group("/api")
+api.Use(requireAuth)
+via.MountOn[Profile](api, "/profile")
+
+http.ListenAndServe(":8080", app)
+```
 
 ## Cross-tab broadcast
 
