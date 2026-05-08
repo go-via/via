@@ -27,6 +27,53 @@ func TestHSTS_defaultHeaderHasOneYearAndSubdomains(t *testing.T) {
 	assert.Equal(t, "max-age=31536000; includeSubDomains", got)
 }
 
+func TestRedirectHTTPS_passesHTTPSThroughViaXForwardedProto(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.RedirectHTTPS())
+	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	defer server.Close()
+
+	req, _ := http.NewRequest("GET", server.URL+"/", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"X-Forwarded-Proto: https should pass through unredirected")
+}
+
+func TestRedirectHTTPS_redirectsPlainHTTP(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.RedirectHTTPS())
+	app.HandleFunc("/path", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	defer server.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(server.URL + "/path?q=1")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusMovedPermanently, resp.StatusCode)
+	loc := resp.Header.Get("Location")
+	assert.True(t, len(loc) >= 8 && loc[:8] == "https://",
+		"redirect Location should start with https://, got %q", loc)
+	assert.Contains(t, loc, "/path?q=1")
+}
+
 func TestHSTS_optionsCustomiseHeader(t *testing.T) {
 	t.Parallel()
 

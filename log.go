@@ -77,6 +77,33 @@ func Defaults(a *App) {
 	a.Use(Recover(a))
 }
 
+// RedirectHTTPS returns a Middleware that 301-redirects plain HTTP to
+// the same URL on https. Detection respects the X-Forwarded-Proto
+// header (the convention every TLS-terminating proxy / load balancer
+// sets), falling back to r.TLS != nil for direct-bind scenarios.
+//
+//	app.Use(via.RedirectHTTPS())
+//
+// The redirect is applied to every request; pair with WithSecureCookies
+// and HSTS for a complete TLS-only deployment posture.
+func RedirectHTTPS() Middleware {
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		if isHTTPS(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		target := "https://" + r.Host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	}
+}
+
+func isHTTPS(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return r.Header.Get("X-Forwarded-Proto") == "https"
+}
+
 // HSTS returns a Middleware that sets the Strict-Transport-Security
 // response header. Pairs with via.WithSecureCookies for HTTPS
 // deployments. Use this only when the app is actually served over
