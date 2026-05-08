@@ -133,6 +133,26 @@ func (ctx *Ctx) ExecScriptf(format string, args ...any) {
 	enqueueScript(ctx, sprintfFmt(format, args...))
 }
 
+// Reload tells the browser to reload the current page on the next
+// flush. Convenience wrapper for the common "the data changed
+// drastically; just refetch" pattern after multi-step actions.
+func (ctx *Ctx) Reload() {
+	if ctx == nil {
+		return
+	}
+	ctx.ExecScript("location.reload()")
+}
+
+// Toast queues a browser alert(message). Sugar for the common
+// "show a quick notice and move on" pattern; for richer toasts use
+// PatchSignal to drive a client-side notice signal instead.
+func (ctx *Ctx) Toast(message string) {
+	if ctx == nil || message == "" {
+		return
+	}
+	ctx.ExecScriptf("alert(%q)", message)
+}
+
 // Redirect sends a client-side navigation to url at the next flush.
 func (ctx *Ctx) Redirect(url string) {
 	if ctx == nil || url == "" || ctx.queue == nil {
