@@ -33,8 +33,11 @@ func MethodName(fn any) string {
 	return full
 }
 
-// ActionFn is the function-shape every action method satisfies.
-type ActionFn = func(ctx *Ctx) error
+// ActionFn is a sentinel type alias spanning the two recognised action
+// signatures: `func(*Ctx) error` and `func(*Ctx)`. Callers in user code
+// pass a bound method value; on.Click and friends type-check it via
+// reflect rather than the type system, so both shapes compile.
+type ActionFn = any
 
 // TriggerOption is consumed by the on/* sub-package to layer extra
 // behaviour onto a binding (debounce, throttle, key filters, etc.).

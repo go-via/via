@@ -559,7 +559,7 @@ func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
 
 	cmpVal := reflect.ValueOf(ctx.cmpVal)
 	out := cmpVal.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
-	if !out[0].IsNil() {
+	if !slot.voidReturn && len(out) > 0 && !out[0].IsNil() {
 		errVal, _ := out[0].Interface().(error)
 		if errVal != nil {
 			a.dispatchActionError(ctx, errVal, false)

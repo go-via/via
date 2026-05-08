@@ -81,6 +81,7 @@ type actionSlot struct {
 	name        string
 	methodIndex int
 	method      reflect.Method
+	voidReturn  bool // true if the method has signature func(*Ctx) (no error)
 }
 
 type childSlot struct {
@@ -184,7 +185,8 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 
 	for i := 0; i < ptrTyp.NumMethod(); i++ {
 		m := ptrTyp.Method(i)
-		if !isActionMethod(m) {
+		void, ok := actionMethodKind(m)
+		if !ok {
 			continue
 		}
 		idx := len(desc.actionSlots)
@@ -192,6 +194,7 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 			name:        m.Name,
 			methodIndex: i,
 			method:      m,
+			voidReturn:  void,
 		})
 		desc.actionByName[m.Name] = idx
 	}
@@ -486,22 +489,36 @@ func peekValueKind(t reflect.Type) reflect.Kind {
 	return t.Field(0).Type.Kind()
 }
 
-func isActionMethod(m reflect.Method) bool {
+// actionMethodKind reports whether m is a valid action method and its
+// return shape. Recognised signatures:
+//
+//	func (c *T) Inc(ctx *via.Ctx) error  // void=false
+//	func (c *T) Inc(ctx *via.Ctx)        // void=true (no return)
+//
+// Lifecycle method names are excluded so they don't masquerade as
+// actions when their signature happens to match.
+func actionMethodKind(m reflect.Method) (void bool, ok bool) {
 	mt := m.Type
-	if mt.NumIn() != 2 || mt.NumOut() != 1 {
-		return false
+	if mt.NumIn() != 2 {
+		return false, false
 	}
 	if mt.In(1) != reflect.TypeOf((*Ctx)(nil)) {
-		return false
-	}
-	if mt.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
-		return false
+		return false, false
 	}
 	switch m.Name {
 	case "View", "Init", "OnConnect", "Dispose":
-		return false
+		return false, false
 	}
-	return true
+	switch mt.NumOut() {
+	case 0:
+		return true, true
+	case 1:
+		if mt.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+			return false, false
+		}
+		return false, true
+	}
+	return false, false
 }
 
 func checkPathParams(d *cmpDescriptor, route string) {
