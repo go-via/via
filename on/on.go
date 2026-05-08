@@ -12,11 +12,20 @@
 package on
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 )
+
+func jsonForJS(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
 
 // Click binds a click handler.
 func Click(fn via.ActionFn, opts ...via.TriggerOption) h.H {
@@ -72,6 +81,29 @@ func Stop() via.TriggerOption {
 	return modifier("stop")
 }
 
+// SetSignal bundles a typed signal write into the same trigger as the
+// action — the signal updates client-side first, then the @post fires
+// (and reads the new value):
+//
+//	h.Button(h.Text("Step 5"),
+//	    on.Click(c.Apply, on.SetSignal(&c.Step, 5)),
+//	)
+//
+// sig must be a Signal[T] handle bound at Mount (any Signal[T] field
+// reached through the composition struct satisfies this). value is
+// JSON-encoded into the rendered JS expression.
+func SetSignal[T any](sig *via.Signal[T], value T) via.TriggerOption {
+	key := sig.Key()
+	encoded, err := jsonForJS(value)
+	if err != nil {
+		// Fall back to a no-op so render doesn't blow up; the user will
+		// see no signal write but the action still fires.
+		return func(*via.TriggerSpec) {}
+	}
+	stmt := "$" + key + "=" + encoded
+	return func(s *via.TriggerSpec) { s.AppendPre(stmt) }
+}
+
 func modifier(m string) via.TriggerOption {
 	return func(s *via.TriggerSpec) { s.Modifiers = append(s.Modifiers, m) }
 }
@@ -110,6 +142,13 @@ func render(s *via.TriggerSpec) h.H {
 		attr.WriteString(s.Throttle)
 	}
 
-	expr := "@post('/_action/" + method + "')"
-	return h.Data(attr.String(), expr)
+	var expr strings.Builder
+	for _, stmt := range s.Pre {
+		expr.WriteString(stmt)
+		expr.WriteByte(';')
+	}
+	expr.WriteString("@post('/_action/")
+	expr.WriteString(method)
+	expr.WriteString("')")
+	return h.Data(attr.String(), expr.String())
 }

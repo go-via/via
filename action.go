@@ -44,10 +44,25 @@ type TriggerOption func(*TriggerSpec)
 // package exposes a builder; via owns the type so consumers don't need to
 // reach across packages.
 type TriggerSpec struct {
-	Event   string // "click", "input", "submit", …
-	Method  ActionFn
-	Debounce string // e.g. "200ms"
-	Throttle string
+	Event     string // "click", "input", "submit", …
+	Method    ActionFn
+	Debounce  string // e.g. "200ms"
+	Throttle  string
 	Modifiers []string // e.g. ["prevent", "stop"]
 	KeyFilter string   // e.g. "Enter" for on:keydown
+
+	// Pre is a list of JS statements to run synchronously before the
+	// @post(...) call fires. Used by on.SetSignal to bundle a typed
+	// signal write into the same trigger.
+	Pre []string
+}
+
+// AppendPre adds a JS statement that will run before the action POST.
+// Used by on.SetSignal and other helpers in the on/* package; the
+// statements run in insertion order.
+func (s *TriggerSpec) AppendPre(stmt string) {
+	if stmt == "" {
+		return
+	}
+	s.Pre = append(s.Pre, stmt)
 }
