@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -49,6 +50,20 @@ func TestRoute_panicsOnHandleFuncCollidingWithMount(t *testing.T) {
 		}
 	}()
 	app.HandleFunc("GET /x", func(http.ResponseWriter, *http.Request) {})
+}
+
+func TestRoute_panicsOnHandleStaticCollision(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	app.HandleStatic("/static/", fstest.MapFS{})
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on HandleStatic colliding with another HandleStatic")
+		}
+	}()
+	app.HandleStatic("/static/", fstest.MapFS{})
 }
 
 func TestRoute_panicsOnGroupHandleFuncDuplicate(t *testing.T) {
