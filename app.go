@@ -145,6 +145,33 @@ func (a *App) HandleStatic(prefix string, fsys fs.FS) {
 		http.StripPrefix(prefix, http.FileServer(http.FS(fsys))))
 }
 
+// Broadcast queues a JavaScript snippet on every currently-live tab's
+// patch queue. The next SSE drain on each tab pushes it to the browser.
+// Useful for "page will reload in 30 seconds" maintenance notices,
+// site-wide flash messages, or coordinated state invalidation.
+//
+//	app.Broadcast(`alert("Maintenance in 30 seconds.")`)
+//	time.Sleep(30 * time.Second)
+//	app.Shutdown(ctx)
+//
+// Returns the number of tabs the script was queued on. Empty script is
+// a no-op.
+func (a *App) Broadcast(script string) int {
+	if script == "" {
+		return 0
+	}
+	a.contextRegistryMutex.RLock()
+	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
+	for _, c := range a.contextRegistry {
+		ctxs = append(ctxs, c)
+	}
+	a.contextRegistryMutex.RUnlock()
+	for _, c := range ctxs {
+		enqueueScript(c, script)
+	}
+	return len(ctxs)
+}
+
 // LiveTabs returns the number of currently-registered tab contexts.
 // Useful for ops endpoints (/healthz, /metrics) that want to surface
 // concurrency without scraping internal state. The number is a
