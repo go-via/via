@@ -261,9 +261,14 @@ func New(opts ...Option) *App {
 
 	a.handler = a.withSession()
 
-	if a.cfg.sessionTTL > 0 {
+	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
 		a.stopSweep = make(chan struct{})
-		go a.sweepExpiredSessions()
+		if a.cfg.sessionTTL > 0 {
+			go a.sweepExpiredSessions()
+		}
+		if a.cfg.contextTTL > 0 {
+			go a.sweepExpiredContexts()
+		}
 	}
 
 	if a.cfg.testServer != nil {

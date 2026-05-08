@@ -500,6 +500,41 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// sweepExpiredContexts periodically disposes Ctxs that haven't been touched
+// (no SSE event, action, or page-render) for longer than contextTTL.
+func (a *App) sweepExpiredContexts() {
+	interval := a.cfg.contextTTL / 2
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopSweep:
+			return
+		case <-ticker.C:
+			a.removeExpiredContexts()
+		}
+	}
+}
+
+func (a *App) removeExpiredContexts() {
+	cutoff := time.Now().Add(-a.cfg.contextTTL).UnixNano()
+	a.contextRegistryMutex.Lock()
+	expired := make([]*Ctx, 0)
+	for id, c := range a.contextRegistry {
+		if c.lastAccess.Load() < cutoff {
+			expired = append(expired, c)
+			delete(a.contextRegistry, id)
+		}
+	}
+	a.contextRegistryMutex.Unlock()
+	for _, c := range expired {
+		a.disposeCtx(c)
+	}
+}
+
 // disposeCtx closes the ctx and runs Dispose if defined.
 func (a *App) disposeCtx(ctx *Ctx) {
 	ctx.mu.Lock()
