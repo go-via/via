@@ -85,6 +85,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	ctx.touch()
 
 	bindSlots(ctx, cmpVal, d)
+	bindScopeKeys(cmpVal, d)
 	applyInits(ctx, cmpVal, d)
 	decodePathParams(cmpVal, r, d)
 
@@ -159,6 +160,21 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 		ref := field.Addr().Interface().(signalRef)
 		ref.bindSlot(uint16(i), s.wireKey)
 		ctx.signalRefs[i] = ref
+	}
+}
+
+// bindScopeKeys writes the wire key into every scope.User[T] / scope.App[T]
+// field of the freshly allocated *C. The handles' WireKey field is exported
+// for this purpose.
+func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
+	if len(d.scopeSlots) == 0 {
+		return
+	}
+	elem := cmpVal.Elem()
+	for _, s := range d.scopeSlots {
+		field := fieldByPath(elem, s.fieldPath)
+		// scope.User / scope.App both expose WireKey as the first field.
+		field.FieldByName("WireKey").SetString(s.wireKey)
 	}
 }
 

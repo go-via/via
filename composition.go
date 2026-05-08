@@ -52,6 +52,19 @@ type signalSlot struct {
 	initRaw    string
 }
 
+type scopeKind int
+
+const (
+	scopeUser scopeKind = iota
+	scopeApp
+)
+
+type scopeSlot struct {
+	fieldPath []int // index path from root *C
+	kind      scopeKind
+	wireKey   string // session/app store key
+}
+
 type paramSlot struct {
 	fieldPath []int
 	name      string
@@ -74,6 +87,7 @@ type cmpDescriptor struct {
 	ptrTyp       reflect.Type
 	route        string
 	signalSlots  []signalSlot
+	scopeSlots   []scopeSlot
 	paramSlots   []paramSlot
 	actionSlots  []actionSlot
 	actionByName map[string]int
@@ -256,6 +270,8 @@ const (
 	roleNone fieldRole = iota
 	roleSignal
 	roleState
+	roleScopeUser
+	roleScopeApp
 	roleParam
 	roleChild
 )
@@ -287,6 +303,21 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 				wireKey:    wire,
 				initRaw:    parseInitTag(f),
 				scalarKind: peekValueKind(f.Type),
+			})
+		case roleScopeUser, roleScopeApp:
+			local := parseLocalID(f)
+			wire := local
+			if pathPrefix != "" {
+				wire = pathPrefix + "." + local
+			}
+			kind := scopeUser
+			if role == roleScopeApp {
+				kind = scopeApp
+			}
+			d.scopeSlots = append(d.scopeSlots, scopeSlot{
+				fieldPath: fieldPath,
+				kind:      kind,
+				wireKey:   wire,
 			})
 		case roleParam:
 			d.paramSlots = append(d.paramSlots, paramSlot{
@@ -321,10 +352,32 @@ func classifyField(f reflect.StructField) fieldRole {
 	if isStateType(f.Type) {
 		return roleState
 	}
+	if isScopeUserType(f.Type) {
+		return roleScopeUser
+	}
+	if isScopeAppType(f.Type) {
+		return roleScopeApp
+	}
 	if isChildComposition(f.Type) {
 		return roleChild
 	}
 	return roleNone
+}
+
+func isScopeUserType(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	return strings.HasPrefix(t.Name(), "User[") &&
+		t.PkgPath() == "github.com/go-via/via/scope"
+}
+
+func isScopeAppType(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	return strings.HasPrefix(t.Name(), "App[") &&
+		t.PkgPath() == "github.com/go-via/via/scope"
 }
 
 // isChildComposition reports whether t is a struct (or pointer-to-struct)

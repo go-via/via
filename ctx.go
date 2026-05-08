@@ -28,6 +28,10 @@ type Ctx struct {
 	session      *session
 	lastAccess   atomic.Int64
 
+	// localScope backs scope.User[T] when the request had no session
+	// (test path or unauth scenarios). Per-Ctx, not shared.
+	localScope sync.Map
+
 	connectOnce sync.Once // guards OnConnect dispatch
 
 	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]
