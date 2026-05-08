@@ -146,6 +146,19 @@ func (ctx *Ctx) SetCookie(c *http.Cookie) {
 	http.SetCookie(w, c)
 }
 
+// DelCookie tells the browser to delete the named cookie by emitting
+// a Set-Cookie response header with an empty value, MaxAge=-1, and
+// Path="/". For a cookie scoped to a specific path use SetCookie with
+// a fully-formed *http.Cookie instead.
+func (ctx *Ctx) DelCookie(name string) {
+	if ctx == nil || name == "" {
+		return
+	}
+	ctx.SetCookie(&http.Cookie{
+		Name: name, Value: "", Path: "/", MaxAge: -1,
+	})
+}
+
 func (ctx *Ctx) touch() {
 	ctx.lastAccess.Store(nowNano())
 }

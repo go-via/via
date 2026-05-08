@@ -50,6 +50,26 @@ func TestCookie_readsValueFromRequest(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
+func TestDelCookie_outsideActionScopeIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	c := &cookiePage{}
+	ctx := via.NewBoundCtx(c)
+	assert.NotPanics(t, func() {
+		ctx.DelCookie("anything")
+	})
+}
+
+func TestDelCookie_emptyNameIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	c := &cookiePage{}
+	ctx := via.NewBoundCtx(c)
+	assert.NotPanics(t, func() {
+		ctx.DelCookie("")
+	})
+}
+
 func TestSetCookie_outsideActionScopeIsNoOp(t *testing.T) {
 	t.Parallel()
 
