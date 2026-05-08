@@ -100,6 +100,8 @@ type cmpDescriptor struct {
 	hasOnConnect  bool
 	hasDispose    bool
 	app          *App
+
+	groupMW []Middleware // middleware from the owning Group, if any
 }
 
 var (
@@ -113,10 +115,12 @@ func Mount[C any](app *App, route string) {
 	app.registerDescriptor(desc)
 }
 
-// MountOn mounts a composition C at a path under the group prefix.
+// MountOn mounts a composition C at a path under the group prefix. The
+// group's middleware chain wraps the rendered route.
 func MountOn[C any](g *Group, route string) {
 	full := joinPath(g.prefix, route)
 	desc := buildDescriptor[C](g.app, full)
+	desc.groupMW = append([]Middleware(nil), g.middleware...)
 	g.app.registerDescriptor(desc)
 }
 

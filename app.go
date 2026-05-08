@@ -126,9 +126,10 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 	a.descsMu.Lock()
 	a.descs = append(a.descs, d)
 	a.descsMu.Unlock()
-	a.mux.HandleFunc("GET "+d.route, func(w http.ResponseWriter, r *http.Request) {
+	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.renderPage(d, w, r)
 	})
+	a.mux.Handle("GET "+d.route, applyMiddleware(d.groupMW, final))
 }
 
 func (a *App) registerCtx(id string, ctx *Ctx) {
