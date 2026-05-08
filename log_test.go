@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -30,15 +31,13 @@ type logRec struct {
 func (c *captureLogger) Log(level via.LogLevel, msg string, kv ...any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.records = append(c.records, logRec{level: level, msg: msg, kv: append([]any(nil), kv...)})
+	c.records = append(c.records, logRec{level: level, msg: msg, kv: slices.Clone(kv)})
 }
 
 func (c *captureLogger) snapshot() []logRec {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]logRec, len(c.records))
-	copy(out, c.records)
-	return out
+	return slices.Clone(c.records)
 }
 
 type erroringPage struct{}
@@ -56,10 +55,10 @@ func (e assertError) Error() string { return string(e) }
 func TestWithLogger_routesActionPanicsThroughLogger(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogDebug),
 		via.WithTestServer(&server),
 	)
@@ -69,7 +68,7 @@ func TestWithLogger_routesActionPanicsThroughLogger(t *testing.T) {
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
 
-	recs := cap.snapshot()
+	recs := logger.snapshot()
 	require.NotEmpty(t, recs, "panic should have produced a log record")
 
 	found := false
@@ -97,10 +96,10 @@ func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTestServer(&server),
 	)
@@ -126,7 +125,7 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	assert.NotEmpty(t, resp2.Header.Get("X-Request-ID"))
 
 	// AccessLog logs both, including rid.
-	logs := cap.snapshot()
+	logs := logger.snapshot()
 	sawAccess := 0
 	for _, r := range logs {
 		if strings.Contains(r.msg, "rid=") &&
@@ -141,10 +140,10 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogError),
 		via.WithTestServer(&server),
 	)
@@ -171,7 +170,7 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 		"server should survive the panic")
 
 	logged := false
-	for _, r := range cap.snapshot() {
+	for _, r := range logger.snapshot() {
 		if r.level == via.LogError && strings.Contains(r.msg, "panic") {
 			logged = true
 		}
@@ -182,10 +181,10 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithTestServer(&server),
 		// LogLevel defaults to LogWarn — no info/debug records should leak.
 	)
@@ -193,7 +192,7 @@ func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 	via.Mount[accessLogPage](app, "/")
 	defer server.Close()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		resp, err := http.Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
@@ -201,7 +200,7 @@ func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 
 	// Healthy renders + the AccessLog info records they produce should
 	// be filtered out at WarnLevel; the captureLogger ends empty.
-	for _, r := range cap.snapshot() {
+	for _, r := range logger.snapshot() {
 		if r.level < via.LogWarn {
 			t.Errorf("unexpected info/debug record leaked at WarnLevel default: %+v", r)
 		}
@@ -220,10 +219,10 @@ func (p *ridLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTestServer(&server),
 	)
@@ -236,7 +235,7 @@ func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 
 	// The action's Log call should have appended both via_tab and rid.
 	got := false
-	for _, r := range cap.snapshot() {
+	for _, r := range logger.snapshot() {
 		if r.msg != "doing-it" {
 			continue
 		}
@@ -289,10 +288,10 @@ func TestRequestID_passesThroughInboundHeader(t *testing.T) {
 func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTestServer(&server),
 	)
@@ -307,7 +306,7 @@ func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 	resp.Body.Close()
 
 	found := false
-	for _, r := range cap.snapshot() {
+	for _, r := range logger.snapshot() {
 		if strings.Contains(r.msg, "rid=trace-7") {
 			found = true
 		}
@@ -318,10 +317,10 @@ func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTestServer(&server),
 	)
@@ -329,14 +328,14 @@ func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	via.Mount[accessLogPage](app, "/")
 	defer server.Close()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		resp, err := http.Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 	}
 
 	got := 0
-	for _, r := range cap.snapshot() {
+	for _, r := range logger.snapshot() {
 		if strings.Contains(r.msg, "GET /") &&
 			strings.Contains(r.msg, "status=200") {
 			got++
@@ -357,10 +356,10 @@ func (p *loggingPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTestServer(&server),
 	)
@@ -370,7 +369,7 @@ func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())
 
-	recs := cap.snapshot()
+	recs := logger.snapshot()
 	var got *logRec
 	for i := range recs {
 		if recs[i].msg == "checkout" {
@@ -390,10 +389,10 @@ func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 func TestLog_respectsLogLevelFilter(t *testing.T) {
 	t.Parallel()
 
-	cap := &captureLogger{}
+	logger := &captureLogger{}
 	var server *httptest.Server
 	app := via.New(
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogWarn),
 		via.WithTestServer(&server),
 	)
@@ -403,7 +402,7 @@ func TestLog_respectsLogLevelFilter(t *testing.T) {
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())
 
-	recs := cap.snapshot()
+	recs := logger.snapshot()
 	for _, r := range recs {
 		if r.msg == "checkout" {
 			t.Fatal("checkout (LogInfo) record should be filtered out at LogWarn level")

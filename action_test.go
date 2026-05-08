@@ -67,6 +67,19 @@ func TestMethodName_resolvesBoundMethod(t *testing.T) {
 	assert.Equal(t, "Inc", via.MethodName(c.Inc))
 }
 
+func TestMethodName_returnsSameStringForSameMethod(t *testing.T) {
+	t.Parallel()
+
+	// Two distinct *counterPage instances → same method PC → same
+	// resolved name. Catches a regression in the PC-keyed cache where
+	// e.g. caching by closure address (changes per instance) instead of
+	// PC would silently re-parse.
+	a := &counterPage{}
+	b := &counterPage{}
+	assert.Equal(t, via.MethodName(a.Inc), via.MethodName(b.Inc))
+	assert.Equal(t, "Inc", via.MethodName(b.Inc))
+}
+
 type erroringActionPage struct{}
 
 func (p *erroringActionPage) Save(ctx *via.Ctx) error {

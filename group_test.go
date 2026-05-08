@@ -195,3 +195,27 @@ func TestGroup_routes404WithoutPrefix(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+func TestGroup_handleFuncRegistersExplicitMethod(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	group := app.Group("/api")
+	group.HandleFunc("POST /widgets", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("created"))
+	})
+	defer server.Close()
+
+	resp, err := http.Post(server.URL+"/api/widgets", "application/json", http.NoBody)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	buf, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(buf), "created")
+
+	// GET to the same path must miss — POST registration shouldn't leak.
+	getResp, err := http.Get(server.URL + "/api/widgets")
+	require.NoError(t, err)
+	defer getResp.Body.Close()
+	assert.Equal(t, http.StatusMethodNotAllowed, getResp.StatusCode)
+}

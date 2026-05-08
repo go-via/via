@@ -27,7 +27,7 @@ type Counter struct {
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
+    via.Add(ctx, &c.Hits, c.Step.Get(ctx))
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
@@ -57,6 +57,16 @@ func main() {
 Reads and writes go through `Get(ctx) / Set(ctx, v)` — explicit context,
 no hidden globals. Wire keys default to lower-cased field names; override
 with the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
+
+For common read-modify-write patterns there are typed helpers that work
+on any handle satisfying `via.Mutable[T]` — that's all four reactive
+shapes: `Signal[T]`, `State[T]`, `scope.User[T]`, `scope.App[T]`:
+
+```go
+s.Update(ctx, func(n int) int { return n + 1 })  // generic transform
+via.Add(ctx, &p.Count, 1)                         // numeric delta
+via.Toggle(ctx, &p.Open)                          // bool flip
+```
 
 ## Lifecycle hooks
 
@@ -106,10 +116,10 @@ action so the value updates client-side _before_ the POST fires.
 
 The action method's body can:
 
-- Set typed state: `c.Hits.Set(ctx, …)`.
+- Set typed state: `c.Hits.Set(ctx, …)` or `via.Add(ctx, &c.Hits, 1)`.
 - Push targeted patches: `ctx.SyncElements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.PatchSignal("_picoTheme", "purple")`.
-- Run client JS: `ctx.ExecScriptf("alert(%q)", msg)`.
+- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe).
 - Redirect: `ctx.Redirect("/profile")`.
 - Decode the request payload into a typed struct:
 
@@ -196,12 +206,16 @@ api := app.Group("/api")
 api.Use(requireAuth)
 via.MountOn[Profile](api, "/profile")
 
-app.Routes()                 // []RouteInfo for boot logging
+api.HandleFunc("POST /widgets", createWidget) // method-prefixed
+api.HandleFunc("/widgets",       listWidgets) // bare path = GET
+
+app.Routes()                                  // []RouteInfo for boot logging
 ```
 
-Mounting two routes at the same path panics at registration with the
-offending pattern + the original registrar tag. `WithNotFound(h)`
-installs a custom 404 handler.
+Group patterns follow `http.ServeMux` shape: `"GET /foo"`, `"POST /foo"`,
+… or just `"/foo"` (defaults to GET). Mounting two routes at the same
+path panics at registration with the offending pattern + the original
+registrar tag. `WithNotFound(h)` installs a custom 404 handler.
 
 ### Production wiring
 
@@ -241,15 +255,21 @@ deliver via the existing patch queue + SSE drain — no extra wiring.
 
 ## h package helpers
 
-| Helper                      | What it does                                 |
-|-----------------------------|----------------------------------------------|
-| `h.Each(items, fn)`         | One node per element; empty slice → nothing  |
-| `h.EachIndexed(items, fn)`  | Same with `(i, v)`                           |
-| `h.When(cond, build)`       | Lazy `If` — only constructs when true        |
-| `h.Group(items)`            | Bundle many nodes into one                   |
-| `h.Classes(parts...)`       | Join class names; empty parts skipped        |
-| `h.ClassMap(map[string]bool)` | Render only true keys                      |
-| `h.IfStr(cond, s)`          | `s` when cond, `""` otherwise                |
+| Helper                              | What it does                                  |
+|-------------------------------------|-----------------------------------------------|
+| `h.Each(items, fn)`                 | One node per element; empty slice → nothing   |
+| `h.EachIndexed(items, fn)`          | Same with `(i, v)`                            |
+| `h.EachSeq(seq, fn)`                | Iter-based variant (slices.Values, maps.Values…) |
+| `h.EachSeq2(seq, fn)`               | Same for `iter.Seq2` (maps.All, slices.All…)  |
+| `h.If(cond, n)`                     | Render `n` when cond, nothing otherwise       |
+| `h.IfElse(cond, then, els)`         | Eager two-branch picker                       |
+| `h.When(cond, build)`               | Lazy `If` — only constructs when true         |
+| `h.WhenElse(cond, then, els)`       | Lazy `IfElse` — only the winning builder runs |
+| `h.Switch(value, h.Case…, h.Default…)` | Tab-style branching by equality            |
+| `h.Group(items)` / `h.Fragment(items…)` | Bundle many nodes into one                |
+| `h.Classes(parts...)`               | Join class names; empty parts skipped         |
+| `h.ClassMap(map[string]bool)`       | Render true keys in sorted (stable) order     |
+| `h.IfStr(cond, s)`                  | `s` when cond, `""` otherwise                 |
 
 ## Plugins
 
@@ -296,13 +316,18 @@ app := via.New(via.WithTestServer(&server))
 via.Mount[Counter](app, "/")
 
 tc := test.NewClient(t, server, "/")
-require.Equal(t, 200, tc.Action("Inc").Fire())
-require.Equal(t, 200, tc.Action("Apply").WithSignal("step", 5).Fire())
+c := &Counter{}
+require.Equal(t, 200, tc.Action(c.Inc).Fire())             // typed: typo → compile error
+require.Equal(t, 200, tc.Action("Apply").                  // string still works
+    WithSignal("step", 5).Fire())
+require.Contains(t, tc.Reload(), ">1<")                    // re-fetch + assert on body
 frames, cancel := tc.SSE(t)
 defer cancel()
 ```
 
-The client name-addresses actions and signals; no HTML scraping.
+`tc.Action` accepts either a method value (compile-time typo protection) or
+the action's name as a string. `tc.Reload` re-fetches the mounted page so
+post-action body assertions are one call instead of a hand-rolled GET.
 
 ## Examples
 

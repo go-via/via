@@ -25,20 +25,46 @@ func (g *Group) Use(mw ...Middleware) {
 }
 
 // HandleFunc registers a non-via handler under the group prefix, wrapped
-// in the group's middleware chain.
+// in the group's middleware chain. The pattern follows the same shape as
+// http.ServeMux — `"/users"` is GET-only by convention,
+// `"POST /users"` registers POST. Without a method token, GET is assumed.
 func (g *Group) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	full := "GET " + joinPath(g.prefix, pattern)
+	full := groupPattern(g.prefix, pattern)
 	g.app.claimRoute(full, "Group("+g.prefix+").HandleFunc")
 	g.app.mux.Handle(full,
 		applyMiddleware(g.middleware, http.HandlerFunc(handler)))
 }
 
-// Handle registers a non-via http.Handler under the group prefix.
+// Handle registers a non-via http.Handler under the group prefix. Same
+// pattern shape as HandleFunc.
 func (g *Group) Handle(pattern string, handler http.Handler) {
-	full := "GET " + joinPath(g.prefix, pattern)
+	full := groupPattern(g.prefix, pattern)
 	g.app.claimRoute(full, "Group("+g.prefix+").Handle")
 	g.app.mux.Handle(full,
 		applyMiddleware(g.middleware, handler))
+}
+
+// groupPattern joins a group's prefix with a per-handler pattern, keeping
+// any leading method token (GET, POST, ...) intact and defaulting to GET
+// when the caller didn't specify a method.
+func groupPattern(prefix, pattern string) string {
+	method, path, ok := strings.Cut(pattern, " ")
+	if !ok || !isHTTPMethodToken(method) {
+		method = "GET"
+		path = pattern
+	}
+	return method + " " + joinPath(prefix, path)
+}
+
+// isHTTPMethodToken matches the standard methods Go's http.ServeMux
+// recognises as a route prefix. Excludes obscure verbs (TRACE, CONNECT) —
+// callers using those must register at the App level directly.
+func isHTTPMethodToken(s string) bool {
+	switch s {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		return true
+	}
+	return false
 }
 
 func joinPath(base, segment string) string {

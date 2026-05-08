@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+// sessionCookieName is the name of the HTTP cookie via uses to identify
+// a browser session across requests. Centralized here so set/read/delete
+// paths can never drift.
+const sessionCookieName = "via_session"
+
 type session struct {
 	id         string
 	data       sync.Map
@@ -16,7 +21,7 @@ type session struct {
 
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
 	now := time.Now().UnixNano()
-	if c, err := r.Cookie("via_session"); err == nil {
+	if c, err := r.Cookie(sessionCookieName); err == nil {
 		a.sessionsMu.RLock()
 		sess, ok := a.sessions[c.Value]
 		a.sessionsMu.RUnlock()
@@ -33,18 +38,11 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 	a.sessions[sess.id] = sess
 	a.sessionsMu.Unlock()
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     "via_session",
-		Value:    sess.id,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   a.cfg.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, a.sessionCookie(sess.id))
 	// Plant the cookie on the request too so sessionFromRequest in
 	// downstream handlers (renderPage/handleAction/handleSSE) can find
 	// the session it just created without waiting for the next round-trip.
-	r.AddCookie(&http.Cookie{Name: "via_session", Value: sess.id})
+	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sess.id})
 
 	return sess
 }
@@ -115,23 +113,23 @@ func ClearSess[T any](src any) {
 	}
 }
 
+// sessionTypeKeyCache memoises sessionTypeKey results so PutSess/GetSess/
+// ClearSess hot paths avoid repeated string concatenation. Keyed by
+// reflect.Type which is canonical and comparable.
+var sessionTypeKeyCache sync.Map // map[reflect.Type]string
+
 // sessionTypeKey returns a stable string key for a Go type used as a
 // typed-session value. We use the reflect type's full string ("pkg.Name")
 // so distinct types in different packages don't collide.
 func sessionTypeKey[T any]() string {
 	var zero T
-	return "type:" + reflectTypeName(zero)
-}
-
-func reflectTypeName(v any) string {
-	t := reflect.TypeOf(v)
-	if t == nil {
-		return "nil"
+	rt := reflect.TypeOf(&zero).Elem()
+	if v, ok := sessionTypeKeyCache.Load(rt); ok {
+		return v.(string)
 	}
-	if t.Kind() == reflect.Ptr {
-		t = t.Elem()
-	}
-	return t.String()
+	key := "type:" + rt.String()
+	sessionTypeKeyCache.Store(rt, key)
+	return key
 }
 
 // sessionFromRequestCtx looks up the session associated with the request's
@@ -197,7 +195,7 @@ func RotateSession(ctx *Ctx) string {
 	app := ctx.app
 
 	fresh := &session{id: genSecureID()}
-	fresh.lastAccess.Store(nowNano())
+	fresh.lastAccess.Store(time.Now().UnixNano())
 
 	if old != nil {
 		old.data.Range(func(k, v any) bool {
@@ -215,18 +213,24 @@ func RotateSession(ctx *Ctx) string {
 
 	ctx.session = fresh
 
-	w := ctx.Writer()
-	if w != nil {
-		http.SetCookie(w, &http.Cookie{
-			Name:     "via_session",
-			Value:    fresh.id,
-			Path:     "/",
-			HttpOnly: true,
-			Secure:   app.cfg.secureCookies,
-			SameSite: http.SameSiteLaxMode,
-		})
+	if w := ctx.Writer(); w != nil {
+		http.SetCookie(w, app.sessionCookie(fresh.id))
 	}
 	return fresh.id
+}
+
+// sessionCookie returns the canonical via_session cookie for id with the
+// app's configured Secure flag applied. Single source of truth shared by
+// getOrCreateSession and RotateSession so the two paths can never drift.
+func (a *App) sessionCookie(id string) *http.Cookie {
+	return &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    id,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.cfg.secureCookies,
+		SameSite: http.SameSiteLaxMode,
+	}
 }
 
 // AppLoad reads a value from the per-app store. Backs scope.App[T].
@@ -252,7 +256,7 @@ func AppStore(ctx *Ctx, key string, value any) {
 // established by the withSession middleware on the first request, so by
 // the time SSE/action handlers run there is always a session present.
 func (a *App) sessionFromRequest(r *http.Request) *session {
-	c, err := r.Cookie("via_session")
+	c, err := r.Cookie(sessionCookieName)
 	if err != nil {
 		return nil
 	}
@@ -262,20 +266,7 @@ func (a *App) sessionFromRequest(r *http.Request) *session {
 }
 
 func (a *App) sweepExpiredSessions() {
-	interval := a.cfg.sessionTTL / 2
-	if interval <= 0 {
-		interval = time.Millisecond
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-a.stopSweep:
-			return
-		case <-ticker.C:
-			a.removeExpiredSessions()
-		}
-	}
+	a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 }
 
 func (a *App) removeExpiredSessions() {

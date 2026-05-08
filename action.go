@@ -4,7 +4,14 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 )
+
+// methodNameCache memoises MethodName results by trampoline PC so the
+// reflect-light parse (runtime.FuncForPC, two string scans) only runs the
+// first time we see a given bound method. PC is stable per (type, method)
+// pair, so the cache is safe across compositions.
+var methodNameCache sync.Map // map[uintptr]string
 
 // MethodName resolves a bound method value (like `c.Inc`) to its method
 // name. Method values in Go are closures; runtime.FuncForPC on the value's
@@ -19,17 +26,22 @@ func MethodName(fn any) string {
 	if !v.IsValid() || v.Kind() != reflect.Func {
 		return ""
 	}
-	pc := runtime.FuncForPC(v.Pointer())
-	if pc == nil {
+	pc := v.Pointer()
+	if cached, ok := methodNameCache.Load(pc); ok {
+		return cached.(string)
+	}
+	fnPC := runtime.FuncForPC(pc)
+	if fnPC == nil {
 		return ""
 	}
-	full := pc.Name()
+	full := fnPC.Name()
 	// Trim trailing "-fm" (Go's bound-method suffix).
 	full = strings.TrimSuffix(full, "-fm")
 	// Last dot separates receiver/package from method name.
 	if i := strings.LastIndex(full, "."); i >= 0 {
-		return full[i+1:]
+		full = full[i+1:]
 	}
+	methodNameCache.Store(pc, full)
 	return full
 }
 

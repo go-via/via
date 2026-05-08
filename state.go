@@ -1,7 +1,9 @@
 package via
 
 import (
+	"encoding/json"
 	"reflect"
+	"strconv"
 
 	"github.com/go-via/via/h"
 )
@@ -12,18 +14,24 @@ import (
 // For session-scoped or app-scoped state use scope.User[T] / scope.App[T].
 //
 //	type Counter struct {
-//	    Hits via.State[int]
+//	    Hits   via.State[int]
+//	    Filter via.State[string] `via:"filter,init=all"`
 //	}
-//	c.Hits.Get(ctx); c.Hits.Set(ctx, c.Hits.Get(ctx)+1)
+//	c.Hits.Get(ctx)        // returns int
+//	c.Hits.Set(ctx, 0)     // direct write
+//	via.Add(ctx, &c.Hits, 1) // numeric delta via Mutable[T]
+//
+// The optional `via:"name,init=value"` tag mirrors Signal[T]: either part
+// is optional, and init=… is decoded into the field at bind time.
 type State[T any] struct {
-	val  T
-	slot uint16
-	key  string
+	val T
+	key string
 }
 
-// Get returns the current value.
-func (s *State[T]) Get(ctx *Ctx) T {
-	_ = ctx
+// Get returns the current value. The ctx is unused today but kept so
+// State[T] mirrors Signal[T]'s shape (and so future tab-scoped reads
+// can move into the runtime without an API break).
+func (s *State[T]) Get(_ *Ctx) T {
 	return s.val
 }
 
@@ -62,8 +70,11 @@ func (s *State[T]) Text() h.H {
 // Key returns the local key. Useful in tests.
 func (s *State[T]) Key() string { return s.key }
 
-func (s *State[T]) bindSlot(slot uint16, key string) {
-	s.slot = slot
+func (s *State[T]) bindSlot(_ uint16, key string) {
+	// State doesn't carry a per-slot dirty bit (it uses Ctx.stateDirty)
+	// so the slot index is intentionally discarded; the bindSlot
+	// signature is fixed by the signalRef interface that Signal[T] also
+	// implements.
 	s.key = key
 }
 
@@ -87,12 +98,12 @@ func scalarString(v reflect.Value) string {
 		}
 		return "false"
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconvAppendInt(v.Int())
+		return strconv.FormatInt(v.Int(), 10)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return strconvAppendUint(v.Uint())
+		return strconv.FormatUint(v.Uint(), 10)
 	case reflect.Float32, reflect.Float64:
-		return strconvAppendFloat(v.Float())
+		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
 	}
-	b, _ := jsonMarshal(v.Interface())
+	b, _ := json.Marshal(v.Interface())
 	return string(b)
 }

@@ -18,10 +18,10 @@ type Counter struct {
 }
 
 // Action methods drop the error return when nothing in the body can
-// fail meaningfully — Update + Set don't surface errors.
+// fail meaningfully — via.Add / Set don't surface errors.
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-	c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
+	via.Add(ctx, &c.Hits, c.Step.Get(ctx))
 }
 
 func (c *Counter) Reset(ctx *via.Ctx) {

@@ -95,3 +95,13 @@ func TestMount_panicsWhenPathTagHasNoMatchingSegment(t *testing.T) {
 		via.Mount[missingParamPage](app, "/no-id-segment")
 	})
 }
+
+func TestMount_panicsWhenCisNotAStruct(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	assert.PanicsWithValue(t,
+		"via.Mount: C must be a struct, got int (kind: int)",
+		func() { via.Mount[int](app, "/") },
+		"non-struct type at C must surface a precise panic listing the offending type")
+}

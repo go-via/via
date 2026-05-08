@@ -19,7 +19,7 @@ type CounterCard struct {
 }
 
 func (c *CounterCard) Inc(ctx *via.Ctx) {
-	c.Count.Set(ctx, c.Count.Get(ctx)+c.Step.Get(ctx))
+	via.Add(ctx, &c.Count, c.Step.Get(ctx))
 }
 
 // View takes the click attribute as a parameter so the parent can decide

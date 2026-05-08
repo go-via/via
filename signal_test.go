@@ -65,6 +65,120 @@ func TestSignal_textRendersDataTextSpan(t *testing.T) {
 	assert.Contains(t, body, `data-text="$step"`)
 }
 
+type togglePage struct {
+	Open via.Signal[bool] `via:"open"`
+}
+
+func (p *togglePage) Flip(ctx *via.Ctx) error {
+	via.Toggle(ctx, &p.Open)
+	return nil
+}
+
+func (p *togglePage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestToggle_flipsBoolSignalAndMarksDirty(t *testing.T) {
+	t.Parallel()
+
+	page := &togglePage{}
+	c := via.NewBoundCtx(page)
+
+	require.False(t, page.Open.Get(c))
+	via.Toggle(c, &page.Open)
+	assert.True(t, page.Open.Get(c), "Toggle must flip false → true")
+	via.Toggle(c, &page.Open)
+	assert.False(t, page.Open.Get(c), "Toggle must flip back true → false")
+}
+
+func TestToggle_nilSignalIsNoOp(t *testing.T) {
+	t.Parallel()
+	assert.NotPanics(t, func() {
+		via.Toggle(via.NewBoundCtx(&togglePage{}), nil)
+	})
+}
+
+type adderPage struct {
+	Count via.Signal[int] `via:"count,init=10"`
+	Bal   via.Signal[float64]
+}
+
+func (p *adderPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
+	t.Parallel()
+
+	page := &adderPage{}
+	c := via.NewBoundCtx(page)
+
+	via.Add(c, &page.Count, 3)
+	assert.Equal(t, 13, page.Count.Get(c))
+	via.Add(c, &page.Count, -5)
+	assert.Equal(t, 8, page.Count.Get(c), "negative delta = decrement")
+}
+
+func TestAdd_floatSignalRespectsType(t *testing.T) {
+	t.Parallel()
+
+	page := &adderPage{}
+	c := via.NewBoundCtx(page)
+
+	via.Add(c, &page.Bal, 0.5)
+	via.Add(c, &page.Bal, 0.25)
+	assert.InDelta(t, 0.75, page.Bal.Get(c), 1e-9)
+}
+
+type stateAdderPage struct {
+	Hits via.State[int]
+	Open via.State[bool]
+}
+
+func (p *stateAdderPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
+	t.Parallel()
+
+	page := &stateAdderPage{}
+	c := via.NewBoundCtx(page)
+
+	// Same helper, different storage flavor — Mutable[T] makes them
+	// interchangeable for read/modify/write helpers.
+	via.Add(c, &page.Hits, 7)
+	via.Add(c, &page.Hits, -2)
+	assert.Equal(t, 5, page.Hits.Get(c))
+}
+
+func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
+	t.Parallel()
+
+	page := &stateAdderPage{}
+	c := via.NewBoundCtx(page)
+
+	via.Toggle(c, &page.Open)
+	assert.True(t, page.Open.Get(c))
+	via.Toggle(c, &page.Open)
+	assert.False(t, page.Open.Get(c))
+}
+
+type signalShowPage struct {
+	Open via.Signal[bool] `via:"open"`
+}
+
+func (p *signalShowPage) View(ctx *via.Ctx) h.H {
+	return h.Div(p.Open.Show(), h.Text("hello"))
+}
+
+func TestSignal_showRendersDataShowExpression(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalShowPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-show="$open"`,
+		"Show should produce data-show=$<key>")
+}
+
 type fieldNameKey struct {
 	MyField via.Signal[int]
 }

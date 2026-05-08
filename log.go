@@ -6,11 +6,10 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
-
-func timeNow() time.Time            { return time.Now() }
-func timeSince(t time.Time) string  { return time.Since(t).String() }
 
 // Logger receives log records produced by the via runtime. Implementations
 // are free to forward to any logger of their choice — slog, zap, zerolog,
@@ -72,9 +71,7 @@ func RequestIDFrom(r *http.Request) string {
 //	via.Defaults(app)
 //	via.Mount[Counter](app, "/")
 func Defaults(a *App) {
-	a.Use(RequestID())
-	a.Use(AccessLog(a))
-	a.Use(Recover(a))
+	a.Use(RequestID(), AccessLog(a), Recover(a))
 }
 
 // RedirectHTTPS returns a Middleware that 301-redirects plain HTTP to
@@ -120,7 +117,7 @@ func HSTS(opts ...HSTSOption) Middleware {
 	for _, o := range opts {
 		o(&cfg)
 	}
-	header := "max-age=" + itoa(cfg.maxAge)
+	header := "max-age=" + strconv.Itoa(cfg.maxAge)
 	if cfg.includeSubdomains {
 		header += "; includeSubDomains"
 	}
@@ -159,29 +156,6 @@ func HSTSPreload(on bool) HSTSOption {
 	return func(c *hstsConfig) { c.preload = on }
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var b [20]byte
-	pos := len(b)
-	for n > 0 {
-		pos--
-		b[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		pos--
-		b[pos] = '-'
-	}
-	return string(b[pos:])
-}
-
 // Recover returns a Middleware that catches panics in downstream
 // handlers, logs the recovered value through the App's logger, and
 // writes a 500 response so the goroutine doesn't crash the server.
@@ -199,7 +173,7 @@ func Recover(a *App) Middleware {
 			if rec := recover(); rec != nil {
 				a.logErr(nil, "panic in handler %s %s: %v", r.Method, r.URL.Path, rec)
 				// If the handler already wrote headers, http.Error
-				// will be a noop. Either way the goroutine survives.
+				// will be a no-op. Either way the goroutine survives.
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
@@ -217,24 +191,24 @@ func Recover(a *App) Middleware {
 // the handler never calls WriteHeader.
 func AccessLog(a *App) Middleware {
 	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-		start := timeNow()
+		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
+		dur := time.Since(start)
 		if rid := RequestIDFrom(r); rid != "" {
 			a.logInfo(nil, "%s %s status=%d duration=%s rid=%s",
-				r.Method, r.URL.Path, sw.status, timeSince(start), rid)
+				r.Method, r.URL.Path, sw.status, dur, rid)
 		} else {
 			a.logInfo(nil, "%s %s status=%d duration=%s",
-				r.Method, r.URL.Path, sw.status, timeSince(start))
+				r.Method, r.URL.Path, sw.status, dur)
 		}
 	}
 }
 
 type statusWriter struct {
 	http.ResponseWriter
-	status   int
-	written  bool
-	hijacked bool
+	status  int
+	written bool
 }
 
 func (s *statusWriter) WriteHeader(code int) {
@@ -286,19 +260,30 @@ func Log(ctx *Ctx) Logger {
 		if level < app.cfg.logLevel {
 			return
 		}
-		// Prepend correlation pairs so they're stable in slog handlers
-		// that rely on attribute order.
-		head := make([]any, 0, 4)
+		// Prepend correlation pairs in one allocation. The previous
+		// implementation made a 4-cap head slice unconditionally, then
+		// appended kv into it (a second alloc whenever both correlation
+		// pairs were present). Sizing the slice exactly avoids both.
+		extra := 0
 		if tab != "" {
-			head = append(head, "via_tab", tab)
+			extra += 2
 		}
 		if rid != "" {
-			head = append(head, "rid", rid)
+			extra += 2
 		}
-		if len(head) > 0 {
-			kv = append(head, kv...)
+		if extra == 0 {
+			base.Log(level, msg, kv...)
+			return
 		}
-		base.Log(level, msg, kv...)
+		full := make([]any, 0, extra+len(kv))
+		if tab != "" {
+			full = append(full, tabSignalKey, tab)
+		}
+		if rid != "" {
+			full = append(full, "rid", rid)
+		}
+		full = append(full, kv...)
+		base.Log(level, msg, full...)
 	})
 }
 
@@ -356,16 +341,16 @@ func (defaultLogger) Log(level LogLevel, msg string, kv ...any) {
 		log.Printf("[%s] %s", levelTag(level), msg)
 		return
 	}
-	var sb fmtBuf
-	sb.WriteString("[")
+	var sb strings.Builder
+	sb.WriteByte('[')
 	sb.WriteString(levelTag(level))
 	sb.WriteString("] ")
 	sb.WriteString(msg)
 	for i := 0; i+1 < len(kv); i += 2 {
 		k, _ := kv[i].(string)
-		sb.WriteString(" ")
+		sb.WriteByte(' ')
 		sb.WriteString(k)
-		sb.WriteString("=")
+		sb.WriteByte('=')
 		fmt.Fprintf(&sb, "%v", kv[i+1])
 	}
 	log.Print(sb.String())
@@ -385,10 +370,3 @@ func levelTag(l LogLevel) string {
 	return "info"
 }
 
-// fmtBuf is a tiny buffer that satisfies io.Writer for fmt.Fprintf without
-// pulling bytes.Buffer into log.go's import set.
-type fmtBuf struct{ b []byte }
-
-func (s *fmtBuf) Write(p []byte) (int, error) { s.b = append(s.b, p...); return len(p), nil }
-func (s *fmtBuf) WriteString(p string)        { s.b = append(s.b, p...) }
-func (s *fmtBuf) String() string              { return string(s.b) }

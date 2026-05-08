@@ -1,6 +1,7 @@
 package echarts
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -47,18 +48,13 @@ type chartOptions struct {
 	version string
 }
 
-// PluginOption configures the Echarts plugin.
-type PluginOption interface {
-	apply(*plugin)
-}
-
-type pluginOptionFunc func(*plugin)
-
-func (f pluginOptionFunc) apply(p *plugin) { f(p) }
+// PluginOption configures the Echarts plugin. Each option mutates the
+// plugin in place; Plugin applies them in argument order.
+type PluginOption func(*plugin)
 
 // WithVersion sets the ECharts CDN version.
 func WithVersion(version string) PluginOption {
-	return pluginOptionFunc(func(p *plugin) { p.opts.version = version })
+	return func(p *plugin) { p.opts.version = version }
 }
 
 // chartCounter provides deterministic, unique IDs across chart instances.
@@ -80,49 +76,44 @@ type Chart struct {
 	updateDurationMs int          // animationDurationUpdate override; 0 = use default (950)
 }
 
-// ChartOption configures a Chart.
-type ChartOption interface {
-	apply(*Chart)
-}
-
-type chartOptionFunc func(*Chart)
-
-func (f chartOptionFunc) apply(c *Chart) { f(c) }
+// ChartOption configures a Chart. Each option mutates the chart in place;
+// NewChart applies them in argument order.
+type ChartOption func(*Chart)
 
 // WithElementID sets the element ID for the chart container.
 func WithElementID(id string) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.elementID = id })
+	return func(c *Chart) { c.elementID = id }
 }
 
 // WithChartType sets the chart type.
 func WithChartType(t ChartType) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.chartType = t })
+	return func(c *Chart) { c.chartType = t }
 }
 
 // WithData sets initial data for the chart.
 func WithData(data [][]any) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.data = data })
+	return func(c *Chart) { c.data = data }
 }
 
 // WithVarName sets a custom JavaScript variable name.
 // This is useful when you need to reference the chart instance externally.
 func WithVarName(name string) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.varName = name })
+	return func(c *Chart) { c.varName = name }
 }
 
 // WithTitle sets the chart title.
 func WithTitle(title string) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.title = title })
+	return func(c *Chart) { c.title = title }
 }
 
 // WithXAxisLabel sets the x-axis label.
 func WithXAxisLabel(label string) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.xAxisLabel = label })
+	return func(c *Chart) { c.xAxisLabel = label }
 }
 
 // WithYAxisLabel sets the y-axis label.
 func WithYAxisLabel(label string) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.yAxisLabel = label })
+	return func(c *Chart) { c.yAxisLabel = label }
 }
 
 // WithAnimationDuration sets animationDurationUpdate in milliseconds.
@@ -130,21 +121,21 @@ func WithYAxisLabel(label string) ChartOption {
 // small numbers of points where ECharts can meaningfully interpolate between frames.
 // Defaults to 0 (no animation).
 func WithAnimationDuration(ms int) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.updateDurationMs = ms })
+	return func(c *Chart) { c.updateDurationMs = ms }
 }
 
 // WithDimensions sets container width and height.
 // Example: WithDimensions("100%", "400px")
 func WithDimensions(width, height string) ChartOption {
-	return chartOptionFunc(func(c *Chart) {
+	return func(c *Chart) {
 		c.width = width
 		c.height = height
-	})
+	}
 }
 
 // WithThemeOverride overrides the default theme for this specific chart.
 func WithThemeOverride(theme EChartsTheme) ChartOption {
-	return chartOptionFunc(func(c *Chart) { c.theme = theme })
+	return func(c *Chart) { c.theme = theme }
 }
 
 // NewChart creates a new Chart with options.
@@ -153,7 +144,7 @@ func NewChart(opts ...ChartOption) *Chart {
 	c := &Chart{}
 	c.seq = chartCounter.Add(1)
 	for _, opt := range opts {
-		opt.apply(c)
+		opt(c)
 	}
 	if c.elementID == "" {
 		c.elementID = fmt.Sprintf("echart-%d", c.seq)
@@ -181,12 +172,8 @@ func themeColors(theme EChartsTheme) (string, string, string) {
 // InitJS returns JavaScript to initialize the chart on page load.
 // It creates the echarts instance and sets initial options.
 func (c *Chart) InitJS() string {
-	theme := "light"
-	if c.theme != "" {
-		theme = string(c.theme)
-	}
-
-	textColor, labelColor, lineColor := themeColors(EChartsTheme(theme))
+	theme := cmp.Or(c.theme, ThemeLight)
+	textColor, labelColor, lineColor := themeColors(theme)
 
 	varName := c.getVarName()
 	updateDuration := c.updateDurationMs
@@ -261,7 +248,7 @@ func (c *Chart) AppendDataBatch(ctx *via.Ctx, batches ...[][]any) {
 		sb.WriteString(mustJSON(data))
 		sb.WriteString("});")
 	}
-	sb.WriteString("}")
+	sb.WriteByte('}')
 	ctx.ExecScript(sb.String())
 }
 
@@ -319,14 +306,8 @@ func (c *Chart) Mount() h.H {
 		h.ID(c.elementID),
 		h.DataIgnoreMorph(),
 	}
-	width := c.width
-	if width == "" {
-		width = "100%"
-	}
-	height := c.height
-	if height == "" {
-		height = "300px"
-	}
+	width := cmp.Or(c.width, "100%")
+	height := cmp.Or(c.height, "300px")
 	children = append(children, h.Style(fmt.Sprintf("width:%s;height:%s", width, height)))
 	children = append(children, h.Script(h.Raw(c.InitJS())))
 	return h.Div(children...)
@@ -341,7 +322,7 @@ func Plugin(opts ...PluginOption) via.Plugin {
 		},
 	}
 	for _, opt := range opts {
-		opt.apply(p)
+		opt(p)
 	}
 	return p
 }

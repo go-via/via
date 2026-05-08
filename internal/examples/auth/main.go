@@ -185,8 +185,10 @@ func shell(ctx *via.Ctx, _ string, content h.H) h.H {
 		h.Nav(h.Class("container"),
 			h.Ul(h.Li(h.A(h.Href("/"), h.Strong(h.Text("⚡ Via Auth"))))),
 			h.Ul(
-				h.If(loggedIn, h.Li(h.A(h.Href("/profile"), h.Text("Profile")))),
-				h.If(!loggedIn, h.Li(h.A(h.Href("/login"), h.Text("Login")))),
+				h.IfElse(loggedIn,
+					h.Li(h.A(h.Href("/profile"), h.Text("Profile"))),
+					h.Li(h.A(h.Href("/login"), h.Text("Login"))),
+				),
 				h.If(!loggedIn, h.Li(h.A(h.Href("/register"), h.Role("button"), h.Text("Register")))),
 			),
 		),

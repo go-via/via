@@ -7,6 +7,7 @@ package main
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/go-via/via"
@@ -23,7 +24,7 @@ type Item struct {
 
 type Todos struct {
 	Draft  via.Signal[string] `via:"draft"`
-	Filter via.Signal[string] `via:"filter,init=all"`
+	Filter via.State[string]  `via:"filter,init=all"`
 	Index  via.Signal[int]    `via:"index"`
 	Items  scope.User[[]Item]
 }
@@ -42,7 +43,7 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 
 func (t *Todos) Toggle(ctx *via.Ctx) error {
 	idx := t.Index.Get(ctx)
-	items := append([]Item(nil), t.Items.Get(ctx)...)
+	items := slices.Clone(t.Items.Get(ctx))
 	if idx < 0 || idx >= len(items) {
 		return nil
 	}
@@ -100,12 +101,12 @@ func (t *Todos) View(ctx *via.Ctx) h.H {
 				h.Button(h.Text("Add"), on.Click(t.Add)),
 			),
 
-			// Filter row — three buttons that set the filter signal
+			// Filter row — three buttons that set the filter state
 			// and re-render via the same render path.
 			h.Div(h.Style("display:flex;gap:0.5rem;margin:1rem 0"),
-				filterButton(t, "all", filter),
-				filterButton(t, "active", filter),
-				filterButton(t, "done", filter),
+				filterButton("all", filter, t.FilterAll),
+				filterButton("active", filter, t.FilterActive),
+				filterButton("done", filter, t.FilterDone),
 				h.Span(h.Style("margin-left:auto"),
 					h.Textf("%d remaining", pendingCount)),
 			),
@@ -147,17 +148,17 @@ func (t *Todos) View(ctx *via.Ctx) h.H {
 
 // filterButton renders one of the three filter pills. Active pill is
 // styled with the standard button look; others get the outline class.
-func filterButton(t *Todos, name, current string) h.H {
+func filterButton(name, current string, action via.ActionFn) h.H {
 	return h.Button(
 		h.Class(h.IfStr(name != current, "outline secondary")),
 		h.Text(strings.Title(name)),
-		on.Click(t.SetFilter, on.SetSignal(&t.Filter, name)),
+		on.Click(action),
 	)
 }
 
-// SetFilter is a no-op action whose only purpose is to land a signal
-// write through on.SetSignal — the re-render does the rest.
-func (t *Todos) SetFilter(ctx *via.Ctx) error { return nil }
+func (t *Todos) FilterAll(ctx *via.Ctx) error    { t.Filter.Set(ctx, "all"); return nil }
+func (t *Todos) FilterActive(ctx *via.Ctx) error { t.Filter.Set(ctx, "active"); return nil }
+func (t *Todos) FilterDone(ctx *via.Ctx) error   { t.Filter.Set(ctx, "done"); return nil }
 
 // boolAttr renders the named attribute only when the flag is true.
 // Useful for the "checked" attribute and similar boolean-only attrs

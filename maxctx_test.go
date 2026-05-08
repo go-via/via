@@ -26,7 +26,7 @@ func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 	via.Mount[maxCtxPage](app, "/")
 	defer server.Close()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		resp, err := http.Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
@@ -68,7 +68,7 @@ func TestMaxContexts_zeroDisablesTheCap(t *testing.T) {
 	via.Mount[maxCtxPage](app, "/")
 	defer server.Close()
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		resp, err := http.Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()

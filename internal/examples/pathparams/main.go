@@ -29,7 +29,7 @@ func (c *CounterPage) Init(ctx *via.Ctx) error {
 }
 
 func (c *CounterPage) Increment(ctx *via.Ctx) error {
-	c.Count.Set(ctx, c.Count.Get(ctx)+c.Step.Get(ctx))
+	via.Add(ctx, &c.Count, c.Step.Get(ctx))
 	return nil
 }
 

@@ -1,7 +1,8 @@
 package h
 
 import (
-	"fmt"
+	"slices"
+	"strings"
 
 	gh "maragu.dev/gomponents/html"
 )
@@ -48,46 +49,37 @@ func Class(v string) H {
 //
 //	h.Classes("btn", h.IfStr(active, "btn-primary"), "lg")
 func Classes(parts ...string) H {
-	out := make([]byte, 0, 32)
-	first := true
+	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if p == "" {
-			continue
+		if p != "" {
+			out = append(out, p)
 		}
-		if !first {
-			out = append(out, ' ')
-		}
-		out = append(out, p...)
-		first = false
 	}
 	if len(out) == 0 {
 		return nil
 	}
-	return gh.Class(string(out))
+	return gh.Class(strings.Join(out, " "))
 }
 
 // ClassMap renders a class attribute that includes each key whose value
-// is true. Order follows the iteration order of the map.
+// is true. Keys are emitted in sorted order so the output is stable
+// across renders — handy for snapshot tests and browser caching.
 func ClassMap(m map[string]bool) H {
 	if len(m) == 0 {
 		return nil
 	}
-	out := make([]byte, 0, 32)
-	first := true
+	keys := make([]string, 0, len(m))
 	for k, v := range m {
 		if !v || k == "" {
 			continue
 		}
-		if !first {
-			out = append(out, ' ')
-		}
-		out = append(out, k...)
-		first = false
+		keys = append(keys, k)
 	}
-	if len(out) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
-	return gh.Class(string(out))
+	slices.Sort(keys)
+	return gh.Class(strings.Join(keys, " "))
 }
 
 // IfStr returns s if cond is true, "" otherwise. Pairs with Classes /
@@ -122,7 +114,7 @@ func Data(name, v string) H {
 
 // DataF creates a data attribute with fmt.Sprintf formatting.
 func DataF(name, format string, args ...any) H {
-	return gh.Data(name, fmt.Sprintf(format, args...))
+	return gh.Data(name, expr(format, args))
 }
 
 func For(v string) H {

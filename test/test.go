@@ -2,23 +2,25 @@
 // drive a Composition by HTTP without parsing HTML, by name-addressing
 // actions and signals through the descriptor.
 //
-//	app := via.New()
+//	var srv *httptest.Server
+//	app := via.New(via.WithTestServer(&srv))
 //	via.Mount[Counter](app, "/")
-//	tc := test.NewClient(t, app, "/")
-//	tc.Action("Inc").Fire()
-//	tc.Signal("step").Set(3)
-//	require.Equal(t, "3", tc.Text())   // last rendered fragment innerText
+//	tc := test.NewClient(t, srv, "/")
+//	tc.Action(p.Inc).WithSignal("step", 3).Fire()
+//	require.Contains(t, tc.Reload(), ">3<")
 package test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -49,6 +51,7 @@ type Client struct {
 	t        testing.TB
 	server   *httptest.Server
 	tabID    string
+	path     string // captured at NewClient so Reload can re-fetch
 	jar      http.CookieJar
 	httpc    *http.Client
 	mu       sync.Mutex
@@ -71,7 +74,7 @@ func NewClient(t testing.TB, server *httptest.Server, path string) *Client {
 	if tab == "" {
 		t.Fatalf("test.NewClient: no tab id in body of %s", path)
 	}
-	return &Client{t: t, server: server, tabID: tab, jar: jar, httpc: httpc, lastBody: string(body)}
+	return &Client{t: t, server: server, tabID: tab, path: path, jar: jar, httpc: httpc, lastBody: string(body)}
 }
 
 // TabID returns the active tab id.
@@ -84,8 +87,44 @@ func (c *Client) HTML() string {
 	return c.lastBody
 }
 
-// Action returns a handle that fires the named action.
-func (c *Client) Action(name string) *ActionCall {
+// Reload re-fetches the currently mounted page, refreshes lastBody, and
+// returns the new HTML. Use after firing actions to assert on the
+// re-rendered body — server-side state changes only show up in HTML on
+// a fresh GET (or via the SSE stream, but that's heavier to wire up).
+//
+//	tc.Action("Bump").Fire()
+//	body := tc.Reload()
+//	assert.Contains(t, body, ">3<")
+//
+// Note: Reload assigns a *new* tab id (each GET registers a fresh Ctx).
+// If you need to assert against the original tab, capture HTML() first.
+func (c *Client) Reload() string {
+	c.t.Helper()
+	resp, err := c.httpc.Get(c.server.URL + c.path)
+	if err != nil {
+		c.t.Fatalf("test.Client.Reload: GET %s: %v", c.path, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	c.mu.Lock()
+	c.lastBody = string(body)
+	c.tabID = tabIDFrom(c.lastBody)
+	c.mu.Unlock()
+	return c.lastBody
+}
+
+// Action returns a handle that fires an action. The target may be either
+// the action's name as a string, or a bound method value resolved via
+// via.MethodName — the typed form gives the test compile-time protection
+// against typos:
+//
+//	tc.Action("Bump").Fire()         // string form
+//	tc.Action(p.Bump).Fire()         // typed form (preferred)
+func (c *Client) Action(target any) *ActionCall {
+	name, ok := target.(string)
+	if !ok {
+		name = via.MethodName(target)
+	}
 	return &ActionCall{client: c, name: name}
 }
 
@@ -109,14 +148,12 @@ func (a *ActionCall) WithSignal(name string, value any) *ActionCall {
 func (a *ActionCall) Fire() int {
 	a.client.t.Helper()
 	body := map[string]any{"via_tab": a.client.tabID}
-	for k, v := range a.signals {
-		body[k] = v
-	}
+	maps.Copy(body, a.signals)
 	buf, _ := json.Marshal(body)
 	resp, err := a.client.httpc.Post(
 		a.client.server.URL+"/_action/"+a.name,
 		"application/json",
-		strings.NewReader(string(buf)),
+		bytes.NewReader(buf),
 	)
 	if err != nil {
 		a.client.t.Fatalf("test.Action(%s).Fire: %v", a.name, err)
@@ -125,34 +162,12 @@ func (a *ActionCall) Fire() int {
 	return resp.StatusCode
 }
 
-// Signal returns a handle that sets the named signal via an action POST.
-type SignalRef struct {
-	client *Client
-	name   string
-}
-
-// Signal returns a handle for the named server-side signal.
-func (c *Client) Signal(name string) *SignalRef {
-	return &SignalRef{client: c, name: name}
-}
-
-// Set fires an empty action that updates the signal value. Useful only when
-// an action exists that consumes the signal; otherwise call Action(...).
-func (s *SignalRef) Set(v any) {
-	s.client.t.Helper()
-	body, _ := json.Marshal(map[string]any{
-		"via_tab": s.client.tabID,
-		s.name:    v,
-	})
-	resp, err := s.client.httpc.Post(
-		s.client.server.URL+"/_action/__signal_set__",
-		"application/json",
-		strings.NewReader(string(body)),
-	)
-	if err == nil {
-		resp.Body.Close()
-	}
-}
+// SignalRef and Client.Signal were removed: they posted to a fake
+// /_action/__signal_set__ that always 404'd, which meant Set never
+// actually wrote anything. The supported pattern is to fire an action
+// that consumes the signal:
+//
+//	tc.Action(p.Update).WithSignal("step", 3).Fire()
 
 // SSE opens an SSE stream and returns a cancel func and a channel of frames.
 // Use only when you must observe live patch frames.
@@ -203,8 +218,5 @@ func tabIDFrom(html string) string {
 
 func sseQueryParam(tabID string) string {
 	body, _ := json.Marshal(map[string]any{"via_tab": tabID})
-	return strings.NewReplacer(
-		"\"", "%22", "{", "%7B", "}", "%7D",
-		":", "%3A", ",", "%2C", "/", "%2F",
-	).Replace(string(body))
+	return url.QueryEscape(string(body))
 }

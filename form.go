@@ -1,7 +1,6 @@
 package via
 
 import (
-	"net/url"
 	"reflect"
 	"strconv"
 )
@@ -40,6 +39,15 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 	}
 
 	signals := ctx.lastSignals
+	// Hoist the query parse and PostForm population once per call —
+	// r.URL.Query() reparses the raw query string on every invocation.
+	var query map[string][]string
+	if r != nil {
+		query = r.URL.Query()
+		if r.PostForm == nil {
+			_ = r.ParseForm()
+		}
+	}
 	getValue := func(key string) (string, bool) {
 		if signals != nil {
 			if v, ok := signals[key]; ok {
@@ -47,11 +55,8 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 			}
 		}
 		if r != nil {
-			if v := r.URL.Query().Get(key); v != "" {
-				return v, true
-			}
-			if r.PostForm == nil {
-				_ = r.ParseForm()
+			if vs := query[key]; len(vs) > 0 && vs[0] != "" {
+				return vs[0], true
 			}
 			if v := r.PostFormValue(key); v != "" {
 				return v, true
@@ -60,7 +65,7 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 		return "", false
 	}
 
-	for i := 0; i < rt.NumField(); i++ {
+	for i := range rt.NumField() {
 		f := rt.Field(i)
 		if !f.IsExported() {
 			continue
@@ -76,20 +81,6 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 		decodeFormField(rv.Field(i), f.Type.Kind(), raw)
 	}
 	return nil
-}
-
-func lowerFirst(s string) string {
-	if s == "" {
-		return s
-	}
-	return string(toLower(s[0])) + s[1:]
-}
-
-func toLower(b byte) byte {
-	if b >= 'A' && b <= 'Z' {
-		return b + ('a' - 'A')
-	}
-	return b
 }
 
 func formatScalar(v any) string {
@@ -132,5 +123,4 @@ func decodeFormField(v reflect.Value, kind reflect.Kind, raw string) {
 			v.SetBool(b)
 		}
 	}
-	_ = url.Values{} // keep url imported for future multi-form handling
 }

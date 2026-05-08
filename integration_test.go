@@ -40,12 +40,12 @@ func (p *kitchenSinkPage) View(ctx *via.Ctx) h.H {
 func TestIntegration_fullProductionStack(t *testing.T) {
 	t.Parallel()
 
-	cap := newCaptureLogger()
+	logger := newCaptureLogger()
 
 	var server *httptest.Server
 	app := via.New(
 		via.WithTestServer(&server),
-		via.WithLogger(cap),
+		via.WithLogger(logger),
 		via.WithLogLevel(via.LogInfo),
 		via.WithTitle("KS"),
 		via.WithLang("en"),
@@ -77,7 +77,7 @@ func TestIntegration_fullProductionStack(t *testing.T) {
 
 	// AccessLog records both the page render and the action POST,
 	// each with a rid.
-	logs := cap.snapshot()
+	logs := logger.snapshot()
 	pageHits, actionHits := 0, 0
 	for _, r := range logs {
 		if strings.Contains(r.msg, "GET /page") {

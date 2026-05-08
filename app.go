@@ -1,15 +1,19 @@
 package via
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -30,16 +34,17 @@ var datastarJS []byte
 //	parent := http.NewServeMux()
 //	parent.Handle("/", app)
 type App struct {
-	cfg     config
-	mux     *http.ServeMux
-	handler http.Handler
-	server  *http.Server
+	cfg         config
+	mux         *http.ServeMux
+	handler     http.Handler
+	server      *http.Server
+	cachedChain atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.mux), rebuilt on Use
 
-	descs        []*cmpDescriptor
-	descsMu      sync.RWMutex
-	routes       map[string]string // method-and-pattern → registrar tag
-	routesMu     sync.Mutex
-	serverMu     sync.Mutex // guards a.server while Start binds and Shutdown reads
+	descs    []*cmpDescriptor
+	descsMu  sync.RWMutex
+	routes   map[string]string // method-and-pattern → registrar tag
+	routesMu sync.Mutex
+	serverMu sync.Mutex // guards a.server while Start binds and Shutdown reads
 
 	// appSignals holds plugin-registered, app-wide initial signal values.
 	// They are injected into <meta data-signals> on every page render but
@@ -74,33 +79,55 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // AppendToHead adds nodes to the <head> of every rendered page.
 func (a *App) AppendToHead(elements ...h.H) {
-	for _, el := range elements {
-		if el != nil {
-			a.documentHeadIncludes = append(a.documentHeadIncludes, el)
-		}
-	}
+	a.documentHeadIncludes = appendNonNil(a.documentHeadIncludes, elements)
 }
 
 // AppendToFoot adds nodes to the end of <body> on every rendered page.
 func (a *App) AppendToFoot(elements ...h.H) {
-	for _, el := range elements {
-		if el != nil {
-			a.documentFootIncludes = append(a.documentFootIncludes, el)
-		}
-	}
+	a.documentFootIncludes = appendNonNil(a.documentFootIncludes, elements)
 }
 
 // AppendAttrToHTML adds attributes to the <html> element of every page.
 func (a *App) AppendAttrToHTML(attrs ...h.H) {
-	for _, attr := range attrs {
-		if attr != nil {
-			a.documentHTMLAttrs = append(a.documentHTMLAttrs, attr)
+	a.documentHTMLAttrs = appendNonNil(a.documentHTMLAttrs, attrs)
+}
+
+// appendNonNil appends every non-nil element from src onto dst. Used by
+// the document-mutation Append* helpers so they all share one nil-skip
+// loop.
+func appendNonNil(dst, src []h.H) []h.H {
+	for _, n := range src {
+		if n != nil {
+			dst = append(dst, n)
 		}
 	}
+	return dst
 }
 
 // Use installs middleware that wraps every via-served request.
-func (a *App) Use(mw ...Middleware) { a.middleware = append(a.middleware, mw...) }
+//
+// Call Use during boot, before the server begins handling requests.
+// The middleware slice is not guarded by a mutex; serving and
+// rebuildChain happen via atomic.Value so reads are safe, but two
+// concurrent Use calls would race on the underlying slice append.
+func (a *App) Use(mw ...Middleware) {
+	a.middleware = append(a.middleware, mw...)
+	a.rebuildChain()
+}
+
+// rebuildChain caches the post-middleware http.Handler used by every
+// request. Without this cache we'd rebuild the closure chain in
+// withSession on every request — N+1 allocations per hit, where N is
+// the number of installed middlewares.
+//
+// We wrap the result as *http.HandlerFunc so the atomic.Pointer stays
+// statically typed and the load site can deref-and-call without a
+// runtime type assertion.
+func (a *App) rebuildChain() {
+	chain := applyMiddleware(a.middleware, a.mux)
+	hf := http.HandlerFunc(chain.ServeHTTP)
+	a.cachedChain.Store(&hf)
+}
 
 // RegisterAppSignal sets the initial value of a named, app-wide signal.
 // Used by plugins to seed data-signals entries that the client owns
@@ -108,11 +135,8 @@ func (a *App) Use(mw ...Middleware) { a.middleware = append(a.middleware, mw...)
 // page's <meta data-signals> on render.
 func (a *App) RegisterAppSignal(key string, value any) {
 	a.appSignalsMu.Lock()
-	defer a.appSignalsMu.Unlock()
-	if a.appSignals == nil {
-		a.appSignals = map[string]any{}
-	}
 	a.appSignals[key] = value
+	a.appSignalsMu.Unlock()
 }
 
 // HandleFunc registers a non-via handler on the app's mux.
@@ -160,12 +184,7 @@ func (a *App) Broadcast(script string) int {
 	if script == "" {
 		return 0
 	}
-	a.contextRegistryMutex.RLock()
-	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
-	for _, c := range a.contextRegistry {
-		ctxs = append(ctxs, c)
-	}
-	a.contextRegistryMutex.RUnlock()
+	ctxs := a.snapshotContexts()
 	for _, c := range ctxs {
 		enqueueScript(c, script)
 	}
@@ -174,22 +193,31 @@ func (a *App) Broadcast(script string) int {
 
 // BroadcastSignals pushes a signal patch to every currently-live tab.
 // Useful for site-wide announcements that drive a banner via a
-// client-only signal (e.g. \"$_systemNotice = 'planned maintenance'\")
+// client-only signal (e.g. "$_systemNotice = 'planned maintenance'")
 // without rendering each composition. Returns the tab count.
 func (a *App) BroadcastSignals(values map[string]any) int {
 	if len(values) == 0 {
 		return 0
 	}
+	ctxs := a.snapshotContexts()
+	for _, c := range ctxs {
+		c.PatchSignals(values)
+	}
+	return len(ctxs)
+}
+
+// snapshotContexts copies every live *Ctx into a slice under the
+// registry RLock, so callers can iterate without holding the lock —
+// the per-Ctx work (enqueueScript, PatchSignals) takes its own locks
+// and we don't want the registry lock to gate that.
+func (a *App) snapshotContexts() []*Ctx {
 	a.contextRegistryMutex.RLock()
 	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
 	for _, c := range a.contextRegistry {
 		ctxs = append(ctxs, c)
 	}
 	a.contextRegistryMutex.RUnlock()
-	for _, c := range ctxs {
-		c.PatchSignals(values)
-	}
-	return len(ctxs)
+	return ctxs
 }
 
 // Compositions returns a sorted snapshot of the names of every typed
@@ -197,7 +225,7 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 // boot logging or status pages:
 //
 //	for _, c := range app.Compositions() {
-//	    log.Printf(\"mounted %-30s at %s\", c.Type, c.Route)
+//	    log.Printf("mounted %-30s at %s", c.Type, c.Route)
 //	}
 func (a *App) Compositions() []CompositionInfo {
 	a.descsMu.RLock()
@@ -209,11 +237,7 @@ func (a *App) Compositions() []CompositionInfo {
 		})
 	}
 	a.descsMu.RUnlock()
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1].Route > out[j].Route; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
+	slices.SortFunc(out, func(a, b CompositionInfo) int { return cmp.Compare(a.Route, b.Route) })
 	return out
 }
 
@@ -245,7 +269,7 @@ func (a *App) Routes() []RouteInfo {
 		out = append(out, RouteInfo{Pattern: pattern, RegisteredBy: tag})
 	}
 	a.routesMu.Unlock()
-	sortRoutes(out)
+	slices.SortFunc(out, func(a, b RouteInfo) int { return cmp.Compare(a.Pattern, b.Pattern) })
 	return out
 }
 
@@ -253,14 +277,6 @@ func (a *App) Routes() []RouteInfo {
 type RouteInfo struct {
 	Pattern      string // method-and-pattern, e.g. "GET /counter/{id}"
 	RegisteredBy string // who claimed it: "Mount[Counter]", "HandleFunc", …
-}
-
-func sortRoutes(routes []RouteInfo) {
-	for i := 1; i < len(routes); i++ {
-		for j := i; j > 0 && routes[j-1].Pattern > routes[j].Pattern; j-- {
-			routes[j-1], routes[j] = routes[j], routes[j-1]
-		}
-	}
 }
 
 // claimRoute records that pattern has been claimed by tag and panics if the
@@ -290,10 +306,10 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 	a.mux.Handle(pattern, applyMiddleware(d.groupMW, final))
 }
 
-func (a *App) registerCtx(id string, ctx *Ctx) {
+func (a *App) registerCtx(ctx *Ctx) {
 	a.contextRegistryMutex.Lock()
 	defer a.contextRegistryMutex.Unlock()
-	a.contextRegistry[id] = ctx
+	a.contextRegistry[ctx.id] = ctx
 }
 
 func (a *App) unregisterCtx(id string) {
@@ -302,13 +318,15 @@ func (a *App) unregisterCtx(id string) {
 	delete(a.contextRegistry, id)
 }
 
-func (a *App) getCtx(id string) (*Ctx, error) {
+// getCtx returns the live Ctx for id and ok=true; ok=false if the id is
+// unknown (a cleaned-up tab, a forged via_tab, or a stale reconnect after
+// disposal). Comma-ok shape so callers don't allocate an error wrapper
+// just to throw it away — every caller maps a miss to a 404 directly.
+func (a *App) getCtx(id string) (*Ctx, bool) {
 	a.contextRegistryMutex.RLock()
 	defer a.contextRegistryMutex.RUnlock()
-	if ctx, ok := a.contextRegistry[id]; ok {
-		return ctx, nil
-	}
-	return nil, fmt.Errorf("ctx %q not found", id)
+	ctx, ok := a.contextRegistry[id]
+	return ctx, ok
 }
 
 func (a *App) emit(level LogLevel, ctx *Ctx, format string, args ...any) {
@@ -324,16 +342,15 @@ func (a *App) emit(level LogLevel, ctx *Ctx, format string, args ...any) {
 		logger = defaultLogger{}
 	}
 	if ctx != nil {
-		logger.Log(level, msg, "via_tab", ctx.id)
+		logger.Log(level, msg, tabSignalKey, ctx.id)
 	} else {
 		logger.Log(level, msg)
 	}
 }
 
-func (a *App) logErr(ctx *Ctx, format string, args ...any)   { a.emit(LogError, ctx, format, args...) }
-func (a *App) logWarn(ctx *Ctx, format string, args ...any)  { a.emit(LogWarn, ctx, format, args...) }
-func (a *App) logInfo(ctx *Ctx, format string, args ...any)  { a.emit(LogInfo, ctx, format, args...) }
-func (a *App) logDebug(ctx *Ctx, format string, args ...any) { a.emit(LogDebug, ctx, format, args...) }
+func (a *App) logErr(ctx *Ctx, format string, args ...any)  { a.emit(LogError, ctx, format, args...) }
+func (a *App) logWarn(ctx *Ctx, format string, args ...any) { a.emit(LogWarn, ctx, format, args...) }
+func (a *App) logInfo(ctx *Ctx, format string, args ...any) { a.emit(LogInfo, ctx, format, args...) }
 
 // HTTPServer returns an *http.Server configured with the app as its
 // handler and every WithReadTimeout/WithWriteTimeout/WithIdleTimeout/
@@ -344,21 +361,13 @@ func (a *App) logDebug(ctx *Ctx, format string, args ...any) { a.emit(LogDebug, 
 //
 // HTTPServer is also what Start uses internally — same defaults.
 func (a *App) HTTPServer() *http.Server {
-	readHeader := a.cfg.readHeaderTimeout
-	if readHeader == 0 {
-		readHeader = 10 * time.Second
-	}
-	idle := a.cfg.idleTimeout
-	if idle == 0 {
-		idle = 120 * time.Second
-	}
 	srv := &http.Server{
 		Addr:              a.cfg.addr,
 		Handler:           a.handler,
-		ReadHeaderTimeout: readHeader,
+		ReadHeaderTimeout: cmp.Or(a.cfg.readHeaderTimeout, 10*time.Second),
 		ReadTimeout:       a.cfg.readTimeout,
 		WriteTimeout:      a.cfg.writeTimeout,
-		IdleTimeout:       idle,
+		IdleTimeout:       cmp.Or(a.cfg.idleTimeout, 120*time.Second),
 		MaxHeaderBytes:    1 << 20,
 	}
 	if a.cfg.httpServerHook != nil {
@@ -387,7 +396,7 @@ func (a *App) Start() {
 		}
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		panic(fmt.Sprintf("via: %v", err))
 	}
 }
@@ -399,7 +408,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	for _, c := range a.contextRegistry {
 		ctxs = append(ctxs, c)
 	}
-	a.contextRegistry = make(map[string]*Ctx)
+	clear(a.contextRegistry)
 	a.contextRegistryMutex.Unlock()
 
 	for _, c := range ctxs {
@@ -413,7 +422,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	})
 
 	a.sessionsMu.Lock()
-	a.sessions = make(map[string]*session)
+	clear(a.sessions)
 	a.sessionsMu.Unlock()
 
 	a.serverMu.Lock()
@@ -462,6 +471,7 @@ func New(opts ...Option) *App {
 	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 
+	a.rebuildChain()
 	a.handler = a.withSession()
 
 	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
@@ -496,6 +506,6 @@ func (a *App) withSession() http.Handler {
 				return
 			}
 		}
-		applyMiddleware(a.middleware, a.mux).ServeHTTP(w, r)
+		(*a.cachedChain.Load()).ServeHTTP(w, r)
 	})
 }

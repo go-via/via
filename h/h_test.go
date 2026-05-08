@@ -1,6 +1,7 @@
 package h_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,6 +44,32 @@ func TestEachIndexed_passesIndex(t *testing.T) {
 	assert.Equal(t, "<ul><li>0:x</li><li>1:y</li></ul>", got)
 }
 
+func TestEachSeq_consumesGoIterators(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Ul(
+		h.EachSeq(slices.Values([]string{"a", "b", "c"}), func(s string) h.H {
+			return h.Li(h.Text(s))
+		}),
+	))
+	assert.Equal(t, "<ul><li>a</li><li>b</li><li>c</li></ul>", got)
+}
+
+func TestEachSeq_nilSeqProducesNoOutput(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Ul(h.EachSeq[int](nil, func(int) h.H { return h.Li() })))
+	assert.Equal(t, "<ul></ul>", got)
+}
+
+func TestEachSeq2_consumesIndexedIterators(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Ul(
+		h.EachSeq2(slices.All([]string{"x", "y"}), func(i int, s string) h.H {
+			return h.Li(h.Textf("%d:%s", i, s))
+		}),
+	))
+	assert.Equal(t, "<ul><li>0:x</li><li>1:y</li></ul>", got)
+}
+
 func TestClasses_joinsAndSkipsEmpty(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Div(h.Classes("btn", "", "primary")))
@@ -64,6 +91,29 @@ func TestClassMap_includesOnlyTrueKeys(t *testing.T) {
 	assert.Contains(t, got, `class="`)
 	assert.Contains(t, got, `on`)
 	assert.NotContains(t, got, `off`)
+}
+
+func TestClassMap_emitsKeysInSortedOrder(t *testing.T) {
+	t.Parallel()
+	// Run a few times — Go's map iteration order is randomised, so a
+	// non-deterministic implementation would eventually produce a
+	// different ordering and fail this test.
+	for range 25 {
+		got := render(t, h.Div(h.ClassMap(map[string]bool{
+			"zebra": true,
+			"alpha": true,
+			"mango": true,
+		})))
+		assert.Contains(t, got, `class="alpha mango zebra"`,
+			"ClassMap output must be stable across renders")
+	}
+}
+
+func TestClassMap_allFalseProducesNoAttribute(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.ClassMap(map[string]bool{"x": false, "y": false})))
+	assert.Equal(t, `<div></div>`, got,
+		"if no key is true the class attribute must be omitted entirely")
 }
 
 func TestIfStr_returnsConditional(t *testing.T) {
@@ -138,6 +188,62 @@ func TestFragment_emptyRendersNothing(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Div(h.Fragment()))
 	assert.Equal(t, "<div></div>", got)
+}
+
+func TestDataInit_bareLiteralPercentIsNotMangled(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.DataInit("$progress = '100%'")))
+	assert.Contains(t, got, "100%",
+		"no-arg form must skip Sprintf so a bare % stays literal")
+	assert.NotContains(t, got, "NOVERB",
+		"Sprintf-when-no-args used to corrupt the expression")
+}
+
+func TestDataShow_formatArgsStillWork(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.DataShow("$count > %d", 0)))
+	assert.Contains(t, got, "$count &gt; 0",
+		"args path must still format normally")
+}
+
+func TestIfElse_picksBranchEagerly(t *testing.T) {
+	t.Parallel()
+	on := render(t, h.Div(h.IfElse(true,
+		h.P(h.Text("yes")),
+		h.P(h.Text("no")),
+	)))
+	off := render(t, h.Div(h.IfElse(false,
+		h.P(h.Text("yes")),
+		h.P(h.Text("no")),
+	)))
+	assert.Equal(t, "<div><p>yes</p></div>", on)
+	assert.Equal(t, "<div><p>no</p></div>", off)
+}
+
+func TestWhenElse_runsOnlyTheWinningBuilder(t *testing.T) {
+	t.Parallel()
+
+	thenCalls, elsCalls := 0, 0
+	thenB := func() h.H { thenCalls++; return h.P(h.Text("then")) }
+	elsB := func() h.H { elsCalls++; return h.P(h.Text("els")) }
+
+	got := render(t, h.Div(h.WhenElse(true, thenB, elsB)))
+	assert.Equal(t, "<div><p>then</p></div>", got)
+	assert.Equal(t, 1, thenCalls)
+	assert.Equal(t, 0, elsCalls, "else builder must not run when condition is true")
+
+	got = render(t, h.Div(h.WhenElse(false, thenB, elsB)))
+	assert.Equal(t, "<div><p>els</p></div>", got)
+	assert.Equal(t, 1, thenCalls, "then builder must not re-run when condition is false")
+	assert.Equal(t, 1, elsCalls)
+}
+
+func TestWhenElse_toleratesNilBuilders(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "<div></div>",
+		render(t, h.Div(h.WhenElse(true, nil, func() h.H { return h.P() }))))
+	assert.Equal(t, "<div></div>",
+		render(t, h.Div(h.WhenElse(false, func() h.H { return h.P() }, nil))))
 }
 
 func TestWhen_buildsOnlyWhenTrue(t *testing.T) {

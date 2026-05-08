@@ -38,14 +38,14 @@ func (p *Page) Init(ctx *via.Ctx) error {
 
 func (p *Page) Inc(ctx *via.Ctx) error {
 	if p.Visible.Get(ctx) < len(allFeatures) {
-		p.Visible.Set(ctx, p.Visible.Get(ctx)+1)
+		via.Add(ctx, &p.Visible, 1)
 	}
 	return nil
 }
 
 func (p *Page) Dec(ctx *via.Ctx) error {
 	if p.Visible.Get(ctx) > 1 {
-		p.Visible.Set(ctx, p.Visible.Get(ctx)-1)
+		via.Add(ctx, &p.Visible, -1)
 	}
 	return nil
 }

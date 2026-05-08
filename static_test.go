@@ -17,7 +17,7 @@ func TestHandleStatic_servesFromFS(t *testing.T) {
 	t.Parallel()
 
 	fsys := fstest.MapFS{
-		"app.css": {Data: []byte("body { color: amber; }")},
+		"app.css":       {Data: []byte("body { color: amber; }")},
 		"sub/inner.txt": {Data: []byte("hello")},
 	}
 

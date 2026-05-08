@@ -2,10 +2,12 @@ package via
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"reflect"
 	"strings"
@@ -15,6 +17,11 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/starfederation/datastar-go/datastar"
 )
+
+// tabSignalKey is the wire-protocol signal name carrying a Ctx's tab id.
+// Every datastar payload (action POST, SSE handshake) must carry it; it
+// doubles as the CSRF token (see memory: via_tab IS the CSRF token).
+const tabSignalKey = "via_tab"
 
 // renderBufPool reduces alloc churn on the patch render path. Buffers
 // start at 8 KiB and grow as needed; we keep them around for the next
@@ -45,7 +52,6 @@ type patchQueue struct {
 	scripts  strings.Builder
 	redirect string
 	hasRedir bool
-	disposed bool
 	wake     chan struct{}
 }
 
@@ -72,12 +78,17 @@ func (q *patchQueue) notify() {
 // Reserved for tests; the via/test package wraps it in
 // test.NewCtx[T any](t, *T) so production code never imports it.
 func NewBoundCtx[T any](c *T) *Ctx {
-	d := buildDescriptor[T](nil, "")
-	cmpVal := reflect.ValueOf(c)
+	return newCtx(buildDescriptor[T](""), reflect.ValueOf(c), genTabID("test"))
+}
+
+// newCtx allocates a Ctx wired to the descriptor's slot bindings and
+// scope keys. Shared between the production page-render path and
+// NewBoundCtx for tests; the production path layers app / session /
+// writer / request on top of the returned ctx.
+func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 	ctx := &Ctx{
-		id:           "test_" + genSecureID(),
+		id:           id,
 		desc:         d,
-		cmpVal:       c,
 		signalRefs:   make([]signalRef, len(d.signalSlots)),
 		dirtySignals: newBitset(len(d.signalSlots)),
 		queue:        newPatchQueue(),
@@ -87,11 +98,6 @@ func NewBoundCtx[T any](c *T) *Ctx {
 	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
 	bindScopeKeys(cmpVal, d)
-	for i, s := range d.signalSlots {
-		if s.initRaw != "" {
-			ctx.signalRefs[i].decodeRaw(s.initRaw)
-		}
-	}
 	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
 	return ctx
 }
@@ -124,9 +130,7 @@ func (ctx *Ctx) PatchSignals(values map[string]any) {
 	if ctx.queue.signals == nil {
 		ctx.queue.signals = make(map[string]any, len(values))
 	}
-	for k, v := range values {
-		ctx.queue.signals[k] = v
-	}
+	maps.Copy(ctx.queue.signals, values)
 	ctx.queue.mu.Unlock()
 	ctx.queue.notify()
 }
@@ -161,56 +165,36 @@ func (ctx *Ctx) SyncElements(elements ...h.H) {
 // path params + initial signal values, optionally calls Init, renders the
 // view inside the HTML5 envelope.
 func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Request) {
-	if cap := a.cfg.maxContexts; cap > 0 {
+	if limit := a.cfg.maxContexts; limit > 0 {
 		a.contextRegistryMutex.RLock()
 		live := len(a.contextRegistry)
 		a.contextRegistryMutex.RUnlock()
-		if live >= cap {
-			a.logWarn(nil, "max contexts reached (%d); rejecting page render", cap)
+		if live >= limit {
+			a.logWarn(nil, "max contexts reached (%d); rejecting page render", limit)
 			http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
 			return
 		}
 	}
 
 	cmpVal := reflect.New(d.typ)
-	cmpAny := cmpVal.Interface()
+	ctx := newCtx(d, cmpVal, genTabID(d.route))
+	ctx.app = a
+	ctx.session = a.sessionFromRequest(r)
+	ctx.w = w
+	ctx.r = r
 
-	tabID := genTabID(d.route)
-	ctx := &Ctx{
-		id:           tabID,
-		app:          a,
-		desc:         d,
-		cmpVal:       cmpAny,
-		signalRefs:   make([]signalRef, len(d.signalSlots)),
-		dirtySignals: newBitset(len(d.signalSlots)),
-		queue:        newPatchQueue(),
-		doneChan:     make(chan struct{}),
-		session:      a.sessionFromRequest(r),
-		w:            w,
-		r:            r,
-	}
-	ctx.touch()
-
-	ctx.cmpReflect = cmpVal
-	bindSlots(ctx, cmpVal, d)
-	bindScopeKeys(cmpVal, d)
-	applyInits(ctx, cmpVal, d)
 	decodePathParams(cmpVal, r, d)
 	decodeQueryParams(cmpVal, r, d)
 
-	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
 	ctxArg := ctx.reflectArgs[:]
 
-	if d.hasInit {
-		out := ctx.cmpReflect.Method(d.initIdx).Call(ctxArg)
-		if !out[0].IsNil() {
-			if errVal, ok := out[0].Interface().(error); ok && errVal != nil {
-				a.logErr(ctx, "Init: %v", errVal)
-			}
+	if d.initIdx >= 0 {
+		if err := errFromCallOut(ctx.cmpReflect.Method(d.initIdx).Call(ctxArg)); err != nil {
+			a.logErr(ctx, "Init: %v", err)
 		}
 	}
 
-	a.registerCtx(tabID, ctx)
+	a.registerCtx(ctx)
 
 	view := ctx.cmpReflect.Method(d.viewIdx).Call(ctxArg)[0]
 	body := view.Interface().(h.H)
@@ -219,35 +203,37 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 }
 
 func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
-	initialSigs := map[string]any{"via_tab": ctx.id}
 	a.appSignalsMu.RLock()
-	for k, v := range a.appSignals {
-		initialSigs[k] = v
-	}
+	// Size hint: via_tab + every app signal + every typed signal slot.
+	// Map auto-grows beyond this if scope handles add more, but a
+	// correct hint avoids the rehash chain on the common path.
+	initialSigs := make(map[string]any, 1+len(a.appSignals)+len(ctx.desc.signalSlots))
+	initialSigs[tabSignalKey] = ctx.id
+	maps.Copy(initialSigs, a.appSignals)
 	a.appSignalsMu.RUnlock()
-	for slot, ref := range ctx.signalRefs {
-		s := ctx.desc.signalSlots[slot]
+	for i, s := range ctx.desc.signalSlots {
 		if s.kind != kindSignal {
 			continue
 		}
-		v, err := ref.encode()
+		v, err := ctx.signalRefs[i].encode()
 		if err != nil {
 			continue
 		}
-		var raw json.RawMessage = v
-		initialSigs[s.wireKey] = raw
+		initialSigs[s.wireKey] = json.RawMessage(v)
 	}
 
 	sigsJSON, _ := json.Marshal(initialSigs)
-	head := []h.H{
+	head := make([]h.H, 0, 3+len(a.documentHeadIncludes))
+	head = append(head,
 		h.Meta(h.Data("signals", string(sigsJSON))),
 		h.Meta(h.Data("init", "@get('/_sse')")),
-		h.Meta(h.Data("init", fmt.Sprintf(
-			`window.addEventListener('beforeunload',(e)=>{navigator.sendBeacon('/_sse/close','%s');});`, ctx.id))),
-	}
+		h.Meta(h.Data("init",
+			`window.addEventListener('beforeunload',(e)=>{navigator.sendBeacon('/_sse/close','`+ctx.id+`');});`)),
+	)
 	head = append(head, a.documentHeadIncludes...)
 
-	bodyEls := []h.H{h.Div(h.ID(ctx.id), body)}
+	bodyEls := make([]h.H, 0, 1+len(a.documentFootIncludes))
+	bodyEls = append(bodyEls, h.Div(h.ID(ctx.id), body))
 	bodyEls = append(bodyEls, a.documentFootIncludes...)
 
 	doc := h.HTML5(h.HTML5Props{
@@ -262,8 +248,10 @@ func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 }
 
 // bindSlots writes the slot index and wire key into every Signal[T] / State[T]
-// field of the freshly allocated *C (including nested children), and stashes
-// a typed signalRef pointer for reflection-free dispatch later.
+// field of the freshly allocated *C (including nested children), stashes a
+// typed signalRef pointer for reflection-free dispatch, and applies the
+// init=… tag value if any. Combined into one pass so we walk
+// d.signalSlots only once per Ctx setup.
 func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for i, s := range d.signalSlots {
@@ -271,12 +259,16 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 		ref := field.Addr().Interface().(signalRef)
 		ref.bindSlot(uint16(i), s.wireKey)
 		ctx.signalRefs[i] = ref
+		if s.initRaw != "" {
+			ref.decodeRaw(s.initRaw)
+		}
 	}
 }
 
 // bindScopeKeys writes the wire key into every scope.User[T] / scope.App[T]
-// field of the freshly allocated *C. The handles' WireKey field is exported
-// for this purpose.
+// field of the freshly allocated *C. The handles' WireKey field index is
+// cached on the descriptor at Mount time, so we skip the per-request
+// FieldByName string lookup.
 func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
 	if len(d.scopeSlots) == 0 {
 		return
@@ -284,8 +276,7 @@ func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for _, s := range d.scopeSlots {
 		field := fieldByPath(elem, s.fieldPath)
-		// scope.User / scope.App both expose WireKey as the first field.
-		field.FieldByName("WireKey").SetString(s.wireKey)
+		field.Field(s.keyFieldIdx).SetString(s.wireKey)
 	}
 }
 
@@ -302,19 +293,6 @@ func fieldByPath(v reflect.Value, path []int) reflect.Value {
 		}
 	}
 	return v
-}
-
-// applyInits decodes init=… tag tokens into the typed value field. The
-// value lives in an unexported field of the handle, so we go through the
-// typed signalRef decoder rather than reflect.Value.SetX.
-func applyInits(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
-	for i, s := range d.signalSlots {
-		if s.initRaw == "" {
-			continue
-		}
-		ctx.signalRefs[i].decodeRaw(s.initRaw)
-	}
-	_ = cmpVal
 }
 
 func decodePathParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
@@ -348,16 +326,28 @@ func genTabID(route string) string {
 	return route + "_" + genSecureID()
 }
 
+// errFromCallOut extracts the error from a reflect.Method.Call return
+// slice, handling the typed-nil and zero-output cases. Centralised so
+// the three reflective dispatch sites (Init, OnConnect, action) read
+// identically.
+func errFromCallOut(out []reflect.Value) error {
+	if len(out) == 0 || out[0].IsNil() {
+		return nil
+	}
+	err, _ := out[0].Interface().(error)
+	return err
+}
+
 // handleSSE opens the persistent stream for a Ctx identified by the via_tab
 // signal sent in the URL, drains the patch queue until the client goes away
 // or the ctx is disposed.
 func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	var sigs map[string]any
 	_ = datastar.ReadSignals(r, &sigs)
-	tabID, _ := sigs["via_tab"].(string)
+	tabID, _ := sigs[tabSignalKey].(string)
 
-	ctx, err := a.getCtx(tabID)
-	if err != nil {
+	ctx, ok := a.getCtx(tabID)
+	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -378,8 +368,13 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // sseLevel is the brotli compression level applied to SSE streams.
 // Level 5 trades a bit of CPU for noticeable bandwidth savings on the
-// repetitive HTML element patches via emits — same as viaold.
+// repetitive HTML element patches via emits.
 const sseLevel = 5
+
+// heartbeatPayload is the empty-signals JSON object sent on every SSE
+// heartbeat tick. Cached so we don't allocate two bytes per tick per
+// live tab (datastar treats the slice as immutable once handed off).
+var heartbeatPayload = []byte("{}")
 
 func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
@@ -387,7 +382,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// expensive background work (tickers, fan-out goroutines) lives here
 	// rather than in Init.
 	ctx.connectOnce.Do(func() {
-		if !ctx.desc.hasOnConnect {
+		if ctx.desc.connectIdx < 0 {
 			return
 		}
 		defer func() {
@@ -395,12 +390,9 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 				a.logErr(ctx, "OnConnect panicked: %v", rec)
 			}
 		}()
-		out := ctx.cmpReflect.Method(ctx.desc.connectIdx).
-			Call(ctx.reflectArgs[:])
-		if !out[0].IsNil() {
-			if errVal, _ := out[0].Interface().(error); errVal != nil {
-				a.logErr(ctx, "OnConnect: %v", errVal)
-			}
+		out := ctx.cmpReflect.Method(ctx.desc.connectIdx).Call(ctx.reflectArgs[:])
+		if err := errFromCallOut(out); err != nil {
+			a.logErr(ctx, "OnConnect: %v", err)
 		}
 	})
 
@@ -432,7 +424,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		case <-ctx.doneChan:
 			return
 		case <-heartbeat:
-			if err := sse.PatchSignals([]byte("{}")); err != nil {
+			if err := sse.PatchSignals(heartbeatPayload); err != nil {
 				return
 			}
 			ctx.touch()
@@ -505,11 +497,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxBody := a.cfg.maxRequestBody
-	if maxBody == 0 {
-		maxBody = 1 << 20
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	r.Body = http.MaxBytesReader(w, r.Body, cmp.Or(a.cfg.maxRequestBody, 1<<20))
 
 	var sigs map[string]any
 	if err := datastar.ReadSignals(r, &sigs); err != nil {
@@ -518,11 +506,14 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
 			return
 		}
+		// Other ReadSignals failures (malformed body, wrong content
+		// type) fall through to the tabID="" path below and 404 —
+		// existing tests rely on that posture.
 	}
-	tabID, _ := sigs["via_tab"].(string)
+	tabID, _ := sigs[tabSignalKey].(string)
 
-	ctx, err := a.getCtx(tabID)
-	if err != nil {
+	ctx, ok := a.getCtx(tabID)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -537,18 +528,18 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	slot := d.actionSlots[slotIdx]
+	slot := &d.actionSlots[slotIdx]
 
 	// Wrap the dispatch in the descriptor's group middleware so a
 	// requireAuth (or any group-level guard) checks the request before
 	// the action runs — same auth posture as the rendered route.
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runAction(a, ctx, slot, id, w, r, sigs)
+		runAction(a, ctx, slot, w, r, sigs)
 	})
 	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
 }
 
-func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
+func runAction(a *App, ctx *Ctx, slot *actionSlot,
 	w http.ResponseWriter, r *http.Request, sigs map[string]any) {
 	// Serialize per-tab so parallel POSTs to the same ctx don't race
 	// on State writes, dirty bits, or Writer/Request assignment.
@@ -567,7 +558,7 @@ func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
 	}()
 	defer func() {
 		if rec := recover(); rec != nil {
-			a.logErr(ctx, "action %q panicked: %v", id, rec)
+			a.logErr(ctx, "action %q panicked: %v", slot.name, rec)
 			// Preserve a typed error from panic(err) so a custom
 			// WithActionErrorHandler can errors.As / errors.Is it.
 			// String/other panics get wrapped.
@@ -585,10 +576,9 @@ func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
 	injectSignals(ctx, sigs)
 
 	out := ctx.cmpReflect.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
-	if !slot.voidReturn && len(out) > 0 && !out[0].IsNil() {
-		errVal, _ := out[0].Interface().(error)
-		if errVal != nil {
-			a.dispatchActionError(ctx, errVal, false)
+	if !slot.voidReturn {
+		if err := errFromCallOut(out); err != nil {
+			a.dispatchActionError(ctx, err, false)
 		}
 	}
 
@@ -604,8 +594,7 @@ func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
 	if fromPanic {
 		msg = "Something went wrong"
 	}
-	out, _ := json.Marshal(msg)
-	enqueueScript(ctx, "alert("+string(out)+")")
+	ctx.Toast(msg)
 }
 
 func enqueueScript(ctx *Ctx, s string) {
@@ -643,26 +632,25 @@ func flushDirty(ctx *Ctx) {
 	}
 
 	if ctx.dirtySignals.any() {
-		out := map[string]any{}
+		// Encode-and-merge directly under the queue lock so we don't
+		// have to allocate a staging map only to copy it across the
+		// lock boundary. encode() is cheap (scalar paths skip fmt /
+		// json entirely), so the extra lock-hold is negligible.
+		ctx.queue.mu.Lock()
+		if ctx.queue.signals == nil {
+			ctx.queue.signals = make(map[string]any)
+		}
 		for slot, ref := range ctx.signalRefs {
 			if !ctx.dirtySignals.get(slot) {
 				continue
 			}
-			s := ctx.desc.signalSlots[slot]
 			b, err := ref.encode()
 			if err != nil {
 				continue
 			}
-			out[s.wireKey] = json.RawMessage(b)
+			ctx.queue.signals[ctx.desc.signalSlots[slot].wireKey] = json.RawMessage(b)
 		}
 		ctx.dirtySignals.clear()
-		ctx.queue.mu.Lock()
-		if ctx.queue.signals == nil {
-			ctx.queue.signals = make(map[string]any, len(out))
-		}
-		for k, v := range out {
-			ctx.queue.signals[k] = v
-		}
 		ctx.queue.mu.Unlock()
 	}
 	ctx.queue.notify()
@@ -672,11 +660,11 @@ func flushDirty(ctx *Ctx) {
 // Signal[T] fields by wire key.
 func injectSignals(ctx *Ctx, sigs map[string]any) {
 	for slot, ref := range ctx.signalRefs {
-		if ctx.desc.signalSlots[slot].kind != kindSignal {
+		s := ctx.desc.signalSlots[slot]
+		if s.kind != kindSignal {
 			continue
 		}
-		key := ctx.desc.signalSlots[slot].wireKey
-		if v, ok := sigs[key]; ok {
+		if v, ok := sigs[s.wireKey]; ok {
 			ref.decodeRaw(v)
 		}
 	}
@@ -699,21 +687,32 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tabID := strings.TrimSpace(string(body))
-	if ctx, err := a.getCtx(tabID); err == nil {
+	if ctx, ok := a.getCtx(tabID); ok {
 		if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
 			return
 		}
-		a.disposeCtx(ctx)
+		// Unregister first so concurrent action handlers see "not
+		// found" and 404 instead of finding a half-disposed Ctx that
+		// they then try to operate on. disposeCtx is idempotent so
+		// the dispose-after-unregister order is safe.
 		a.unregisterCtx(tabID)
+		a.disposeCtx(ctx)
 	}
 }
 
 // sweepExpiredContexts periodically disposes Ctxs that haven't been touched
 // (no SSE event, action, or page-render) for longer than contextTTL.
 func (a *App) sweepExpiredContexts() {
-	interval := a.cfg.contextTTL / 2
+	a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
+}
+
+// runSweep drives a sweep goroutine: it ticks at interval and calls sweep
+// on every tick, exiting when stopSweep closes. Used for both the session
+// and context expirers — the only thing that varies is the cadence and
+// the per-tick action.
+func (a *App) runSweep(interval, fallback time.Duration, sweep func()) {
 	if interval <= 0 {
-		interval = time.Second
+		interval = fallback
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -722,7 +721,7 @@ func (a *App) sweepExpiredContexts() {
 		case <-a.stopSweep:
 			return
 		case <-ticker.C:
-			a.removeExpiredContexts()
+			sweep()
 		}
 	}
 }
@@ -730,7 +729,7 @@ func (a *App) sweepExpiredContexts() {
 func (a *App) removeExpiredContexts() {
 	cutoff := time.Now().Add(-a.cfg.contextTTL).UnixNano()
 	a.contextRegistryMutex.Lock()
-	expired := make([]*Ctx, 0)
+	var expired []*Ctx
 	for id, c := range a.contextRegistry {
 		if c.lastAccess.Load() < cutoff {
 			expired = append(expired, c)
@@ -752,14 +751,9 @@ func (a *App) disposeCtx(ctx *Ctx) {
 	}
 	ctx.disposed = true
 	close(ctx.doneChan)
-	if ctx.queue != nil {
-		ctx.queue.mu.Lock()
-		ctx.queue.disposed = true
-		ctx.queue.mu.Unlock()
-	}
 	ctx.mu.Unlock()
 
-	if ctx.desc != nil && ctx.desc.hasDispose && ctx.cmpVal != nil {
+	if ctx.desc != nil && ctx.desc.disposeIdx >= 0 && ctx.cmpReflect.IsValid() {
 		defer func() {
 			if rec := recover(); rec != nil {
 				a.logErr(ctx, "Dispose panicked: %v", rec)

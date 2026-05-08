@@ -2,19 +2,20 @@ package via
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 func contextWithCSPNonce(ctx context.Context, nonce string) context.Context {
 	return context.WithValue(ctx, cspNonceKey{}, nonce)
 }
-
-// reflectValue is a local alias so the field declaration on Ctx doesn't
-// pull reflect into every file that imports "via" through field access.
-type reflectValue = reflect.Value
 
 // Ctx is the per-request execution context. Created on page load, kept alive
 // for the lifetime of the SSE stream, passed to View/Init/Action methods.
@@ -22,11 +23,10 @@ type Ctx struct {
 	id           string // tab id, generated per page request
 	app          *App
 	desc         *cmpDescriptor
-	cmpVal       any           // the bound *C
-	cmpReflect   reflect.Value // reflect.ValueOf(cmpVal), boxed once at request entry
-	signalRefs   []signalRef // indexed by slot
-	dirtySignals bitset      // size = len(signalRefs)
-	stateDirty   bool        // any State[T] mutated → re-render needed
+	cmpReflect   reflect.Value // reflect.ValueOf(<bound *C>), boxed once at request entry
+	signalRefs   []signalRef   // indexed by slot
+	dirtySignals bitset        // size = len(signalRefs)
+	stateDirty   bool          // any State[T] mutated → re-render needed
 	queue        *patchQueue
 	doneChan     chan struct{}
 	disposed     bool
@@ -55,7 +55,7 @@ type Ctx struct {
 	// used as the argument list for Init/View/Action/OnConnect/Dispose
 	// reflect.Method.Call. Boxing ctx once and re-using the slice
 	// avoids 2 allocations per dispatch.
-	reflectArgs [1]reflectValue
+	reflectArgs [1]reflect.Value
 
 	mu sync.Mutex // guards w / r and disposed flag
 
@@ -160,7 +160,7 @@ func (ctx *Ctx) DelCookie(name string) {
 }
 
 func (ctx *Ctx) touch() {
-	ctx.lastAccess.Store(nowNano())
+	ctx.lastAccess.Store(time.Now().UnixNano())
 }
 
 func (ctx *Ctx) markSignalDirty(slot uint16) {
@@ -193,14 +193,18 @@ func (ctx *Ctx) ExecScript(s string) {
 	enqueueScript(ctx, s)
 }
 
-// ExecScriptf is ExecScript with fmt-style formatting:
+// ExecScriptf is ExecScript with fmt-style formatting. Use it to splice
+// numeric / boolean values; for user-controlled strings prefer
+// JSON-encoding so the embedded value parses unambiguously as a JS
+// string literal — Go's %q diverges from JS string syntax in subtle
+// ways (\a, some \u forms). For an alert with arbitrary text, see Toast.
 //
-//	ctx.ExecScriptf("alert(%q)", err.Error())
+//	ctx.ExecScriptf("location.href = '/users/%d'", id)
 func (ctx *Ctx) ExecScriptf(format string, args ...any) {
 	if ctx == nil || format == "" {
 		return
 	}
-	enqueueScript(ctx, sprintfFmt(format, args...))
+	enqueueScript(ctx, fmt.Sprintf(format, args...))
 }
 
 // Reload tells the browser to reload the current page on the next
@@ -216,11 +220,19 @@ func (ctx *Ctx) Reload() {
 // Toast queues a browser alert(message). Sugar for the common
 // "show a quick notice and move on" pattern; for richer toasts use
 // PatchSignal to drive a client-side notice signal instead.
+//
+// The message is JSON-encoded into the alert call so any user-supplied
+// content survives untouched — Go's %q escape rules diverge from
+// JavaScript's in a handful of edge cases (e.g. \a), JSON does not.
 func (ctx *Ctx) Toast(message string) {
 	if ctx == nil || message == "" {
 		return
 	}
-	ctx.ExecScriptf("alert(%q)", message)
+	b, err := json.Marshal(message)
+	if err != nil {
+		return
+	}
+	ctx.ExecScript("alert(" + string(b) + ")")
 }
 
 // Redirect sends a client-side navigation to url at the next flush.
@@ -307,7 +319,7 @@ func RequestWithCSPNonce(r *http.Request, nonce string) *http.Request {
 func StrictCSP(extra ...string) Middleware {
 	tail := ""
 	if len(extra) > 0 {
-		tail = "; " + joinSemi(extra)
+		tail = "; " + strings.Join(extra, "; ")
 	}
 	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		n := genCSPNonce()
@@ -316,17 +328,6 @@ func StrictCSP(extra ...string) Middleware {
 				"object-src 'none'; base-uri 'self'"+tail)
 		next.ServeHTTP(w, RequestWithCSPNonce(r, n))
 	}
-}
-
-func joinSemi(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += "; "
-		}
-		out += p
-	}
-	return out
 }
 
 // Sync forces a view re-render and flushes pending patches. Marks the
@@ -398,11 +399,7 @@ func (ctx *Ctx) PendingSignals() map[string]any {
 	if len(ctx.queue.signals) == 0 {
 		return nil
 	}
-	out := make(map[string]any, len(ctx.queue.signals))
-	for k, v := range ctx.queue.signals {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(ctx.queue.signals)
 }
 
 func (ctx *Ctx) markStateDirty() {
@@ -440,9 +437,7 @@ func (b *bitset) get(i int) bool {
 }
 
 func (b *bitset) clear() {
-	for i := range b.words {
-		b.words[i] = 0
-	}
+	clear(b.words)
 }
 
 func (b *bitset) any() bool {

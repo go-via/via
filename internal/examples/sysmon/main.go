@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -135,9 +136,7 @@ func (b *histBuf) push(tsMs int64, v float64) {
 func (b *histBuf) snapshot() [][]any {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	out := make([][]any, len(b.pts))
-	copy(out, b.pts)
-	return out
+	return slices.Clone(b.pts)
 }
 
 // Chart-option builders

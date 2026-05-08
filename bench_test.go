@@ -16,7 +16,7 @@ type benchPage struct {
 }
 
 func (p *benchPage) Inc(ctx *via.Ctx) error {
-	p.Hits.Set(ctx, p.Hits.Get(ctx)+p.Step.Get(ctx))
+	via.Add(ctx, &p.Hits, p.Step.Get(ctx))
 	return nil
 }
 
@@ -37,13 +37,28 @@ func BenchmarkCounterRender(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		resp, err := server.Client().Get(server.URL + "/")
 		if err != nil {
 			b.Fatal(err)
 		}
 		_, _ = resp.Body.Read(make([]byte, 1<<14))
 		resp.Body.Close()
+	}
+}
+
+// BenchmarkActionBodyOnly measures the alloc cost of the Inc *body* —
+// no HTTP round-trip, no JSON, no reflect.Call. Establishes a floor:
+// with via.Add over a Mutable[int], the State/Signal Set/Get path
+// doesn't allocate, so steady-state should be 0 allocs/op. Catches a
+// regression where the typed helpers accidentally start escaping.
+func BenchmarkActionBodyOnly(b *testing.B) {
+	page := &benchPage{}
+	ctx := viatest.NewCtx(b, page)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		_ = page.Inc(ctx)
 	}
 }
 
@@ -60,7 +75,7 @@ func BenchmarkCounterAction(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if got := tc.Action("Inc").Fire(); got != 200 {
 			b.Fatalf("status %d", got)
 		}
@@ -90,7 +105,7 @@ func BenchmarkCounterActionWithLogger(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		if got := tc.Action("Inc").Fire(); got != 200 {
 			b.Fatalf("status %d", got)
 		}

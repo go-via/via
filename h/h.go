@@ -5,12 +5,13 @@
 //
 //	h.Div(
 //		h.H1(h.Text("Hello, Via")),
-//		h.P(h.Text("Pure Go. No tmplates.")),
+//		h.P(h.Text("Pure Go. No templates.")),
 //	)
 package h
 
 import (
 	"io"
+	"iter"
 
 	g "maragu.dev/gomponents"
 	gc "maragu.dev/gomponents/components"
@@ -62,6 +63,21 @@ func If(condition bool, n H) H {
 	return nil
 }
 
+// IfElse picks between two pre-built branches. Both are constructed
+// eagerly — use [WhenElse] if construction is expensive or has side
+// effects.
+//
+//	h.IfElse(loggedIn,
+//	    h.A(h.Href("/profile"), h.Text("Profile")),
+//	    h.A(h.Href("/login"),   h.Text("Sign in")),
+//	)
+func IfElse(condition bool, then, els H) H {
+	if condition {
+		return then
+	}
+	return els
+}
+
 // When is If with a builder so the node is constructed lazily — useful
 // when the construction has side effects or is expensive:
 //
@@ -73,6 +89,27 @@ func When(condition bool, build func() H) H {
 	return nil
 }
 
+// WhenElse is IfElse with lazy builders — only the branch that wins
+// runs. Either builder may be nil; a nil builder for the winning branch
+// renders nothing.
+//
+//	h.WhenElse(loaded,
+//	    func() h.H { return h.P(h.Text(slow.Render())) },
+//	    func() h.H { return h.Aside(h.Text("loading…")) },
+//	)
+func WhenElse(condition bool, then, els func() H) H {
+	if condition {
+		if then != nil {
+			return then()
+		}
+		return nil
+	}
+	if els != nil {
+		return els()
+	}
+	return nil
+}
+
 // Each renders a list of values into a Group of nodes, one per element.
 //
 //	h.Ul(h.Each(items, func(it Item) h.H { return h.Li(h.Text(it.Name)) }))
@@ -80,13 +117,13 @@ func Each[T any](items []T, fn func(T) H) H {
 	if len(items) == 0 {
 		return nil
 	}
-	out := make([]H, 0, len(items))
+	out := make(group, 0, len(items))
 	for _, it := range items {
-		if n := fn(it); n != nil {
-			out = append(out, n)
+		if gn, ok := fn(it).(gNode); ok && gn != nil {
+			out = append(out, gn)
 		}
 	}
-	return Group(out)
+	return out
 }
 
 // EachIndexed is Each with the element's index passed alongside the value.
@@ -94,20 +131,67 @@ func EachIndexed[T any](items []T, fn func(i int, v T) H) H {
 	if len(items) == 0 {
 		return nil
 	}
-	out := make([]H, 0, len(items))
+	out := make(group, 0, len(items))
 	for i, it := range items {
-		if n := fn(i, it); n != nil {
-			out = append(out, n)
+		if gn, ok := fn(i, it).(gNode); ok && gn != nil {
+			out = append(out, gn)
 		}
 	}
-	return Group(out)
+	return out
+}
+
+// EachSeq renders one node per value drawn from a Go 1.23 iter.Seq.
+// Pairs with stdlib iterators (slices.Values, maps.Values, ...) and any
+// custom iterator that yields T values:
+//
+//	h.Ul(h.EachSeq(maps.Values(byID), func(it Item) h.H {
+//	    return h.Li(h.Text(it.Name))
+//	}))
+//
+// Length is unknown up front, so the underlying group grows as needed.
+func EachSeq[T any](seq iter.Seq[T], fn func(T) H) H {
+	if seq == nil {
+		return nil
+	}
+	var out group
+	for v := range seq {
+		if gn, ok := fn(v).(gNode); ok && gn != nil {
+			out = append(out, gn)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// EachSeq2 renders one node per (K, V) pair drawn from a Go 1.23
+// iter.Seq2. Pairs with maps.All / slices.All / custom 2-iterators:
+//
+//	h.Ul(h.EachSeq2(maps.All(byID), func(id string, it Item) h.H {
+//	    return h.Li(h.Textf("%s — %s", id, it.Name))
+//	}))
+func EachSeq2[K, V any](seq iter.Seq2[K, V], fn func(K, V) H) H {
+	if seq == nil {
+		return nil
+	}
+	var out group
+	for k, v := range seq {
+		if gn, ok := fn(k, v).(gNode); ok && gn != nil {
+			out = append(out, gn)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SwitchCase pairs a key with the node to render when Switch's value
 // matches the key. Build with Case / Default.
 type SwitchCase struct {
-	key any // empty for Default
-	node    H
+	key       any // empty for Default
+	node      H
 	isDefault bool
 }
 
@@ -157,12 +241,10 @@ func Fragment(items ...H) H { return Group(items) }
 // Group bundles a slice of nodes into a single H so callers can return
 // many nodes from a function that has to return one.
 func Group(items []H) H {
-	gnodes := retype(items)
-	out := make(group, len(gnodes))
-	for i, n := range gnodes {
-		out[i] = n
-	}
-	return out
+	// retype already produces a []g.Node; group is just a named version
+	// of the same type, so a conversion (no copy, no second alloc) is
+	// enough.
+	return group(retype(items))
 }
 
 type group []gNode
@@ -179,8 +261,9 @@ func (g group) Render(w io.Writer) error {
 	return nil
 }
 
-// HTML5Props defines properties for HTML5 pages. Title is set always set, Description
-// and Language elements only if the strings are non-empty.
+// HTML5Props defines properties for HTML5 pages. Title is always set;
+// Description and Language elements are emitted only if the strings are
+// non-empty.
 type HTML5Props struct {
 	Title       string
 	Description string
@@ -204,10 +287,12 @@ func HTML5(p HTML5Props) H {
 	return gc.HTML5(gp)
 }
 
-// JoinAttrs with the given name only on the first level of the given nodes. This means that
-// attributes on non-direct descendants are ignored. Attribute values are joined by spaces.
+// JoinAttrs collapses every name=… attribute on the first level of
+// children into one attribute whose values are space-joined. Attributes
+// on non-direct descendants are left alone.
 //
-// Note that this renders all first-level attributes to check whether they should be processed.
+// Note that this renders all first-level attributes to decide which
+// ones to merge.
 func JoinAttrs(name string, children ...H) H {
 	return gc.JoinAttrs(name, retype(children)...)
 }

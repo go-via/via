@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/go-via/via"
@@ -97,9 +98,9 @@ func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
 	// The CSP header has 'nonce-XYZ'; pull the XYZ and confirm it
 	// matches the rendered <div>.
 	const prefix = "'nonce-"
-	idx := indexOf(csp, prefix)
+	idx := strings.Index(csp, prefix)
 	require.NotEqual(t, -1, idx)
-	end := indexOf(csp[idx+len(prefix):], "'")
+	end := strings.Index(csp[idx+len(prefix):], "'")
 	require.NotEqual(t, -1, end)
 	nonce := csp[idx+len(prefix) : idx+len(prefix)+end]
 	assert.Contains(t, body, `<div id="nonce">`+nonce+`</div>`)
@@ -119,15 +120,6 @@ func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
 	defer resp.Body.Close()
 	csp := resp.Header.Get("Content-Security-Policy")
 	assert.Contains(t, csp, "img-src 'self' data:")
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
 }
 
 func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {

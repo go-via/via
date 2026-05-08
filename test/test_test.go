@@ -57,6 +57,29 @@ func TestClient_HTML_returnsLastFetchedBody(t *testing.T) {
 	assert.Contains(t, body, ">+<")
 }
 
+func TestClient_Reload_refetchesAndReturnsCurrentBody(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[tcPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	originalTab := tc.TabID()
+	original := tc.HTML()
+	require.NotEmpty(t, original)
+
+	// Reload returns a fresh fetch and rotates the tab id (each GET
+	// registers a new Ctx — that's the contract documented on Reload).
+	body := tc.Reload()
+	assert.Contains(t, body, "<button")
+	assert.NotEqual(t, originalTab, tc.TabID(),
+		"each GET registers a new tab; Reload must update tabID")
+	assert.Equal(t, body, tc.HTML(),
+		"HTML() should now return what Reload just stored")
+}
+
 func TestActionCall_Fire_returnsResponseStatus(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +90,21 @@ func TestActionCall_Fire_returnsResponseStatus(t *testing.T) {
 
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Bump").Fire())
+}
+
+func TestAction_acceptsBoundMethodValue(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[tcPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	page := &tcPage{}
+	// Typed form: pass the bound method, get the action name resolved
+	// via reflect — typo-proof since Bump is referenced, not stringified.
+	require.Equal(t, 200, tc.Action(page.Bump).Fire())
 }
 
 func TestActionCall_Fire_returns404OnUnknownMethod(t *testing.T) {

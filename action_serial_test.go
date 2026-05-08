@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -42,7 +43,7 @@ func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 	const N = 50
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
+	for range N {
 		go func() {
 			defer wg.Done()
 			tc.Action("Bump").Fire()
@@ -76,24 +77,21 @@ func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 }
 
 func containsFinalCount(body string, want int) bool {
-	target := []byte("<div>")
-	for i := 0; i+len(target) <= len(body); i++ {
-		if body[i] != '<' {
-			continue
+	const target = "<div>"
+	rest := body
+	for {
+		i := strings.Index(rest, target)
+		if i < 0 {
+			return false
 		}
-		if string(body[i:i+len(target)]) != string(target) {
-			continue
-		}
-		// scan number
-		j := i + len(target)
-		n := 0
-		for j < len(body) && body[j] >= '0' && body[j] <= '9' {
-			n = n*10 + int(body[j]-'0')
+		rest = rest[i+len(target):]
+		n, j := 0, 0
+		for j < len(rest) && rest[j] >= '0' && rest[j] <= '9' {
+			n = n*10 + int(rest[j]-'0')
 			j++
 		}
-		if j > i+len(target) && n == want {
+		if j > 0 && n == want {
 			return true
 		}
 	}
-	return false
 }

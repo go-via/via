@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -91,8 +92,10 @@ var AllPicoThemes = []PicoTheme{
 // String returns the theme name.
 func (t PicoTheme) String() string { return string(t) }
 
-// PicoOption configures the plugin.
-type PicoOption interface{ apply(*plugin) }
+// PicoOption configures the plugin. Functional-options shape: each option
+// is a closure that mutates the plugin's option struct, applied in order
+// by Plugin.
+type PicoOption func(*plugin)
 
 type pluginOptions struct {
 	themes       []PicoTheme
@@ -125,7 +128,7 @@ func Plugin(opts ...PicoOption) via.Plugin {
 		themeETags:   make(map[PicoTheme]string),
 	}
 	for _, opt := range opts {
-		opt.apply(p)
+		opt(p)
 	}
 	p.opts.themes = dedup(p.opts.themes)
 	if len(p.opts.themes) == 0 {
@@ -137,43 +140,35 @@ func Plugin(opts ...PicoOption) via.Plugin {
 	return p
 }
 
-type withThemesOpt struct{ themes []PicoTheme }
-
-func (o *withThemesOpt) apply(p *plugin) { p.opts.themes = o.themes }
-
 // WithThemes sets which themes are available. Defaults to [PicoThemeAmber].
-func WithThemes(themes []PicoTheme) PicoOption { return &withThemesOpt{themes: themes} }
-
-type withDefaultThemeOpt struct{ theme PicoTheme }
-
-func (o *withDefaultThemeOpt) apply(p *plugin) { p.opts.defaultTheme = o.theme }
+func WithThemes(themes []PicoTheme) PicoOption {
+	return func(p *plugin) { p.opts.themes = themes }
+}
 
 // WithDefaultTheme sets the initial theme on page load.
-func WithDefaultTheme(theme PicoTheme) PicoOption { return &withDefaultThemeOpt{theme: theme} }
-
-type withClasslessOpt struct{}
-
-func (o *withClasslessOpt) apply(p *plugin) { p.opts.classless = true }
+func WithDefaultTheme(theme PicoTheme) PicoOption {
+	return func(p *plugin) { p.opts.defaultTheme = theme }
+}
 
 // WithClassless enables classless Pico CSS mode.
-func WithClassless() PicoOption { return &withClasslessOpt{} }
-
-type withColorClassesOpt struct{}
-
-func (o *withColorClassesOpt) apply(p *plugin) { p.opts.colorClasses = true }
+func WithClassless() PicoOption {
+	return func(p *plugin) { p.opts.classless = true }
+}
 
 // WithColorClasses enables pico-color-* utility classes.
-func WithColorClasses() PicoOption { return &withColorClassesOpt{} }
-
-type withDarkModeOpt struct{ mode string }
-
-func (o *withDarkModeOpt) apply(p *plugin) { p.opts.darkMode = o.mode }
+func WithColorClasses() PicoOption {
+	return func(p *plugin) { p.opts.colorClasses = true }
+}
 
 // WithDarkMode forces dark mode.
-func WithDarkMode() PicoOption { return &withDarkModeOpt{mode: "dark"} }
+func WithDarkMode() PicoOption {
+	return func(p *plugin) { p.opts.darkMode = "dark" }
+}
 
 // WithLightMode forces light mode.
-func WithLightMode() PicoOption { return &withDarkModeOpt{mode: "light"} }
+func WithLightMode() PicoOption {
+	return func(p *plugin) { p.opts.darkMode = "light" }
+}
 
 // Helpers
 
@@ -189,8 +184,14 @@ func dedup(themes []PicoTheme) []PicoTheme {
 	return out
 }
 
+// fetchHTTPClient bounds the CSS-CDN fetch so a slow upstream can't
+// hang via.New() indefinitely. 10s is generous for a static CSS asset
+// over reasonable network conditions; bigger means the CDN is sick and
+// we want the plugin Register to fail fast.
+var fetchHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 func fetchCSS(url string) ([]byte, error) {
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := fetchHTTPClient.Get(url) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +233,6 @@ func (p *plugin) fetchThemes() error {
 	}
 	ch := make(chan fetchResult, len(p.opts.themes))
 	for _, theme := range p.opts.themes {
-		theme := theme
 		go func() {
 			css, err := fetchCSS(fmt.Sprintf(baseURL, theme))
 			ch <- fetchResult{theme: theme, css: css, err: err}

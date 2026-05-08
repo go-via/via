@@ -156,6 +156,66 @@ func TestSetSignal_quotesStringValues(t *testing.T) {
 	assert.Contains(t, body, `$theme=&#34;red&#34;`)
 }
 
+type unmarshalable struct{ Ch chan int }
+
+func TestSetSignal_panicsOnNonJSONValue(t *testing.T) {
+	t.Parallel()
+
+	// Constructing a Signal with a chan field; channels never serialize
+	// to JSON, so SetSignal must surface the programmer error as a panic
+	// rather than silently dropping the assignment.
+	var sig via.Signal[unmarshalable]
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "SetSignal must panic when the value type cannot be JSON-encoded")
+		msg, ok := rec.(string)
+		require.True(t, ok, "panic value should be a string, got %T", rec)
+		assert.Contains(t, msg, "on.SetSignal:",
+			"panic message should be prefixed with the package + function for grep-ability")
+		assert.Contains(t, msg, "cannot be JSON-encoded",
+			"panic message should explain the failure mode")
+	}()
+	on.SetSignal(&sig, unmarshalable{Ch: make(chan int)})
+}
+
+type eventCoveragePage struct{}
+
+func (p *eventCoveragePage) Hit(ctx *via.Ctx) error { return nil }
+
+func (p *eventCoveragePage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Input(on.Focus(p.Hit)),
+		h.Input(on.Blur(p.Hit)),
+		h.Div(on.DblClick(p.Hit)),
+		h.Div(on.MouseEnter(p.Hit)),
+		h.Div(on.MouseLeave(p.Hit)),
+		h.Div(on.Load(p.Hit)),
+		h.Div(on.Event("contextmenu", p.Hit)),
+	)
+}
+
+func TestOn_NamedEventHelpersRenderExpectedTriggers(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[eventCoveragePage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+
+	for _, want := range []string{
+		"on:focus", "on:blur",
+		"on:dblclick",
+		"on:mouseenter", "on:mouseleave",
+		"on:load",
+		"on:contextmenu",
+	} {
+		assert.Contains(t, body, want,
+			"each named helper / on.Event must emit on:<name> attribute")
+	}
+}
+
 func getBody(t *testing.T, server *httptest.Server, path string) string {
 	t.Helper()
 	resp, err := http.Get(server.URL + path)
