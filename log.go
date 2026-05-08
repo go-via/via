@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/http"
+	"time"
 )
+
+func timeNow() time.Time            { return time.Now() }
+func timeSince(t time.Time) string  { return time.Since(t).String() }
 
 // Logger receives log records produced by the via runtime. Implementations
 // are free to forward to any logger of their choice — slog, zap, zerolog,
@@ -20,6 +25,54 @@ import (
 // Field values may be any type; the default formatter renders with %v.
 type Logger interface {
 	Log(level LogLevel, msg string, kv ...any)
+}
+
+// AccessLog returns a Middleware that emits one info-level log record
+// per HTTP request through the App's configured Logger:
+//
+//	app.Use(via.AccessLog(app))
+//
+// Format: method=GET path=/foo status=200 duration=1.2ms remote=…
+// Status is captured by wrapping the ResponseWriter; default 200 if
+// the handler never calls WriteHeader.
+func AccessLog(a *App) Middleware {
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		start := timeNow()
+		sw := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(sw, r)
+		a.logInfo(nil, "%s %s status=%d duration=%s",
+			r.Method, r.URL.Path, sw.status, timeSince(start))
+	}
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status   int
+	written  bool
+	hijacked bool
+}
+
+func (s *statusWriter) WriteHeader(code int) {
+	if !s.written {
+		s.status = code
+		s.written = true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusWriter) Write(b []byte) (int, error) {
+	if !s.written {
+		s.written = true
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Flush forwards if the wrapped writer supports it. SSE streams need
+// this so frames reach the browser without buffering.
+func (s *statusWriter) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // Log returns the logger configured on the App that owns ctx, stamped

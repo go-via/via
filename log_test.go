@@ -3,6 +3,7 @@ package via_test
 import (
 	"bytes"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -88,6 +89,40 @@ type panicPage struct{}
 
 func (p *panicPage) Boom(ctx *via.Ctx) error { panic("boom") }
 func (p *panicPage) View(ctx *via.Ctx) h.H   { return h.Div() }
+
+type accessLogPage struct{}
+
+func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogInfo),
+		via.WithTestServer(&server),
+	)
+	app.Use(via.AccessLog(app))
+	via.Mount[accessLogPage](app, "/")
+	defer server.Close()
+
+	for i := 0; i < 3; i++ {
+		resp, err := http.Get(server.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+	}
+
+	got := 0
+	for _, r := range cap.snapshot() {
+		if strings.Contains(r.msg, "GET /") &&
+			strings.Contains(r.msg, "status=200") {
+			got++
+		}
+	}
+	assert.Equal(t, 3, got, "AccessLog should emit one record per request")
+}
 
 type loggingPage struct{}
 
