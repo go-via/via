@@ -112,6 +112,40 @@ func (ctx *Ctx) Request() *http.Request {
 // expires per WithSessionTTL.
 func (ctx *Ctx) Session() *session { return ctx.session }
 
+// Cookie returns the value of the named cookie on the in-flight request,
+// or "" if the cookie isn't present. Convenience over Request().Cookie
+// for the common 80% case where you just want the value:
+//
+//	consent := ctx.Cookie("cookie_consent")
+//
+// For full cookie access (Path, Expires, …) use Request().Cookie.
+func (ctx *Ctx) Cookie(name string) string {
+	r := ctx.Request()
+	if r == nil {
+		return ""
+	}
+	c, err := r.Cookie(name)
+	if err != nil {
+		return ""
+	}
+	return c.Value
+}
+
+// SetCookie writes a cookie on the action's response. Convenience over
+// http.SetCookie that pulls the response writer off the Ctx; safe to
+// call from an action handler. Outside action scope (Writer == nil) it
+// is a no-op.
+func (ctx *Ctx) SetCookie(c *http.Cookie) {
+	if ctx == nil || c == nil {
+		return
+	}
+	w := ctx.Writer()
+	if w == nil {
+		return
+	}
+	http.SetCookie(w, c)
+}
+
 func (ctx *Ctx) touch() {
 	ctx.lastAccess.Store(nowNano())
 }
