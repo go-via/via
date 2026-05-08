@@ -125,6 +125,35 @@ func (a *App) Handle(pattern string, handler http.Handler) {
 	a.mux.Handle(pattern, handler)
 }
 
+// Routes returns a sorted snapshot of every method+pattern registered on
+// this app, paired with the registrar tag (Mount[T], HandleFunc,
+// Group(prefix).Handle, …). Useful for `app.Routes()` debugging and for
+// surfacing registered surface area at boot.
+func (a *App) Routes() []RouteInfo {
+	a.routesMu.Lock()
+	out := make([]RouteInfo, 0, len(a.routes))
+	for pattern, tag := range a.routes {
+		out = append(out, RouteInfo{Pattern: pattern, RegisteredBy: tag})
+	}
+	a.routesMu.Unlock()
+	sortRoutes(out)
+	return out
+}
+
+// RouteInfo is one entry in App.Routes().
+type RouteInfo struct {
+	Pattern      string // method-and-pattern, e.g. "GET /counter/{id}"
+	RegisteredBy string // who claimed it: "Mount[Counter]", "HandleFunc", …
+}
+
+func sortRoutes(routes []RouteInfo) {
+	for i := 1; i < len(routes); i++ {
+		for j := i; j > 0 && routes[j-1].Pattern > routes[j].Pattern; j-- {
+			routes[j-1], routes[j] = routes[j], routes[j-1]
+		}
+	}
+}
+
 // claimRoute records that pattern has been claimed by tag and panics if the
 // same pattern is registered twice. Catching the conflict early surfaces
 // silent footguns ("why does only the second Mount win?") at boot rather
@@ -319,6 +348,16 @@ func (a *App) withSession() http.Handler {
 		// Stamp the app pointer into r so middleware can resolve the
 		// session via via.GetSess[T](r) without holding a *Ctx yet.
 		r = r.WithContext(context.WithValue(r.Context(), appKey{}, a))
+		// Detour through a 404 sniffer if a custom not-found handler
+		// is configured. The mux's default 404 path is opaque, so we
+		// pre-check via mux.Handler — if it returns the "not found"
+		// handler, we run the user's WithNotFound callback instead.
+		if a.cfg.notFoundHandler != nil {
+			if _, pattern := a.mux.Handler(r); pattern == "" {
+				a.cfg.notFoundHandler.ServeHTTP(w, r)
+				return
+			}
+		}
 		applyMiddleware(a.middleware, a.mux).ServeHTTP(w, r)
 	})
 }

@@ -31,6 +31,7 @@ type config struct {
 	maxRequestBody     int64
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
+	notFoundHandler    http.Handler
 }
 
 // Option configures a via App.
@@ -93,6 +94,14 @@ func WithActionErrorHandler(fn func(*Ctx, error)) Option {
 // and errors flow through this callback as level + message + key/value
 // pairs.
 func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
+
+// WithNotFound replaces the default 404 page with a custom handler. The
+// handler runs after the session middleware, so it can read the session
+// and decide whether to redirect, render a "not found" composition, or
+// short-circuit with an empty body.
+func WithNotFound(h http.Handler) Option {
+	return func(c *config) { c.notFoundHandler = h }
+}
 
 // Plugin extends the App at registration time.
 type Plugin interface {
