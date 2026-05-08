@@ -56,6 +56,93 @@ func (p *setSignalStringPage) View(ctx *via.Ctx) h.H {
 	)
 }
 
+type modifierPage struct{}
+
+func (p *modifierPage) Submit(ctx *via.Ctx) error { return nil }
+func (p *modifierPage) Search(ctx *via.Ctx) error { return nil }
+
+func (p *modifierPage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Form(on.Submit(p.Submit, on.Prevent())),
+		h.Input(on.Input(p.Search, on.Debounce("200ms"))),
+		h.Button(h.Text("Stop"), on.Click(p.Submit, on.Stop())),
+		h.Input(on.Input(p.Search, on.Throttle("500ms"))),
+	)
+}
+
+func TestOn_DebounceModifierAppendsToTrigger(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[modifierPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "on:input.debounce.200ms",
+		"Debounce should append .debounce.<dur> to the trigger spec")
+}
+
+func TestOn_ThrottleModifierAppendsToTrigger(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[modifierPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "on:input.throttle.500ms",
+		"Throttle should append .throttle.<dur> to the trigger spec")
+}
+
+func TestOn_PreventModifierAppendsToTrigger(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[modifierPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "on:submit.prevent",
+		"Prevent should append .prevent to the trigger spec")
+}
+
+func TestOn_StopModifierAppendsToTrigger(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[modifierPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "on:click.stop",
+		"Stop should append .stop to the trigger spec")
+}
+
+type keyFilterPage struct{}
+
+func (p *keyFilterPage) Send(ctx *via.Ctx) error { return nil }
+
+func (p *keyFilterPage) View(ctx *via.Ctx) h.H {
+	return h.Div(on.Key("Enter", p.Send))
+}
+
+func TestOn_KeyAttributeIncludesNamedKey(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[keyFilterPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "on:keydown.Enter",
+		"on.Key should append .<key> to the keydown trigger")
+}
+
 func TestSetSignal_quotesStringValues(t *testing.T) {
 	t.Parallel()
 
