@@ -120,6 +120,43 @@ func (p *customErrPage) Save(ctx *via.Ctx) error {
 
 func (p *customErrPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+type panicTypedErr struct {
+	Code string
+}
+
+func (e *panicTypedErr) Error() string { return e.Code }
+
+type panicTypedPage struct{}
+
+func (p *panicTypedPage) Boom(ctx *via.Ctx) error {
+	panic(&panicTypedErr{Code: "E_TYPED"})
+}
+
+func (p *panicTypedPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAction_panicWithTypedErrorPreservesType(t *testing.T) {
+	t.Parallel()
+
+	var got error
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
+			got = err
+		}),
+	)
+	via.Mount[panicTypedPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Boom").Fire())
+
+	require.NotNil(t, got)
+	te, ok := got.(*panicTypedErr)
+	require.True(t, ok, "panic with typed *panicTypedErr should be passed through to the handler verbatim, got %T", got)
+	assert.Equal(t, "E_TYPED", te.Code)
+}
+
 func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
 	t.Parallel()
 

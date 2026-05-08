@@ -568,7 +568,15 @@ func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
 	defer func() {
 		if rec := recover(); rec != nil {
 			a.logErr(ctx, "action %q panicked: %v", id, rec)
-			panicErr := fmt.Errorf("panic: %v", rec)
+			// Preserve a typed error from panic(err) so a custom
+			// WithActionErrorHandler can errors.As / errors.Is it.
+			// String/other panics get wrapped.
+			var panicErr error
+			if e, ok := rec.(error); ok {
+				panicErr = e
+			} else {
+				panicErr = fmt.Errorf("panic: %v", rec)
+			}
 			a.dispatchActionError(ctx, panicErr, true)
 		}
 	}()
