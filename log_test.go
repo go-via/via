@@ -94,6 +94,48 @@ type accessLogPage struct{}
 
 func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+type ridLogPage struct{}
+
+func (p *ridLogPage) Trace(ctx *via.Ctx) error {
+	via.Log(ctx).Log(via.LogInfo, "doing-it")
+	return nil
+}
+
+func (p *ridLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogInfo),
+		via.WithTestServer(&server),
+	)
+	app.Use(via.RequestID())
+	via.Mount[ridLogPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Trace").Fire())
+
+	// The action's Log call should have appended both via_tab and rid.
+	got := false
+	for _, r := range cap.snapshot() {
+		if r.msg != "doing-it" {
+			continue
+		}
+		// kv has via_tab=…, rid=…, then any user kv. Check rid present.
+		for i := 0; i+1 < len(r.kv); i += 2 {
+			if r.kv[i] == "rid" && r.kv[i+1].(string) != "" {
+				got = true
+			}
+		}
+	}
+	assert.True(t, got, "via.Log should include rid when RequestID middleware ran")
+}
+
 func TestRequestID_generatesWhenAbsent(t *testing.T) {
 	t.Parallel()
 

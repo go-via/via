@@ -132,12 +132,25 @@ func Log(ctx *Ctx) Logger {
 	if base == nil {
 		base = defaultLogger{}
 	}
+	rid := ""
+	if ctx.r != nil {
+		rid = RequestIDFrom(ctx.r)
+	}
 	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
 		if level < app.cfg.logLevel {
 			return
 		}
+		// Prepend correlation pairs so they're stable in slog handlers
+		// that rely on attribute order.
+		head := make([]any, 0, 4)
 		if tab != "" {
-			kv = append([]any{"via_tab", tab}, kv...)
+			head = append(head, "via_tab", tab)
+		}
+		if rid != "" {
+			head = append(head, "rid", rid)
+		}
+		if len(head) > 0 {
+			kv = append(head, kv...)
 		}
 		base.Log(level, msg, kv...)
 	})
