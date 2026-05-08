@@ -27,8 +27,11 @@ func (s *State[T]) Get(ctx *Ctx) T {
 	return s.val
 }
 
-// Set writes a new value, marks the composition dirty, and schedules a
-// re-render of the view fragment.
+// Set writes a new value and marks the composition dirty so the next
+// flush re-renders the view fragment. From inside an action method or
+// a via.Stream callback, the flush is automatic. From a raw goroutine
+// you started yourself, call ctx.Sync() at a coalescing boundary —
+// the dirty bit alone won't reach the browser without a flush.
 func (s *State[T]) Set(ctx *Ctx, v T) {
 	s.val = v
 	if ctx != nil {
