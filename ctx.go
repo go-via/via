@@ -23,6 +23,8 @@ type Ctx struct {
 	session      *session
 	lastAccess   atomic.Int64
 
+	connectOnce sync.Once // guards OnConnect dispatch
+
 	mu sync.Mutex // guards w / r and disposed flag
 
 	w http.ResponseWriter

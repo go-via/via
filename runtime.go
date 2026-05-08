@@ -224,6 +224,28 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx.touch()
 
+	// OnConnect runs once, the first time the SSE stream is opened. Bots
+	// that hit GET without ever opening the SSE never see this fire, so
+	// expensive background work (tickers, fan-out goroutines) lives here
+	// rather than in Init.
+	ctx.connectOnce.Do(func() {
+		if !ctx.desc.hasOnConnect {
+			return
+		}
+		defer func() {
+			if rec := recover(); rec != nil {
+				a.logErr(ctx, "OnConnect panicked: %v", rec)
+			}
+		}()
+		out := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.connectIdx).
+			Call([]reflect.Value{reflect.ValueOf(ctx)})
+		if !out[0].IsNil() {
+			if errVal, _ := out[0].Interface().(error); errVal != nil {
+				a.logErr(ctx, "OnConnect: %v", errVal)
+			}
+		}
+	})
+
 	sse := datastar.NewSSE(w, r)
 
 	var heartbeat <-chan time.Time

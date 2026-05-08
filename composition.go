@@ -78,11 +78,13 @@ type cmpDescriptor struct {
 	actionSlots  []actionSlot
 	actionByName map[string]int
 	childSlots   []childSlot
-	viewIdx      int // method index of View on *C
-	initIdx      int // method index of Init or -1
-	disposeIdx   int // method index of Dispose or -1
-	hasInit      bool
-	hasDispose   bool
+	viewIdx       int // method index of View on *C
+	initIdx       int // method index of Init or -1
+	connectIdx    int // method index of OnConnect or -1
+	disposeIdx    int // method index of Dispose or -1
+	hasInit       bool
+	hasOnConnect  bool
+	hasDispose    bool
 	app          *App
 }
 
@@ -138,10 +140,11 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 		ptrTyp:       ptrTyp,
 		route:        route,
 		actionByName: map[string]int{},
-		viewIdx:      viewMethod.Index,
-		initIdx:      -1,
-		disposeIdx:   -1,
-		app:          app,
+		viewIdx:    viewMethod.Index,
+		initIdx:    -1,
+		connectIdx: -1,
+		disposeIdx: -1,
+		app:        app,
 	}
 
 	walkStruct(desc, typ, nil, "")
@@ -163,6 +166,10 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 	if m, ok := ptrTyp.MethodByName("Init"); ok {
 		desc.hasInit = true
 		desc.initIdx = m.Index
+	}
+	if m, ok := ptrTyp.MethodByName("OnConnect"); ok {
+		desc.hasOnConnect = true
+		desc.connectIdx = m.Index
 	}
 	if m, ok := ptrTyp.MethodByName("Dispose"); ok {
 		desc.hasDispose = true
@@ -346,7 +353,7 @@ func isActionMethod(m reflect.Method) bool {
 		return false
 	}
 	switch m.Name {
-	case "View", "Init", "Dispose":
+	case "View", "Init", "OnConnect", "Dispose":
 		return false
 	}
 	return true
