@@ -61,6 +61,22 @@ func RequestIDFrom(r *http.Request) string {
 	return v
 }
 
+// Defaults installs the recommended middleware stack on the app:
+// RequestID (X-Request-ID stamping), AccessLog (one info line per
+// request with the captured status + rid), Recover (panic → 500).
+// Order matters: RequestID is outermost so AccessLog can read the
+// id from r.Context; AccessLog wraps Recover so it sees the final
+// status (500 after Recover writes) on the deferred log line.
+//
+//	app := via.New()
+//	via.Defaults(app)
+//	via.Mount[Counter](app, "/")
+func Defaults(a *App) {
+	a.Use(RequestID())
+	a.Use(AccessLog(a))
+	a.Use(Recover(a))
+}
+
 // Recover returns a Middleware that catches panics in downstream
 // handlers, logs the recovered value through the App's logger, and
 // writes a 500 response so the goroutine doesn't crash the server.

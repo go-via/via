@@ -94,6 +94,50 @@ type accessLogPage struct{}
 
 func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogInfo),
+		via.WithTestServer(&server),
+	)
+	via.Defaults(app)
+	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("oops")
+	})
+	app.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	defer server.Close()
+
+	// Recover survives the panic.
+	resp, err := http.Get(server.URL + "/boom")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+
+	// RequestID stamps a header.
+	resp2, err := http.Get(server.URL + "/ok")
+	require.NoError(t, err)
+	resp2.Body.Close()
+	assert.NotEmpty(t, resp2.Header.Get("X-Request-ID"))
+
+	// AccessLog logs both, including rid.
+	logs := cap.snapshot()
+	sawAccess := 0
+	for _, r := range logs {
+		if strings.Contains(r.msg, "rid=") &&
+			(strings.Contains(r.msg, "/boom") || strings.Contains(r.msg, "/ok")) {
+			sawAccess++
+		}
+	}
+	assert.GreaterOrEqual(t, sawAccess, 2,
+		"AccessLog should record both requests with rid")
+}
+
 func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	t.Parallel()
 
