@@ -38,6 +38,12 @@ type App struct {
 	descs   []*cmpDescriptor
 	descsMu sync.RWMutex
 
+	// appSignals holds plugin-registered, app-wide initial signal values.
+	// They are injected into <meta data-signals> on every page render but
+	// don't have a server-side reactive handle — clients drive them.
+	appSignals   map[string]any
+	appSignalsMu sync.RWMutex
+
 	contextRegistry      map[string]*Ctx
 	contextRegistryMutex sync.RWMutex
 
@@ -88,6 +94,19 @@ func (a *App) AppendAttrToHTML(attrs ...h.H) {
 
 // Use installs middleware that wraps every via-served request.
 func (a *App) Use(mw ...Middleware) { a.middleware = append(a.middleware, mw...) }
+
+// RegisterAppSignal sets the initial value of a named, app-wide signal.
+// Used by plugins to seed data-signals entries that the client owns
+// (e.g. picocss's "_picoTheme"). The value is JSON-encoded into every
+// page's <meta data-signals> on render.
+func (a *App) RegisterAppSignal(key string, value any) {
+	a.appSignalsMu.Lock()
+	defer a.appSignalsMu.Unlock()
+	if a.appSignals == nil {
+		a.appSignals = map[string]any{}
+	}
+	a.appSignals[key] = value
+}
 
 // HandleFunc registers a non-via handler on the app's mux.
 func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
@@ -211,6 +230,7 @@ func New(opts ...Option) *App {
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
 		sessions:        make(map[string]*session),
+		appSignals:      make(map[string]any),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,

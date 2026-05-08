@@ -79,6 +79,38 @@ func MarkDirty(ctx *Ctx) {
 	ctx.markStateDirty()
 }
 
+// ExecScript queues a JavaScript snippet for execution on the client at
+// the next flush. Use sparingly — most reactivity should flow through
+// signals/state rather than imperative scripts.
+func (ctx *Ctx) ExecScript(s string) {
+	if ctx == nil || s == "" {
+		return
+	}
+	enqueueScript(ctx, s)
+}
+
+// Redirect sends a client-side navigation to url at the next flush.
+func (ctx *Ctx) Redirect(url string) {
+	if ctx == nil || url == "" || ctx.queue == nil {
+		return
+	}
+	q := ctx.queue
+	q.mu.Lock()
+	q.redirect = url
+	q.hasRedir = true
+	q.mu.Unlock()
+	q.notify()
+}
+
+// Sync explicitly re-renders the view and flushes pending patches.
+func (ctx *Ctx) Sync() {
+	if ctx == nil {
+		return
+	}
+	ctx.markStateDirty()
+	flushDirty(ctx)
+}
+
 func (ctx *Ctx) markStateDirty() {
 	ctx.stateDirty = true
 	if ctx.queue != nil {

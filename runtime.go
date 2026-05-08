@@ -90,6 +90,11 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 
 func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 	initialSigs := map[string]any{"via_tab": ctx.id}
+	a.appSignalsMu.RLock()
+	for k, v := range a.appSignals {
+		initialSigs[k] = v
+	}
+	a.appSignalsMu.RUnlock()
 	for slot, ref := range ctx.signalRefs {
 		s := ctx.desc.signalSlots[slot]
 		if s.kind != kindSignal {
