@@ -63,6 +63,41 @@ func (q *patchQueue) notify() {
 	}
 }
 
+// PatchSignal queues a single signal update keyed by name. Plugins use it
+// to push values to client-only signals they own (e.g. picocss's
+// "_picoTheme") without going through a typed Signal[T] handle. Multiple
+// PatchSignal calls within the same flush window are merged — last write
+// wins per key.
+func (ctx *Ctx) PatchSignal(key string, value any) {
+	if ctx == nil || ctx.queue == nil || key == "" {
+		return
+	}
+	ctx.queue.mu.Lock()
+	if ctx.queue.signals == nil {
+		ctx.queue.signals = make(map[string]any, 1)
+	}
+	ctx.queue.signals[key] = value
+	ctx.queue.mu.Unlock()
+	ctx.queue.notify()
+}
+
+// PatchSignals queues many signal updates as a single batched merge. Same
+// last-wins-per-key semantics as PatchSignal.
+func (ctx *Ctx) PatchSignals(values map[string]any) {
+	if ctx == nil || ctx.queue == nil || len(values) == 0 {
+		return
+	}
+	ctx.queue.mu.Lock()
+	if ctx.queue.signals == nil {
+		ctx.queue.signals = make(map[string]any, len(values))
+	}
+	for k, v := range values {
+		ctx.queue.signals[k] = v
+	}
+	ctx.queue.mu.Unlock()
+	ctx.queue.notify()
+}
+
 // SyncElements pushes one or more h.H trees to the client as element
 // patches at the next flush. Useful for action-driven, targeted DOM
 // updates that bypass the full view re-render. Each element should carry

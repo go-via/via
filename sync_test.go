@@ -29,6 +29,11 @@ func (p *syncPage) Toast(ctx *via.Ctx) error {
 	return nil
 }
 
+func (p *syncPage) PickTheme(ctx *via.Ctx) error {
+	ctx.PatchSignal("_picoTheme", "purple")
+	return nil
+}
+
 func (p *syncPage) View(ctx *via.Ctx) h.H {
 	return h.Div(h.ID("root"), h.P(h.Text("ready")))
 }
@@ -63,6 +68,39 @@ func TestSyncElements_pushesManualPatchOverSSE(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatalf("expected manual patch with id=results; got %q", got.String())
+		}
+	}
+}
+
+func TestPatchSignal_pushesKeyedValueToClient(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE(t)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("PickTheme").Fire())
+
+	deadline := time.After(2 * time.Second)
+	got := strings.Builder{}
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatalf("SSE closed early; got %q", got.String())
+			}
+			got.WriteString(f)
+			if strings.Contains(got.String(), `"_picoTheme":"purple"`) {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("expected _picoTheme=purple patch; got %q", got.String())
 		}
 	}
 }
