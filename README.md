@@ -177,6 +177,7 @@ Built-in factories under `via`:
 | `Recover(app)`                   | panic → 500 + error log; goroutine survives   |
 | `StrictCSP(extra…)`              | strict CSP header + nonce on r.Context        |
 | `HSTS(opts…)`                    | Strict-Transport-Security for HTTPS deploys   |
+| `RedirectHTTPS()`                | 301 plain HTTP → https; respects XFP header   |
 
 Read it back inside actions / handlers:
 
@@ -216,6 +217,7 @@ app := via.New(
 via.Defaults(app)
 app.Use(via.HSTS())
 app.Use(via.StrictCSP())
+app.Use(via.RedirectHTTPS())
 
 via.Mount[Home](app, "/")
 api := app.Group("/api")
