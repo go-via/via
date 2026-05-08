@@ -142,6 +142,43 @@ func TestGroup_middlewareAppliesToMountOnComposition(t *testing.T) {
 		"MountOn must wrap the rendered route in the group's middleware")
 }
 
+type tenantPage struct {
+	Tenant string `path:"tenant"`
+	UserID int    `path:"id"`
+}
+
+func (p *tenantPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.Textf("tenant=%s", p.Tenant)),
+		h.Span(h.Textf("user=%d", p.UserID)))
+}
+
+func TestGroup_pathParamsUnderGroupPrefix(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	api := app.Group("/api/{tenant}")
+	via.MountOn[tenantPage](api, "/users/{id}")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/acme/users/42")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body := readGroupBody(t, resp)
+	assert.Contains(t, body, "tenant=acme",
+		"path param from group prefix should decode into the typed field")
+	assert.Contains(t, body, "user=42",
+		"path param from MountOn route should decode alongside")
+}
+
+func readGroupBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	buf, _ := io.ReadAll(resp.Body)
+	return string(buf)
+}
+
 func TestGroup_routes404WithoutPrefix(t *testing.T) {
 	t.Parallel()
 
