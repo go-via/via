@@ -143,6 +143,17 @@ func Switch(value any, cases ...SwitchCase) H {
 	return fallback
 }
 
+// Fragment is the variadic form of Group. Reads cleanly when the node
+// count is known at the call site:
+//
+//	func sectionHeader(title string) h.H {
+//	    return h.Fragment(
+//	        h.H2(h.Text(title)),
+//	        h.Hr(),
+//	    )
+//	}
+func Fragment(items ...H) H { return Group(items) }
+
 // Group bundles a slice of nodes into a single H so callers can return
 // many nodes from a function that has to return one.
 func Group(items []H) H {

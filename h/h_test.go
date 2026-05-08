@@ -113,6 +113,33 @@ func TestSwitch_typedKeysCompareEquality(t *testing.T) {
 	assert.Contains(t, got, "β")
 }
 
+func TestFragment_rendersChildrenWithoutWrapper(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Fragment(
+		h.H2(h.Text("title")),
+		h.Hr(),
+	)))
+	assert.Equal(t, "<div><h2>title</h2><hr></div>", got,
+		"Fragment must inline its children — no wrapping element")
+}
+
+func TestFragment_skipsNilChildren(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Fragment(
+		h.P(h.Text("a")),
+		nil,
+		h.P(h.Text("b")),
+	)))
+	assert.Equal(t, "<div><p>a</p><p>b</p></div>", got,
+		"nil children must be tolerated so callers can use If/When inside Fragment")
+}
+
+func TestFragment_emptyRendersNothing(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Fragment()))
+	assert.Equal(t, "<div></div>", got)
+}
+
 func TestWhen_buildsOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
 
