@@ -52,6 +52,29 @@ func TestRoutes_orderedAlphabetically(t *testing.T) {
 	}
 }
 
+type infoA struct{}
+
+func (a *infoA) View(ctx *via.Ctx) h.H { return h.Div() }
+
+type infoB struct{}
+
+func (b *infoB) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestCompositions_listsMountedTypesSorted(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	via.Mount[infoB](app, "/zeta")
+	via.Mount[infoA](app, "/alpha")
+
+	cs := app.Compositions()
+	require.Equal(t, 2, len(cs))
+	assert.Equal(t, "/alpha", cs[0].Route, "should be sorted by route")
+	assert.Contains(t, cs[0].Type, "infoA")
+	assert.Equal(t, "/zeta", cs[1].Route)
+	assert.Contains(t, cs[1].Type, "infoB")
+}
+
 func TestWithNotFound_servesCustomHandlerOnUnknownRoute(t *testing.T) {
 	t.Parallel()
 

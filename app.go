@@ -192,6 +192,37 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 	return len(ctxs)
 }
 
+// Compositions returns a sorted snapshot of the names of every typed
+// Composition mounted on this app, paired with its route. Useful for
+// boot logging or status pages:
+//
+//	for _, c := range app.Compositions() {
+//	    log.Printf(\"mounted %-30s at %s\", c.Type, c.Route)
+//	}
+func (a *App) Compositions() []CompositionInfo {
+	a.descsMu.RLock()
+	out := make([]CompositionInfo, 0, len(a.descs))
+	for _, d := range a.descs {
+		out = append(out, CompositionInfo{
+			Type:  d.typ.String(),
+			Route: d.route,
+		})
+	}
+	a.descsMu.RUnlock()
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1].Route > out[j].Route; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
+// CompositionInfo is one entry in App.Compositions().
+type CompositionInfo struct {
+	Type  string // type name, e.g. "via_test.Counter"
+	Route string // mounted pattern
+}
+
 // LiveTabs returns the number of currently-registered tab contexts.
 // Useful for ops endpoints (/healthz, /metrics) that want to surface
 // concurrency without scraping internal state. The number is a
