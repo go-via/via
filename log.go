@@ -77,6 +77,84 @@ func Defaults(a *App) {
 	a.Use(Recover(a))
 }
 
+// HSTS returns a Middleware that sets the Strict-Transport-Security
+// response header. Pairs with via.WithSecureCookies for HTTPS
+// deployments. Use this only when the app is actually served over
+// HTTPS — sending HSTS over plain HTTP gets ignored, but enabling it
+// behind a misconfigured TLS terminator can lock users out for the
+// max-age duration.
+//
+// Defaults: max-age=31536000 (one year), includeSubDomains.
+//
+//	app.Use(via.HSTS())                     // 1y, subdomains, no preload
+//	app.Use(via.HSTS(via.HSTSPreload(true))) // opt into preload list
+func HSTS(opts ...HSTSOption) Middleware {
+	cfg := hstsConfig{maxAge: 31536000, includeSubdomains: true}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	header := "max-age=" + itoa(cfg.maxAge)
+	if cfg.includeSubdomains {
+		header += "; includeSubDomains"
+	}
+	if cfg.preload {
+		header += "; preload"
+	}
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		w.Header().Set("Strict-Transport-Security", header)
+		next.ServeHTTP(w, r)
+	}
+}
+
+type hstsConfig struct {
+	maxAge            int
+	includeSubdomains bool
+	preload           bool
+}
+
+// HSTSOption configures HSTS.
+type HSTSOption func(*hstsConfig)
+
+// HSTSMaxAge overrides the max-age value (in seconds).
+func HSTSMaxAge(seconds int) HSTSOption {
+	return func(c *hstsConfig) { c.maxAge = seconds }
+}
+
+// HSTSIncludeSubdomains toggles the includeSubDomains directive.
+func HSTSIncludeSubdomains(on bool) HSTSOption {
+	return func(c *hstsConfig) { c.includeSubdomains = on }
+}
+
+// HSTSPreload toggles the preload directive. Only set true if you
+// actually intend to submit to the HSTS preload list — once preloaded
+// the policy is essentially irreversible.
+func HSTSPreload(on bool) HSTSOption {
+	return func(c *hstsConfig) { c.preload = on }
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := false
+	if n < 0 {
+		neg = true
+		n = -n
+	}
+	var b [20]byte
+	pos := len(b)
+	for n > 0 {
+		pos--
+		b[pos] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		pos--
+		b[pos] = '-'
+	}
+	return string(b[pos:])
+}
+
 // Recover returns a Middleware that catches panics in downstream
 // handlers, logs the recovered value through the App's logger, and
 // writes a 500 response so the goroutine doesn't crash the server.
