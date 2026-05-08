@@ -25,6 +25,19 @@ func (d *disposable) Dispose(ctx *via.Ctx) {
 
 func (d *disposable) View(ctx *via.Ctx) h.H { return h.Div() }
 
+type disposedFlagPage struct{}
+
+func (p *disposedFlagPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestDisposed_falseWhileLive(t *testing.T) {
+	t.Parallel()
+
+	c := &disposedFlagPage{}
+	ctx := via.NewBoundCtx(c)
+	require.False(t, ctx.Disposed(),
+		"a freshly-bound Ctx should not be marked disposed")
+}
+
 func TestDispose_runsOnAppShutdown(t *testing.T) {
 	t.Parallel()
 

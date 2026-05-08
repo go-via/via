@@ -66,6 +66,29 @@ type Ctx struct {
 // Done returns a channel closed on context disposal (tab close or shutdown).
 func (ctx *Ctx) Done() <-chan struct{} { return ctx.doneChan }
 
+// Disposed reports whether the Ctx has been torn down (tab closed,
+// swept by ctx-TTL, or app shutdown). Use it from a long-running
+// goroutine to skip expensive work that nobody's going to see:
+//
+//	for {
+//	    if ctx.Disposed() { return }
+//	    ...
+//	}
+//
+// Equivalent to a non-blocking <-ctx.Done(), but reads more
+// naturally inline.
+func (ctx *Ctx) Disposed() bool {
+	if ctx == nil {
+		return true
+	}
+	select {
+	case <-ctx.doneChan:
+		return true
+	default:
+		return false
+	}
+}
+
 // ID returns the tab id (the wire key for via_tab).
 func (ctx *Ctx) ID() string { return ctx.id }
 
