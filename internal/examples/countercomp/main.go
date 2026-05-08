@@ -41,8 +41,8 @@ type Page struct {
 	B CounterCard
 }
 
-func (p *Page) IncA(ctx *via.Ctx) error { p.A.Inc(ctx); return nil }
-func (p *Page) IncB(ctx *via.Ctx) error { p.B.Inc(ctx); return nil }
+func (p *Page) IncA(ctx *via.Ctx) { p.A.Inc(ctx) }
+func (p *Page) IncB(ctx *via.Ctx) { p.B.Inc(ctx) }
 
 func (p *Page) View(ctx *via.Ctx) h.H {
 	return h.Div(

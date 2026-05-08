@@ -15,14 +15,12 @@ type Greeter struct {
 	Greeting via.Signal[string] `via:"greeting,init=Hello..."`
 }
 
-func (g *Greeter) GreetBob(ctx *via.Ctx) error {
+func (g *Greeter) GreetBob(ctx *via.Ctx) {
 	g.Greeting.Set(ctx, "Hello Bob!")
-	return nil
 }
 
-func (g *Greeter) GreetAlice(ctx *via.Ctx) error {
+func (g *Greeter) GreetAlice(ctx *via.Ctx) {
 	g.Greeting.Set(ctx, "Hello Alice!")
-	return nil
 }
 
 func (g *Greeter) View(ctx *via.Ctx) h.H {

@@ -17,15 +17,16 @@ type Counter struct {
 	Step via.Signal[int] `via:"step,init=1"`
 }
 
-func (c *Counter) Inc(ctx *via.Ctx) error {
-	c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
-	return nil
+// Action methods drop the error return when nothing in the body can
+// fail meaningfully — Update + Set don't surface errors.
+
+func (c *Counter) Inc(ctx *via.Ctx) {
+	c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 }
 
-func (c *Counter) Reset(ctx *via.Ctx) error {
+func (c *Counter) Reset(ctx *via.Ctx) {
 	c.Hits.Set(ctx, 0)
 	c.Step.Set(ctx, 1)
-	return nil
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {

@@ -26,9 +26,8 @@ type Counter struct {
     Step via.Signal[int] `via:"step,init=1"`
 }
 
-func (c *Counter) Inc(ctx *via.Ctx) error {
-    c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
-    return nil
+func (c *Counter) Inc(ctx *via.Ctx) {
+    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
@@ -84,8 +83,9 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 
 ## Actions
 
-A method on `*Composition` of signature `func(*via.Ctx) error` is an
-action. Bind it to a DOM event with the `on` sub-package:
+A method on `*Composition` of signature `func(*via.Ctx) error` — or
+`func(*via.Ctx)` when nothing in the body can fail meaningfully — is
+an action. Bind it to a DOM event with the `on` sub-package:
 
 ```go
 h.Button(h.Text("+"), on.Click(c.Inc))
