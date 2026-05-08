@@ -433,6 +433,11 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	slot := d.actionSlots[slotIdx]
 
+	// Serialize per-tab so parallel POSTs to the same ctx don't race
+	// on State writes, dirty bits, or Writer/Request assignment.
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
+
 	ctx.mu.Lock()
 	ctx.w = w
 	ctx.r = r

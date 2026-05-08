@@ -39,6 +39,11 @@ type Ctx struct {
 
 	connectOnce sync.Once // guards OnConnect dispatch
 
+	// actionMu serializes action handlers per-Ctx. Without it, two POSTs
+	// for the same tab arriving concurrently race on State writes,
+	// dirty bits, and Writer/Request assignment.
+	actionMu sync.Mutex
+
 	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]
 	// used as the argument list for Init/View/Action/OnConnect/Dispose
 	// reflect.Method.Call. Boxing ctx once and re-using the slice
