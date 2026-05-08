@@ -148,6 +148,50 @@ func (ctx *Ctx) Sync() {
 	flushDirty(ctx)
 }
 
+// PendingRedirect returns the URL queued by Redirect (if any) without
+// draining it. Reserved for tests that drive actions through
+// test.NewCtx and need to assert that an action queued a redirect.
+func (ctx *Ctx) PendingRedirect() string {
+	if ctx == nil || ctx.queue == nil {
+		return ""
+	}
+	ctx.queue.mu.Lock()
+	defer ctx.queue.mu.Unlock()
+	if !ctx.queue.hasRedir {
+		return ""
+	}
+	return ctx.queue.redirect
+}
+
+// PendingScripts returns the JavaScript queued by ExecScript /
+// ExecScriptf, without draining it. Reserved for tests.
+func (ctx *Ctx) PendingScripts() string {
+	if ctx == nil || ctx.queue == nil {
+		return ""
+	}
+	ctx.queue.mu.Lock()
+	defer ctx.queue.mu.Unlock()
+	return ctx.queue.scripts.String()
+}
+
+// PendingSignals returns a snapshot of the signals queued for the
+// next flush, without draining them. Reserved for tests.
+func (ctx *Ctx) PendingSignals() map[string]any {
+	if ctx == nil || ctx.queue == nil {
+		return nil
+	}
+	ctx.queue.mu.Lock()
+	defer ctx.queue.mu.Unlock()
+	if len(ctx.queue.signals) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(ctx.queue.signals))
+	for k, v := range ctx.queue.signals {
+		out[k] = v
+	}
+	return out
+}
+
 func (ctx *Ctx) markStateDirty() {
 	ctx.stateDirty = true
 	if ctx.queue != nil {

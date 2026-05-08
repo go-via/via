@@ -157,6 +157,30 @@ func TestNewCtx_initialSignalValueComesFromTag(t *testing.T) {
 		"init=2 tag should populate the Signal at NewCtx time")
 }
 
+type redirectingPage struct{}
+
+func (p *redirectingPage) Login(ctx *via.Ctx) error {
+	ctx.Redirect("/profile")
+	ctx.ExecScript("console.log('hi')")
+	ctx.PatchSignal("_picoTheme", "blue")
+	return nil
+}
+
+func (p *redirectingPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestNewCtx_pendingRedirectVisibleViaCtxIntrospection(t *testing.T) {
+	t.Parallel()
+
+	c := &redirectingPage{}
+	ctx := viatest.NewCtx(t, c)
+	require.NoError(t, c.Login(ctx))
+
+	assert.Equal(t, "/profile", ctx.PendingRedirect())
+	assert.Contains(t, ctx.PendingScripts(), "console.log('hi')")
+	sigs := ctx.PendingSignals()
+	assert.Equal(t, "blue", sigs["_picoTheme"])
+}
+
 func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	t.Parallel()
 
