@@ -40,3 +40,14 @@ go.work.sum
 
 # Air artifacts
 *tmp/
+
+# Stray go-build outputs from example dirs
+/counter
+/countercomp
+/greeter
+/pathparams
+/picocss
+/sysmon
+/auth
+/plugins
+/echarts
