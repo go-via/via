@@ -42,6 +42,63 @@ func Class(v string) H {
 	return gh.Class(v)
 }
 
+// Classes joins many class names with spaces and renders one class
+// attribute. Empty entries are skipped so callers can branch with
+// inline conditionals without producing a ragged class list:
+//
+//	h.Classes("btn", h.IfStr(active, "btn-primary"), "lg")
+func Classes(parts ...string) H {
+	out := make([]byte, 0, 32)
+	first := true
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if !first {
+			out = append(out, ' ')
+		}
+		out = append(out, p...)
+		first = false
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return gh.Class(string(out))
+}
+
+// ClassMap renders a class attribute that includes each key whose value
+// is true. Order follows the iteration order of the map.
+func ClassMap(m map[string]bool) H {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]byte, 0, 32)
+	first := true
+	for k, v := range m {
+		if !v || k == "" {
+			continue
+		}
+		if !first {
+			out = append(out, ' ')
+		}
+		out = append(out, k...)
+		first = false
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return gh.Class(string(out))
+}
+
+// IfStr returns s if cond is true, "" otherwise. Pairs with Classes /
+// Style for inline conditional fragments.
+func IfStr(cond bool, s string) string {
+	if cond {
+		return s
+	}
+	return ""
+}
+
 func Role(v string) H {
 	return gh.Role(v)
 }

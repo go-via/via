@@ -43,6 +43,35 @@ func TestEachIndexed_passesIndex(t *testing.T) {
 	assert.Equal(t, "<ul><li>0:x</li><li>1:y</li></ul>", got)
 }
 
+func TestClasses_joinsAndSkipsEmpty(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Classes("btn", "", "primary")))
+	assert.Equal(t, `<div class="btn primary"></div>`, got)
+}
+
+func TestClasses_emptyInputProducesNoAttribute(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Classes("", "")))
+	assert.Equal(t, `<div></div>`, got)
+}
+
+func TestClassMap_includesOnlyTrueKeys(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.ClassMap(map[string]bool{
+		"on":  true,
+		"off": false,
+	})))
+	assert.Contains(t, got, `class="`)
+	assert.Contains(t, got, `on`)
+	assert.NotContains(t, got, `off`)
+}
+
+func TestIfStr_returnsConditional(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "yes", h.IfStr(true, "yes"))
+	assert.Equal(t, "", h.IfStr(false, "yes"))
+}
+
 func TestWhen_buildsOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
 
