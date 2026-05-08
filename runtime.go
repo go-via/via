@@ -16,6 +16,26 @@ import (
 	"github.com/starfederation/datastar-go/datastar"
 )
 
+// renderBufPool reduces alloc churn on the patch render path. Buffers
+// start at 8 KiB and grow as needed; we keep them around for the next
+// render.
+var renderBufPool = sync.Pool{
+	New: func() any { return bytes.NewBuffer(make([]byte, 0, 8192)) },
+}
+
+func getRenderBuf() *bytes.Buffer {
+	b := renderBufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	return b
+}
+
+func putRenderBuf(b *bytes.Buffer) {
+	if b.Cap() > 1<<20 { // drop >1 MiB outliers
+		return
+	}
+	renderBufPool.Put(b)
+}
+
 // patchQueue coalesces outgoing patches between SSE flushes.
 type patchQueue struct {
 	mu       sync.Mutex
@@ -68,21 +88,20 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	applyInits(ctx, cmpVal, d)
 	decodePathParams(cmpVal, r, d)
 
+	ctxArg := []reflect.Value{reflect.ValueOf(ctx)}
+
 	if d.hasInit {
-		m := cmpVal.MethodByName("Init")
-		if m.IsValid() {
-			out := m.Call([]reflect.Value{reflect.ValueOf(ctx)})
-			if !out[0].IsNil() {
-				if errVal, ok := out[0].Interface().(error); ok && errVal != nil {
-					a.logErr(ctx, "Init: %v", errVal)
-				}
+		out := cmpVal.Method(d.initIdx).Call(ctxArg)
+		if !out[0].IsNil() {
+			if errVal, ok := out[0].Interface().(error); ok && errVal != nil {
+				a.logErr(ctx, "Init: %v", errVal)
 			}
 		}
 	}
 
 	a.registerCtx(tabID, ctx)
 
-	view := cmpVal.MethodByName("View").Call([]reflect.Value{reflect.ValueOf(ctx)})[0]
+	view := cmpVal.Method(d.viewIdx).Call(ctxArg)[0]
 	body := view.Interface().(h.H)
 
 	a.writePageDocument(w, ctx, body)
@@ -380,8 +399,8 @@ func flushDirty(ctx *Ctx) {
 	}
 
 	if ctx.stateDirty {
-		buf := bytes.NewBuffer(nil)
-		view := reflect.ValueOf(ctx.cmpVal).MethodByName("View").
+		buf := getRenderBuf()
+		view := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.viewIdx).
 			Call([]reflect.Value{reflect.ValueOf(ctx)})[0]
 		body := view.Interface().(h.H)
 		_ = h.Div(h.ID(ctx.id), body).Render(buf)
@@ -389,6 +408,7 @@ func flushDirty(ctx *Ctx) {
 		ctx.queue.elements = buf.String()
 		ctx.queue.hasElems = true
 		ctx.queue.mu.Unlock()
+		putRenderBuf(buf)
 		ctx.stateDirty = false
 	}
 

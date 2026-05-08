@@ -78,6 +78,9 @@ type cmpDescriptor struct {
 	actionSlots  []actionSlot
 	actionByName map[string]int
 	childSlots   []childSlot
+	viewIdx      int // method index of View on *C
+	initIdx      int // method index of Init or -1
+	disposeIdx   int // method index of Dispose or -1
 	hasInit      bool
 	hasDispose   bool
 	app          *App
@@ -125,7 +128,8 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 	descriptorMu.RUnlock()
 
 	ptrTyp := reflect.PointerTo(typ)
-	if _, ok := ptrTyp.MethodByName("View"); !ok {
+	viewMethod, ok := ptrTyp.MethodByName("View")
+	if !ok {
 		panic(fmt.Sprintf("via.Mount: %s must implement View(ctx *Ctx) h.H", typ.String()))
 	}
 
@@ -134,6 +138,9 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 		ptrTyp:       ptrTyp,
 		route:        route,
 		actionByName: map[string]int{},
+		viewIdx:      viewMethod.Index,
+		initIdx:      -1,
+		disposeIdx:   -1,
 		app:          app,
 	}
 
@@ -153,11 +160,13 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 		desc.actionByName[m.Name] = idx
 	}
 
-	if _, ok := ptrTyp.MethodByName("Init"); ok {
+	if m, ok := ptrTyp.MethodByName("Init"); ok {
 		desc.hasInit = true
+		desc.initIdx = m.Index
 	}
-	if _, ok := ptrTyp.MethodByName("Dispose"); ok {
+	if m, ok := ptrTyp.MethodByName("Dispose"); ok {
 		desc.hasDispose = true
+		desc.disposeIdx = m.Index
 	}
 
 	checkPathParams(desc, route)
