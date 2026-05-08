@@ -22,8 +22,8 @@ type Ctx struct {
 	id           string // tab id, generated per page request
 	app          *App
 	desc         *cmpDescriptor
-	cmpVal       any         // the bound *C
-	cmpReflect   any         // reflect.Value cache (boxed once)
+	cmpVal       any           // the bound *C
+	cmpReflect   reflect.Value // reflect.ValueOf(cmpVal), boxed once at request entry
 	signalRefs   []signalRef // indexed by slot
 	dirtySignals bitset      // size = len(signalRefs)
 	stateDirty   bool        // any State[T] mutated → re-render needed

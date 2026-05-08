@@ -84,6 +84,7 @@ func NewBoundCtx[T any](c *T) *Ctx {
 		doneChan:     make(chan struct{}),
 	}
 	ctx.touch()
+	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
 	bindScopeKeys(cmpVal, d)
 	for i, s := range d.signalSlots {
@@ -179,6 +180,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	}
 	ctx.touch()
 
+	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
 	bindScopeKeys(cmpVal, d)
 	applyInits(ctx, cmpVal, d)
@@ -189,7 +191,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	ctxArg := ctx.reflectArgs[:]
 
 	if d.hasInit {
-		out := cmpVal.Method(d.initIdx).Call(ctxArg)
+		out := ctx.cmpReflect.Method(d.initIdx).Call(ctxArg)
 		if !out[0].IsNil() {
 			if errVal, ok := out[0].Interface().(error); ok && errVal != nil {
 				a.logErr(ctx, "Init: %v", errVal)
@@ -199,7 +201,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 
 	a.registerCtx(tabID, ctx)
 
-	view := cmpVal.Method(d.viewIdx).Call(ctxArg)[0]
+	view := ctx.cmpReflect.Method(d.viewIdx).Call(ctxArg)[0]
 	body := view.Interface().(h.H)
 
 	a.writePageDocument(w, ctx, body)
@@ -377,7 +379,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 				a.logErr(ctx, "OnConnect panicked: %v", rec)
 			}
 		}()
-		out := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.connectIdx).
+		out := ctx.cmpReflect.Method(ctx.desc.connectIdx).
 			Call(ctx.reflectArgs[:])
 		if !out[0].IsNil() {
 			if errVal, _ := out[0].Interface().(error); errVal != nil {
@@ -557,8 +559,7 @@ func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
 	ctx.lastSignals = sigs
 	injectSignals(ctx, sigs)
 
-	cmpVal := reflect.ValueOf(ctx.cmpVal)
-	out := cmpVal.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
+	out := ctx.cmpReflect.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
 	if !slot.voidReturn && len(out) > 0 && !out[0].IsNil() {
 		errVal, _ := out[0].Interface().(error)
 		if errVal != nil {
@@ -604,7 +605,7 @@ func flushDirty(ctx *Ctx) {
 
 	if ctx.stateDirty {
 		buf := getRenderBuf()
-		view := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.viewIdx).
+		view := ctx.cmpReflect.Method(ctx.desc.viewIdx).
 			Call(ctx.reflectArgs[:])[0]
 		body := view.Interface().(h.H)
 		_ = h.Div(h.ID(ctx.id), body).Render(buf)
@@ -739,9 +740,6 @@ func (a *App) disposeCtx(ctx *Ctx) {
 				a.logErr(ctx, "Dispose panicked: %v", rec)
 			}
 		}()
-		m := reflect.ValueOf(ctx.cmpVal).MethodByName("Dispose")
-		if m.IsValid() {
-			m.Call([]reflect.Value{reflect.ValueOf(ctx)})
-		}
+		ctx.cmpReflect.Method(ctx.desc.disposeIdx).Call(ctx.reflectArgs[:])
 	}
 }
