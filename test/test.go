@@ -167,7 +167,11 @@ func (c *Client) SSE(t testing.TB) (frames <-chan string, cancel func()) {
 
 // helpers
 
-var tabRE = regexp.MustCompile(`(/_[a-f0-9]{8,})`)
+// tabRE picks the via_tab id out of the data-signals attribute on the
+// rendered <meta>. The id is `<route>_<64-hex>`; the route can contain
+// any URL-safe characters (including `/`), so we match the suffix and
+// then re-extract the surrounding key.
+var tabRE = regexp.MustCompile(`&#34;via_tab&#34;:&#34;([^"&]+)&#34;`)
 
 func tabIDFrom(html string) string {
 	m := tabRE.FindStringSubmatch(html)

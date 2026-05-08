@@ -433,6 +433,17 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	slot := d.actionSlots[slotIdx]
 
+	// Wrap the dispatch in the descriptor's group middleware so a
+	// requireAuth (or any group-level guard) checks the request before
+	// the action runs — same auth posture as the rendered route.
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runAction(a, ctx, slot, id, w, r, sigs)
+	})
+	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
+}
+
+func runAction(a *App, ctx *Ctx, slot actionSlot, id string,
+	w http.ResponseWriter, r *http.Request, sigs map[string]any) {
 	// Serialize per-tab so parallel POSTs to the same ctx don't race
 	// on State writes, dirty bits, or Writer/Request assignment.
 	ctx.actionMu.Lock()
