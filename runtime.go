@@ -137,18 +137,17 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 	}
 }
 
-// applyInits decodes init=… tag tokens into the typed value field.
+// applyInits decodes init=… tag tokens into the typed value field. The
+// value lives in an unexported field of the handle, so we go through the
+// typed signalRef decoder rather than reflect.Value.SetX.
 func applyInits(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
-	elem := cmpVal.Elem()
-	for _, s := range d.signalSlots {
+	for i, s := range d.signalSlots {
 		if s.initRaw == "" {
 			continue
 		}
-		// The handle struct is { val T; slot; key }; field 0 is val.
-		valField := elem.Field(s.fieldIndex).Field(0)
-		decodeParam(valField, s.scalarKind, s.initRaw)
+		ctx.signalRefs[i].decodeRaw(s.initRaw)
 	}
-	_ = ctx
+	_ = cmpVal
 }
 
 func decodePathParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
