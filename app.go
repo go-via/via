@@ -4,7 +4,6 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -153,19 +152,29 @@ func (a *App) getCtx(id string) (*Ctx, error) {
 	return nil, fmt.Errorf("ctx %q not found", id)
 }
 
-func (a *App) logErr(ctx *Ctx, format string, args ...any) {
-	tag := ""
-	if ctx != nil {
-		tag = "via_tab=" + ctx.id + " "
+func (a *App) emit(level LogLevel, ctx *Ctx, format string, args ...any) {
+	if level < a.cfg.logLevel {
+		return
 	}
-	log.Printf("[error] "+tag+format, args...)
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	logger := a.cfg.logger
+	if logger == nil {
+		logger = defaultLogger{}
+	}
+	if ctx != nil {
+		logger.Log(level, msg, "via_tab", ctx.id)
+	} else {
+		logger.Log(level, msg)
+	}
 }
 
-func (a *App) logDebug(ctx *Ctx, format string, args ...any) {
-	if a.cfg.logLevel <= LogDebug {
-		log.Printf("[debug] "+format, args...)
-	}
-}
+func (a *App) logErr(ctx *Ctx, format string, args ...any)   { a.emit(LogError, ctx, format, args...) }
+func (a *App) logWarn(ctx *Ctx, format string, args ...any)  { a.emit(LogWarn, ctx, format, args...) }
+func (a *App) logInfo(ctx *Ctx, format string, args ...any)  { a.emit(LogInfo, ctx, format, args...) }
+func (a *App) logDebug(ctx *Ctx, format string, args ...any) { a.emit(LogDebug, ctx, format, args...) }
 
 // Start binds and serves on the configured address. SIGINT/SIGTERM trigger
 // a graceful Shutdown.
@@ -180,7 +189,7 @@ func (a *App) Start() {
 	if a.cfg.httpServerHook != nil {
 		a.cfg.httpServerHook(a.server)
 	}
-	log.Printf("[info] via started at [%s]", a.cfg.addr)
+	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)

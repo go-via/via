@@ -30,6 +30,7 @@ type config struct {
 	httpServerHook     func(*http.Server)
 	maxRequestBody     int64
 	actionErrorHandler func(*Ctx, error)
+	logger             Logger
 }
 
 // Option configures a via App.
@@ -86,6 +87,12 @@ func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestB
 func WithActionErrorHandler(fn func(*Ctx, error)) Option {
 	return func(c *config) { c.actionErrorHandler = fn }
 }
+
+// WithLogger replaces the default log.Printf-backed logger with a custom
+// Logger (slog, zap, zerolog, a test buffer, …). All runtime warnings
+// and errors flow through this callback as level + message + key/value
+// pairs.
+func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
 
 // Plugin extends the App at registration time.
 type Plugin interface {
