@@ -4,19 +4,17 @@ Real-time engine for building reactive web applications in pure Go.
 
 ## Why Via?
 
-Somewhere along the way, the web became tangled in layers of JavaScript,
-build chains, and frameworks stacked on frameworks.
-
-Via takes a radical stance:
+The web has become tangled in layers of JavaScript, build chains, and
+frameworks stacked on frameworks. Via takes a different stance:
 
 - No templates.
 - No hand-written JavaScript.
 - No transpilation.
 - No hydration.
-- No front-end fatigue.
-- Single Brotli-compressed SSE stream.
-- Full reactivity.
+- Single SSE stream.
 - Pure Go.
+- A composition is a Go struct. Reactive state is a typed field. Actions
+  are methods. The compiler understands your UI.
 
 ## Quick Start
 
@@ -24,207 +22,167 @@ Via takes a radical stance:
 package main
 
 import (
-  "github.com/go-via/via"
-  "github.com/go-via/via/h"
+    "net/http"
+
+    "github.com/go-via/via"
+    "github.com/go-via/via/h"
+    "github.com/go-via/via/on"
 )
 
+type Counter struct {
+    Hits via.State[int]
+    Step via.Signal[int] `via:"step,init=1"`
+}
+
+func (c *Counter) Inc(ctx *via.Ctx) error {
+    c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
+    return nil
+}
+
+func (c *Counter) View(ctx *via.Ctx) h.H {
+    return h.Div(
+        h.P(h.Text("Count: "), c.Hits.Text()),
+        h.Input(h.Type("number"), c.Step.Bind()),
+        h.Button(h.Text("+"), on.Click(c.Inc)),
+    )
+}
+
 func main() {
-  v := via.New()
-
-  v.Page("/", func(cmp *via.Cmp) {
-    count := via.State(cmp, 0)
-    step := via.Signal(cmp, 1)
-
-    increment := cmp.Action(func(ctx *via.Ctx) error {
-      count.Set(ctx, count.Get(ctx)+step.Get(ctx))
-      return nil
-    })
-
-    cmp.View(func(ctx *via.Ctx) h.H {
-      return h.Div(
-        h.P(h.Textf("Count: %d", count.Get(ctx))),
-        h.P(h.Span(h.Text("Step: ")), h.Span(step.Text())),
-        h.Label(
-          h.Text("Update Step: "),
-          h.Input(h.Type("number"), step.Bind()),
-        ),
-        h.Button(h.Text("Increment"), increment.OnClick()),
-      )
-    })
-  })
-
-  v.Start()
+    app := via.New()
+    via.Mount[Counter](app, "/")
+    _ = http.ListenAndServe(":3000", app)
 }
 ```
 
-## Core Concepts
+`*App` implements `http.Handler`, so it slots straight into any standard
+mux or middleware stack.
 
-### State and Signals
+## API at a glance
 
-Via has two reactive primitives, both generic and type-safe:
+### Composition types
 
-- **State** — server-side values. Mutating state re-renders the view and
-  pushes an HTML patch over SSE.
-- **Signal** — client-side reactive values. Bind them to inputs, display them
-  with `Text()`, or toggle visibility with `Show()`. The browser owns the
-  value; the server reads it on actions and can push updates back.
+A composition is a struct. Implement `View(ctx *via.Ctx) h.H`; everything
+else is optional. Mount it at a route:
 
 ```go
-count := via.State(cmp, 0)        // server-owned, triggers re-render on Set
-query := via.Signal(cmp, "")      // client-owned, bound to an input via Bind()
+via.Mount[MyPage](app, "/dashboard")
+via.MountOn[Card](apiGroup, "/card/{id}")
 ```
+
+### Reactive state
+
+| Handle              | Scope          | Lives on        |
+|---------------------|----------------|-----------------|
+| `via.Signal[T]`     | per-tab        | client + server |
+| `via.State[T]`      | per-tab        | server only     |
+| `scope.User[T]`     | per-session    | server only     |
+| `scope.App[T]`      | global         | server only     |
+
+All four are zero-value-usable struct fields. Reads and writes go through
+`Get(ctx) / Set(ctx, v)` — explicit context, no hidden globals.
+
+The wire key for a signal is the lower-cased field name; override with
+the `via:"name"` tag, and seed an initial value with `via:"name,init=value"`.
 
 ### Actions
 
-Actions are server-side event handlers triggered by the browser. State and
-signal mutations inside an action are automatically synced — no manual
-`Sync()` needed.
+A method on `*Composition` of signature `func(*via.Ctx) error` is an
+action. Bind it to a DOM event with the `on` sub-package:
 
 ```go
-submit := cmp.Action(func(ctx *via.Ctx) error {
-  name := query.Get(ctx)       // read the signal value sent by the browser
-  count.Set(ctx, count.Get(ctx)+1)  // mutate state — auto-synced after return
-  return nil
-})
-
-// In the view:
-h.Button(h.Text("Submit"), submit.OnClick())
-h.Input(query.Bind(), submit.OnChange())
-h.Input(query.Bind(), submit.OnKeyDown("Enter"))
+h.Button(h.Text("+"), on.Click(c.Inc))
+h.Form(on.Submit(c.Save), ...)
+h.Input(on.Input(c.Filter, on.Debounce("200ms")))
+h.Div(on.Key("Enter", c.Send))
 ```
 
-### Components
+`on.Click(c.Inc)` reads the method name from the bound method value and
+renders a Datastar `@post('/_action/<method>')` attribute.
 
-Reusable UI pieces that encapsulate state, signals, and actions within a
-parent page:
+### Path parameters
 
 ```go
-v.Page("/", func(cmp *via.Cmp) {
-  counter1 := cmp.Component(counterComponent)
-  counter2 := cmp.Component(counterComponent)
-
-  cmp.View(func(ctx *via.Ctx) h.H {
-    return h.Div(counter1(ctx), counter2(ctx))
-  })
-})
-
-func counterComponent(cmp *via.Cmp) {
-  n := via.State(cmp, 0)
-  inc := cmp.Action(func(ctx *via.Ctx) error {
-    n.Set(ctx, n.Get(ctx)+1)
-    return nil
-  })
-  cmp.View(func(ctx *via.Ctx) h.H {
-    return h.Div(
-      h.P(h.Textf("Count: %d", n.Get(ctx))),
-      h.Button(h.Text("+"), inc.OnClick()),
-    )
-  })
+type Profile struct {
+    UserID int    `path:"id"`
+    Slug   string `path:"slug"`
 }
+via.Mount[Profile](app, "/u/{id}/posts/{slug}")
 ```
 
-### Lifecycle
+Each `path:"name"` tag must match a `{name}` segment in the route.
 
-```go
-v.Page("/dashboard", func(cmp *via.Cmp) {
-  data := via.State(cmp, "")
+### Lifecycle hooks
 
-  // Init runs once when the browser connects via SSE.
-  // Use it to start background work (polling, tickers, streams).
-  cmp.Init(func(ctx *via.Ctx) {
-    go func() {
-      ticker := time.NewTicker(time.Second)
-      defer ticker.Stop()
-      for {
-        select {
-        case <-ctx.Done():
-          return
-        case <-ticker.C:
-          // push updates from a goroutine
-          data.Set(ctx, fetchData())
-          ctx.Sync()
-        }
-      }
-    }()
-  })
-
-  // Dispose runs when the tab closes or the server shuts down.
-  cmp.Dispose(func() {
-    cleanup()
-  })
-
-  cmp.View(func(ctx *via.Ctx) h.H { /* ... */ })
-})
-```
-
-### Configuration
-
-```go
-v := via.New(
-  via.WithAddr(":8080"),
-  via.WithTitle("My App"),
-  via.WithLogLevel(via.LogDebug),
-  via.WithShutdownTimeout(10 * time.Second),
-  via.WithPlugins(picocss.Plugin(), echarts.Plugin()),
-)
-```
-
-### State Scopes
-
-```go
-// Default: per-tab (each browser tab has its own copy)
-count := via.State(cmp, 0)
-
-// App-wide: shared across all tabs and sessions
-visits := via.State(cmp, 0, via.WithScopeApp())
-```
+| Method                       | Fires when                              |
+|------------------------------|-----------------------------------------|
+| `Init(ctx) error`            | Before View on the page-load request    |
+| `Dispose(ctx)`               | Tab closed, ctx swept, or app shut down |
+| `View(ctx) h.H`              | Required; renders the composition       |
 
 ### Plugins
 
-Plugins hook into the app at startup to register routes, inject head/foot
-elements, or modify the HTML document.
-
 ```go
-// Using built-in plugins
-v := via.New(via.WithPlugins(
-  picocss.Plugin(
-    picocss.WithThemes(picocss.AllPicoThemes),
-    picocss.WithDefaultTheme(picocss.PicoThemeAmber),
-  ),
-  echarts.Plugin(),
+app := via.New(via.WithPlugins(
+    picocss.Plugin(picocss.WithThemes(picocss.AllPicoThemes)),
+    echarts.Plugin(),
 ))
-
-// Writing a custom plugin
-type myPlugin struct{}
-
-func (p myPlugin) Register(app *via.App) {
-  app.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/style.css")))
-  app.HandleFunc("GET /api/health", healthHandler)
-}
 ```
 
-## Experimental
+A plugin's `Register(*App)` runs at `New` time and can:
 
-Via is taking its first steps!
+- `app.AppendToHead`, `app.AppendToFoot`, `app.AppendAttrToHTML`
+- `app.HandleFunc` for plugin-specific routes
+- `app.RegisterAppSignal(key, value)` for client-driven app signals
 
-- Version `0.2.0` released.
-- The API is stabilizing but may still change.
+### Testing
 
-## Contributing
+```go
+import (
+    via "github.com/go-via/via"
+    "github.com/go-via/via/test"
+)
 
-- Via is intentionally minimal and opinionated — and so is contributing.
-- If you love Go, simplicity, and meaningful abstractions — come along for the ride!
-- Fork, branch, build, tinker with things, submit a pull request.
-- Keep every line purposeful.
-- Share feedback: open an issue or start a discussion.
+var server *httptest.Server
+app := via.New(via.WithTestServer(&server))
+via.Mount[Counter](app, "/")
 
-## Credits
+tc := test.NewClient(t, server, "/")
+require.Equal(t, 200, tc.Action("Inc").Fire())
+```
 
-Via builds upon the work of these amazing projects:
+The client name-addresses actions and signals; no HTML scraping required.
 
-- [Datastar](https://data-star.dev) - The hypermedia powerhouse at the
-  core of Via. It powers browser reactivity through Signals and enables
-  real-time HTML/Signal patches over an always-on SSE event stream.
-- [Gomponents](https://maragu.dev/gomponents) - The awesome project that
-  gifts Via with Go-native HTML composition superpowers through the
-  `via/h` package.
+## Examples
+
+`internal/examples/` ships:
+
+- `counter` — basic state + signal + actions
+- `greeter` — Signal[string] mutated from two distinct actions
+- `pathparams` — typed path:"…" tag decoding
+- `countercomp` — two nested counter cards on one page
+- `picocss` — full PicoCSS showcase via the plugin
+
+```bash
+go run ./internal/examples/counter
+```
+
+## Configuration
+
+Pass options to `via.New`:
+
+| Option                          | Default        | Notes                              |
+|---------------------------------|----------------|------------------------------------|
+| `WithAddr(":3000")`             | `:3000`        | listen address for `Start()`       |
+| `WithTitle("Via")`              | `Via`          | document `<title>`                 |
+| `WithSessionTTL(30m)`           | 30 min         | session cookie expiry              |
+| `WithContextTTL(15m)`           | 15 min         | per-tab Ctx idle expiry            |
+| `WithSSEHeartbeat(25s)`         | 25 s           | keep-alive comment frame interval  |
+| `WithMaxRequestBody(1<<20)`     | 1 MiB          | body cap on action / close beacon  |
+| `WithActionErrorHandler(fn)`    | browser alert  | replace default error UX           |
+| `WithSecureCookies()`           | off            | mark session cookie Secure         |
+| `WithHTTPServer(hook)`          | nil            | last-mile `*http.Server` tweaks    |
+| `WithLogLevel(LogWarn)`         | warn           | minimum log severity               |
+
+## License
+
+MIT
