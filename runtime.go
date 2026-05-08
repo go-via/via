@@ -336,6 +336,17 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r)
 
+	// Force-drain anything queued while the previous SSE was
+	// disconnected — patches accumulated during the gap have no wake
+	// notification waiting (it was either consumed by the dead loop or
+	// never sent if the previous drain was mid-flight). Without this,
+	// the reconnected client sees stale UI until the next notify.
+	if hasPending(ctx.queue) {
+		if err := drainQueue(sse, ctx); err != nil {
+			return
+		}
+	}
+
 	var heartbeat <-chan time.Time
 	if a.cfg.sseHeartbeat > 0 {
 		t := time.NewTicker(a.cfg.sseHeartbeat)
@@ -361,6 +372,20 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 			ctx.touch()
 		}
 	}
+}
+
+// hasPending reports whether the patch queue holds anything to flush.
+// Cheap snapshot under the lock — used by the SSE handshake to drain
+// a backlog from the previous (dropped) connection without waiting for
+// the next notify.
+func hasPending(q *patchQueue) bool {
+	if q == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.hasElems || q.hasRedir ||
+		len(q.signals) > 0 || q.scripts.Len() > 0
 }
 
 func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
