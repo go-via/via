@@ -118,6 +118,23 @@ var (
 )
 
 // Mount registers a typed composition C at the given route.
+//
+// C must be a struct whose pointer type satisfies the Composition
+// interface (i.e. has a View(ctx *Ctx) h.H method). Reflection runs
+// once at Mount time to:
+//
+//   - validate View, Init, OnConnect, Dispose signatures (panics with
+//     a format-the-fix-yourself message on a mismatch);
+//   - collect Signal[T] / State[T] / scope.User[T] / scope.App[T]
+//     fields and assign their wire keys (lowercased field name, or
+//     `via:"name"` tag override);
+//   - collect path:"name" / query:"name" tagged fields;
+//   - enumerate exported methods of signature func(*Ctx) error or
+//     func(*Ctx) and register them as actions.
+//
+// Per-request handlers do no reflection on the hot path for already-
+// bound state. Mount panics if the route conflicts with an earlier
+// registration on the same App.
 func Mount[C any](app *App, route string) {
 	desc := buildDescriptor[C](app, route)
 	app.registerDescriptor(desc)
