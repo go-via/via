@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -123,6 +124,24 @@ func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http
 func (a *App) Handle(pattern string, handler http.Handler) {
 	a.claimRoute(pattern, "Handle")
 	a.mux.Handle(pattern, handler)
+}
+
+// HandleStatic serves files under prefix from fsys. Common pattern for
+// shipping a single binary with embedded assets:
+//
+//	//go:embed static
+//	var assets embed.FS
+//	sub, _ := fs.Sub(assets, "static")
+//	app.HandleStatic("/assets/", sub)
+//
+// The pattern ends with a trailing slash; the prefix is stripped before
+// the file lookup. The handler claims `GET <prefix>` so the route table
+// reflects the registration.
+func (a *App) HandleStatic(prefix string, fsys fs.FS) {
+	pattern := "GET " + prefix
+	a.claimRoute(pattern, "HandleStatic")
+	a.mux.Handle(prefix,
+		http.StripPrefix(prefix, http.FileServer(http.FS(fsys))))
 }
 
 // Routes returns a sorted snapshot of every method+pattern registered on
