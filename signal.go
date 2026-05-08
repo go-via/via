@@ -42,6 +42,18 @@ func (s *Signal[T]) Set(ctx *Ctx, v T) {
 	}
 }
 
+// Update applies fn to the current value and stores the result. Saves
+// a Get/Set pair on transform-the-current-value patterns.
+func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
+	if fn == nil {
+		return
+	}
+	s.val = fn(s.val)
+	if ctx != nil {
+		ctx.markSignalDirty(s.slot)
+	}
+}
+
 // Bind returns a two-way binding attribute. Use on form inputs.
 func (s *Signal[T]) Bind() h.H {
 	return h.Data("bind", s.key)

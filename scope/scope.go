@@ -45,6 +45,14 @@ func (s *User[T]) Set(ctx *via.Ctx, v T) {
 	via.SessionStore(ctx, s.WireKey, v)
 }
 
+// Update applies fn to the current value and stores the result.
+func (s *User[T]) Update(ctx *via.Ctx, fn func(T) T) {
+	if fn == nil {
+		return
+	}
+	s.Set(ctx, fn(s.Get(ctx)))
+}
+
 // Text renders the current value as a static text node.
 func (s *User[T]) Text(ctx *via.Ctx) h.H { return h.Textf("%v", s.Get(ctx)) }
 
@@ -75,6 +83,14 @@ func (a *App[T]) Get(ctx *via.Ctx) T {
 // own broadcast mechanism.
 func (a *App[T]) Set(ctx *via.Ctx, v T) {
 	via.AppStore(ctx, a.WireKey, v)
+}
+
+// Update applies fn to the current value and stores the result.
+func (a *App[T]) Update(ctx *via.Ctx, fn func(T) T) {
+	if fn == nil {
+		return
+	}
+	a.Set(ctx, fn(a.Get(ctx)))
 }
 
 // Text renders the current value as a static text node.

@@ -36,6 +36,20 @@ func (s *State[T]) Set(ctx *Ctx, v T) {
 	}
 }
 
+// Update applies fn to the current value and stores the result. Saves
+// a Get/Set pair on common increment/transform patterns:
+//
+//	c.Hits.Update(ctx, func(n int) int { return n + 1 })
+func (s *State[T]) Update(ctx *Ctx, fn func(T) T) {
+	if fn == nil {
+		return
+	}
+	s.val = fn(s.val)
+	if ctx != nil {
+		ctx.markStateDirty()
+	}
+}
+
 // Text returns a span whose text content is the current value at render time.
 // Re-renders happen as part of the view fragment, not via a client signal.
 func (s *State[T]) Text() h.H {
