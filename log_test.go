@@ -89,6 +89,72 @@ type panicPage struct{}
 func (p *panicPage) Boom(ctx *via.Ctx) error { panic("boom") }
 func (p *panicPage) View(ctx *via.Ctx) h.H   { return h.Div() }
 
+type loggingPage struct{}
+
+func (p *loggingPage) DoIt(ctx *via.Ctx) error {
+	via.Log(ctx).Log(via.LogInfo, "checkout", "amount", 42)
+	return nil
+}
+
+func (p *loggingPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogInfo),
+		via.WithTestServer(&server),
+	)
+	via.Mount[loggingPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("DoIt").Fire())
+
+	recs := cap.snapshot()
+	var got *logRec
+	for i := range recs {
+		if recs[i].msg == "checkout" {
+			got = &recs[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "via.Log(ctx).Log should reach the configured logger")
+	require.Equal(t, via.LogInfo, got.level)
+	require.GreaterOrEqual(t, len(got.kv), 4,
+		"kv should include via_tab and amount=42")
+	assert.Equal(t, "via_tab", got.kv[0])
+	assert.Equal(t, "amount", got.kv[2])
+	assert.Equal(t, 42, got.kv[3])
+}
+
+func TestLog_respectsLogLevelFilter(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogWarn),
+		via.WithTestServer(&server),
+	)
+	via.Mount[loggingPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("DoIt").Fire())
+
+	recs := cap.snapshot()
+	for _, r := range recs {
+		if r.msg == "checkout" {
+			t.Fatal("checkout (LogInfo) record should be filtered out at LogWarn level")
+		}
+	}
+}
+
 func TestSlogLogger_routesRecordsToProvidedSlog(t *testing.T) {
 	t.Parallel()
 

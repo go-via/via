@@ -22,6 +22,35 @@ type Logger interface {
 	Log(level LogLevel, msg string, kv ...any)
 }
 
+// Log returns the logger configured on the App that owns ctx, stamped
+// with the current via_tab so every record is correlated to the tab
+// that produced it. Falls back to the default logger if ctx is nil or
+// detached (e.g. constructed via test.NewCtx without an App attached).
+// Use it inside actions / Init / OnConnect to write app-level
+// structured logs through the same pipe via uses for its own warnings:
+//
+//	via.Log(ctx).Log(via.LogInfo, "checkout", "user", id, "amount", n)
+func Log(ctx *Ctx) Logger {
+	if ctx == nil || ctx.app == nil {
+		return defaultLogger{}
+	}
+	app := ctx.app
+	tab := ctx.id
+	base := app.cfg.logger
+	if base == nil {
+		base = defaultLogger{}
+	}
+	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
+		if level < app.cfg.logLevel {
+			return
+		}
+		if tab != "" {
+			kv = append([]any{"via_tab", tab}, kv...)
+		}
+		base.Log(level, msg, kv...)
+	})
+}
+
 // LoggerFunc adapts a function into a Logger.
 type LoggerFunc func(level LogLevel, msg string, kv ...any)
 
