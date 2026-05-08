@@ -2,9 +2,14 @@ package via
 
 import (
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
 )
+
+// reflectValue is a local alias so the field declaration on Ctx doesn't
+// pull reflect into every file that imports "via" through field access.
+type reflectValue = reflect.Value
 
 // Ctx is the per-request execution context. Created on page load, kept alive
 // for the lifetime of the SSE stream, passed to View/Init/Action methods.
@@ -24,6 +29,12 @@ type Ctx struct {
 	lastAccess   atomic.Int64
 
 	connectOnce sync.Once // guards OnConnect dispatch
+
+	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]
+	// used as the argument list for Init/View/Action/OnConnect/Dispose
+	// reflect.Method.Call. Boxing ctx once and re-using the slice
+	// avoids 2 allocations per dispatch.
+	reflectArgs [1]reflectValue
 
 	mu sync.Mutex // guards w / r and disposed flag
 

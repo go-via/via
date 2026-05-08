@@ -88,7 +88,8 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	applyInits(ctx, cmpVal, d)
 	decodePathParams(cmpVal, r, d)
 
-	ctxArg := []reflect.Value{reflect.ValueOf(ctx)}
+	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
+	ctxArg := ctx.reflectArgs[:]
 
 	if d.hasInit {
 		out := cmpVal.Method(d.initIdx).Call(ctxArg)
@@ -238,7 +239,7 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 			}
 		}()
 		out := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.connectIdx).
-			Call([]reflect.Value{reflect.ValueOf(ctx)})
+			Call(ctx.reflectArgs[:])
 		if !out[0].IsNil() {
 			if errVal, _ := out[0].Interface().(error); errVal != nil {
 				a.logErr(ctx, "OnConnect: %v", errVal)
@@ -376,7 +377,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	injectSignals(ctx, sigs)
 
 	cmpVal := reflect.ValueOf(ctx.cmpVal)
-	out := cmpVal.Method(slot.methodIndex).Call([]reflect.Value{reflect.ValueOf(ctx)})
+	out := cmpVal.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
 	if !out[0].IsNil() {
 		errVal, _ := out[0].Interface().(error)
 		if errVal != nil {
@@ -423,7 +424,7 @@ func flushDirty(ctx *Ctx) {
 	if ctx.stateDirty {
 		buf := getRenderBuf()
 		view := reflect.ValueOf(ctx.cmpVal).Method(ctx.desc.viewIdx).
-			Call([]reflect.Value{reflect.ValueOf(ctx)})[0]
+			Call(ctx.reflectArgs[:])[0]
 		body := view.Interface().(h.H)
 		_ = h.Div(h.ID(ctx.id), body).Render(buf)
 		ctx.queue.mu.Lock()
