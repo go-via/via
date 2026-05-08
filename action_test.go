@@ -120,6 +120,47 @@ func (p *customErrPage) Save(ctx *via.Ctx) error {
 
 func (p *customErrPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+type panicStringPage struct{}
+
+func (p *panicStringPage) Crash(ctx *via.Ctx) error {
+	panic("internal database connection string: secret-leaks-here")
+}
+
+func (p *panicStringPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAction_defaultPanicAlertHidesInternalMessage(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[panicStringPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE(t)
+	defer cancel()
+	require.Equal(t, 200, tc.Action("Crash").Fire())
+
+	deadline := time.After(2 * time.Second)
+	got := strings.Builder{}
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatalf("SSE closed early; got %q", got.String())
+			}
+			got.WriteString(f)
+			if strings.Contains(got.String(), `alert("Something went wrong")`) {
+				assert.NotContains(t, got.String(), "secret-leaks-here",
+					"default panic alert must not leak the internal panic message")
+				return
+			}
+		case <-deadline:
+			t.Fatalf("expected generic alert; got %q", got.String())
+		}
+	}
+}
+
 type panicTypedErr struct {
 	Code string
 }
