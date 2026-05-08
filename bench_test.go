@@ -66,3 +66,33 @@ func BenchmarkCounterAction(b *testing.B) {
 		}
 	}
 }
+
+type discardLogger struct{}
+
+func (discardLogger) Log(via.LogLevel, string, ...any) {}
+
+// BenchmarkCounterActionWithLogger establishes that installing a custom
+// Logger is alloc-flat — neither the default-logger fallback nor the
+// app.emit format-string path should add unbounded allocations per
+// action. Pairs with BenchmarkCounterAction so a regression in one
+// shows up against the other.
+func BenchmarkCounterActionWithLogger(b *testing.B) {
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithLogger(discardLogger{}),
+		via.WithLogLevel(via.LogDebug), // exercise the full logger path
+	)
+	via.Mount[benchPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(b, server, "/")
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if got := tc.Action("Inc").Fire(); got != 200 {
+			b.Fatalf("status %d", got)
+		}
+	}
+}
