@@ -41,6 +41,25 @@ func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 		"third request should be 503 with cap=2")
 }
 
+func TestLiveTabs_reflectsRegisteredCount(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[maxCtxPage](app, "/")
+	defer server.Close()
+
+	assert.Equal(t, 0, app.LiveTabs(), "starts at zero")
+
+	for i := 1; i <= 3; i++ {
+		resp, err := http.Get(server.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, i, app.LiveTabs(),
+			"each fresh page render registers one ctx")
+	}
+}
+
 func TestMaxContexts_zeroDisablesTheCap(t *testing.T) {
 	t.Parallel()
 

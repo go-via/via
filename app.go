@@ -145,6 +145,17 @@ func (a *App) HandleStatic(prefix string, fsys fs.FS) {
 		http.StripPrefix(prefix, http.FileServer(http.FS(fsys))))
 }
 
+// LiveTabs returns the number of currently-registered tab contexts.
+// Useful for ops endpoints (/healthz, /metrics) that want to surface
+// concurrency without scraping internal state. The number is a
+// snapshot — it may have changed by the time the caller reads the
+// return value.
+func (a *App) LiveTabs() int {
+	a.contextRegistryMutex.RLock()
+	defer a.contextRegistryMutex.RUnlock()
+	return len(a.contextRegistry)
+}
+
 // Routes returns a sorted snapshot of every method+pattern registered on
 // this app, paired with the registrar tag (Mount[T], HandleFunc,
 // Group(prefix).Handle, …). Useful for `app.Routes()` debugging and for

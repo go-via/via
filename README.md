@@ -262,6 +262,7 @@ go run ./internal/examples/counter
 | `WithContextTTL(15m)`             | 15 min        |
 | `WithSSEHeartbeat(25s)`           | 25 s          |
 | `WithMaxRequestBody(1<<20)`       | 1 MiB         |
+| `WithMaxContexts(n)`              | 0 (no cap)    |
 | `WithReadHeaderTimeout(10s)`      | 10 s          |
 | `WithReadTimeout(d)`              | 0 (disabled)  |
 | `WithWriteTimeout(d)`             | 0 (SSE-safe)  |
