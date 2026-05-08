@@ -172,6 +172,26 @@ func (a *App) Broadcast(script string) int {
 	return len(ctxs)
 }
 
+// BroadcastSignals pushes a signal patch to every currently-live tab.
+// Useful for site-wide announcements that drive a banner via a
+// client-only signal (e.g. \"$_systemNotice = 'planned maintenance'\")
+// without rendering each composition. Returns the tab count.
+func (a *App) BroadcastSignals(values map[string]any) int {
+	if len(values) == 0 {
+		return 0
+	}
+	a.contextRegistryMutex.RLock()
+	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
+	for _, c := range a.contextRegistry {
+		ctxs = append(ctxs, c)
+	}
+	a.contextRegistryMutex.RUnlock()
+	for _, c := range ctxs {
+		c.PatchSignals(values)
+	}
+	return len(ctxs)
+}
+
 // LiveTabs returns the number of currently-registered tab contexts.
 // Useful for ops endpoints (/healthz, /metrics) that want to surface
 // concurrency without scraping internal state. The number is a
