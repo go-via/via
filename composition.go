@@ -132,8 +132,16 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 	ptrTyp := reflect.PointerTo(typ)
 	viewMethod, ok := ptrTyp.MethodByName("View")
 	if !ok {
-		panic(fmt.Sprintf("via.Mount: %s must implement View(ctx *Ctx) h.H", typ.String()))
+		panic(fmt.Sprintf(
+			"via.Mount(%s): missing required method\n"+
+				"\n"+
+				"  func (c *%s) View(ctx *via.Ctx) h.H { ... }\n",
+			typ.String(), typ.Name()))
 	}
+	checkViewSignature(typ, viewMethod)
+	checkLifecycleSignature(typ, ptrTyp, "Init", initSig)
+	checkLifecycleSignature(typ, ptrTyp, "OnConnect", initSig)
+	checkLifecycleSignature(typ, ptrTyp, "Dispose", disposeSig)
 
 	desc := &cmpDescriptor{
 		typ:          typ,
@@ -182,6 +190,64 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 	descriptorCache[typ] = desc
 	descriptorMu.Unlock()
 	return desc
+}
+
+// expected method signatures for lifecycle hooks; Mount validates against
+// these and panics with a helpful, format-the-fix-yourself message if a
+// method exists but has the wrong shape.
+type lifecycleSig struct {
+	in    int    // number of inputs (incl. receiver)
+	out   int    // number of outputs
+	ctxIn bool   // true if input[1] must be *Ctx
+	errOut bool  // true if output[0] must be error
+	repr   string // human-readable form of the expected signature
+}
+
+var (
+	initSig    = lifecycleSig{in: 2, out: 1, ctxIn: true, errOut: true,
+		repr: "func (c *T) %s(ctx *via.Ctx) error"}
+	disposeSig = lifecycleSig{in: 2, out: 0, ctxIn: true, errOut: false,
+		repr: "func (c *T) %s(ctx *via.Ctx)"}
+)
+
+func checkLifecycleSignature(typ, ptrTyp reflect.Type, name string, want lifecycleSig) {
+	m, ok := ptrTyp.MethodByName(name)
+	if !ok {
+		return
+	}
+	mt := m.Type
+	bad := false
+	if mt.NumIn() != want.in || mt.NumOut() != want.out {
+		bad = true
+	}
+	if !bad && want.ctxIn && mt.In(1) != reflect.TypeOf((*Ctx)(nil)) {
+		bad = true
+	}
+	if !bad && want.errOut && mt.Out(0) != reflect.TypeOf((*error)(nil)).Elem() {
+		bad = true
+	}
+	if bad {
+		panic(fmt.Sprintf(
+			"via.Mount(%s): %s has the wrong signature\n"+
+				"\n"+
+				"  expected: "+want.repr+"\n",
+			typ.String(), name, name))
+	}
+}
+
+func checkViewSignature(typ reflect.Type, m reflect.Method) {
+	mt := m.Type
+	if mt.NumIn() != 2 || mt.NumOut() != 1 ||
+		mt.In(1) != reflect.TypeOf((*Ctx)(nil)) {
+		panic(fmt.Sprintf(
+			"via.Mount(%s): View has the wrong signature\n"+
+				"\n"+
+				"  expected: func (c *%s) View(ctx *via.Ctx) h.H\n",
+			typ.String(), typ.Name()))
+	}
+	// View's return type is checked structurally — h.H is an interface so
+	// the concrete return type can be anything assignable to it; we trust
+	// the assertion at render time.
 }
 
 type fieldRole int
