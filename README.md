@@ -194,12 +194,32 @@ and `app.RegisterAppSignal(key, value)` for client-driven signals.
 
 ## Testing
 
+Two test surfaces, picked by what you want to verify:
+
 ```go
 import (
     "github.com/go-via/via"
     "github.com/go-via/via/test"
 )
+```
 
+**Direct method tests** (no HTTP, no SSE, no session):
+
+```go
+c := &Counter{}
+ctx := test.NewCtx(t, c)
+c.Inc(ctx)
+require.Equal(t, 1, c.Hits.Get(ctx))
+
+// Inspect non-state side effects:
+require.Equal(t, "/profile", ctx.PendingRedirect())
+require.Contains(t, ctx.PendingScripts(), "console.log")
+require.Equal(t, "blue", ctx.PendingSignals()["theme"])
+```
+
+**End-to-end through HTTP** (SSE, session, full middleware stack):
+
+```go
 var server *httptest.Server
 app := via.New(via.WithTestServer(&server))
 via.Mount[Counter](app, "/")
@@ -232,20 +252,29 @@ go run ./internal/examples/counter
 
 ## Configuration
 
-| Option                           | Default       |
-|----------------------------------|---------------|
-| `WithAddr(":3000")`              | `:3000`       |
-| `WithTitle("Via")`               | `Via`         |
-| `WithSessionTTL(30m)`            | 30 min        |
-| `WithContextTTL(15m)`            | 15 min        |
-| `WithSSEHeartbeat(25s)`          | 25 s          |
-| `WithMaxRequestBody(1<<20)`      | 1 MiB         |
-| `WithActionErrorHandler(fn)`     | browser alert |
-| `WithSecureCookies()`            | off           |
-| `WithHTTPServer(hook)`           | nil           |
-| `WithLogger(l)`                  | log.Printf    |
-| `WithNotFound(h)`                | std 404       |
-| `WithLogLevel(LogWarn)`          | warn          |
+| Option                            | Default       |
+|-----------------------------------|---------------|
+| `WithAddr(":3000")`               | `:3000`       |
+| `WithTitle("Via")`                | `Via`         |
+| `WithLang("en")`                  | unset         |
+| `WithDescription(s)`              | unset         |
+| `WithSessionTTL(30m)`             | 30 min        |
+| `WithContextTTL(15m)`             | 15 min        |
+| `WithSSEHeartbeat(25s)`           | 25 s          |
+| `WithMaxRequestBody(1<<20)`       | 1 MiB         |
+| `WithReadHeaderTimeout(10s)`      | 10 s          |
+| `WithReadTimeout(d)`              | 0 (disabled)  |
+| `WithWriteTimeout(d)`             | 0 (SSE-safe)  |
+| `WithIdleTimeout(120s)`           | 120 s         |
+| `WithActionErrorHandler(fn)`      | browser alert |
+| `WithSecureCookies()`             | off           |
+| `WithHTTPServer(hook)`            | nil           |
+| `WithLogger(l)`                   | log.Printf    |
+| `WithLogLevel(LogWarn)`           | warn          |
+| `WithNotFound(h)`                 | std 404       |
+| `WithShutdownTimeout(5s)`         | 5 s           |
+| `WithPlugins(...)`                | none          |
+| `WithTestServer(&server)`         | nil           |
 
 ## License
 
