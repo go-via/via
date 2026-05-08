@@ -212,8 +212,8 @@ func dualMetricCard(title, l1, v1, l2, v2 string, chart h.H) h.H {
 // Composition
 
 type Page struct {
-	IntervalMs via.Signal[int]    `via:"intervalMs,init=1000"`
-	Running    via.Signal[bool]   `via:"running,init=true"`
+	IntervalMs via.Signal[int]  `via:"intervalMs,init=1000"`
+	Running    via.Signal[bool] `via:"running,init=true"`
 
 	CPUVal via.State[string]
 	RAMVal via.State[string]

@@ -68,9 +68,9 @@ func (p *Page) View(ctx *via.Ctx) h.H {
 	for _, t := range picocss.AllPicoThemes {
 		themeRow = append(themeRow, h.Button(
 			h.Style("margin:0;min-width:7rem"),
-			h.DataClass("outline", fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
-			h.DataClass("pico-color-"+t.String(), fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
-			h.DataOnClick(fmt.Sprintf("%s = %q", picocss.ThemeRef(), t.String())),
+			h.DataClass("outline", "%s", fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
+			h.DataClass("pico-color-"+t.String(), "%s", fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
+			h.DataOnClick("%s", fmt.Sprintf("%s = %q", picocss.ThemeRef(), t.String())),
 			h.Text(t.String()),
 		))
 	}
@@ -100,20 +100,20 @@ func (p *Page) View(ctx *via.Ctx) h.H {
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("Light"),
-						h.DataClass("outline", fmt.Sprintf("%s!=='light'", dm)),
-						h.DataOnClick(fmt.Sprintf("%s = 'light'", dm)),
+						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='light'", dm)),
+						h.DataOnClick("%s", fmt.Sprintf("%s = 'light'", dm)),
 					),
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("Dark"),
-						h.DataClass("outline", fmt.Sprintf("%s!=='dark'", dm)),
-						h.DataOnClick(fmt.Sprintf("%s = 'dark'", dm)),
+						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='dark'", dm)),
+						h.DataOnClick("%s", fmt.Sprintf("%s = 'dark'", dm)),
 					),
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("System"),
-						h.DataClass("outline", fmt.Sprintf("%s!=='system'", dm)),
-						h.DataOnClick(fmt.Sprintf("%s = 'system'", dm)),
+						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='system'", dm)),
+						h.DataOnClick("%s", fmt.Sprintf("%s = 'system'", dm)),
 					),
 				),
 			),

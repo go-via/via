@@ -92,13 +92,13 @@ type cmpDescriptor struct {
 	actionSlots  []actionSlot
 	actionByName map[string]int
 	childSlots   []childSlot
-	viewIdx       int // method index of View on *C
-	initIdx       int // method index of Init or -1
-	connectIdx    int // method index of OnConnect or -1
-	disposeIdx    int // method index of Dispose or -1
-	hasInit       bool
-	hasOnConnect  bool
-	hasDispose    bool
+	viewIdx      int // method index of View on *C
+	initIdx      int // method index of Init or -1
+	connectIdx   int // method index of OnConnect or -1
+	disposeIdx   int // method index of Dispose or -1
+	hasInit      bool
+	hasOnConnect bool
+	hasDispose   bool
 	app          *App
 
 	groupMW []Middleware // middleware from the owning Group, if any
@@ -166,11 +166,11 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 		ptrTyp:       ptrTyp,
 		route:        route,
 		actionByName: map[string]int{},
-		viewIdx:    viewMethod.Index,
-		initIdx:    -1,
-		connectIdx: -1,
-		disposeIdx: -1,
-		app:        app,
+		viewIdx:      viewMethod.Index,
+		initIdx:      -1,
+		connectIdx:   -1,
+		disposeIdx:   -1,
+		app:          app,
 	}
 
 	walkStruct(desc, typ, nil, "")
@@ -214,15 +214,15 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 // these and panics with a helpful, format-the-fix-yourself message if a
 // method exists but has the wrong shape.
 type lifecycleSig struct {
-	in    int    // number of inputs (incl. receiver)
-	out   int    // number of outputs
-	ctxIn bool   // true if input[1] must be *Ctx
-	errOut bool  // true if output[0] must be error
+	in     int    // number of inputs (incl. receiver)
+	out    int    // number of outputs
+	ctxIn  bool   // true if input[1] must be *Ctx
+	errOut bool   // true if output[0] must be error
 	repr   string // human-readable form of the expected signature
 }
 
 var (
-	initSig    = lifecycleSig{in: 2, out: 1, ctxIn: true, errOut: true,
+	initSig = lifecycleSig{in: 2, out: 1, ctxIn: true, errOut: true,
 		repr: "func (c *T) %s(ctx *via.Ctx) error"}
 	disposeSig = lifecycleSig{in: 2, out: 0, ctxIn: true, errOut: false,
 		repr: "func (c *T) %s(ctx *via.Ctx)"}

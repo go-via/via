@@ -17,11 +17,11 @@ type Ctx struct {
 	id           string // tab id, generated per page request
 	app          *App
 	desc         *cmpDescriptor
-	cmpVal       any           // the bound *C
-	cmpReflect   any           // reflect.Value cache (boxed once)
-	signalRefs   []signalRef   // indexed by slot
-	dirtySignals bitset        // size = len(signalRefs)
-	stateDirty   bool          // any State[T] mutated → re-render needed
+	cmpVal       any         // the bound *C
+	cmpReflect   any         // reflect.Value cache (boxed once)
+	signalRefs   []signalRef // indexed by slot
+	dirtySignals bitset      // size = len(signalRefs)
+	stateDirty   bool        // any State[T] mutated → re-render needed
 	queue        *patchQueue
 	doneChan     chan struct{}
 	disposed     bool
@@ -120,7 +120,6 @@ func (ctx *Ctx) ExecScriptf(format string, args ...any) {
 	}
 	enqueueScript(ctx, sprintfFmt(format, args...))
 }
-
 
 // Redirect sends a client-side navigation to url at the next flush.
 func (ctx *Ctx) Redirect(url string) {

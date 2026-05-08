@@ -15,12 +15,12 @@ func (w *wrongView) View() h.H { return h.Div() } // missing ctx
 
 type initWrongReturn struct{}
 
-func (i *initWrongReturn) Init(ctx *via.Ctx) {} // missing error
+func (i *initWrongReturn) Init(ctx *via.Ctx)     {} // missing error
 func (i *initWrongReturn) View(ctx *via.Ctx) h.H { return h.Div() }
 
 type disposeWrongArg struct{}
 
-func (d *disposeWrongArg) Dispose() {} // missing ctx
+func (d *disposeWrongArg) Dispose()              {} // missing ctx
 func (d *disposeWrongArg) View(ctx *via.Ctx) h.H { return h.Div() }
 
 func TestMount_panicMessageNamesTheTypeOnMissingView(t *testing.T) {

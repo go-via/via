@@ -49,8 +49,6 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 	return sess
 }
 
-
-
 // PutSess stores a typed value in the session, keyed by the type name.
 // Use it to attach "the logged-in user" or any struct that is one-per-
 // session. Marks the current Ctx dirty so the page re-renders.

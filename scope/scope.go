@@ -79,4 +79,3 @@ func (a *App[T]) Set(ctx *via.Ctx, v T) {
 
 // Text renders the current value as a static text node.
 func (a *App[T]) Text(ctx *via.Ctx) h.H { return h.Textf("%v", a.Get(ctx)) }
-

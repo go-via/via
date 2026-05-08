@@ -9,7 +9,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	viatest "github.com/go-via/via/test"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -125,5 +124,4 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 			t.Fatalf("expected userName decoded; got %q", got.String())
 		}
 	}
-	assert.True(t, true)
 }

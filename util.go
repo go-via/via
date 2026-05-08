@@ -25,7 +25,7 @@ func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 // ctx.ExecScriptf to import fmt themselves through h.
 func sprintfFmt(format string, args ...any) string { return fmtSprintf(format, args...) }
 
-func strconvAppendInt(n int64) string  { return strconv.FormatInt(n, 10) }
+func strconvAppendInt(n int64) string   { return strconv.FormatInt(n, 10) }
 func strconvAppendUint(n uint64) string { return strconv.FormatUint(n, 10) }
 func strconvAppendFloat(f float64) string {
 	return strconv.FormatFloat(f, 'g', -1, 64)

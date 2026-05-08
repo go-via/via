@@ -68,5 +68,5 @@ func levelTag(l LogLevel) string {
 type fmtBuf struct{ b []byte }
 
 func (s *fmtBuf) Write(p []byte) (int, error) { s.b = append(s.b, p...); return len(p), nil }
-func (s *fmtBuf) WriteString(p string) { s.b = append(s.b, p...) }
-func (s *fmtBuf) String() string       { return string(s.b) }
+func (s *fmtBuf) WriteString(p string)        { s.b = append(s.b, p...) }
+func (s *fmtBuf) String() string              { return string(s.b) }
