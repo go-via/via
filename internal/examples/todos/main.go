@@ -1,0 +1,179 @@
+// Todos exercises a slice of items, list rendering with h.Each, an
+// input + signal, scope.User-backed persistence across tabs, and a
+// filter signal — without ever leaving Go.
+//
+//	go run ./internal/examples/todos
+package main
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
+	"github.com/go-via/via/plugins/picocss"
+	"github.com/go-via/via/scope"
+)
+
+type Item struct {
+	Text string
+	Done bool
+}
+
+type Todos struct {
+	Draft  via.Signal[string] `via:"draft"`
+	Filter via.Signal[string] `via:"filter,init=all"`
+	Index  via.Signal[int]    `via:"index"`
+	Items  scope.User[[]Item]
+}
+
+func (t *Todos) Add(ctx *via.Ctx) error {
+	text := strings.TrimSpace(t.Draft.Get(ctx))
+	if text == "" {
+		return nil
+	}
+	items := t.Items.Get(ctx)
+	items = append(items, Item{Text: text})
+	t.Items.Set(ctx, items)
+	t.Draft.Set(ctx, "")
+	return nil
+}
+
+func (t *Todos) Toggle(ctx *via.Ctx) error {
+	idx := t.Index.Get(ctx)
+	items := append([]Item(nil), t.Items.Get(ctx)...)
+	if idx < 0 || idx >= len(items) {
+		return nil
+	}
+	items[idx].Done = !items[idx].Done
+	t.Items.Set(ctx, items)
+	return nil
+}
+
+func (t *Todos) Clear(ctx *via.Ctx) error {
+	items := t.Items.Get(ctx)
+	live := make([]Item, 0, len(items))
+	for _, it := range items {
+		if !it.Done {
+			live = append(live, it)
+		}
+	}
+	t.Items.Set(ctx, live)
+	return nil
+}
+
+func (t *Todos) View(ctx *via.Ctx) h.H {
+	items := t.Items.Get(ctx)
+	filter := t.Filter.Get(ctx)
+	visible := make([]int, 0, len(items))
+	for i, it := range items {
+		switch filter {
+		case "active":
+			if it.Done {
+				continue
+			}
+		case "done":
+			if !it.Done {
+				continue
+			}
+		}
+		visible = append(visible, i)
+	}
+
+	pendingCount := 0
+	for _, it := range items {
+		if !it.Done {
+			pendingCount++
+		}
+	}
+
+	return h.Body(
+		h.Main(h.Class("container"),
+			h.H1(h.Text("Todos")),
+
+			// New-item form: input bound to Draft, button fires Add.
+			h.Form(
+				h.Style("display:flex;gap:0.5rem"),
+				h.Input(h.Type("text"), t.Draft.Bind(),
+					h.Placeholder("What needs doing?")),
+				h.Button(h.Text("Add"), on.Click(t.Add)),
+			),
+
+			// Filter row — three buttons that set the filter signal
+			// and re-render via the same render path.
+			h.Div(h.Style("display:flex;gap:0.5rem;margin:1rem 0"),
+				filterButton(t, "all", filter),
+				filterButton(t, "active", filter),
+				filterButton(t, "done", filter),
+				h.Span(h.Style("margin-left:auto"),
+					h.Textf("%d remaining", pendingCount)),
+			),
+
+			// List
+			h.Ul(
+				h.Style("padding:0;margin:0"),
+				h.Each(visible, func(i int) h.H {
+					it := items[i]
+					return h.Li(
+						h.Style("list-style:none;padding:0.5rem;display:flex;align-items:center;gap:0.5rem"),
+						h.Input(h.Type("checkbox"),
+							boolAttr("checked", it.Done),
+							on.Change(t.Toggle, on.SetSignal(&t.Index, i)),
+						),
+						h.Span(
+							h.Style(strings.Join([]string{
+								"flex:1",
+								h.IfStr(it.Done, "text-decoration:line-through;opacity:0.5"),
+							}, ";")),
+							h.Text(it.Text),
+						),
+					)
+				}),
+			),
+
+			// Clear-completed only when there's something to clear
+			h.If(pendingCount < len(items),
+				h.Button(
+					h.Class("outline secondary"),
+					h.Style("margin-top:1rem"),
+					h.Text("Clear completed"),
+					on.Click(t.Clear),
+				),
+			),
+		),
+	)
+}
+
+// filterButton renders one of the three filter pills. Active pill is
+// styled with the standard button look; others get the outline class.
+func filterButton(t *Todos, name, current string) h.H {
+	return h.Button(
+		h.Class(h.IfStr(name != current, "outline secondary")),
+		h.Text(strings.Title(name)),
+		on.Click(t.SetFilter, on.SetSignal(&t.Filter, name)),
+	)
+}
+
+// SetFilter is a no-op action whose only purpose is to land a signal
+// write through on.SetSignal — the re-render does the rest.
+func (t *Todos) SetFilter(ctx *via.Ctx) error { return nil }
+
+// boolAttr renders the named attribute only when the flag is true.
+// Useful for the "checked" attribute and similar boolean-only attrs
+// that the gomponents library doesn't expose by name yet.
+func boolAttr(name string, on bool) h.H {
+	if !on {
+		return nil
+	}
+	return h.Attr(name)
+}
+
+func main() {
+	app := via.New(
+		via.WithTitle("Via Todos"),
+		via.WithPlugins(picocss.Plugin()),
+	)
+	via.Mount[Todos](app, "/")
+	_ = http.ListenAndServe(":3000", app)
+}
