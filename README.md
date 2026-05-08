@@ -201,6 +201,18 @@ Mounting two routes at the same path panics at registration with the
 offending pattern + the original registrar tag. `WithNotFound(h)`
 installs a custom 404 handler.
 
+## Cross-tab broadcast
+
+```go
+app.Broadcast(`alert("Maintenance in 30 seconds.")`)
+app.BroadcastSignals(map[string]any{"_systemNotice": "site read-only"})
+app.LiveTabs()               // current tab count
+```
+
+`Broadcast` queues a JS snippet on every live tab; `BroadcastSignals`
+queues a signal patch. Both return the tab count they reached and
+deliver via the existing patch queue + SSE drain — no extra wiring.
+
 ## h package helpers
 
 | Helper                      | What it does                                 |
