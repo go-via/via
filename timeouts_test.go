@@ -12,6 +12,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHTTPServer_constructsConfiguredServer(t *testing.T) {
+	t.Parallel()
+
+	app := via.New(
+		via.WithAddr(":4242"),
+		via.WithReadHeaderTimeout(8*time.Second),
+		via.WithReadTimeout(11*time.Second),
+		via.WithWriteTimeout(0),
+		via.WithIdleTimeout(99*time.Second),
+	)
+
+	srv := app.HTTPServer()
+	require.NotNil(t, srv)
+	assert.Equal(t, ":4242", srv.Addr)
+	assert.Equal(t, 8*time.Second, srv.ReadHeaderTimeout)
+	assert.Equal(t, 11*time.Second, srv.ReadTimeout)
+	assert.Equal(t, time.Duration(0), srv.WriteTimeout)
+	assert.Equal(t, 99*time.Second, srv.IdleTimeout)
+	assert.NotNil(t, srv.Handler, "server.Handler should be set")
+}
+
+func TestHTTPServer_appliesWithHTTPServerHook(t *testing.T) {
+	t.Parallel()
+
+	app := via.New(via.WithHTTPServer(func(s *http.Server) {
+		s.MaxHeaderBytes = 4096
+	}))
+	srv := app.HTTPServer()
+	assert.Equal(t, 4096, srv.MaxHeaderBytes)
+}
+
 func TestWithTimeouts_passThroughToHTTPServer(t *testing.T) {
 	t.Parallel()
 

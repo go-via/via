@@ -39,6 +39,7 @@ type App struct {
 	descsMu      sync.RWMutex
 	routes       map[string]string // method-and-pattern → registrar tag
 	routesMu     sync.Mutex
+	serverMu     sync.Mutex // guards a.server while Start binds and Shutdown reads
 
 	// appSignals holds plugin-registered, app-wide initial signal values.
 	// They are injected into <meta data-signals> on every page render but
@@ -245,9 +246,15 @@ func (a *App) logWarn(ctx *Ctx, format string, args ...any)  { a.emit(LogWarn, c
 func (a *App) logInfo(ctx *Ctx, format string, args ...any)  { a.emit(LogInfo, ctx, format, args...) }
 func (a *App) logDebug(ctx *Ctx, format string, args ...any) { a.emit(LogDebug, ctx, format, args...) }
 
-// Start binds and serves on the configured address. SIGINT/SIGTERM trigger
-// a graceful Shutdown.
-func (a *App) Start() {
+// HTTPServer returns an *http.Server configured with the app as its
+// handler and every WithReadTimeout/WithWriteTimeout/WithIdleTimeout/
+// WithReadHeaderTimeout option applied. Useful when the caller wants
+// to bind directly (TLS, custom listener, ALB sidecar) instead of
+// going through Start. The returned server has no listener attached;
+// the caller drives ListenAndServe / ListenAndServeTLS themselves.
+//
+// HTTPServer is also what Start uses internally — same defaults.
+func (a *App) HTTPServer() *http.Server {
 	readHeader := a.cfg.readHeaderTimeout
 	if readHeader == 0 {
 		readHeader = 10 * time.Second
@@ -256,7 +263,7 @@ func (a *App) Start() {
 	if idle == 0 {
 		idle = 120 * time.Second
 	}
-	a.server = &http.Server{
+	srv := &http.Server{
 		Addr:              a.cfg.addr,
 		Handler:           a.handler,
 		ReadHeaderTimeout: readHeader,
@@ -266,8 +273,18 @@ func (a *App) Start() {
 		MaxHeaderBytes:    1 << 20,
 	}
 	if a.cfg.httpServerHook != nil {
-		a.cfg.httpServerHook(a.server)
+		a.cfg.httpServerHook(srv)
 	}
+	return srv
+}
+
+// Start binds and serves on the configured address. SIGINT/SIGTERM trigger
+// a graceful Shutdown.
+func (a *App) Start() {
+	srv := a.HTTPServer()
+	a.serverMu.Lock()
+	a.server = srv
+	a.serverMu.Unlock()
 	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
 
 	stop := make(chan os.Signal, 1)
@@ -281,7 +298,7 @@ func (a *App) Start() {
 		}
 	}()
 
-	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		panic(fmt.Sprintf("via: %v", err))
 	}
 }
@@ -310,8 +327,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.sessions = make(map[string]*session)
 	a.sessionsMu.Unlock()
 
-	if a.server != nil {
-		return a.server.Shutdown(ctx)
+	a.serverMu.Lock()
+	srv := a.server
+	a.serverMu.Unlock()
+	if srv != nil {
+		return srv.Shutdown(ctx)
 	}
 	return nil
 }
