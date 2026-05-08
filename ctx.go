@@ -1,11 +1,16 @@
 package via
 
 import (
+	"context"
 	"net/http"
 	"reflect"
 	"sync"
 	"sync/atomic"
 )
+
+func contextWithCSPNonce(ctx context.Context, nonce string) context.Context {
+	return context.WithValue(ctx, cspNonceKey{}, nonce)
+}
 
 // reflectValue is a local alias so the field declaration on Ctx doesn't
 // pull reflect into every file that imports "via" through field access.
@@ -144,18 +149,53 @@ func (ctx *Ctx) Redirect(url string) {
 // CSPNonce returns a per-request cryptographically-random base64
 // nonce suitable for use with strict Content-Security-Policy headers.
 // The same value is returned on every call within one request, so
-// plugins and the page render share one nonce. The user is
-// responsible for emitting the matching `Content-Security-Policy:
-// script-src 'self' 'nonce-XYZ'` header — typically through a
-// middleware that reads ctx.CSPNonce() and writes the header.
+// plugins and the page render share one nonce.
+//
+// For strict CSP enforcement, install a middleware that pre-generates
+// the nonce and threads it through both the response header and the
+// request context, e.g.:
+//
+//	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+//	    n := via.NewCSPNonce()
+//	    w.Header().Set("Content-Security-Policy",
+//	        "script-src 'self' 'nonce-"+n+"'")
+//	    next.ServeHTTP(w, via.RequestWithCSPNonce(r, n))
+//	})
+//
+// Without that middleware, CSPNonce returns a random per-request value
+// that the browser will not honor (no matching CSP header) — useful in
+// development, useless in production.
 func (ctx *Ctx) CSPNonce() string {
 	if ctx == nil {
 		return ""
 	}
-	if ctx.cspNonce == "" {
-		ctx.cspNonce = genCSPNonce()
+	if ctx.cspNonce != "" {
+		return ctx.cspNonce
 	}
+	// Pull from request context if a middleware put one there.
+	if ctx.r != nil {
+		if v, ok := ctx.r.Context().Value(cspNonceKey{}).(string); ok && v != "" {
+			ctx.cspNonce = v
+			return v
+		}
+	}
+	ctx.cspNonce = genCSPNonce()
 	return ctx.cspNonce
+}
+
+// cspNonceKey is the unexported r.Context() key used to thread a
+// pre-generated nonce from middleware into the rendered page.
+type cspNonceKey struct{}
+
+// NewCSPNonce returns a fresh 16-byte base64url nonce. Callers
+// installing a strict-CSP middleware use this to keep the value
+// consistent across the response header and the rendered HTML.
+func NewCSPNonce() string { return genCSPNonce() }
+
+// RequestWithCSPNonce returns r with nonce stored in its context so
+// downstream renderPage can find it via Ctx.CSPNonce().
+func RequestWithCSPNonce(r *http.Request, nonce string) *http.Request {
+	return r.WithContext(contextWithCSPNonce(r.Context(), nonce))
 }
 
 // Sync explicitly re-renders the view and flushes pending patches.

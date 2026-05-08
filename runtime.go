@@ -174,6 +174,8 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 		queue:        newPatchQueue(),
 		doneChan:     make(chan struct{}),
 		session:      a.sessionFromRequest(r),
+		w:            w,
+		r:            r,
 	}
 	ctx.touch()
 
