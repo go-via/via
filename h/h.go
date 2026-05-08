@@ -16,6 +16,10 @@ import (
 	gc "maragu.dev/gomponents/components"
 )
 
+// gNode is a local alias for gomponents.Node so Group can hold them
+// without forcing every caller to import gomponents directly.
+type gNode = g.Node
+
 // H represents a DOM node.
 type H interface {
 	Render(w io.Writer) error
@@ -54,6 +58,72 @@ func Attr(name string, value ...string) H {
 func If(condition bool, n H) H {
 	if condition {
 		return n
+	}
+	return nil
+}
+
+// When is If with a builder so the node is constructed lazily — useful
+// when the construction has side effects or is expensive:
+//
+//	h.When(loaded, func() h.H { return h.P(h.Text(slow.Render())) })
+func When(condition bool, build func() H) H {
+	if condition && build != nil {
+		return build()
+	}
+	return nil
+}
+
+// Each renders a list of values into a Group of nodes, one per element.
+//
+//	h.Ul(h.Each(items, func(it Item) h.H { return h.Li(h.Text(it.Name)) }))
+func Each[T any](items []T, fn func(T) H) H {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]H, 0, len(items))
+	for _, it := range items {
+		if n := fn(it); n != nil {
+			out = append(out, n)
+		}
+	}
+	return Group(out)
+}
+
+// EachIndexed is Each with the element's index passed alongside the value.
+func EachIndexed[T any](items []T, fn func(i int, v T) H) H {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]H, 0, len(items))
+	for i, it := range items {
+		if n := fn(i, it); n != nil {
+			out = append(out, n)
+		}
+	}
+	return Group(out)
+}
+
+// Group bundles a slice of nodes into a single H so callers can return
+// many nodes from a function that has to return one.
+func Group(items []H) H {
+	gnodes := retype(items)
+	out := make(group, len(gnodes))
+	for i, n := range gnodes {
+		out[i] = n
+	}
+	return out
+}
+
+type group []gNode
+
+func (g group) Render(w io.Writer) error {
+	for _, n := range g {
+		if n == nil {
+			continue
+		}
+		if err := n.Render(w); err != nil {
+			return err
+		}
 	}
 	return nil
 }
