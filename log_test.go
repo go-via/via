@@ -1,6 +1,8 @@
 package via_test
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -86,3 +88,27 @@ type panicPage struct{}
 
 func (p *panicPage) Boom(ctx *via.Ctx) error { panic("boom") }
 func (p *panicPage) View(ctx *via.Ctx) h.H   { return h.Div() }
+
+func TestSlogLogger_routesRecordsToProvidedSlog(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	sl := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(via.SlogLogger(sl)),
+		via.WithLogLevel(via.LogDebug),
+		via.WithTestServer(&server),
+	)
+	via.Mount[panicPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Boom").Fire())
+
+	out := buf.String()
+	require.Contains(t, out, `"level":"ERROR"`)
+	require.Contains(t, out, `"msg":"action \"Boom\" panicked: boom"`)
+	require.Contains(t, out, `"via_tab":`)
+}

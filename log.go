@@ -1,8 +1,10 @@
 package via
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"log/slog"
 )
 
 // Logger receives log records produced by the via runtime. Implementations
@@ -25,6 +27,46 @@ type LoggerFunc func(level LogLevel, msg string, kv ...any)
 
 // Log implements Logger.
 func (f LoggerFunc) Log(level LogLevel, msg string, kv ...any) { f(level, msg, kv...) }
+
+// SlogLogger adapts a *slog.Logger to via's Logger. via's level maps
+// onto slog's directly (Debug, Info, Warn, Error). Field pairs are
+// passed through as slog attrs.
+//
+//	app := via.New(via.WithLogger(via.SlogLogger(slog.Default())))
+func SlogLogger(l *slog.Logger) Logger {
+	if l == nil {
+		l = slog.Default()
+	}
+	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
+		l.LogAttrs(context.Background(), slogLevel(level), msg, attrsFromKV(kv)...)
+	})
+}
+
+func slogLevel(l LogLevel) slog.Level {
+	switch l {
+	case LogDebug:
+		return slog.LevelDebug
+	case LogInfo:
+		return slog.LevelInfo
+	case LogWarn:
+		return slog.LevelWarn
+	case LogError:
+		return slog.LevelError
+	}
+	return slog.LevelInfo
+}
+
+func attrsFromKV(kv []any) []slog.Attr {
+	if len(kv) == 0 {
+		return nil
+	}
+	out := make([]slog.Attr, 0, len(kv)/2)
+	for i := 0; i+1 < len(kv); i += 2 {
+		key, _ := kv[i].(string)
+		out = append(out, slog.Any(key, kv[i+1]))
+	}
+	return out
+}
 
 // defaultLogger writes to the standard log package.
 type defaultLogger struct{}
