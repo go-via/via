@@ -22,7 +22,27 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-via/via"
 )
+
+// NewCtx returns a *via.Ctx wired to the given composition, suitable
+// for unit-testing action methods directly without spinning up an
+// HTTP server. Signal/State handles are bound (Get/Set work), the
+// session is empty, and the context's Done() channel is open.
+//
+//	c := &Counter{}
+//	ctx := test.NewCtx(t, c)
+//	require.NoError(t, c.Inc(ctx))
+//	assert.Equal(t, 1, c.Hits.Get(ctx))
+//
+// Use this for unit-testing logic where a full HTTP round-trip would
+// be wasteful. For end-to-end tests use NewClient against an
+// httptest.Server.
+func NewCtx[T any](t testing.TB, c *T) *via.Ctx {
+	t.Helper()
+	return via.NewBoundCtx(c)
+}
 
 // Client drives a mounted Composition over HTTP for tests.
 type Client struct {

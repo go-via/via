@@ -63,6 +63,38 @@ func (q *patchQueue) notify() {
 	}
 }
 
+// NewBoundCtx returns a *Ctx bound to c with all Signal[T]/State[T]/
+// scope fields wired up, ready for direct unit testing of action
+// methods. No HTTP server, no session, no SSE — just a typed Ctx
+// against a typed *C. The descriptor is the same one Mount[T] would
+// build, but the resulting Ctx is detached from any App.
+//
+// Reserved for tests; the via/test package wraps it in
+// test.NewCtx[T any](t, *T) so production code never imports it.
+func NewBoundCtx[T any](c *T) *Ctx {
+	d := buildDescriptor[T](nil, "")
+	cmpVal := reflect.ValueOf(c)
+	ctx := &Ctx{
+		id:           "test_" + genSecureID(),
+		desc:         d,
+		cmpVal:       c,
+		signalRefs:   make([]signalRef, len(d.signalSlots)),
+		dirtySignals: newBitset(len(d.signalSlots)),
+		queue:        newPatchQueue(),
+		doneChan:     make(chan struct{}),
+	}
+	ctx.touch()
+	bindSlots(ctx, cmpVal, d)
+	bindScopeKeys(cmpVal, d)
+	for i, s := range d.signalSlots {
+		if s.initRaw != "" {
+			ctx.signalRefs[i].decodeRaw(s.initRaw)
+		}
+	}
+	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
+	return ctx
+}
+
 // PatchSignal queues a single signal update keyed by name. Plugins use it
 // to push values to client-only signals they own (e.g. picocss's
 // "_picoTheme") without going through a typed Signal[T] handle. Multiple

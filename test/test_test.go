@@ -122,6 +122,41 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 	}
 }
 
+type unitTestPage struct {
+	N    via.State[int]
+	Step via.Signal[int] `via:"step,init=2"`
+}
+
+func (p *unitTestPage) Inc(ctx *via.Ctx) error {
+	p.N.Set(ctx, p.N.Get(ctx)+p.Step.Get(ctx))
+	return nil
+}
+
+func (p *unitTestPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestNewCtx_invokesActionMethodsDirectly(t *testing.T) {
+	t.Parallel()
+
+	c := &unitTestPage{}
+	ctx := viatest.NewCtx(t, c)
+
+	require.NoError(t, c.Inc(ctx))
+	require.NoError(t, c.Inc(ctx))
+	require.NoError(t, c.Inc(ctx))
+
+	assert.Equal(t, 6, c.N.Get(ctx),
+		"three Inc calls with init=2 step should yield 6")
+}
+
+func TestNewCtx_initialSignalValueComesFromTag(t *testing.T) {
+	t.Parallel()
+
+	c := &unitTestPage{}
+	ctx := viatest.NewCtx(t, c)
+	assert.Equal(t, 2, c.Step.Get(ctx),
+		"init=2 tag should populate the Signal at NewCtx time")
+}
+
 func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	t.Parallel()
 
