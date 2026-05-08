@@ -198,6 +198,47 @@ func RequestWithCSPNonce(r *http.Request, nonce string) *http.Request {
 	return r.WithContext(contextWithCSPNonce(r.Context(), nonce))
 }
 
+// StrictCSP returns a Middleware that generates a fresh nonce per
+// request, sets a strict Content-Security-Policy header that allows
+// only same-origin scripts plus that nonce, and threads the nonce
+// through r.Context so Ctx.CSPNonce returns the matching value.
+//
+// Wire it up as the very first middleware so the header lands on
+// every response, including 404s and SSE handshakes:
+//
+//	app.Use(via.StrictCSP())
+//
+// Pass extra directives if defaults aren't enough:
+//
+//	app.Use(via.StrictCSP("img-src 'self' data:"))
+//
+// The default policy is `default-src 'self'; script-src 'self'
+// 'nonce-XYZ'; object-src 'none'; base-uri 'self'`.
+func StrictCSP(extra ...string) Middleware {
+	tail := ""
+	if len(extra) > 0 {
+		tail = "; " + joinSemi(extra)
+	}
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		n := genCSPNonce()
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self' 'nonce-"+n+"'; "+
+				"object-src 'none'; base-uri 'self'"+tail)
+		next.ServeHTTP(w, RequestWithCSPNonce(r, n))
+	}
+}
+
+func joinSemi(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += "; "
+		}
+		out += p
+	}
+	return out
+}
+
 // Sync explicitly re-renders the view and flushes pending patches.
 func (ctx *Ctx) Sync() {
 	if ctx == nil {

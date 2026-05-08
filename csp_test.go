@@ -67,6 +67,69 @@ func (p *cspEchoPage) View(ctx *via.Ctx) h.H {
 	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
 }
 
+type strictCSPPage struct{}
+
+func (p *strictCSPPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
+}
+
+func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.StrictCSP())
+	via.Mount[strictCSPPage](app, "/")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	csp := resp.Header.Get("Content-Security-Policy")
+	require.NotEmpty(t, csp, "StrictCSP must set the header")
+	assert.Contains(t, csp, "default-src 'self'")
+	assert.Contains(t, csp, "object-src 'none'")
+	assert.Contains(t, csp, "base-uri 'self'")
+	assert.Contains(t, csp, "script-src 'self' 'nonce-")
+
+	body := readAll(t, resp.Body)
+	// The CSP header has 'nonce-XYZ'; pull the XYZ and confirm it
+	// matches the rendered <div>.
+	const prefix = "'nonce-"
+	idx := indexOf(csp, prefix)
+	require.NotEqual(t, -1, idx)
+	end := indexOf(csp[idx+len(prefix):], "'")
+	require.NotEqual(t, -1, end)
+	nonce := csp[idx+len(prefix) : idx+len(prefix)+end]
+	assert.Contains(t, body, `<div id="nonce">`+nonce+`</div>`)
+}
+
+func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.StrictCSP("img-src 'self' data:"))
+	via.Mount[strictCSPPage](app, "/")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, "img-src 'self' data:")
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 	t.Parallel()
 
