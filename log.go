@@ -61,6 +61,31 @@ func RequestIDFrom(r *http.Request) string {
 	return v
 }
 
+// Recover returns a Middleware that catches panics in downstream
+// handlers, logs the recovered value through the App's logger, and
+// writes a 500 response so the goroutine doesn't crash the server.
+//
+// Action handlers already have per-action panic recovery (so action
+// panics surface through WithActionErrorHandler / the default alert).
+// Recover protects everything else — non-via handlers via HandleFunc,
+// custom middleware, plugin endpoints — that wouldn't otherwise have
+// a backstop:
+//
+//	app.Use(via.Recover(app))
+func Recover(a *App) Middleware {
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				a.logErr(nil, "panic in handler %s %s: %v", r.Method, r.URL.Path, rec)
+				// If the handler already wrote headers, http.Error
+				// will be a noop. Either way the goroutine survives.
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	}
+}
+
 // AccessLog returns a Middleware that emits one info-level log record
 // per HTTP request through the App's configured Logger:
 //

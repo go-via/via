@@ -94,6 +94,47 @@ type accessLogPage struct{}
 
 func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogError),
+		via.WithTestServer(&server),
+	)
+	app.Use(via.Recover(app))
+	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
+		panic("kaboom")
+	})
+	app.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/boom")
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"panicking handler should produce 500")
+
+	// Subsequent requests still work.
+	resp2, err := http.Get(server.URL + "/ok")
+	require.NoError(t, err)
+	resp2.Body.Close()
+	assert.Equal(t, http.StatusOK, resp2.StatusCode,
+		"server should survive the panic")
+
+	logged := false
+	for _, r := range cap.snapshot() {
+		if r.level == via.LogError && strings.Contains(r.msg, "panic") {
+			logged = true
+		}
+	}
+	assert.True(t, logged, "Recover should log an error record on panic")
+}
+
 type ridLogPage struct{}
 
 func (p *ridLogPage) Trace(ctx *via.Ctx) error {
