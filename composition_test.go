@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -9,7 +8,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type simpleCounter struct {
@@ -28,15 +26,11 @@ func TestMount_rendersComposition(t *testing.T) {
 	via.Mount[simpleCounter](app, "/counter")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/counter")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	buf, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(buf), "<div>")
+	body := getBody(t, server, "/counter")
+	assert.Contains(t, body, "<div>")
 }
 
-func TestMount_rendersDivWithContent(t *testing.T) {
+func TestMount_renders404OnUnknownRoute(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -44,12 +38,12 @@ func TestMount_rendersDivWithContent(t *testing.T) {
 	via.Mount[simpleCounter](app, "/counter")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/counter")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	buf, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(buf), "<div")
+	resp, err := http.Get(server.URL + "/unknown")
+	defer func() { _ = resp.Body.Close() }()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestMount_panicsOnMissingView(t *testing.T) {
@@ -62,30 +56,42 @@ func TestMount_panicsOnMissingView(t *testing.T) {
 	})
 }
 
-func TestMount_registersRoute(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[simpleCounter](app, "/counter")
-	defer server.Close()
-
-	resp, err := http.Get(server.URL + "/counter")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+type pathParamPage struct {
+	UserID int    `path:"id"`
+	Slug   string `path:"slug"`
 }
 
-func TestMount_404UnknownRoute(t *testing.T) {
+func (p *pathParamPage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Span(h.Textf("user=%d", p.UserID)),
+		h.Span(h.Textf("slug=%s", p.Slug)),
+	)
+}
+
+func TestMount_decodesPathParamsIntoTaggedFields(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	via.Mount[simpleCounter](app, "/counter")
+	via.Mount[pathParamPage](app, "/u/{id}/posts/{slug}")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/unknown")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	body := getBody(t, server, "/u/42/posts/hello")
+	assert.Contains(t, body, "user=42", "path param int decoded into typed field")
+	assert.Contains(t, body, "slug=hello", "path param string decoded into typed field")
+}
+
+type missingParamPage struct {
+	UserID int `path:"id"`
+}
+
+func (p *missingParamPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestMount_panicsWhenPathTagHasNoMatchingSegment(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	assert.Panics(t, func() {
+		via.Mount[missingParamPage](app, "/no-id-segment")
+	})
 }

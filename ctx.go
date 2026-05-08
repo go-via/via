@@ -69,6 +69,16 @@ func (ctx *Ctx) markSignalDirty(slot uint16) {
 	}
 }
 
+// MarkDirty schedules a view re-render on the next flush. Use from external
+// reactive primitives (e.g. scope.User[T]) that mutate state outside the
+// composition struct's own State[T] handles.
+func MarkDirty(ctx *Ctx) {
+	if ctx == nil {
+		return
+	}
+	ctx.markStateDirty()
+}
+
 func (ctx *Ctx) markStateDirty() {
 	ctx.stateDirty = true
 	if ctx.queue != nil {
