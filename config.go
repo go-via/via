@@ -28,6 +28,10 @@ type config struct {
 	secureCookies      bool
 	testServer         **httptest.Server
 	httpServerHook     func(*http.Server)
+	readHeaderTimeout  time.Duration
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	idleTimeout        time.Duration
 	maxRequestBody     int64
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
@@ -76,6 +80,30 @@ func WithTestServer(server **httptest.Server) Option {
 // non-default fields (TLSConfig, ConnState, …) can be set.
 func WithHTTPServer(hook func(*http.Server)) Option {
 	return func(c *config) { c.httpServerHook = hook }
+}
+
+// WithReadHeaderTimeout overrides the default 10 s read-header timeout.
+func WithReadHeaderTimeout(d time.Duration) Option {
+	return func(c *config) { c.readHeaderTimeout = d }
+}
+
+// WithReadTimeout sets http.Server.ReadTimeout. The SSE handler doesn't
+// honor it (the stream is meant to be long-lived), but action POSTs do.
+func WithReadTimeout(d time.Duration) Option {
+	return func(c *config) { c.readTimeout = d }
+}
+
+// WithWriteTimeout sets http.Server.WriteTimeout. Be cautious: SSE
+// streams are long-lived, so a non-zero WriteTimeout can cut them off
+// mid-stream. Default 0 (no timeout) is safer for SSE-heavy apps.
+func WithWriteTimeout(d time.Duration) Option {
+	return func(c *config) { c.writeTimeout = d }
+}
+
+// WithIdleTimeout overrides the default 120 s idle-timeout. Affects the
+// lifetime of HTTP/1.1 keep-alive connections; SSE streams are exempt.
+func WithIdleTimeout(d time.Duration) Option {
+	return func(c *config) { c.idleTimeout = d }
 }
 
 // WithMaxRequestBody caps body bytes for action and close requests.

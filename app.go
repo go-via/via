@@ -248,11 +248,21 @@ func (a *App) logDebug(ctx *Ctx, format string, args ...any) { a.emit(LogDebug, 
 // Start binds and serves on the configured address. SIGINT/SIGTERM trigger
 // a graceful Shutdown.
 func (a *App) Start() {
+	readHeader := a.cfg.readHeaderTimeout
+	if readHeader == 0 {
+		readHeader = 10 * time.Second
+	}
+	idle := a.cfg.idleTimeout
+	if idle == 0 {
+		idle = 120 * time.Second
+	}
 	a.server = &http.Server{
 		Addr:              a.cfg.addr,
 		Handler:           a.handler,
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: readHeader,
+		ReadTimeout:       a.cfg.readTimeout,
+		WriteTimeout:      a.cfg.writeTimeout,
+		IdleTimeout:       idle,
 		MaxHeaderBytes:    1 << 20,
 	}
 	if a.cfg.httpServerHook != nil {
