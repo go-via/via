@@ -72,6 +72,47 @@ func TestIfStr_returnsConditional(t *testing.T) {
 	assert.Equal(t, "", h.IfStr(false, "yes"))
 }
 
+func TestSwitch_rendersMatchingCase(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Switch("settings",
+		h.Case("overview", h.P(h.Text("o"))),
+		h.Case("settings", h.P(h.Text("s"))),
+		h.Default(h.P(h.Text("d"))),
+	)))
+	assert.Equal(t, "<div><p>s</p></div>", got)
+}
+
+func TestSwitch_fallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Switch("missing",
+		h.Case("a", h.P(h.Text("a"))),
+		h.Default(h.P(h.Text("d"))),
+	)))
+	assert.Equal(t, "<div><p>d</p></div>", got)
+}
+
+func TestSwitch_noDefaultRendersNothing(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Switch("none",
+		h.Case("a", h.P(h.Text("a"))),
+	)))
+	assert.Equal(t, "<div></div>", got)
+}
+
+func TestSwitch_typedKeysCompareEquality(t *testing.T) {
+	t.Parallel()
+	type kind int
+	const (
+		alpha kind = iota
+		beta
+	)
+	got := render(t, h.Div(h.Switch(beta,
+		h.Case(alpha, h.P(h.Text("α"))),
+		h.Case(beta, h.P(h.Text("β"))),
+	)))
+	assert.Contains(t, got, "β")
+}
+
 func TestWhen_buildsOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
 

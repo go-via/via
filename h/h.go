@@ -103,6 +103,46 @@ func EachIndexed[T any](items []T, fn func(i int, v T) H) H {
 	return Group(out)
 }
 
+// SwitchCase pairs a key with the node to render when Switch's value
+// matches the key. Build with Case / Default.
+type SwitchCase struct {
+	key any // empty for Default
+	node    H
+	isDefault bool
+}
+
+// Case returns a SwitchCase that fires when Switch's value equals key.
+func Case(key any, node H) SwitchCase { return SwitchCase{key: key, node: node} }
+
+// Default returns a SwitchCase that fires when no other case matches.
+// At most one Default per Switch is honoured (the first one wins).
+func Default(node H) SwitchCase { return SwitchCase{node: node, isDefault: true} }
+
+// Switch renders the first matching SwitchCase and nothing else.
+// Falls back to Default if no Case matches; renders nothing if no
+// Default is provided.
+//
+//	h.Switch(p.Active.Get(ctx),
+//	    h.Case("overview", overviewView(ctx)),
+//	    h.Case("settings", settingsView(ctx)),
+//	    h.Default(h.P(h.Text("not found"))),
+//	)
+func Switch(value any, cases ...SwitchCase) H {
+	var fallback H
+	for _, c := range cases {
+		if c.isDefault {
+			if fallback == nil {
+				fallback = c.node
+			}
+			continue
+		}
+		if c.key == value {
+			return c.node
+		}
+	}
+	return fallback
+}
+
 // Group bundles a slice of nodes into a single H so callers can return
 // many nodes from a function that has to return one.
 func Group(items []H) H {
