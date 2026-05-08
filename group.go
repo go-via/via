@@ -27,13 +27,17 @@ func (g *Group) Use(mw ...Middleware) {
 // HandleFunc registers a non-via handler under the group prefix, wrapped
 // in the group's middleware chain.
 func (g *Group) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	g.app.mux.Handle("GET "+joinPath(g.prefix, pattern),
+	full := "GET " + joinPath(g.prefix, pattern)
+	g.app.claimRoute(full, "Group("+g.prefix+").HandleFunc")
+	g.app.mux.Handle(full,
 		applyMiddleware(g.middleware, http.HandlerFunc(handler)))
 }
 
 // Handle registers a non-via http.Handler under the group prefix.
 func (g *Group) Handle(pattern string, handler http.Handler) {
-	g.app.mux.Handle("GET "+joinPath(g.prefix, pattern),
+	full := "GET " + joinPath(g.prefix, pattern)
+	g.app.claimRoute(full, "Group("+g.prefix+").Handle")
+	g.app.mux.Handle(full,
 		applyMiddleware(g.middleware, handler))
 }
 

@@ -34,8 +34,10 @@ type App struct {
 	handler http.Handler
 	server  *http.Server
 
-	descs   []*cmpDescriptor
-	descsMu sync.RWMutex
+	descs        []*cmpDescriptor
+	descsMu      sync.RWMutex
+	routes       map[string]string // method-and-pattern → registrar tag
+	routesMu     sync.Mutex
 
 	// appSignals holds plugin-registered, app-wide initial signal values.
 	// They are injected into <meta data-signals> on every page render but
@@ -113,22 +115,41 @@ func (a *App) RegisterAppSignal(key string, value any) {
 
 // HandleFunc registers a non-via handler on the app's mux.
 func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	a.claimRoute(pattern, "HandleFunc")
 	a.mux.HandleFunc(pattern, handler)
 }
 
 // Handle registers a non-via http.Handler on the app's mux.
 func (a *App) Handle(pattern string, handler http.Handler) {
+	a.claimRoute(pattern, "Handle")
 	a.mux.Handle(pattern, handler)
+}
+
+// claimRoute records that pattern has been claimed by tag and panics if the
+// same pattern is registered twice. Catching the conflict early surfaces
+// silent footguns ("why does only the second Mount win?") at boot rather
+// than at the next request.
+func (a *App) claimRoute(pattern, tag string) {
+	a.routesMu.Lock()
+	defer a.routesMu.Unlock()
+	if prev, ok := a.routes[pattern]; ok {
+		panic(fmt.Sprintf(
+			"via: route %q already registered (by %s); now %s would overwrite it",
+			pattern, prev, tag))
+	}
+	a.routes[pattern] = tag
 }
 
 func (a *App) registerDescriptor(d *cmpDescriptor) {
 	a.descsMu.Lock()
 	a.descs = append(a.descs, d)
 	a.descsMu.Unlock()
+	pattern := "GET " + d.route
+	a.claimRoute(pattern, "Mount["+d.typ.Name()+"]")
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.renderPage(d, w, r)
 	})
-	a.mux.Handle("GET "+d.route, applyMiddleware(d.groupMW, final))
+	a.mux.Handle(pattern, applyMiddleware(d.groupMW, final))
 }
 
 func (a *App) registerCtx(id string, ctx *Ctx) {
@@ -245,6 +266,7 @@ func New(opts ...Option) *App {
 		contextRegistry: make(map[string]*Ctx),
 		sessions:        make(map[string]*session),
 		appSignals:      make(map[string]any),
+		routes:          make(map[string]string),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
