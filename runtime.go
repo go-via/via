@@ -1,0 +1,469 @@
+package via
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/go-via/via/h"
+	"github.com/starfederation/datastar-go/datastar"
+)
+
+// patchQueue coalesces outgoing patches between SSE flushes.
+type patchQueue struct {
+	mu       sync.Mutex
+	elements string
+	hasElems bool
+	signals  map[string]any
+	scripts  strings.Builder
+	redirect string
+	hasRedir bool
+	disposed bool
+	wake     chan struct{}
+}
+
+func newPatchQueue() *patchQueue {
+	return &patchQueue{wake: make(chan struct{}, 1)}
+}
+
+func (q *patchQueue) notify() {
+	if q == nil {
+		return
+	}
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+// renderPage handles GET on a Mount-ed route. Allocates a fresh *C, decodes
+// path params + initial signal values, optionally calls Init, renders the
+// view inside the HTML5 envelope.
+func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Request) {
+	cmpVal := reflect.New(d.typ)
+	cmpAny := cmpVal.Interface()
+
+	tabID := genTabID(d.route)
+	ctx := &Ctx{
+		id:           tabID,
+		app:          a,
+		desc:         d,
+		cmpVal:       cmpAny,
+		signalRefs:   make([]signalRef, len(d.signalSlots)),
+		dirtySignals: newBitset(len(d.signalSlots)),
+		queue:        newPatchQueue(),
+		doneChan:     make(chan struct{}),
+		session:      a.sessionFromRequest(r),
+	}
+	ctx.touch()
+
+	bindSlots(ctx, cmpVal, d)
+	applyInits(ctx, cmpVal, d)
+	decodePathParams(cmpVal, r, d)
+
+	if d.hasInit {
+		m := cmpVal.MethodByName("Init")
+		if m.IsValid() {
+			out := m.Call([]reflect.Value{reflect.ValueOf(ctx)})
+			if !out[0].IsNil() {
+				if errVal, ok := out[0].Interface().(error); ok && errVal != nil {
+					a.logErr(ctx, "Init: %v", errVal)
+				}
+			}
+		}
+	}
+
+	a.registerCtx(tabID, ctx)
+
+	view := cmpVal.MethodByName("View").Call([]reflect.Value{reflect.ValueOf(ctx)})[0]
+	body := view.Interface().(h.H)
+
+	a.writePageDocument(w, ctx, body)
+}
+
+func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
+	initialSigs := map[string]any{"via_tab": ctx.id}
+	for slot, ref := range ctx.signalRefs {
+		s := ctx.desc.signalSlots[slot]
+		if s.kind != kindSignal {
+			continue
+		}
+		v, err := ref.encode()
+		if err != nil {
+			continue
+		}
+		var raw json.RawMessage = v
+		initialSigs[s.wireKey] = raw
+	}
+
+	sigsJSON, _ := json.Marshal(initialSigs)
+	head := []h.H{
+		h.Meta(h.Data("signals", string(sigsJSON))),
+		h.Meta(h.Data("init", "@get('/_sse')")),
+		h.Meta(h.Data("init", fmt.Sprintf(
+			`window.addEventListener('beforeunload',(e)=>{navigator.sendBeacon('/_sse/close','%s');});`, ctx.id))),
+	}
+	head = append(head, a.documentHeadIncludes...)
+
+	bodyEls := []h.H{h.Div(h.ID(ctx.id), body)}
+	bodyEls = append(bodyEls, a.documentFootIncludes...)
+
+	doc := h.HTML5(h.HTML5Props{
+		Title:     a.cfg.title,
+		Head:      head,
+		Body:      bodyEls,
+		HTMLAttrs: a.documentHTMLAttrs,
+	})
+	_ = doc.Render(w)
+}
+
+// bindSlots writes the slot index and wire key into every Signal[T] / State[T]
+// field of the freshly allocated *C, and stashes a typed signalRef pointer for
+// reflection-free dispatch later.
+func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
+	elem := cmpVal.Elem()
+	for i, s := range d.signalSlots {
+		field := elem.Field(s.fieldIndex)
+		ref := field.Addr().Interface().(signalRef)
+		ref.bindSlot(uint16(i), s.wireKey)
+		ctx.signalRefs[i] = ref
+	}
+}
+
+// applyInits decodes init=… tag tokens into the typed value field.
+func applyInits(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
+	elem := cmpVal.Elem()
+	for _, s := range d.signalSlots {
+		if s.initRaw == "" {
+			continue
+		}
+		// The handle struct is { val T; slot; key }; field 0 is val.
+		valField := elem.Field(s.fieldIndex).Field(0)
+		decodeParam(valField, s.scalarKind, s.initRaw)
+	}
+	_ = ctx
+}
+
+func decodePathParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
+	if len(d.paramSlots) == 0 {
+		return
+	}
+	elem := cmpVal.Elem()
+	for _, p := range d.paramSlots {
+		raw := r.PathValue(p.name)
+		decodeParam(elem.Field(p.fieldIndex), p.kind, raw)
+	}
+}
+
+// genTabID returns a route-prefixed random id for human-readable tab traces.
+func genTabID(route string) string {
+	return route + "_" + genSecureID()
+}
+
+// handleSSE opens the persistent stream for a Ctx identified by the via_tab
+// signal sent in the URL, drains the patch queue until the client goes away
+// or the ctx is disposed.
+func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
+	var sigs map[string]any
+	_ = datastar.ReadSignals(r, &sigs)
+	tabID, _ := sigs["via_tab"].(string)
+
+	ctx, err := a.getCtx(tabID)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	ctx.touch()
+
+	sse := datastar.NewSSE(w, r)
+
+	var heartbeat <-chan time.Time
+	if a.cfg.sseHeartbeat > 0 {
+		t := time.NewTicker(a.cfg.sseHeartbeat)
+		defer t.Stop()
+		heartbeat = t.C
+	}
+
+	for {
+		select {
+		case <-sse.Context().Done():
+			return
+		case <-ctx.doneChan:
+			return
+		case <-heartbeat:
+			if err := sse.PatchSignals([]byte("{}")); err != nil {
+				return
+			}
+			ctx.touch()
+		case <-ctx.queue.wake:
+			if err := drainQueue(sse, ctx); err != nil {
+				return
+			}
+			ctx.touch()
+		}
+	}
+}
+
+func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
+	q := ctx.queue
+	q.mu.Lock()
+	elems, hasElems := q.elements, q.hasElems
+	signals := q.signals
+	scripts := q.scripts.String()
+	redirect, hasRedir := q.redirect, q.hasRedir
+	q.elements = ""
+	q.hasElems = false
+	q.signals = nil
+	q.scripts.Reset()
+	q.redirect = ""
+	q.hasRedir = false
+	q.mu.Unlock()
+
+	if hasRedir {
+		return sse.Redirect(redirect)
+	}
+	if hasElems {
+		if err := sse.PatchElements(elems); err != nil {
+			return err
+		}
+	}
+	if len(signals) > 0 {
+		out, _ := json.Marshal(signals)
+		if err := sse.PatchSignals(out); err != nil {
+			return err
+		}
+	}
+	if scripts != "" {
+		if err := sse.ExecuteScript(scripts); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// handleAction dispatches POST /_action/{cmpID}.{methodName} (or just
+// /_action/{methodName} for root). The {id} URL segment encodes both.
+func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	maxBody := a.cfg.maxRequestBody
+	if maxBody == 0 {
+		maxBody = 1 << 20
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	var sigs map[string]any
+	if err := datastar.ReadSignals(r, &sigs); err != nil {
+		var mb *http.MaxBytesError
+		if errors.As(err, &mb) {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+	tabID, _ := sigs["via_tab"].(string)
+
+	ctx, err := a.getCtx(tabID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+		http.Error(w, "session mismatch", http.StatusForbidden)
+		return
+	}
+
+	d := ctx.desc
+	slotIdx, ok := d.actionByName[id]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	slot := d.actionSlots[slotIdx]
+
+	ctx.mu.Lock()
+	ctx.w = w
+	ctx.r = r
+	ctx.mu.Unlock()
+	defer func() {
+		ctx.mu.Lock()
+		ctx.w = nil
+		ctx.r = nil
+		ctx.mu.Unlock()
+	}()
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.logErr(ctx, "action %q panicked: %v", id, rec)
+			panicErr := fmt.Errorf("panic: %v", rec)
+			a.dispatchActionError(ctx, panicErr, true)
+		}
+	}()
+
+	injectSignals(ctx, sigs)
+
+	cmpVal := reflect.ValueOf(ctx.cmpVal)
+	out := cmpVal.Method(slot.methodIndex).Call([]reflect.Value{reflect.ValueOf(ctx)})
+	if !out[0].IsNil() {
+		errVal, _ := out[0].Interface().(error)
+		if errVal != nil {
+			a.dispatchActionError(ctx, errVal, false)
+		}
+	}
+
+	flushDirty(ctx)
+}
+
+func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
+	if a.cfg.actionErrorHandler != nil {
+		a.cfg.actionErrorHandler(ctx, err)
+		return
+	}
+	msg := err.Error()
+	if fromPanic {
+		msg = "Something went wrong"
+	}
+	out, _ := json.Marshal(msg)
+	enqueueScript(ctx, "alert("+string(out)+")")
+}
+
+func enqueueScript(ctx *Ctx, s string) {
+	if ctx == nil || ctx.queue == nil {
+		return
+	}
+	q := ctx.queue
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.scripts.WriteString("try{")
+	q.scripts.WriteString(s)
+	q.scripts.WriteString("}catch(e){console.error(e)};")
+	q.notify()
+}
+
+// flushDirty re-renders the view fragment if any State changed and patches
+// any dirty signals to the browser.
+func flushDirty(ctx *Ctx) {
+	if !ctx.stateDirty && !ctx.dirtySignals.any() {
+		return
+	}
+
+	if ctx.stateDirty {
+		buf := bytes.NewBuffer(nil)
+		view := reflect.ValueOf(ctx.cmpVal).MethodByName("View").
+			Call([]reflect.Value{reflect.ValueOf(ctx)})[0]
+		body := view.Interface().(h.H)
+		_ = h.Div(h.ID(ctx.id), body).Render(buf)
+		ctx.queue.mu.Lock()
+		ctx.queue.elements = buf.String()
+		ctx.queue.hasElems = true
+		ctx.queue.mu.Unlock()
+		ctx.stateDirty = false
+	}
+
+	if ctx.dirtySignals.any() {
+		out := map[string]any{}
+		for slot, ref := range ctx.signalRefs {
+			if !ctx.dirtySignals.get(slot) {
+				continue
+			}
+			s := ctx.desc.signalSlots[slot]
+			b, err := ref.encode()
+			if err != nil {
+				continue
+			}
+			out[s.wireKey] = json.RawMessage(b)
+		}
+		ctx.dirtySignals.clear()
+		ctx.queue.mu.Lock()
+		if ctx.queue.signals == nil {
+			ctx.queue.signals = make(map[string]any, len(out))
+		}
+		for k, v := range out {
+			ctx.queue.signals[k] = v
+		}
+		ctx.queue.mu.Unlock()
+	}
+	ctx.queue.notify()
+}
+
+// injectSignals applies signals from a request body into the bound *C's
+// Signal[T] fields by wire key.
+func injectSignals(ctx *Ctx, sigs map[string]any) {
+	for slot, ref := range ctx.signalRefs {
+		if ctx.desc.signalSlots[slot].kind != kindSignal {
+			continue
+		}
+		key := ctx.desc.signalSlots[slot].wireKey
+		if v, ok := sigs[key]; ok {
+			ref.decodeRaw(v)
+		}
+	}
+}
+
+func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
+	maxBody := a.cfg.maxRequestBody
+	if maxBody == 0 {
+		maxBody = 4096
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var mb *http.MaxBytesError
+		if errors.As(err, &mb) {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	tabID := strings.TrimSpace(string(body))
+	if ctx, err := a.getCtx(tabID); err == nil {
+		if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+			return
+		}
+		a.disposeCtx(ctx)
+		a.unregisterCtx(tabID)
+	}
+}
+
+// disposeCtx closes the ctx and runs Dispose if defined.
+func (a *App) disposeCtx(ctx *Ctx) {
+	ctx.mu.Lock()
+	if ctx.disposed {
+		ctx.mu.Unlock()
+		return
+	}
+	ctx.disposed = true
+	close(ctx.doneChan)
+	if ctx.queue != nil {
+		ctx.queue.mu.Lock()
+		ctx.queue.disposed = true
+		ctx.queue.mu.Unlock()
+	}
+	ctx.mu.Unlock()
+
+	if ctx.desc != nil && ctx.desc.hasDispose && ctx.cmpVal != nil {
+		defer func() {
+			if rec := recover(); rec != nil {
+				a.logErr(ctx, "Dispose panicked: %v", rec)
+			}
+		}()
+		m := reflect.ValueOf(ctx.cmpVal).MethodByName("Dispose")
+		if m.IsValid() {
+			m.Call([]reflect.Value{reflect.ValueOf(ctx)})
+		}
+	}
+}

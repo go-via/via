@@ -84,34 +84,33 @@ func TestApp_handlesMultipleRoutes(t *testing.T) {
 	assert.Contains(t, string(buf2), "second")
 }
 
-func TestApp_sseEndpointExists(t *testing.T) {
+func TestApp_sseEndpointRejectsUnknownTab(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	via.New(via.WithTestServer(&server))
 	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/_sse")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-func TestApp_actionEndpointExists(t *testing.T) {
+func TestApp_actionEndpointRejectsUnknownTab(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	via.New(via.WithTestServer(&server))
 	defer server.Close()
 
-	resp, err := http.Post(server.URL+"/_action/test", "text/plain", nil)
+	resp, err := http.Post(server.URL+"/_action/Inc", "text/plain", nil)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestApp_implementsHTTPHandler(t *testing.T) {
+	t.Parallel()
+	var _ http.Handler = via.New()
 }

@@ -1,77 +1,93 @@
 package via
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"time"
 )
 
+// LogLevel selects the minimum log severity written to stdout.
 type LogLevel int
 
 const (
 	LogDebug LogLevel = iota
 	LogInfo
 	LogWarn
+	LogError
 )
 
 type config struct {
-	addr            string
-	title           string
-	logLevel        LogLevel
-	plugins         []Plugin
-	shutdownTimeout  time.Duration
-	sessionTTL      time.Duration
-	contextTTL     time.Duration
-	sseHeartbeat    time.Duration
-	secureCookies   bool
-	testServer      **httptest.Server
+	addr               string
+	title              string
+	logLevel           LogLevel
+	plugins            []Plugin
+	shutdownTimeout    time.Duration
+	sessionTTL         time.Duration
+	contextTTL         time.Duration
+	sseHeartbeat       time.Duration
+	secureCookies      bool
+	testServer         **httptest.Server
+	httpServerHook     func(*http.Server)
+	maxRequestBody     int64
+	actionErrorHandler func(*Ctx, error)
 }
 
-func (c *config) Addr() string         { return c.addr }
-func (c *config) Title() string         { return c.title }
-func (c *config) LogLevel() LogLevel   { return c.logLevel }
-func (c *config) ShutdownTimeout() time.Duration { return c.shutdownTimeout }
-func (c *config) SessionTTL() time.Duration { return c.sessionTTL }
-func (c *config) SSEHeartbeat() time.Duration { return c.sseHeartbeat }
-func (c *config) SecureCookies() bool   { return c.secureCookies }
-
+// Option configures a via App.
 type Option func(*config)
 
-func WithAddr(addr string) Option {
-	return func(c *config) { c.addr = addr }
-}
+// WithAddr sets the HTTP listen address.
+func WithAddr(addr string) Option { return func(c *config) { c.addr = addr } }
 
-func WithTitle(title string) Option {
-	return func(c *config) { c.title = title }
-}
+// WithTitle sets the rendered <title> on every page.
+func WithTitle(title string) Option { return func(c *config) { c.title = title } }
 
-func WithLogLevel(level LogLevel) Option {
-	return func(c *config) { c.logLevel = level }
-}
+// WithLogLevel sets the minimum log severity.
+func WithLogLevel(level LogLevel) Option { return func(c *config) { c.logLevel = level } }
 
-func WithShutdownTimeout(d time.Duration) Option {
-	return func(c *config) { c.shutdownTimeout = d }
-}
+// WithShutdownTimeout sets the graceful shutdown timeout.
+func WithShutdownTimeout(d time.Duration) Option { return func(c *config) { c.shutdownTimeout = d } }
 
-func WithSessionTTL(d time.Duration) Option {
-	return func(c *config) { c.sessionTTL = d }
-}
+// WithSessionTTL sets the per-session expiry. Default 30 minutes.
+func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.sessionTTL = d } }
 
-func WithSSEHeartbeat(d time.Duration) Option {
-	return func(c *config) { c.sseHeartbeat = d }
-}
+// WithContextTTL sets the per-tab Ctx idle expiry. Default 15 minutes.
+func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
 
-func WithSecureCookies() Option {
-	return func(c *config) { c.secureCookies = true }
-}
+// WithSSEHeartbeat sets the SSE keep-alive interval.
+func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
 
+// WithSecureCookies marks the session cookie Secure for HTTPS deployments.
+func WithSecureCookies() Option { return func(c *config) { c.secureCookies = true } }
+
+// WithPlugins registers plugins. They run Register at New time.
 func WithPlugins(plugins ...Plugin) Option {
 	return func(c *config) { c.plugins = append(c.plugins, plugins...) }
 }
 
+// WithTestServer creates an httptest.Server bound to the app's handler and
+// writes it to *server before New returns. Caller must Close it.
 func WithTestServer(server **httptest.Server) Option {
 	return func(c *config) { c.testServer = server }
 }
 
+// WithHTTPServer hands the user the *http.Server before listening so
+// non-default fields (TLSConfig, ConnState, …) can be set.
+func WithHTTPServer(hook func(*http.Server)) Option {
+	return func(c *config) { c.httpServerHook = hook }
+}
+
+// WithMaxRequestBody caps body bytes for action and close requests.
+// Default 1 MiB.
+func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestBody = n } }
+
+// WithActionErrorHandler replaces the default browser-alert with a custom
+// callback for action errors and panics. The error from a panic is wrapped
+// as fmt.Errorf("panic: %v", recovered).
+func WithActionErrorHandler(fn func(*Ctx, error)) Option {
+	return func(c *config) { c.actionErrorHandler = fn }
+}
+
+// Plugin extends the App at registration time.
 type Plugin interface {
 	Register(*App)
 }

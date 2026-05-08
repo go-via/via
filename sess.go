@@ -46,6 +46,20 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 
 
 
+// sessionFromRequest returns the session for the cookie on r, or nil if
+// there's no session yet (no cookie or unknown id). The session is
+// established by the withSession middleware on the first request, so by
+// the time SSE/action handlers run there is always a session present.
+func (a *App) sessionFromRequest(r *http.Request) *session {
+	c, err := r.Cookie("via_session")
+	if err != nil {
+		return nil
+	}
+	a.sessionsMu.RLock()
+	defer a.sessionsMu.RUnlock()
+	return a.sessions[c.Value]
+}
+
 func (a *App) sweepExpiredSessions() {
 	interval := a.cfg.sessionTTL / 2
 	if interval <= 0 {

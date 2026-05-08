@@ -14,75 +14,98 @@ import (
 	"time"
 
 	"github.com/go-via/via/h"
-	"github.com/starfederation/datastar-go/datastar"
 )
 
+//go:embed datastar.js
 var datastarJS []byte
 
+// App is the root of a via web app. It implements http.Handler so it can be
+// passed straight to http.ListenAndServe or composed inside any std mux:
+//
+//	app := via.New()
+//	via.Mount[Counter](app, "/counter")
+//	http.ListenAndServe(":3000", app)
+//
+//	// or, embed under a parent mux:
+//	parent := http.NewServeMux()
+//	parent.Handle("/", app)
 type App struct {
-	cfg             config
-	mux             *http.ServeMux
-	handler         http.Handler
-	server          *http.Server
-	contextRegistry map[string]*Ctx
+	cfg     config
+	mux     *http.ServeMux
+	handler http.Handler
+	server  *http.Server
+
+	descs   []*cmpDescriptor
+	descsMu sync.RWMutex
+
+	contextRegistry      map[string]*Ctx
 	contextRegistryMutex sync.RWMutex
-	sessions        map[string]*session
-	sessionsMu      sync.RWMutex
-	stopSweep      chan struct{}
-	stopSweepOnce   sync.Once
-	middleware     []Middleware
+
+	sessions   map[string]*session
+	sessionsMu sync.RWMutex
+
+	stopSweep     chan struct{}
+	stopSweepOnce sync.Once
+
+	middleware []Middleware
+
+	documentHeadIncludes []h.H
+	documentFootIncludes []h.H
+	documentHTMLAttrs    []h.H
 }
 
-func (a *App) logErr(ctx *Ctx, format string, args ...any) {
-	log.Printf("[error] "+format, args...)
+// ServeHTTP makes *App an http.Handler.
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.handler.ServeHTTP(w, r)
 }
 
-func (a *App) Config() *config {
-	return &a.cfg
-}
-
-func (a *App) logDebug(ctx *Ctx, format string, args ...any) {
-	if a.cfg.logLevel <= LogDebug {
-		log.Printf("[debug] "+format, args...)
+// AppendToHead adds nodes to the <head> of every rendered page.
+func (a *App) AppendToHead(elements ...h.H) {
+	for _, el := range elements {
+		if el != nil {
+			a.documentHeadIncludes = append(a.documentHeadIncludes, el)
+		}
 	}
 }
 
-func (a *App) AppendToHead(elements ...h.H) {}
-
-func (a *App) AppendToFoot(elements ...h.H) {}
-
-func (a *App) AppendAttrToHTML(attrs ...h.H) {}
-
-func (a *App) Use(mw ...Middleware) {
-	a.middleware = append(a.middleware, mw...)
+// AppendToFoot adds nodes to the end of <body> on every rendered page.
+func (a *App) AppendToFoot(elements ...h.H) {
+	for _, el := range elements {
+		if el != nil {
+			a.documentFootIncludes = append(a.documentFootIncludes, el)
+		}
+	}
 }
 
+// AppendAttrToHTML adds attributes to the <html> element of every page.
+func (a *App) AppendAttrToHTML(attrs ...h.H) {
+	for _, attr := range attrs {
+		if attr != nil {
+			a.documentHTMLAttrs = append(a.documentHTMLAttrs, attr)
+		}
+	}
+}
+
+// Use installs middleware that wraps every via-served request.
+func (a *App) Use(mw ...Middleware) { a.middleware = append(a.middleware, mw...) }
+
+// HandleFunc registers a non-via handler on the app's mux.
 func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
 	a.mux.HandleFunc(pattern, handler)
 }
 
-func (a *App) Start() {
-	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.handler}
-	log.Printf("[info] via started at [%s]", a.cfg.addr)
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stop
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		if err := a.Shutdown(ctx); err != nil {
-			a.logErr(nil, "shutdown error: %v", err)
-		}
-	}()
-
-	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		panic(fmt.Sprintf("via: %v", err))
-	}
+// Handle registers a non-via http.Handler on the app's mux.
+func (a *App) Handle(pattern string, handler http.Handler) {
+	a.mux.Handle(pattern, handler)
 }
 
-func (a *App) Shutdown(ctx interface{}) error {
-	return nil
+func (a *App) registerDescriptor(d *cmpDescriptor) {
+	a.descsMu.Lock()
+	a.descs = append(a.descs, d)
+	a.descsMu.Unlock()
+	a.mux.HandleFunc("GET "+d.route, func(w http.ResponseWriter, r *http.Request) {
+		a.renderPage(d, w, r)
+	})
 }
 
 func (a *App) registerCtx(id string, ctx *Ctx) {
@@ -103,30 +126,105 @@ func (a *App) getCtx(id string) (*Ctx, error) {
 	if ctx, ok := a.contextRegistry[id]; ok {
 		return ctx, nil
 	}
-	return nil, fmt.Errorf("ctx '%s' not found", id)
+	return nil, fmt.Errorf("ctx %q not found", id)
 }
 
+func (a *App) logErr(ctx *Ctx, format string, args ...any) {
+	tag := ""
+	if ctx != nil {
+		tag = "via_tab=" + ctx.id + " "
+	}
+	log.Printf("[error] "+tag+format, args...)
+}
+
+func (a *App) logDebug(ctx *Ctx, format string, args ...any) {
+	if a.cfg.logLevel <= LogDebug {
+		log.Printf("[debug] "+format, args...)
+	}
+}
+
+// Start binds and serves on the configured address. SIGINT/SIGTERM trigger
+// a graceful Shutdown.
+func (a *App) Start() {
+	a.server = &http.Server{
+		Addr:              a.cfg.addr,
+		Handler:           a.handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	if a.cfg.httpServerHook != nil {
+		a.cfg.httpServerHook(a.server)
+	}
+	log.Printf("[info] via started at [%s]", a.cfg.addr)
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.shutdownTimeout)
+		defer cancel()
+		if err := a.Shutdown(ctx); err != nil {
+			a.logErr(nil, "shutdown error: %v", err)
+		}
+	}()
+
+	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		panic(fmt.Sprintf("via: %v", err))
+	}
+}
+
+// Shutdown disposes all live tabs and closes the server.
+func (a *App) Shutdown(ctx context.Context) error {
+	a.contextRegistryMutex.Lock()
+	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
+	for _, c := range a.contextRegistry {
+		ctxs = append(ctxs, c)
+	}
+	a.contextRegistry = make(map[string]*Ctx)
+	a.contextRegistryMutex.Unlock()
+
+	for _, c := range ctxs {
+		a.disposeCtx(c)
+	}
+
+	a.stopSweepOnce.Do(func() {
+		if a.stopSweep != nil {
+			close(a.stopSweep)
+		}
+	})
+
+	a.sessionsMu.Lock()
+	a.sessions = make(map[string]*session)
+	a.sessionsMu.Unlock()
+
+	if a.server != nil {
+		return a.server.Shutdown(ctx)
+	}
+	return nil
+}
+
+// New constructs an *App with the given options.
 func New(opts ...Option) *App {
 	mux := http.NewServeMux()
-
 	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
-		sessions:       make(map[string]*session),
+		sessions:        make(map[string]*session),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
 			title:           "Via",
 			shutdownTimeout: 5 * time.Second,
-			sessionTTL:     30 * time.Minute,
+			sessionTTL:      30 * time.Minute,
+			contextTTL:      15 * time.Minute,
 			sseHeartbeat:    25 * time.Second,
+			maxRequestBody:  1 << 20,
 		},
 	}
-
 	for _, opt := range opts {
 		opt(&a.cfg)
 	}
-
 	for _, plugin := range a.cfg.plugins {
 		if plugin != nil {
 			plugin.Register(a)
@@ -137,21 +235,20 @@ func New(opts ...Option) *App {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(datastarJS)
 	})
-
 	a.mux.HandleFunc("GET /_sse", a.handleSSE)
 	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 
 	a.handler = a.withSession()
 
-	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
+	if a.cfg.sessionTTL > 0 {
 		a.stopSweep = make(chan struct{})
+		go a.sweepExpiredSessions()
 	}
 
 	if a.cfg.testServer != nil {
 		*a.cfg.testServer = httptest.NewServer(a.handler)
 	}
-
 	return a
 }
 
@@ -160,32 +257,4 @@ func (a *App) withSession() http.Handler {
 		_ = a.getOrCreateSession(w, r)
 		applyMiddleware(a.middleware, a.mux).ServeHTTP(w, r)
 	})
-}
-
-func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
-	var sigs map[string]any
-	_ = datastar.ReadSignals(r, &sigs)
-
-	ctx, err := a.getCtx("")
-	if err != nil {
-		return
-	}
-	ctx.touch()
-
-	sse := datastar.NewSSE(w, r)
-
-	for {
-		select {
-		case <-sse.Context().Done():
-			return
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
-}
-
-func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 }
