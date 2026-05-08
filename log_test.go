@@ -94,6 +94,71 @@ type accessLogPage struct{}
 
 func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
+func TestRequestID_generatesWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.RequestID())
+	via.Mount[accessLogPage](app, "/")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	rid := resp.Header.Get("X-Request-ID")
+	assert.NotEmpty(t, rid, "RequestID middleware should generate an id")
+	assert.GreaterOrEqual(t, len(rid), 22)
+}
+
+func TestRequestID_passesThroughInboundHeader(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.RequestID())
+	via.Mount[accessLogPage](app, "/")
+	defer server.Close()
+
+	req, _ := http.NewRequest("GET", server.URL+"/", nil)
+	req.Header.Set("X-Request-ID", "my-trace-123")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, "my-trace-123", resp.Header.Get("X-Request-ID"),
+		"inbound X-Request-ID should round-trip back unchanged")
+}
+
+func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureLogger{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithLogger(cap),
+		via.WithLogLevel(via.LogInfo),
+		via.WithTestServer(&server),
+	)
+	app.Use(via.RequestID())
+	app.Use(via.AccessLog(app))
+	via.Mount[accessLogPage](app, "/")
+	defer server.Close()
+
+	req, _ := http.NewRequest("GET", server.URL+"/", nil)
+	req.Header.Set("X-Request-ID", "trace-7")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	found := false
+	for _, r := range cap.snapshot() {
+		if strings.Contains(r.msg, "rid=trace-7") {
+			found = true
+		}
+	}
+	assert.True(t, found, "AccessLog should include rid=… when RequestID middleware ran")
+}
+
 func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	t.Parallel()
 

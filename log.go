@@ -27,6 +27,40 @@ type Logger interface {
 	Log(level LogLevel, msg string, kv ...any)
 }
 
+// RequestID returns a Middleware that ensures every request carries an
+// X-Request-ID — using the inbound header value if present, otherwise
+// generating a fresh 16-byte base64url id. The id is mirrored back on
+// the response so clients can quote it when reporting issues.
+//
+//	app.Use(via.RequestID())
+//	app.Use(via.AccessLog(app))   // sees the same id in subsequent logs
+//
+// The id is also planted on r.Context under requestIDKey{}; via.Log
+// includes it in the kv pairs when present.
+func RequestID() Middleware {
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			id = genCSPNonce() // 16-byte base64url — same shape, different purpose
+		}
+		w.Header().Set("X-Request-ID", id)
+		next.ServeHTTP(w, r.WithContext(
+			context.WithValue(r.Context(), requestIDKey{}, id)))
+	}
+}
+
+type requestIDKey struct{}
+
+// RequestIDFrom pulls the request id out of r.Context. Returns "" if
+// no RequestID middleware has run for this request.
+func RequestIDFrom(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	v, _ := r.Context().Value(requestIDKey{}).(string)
+	return v
+}
+
 // AccessLog returns a Middleware that emits one info-level log record
 // per HTTP request through the App's configured Logger:
 //
@@ -40,8 +74,13 @@ func AccessLog(a *App) Middleware {
 		start := timeNow()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
-		a.logInfo(nil, "%s %s status=%d duration=%s",
-			r.Method, r.URL.Path, sw.status, timeSince(start))
+		if rid := RequestIDFrom(r); rid != "" {
+			a.logInfo(nil, "%s %s status=%d duration=%s rid=%s",
+				r.Method, r.URL.Path, sw.status, timeSince(start), rid)
+		} else {
+			a.logInfo(nil, "%s %s status=%d duration=%s",
+				r.Method, r.URL.Path, sw.status, timeSince(start))
+		}
 	}
 }
 
