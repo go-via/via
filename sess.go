@@ -2,6 +2,7 @@ package via
 
 import (
 	"net/http"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,6 +50,108 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 }
 
 
+
+// PutSess stores a typed value in the session, keyed by the type name.
+// Use it to attach "the logged-in user" or any struct that is one-per-
+// session. Marks the current Ctx dirty so the page re-renders.
+//
+//	type User struct { Email, Name string }
+//	via.PutSess(ctx, User{Email: "alice@example.com"})
+func PutSess[T any](ctx *Ctx, v T) {
+	if ctx == nil {
+		return
+	}
+	SessionStore(ctx, sessionTypeKey[T](), v)
+}
+
+// GetSess reads the typed value stored with PutSess, returning the zero
+// value of T and false if nothing matches. The src argument may be a
+// *Ctx or an *http.Request — the latter form lets middleware check the
+// session before any composition is rendered.
+//
+//	func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
+//	    if u, ok := via.GetSess[User](r); !ok || u.Email == "" {
+//	        http.Redirect(w, r, "/login", 303)
+//	        return
+//	    }
+//	    next.ServeHTTP(w, r)
+//	}
+func GetSess[T any](src any) (T, bool) {
+	var zero T
+	switch s := src.(type) {
+	case *Ctx:
+		v, ok := SessionLoad(s, sessionTypeKey[T]())
+		if !ok {
+			return zero, false
+		}
+		t, ok := v.(T)
+		return t, ok
+	case *http.Request:
+		sess := sessionFromRequestCtx(s)
+		if sess == nil {
+			return zero, false
+		}
+		v, ok := sess.data.Load(sessionTypeKey[T]())
+		if !ok {
+			return zero, false
+		}
+		t, ok := v.(T)
+		return t, ok
+	}
+	return zero, false
+}
+
+// ClearSess removes the value stored under T's key from the session.
+func ClearSess[T any](src any) {
+	switch s := src.(type) {
+	case *Ctx:
+		if s != nil && s.session != nil {
+			s.session.data.Delete(sessionTypeKey[T]())
+			s.markStateDirty()
+		}
+	case *http.Request:
+		sess := sessionFromRequestCtx(s)
+		if sess != nil {
+			sess.data.Delete(sessionTypeKey[T]())
+		}
+	}
+}
+
+// sessionTypeKey returns a stable string key for a Go type used as a
+// typed-session value. We use the reflect type's full string ("pkg.Name")
+// so distinct types in different packages don't collide.
+func sessionTypeKey[T any]() string {
+	var zero T
+	return "type:" + reflectTypeName(zero)
+}
+
+func reflectTypeName(v any) string {
+	t := reflect.TypeOf(v)
+	if t == nil {
+		return "nil"
+	}
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t.String()
+}
+
+// sessionFromRequestCtx looks up the session associated with the request's
+// cookie, but only if the request originated from this app's session
+// middleware. Resolved via the App pointer stamped into each request's
+// context (see withSession).
+func sessionFromRequestCtx(r *http.Request) *session {
+	if r == nil {
+		return nil
+	}
+	a, _ := r.Context().Value(appKey{}).(*App)
+	if a == nil {
+		return nil
+	}
+	return a.sessionFromRequest(r)
+}
+
+type appKey struct{}
 
 // SessionLoad reads a value from the per-session store. Used by
 // scope.User[T] to back its Get/Set with shared storage that survives

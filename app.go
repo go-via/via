@@ -294,6 +294,9 @@ func New(opts ...Option) *App {
 func (a *App) withSession() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = a.getOrCreateSession(w, r)
+		// Stamp the app pointer into r so middleware can resolve the
+		// session via via.GetSess[T](r) without holding a *Ctx yet.
+		r = r.WithContext(context.WithValue(r.Context(), appKey{}, a))
 		applyMiddleware(a.middleware, a.mux).ServeHTTP(w, r)
 	})
 }
