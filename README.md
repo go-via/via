@@ -1,22 +1,14 @@
 # Via
 
-Real-time engine for building reactive web applications in pure Go.
+Real-time engine for building reactive web apps in pure Go. A composition
+is a struct. Reactive state is a typed field. Actions are methods. The
+compiler understands your UI.
 
-## Why Via?
+- No templates. No hand-written JavaScript. No transpilation. No hydration.
+- Single SSE stream per tab.
+- `*App` implements `http.Handler` — drops into any std mux.
 
-The web has become tangled in layers of JavaScript, build chains, and
-frameworks stacked on frameworks. Via takes a different stance:
-
-- No templates.
-- No hand-written JavaScript.
-- No transpilation.
-- No hydration.
-- Single SSE stream.
-- Pure Go.
-- A composition is a Go struct. Reactive state is a typed field. Actions
-  are methods. The compiler understands your UI.
-
-## Quick Start
+## Quick start
 
 ```go
 package main
@@ -54,22 +46,7 @@ func main() {
 }
 ```
 
-`*App` implements `http.Handler`, so it slots straight into any standard
-mux or middleware stack.
-
-## API at a glance
-
-### Composition types
-
-A composition is a struct. Implement `View(ctx *via.Ctx) h.H`; everything
-else is optional. Mount it at a route:
-
-```go
-via.Mount[MyPage](app, "/dashboard")
-via.MountOn[Card](apiGroup, "/card/{id}")
-```
-
-### Reactive state
+## Reactive state
 
 | Handle              | Scope          | Lives on        |
 |---------------------|----------------|-----------------|
@@ -78,13 +55,34 @@ via.MountOn[Card](apiGroup, "/card/{id}")
 | `scope.User[T]`     | per-session    | server only     |
 | `scope.App[T]`      | global         | server only     |
 
-All four are zero-value-usable struct fields. Reads and writes go through
-`Get(ctx) / Set(ctx, v)` — explicit context, no hidden globals.
+Reads and writes go through `Get(ctx) / Set(ctx, v)` — explicit context,
+no hidden globals. Wire keys default to lower-cased field names; override
+with the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
 
-The wire key for a signal is the lower-cased field name; override with
-the `via:"name"` tag, and seed an initial value with `via:"name,init=value"`.
+## Lifecycle hooks
 
-### Actions
+| Method                    | Fires when                                    |
+|---------------------------|-----------------------------------------------|
+| `Init(ctx) error`         | Before View on the page-load request          |
+| `OnConnect(ctx) error`    | First time the SSE stream opens (one-shot)    |
+| `Dispose(ctx)`            | Tab closed, ctx swept, or app shut down       |
+| `View(ctx) h.H`           | Required; renders the composition             |
+
+`OnConnect` is where long-running per-tab work belongs — bots that hit
+GET without ever opening the SSE never trigger it.
+
+`via.Stream(ctx, time.Second, fn)` wires the most common ticker pattern:
+
+```go
+func (p *Page) OnConnect(ctx *via.Ctx) error {
+    via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
+        p.Now.Set(ctx, t.Format("15:04:05"))
+    })
+    return nil
+}
+```
+
+## Actions
 
 A method on `*Composition` of signature `func(*via.Ctx) error` is an
 action. Bind it to a DOM event with the `on` sub-package:
@@ -94,12 +92,30 @@ h.Button(h.Text("+"), on.Click(c.Inc))
 h.Form(on.Submit(c.Save), ...)
 h.Input(on.Input(c.Filter, on.Debounce("200ms")))
 h.Div(on.Key("Enter", c.Send))
+h.Button(h.Text("Pick blue"), on.Click(c.Apply, on.SetSignal(&c.Theme, "blue")))
 ```
 
-`on.Click(c.Inc)` reads the method name from the bound method value and
-renders a Datastar `@post('/_action/<method>')` attribute.
+`on.SetSignal(&c.Field, value)` bundles a typed signal write with the
+action so the value updates client-side _before_ the POST fires.
 
-### Path parameters
+The action method's body can:
+
+- Set typed state: `c.Hits.Set(ctx, …)`.
+- Push targeted patches: `ctx.SyncElements(h.Ul(h.ID("list"), …))`.
+- Push raw signals: `ctx.PatchSignal("_picoTheme", "purple")`.
+- Run client JS: `ctx.ExecScriptf("alert(%q)", msg)`.
+- Redirect: `ctx.Redirect("/profile")`.
+- Decode the request payload into a typed struct:
+
+  ```go
+  var f LoginForm
+  via.DecodeForm(ctx, &f)
+  ```
+
+Per-tab actions are serialized — concurrent POSTs to one tab will not
+race on State writes.
+
+## Path parameters
 
 ```go
 type Profile struct {
@@ -109,17 +125,62 @@ type Profile struct {
 via.Mount[Profile](app, "/u/{id}/posts/{slug}")
 ```
 
-Each `path:"name"` tag must match a `{name}` segment in the route.
+Each `path:"name"` tag must match a `{name}` segment. Reflection runs
+once at Mount; per-request decoding writes directly into the typed field.
 
-### Lifecycle hooks
+## Sessions
 
-| Method                       | Fires when                              |
-|------------------------------|-----------------------------------------|
-| `Init(ctx) error`            | Before View on the page-load request    |
-| `Dispose(ctx)`               | Tab closed, ctx swept, or app shut down |
-| `View(ctx) h.H`              | Required; renders the composition       |
+```go
+type User struct{ Email, Name string }
 
-### Plugins
+via.PutSess(ctx, User{Email: "alice@example.com", Name: "Alice"})
+u, ok := via.GetSess[User](ctx)              // inside a handler/action
+u, ok := via.GetSess[User](r)                // inside a Middleware
+via.ClearSess[User](ctx)
+via.RotateSession(ctx)                       // after login/privilege change
+```
+
+`requireAuth` is a one-line middleware:
+
+```go
+func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
+    if u, ok := via.GetSess[User](r); !ok || u.Email == "" {
+        http.Redirect(w, r, "/login", http.StatusSeeOther)
+        return
+    }
+    next.ServeHTTP(w, r)
+}
+```
+
+## Routing & groups
+
+```go
+via.Mount[Counter](app, "/counter/{id}")
+
+api := app.Group("/api")
+api.Use(requireAuth)
+via.MountOn[Profile](api, "/profile")
+
+app.Routes()                 // []RouteInfo for boot logging
+```
+
+Mounting two routes at the same path panics at registration with the
+offending pattern + the original registrar tag. `WithNotFound(h)`
+installs a custom 404 handler.
+
+## h package helpers
+
+| Helper                      | What it does                                 |
+|-----------------------------|----------------------------------------------|
+| `h.Each(items, fn)`         | One node per element; empty slice → nothing  |
+| `h.EachIndexed(items, fn)`  | Same with `(i, v)`                           |
+| `h.When(cond, build)`       | Lazy `If` — only constructs when true        |
+| `h.Group(items)`            | Bundle many nodes into one                   |
+| `h.Classes(parts...)`       | Join class names; empty parts skipped        |
+| `h.ClassMap(map[string]bool)` | Render only true keys                      |
+| `h.IfStr(cond, s)`          | `s` when cond, `""` otherwise                |
+
+## Plugins
 
 ```go
 app := via.New(via.WithPlugins(
@@ -128,17 +189,14 @@ app := via.New(via.WithPlugins(
 ))
 ```
 
-A plugin's `Register(*App)` runs at `New` time and can:
+Plugins call `app.AppendToHead`, `app.AppendToFoot`, `app.HandleFunc`,
+and `app.RegisterAppSignal(key, value)` for client-driven signals.
 
-- `app.AppendToHead`, `app.AppendToFoot`, `app.AppendAttrToHTML`
-- `app.HandleFunc` for plugin-specific routes
-- `app.RegisterAppSignal(key, value)` for client-driven app signals
-
-### Testing
+## Testing
 
 ```go
 import (
-    via "github.com/go-via/via"
+    "github.com/go-via/via"
     "github.com/go-via/via/test"
 )
 
@@ -148,19 +206,25 @@ via.Mount[Counter](app, "/")
 
 tc := test.NewClient(t, server, "/")
 require.Equal(t, 200, tc.Action("Inc").Fire())
+require.Equal(t, 200, tc.Action("Apply").WithSignal("step", 5).Fire())
+frames, cancel := tc.SSE(t)
+defer cancel()
 ```
 
-The client name-addresses actions and signals; no HTML scraping required.
+The client name-addresses actions and signals; no HTML scraping.
 
 ## Examples
 
 `internal/examples/` ships:
 
 - `counter` — basic state + signal + actions
-- `greeter` — Signal[string] mutated from two distinct actions
-- `pathparams` — typed path:"…" tag decoding
+- `greeter` — Signal[string] mutated by two actions
+- `pathparams` — typed path:"…" decoding
 - `countercomp` — two nested counter cards on one page
-- `picocss` — full PicoCSS showcase via the plugin
+- `picocss` — theme/dark-mode showcase
+- `auth` — typed sessions + `RotateSession` + `requireAuth` middleware
+- `todos` — h.Each + scope.User + on.SetSignal
+- `sysmon` — per-tab ticker streaming CPU/RAM/disk/net charts via `OnConnect`
 
 ```bash
 go run ./internal/examples/counter
@@ -168,20 +232,20 @@ go run ./internal/examples/counter
 
 ## Configuration
 
-Pass options to `via.New`:
-
-| Option                          | Default        | Notes                              |
-|---------------------------------|----------------|------------------------------------|
-| `WithAddr(":3000")`             | `:3000`        | listen address for `Start()`       |
-| `WithTitle("Via")`              | `Via`          | document `<title>`                 |
-| `WithSessionTTL(30m)`           | 30 min         | session cookie expiry              |
-| `WithContextTTL(15m)`           | 15 min         | per-tab Ctx idle expiry            |
-| `WithSSEHeartbeat(25s)`         | 25 s           | keep-alive comment frame interval  |
-| `WithMaxRequestBody(1<<20)`     | 1 MiB          | body cap on action / close beacon  |
-| `WithActionErrorHandler(fn)`    | browser alert  | replace default error UX           |
-| `WithSecureCookies()`           | off            | mark session cookie Secure         |
-| `WithHTTPServer(hook)`          | nil            | last-mile `*http.Server` tweaks    |
-| `WithLogLevel(LogWarn)`         | warn           | minimum log severity               |
+| Option                           | Default       |
+|----------------------------------|---------------|
+| `WithAddr(":3000")`              | `:3000`       |
+| `WithTitle("Via")`               | `Via`         |
+| `WithSessionTTL(30m)`            | 30 min        |
+| `WithContextTTL(15m)`            | 15 min        |
+| `WithSSEHeartbeat(25s)`          | 25 s          |
+| `WithMaxRequestBody(1<<20)`      | 1 MiB         |
+| `WithActionErrorHandler(fn)`     | browser alert |
+| `WithSecureCookies()`            | off           |
+| `WithHTTPServer(hook)`           | nil           |
+| `WithLogger(l)`                  | log.Printf    |
+| `WithNotFound(h)`                | std 404       |
+| `WithLogLevel(LogWarn)`          | warn          |
 
 ## License
 
