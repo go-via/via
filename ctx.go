@@ -32,6 +32,11 @@ type Ctx struct {
 	// (test path or unauth scenarios). Per-Ctx, not shared.
 	localScope sync.Map
 
+	// lastSignals holds the most recent signals payload from an action
+	// POST so via.DecodeForm can read keys that aren't tracked by typed
+	// Signal[T] fields. Reset at request entry.
+	lastSignals map[string]any
+
 	connectOnce sync.Once // guards OnConnect dispatch
 
 	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]

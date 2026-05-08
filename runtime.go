@@ -451,6 +451,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	ctx.lastSignals = sigs
 	injectSignals(ctx, sigs)
 
 	cmpVal := reflect.ValueOf(ctx.cmpVal)
