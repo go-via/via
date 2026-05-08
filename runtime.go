@@ -125,16 +125,31 @@ func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 }
 
 // bindSlots writes the slot index and wire key into every Signal[T] / State[T]
-// field of the freshly allocated *C, and stashes a typed signalRef pointer for
-// reflection-free dispatch later.
+// field of the freshly allocated *C (including nested children), and stashes
+// a typed signalRef pointer for reflection-free dispatch later.
 func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for i, s := range d.signalSlots {
-		field := elem.Field(s.fieldIndex)
+		field := fieldByPath(elem, s.fieldPath)
 		ref := field.Addr().Interface().(signalRef)
 		ref.bindSlot(uint16(i), s.wireKey)
 		ctx.signalRefs[i] = ref
 	}
+}
+
+// fieldByPath walks a chain of struct field indices, dereferencing pointer
+// fields along the way.
+func fieldByPath(v reflect.Value, path []int) reflect.Value {
+	for _, idx := range path {
+		v = v.Field(idx)
+		if v.Kind() == reflect.Ptr {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+	}
+	return v
 }
 
 // applyInits decodes init=… tag tokens into the typed value field. The
@@ -157,7 +172,7 @@ func decodePathParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for _, p := range d.paramSlots {
 		raw := r.PathValue(p.name)
-		decodeParam(elem.Field(p.fieldIndex), p.kind, raw)
+		decodeParam(fieldByPath(elem, p.fieldPath), p.kind, raw)
 	}
 }
 

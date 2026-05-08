@@ -44,7 +44,7 @@ const (
 )
 
 type signalSlot struct {
-	fieldIndex int
+	fieldPath  []int // index path from root *C
 	kind       signalKind
 	localID    string
 	wireKey    string
@@ -53,15 +53,20 @@ type signalSlot struct {
 }
 
 type paramSlot struct {
-	fieldIndex int
-	name       string
-	kind       reflect.Kind
+	fieldPath []int
+	name      string
+	kind      reflect.Kind
 }
 
 type actionSlot struct {
 	name        string
 	methodIndex int
 	method      reflect.Method
+}
+
+type childSlot struct {
+	fieldIndex int
+	pathPrefix string // qualified prefix for nested signals/state, e.g. "Chart"
 }
 
 type cmpDescriptor struct {
@@ -72,6 +77,7 @@ type cmpDescriptor struct {
 	paramSlots   []paramSlot
 	actionSlots  []actionSlot
 	actionByName map[string]int
+	childSlots   []childSlot
 	hasInit      bool
 	hasDispose   bool
 	app          *App
@@ -131,30 +137,7 @@ func buildDescriptor[C any](app *App, route string) *cmpDescriptor {
 		app:          app,
 	}
 
-	for i := 0; i < typ.NumField(); i++ {
-		f := typ.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		switch role := classifyField(f); role {
-		case roleSignal, roleState:
-			s := signalSlot{
-				fieldIndex: i,
-				kind:       kindFor(role),
-				localID:    parseLocalID(f),
-				initRaw:    parseInitTag(f),
-				scalarKind: peekValueKind(f.Type),
-			}
-			s.wireKey = s.localID
-			desc.signalSlots = append(desc.signalSlots, s)
-		case roleParam:
-			desc.paramSlots = append(desc.paramSlots, paramSlot{
-				fieldIndex: i,
-				name:       f.Tag.Get("path"),
-				kind:       f.Type.Kind(),
-			})
-		}
-	}
+	walkStruct(desc, typ, nil, "")
 
 	for i := 0; i < ptrTyp.NumMethod(); i++ {
 		m := ptrTyp.Method(i)
@@ -192,7 +175,59 @@ const (
 	roleSignal
 	roleState
 	roleParam
+	roleChild
 )
+
+// walkStruct recursively flattens a composition tree into the descriptor.
+// pathPrefix is the qualified wire key prefix for nested children
+// (empty at root, "Chart" at one level, "Tab.Chart" at two).
+// indexPath is the slice of struct-field indices from the root *C to the
+// struct being walked (so the runtime can address nested fields via
+// reflect.Value.FieldByIndex).
+func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix string) {
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		fieldPath := append(append([]int{}, indexPath...), i)
+		switch role := classifyField(f); role {
+		case roleSignal, roleState:
+			local := parseLocalID(f)
+			wire := local
+			if pathPrefix != "" {
+				wire = pathPrefix + "." + local
+			}
+			d.signalSlots = append(d.signalSlots, signalSlot{
+				fieldPath:  fieldPath,
+				kind:       kindFor(role),
+				localID:    local,
+				wireKey:    wire,
+				initRaw:    parseInitTag(f),
+				scalarKind: peekValueKind(f.Type),
+			})
+		case roleParam:
+			d.paramSlots = append(d.paramSlots, paramSlot{
+				fieldPath: fieldPath,
+				name:      f.Tag.Get("path"),
+				kind:      f.Type.Kind(),
+			})
+		case roleChild:
+			child := f.Type
+			if child.Kind() == reflect.Ptr {
+				child = child.Elem()
+			}
+			next := f.Name
+			if pathPrefix != "" {
+				next = pathPrefix + "." + f.Name
+			}
+			d.childSlots = append(d.childSlots, childSlot{
+				fieldIndex: i, pathPrefix: next,
+			})
+			walkStruct(d, child, fieldPath, next)
+		}
+	}
+}
 
 func classifyField(f reflect.StructField) fieldRole {
 	if _, ok := f.Tag.Lookup("path"); ok {
@@ -204,7 +239,33 @@ func classifyField(f reflect.StructField) fieldRole {
 	if isStateType(f.Type) {
 		return roleState
 	}
+	if isChildComposition(f.Type) {
+		return roleChild
+	}
 	return roleNone
+}
+
+// isChildComposition reports whether t is a struct (or pointer-to-struct)
+// in a third-party package whose pointer type implements via.Composition.
+// Path-tag and Signal/State handles are special-cased earlier and do not
+// recurse here. We exclude types whose package matches our own to avoid
+// recursing into Signal[T]/State[T]'s internal struct.
+func isChildComposition(t reflect.Type) bool {
+	tt := t
+	if tt.Kind() == reflect.Ptr {
+		tt = tt.Elem()
+	}
+	if tt.Kind() != reflect.Struct {
+		return false
+	}
+	// our own handle types (Signal[T], State[T]) live in the via package;
+	// skip them so we don't recurse into private fields.
+	if tt.PkgPath() == "github.com/go-via/via" {
+		return false
+	}
+	ptr := reflect.PointerTo(tt)
+	_, hasView := ptr.MethodByName("View")
+	return hasView
 }
 
 // isSignalType returns true if t is a Signal[T] for some T. We detect by
