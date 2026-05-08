@@ -37,6 +37,8 @@ type Ctx struct {
 	// Signal[T] fields. Reset at request entry.
 	lastSignals map[string]any
 
+	cspNonce string // lazily generated per-request CSP nonce
+
 	connectOnce sync.Once // guards OnConnect dispatch
 
 	// actionMu serializes action handlers per-Ctx. Without it, two POSTs
@@ -137,6 +139,23 @@ func (ctx *Ctx) Redirect(url string) {
 	q.hasRedir = true
 	q.mu.Unlock()
 	q.notify()
+}
+
+// CSPNonce returns a per-request cryptographically-random base64
+// nonce suitable for use with strict Content-Security-Policy headers.
+// The same value is returned on every call within one request, so
+// plugins and the page render share one nonce. The user is
+// responsible for emitting the matching `Content-Security-Policy:
+// script-src 'self' 'nonce-XYZ'` header — typically through a
+// middleware that reads ctx.CSPNonce() and writes the header.
+func (ctx *Ctx) CSPNonce() string {
+	if ctx == nil {
+		return ""
+	}
+	if ctx.cspNonce == "" {
+		ctx.cspNonce = genCSPNonce()
+	}
+	return ctx.cspNonce
 }
 
 // Sync explicitly re-renders the view and flushes pending patches.
