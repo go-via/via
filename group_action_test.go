@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -63,4 +64,40 @@ func TestGroupMiddleware_appliesToActionPOST(t *testing.T) {
 	got := tc.Action("Bump").Fire()
 	assert.Equal(t, http.StatusForbidden, got,
 		"middleware short-circuit on action POST should return its status")
+}
+
+func TestGroupMiddleware_appliesToSSEHandshake(t *testing.T) {
+	t.Parallel()
+
+	var seen atomic.Bool
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+
+	g := app.Group("/p")
+	g.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		// Mark middleware seen on every request; SSE handshakes should
+		// hit this just like the page render.
+		seen.Store(true)
+		next.ServeHTTP(w, r)
+	})
+	via.MountOn[protectedPage](g, "/secret")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/p/secret")
+	require.True(t, seen.Load(), "render hit middleware")
+
+	seen.Store(false)
+	_, cancel := tc.SSE(t)
+	defer cancel()
+
+	// Give the handshake a moment to flow through.
+	deadline := time.After(500 * time.Millisecond)
+	for !seen.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("group middleware did not run on SSE handshake")
+		default:
+			// busy-wait briefly; SSE wiring is async
+		}
+	}
 }

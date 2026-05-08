@@ -302,6 +302,16 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx.touch()
 
+	// Same posture as the page render and action POST: run the
+	// descriptor's group middleware so a requireAuth-style guard can
+	// veto the SSE handshake before the stream goes hot.
+	stream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runSSEStream(a, ctx, w, r)
+	})
+	applyMiddleware(ctx.desc.groupMW, stream).ServeHTTP(w, r)
+}
+
+func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
 	// that hit GET without ever opening the SSE never see this fire, so
 	// expensive background work (tickers, fan-out goroutines) lives here
