@@ -3,39 +3,28 @@ package via_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
+	"github.com/go-via/via/scope"
+	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSession_createdOnFirstRequest(t *testing.T) {
+// Cookie defaults
+
+func TestSession_cookieIsSetWithSecureDefaults(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
-	defer server.Close()
-
-	resp, err := http.Get(server.URL + "/test")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	cookies := resp.Cookies()
-	assert.NotEmpty(t, cookies)
-	assert.Equal(t, "via_session", cookies[0].Name)
-}
-
-func TestSession_cookieIs64CharHex(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	defer server.Close()
 
@@ -45,16 +34,21 @@ func TestSession_cookieIs64CharHex(t *testing.T) {
 
 	cookies := resp.Cookies()
 	require.NotEmpty(t, cookies)
-	assert.Len(t, cookies[0].Value, 64)
+	c := cookies[0]
+	assert.Equal(t, "via_session", c.Name)
+	assert.Len(t, c.Value, 64, "32 bytes hex-encoded = 64 chars")
+	assert.True(t, c.HttpOnly)
+	assert.Equal(t, "/", c.Path)
+	assert.False(t, c.Secure, "without WithSecureCookies the Secure flag is off")
 }
 
-func TestSession_isHttpOnly(t *testing.T) {
+func TestSession_secureFlagWhenWithSecureCookiesEnabled(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New(via.WithTestServer(&server), via.WithSecureCookies())
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 	defer server.Close()
 
@@ -64,46 +58,149 @@ func TestSession_isHttpOnly(t *testing.T) {
 
 	cookies := resp.Cookies()
 	require.NotEmpty(t, cookies)
-	assert.True(t, cookies[0].HttpOnly)
+	assert.True(t, cookies[0].Secure,
+		"WithSecureCookies must mark the session cookie Secure")
 }
 
-func TestSession_pathIsRoot(t *testing.T) {
+// Typed session: PutSess / GetSess / ClearSess
+
+type sessUser struct {
+	Email string
+	Name  string
+}
+
+type authPage struct {
+	Email via.Signal[string] `via:"email"`
+}
+
+func (p *authPage) LogIn(ctx *via.Ctx) error {
+	via.PutSess(ctx, sessUser{Email: p.Email.Get(ctx), Name: "Alice"})
+	return nil
+}
+
+func (p *authPage) LogOut(ctx *via.Ctx) error {
+	via.ClearSess[sessUser](ctx)
+	return nil
+}
+
+func (p *authPage) View(ctx *via.Ctx) h.H {
+	if u, ok := via.GetSess[sessUser](ctx); ok {
+		return h.Div(h.P(h.Textf("hello %s", u.Name)),
+			h.Button(h.Text("logout"), on.Click(p.LogOut)))
+	}
+	return h.Div(
+		h.Input(h.Type("email"), p.Email.Bind()),
+		h.Button(h.Text("login"), on.Click(p.LogIn)),
+	)
+}
+
+func TestPutSess_makesValueAvailableInRender(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	via.Mount[authPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
-	require.NoError(t, err)
-	defer resp.Body.Close()
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
 
-	cookies := resp.Cookies()
-	require.NotEmpty(t, cookies)
-	assert.Equal(t, "/", cookies[0].Path)
+	require.Equal(t, 200, tc.Action("LogIn").
+		WithSignal("email", "alice@example.com").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "hello Alice")
 }
 
-func TestSession_secureFlagWhenEnabled(t *testing.T) {
+func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 	t.Parallel()
+
+	var sawEmail atomic.Pointer[string]
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		if u, ok := via.GetSess[sessUser](r); ok {
+			s := u.Email
+			sawEmail.Store(&s)
+		}
 		next.ServeHTTP(w, r)
 	})
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
+	via.Mount[authPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
-	require.NoError(t, err)
-	defer resp.Body.Close()
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "bob@example.com").Fire())
 
-	cookies := resp.Cookies()
-	require.NotEmpty(t, cookies)
-	assert.False(t, cookies[0].Secure)
+	// Subsequent action POST through the same client should run through
+	// middleware with the session populated.
+	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "bob@example.com").Fire())
+
+	v := sawEmail.Load()
+	require.NotNil(t, v, "middleware never observed any session value")
+	assert.Equal(t, "bob@example.com", *v,
+		"middleware should see the typed-session user via *http.Request")
+}
+
+func TestPutSess_andClearSess_roundTrip(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[authPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "alice").Fire())
+	require.Equal(t, 200, tc.Action("LogOut").Fire())
+
+	tc2 := viatest.NewClient(t, server, "/")
+	body := tc2.HTML()
+	assert.NotContains(t, body, "hello",
+		"a fresh session should not see the previous user's data")
+}
+
+// RotateSession
+
+type loginPage struct {
+	UserID scope.User[string]
+}
+
+func (p *loginPage) Login(ctx *via.Ctx) error {
+	p.UserID.Set(ctx, "alice")
+	via.RotateSession(ctx)
+	return nil
+}
+
+func (p *loginPage) View(ctx *via.Ctx) h.H {
+	return h.Div(p.UserID.Text(ctx))
+}
+
+func TestRotateSession_changesCookieValue(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[loginPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+
+	originalHTML := tc.HTML()
+	require.NotEmpty(t, originalHTML)
+
+	require.Equal(t, 200, tc.Action("Login").Fire())
+
+	// A separate client with no shared cookie jar should get a fresh
+	// session and not observe the rotated tab's data.
+	tc2 := viatest.NewClient(t, server, "/")
+	body2 := tc2.HTML()
+	assert.NotContains(t, body2, ">alice<",
+		"a fresh cookie jar should NOT see another session's User-scoped data")
+
+	// The original client's cookie is the rotated value; data carried over.
+	frames, cancel := tc.SSE()
+	defer cancel()
+	require.Equal(t, 200, tc.Action("Login").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, ">alice<")
 }

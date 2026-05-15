@@ -16,11 +16,13 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,6 +135,12 @@ type ActionCall struct {
 	client  *Client
 	name    string
 	signals map[string]any
+	files   []actionFile
+}
+
+type actionFile struct {
+	field, filename string
+	body            []byte
 }
 
 // WithSignal adds a signal value to send with the action POST.
@@ -144,9 +152,26 @@ func (a *ActionCall) WithSignal(name string, value any) *ActionCall {
 	return a
 }
 
+// WithFile attaches a file part to the action POST. Adding any file
+// switches the request from JSON to multipart/form-data; signals added
+// via WithSignal ride along as text fields. Repeat calls add multiple
+// files.
+//
+//	tc.Action(p.Upload).
+//	    WithFile("avatar", "me.png", pngBytes).
+//	    WithSignal("note", "from CLI").
+//	    Fire()
+func (a *ActionCall) WithFile(field, filename string, body []byte) *ActionCall {
+	a.files = append(a.files, actionFile{field, filename, body})
+	return a
+}
+
 // Fire issues POST /_action/{name} and returns the response status code.
 func (a *ActionCall) Fire() int {
 	a.client.t.Helper()
+	if len(a.files) > 0 {
+		return a.fireMultipart()
+	}
 	body := map[string]any{"via_tab": a.client.tabID}
 	maps.Copy(body, a.signals)
 	buf, _ := json.Marshal(body)
@@ -162,26 +187,105 @@ func (a *ActionCall) Fire() int {
 	return resp.StatusCode
 }
 
-// SignalRef and Client.Signal were removed: they posted to a fake
-// /_action/__signal_set__ that always 404'd, which meant Set never
-// actually wrote anything. The supported pattern is to fire an action
-// that consumes the signal:
+func (a *ActionCall) fireMultipart() int {
+	a.client.t.Helper()
+	// Errors from multipart.Writer methods can't surface here because
+	// the backing bytes.Buffer is infallible. Real failures only show
+	// up at the http.NewRequest / Do boundary.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("via_tab", a.client.tabID)
+	for k, v := range a.signals {
+		_ = mw.WriteField(k, scalarToFormValue(v))
+	}
+	for _, f := range a.files {
+		fw, _ := mw.CreateFormFile(f.field, f.filename)
+		_, _ = fw.Write(f.body)
+	}
+	_ = mw.Close()
+
+	req, _ := http.NewRequest("POST", a.client.server.URL+"/_action/"+a.name, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := a.client.httpc.Do(req)
+	if err != nil {
+		a.client.t.Fatalf("test.Action(%s).Fire: %v", a.name, err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func scalarToFormValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+// AwaitFrame waits for every needle to appear on a single SSE frames
+// channel, failing the test if any one is missing within timeout.
+// Returns the accumulated frame content at the moment the match landed,
+// so callers can assert further on what came in alongside.
 //
-//	tc.Action(p.Update).WithSignal("step", 3).Fire()
+//	frames, cancel := tc.SSE()
+//	defer cancel()
+//	tc.Action("Bump").Fire()
+//	body := test.AwaitFrame(t, frames, 2*time.Second, "<div>3</div>")
+//	assert.NotContains(t, body, "stale")
+func AwaitFrame(t testing.TB, frames <-chan string, timeout time.Duration, needles ...string) string {
+	t.Helper()
+	deadline := time.After(timeout)
+	var got strings.Builder
+	for {
+		select {
+		case f, ok := <-frames:
+			if !ok {
+				t.Fatalf("SSE closed before seeing %v; got %q", needles, got.String())
+				return got.String()
+			}
+			got.WriteString(f)
+			accum := got.String()
+			matched := true
+			for _, n := range needles {
+				if !strings.Contains(accum, n) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return accum
+			}
+		case <-deadline:
+			t.Fatalf("did not see %v within %v; got %q", needles, timeout, got.String())
+			return got.String()
+		}
+	}
+}
 
 // SSE opens an SSE stream and returns a cancel func and a channel of frames.
 // Use only when you must observe live patch frames.
-func (c *Client) SSE(t testing.TB) (frames <-chan string, cancel func()) {
-	t.Helper()
+//
+// The stream uses a separate http.Client with no overall timeout — the
+// regular client's Timeout would kill the stream mid-flight. Per-frame
+// waits should be bounded with AwaitFrame; cancel with the returned func.
+func (c *Client) SSE() (frames <-chan string, cancel func()) {
+	c.t.Helper()
 	out := make(chan string, 16)
 	ctx, cancelF := context.WithCancel(context.Background())
 	url := c.server.URL + "/_sse?datastar=" + sseQueryParam(c.tabID)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	resp, err := c.httpc.Do(req)
+	sseClient := &http.Client{Jar: c.jar} // no timeout — SSE is long-lived
+	resp, err := sseClient.Do(req)
 	if err != nil {
 		cancelF()
 		close(out)
-		t.Fatalf("test.SSE: %v", err)
+		c.t.Fatalf("test.SSE: %v", err)
 	}
 	go func() {
 		defer close(out)

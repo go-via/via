@@ -56,8 +56,8 @@ type App struct {
 	// session and tab. Keyed by the handle's wire key.
 	appStore sync.Map
 
-	contextRegistry      map[string]*Ctx
-	contextRegistryMutex sync.RWMutex
+	contextRegistry   map[string]*Ctx
+	contextRegistryMu sync.RWMutex
 
 	sessions   map[string]*session
 	sessionsMu sync.RWMutex
@@ -77,17 +77,22 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.handler.ServeHTTP(w, r)
 }
 
-// AppendToHead adds nodes to the <head> of every rendered page.
+// AppendToHead adds nodes to the <head> of every rendered page. Call
+// during boot (e.g. from a plugin's Register) — the underlying slice is
+// not mutex-guarded, so concurrent appends after the server starts race
+// with the page render path.
 func (a *App) AppendToHead(elements ...h.H) {
 	a.documentHeadIncludes = appendNonNil(a.documentHeadIncludes, elements)
 }
 
 // AppendToFoot adds nodes to the end of <body> on every rendered page.
+// Same boot-time-only contract as AppendToHead.
 func (a *App) AppendToFoot(elements ...h.H) {
 	a.documentFootIncludes = appendNonNil(a.documentFootIncludes, elements)
 }
 
 // AppendAttrToHTML adds attributes to the <html> element of every page.
+// Same boot-time-only contract as AppendToHead.
 func (a *App) AppendAttrToHTML(attrs ...h.H) {
 	a.documentHTMLAttrs = appendNonNil(a.documentHTMLAttrs, attrs)
 }
@@ -106,11 +111,17 @@ func appendNonNil(dst, src []h.H) []h.H {
 
 // Use installs middleware that wraps every via-served request.
 //
-// Call Use during boot, before the server begins handling requests.
-// The middleware slice is not guarded by a mutex; serving and
-// rebuildChain happen via atomic.Value so reads are safe, but two
-// concurrent Use calls would race on the underlying slice append.
+// Boot-only: panics if called after Start has bound the server. The
+// middleware slice is not guarded by a mutex; serving and rebuildChain
+// happen via atomic.Value so reads are safe, but two concurrent Use
+// calls would race on the underlying slice append.
 func (a *App) Use(mw ...Middleware) {
+	a.serverMu.Lock()
+	started := a.server != nil
+	a.serverMu.Unlock()
+	if started {
+		panic("via: App.Use called after Start; install middleware during boot")
+	}
 	a.middleware = append(a.middleware, mw...)
 	a.rebuildChain()
 }
@@ -211,12 +222,12 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 // the per-Ctx work (enqueueScript, PatchSignals) takes its own locks
 // and we don't want the registry lock to gate that.
 func (a *App) snapshotContexts() []*Ctx {
-	a.contextRegistryMutex.RLock()
+	a.contextRegistryMu.RLock()
 	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
 	for _, c := range a.contextRegistry {
 		ctxs = append(ctxs, c)
 	}
-	a.contextRegistryMutex.RUnlock()
+	a.contextRegistryMu.RUnlock()
 	return ctxs
 }
 
@@ -253,8 +264,8 @@ type CompositionInfo struct {
 // snapshot — it may have changed by the time the caller reads the
 // return value.
 func (a *App) LiveTabs() int {
-	a.contextRegistryMutex.RLock()
-	defer a.contextRegistryMutex.RUnlock()
+	a.contextRegistryMu.RLock()
+	defer a.contextRegistryMu.RUnlock()
 	return len(a.contextRegistry)
 }
 
@@ -294,6 +305,13 @@ func (a *App) claimRoute(pattern, tag string) {
 	a.routes[pattern] = tag
 }
 
+// mountDescriptor implements Mountable for *App: route is taken as-is.
+func (a *App) mountDescriptor(d *cmpDescriptor, route string) {
+	d.route = route
+	checkPathParams(d, route)
+	a.registerDescriptor(d)
+}
+
 func (a *App) registerDescriptor(d *cmpDescriptor) {
 	a.descsMu.Lock()
 	a.descs = append(a.descs, d)
@@ -307,14 +325,14 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 }
 
 func (a *App) registerCtx(ctx *Ctx) {
-	a.contextRegistryMutex.Lock()
-	defer a.contextRegistryMutex.Unlock()
+	a.contextRegistryMu.Lock()
+	defer a.contextRegistryMu.Unlock()
 	a.contextRegistry[ctx.id] = ctx
 }
 
 func (a *App) unregisterCtx(id string) {
-	a.contextRegistryMutex.Lock()
-	defer a.contextRegistryMutex.Unlock()
+	a.contextRegistryMu.Lock()
+	defer a.contextRegistryMu.Unlock()
 	delete(a.contextRegistry, id)
 }
 
@@ -323,8 +341,8 @@ func (a *App) unregisterCtx(id string) {
 // disposal). Comma-ok shape so callers don't allocate an error wrapper
 // just to throw it away — every caller maps a miss to a 404 directly.
 func (a *App) getCtx(id string) (*Ctx, bool) {
-	a.contextRegistryMutex.RLock()
-	defer a.contextRegistryMutex.RUnlock()
+	a.contextRegistryMu.RLock()
+	defer a.contextRegistryMu.RUnlock()
 	ctx, ok := a.contextRegistry[id]
 	return ctx, ok
 }
@@ -403,13 +421,13 @@ func (a *App) Start() {
 
 // Shutdown disposes all live tabs and closes the server.
 func (a *App) Shutdown(ctx context.Context) error {
-	a.contextRegistryMutex.Lock()
+	a.contextRegistryMu.Lock()
 	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
 	for _, c := range a.contextRegistry {
 		ctxs = append(ctxs, c)
 	}
 	clear(a.contextRegistry)
-	a.contextRegistryMutex.Unlock()
+	a.contextRegistryMu.Unlock()
 
 	for _, c := range ctxs {
 		a.disposeCtx(c)
@@ -477,10 +495,10 @@ func New(opts ...Option) *App {
 	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
 		a.stopSweep = make(chan struct{})
 		if a.cfg.sessionTTL > 0 {
-			go a.sweepExpiredSessions()
+			go a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 		}
 		if a.cfg.contextTTL > 0 {
-			go a.sweepExpiredContexts()
+			go a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
 		}
 	}
 

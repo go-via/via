@@ -18,9 +18,14 @@ RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-212}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
 BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
 
-echo "== CI: Format code =="
-go fmt ./...
-echo "OK: formatting complete"
+echo "== CI: Check formatting =="
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "ERROR: files need 'gofmt -w':"
+  echo "$unformatted"
+  exit 1
+fi
+echo "OK: gofmt clean"
 
 echo "== CI: Run go vet =="
 go vet ./...

@@ -78,7 +78,7 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 		if !ok {
 			continue
 		}
-		decodeFormField(rv.Field(i), f.Type.Kind(), raw)
+		decodeScalarString(rv.Field(i), f.Type.Kind(), raw)
 	}
 	return nil
 }
@@ -100,27 +100,4 @@ func formatScalar(v any) string {
 		return strconv.FormatInt(x, 10)
 	}
 	return ""
-}
-
-func decodeFormField(v reflect.Value, kind reflect.Kind, raw string) {
-	switch kind {
-	case reflect.String:
-		v.SetString(raw)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			v.SetInt(n)
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		if n, err := strconv.ParseUint(raw, 10, 64); err == nil {
-			v.SetUint(n)
-		}
-	case reflect.Float32, reflect.Float64:
-		if f, err := strconv.ParseFloat(raw, 64); err == nil {
-			v.SetFloat(f)
-		}
-	case reflect.Bool:
-		if b, err := strconv.ParseBool(raw); err == nil {
-			v.SetBool(b)
-		}
-	}
 }

@@ -37,47 +37,33 @@ var eventAttrCache = map[string]string{
 }
 
 // Click binds a click handler.
-func Click(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("click", fn, opts...)
-}
+func Click(fn any, opts ...via.TriggerOption) h.H { return event("click", fn, opts...) }
 
 // Change binds a change handler (e.g. <select>, <input type=checkbox>).
-func Change(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("change", fn, opts...)
-}
+func Change(fn any, opts ...via.TriggerOption) h.H { return event("change", fn, opts...) }
 
 // Input binds an input handler.
-func Input(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("input", fn, opts...)
-}
+func Input(fn any, opts ...via.TriggerOption) h.H { return event("input", fn, opts...) }
 
 // Submit binds a form submit handler.
-func Submit(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("submit", fn, opts...)
-}
+func Submit(fn any, opts ...via.TriggerOption) h.H { return event("submit", fn, opts...) }
 
 // Focus binds a focus handler.
-func Focus(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("focus", fn, opts...)
-}
+func Focus(fn any, opts ...via.TriggerOption) h.H { return event("focus", fn, opts...) }
 
 // Blur binds a blur handler.
-func Blur(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("blur", fn, opts...)
-}
+func Blur(fn any, opts ...via.TriggerOption) h.H { return event("blur", fn, opts...) }
 
 // DblClick binds a double-click handler.
-func DblClick(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("dblclick", fn, opts...)
-}
+func DblClick(fn any, opts ...via.TriggerOption) h.H { return event("dblclick", fn, opts...) }
 
 // MouseEnter binds a mouseenter handler (does not bubble).
-func MouseEnter(fn via.ActionFn, opts ...via.TriggerOption) h.H {
+func MouseEnter(fn any, opts ...via.TriggerOption) h.H {
 	return event("mouseenter", fn, opts...)
 }
 
 // MouseLeave binds a mouseleave handler (does not bubble).
-func MouseLeave(fn via.ActionFn, opts ...via.TriggerOption) h.H {
+func MouseLeave(fn any, opts ...via.TriggerOption) h.H {
 	return event("mouseleave", fn, opts...)
 }
 
@@ -86,22 +72,20 @@ func MouseLeave(fn via.ActionFn, opts ...via.TriggerOption) h.H {
 // appears in the DOM:
 //
 //	h.Div(on.Load(p.RefreshChart))
-func Load(fn via.ActionFn, opts ...via.TriggerOption) h.H {
-	return event("load", fn, opts...)
-}
+func Load(fn any, opts ...via.TriggerOption) h.H { return event("load", fn, opts...) }
 
 // Event is the escape hatch for any DOM event not covered by a named
 // helper above. Pass the event name as it would appear after `on:`
 // (e.g. "scroll", "wheel", "contextmenu"):
 //
 //	h.Div(on.Event("scroll", p.OnScroll, on.Throttle("100ms")))
-func Event(name string, fn via.ActionFn, opts ...via.TriggerOption) h.H {
+func Event(name string, fn any, opts ...via.TriggerOption) h.H {
 	return event(name, fn, opts...)
 }
 
 // Key binds a keydown handler that fires only when the named key matches.
 // "Enter", "Escape", "ArrowUp", … (W3C key codes).
-func Key(key string, fn via.ActionFn, opts ...via.TriggerOption) h.H {
+func Key(key string, fn any, opts ...via.TriggerOption) h.H {
 	spec := &via.TriggerSpec{
 		Event:     "keydown",
 		Method:    fn,
@@ -114,14 +98,10 @@ func Key(key string, fn via.ActionFn, opts ...via.TriggerOption) h.H {
 }
 
 // Debounce returns a TriggerOption that debounces firing.
-func Debounce(d string) via.TriggerOption {
-	return func(s *via.TriggerSpec) { s.Debounce = d }
-}
+func Debounce(d string) via.TriggerOption { return func(s *via.TriggerSpec) { s.Debounce = d } }
 
 // Throttle returns a TriggerOption that throttles firing.
-func Throttle(d string) via.TriggerOption {
-	return func(s *via.TriggerSpec) { s.Throttle = d }
-}
+func Throttle(d string) via.TriggerOption { return func(s *via.TriggerSpec) { s.Throttle = d } }
 
 // preventFn / stopFn are pre-allocated TriggerOption closures so each
 // `on.Click(fn, on.Prevent())` call doesn't allocate a fresh closure. The
@@ -161,7 +141,7 @@ func SetSignal[T any](sig *via.Signal[T], value T) via.TriggerOption {
 	return func(s *via.TriggerSpec) { s.AppendPre(stmt) }
 }
 
-func event(name string, fn via.ActionFn, opts ...via.TriggerOption) h.H {
+func event(name string, fn any, opts ...via.TriggerOption) h.H {
 	// Fast path for the bare `on.Click(c.Inc)` shape — no opts means no
 	// modifiers, no debounce/throttle, no pre-statements. Skipping the
 	// TriggerSpec allocation here pairs with render's same-shape fast
@@ -171,17 +151,25 @@ func event(name string, fn via.ActionFn, opts ...via.TriggerOption) h.H {
 		if method == "" {
 			return nil
 		}
-		attr, ok := eventAttrCache[name]
-		if !ok {
-			attr = "on:" + name
-		}
-		return h.Data(attr, "@post('/_action/"+method+"')")
+		return bareAttr(name, method)
 	}
 	spec := &via.TriggerSpec{Event: name, Method: fn}
 	for _, o := range opts {
 		o(spec)
 	}
 	return render(spec)
+}
+
+// bareAttr emits the data-on:<event>="@post('/_action/<method>')"
+// attribute used by every binding that has no modifiers, key filter,
+// debounce/throttle, or pre statements. Shared by event's and render's
+// fast paths.
+func bareAttr(eventName, method string) h.H {
+	attr, ok := eventAttrCache[eventName]
+	if !ok {
+		attr = "on:" + eventName
+	}
+	return h.Data(attr, "@post('/_action/"+method+"')")
 }
 
 func render(s *via.TriggerSpec) h.H {
@@ -196,11 +184,7 @@ func render(s *via.TriggerSpec) h.H {
 	// per binding adds up across a moderately interactive view.
 	if len(s.Pre) == 0 && len(s.Modifiers) == 0 &&
 		s.KeyFilter == "" && s.Debounce == "" && s.Throttle == "" {
-		attr, ok := eventAttrCache[s.Event]
-		if !ok {
-			attr = "on:" + s.Event
-		}
-		return h.Data(attr, "@post('/_action/"+method+"')")
+		return bareAttr(s.Event, method)
 	}
 
 	var attr strings.Builder

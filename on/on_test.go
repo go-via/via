@@ -70,7 +70,7 @@ func (p *modifierPage) View(ctx *via.Ctx) h.H {
 	)
 }
 
-func TestOn_DebounceModifierAppendsToTrigger(t *testing.T) {
+func TestOn_modifiersAppendToTrigger(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -79,47 +79,20 @@ func TestOn_DebounceModifierAppendsToTrigger(t *testing.T) {
 	defer server.Close()
 
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, "on:input.debounce.200ms",
-		"Debounce should append .debounce.<dur> to the trigger spec")
-}
-
-func TestOn_ThrottleModifierAppendsToTrigger(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[modifierPage](app, "/")
-	defer server.Close()
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, "on:input.throttle.500ms",
-		"Throttle should append .throttle.<dur> to the trigger spec")
-}
-
-func TestOn_PreventModifierAppendsToTrigger(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[modifierPage](app, "/")
-	defer server.Close()
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, "on:submit.prevent",
-		"Prevent should append .prevent to the trigger spec")
-}
-
-func TestOn_StopModifierAppendsToTrigger(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[modifierPage](app, "/")
-	defer server.Close()
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, "on:click.stop",
-		"Stop should append .stop to the trigger spec")
+	cases := []struct {
+		name, needle, why string
+	}{
+		{"debounce", "on:input.debounce.200ms", "Debounce should append .debounce.<dur>"},
+		{"throttle", "on:input.throttle.500ms", "Throttle should append .throttle.<dur>"},
+		{"prevent", "on:submit.prevent", "Prevent should append .prevent"},
+		{"stop", "on:click.stop", "Stop should append .stop"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, body, c.needle, c.why)
+		})
+	}
 }
 
 type keyFilterPage struct{}

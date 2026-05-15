@@ -4,7 +4,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/go-via/via"
@@ -31,7 +30,7 @@ type Page struct {
 	Visible via.State[int]
 }
 
-func (p *Page) Init(ctx *via.Ctx) error {
+func (p *Page) OnInit(ctx *via.Ctx) error {
 	p.Visible.Set(ctx, 3)
 	return nil
 }
@@ -63,14 +62,15 @@ func (p *Page) View(ctx *via.Ctx) h.H {
 		))
 	}
 
+	themeRef := picocss.ThemeRef()
 	themeRow := make([]h.H, 0, len(picocss.AllPicoThemes)+1)
 	themeRow = append(themeRow, h.Style("display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center"))
 	for _, t := range picocss.AllPicoThemes {
 		themeRow = append(themeRow, h.Button(
 			h.Style("margin:0;min-width:7rem"),
-			h.DataClass("outline", "%s", fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
-			h.DataClass("pico-color-"+t.String(), "%s", fmt.Sprintf("%s!==%q", picocss.ThemeRef(), t.String())),
-			h.DataOnClick("%s", fmt.Sprintf("%s = %q", picocss.ThemeRef(), t.String())),
+			h.DataClass("outline", "%s!==%q", themeRef, t.String()),
+			h.DataClass("pico-color-"+t.String(), "%s!==%q", themeRef, t.String()),
+			h.DataOnClick("%s = %q", themeRef, t.String()),
 			h.Text(t.String()),
 		))
 	}
@@ -100,20 +100,20 @@ func (p *Page) View(ctx *via.Ctx) h.H {
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("Light"),
-						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='light'", dm)),
-						h.DataOnClick("%s", fmt.Sprintf("%s = 'light'", dm)),
+						h.DataClass("outline", "%s!=='light'", dm),
+						h.DataOnClick("%s = 'light'", dm),
 					),
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("Dark"),
-						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='dark'", dm)),
-						h.DataOnClick("%s", fmt.Sprintf("%s = 'dark'", dm)),
+						h.DataClass("outline", "%s!=='dark'", dm),
+						h.DataOnClick("%s = 'dark'", dm),
 					),
 					h.Button(
 						h.Style("margin:0;min-width:7rem"),
 						h.Text("System"),
-						h.DataClass("outline", "%s", fmt.Sprintf("%s!=='system'", dm)),
-						h.DataOnClick("%s", fmt.Sprintf("%s = 'system'", dm)),
+						h.DataClass("outline", "%s!=='system'", dm),
+						h.DataOnClick("%s = 'system'", dm),
 					),
 				),
 			),

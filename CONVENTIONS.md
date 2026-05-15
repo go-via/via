@@ -126,21 +126,27 @@ Rule:
 - Use setup helpers (e.g. `registerPlugin(...)`) to reduce repetition,
   not `TestMain` unless truly necessary.
 
-## Unexported Types, Exported Factories
+## Field-Embeddable Types Keep Fields Unexported
 
-Reasoning: Callers should work with behavior, not struct fields. Keeping
-concrete types unexported prevents direct construction and field access,
-making the public API surface deliberately narrow.
+Reasoning: Callers should work with behavior, not struct internals.
+Composition handles like `Signal[T]` / `State[T]` are *exported* because
+users declare them as struct fields (`Step via.Signal[int]`), but their
+internals are bound by the runtime via reflection — exposing fields
+would let callers desync the wire key, slot index, and stored value.
 
-Rule: Generic types are unexported. Callers obtain instances only through
-exported factory functions that validate and initialize state.
+Rule: For types whose zero value is meaningful via reflection-driven
+binding (Signal, State, scope.User, scope.App), keep all stored state
+in unexported fields. The type name is exported; the contents aren't.
 
 ```go
-// ✅ Unexported concrete type, exported factory
-type signalOf[T any] struct { ... }
-func Signal[T any](c *Context, initial T) *signalOf[T] { ... }
+// ✅ Exported type, unexported fields — runtime binds via reflection
+type Signal[T any] struct {
+    val    T
+    slot   uint16
+    key    string
+}
 
-// ❌ Exported struct handed directly to callers
+// ❌ Exported fields — caller can desync internal state
 type Signal[T any] struct { ID string; Val T }
 ```
 
@@ -173,15 +179,15 @@ applies to options evaluated during startup; options resolved at runtime
 should return errors instead.
 
 ```go
-type StateOption func(*stateConfig)
+type Option func(*config)
 
-func WithScopeApp() StateOption {
-    return func(cfg *stateConfig) {
-        if cfg.scopeSet {
-            panic("conflicting scopes: multiple scope options provided")
+func WithDarkMode() Option {
+    return func(cfg *config) {
+        if cfg.themeSet {
+            panic("via: conflicting theme options")
         }
-        cfg.scope = ScopeApp
-        cfg.scopeSet = true
+        cfg.theme = "dark"
+        cfg.themeSet = true
     }
 }
 ```
@@ -192,13 +198,13 @@ Reasoning: Errors during page or plugin registration are programming
 mistakes, not recoverable runtime conditions. Panicking at startup makes
 misconfiguration impossible to miss and impossible to ship.
 
-Rule: Validation that runs once at registration time (inside `Page(...)`,
+Rule: Validation that runs once at registration time (inside `Mount[C]`,
 `Plugin(...)`, etc.) panics on invalid input. Do not return errors from
 registration functions.
 
 - ✅ Panic if `View` is never set, if conflicting options are passed, if
   required arguments are zero values.
-- ❌ Return `error` from `Page(...)` and let callers ignore it.
+- ❌ Return `error` from `Mount[C]` and let callers ignore it.
 
 ## Assertions
 
@@ -232,8 +238,9 @@ it.
 func MustJSON(v any) string
 
 // ✅ States a non-obvious contract
-// AppendData drops the update silently when the SSE buffer is full.
-func (c *Chart) AppendData(ctx *via.Context, data [][]any)
+// Toast JSON-encodes message so arbitrary user text is safe inside
+// the rendered alert(...) call.
+func (ctx *Ctx) Toast(message string)
 
 // ❌ Restates the name
 // WithTitle sets the chart title.
@@ -277,8 +284,8 @@ c1 := echarts.NewChart()
 c2 := echarts.NewChart()
 
 // ❌ Describes what the next line already says
-// Create a new chart with a line type.
-chart := echarts.NewChart(echarts.WithChartType(echarts.TypeLine))
+// Create a new chart with a title.
+chart := echarts.NewChart(echarts.WithTitle("CPU"))
 ```
 
 ## Errors

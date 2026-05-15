@@ -19,14 +19,14 @@ type formPage struct {
 	Result   via.State[string]
 }
 
-type LoginForm struct {
+type loginForm struct {
 	Email    string `form:"email"`
 	Password string `form:"password"`
 	Age      int    `form:"age"`
 }
 
 func (p *formPage) Submit(ctx *via.Ctx) error {
-	var f LoginForm
+	var f loginForm
 	if err := via.DecodeForm(ctx, &f); err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
@@ -55,23 +55,7 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 		WithSignal("email", "alice@example.com").
 		WithSignal("password", "secret").
 		WithSignal("age", 3).Fire())
-
-	deadline := time.After(2 * time.Second)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				t.Fatalf("SSE closed early; got %q", got.String())
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), "alice@example.com|secret|***") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("expected decoded form value in render; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 2*time.Second, "alice@example.com|secret|***")
 }
 
 type formNoTag struct {
@@ -101,27 +85,11 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Submit").
 		WithSignal("userName", "bob").Fire())
-
-	deadline := time.After(2 * time.Second)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				t.Fatalf("SSE closed early; got %q", got.String())
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), ">bob<") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("expected userName decoded; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 2*time.Second, ">bob<")
 }

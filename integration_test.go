@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -40,20 +39,13 @@ func (p *kitchenSinkPage) View(ctx *via.Ctx) h.H {
 func TestIntegration_fullProductionStack(t *testing.T) {
 	t.Parallel()
 
-	logger := newCaptureLogger()
-
-	var server *httptest.Server
-	app := via.New(
-		via.WithTestServer(&server),
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
+	app, server, logger := newLoggedApp(t, via.LogInfo,
 		via.WithTitle("KS"),
 		via.WithLang("en"),
 	)
 	via.Defaults(app)
 	app.Use(via.StrictCSP())
 	via.Mount[kitchenSinkPage](app, "/page")
-	defer server.Close()
 
 	// Page render with query param.
 	resp, err := http.Get(server.URL + "/page?q=hello")
@@ -90,7 +82,3 @@ func TestIntegration_fullProductionStack(t *testing.T) {
 	assert.GreaterOrEqual(t, pageHits, 2)
 	assert.GreaterOrEqual(t, actionHits, 1)
 }
-
-// newCaptureLogger here mirrors the captureLogger in log_test.go;
-// duplicated to keep this test file independent.
-func newCaptureLogger() *captureLogger { return &captureLogger{} }

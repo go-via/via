@@ -24,24 +24,6 @@ func TestApp_servesDatastarJS(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestApp_registersHandlerFunc(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("hello"))
-	})
-	defer server.Close()
-
-	resp, err := http.Get(server.URL + "/test")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	buf, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(buf), "hello")
-}
-
 func TestApp_routes404ForUnknownPath(t *testing.T) {
 	t.Parallel()
 
@@ -84,30 +66,33 @@ func TestApp_handlesMultipleRoutes(t *testing.T) {
 	assert.Contains(t, string(buf2), "second")
 }
 
-func TestApp_sseEndpointRejectsUnknownTab(t *testing.T) {
+func TestApp_builtinEndpointsReject404OnUnknownTab(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	via.New(via.WithTestServer(&server))
-	defer server.Close()
+	t.Cleanup(func() { server.Close() })
 
-	resp, err := http.Get(server.URL + "/_sse")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
-func TestApp_actionEndpointRejectsUnknownTab(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	via.New(via.WithTestServer(&server))
-	defer server.Close()
-
-	resp, err := http.Post(server.URL+"/_action/Inc", "text/plain", nil)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	cases := []struct {
+		name string
+		do   func() (*http.Response, error)
+	}{
+		{"GET /_sse", func() (*http.Response, error) {
+			return http.Get(server.URL + "/_sse")
+		}},
+		{"POST /_action/Inc", func() (*http.Response, error) {
+			return http.Post(server.URL+"/_action/Inc", "text/plain", nil)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			resp, err := c.do()
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		})
+	}
 }
 
 func TestApp_implementsHTTPHandler(t *testing.T) {

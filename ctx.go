@@ -1,24 +1,18 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-func contextWithCSPNonce(ctx context.Context, nonce string) context.Context {
-	return context.WithValue(ctx, cspNonceKey{}, nonce)
-}
-
 // Ctx is the per-request execution context. Created on page load, kept alive
-// for the lifetime of the SSE stream, passed to View/Init/Action methods.
+// for the lifetime of the SSE stream, passed to View/OnInit/Action methods.
 type Ctx struct {
 	id           string // tab id, generated per page request
 	app          *App
@@ -52,7 +46,7 @@ type Ctx struct {
 	actionMu sync.Mutex
 
 	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]
-	// used as the argument list for Init/View/Action/OnConnect/Dispose
+	// used as the argument list for OnInit/View/Action/OnConnect/OnDispose
 	// reflect.Method.Call. Boxing ctx once and re-using the slice
 	// avoids 2 allocations per dispatch.
 	reflectArgs [1]reflect.Value
@@ -164,23 +158,10 @@ func (ctx *Ctx) touch() {
 }
 
 func (ctx *Ctx) markSignalDirty(slot uint16) {
-	if ctx == nil {
-		return
-	}
 	ctx.dirtySignals.set(int(slot))
 	if ctx.queue != nil {
 		ctx.queue.notify()
 	}
-}
-
-// MarkDirty schedules a view re-render on the next flush. Use from external
-// reactive primitives (e.g. scope.User[T]) that mutate state outside the
-// composition struct's own State[T] handles.
-func MarkDirty(ctx *Ctx) {
-	if ctx == nil {
-		return
-	}
-	ctx.markStateDirty()
 }
 
 // ExecScript queues a JavaScript snippet for execution on the client at
@@ -243,91 +224,8 @@ func (ctx *Ctx) Redirect(url string) {
 	q := ctx.queue
 	q.mu.Lock()
 	q.redirect = url
-	q.hasRedir = true
 	q.mu.Unlock()
 	q.notify()
-}
-
-// CSPNonce returns a per-request cryptographically-random base64
-// nonce suitable for use with strict Content-Security-Policy headers.
-// The same value is returned on every call within one request, so
-// plugins and the page render share one nonce.
-//
-// For strict CSP enforcement, install a middleware that pre-generates
-// the nonce and threads it through both the response header and the
-// request context, e.g.:
-//
-//	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-//	    n := via.NewCSPNonce()
-//	    w.Header().Set("Content-Security-Policy",
-//	        "script-src 'self' 'nonce-"+n+"'")
-//	    next.ServeHTTP(w, via.RequestWithCSPNonce(r, n))
-//	})
-//
-// Without that middleware, CSPNonce returns a random per-request value
-// that the browser will not honor (no matching CSP header) — useful in
-// development, useless in production.
-func (ctx *Ctx) CSPNonce() string {
-	if ctx == nil {
-		return ""
-	}
-	if ctx.cspNonce != "" {
-		return ctx.cspNonce
-	}
-	// Pull from request context if a middleware put one there.
-	if ctx.r != nil {
-		if v, ok := ctx.r.Context().Value(cspNonceKey{}).(string); ok && v != "" {
-			ctx.cspNonce = v
-			return v
-		}
-	}
-	ctx.cspNonce = genCSPNonce()
-	return ctx.cspNonce
-}
-
-// cspNonceKey is the unexported r.Context() key used to thread a
-// pre-generated nonce from middleware into the rendered page.
-type cspNonceKey struct{}
-
-// NewCSPNonce returns a fresh 16-byte base64url nonce. Callers
-// installing a strict-CSP middleware use this to keep the value
-// consistent across the response header and the rendered HTML.
-func NewCSPNonce() string { return genCSPNonce() }
-
-// RequestWithCSPNonce returns r with nonce stored in its context so
-// downstream renderPage can find it via Ctx.CSPNonce().
-func RequestWithCSPNonce(r *http.Request, nonce string) *http.Request {
-	return r.WithContext(contextWithCSPNonce(r.Context(), nonce))
-}
-
-// StrictCSP returns a Middleware that generates a fresh nonce per
-// request, sets a strict Content-Security-Policy header that allows
-// only same-origin scripts plus that nonce, and threads the nonce
-// through r.Context so Ctx.CSPNonce returns the matching value.
-//
-// Wire it up as the very first middleware so the header lands on
-// every response, including 404s and SSE handshakes:
-//
-//	app.Use(via.StrictCSP())
-//
-// Pass extra directives if defaults aren't enough:
-//
-//	app.Use(via.StrictCSP("img-src 'self' data:"))
-//
-// The default policy is `default-src 'self'; script-src 'self'
-// 'nonce-XYZ'; object-src 'none'; base-uri 'self'`.
-func StrictCSP(extra ...string) Middleware {
-	tail := ""
-	if len(extra) > 0 {
-		tail = "; " + strings.Join(extra, "; ")
-	}
-	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-		n := genCSPNonce()
-		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'nonce-"+n+"'; "+
-				"object-src 'none'; base-uri 'self'"+tail)
-		next.ServeHTTP(w, RequestWithCSPNonce(r, n))
-	}
 }
 
 // Sync forces a view re-render and flushes pending patches. Marks the
@@ -371,9 +269,6 @@ func (ctx *Ctx) PendingRedirect() string {
 	}
 	ctx.queue.mu.Lock()
 	defer ctx.queue.mu.Unlock()
-	if !ctx.queue.hasRedir {
-		return ""
-	}
 	return ctx.queue.redirect
 }
 
@@ -407,44 +302,4 @@ func (ctx *Ctx) markStateDirty() {
 	if ctx.queue != nil {
 		ctx.queue.notify()
 	}
-}
-
-// bitset is a small fixed-size dirty tracker. We use uint64 words; the
-// fixed size is set at descriptor build time.
-type bitset struct {
-	words []uint64
-}
-
-func newBitset(n int) bitset {
-	if n == 0 {
-		return bitset{}
-	}
-	return bitset{words: make([]uint64, (n+63)/64)}
-}
-
-func (b *bitset) set(i int) {
-	if i < 0 || i >= len(b.words)*64 {
-		return
-	}
-	b.words[i/64] |= 1 << (i % 64)
-}
-
-func (b *bitset) get(i int) bool {
-	if i < 0 || i >= len(b.words)*64 {
-		return false
-	}
-	return b.words[i/64]&(1<<(i%64)) != 0
-}
-
-func (b *bitset) clear() {
-	clear(b.words)
-}
-
-func (b *bitset) any() bool {
-	for _, w := range b.words {
-		if w != 0 {
-			return true
-		}
-	}
-	return false
 }

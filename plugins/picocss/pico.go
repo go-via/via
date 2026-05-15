@@ -82,6 +82,8 @@ const (
 	PicoThemeZinc    PicoTheme = "zinc"
 )
 
+// AllPicoThemes lists every supported Pico CSS color theme. Pass to
+// WithThemes to enable the full set, or pick a subset.
 var AllPicoThemes = []PicoTheme{
 	PicoThemeAmber, PicoThemeBlue, PicoThemeCyan, PicoThemeFuchsia, PicoThemeGreen,
 	PicoThemeGrey, PicoThemeIndigo, PicoThemeJade, PicoThemeLime, PicoThemeOrange,
@@ -141,9 +143,7 @@ func Plugin(opts ...PicoOption) via.Plugin {
 }
 
 // WithThemes sets which themes are available. Defaults to [PicoThemeAmber].
-func WithThemes(themes []PicoTheme) PicoOption {
-	return func(p *plugin) { p.opts.themes = themes }
-}
+func WithThemes(themes []PicoTheme) PicoOption { return func(p *plugin) { p.opts.themes = themes } }
 
 // WithDefaultTheme sets the initial theme on page load.
 func WithDefaultTheme(theme PicoTheme) PicoOption {
@@ -151,24 +151,16 @@ func WithDefaultTheme(theme PicoTheme) PicoOption {
 }
 
 // WithClassless enables classless Pico CSS mode.
-func WithClassless() PicoOption {
-	return func(p *plugin) { p.opts.classless = true }
-}
+func WithClassless() PicoOption { return func(p *plugin) { p.opts.classless = true } }
 
 // WithColorClasses enables pico-color-* utility classes.
-func WithColorClasses() PicoOption {
-	return func(p *plugin) { p.opts.colorClasses = true }
-}
+func WithColorClasses() PicoOption { return func(p *plugin) { p.opts.colorClasses = true } }
 
 // WithDarkMode forces dark mode.
-func WithDarkMode() PicoOption {
-	return func(p *plugin) { p.opts.darkMode = "dark" }
-}
+func WithDarkMode() PicoOption { return func(p *plugin) { p.opts.darkMode = "dark" } }
 
 // WithLightMode forces light mode.
-func WithLightMode() PicoOption {
-	return func(p *plugin) { p.opts.darkMode = "light" }
-}
+func WithLightMode() PicoOption { return func(p *plugin) { p.opts.darkMode = "light" } }
 
 // Helpers
 

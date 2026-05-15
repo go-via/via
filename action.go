@@ -1,10 +1,17 @@
 package via
 
 import (
+	"cmp"
+	"errors"
+	"fmt"
+	"mime/multipart"
+	"net/http"
 	"reflect"
 	"runtime"
 	"strings"
 	"sync"
+
+	"github.com/starfederation/datastar-go/datastar"
 )
 
 // methodNameCache memoises MethodName results by trampoline PC so the
@@ -45,12 +52,6 @@ func MethodName(fn any) string {
 	return full
 }
 
-// ActionFn is a sentinel type alias spanning the two recognised action
-// signatures: `func(*Ctx) error` and `func(*Ctx)`. Callers in user code
-// pass a bound method value; on.Click and friends type-check it via
-// reflect rather than the type system, so both shapes compile.
-type ActionFn = any
-
 // TriggerOption is consumed by the on/* sub-package to layer extra
 // behaviour onto a binding (debounce, throttle, key filters, etc.).
 type TriggerOption func(*TriggerSpec)
@@ -58,9 +59,13 @@ type TriggerOption func(*TriggerSpec)
 // TriggerSpec is the resolved configuration of one event binding. The on/*
 // package exposes a builder; via owns the type so consumers don't need to
 // reach across packages.
+//
+// Method is a bound method value of either `func(*Ctx)` or `func(*Ctx) error`.
+// The runtime resolves the method name via MethodName and dispatches via
+// reflect — both shapes are accepted; nothing else is.
 type TriggerSpec struct {
 	Event     string // "click", "input", "submit", …
-	Method    ActionFn
+	Method    any    // bound method value — see godoc above
 	Debounce  string // e.g. "200ms"
 	Throttle  string
 	Modifiers []string // e.g. ["prevent", "stop"]
@@ -80,4 +85,151 @@ func (s *TriggerSpec) AppendPre(stmt string) {
 		return
 	}
 	s.Pre = append(s.Pre, stmt)
+}
+
+// handleAction dispatches POST /_action/{cmpID}.{methodName} (or just
+// /_action/{methodName} for root). The {id} URL segment encodes both.
+func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	maxBody := cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	var (
+		sigs map[string]any
+		form *multipart.Form
+		err  error
+	)
+	if isMultipart(r) {
+		// Memory cap for buffered text fields — file parts spill to disk.
+		// Reuse maxBody so callers tune one knob.
+		sigs, form, err = readMultipartSignals(r, maxBody)
+	} else {
+		err = datastar.ReadSignals(r, &sigs)
+	}
+	if err != nil {
+		var mb *http.MaxBytesError
+		if errors.As(err, &mb) {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Malformed body / wrong content type — fall through to the
+		// tabID="" 404 path below; existing tests rely on that posture.
+	}
+	tabID, _ := sigs[tabSignalKey].(string)
+
+	ctx, ok := a.getCtx(tabID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+		http.Error(w, "session mismatch", http.StatusForbidden)
+		return
+	}
+
+	d := ctx.desc
+	slotIdx, ok := d.actionByName[id]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	slot := &d.actionSlots[slotIdx]
+
+	// Wrap the dispatch in the descriptor's group middleware so a
+	// requireAuth (or any group-level guard) checks the request before
+	// the action runs — same auth posture as the rendered route.
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runAction(a, ctx, slot, w, r, sigs, form)
+	})
+	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
+}
+
+// isMultipart reports whether r carries a multipart/form-data body.
+func isMultipart(r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	return strings.HasPrefix(ct, "multipart/form-data")
+}
+
+func runAction(a *App, ctx *Ctx, slot *actionSlot,
+	w http.ResponseWriter, r *http.Request, sigs map[string]any, form *multipart.Form) {
+	// Serialize per-tab so parallel POSTs to the same ctx don't race
+	// on State writes, dirty bits, or Writer/Request assignment.
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
+
+	ctx.mu.Lock()
+	ctx.w = w
+	ctx.r = r
+	ctx.mu.Unlock()
+	defer func() {
+		ctx.mu.Lock()
+		ctx.w = nil
+		ctx.r = nil
+		ctx.mu.Unlock()
+	}()
+	// flushDirty runs even on panic so state mutated before the panic
+	// still reaches the browser alongside the error toast. Placed
+	// *before* the recover defer so the recover runs first (defers are
+	// LIFO) and turns the panic back into a normal return.
+	defer flushDirty(ctx)
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			return
+		}
+		a.logErr(ctx, "action %q panicked: %v", slot.name, rec)
+		// Preserve a typed error from panic(err) so a custom
+		// WithActionErrorHandler can errors.As / errors.Is it.
+		err, ok := rec.(error)
+		if !ok {
+			err = fmt.Errorf("panic: %v", rec)
+		}
+		a.dispatchActionError(ctx, err, true)
+	}()
+
+	ctx.lastSignals = sigs
+	injectSignals(ctx, sigs)
+	if form != nil {
+		bindFiles(ctx, form)
+		defer clearFiles(ctx)
+		defer form.RemoveAll()
+	}
+
+	out := ctx.cmpReflect.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
+	if !slot.voidReturn {
+		if err := errFromCallOut(out); err != nil {
+			a.dispatchActionError(ctx, err, false)
+		}
+	}
+}
+
+func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
+	if a.cfg.actionErrorHandler != nil {
+		a.cfg.actionErrorHandler(ctx, err)
+		return
+	}
+	msg := err.Error()
+	if fromPanic {
+		msg = "Something went wrong"
+	}
+	ctx.Toast(msg)
+}
+
+// injectSignals applies signals from a request body into the bound *C's
+// Signal[T] fields by wire key.
+func injectSignals(ctx *Ctx, sigs map[string]any) {
+	for slot, ref := range ctx.signalRefs {
+		s := ctx.desc.signalSlots[slot]
+		if s.kind != kindSignal {
+			continue
+		}
+		if v, ok := sigs[s.wireKey]; ok {
+			ref.decodeRaw(v)
+		}
+	}
 }

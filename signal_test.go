@@ -1,15 +1,14 @@
 package via_test
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,7 +26,7 @@ func (c *signalCounter) View(ctx *via.Ctx) h.H {
 	)
 }
 
-func TestSignal_initFromTagAppearsInPageSignals(t *testing.T) {
+func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -36,33 +35,19 @@ func TestSignal_initFromTagAppearsInPageSignals(t *testing.T) {
 	defer server.Close()
 
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, `&#34;step&#34;:1`,
-		"signal init=1 must appear as initial value in data-signals meta")
-}
-
-func TestSignal_bindRendersAttributeWithKey(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[signalCounter](app, "/")
-	defer server.Close()
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-bind="step"`,
-		"Signal.Bind() must render data-bind with the wire key")
-}
-
-func TestSignal_textRendersDataTextSpan(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[signalCounter](app, "/")
-	defer server.Close()
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-text="$step"`)
+	cases := []struct {
+		name, needle, why string
+	}{
+		{"init from tag", `&#34;step&#34;:1`, "init=1 must appear in data-signals meta"},
+		{"Bind() renders data-bind", `data-bind="step"`, "Bind() must render data-bind with wire key"},
+		{"Text() renders data-text span", `data-text="$step"`, "Text() must render data-text=$<key>"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, body, c.needle, c.why)
+		})
+	}
 }
 
 type togglePage struct {
@@ -80,7 +65,7 @@ func TestToggle_flipsBoolSignalAndMarksDirty(t *testing.T) {
 	t.Parallel()
 
 	page := &togglePage{}
-	c := via.NewBoundCtx(page)
+	c := viatest.NewCtx(t, page)
 
 	require.False(t, page.Open.Get(c))
 	via.Toggle(c, &page.Open)
@@ -92,7 +77,7 @@ func TestToggle_flipsBoolSignalAndMarksDirty(t *testing.T) {
 func TestToggle_nilSignalIsNoOp(t *testing.T) {
 	t.Parallel()
 	assert.NotPanics(t, func() {
-		via.Toggle(via.NewBoundCtx(&togglePage{}), nil)
+		via.Toggle(viatest.NewCtx(t, &togglePage{}), nil)
 	})
 }
 
@@ -107,7 +92,7 @@ func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	t.Parallel()
 
 	page := &adderPage{}
-	c := via.NewBoundCtx(page)
+	c := viatest.NewCtx(t, page)
 
 	via.Add(c, &page.Count, 3)
 	assert.Equal(t, 13, page.Count.Get(c))
@@ -119,7 +104,7 @@ func TestAdd_floatSignalRespectsType(t *testing.T) {
 	t.Parallel()
 
 	page := &adderPage{}
-	c := via.NewBoundCtx(page)
+	c := viatest.NewCtx(t, page)
 
 	via.Add(c, &page.Bal, 0.5)
 	via.Add(c, &page.Bal, 0.25)
@@ -137,7 +122,7 @@ func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
 	t.Parallel()
 
 	page := &stateAdderPage{}
-	c := via.NewBoundCtx(page)
+	c := viatest.NewCtx(t, page)
 
 	// Same helper, different storage flavor — Mutable[T] makes them
 	// interchangeable for read/modify/write helpers.
@@ -150,7 +135,7 @@ func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
 	t.Parallel()
 
 	page := &stateAdderPage{}
-	c := via.NewBoundCtx(page)
+	c := viatest.NewCtx(t, page)
 
 	via.Toggle(c, &page.Open)
 	assert.True(t, page.Open.Get(c))
@@ -206,50 +191,4 @@ func getBody(t *testing.T, server *httptest.Server, path string) string {
 	defer resp.Body.Close()
 	buf, _ := io.ReadAll(resp.Body)
 	return string(buf)
-}
-
-func mustBeWellFormedHTML(t *testing.T, body string) {
-	t.Helper()
-	if !strings.Contains(body, "<html") {
-		t.Fatalf("expected <html> in body, got: %s", body)
-	}
-}
-
-func newCounterPostBody(via_tab string, signals map[string]any) *bytes.Buffer {
-	// Datastar reads signals from the JSON body for POST/SSE.
-	out := `{"via_tab":"` + via_tab + `"`
-	for k, v := range signals {
-		out += `,"` + k + `":`
-		switch x := v.(type) {
-		case string:
-			out += `"` + x + `"`
-		case int:
-			out += strings.TrimSpace(strings.ReplaceAll(formatInt(x), " ", ""))
-		}
-	}
-	out += "}"
-	return bytes.NewBufferString(out)
-}
-
-func formatInt(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	neg := false
-	if i < 0 {
-		neg = true
-		i = -i
-	}
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		pos--
-		b[pos] = '-'
-	}
-	return string(b[pos:])
 }

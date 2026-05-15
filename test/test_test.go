@@ -139,25 +139,9 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 	require.Equal(t, 200, tc.Action("Bump").
 		WithSignal("label", "third").Fire())
 
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
-
-	deadline := time.After(2 * time.Second)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				t.Fatalf("SSE closed early; got %q", got.String())
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), ">3<") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("expected N=3 in render; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 2*time.Second, ">3<")
 }
 
 type unitTestPage struct {
@@ -231,25 +215,10 @@ func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
 
 	// Without firing any action we should still observe at least one
 	// heartbeat frame within 1s thanks to the short heartbeat interval.
-	deadline := time.After(1500 * time.Millisecond)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				return
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), "datastar-patch-signals") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("expected at least one heartbeat frame; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 1500*time.Millisecond, "datastar-patch-signals")
 }

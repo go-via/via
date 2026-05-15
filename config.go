@@ -100,22 +100,16 @@ func WithReadHeaderTimeout(d time.Duration) Option {
 
 // WithReadTimeout sets http.Server.ReadTimeout. The SSE handler doesn't
 // honor it (the stream is meant to be long-lived), but action POSTs do.
-func WithReadTimeout(d time.Duration) Option {
-	return func(c *config) { c.readTimeout = d }
-}
+func WithReadTimeout(d time.Duration) Option { return func(c *config) { c.readTimeout = d } }
 
 // WithWriteTimeout sets http.Server.WriteTimeout. Be cautious: SSE
 // streams are long-lived, so a non-zero WriteTimeout can cut them off
 // mid-stream. Default 0 (no timeout) is safer for SSE-heavy apps.
-func WithWriteTimeout(d time.Duration) Option {
-	return func(c *config) { c.writeTimeout = d }
-}
+func WithWriteTimeout(d time.Duration) Option { return func(c *config) { c.writeTimeout = d } }
 
 // WithIdleTimeout overrides the default 120 s idle-timeout. Affects the
 // lifetime of HTTP/1.1 keep-alive connections; SSE streams are exempt.
-func WithIdleTimeout(d time.Duration) Option {
-	return func(c *config) { c.idleTimeout = d }
-}
+func WithIdleTimeout(d time.Duration) Option { return func(c *config) { c.idleTimeout = d } }
 
 // WithMaxRequestBody caps body bytes for action and close requests.
 // Default 1 MiB.
@@ -144,9 +138,7 @@ func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
 // handler runs after the session middleware, so it can read the session
 // and decide whether to redirect, render a "not found" composition, or
 // short-circuit with an empty body.
-func WithNotFound(h http.Handler) Option {
-	return func(c *config) { c.notFoundHandler = h }
-}
+func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHandler = h } }
 
 // Plugin extends the App at registration time.
 type Plugin interface {

@@ -22,8 +22,6 @@ package via
 import (
 	"fmt"
 	"reflect"
-	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -51,19 +49,20 @@ type signalSlot struct {
 	initRaw   string
 }
 
+// scopeBinder is implemented by scope.User[T] / scope.App[T] (pointer
+// receiver) so the runtime can write the wire key into the handle's
+// unexported storage without going through reflect.FieldByName.
+type scopeBinder interface{ BindWireKey(string) }
+
 type scopeSlot struct {
-	fieldPath   []int  // index path from root *C
-	wireKey     string // session/app store key
-	keyFieldIdx int    // resolved index of the handle's WireKey field, cached at Mount time
+	fieldPath []int  // index path from root *C
+	wireKey   string // session/app store key
 }
 
-type paramSlot struct {
-	fieldPath []int
-	name      string
-	kind      reflect.Kind
-}
-
-type querySlot struct {
+// kindedSlot is the shared shape for path:"…" and query:"…" tagged
+// fields. They differ only in source (r.PathValue vs r.URL.Query); the
+// slot data itself is identical.
+type kindedSlot struct {
 	fieldPath []int
 	name      string
 	kind      reflect.Kind
@@ -80,14 +79,15 @@ type cmpDescriptor struct {
 	route        string
 	signalSlots  []signalSlot
 	scopeSlots   []scopeSlot
-	paramSlots   []paramSlot
-	querySlots   []querySlot
+	paramSlots   []kindedSlot
+	querySlots   []kindedSlot
+	fileSlots    []fileSlot
 	actionSlots  []actionSlot
 	actionByName map[string]int
 	viewIdx      int // method index of View on *C
-	initIdx      int // method index of Init or -1
+	initIdx      int // method index of OnInit or -1
 	connectIdx   int // method index of OnConnect or -1
-	disposeIdx   int // method index of Dispose or -1
+	disposeIdx   int // method index of OnDispose or -1
 
 	groupMW []Middleware // middleware from the owning Group, if any
 }
@@ -97,13 +97,32 @@ var (
 	descriptorCache = map[reflect.Type]*cmpDescriptor{}
 )
 
-// Mount registers a typed composition C at the given route.
+// Mountable is the target of [Mount]. Implemented by *App (mounts at
+// route on the app) and *Group (mounts under the group's prefix with
+// the group's middleware applied to page render, action POST, and SSE
+// handshake). The interface has only unexported methods so external
+// types cannot implement it.
+type Mountable interface {
+	mountDescriptor(d *cmpDescriptor, route string)
+}
+
+// Mount registers a typed composition C at route on target.
+//
+// target may be an *App (route is taken as-is) or a *Group (route is
+// joined under the group's prefix; the group's middleware chain wraps
+// the rendered route + action POST + SSE handshake).
+//
+//	via.Mount[Counter](app, "/counter")
+//
+//	api := app.Group("/api")
+//	api.Use(requireAuth)
+//	via.Mount[Profile](api, "/profile")
 //
 // C must be a struct whose pointer type satisfies the Composition
 // interface (i.e. has a View(ctx *Ctx) h.H method). Reflection runs
 // once at Mount time to:
 //
-//   - validate View, Init, OnConnect, Dispose signatures (panics with
+//   - validate View, OnInit, OnConnect, OnDispose signatures (panics with
 //     a format-the-fix-yourself message on a mismatch);
 //   - collect Signal[T] / State[T] / scope.User[T] / scope.App[T]
 //     fields and assign their wire keys (lowercased field name, or
@@ -115,21 +134,11 @@ var (
 // Per-request handlers do no reflection on the hot path for already-
 // bound state. Mount panics if the route conflicts with an earlier
 // registration on the same App.
-func Mount[C any](app *App, route string) {
-	desc := buildDescriptor[C](route)
-	app.registerDescriptor(desc)
+func Mount[C any](target Mountable, route string) {
+	target.mountDescriptor(buildDescriptor[C](), route)
 }
 
-// MountOn mounts a composition C at a path under the group prefix. The
-// group's middleware chain wraps the rendered route.
-func MountOn[C any](g *Group, route string) {
-	full := joinPath(g.prefix, route)
-	desc := buildDescriptor[C](full)
-	desc.groupMW = slices.Clone(g.middleware)
-	g.app.registerDescriptor(desc)
-}
-
-func buildDescriptor[C any](route string) *cmpDescriptor {
+func buildDescriptor[C any]() *cmpDescriptor {
 	var zero C
 	typ := reflect.TypeOf(zero)
 	if typ == nil {
@@ -146,7 +155,6 @@ func buildDescriptor[C any](route string) *cmpDescriptor {
 	if d, ok := descriptorCache[typ]; ok {
 		descriptorMu.RUnlock()
 		clone := *d
-		clone.route = route
 		return &clone
 	}
 	descriptorMu.RUnlock()
@@ -161,13 +169,12 @@ func buildDescriptor[C any](route string) *cmpDescriptor {
 			typ.String(), typ.Name()))
 	}
 	checkViewSignature(typ, viewMethod)
-	initIdx := checkAndIndexLifecycle(typ, ptrTyp, "Init", initSig)
-	connectIdx := checkAndIndexLifecycle(typ, ptrTyp, "OnConnect", initSig)
-	disposeIdx := checkAndIndexLifecycle(typ, ptrTyp, "Dispose", disposeSig)
+	initIdx := checkAndIndexLifecycle(typ, ptrTyp, "OnInit", sigErrReturn)
+	connectIdx := checkAndIndexLifecycle(typ, ptrTyp, "OnConnect", sigErrReturn)
+	disposeIdx := checkAndIndexLifecycle(typ, ptrTyp, "OnDispose", sigVoid)
 
 	desc := &cmpDescriptor{
 		typ:          typ,
-		route:        route,
 		actionByName: map[string]int{},
 		viewIdx:      viewMethod.Index,
 		initIdx:      -1,
@@ -196,15 +203,12 @@ func buildDescriptor[C any](route string) *cmpDescriptor {
 	desc.connectIdx = connectIdx
 	desc.disposeIdx = disposeIdx
 
-	checkPathParams(desc, route)
-
 	descriptorMu.Lock()
 	descriptorCache[typ] = desc
 	descriptorMu.Unlock()
-	// Return a clone so the caller (e.g. MountOn writing groupMW) doesn't
-	// race with concurrent buildDescriptor reads on the cached entry.
+	// Return a clone so the per-mount route + groupMW writes don't race
+	// with concurrent buildDescriptor reads on the cached entry.
 	clone := *desc
-	clone.route = route
 	return &clone
 }
 
@@ -221,8 +225,8 @@ type lifecycleSig struct {
 }
 
 var (
-	initSig    = lifecycleSig{out: 1, errOut: true, repr: "func (c *T) %s(ctx *via.Ctx) error"}
-	disposeSig = lifecycleSig{out: 0, errOut: false, repr: "func (c *T) %s(ctx *via.Ctx)"}
+	sigErrReturn = lifecycleSig{out: 1, errOut: true, repr: "func (c *T) %s(ctx *via.Ctx) error"}
+	sigVoid      = lifecycleSig{out: 0, errOut: false, repr: "func (c *T) %s(ctx *via.Ctx)"}
 
 	// Cached reflect.Type values used by Mount-time signature checks.
 	// reflect.TypeOf returns the same canonical type per call but each call
@@ -241,10 +245,11 @@ func checkAndIndexLifecycle(typ, ptrTyp reflect.Type, name string, want lifecycl
 		return -1
 	}
 	mt := m.Type
-	bad := mt.NumIn() != 2 || mt.In(1) != ctxPtrType || mt.NumOut() != want.out
-	if !bad && want.errOut && mt.Out(0) != errorType {
-		bad = true
-	}
+	// && short-circuits: when NumOut != want.out (especially 0 vs 1)
+	// the Out(0) call is skipped, so this is safe for the void case.
+	bad := mt.NumIn() != 2 || mt.In(1) != ctxPtrType ||
+		mt.NumOut() != want.out ||
+		(want.errOut && mt.Out(0) != errorType)
 	if bad {
 		panic(fmt.Sprintf(
 			"via.Mount(%s): %s has the wrong signature\n"+
@@ -280,6 +285,7 @@ const (
 	roleScopeApp
 	roleParam
 	roleQuery
+	roleFile
 	roleChild
 )
 
@@ -302,40 +308,45 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 		fieldPath[len(indexPath)] = i
 		switch role := classifyField(f); role {
 		case roleSignal, roleState:
+			kind := kindSignal
+			if role == roleState {
+				kind = kindState
+			}
 			d.signalSlots = append(d.signalSlots, signalSlot{
 				fieldPath: fieldPath,
-				kind:      kindFor(role),
+				kind:      kind,
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
 				initRaw:   parseInitTag(f),
 			})
 		case roleScopeUser, roleScopeApp:
-			// Resolve the handle's WireKey field index now so the per-
-			// request bind doesn't pay for a FieldByName string lookup.
 			handleType := f.Type
 			if handleType.Kind() == reflect.Ptr {
 				handleType = handleType.Elem()
 			}
-			keyField, ok := handleType.FieldByName("WireKey")
-			if !ok || len(keyField.Index) != 1 {
+			if !reflect.PointerTo(handleType).Implements(reflect.TypeOf((*scopeBinder)(nil)).Elem()) {
 				panic("via.Mount: scope handle " + handleType.String() +
-					" must have an exported WireKey string field")
+					" must implement BindWireKey(string)")
 			}
 			d.scopeSlots = append(d.scopeSlots, scopeSlot{
-				fieldPath:   fieldPath,
-				wireKey:     qualify(pathPrefix, parseLocalID(f)),
-				keyFieldIdx: keyField.Index[0],
+				fieldPath: fieldPath,
+				wireKey:   qualify(pathPrefix, parseLocalID(f)),
 			})
 		case roleParam:
-			d.paramSlots = append(d.paramSlots, paramSlot{
+			d.paramSlots = append(d.paramSlots, kindedSlot{
 				fieldPath: fieldPath,
 				name:      f.Tag.Get("path"),
 				kind:      f.Type.Kind(),
 			})
 		case roleQuery:
-			d.querySlots = append(d.querySlots, querySlot{
+			d.querySlots = append(d.querySlots, kindedSlot{
 				fieldPath: fieldPath,
 				name:      f.Tag.Get("query"),
 				kind:      f.Type.Kind(),
+			})
+		case roleFile:
+			d.fileSlots = append(d.fileSlots, fileSlot{
+				fieldPath: fieldPath,
+				wireKey:   qualify(pathPrefix, parseLocalID(f)),
 			})
 		case roleChild:
 			child := f.Type
@@ -365,6 +376,9 @@ func classifyField(f reflect.StructField) fieldRole {
 	}
 	if isScopeAppType(f.Type) {
 		return roleScopeApp
+	}
+	if isFileType(f.Type) {
+		return roleFile
 	}
 	if isChildComposition(f.Type) {
 		return roleChild
@@ -433,13 +447,6 @@ func isStateType(t reflect.Type) bool {
 	return strings.HasPrefix(t.Name(), "State[") && t.PkgPath() == viaPkgPath
 }
 
-func kindFor(r fieldRole) signalKind {
-	if r == roleSignal {
-		return kindSignal
-	}
-	return kindState
-}
-
 // qualify joins a dotted path prefix and a name into a wire key. Returns
 // the bare name when the prefix is empty so the top-level composition's
 // signals stay one level deep.
@@ -494,7 +501,7 @@ func actionMethodKind(m reflect.Method) (void bool, ok bool) {
 		return false, false
 	}
 	switch m.Name {
-	case "View", "Init", "OnConnect", "Dispose":
+	case "View", "OnInit", "OnConnect", "OnDispose":
 		return false, false
 	}
 	switch mt.NumOut() {
@@ -523,24 +530,5 @@ func checkPathParams(d *cmpDescriptor, route string) {
 				d.typ.Name(), p.name, p.name, route,
 			))
 		}
-	}
-}
-
-func decodeParam(v reflect.Value, kind reflect.Kind, raw string) {
-	switch kind {
-	case reflect.String:
-		v.SetString(raw)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		n, _ := strconv.ParseInt(raw, 10, 64)
-		v.SetInt(n)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		n, _ := strconv.ParseUint(raw, 10, 64)
-		v.SetUint(n)
-	case reflect.Float32, reflect.Float64:
-		f, _ := strconv.ParseFloat(raw, 64)
-		v.SetFloat(f)
-	case reflect.Bool:
-		b, _ := strconv.ParseBool(raw)
-		v.SetBool(b)
 	}
 }

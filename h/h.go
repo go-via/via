@@ -41,12 +41,6 @@ func Raw(s string) H {
 	return g.Raw(s)
 }
 
-// Rawf creates a text DOM [Node] that just Renders the interpolated and
-// unescaped string format.
-func Rawf(format string, a ...any) H {
-	return g.Rawf(format, a...)
-}
-
 // Attr creates an attribute DOM [Node] with a name and optional value.
 // If only a name is passed, it's a name-only (boolean) attribute (like "required").
 // If a name and value are passed, it's a name-value attribute (like `class="header"`).
@@ -227,25 +221,30 @@ func Switch(value any, cases ...SwitchCase) H {
 	return fallback
 }
 
-// Fragment is the variadic form of Group. Reads cleanly when the node
-// count is known at the call site:
-//
-//	func sectionHeader(title string) h.H {
-//	    return h.Fragment(
-//	        h.H2(h.Text(title)),
-//	        h.Hr(),
-//	    )
-//	}
-func Fragment(items ...H) H { return Group(items) }
-
-// Group bundles a slice of nodes into a single H so callers can return
-// many nodes from a function that has to return one.
-func Group(items []H) H {
-	// retype already produces a []g.Node; group is just a named version
-	// of the same type, so a conversion (no copy, no second alloc) is
-	// enough.
-	return group(retype(items))
+// retype converts a slice of via's H interface values into the
+// gomponents.Node slice that gomponents element constructors expect.
+// Empty input returns nil — variadic call sites accept that identically
+// to a zero-length slice.
+func retype(nodes []H) []g.Node {
+	if len(nodes) == 0 {
+		return nil
+	}
+	list := make([]g.Node, len(nodes))
+	for i, node := range nodes {
+		// (g.Node)(nil) on a nil interface yields (nil, false) — safe to
+		// drop the explicit nil guard, the zero slice value covers it.
+		list[i], _ = node.(g.Node)
+	}
+	return list
 }
+
+// Fragment bundles many nodes into one H so a function whose signature
+// returns a single H can yield several nodes. With a known list,
+// pass them directly; with a slice, spread:
+//
+//	return h.Fragment(h.H2(h.Text(title)), h.Hr())
+//	return h.Fragment(items...)
+func Fragment(items ...H) H { return group(retype(items)) }
 
 type group []gNode
 
@@ -285,14 +284,4 @@ func HTML5(p HTML5Props) H {
 	}
 	gp.Head = append(gp.Head, Script(Type("module"), Src("/_datastar.js")))
 	return gc.HTML5(gp)
-}
-
-// JoinAttrs collapses every name=… attribute on the first level of
-// children into one attribute whose values are space-joined. Attributes
-// on non-direct descendants are left alone.
-//
-// Note that this renders all first-level attributes to decide which
-// ones to merge.
-func JoinAttrs(name string, children ...H) H {
-	return gc.JoinAttrs(name, retype(children)...)
 }

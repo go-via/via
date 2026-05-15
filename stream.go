@@ -28,7 +28,7 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) {
 			case <-ctx.doneChan:
 				return
 			case t := <-ticker.C:
-				safeStreamFn(ctx, t, fn)
+				streamTick(ctx, t, fn)
 				// Flush is a no-op when nothing is dirty and serialises
 				// with concurrent action handlers, so the ticker
 				// doesn't race a POST mid-flight.
@@ -38,11 +38,7 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) {
 	}()
 }
 
-func safeStreamFn(ctx *Ctx, t time.Time, fn func(*Ctx, time.Time)) {
-	defer func() {
-		if rec := recover(); rec != nil && ctx.app != nil {
-			ctx.app.logErr(ctx, "Stream callback panicked: %v", rec)
-		}
-	}()
+func streamTick(ctx *Ctx, t time.Time, fn func(*Ctx, time.Time)) {
+	defer recoverLog(ctx, "Stream callback")
 	fn(ctx, t)
 }

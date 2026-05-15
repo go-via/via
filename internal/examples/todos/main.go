@@ -119,7 +119,7 @@ func (t *Todos) View(ctx *via.Ctx) h.H {
 					return h.Li(
 						h.Style("list-style:none;padding:0.5rem;display:flex;align-items:center;gap:0.5rem"),
 						h.Input(h.Type("checkbox"),
-							boolAttr("checked", it.Done),
+							h.If(it.Done, h.Attr("checked")),
 							on.Change(t.Toggle, on.SetSignal(&t.Index, i)),
 						),
 						h.Span(
@@ -148,10 +148,10 @@ func (t *Todos) View(ctx *via.Ctx) h.H {
 
 // filterButton renders one of the three filter pills. Active pill is
 // styled with the standard button look; others get the outline class.
-func filterButton(name, current string, action via.ActionFn) h.H {
+func filterButton(name, current string, action any) h.H {
 	return h.Button(
 		h.Class(h.IfStr(name != current, "outline secondary")),
-		h.Text(strings.Title(name)),
+		h.Text(strings.ToUpper(name[:1])+name[1:]),
 		on.Click(action),
 	)
 }
@@ -159,16 +159,6 @@ func filterButton(name, current string, action via.ActionFn) h.H {
 func (t *Todos) FilterAll(ctx *via.Ctx) error    { t.Filter.Set(ctx, "all"); return nil }
 func (t *Todos) FilterActive(ctx *via.Ctx) error { t.Filter.Set(ctx, "active"); return nil }
 func (t *Todos) FilterDone(ctx *via.Ctx) error   { t.Filter.Set(ctx, "done"); return nil }
-
-// boolAttr renders the named attribute only when the flag is true.
-// Useful for the "checked" attribute and similar boolean-only attrs
-// that the gomponents library doesn't expose by name yet.
-func boolAttr(name string, on bool) h.H {
-	if !on {
-		return nil
-	}
-	return h.Attr(name)
-}
 
 func main() {
 	app := via.New(

@@ -265,10 +265,6 @@ func (a *App) sessionFromRequest(r *http.Request) *session {
 	return a.sessions[c.Value]
 }
 
-func (a *App) sweepExpiredSessions() {
-	a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
-}
-
 func (a *App) removeExpiredSessions() {
 	cutoff := time.Now().Add(-a.cfg.sessionTTL).UnixNano()
 	a.sessionsMu.Lock()

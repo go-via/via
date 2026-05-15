@@ -236,7 +236,7 @@ type settings struct {
 	running    bool
 }
 
-func (p *Page) Init(ctx *via.Ctx) error {
+func (p *Page) OnInit(ctx *via.Ctx) error {
 	dims := echarts.WithDimensions("100%", "220px")
 	dark := echarts.WithThemeOverride(echarts.ThemeDark)
 	p.cpuChart = echarts.NewChart(echarts.WithElementID("chart-cpu"), dims, dark)
@@ -338,16 +338,16 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 			p.NetTX.Set(ctx, fmtBytes(tx))
 			ctx.Sync()
 
-			p.cpuChart.SetOption(ctx, map[string]any{"series": []any{lineSeries("CPU", p.cpuBuf.snapshot())}})
-			p.ramChart.SetOption(ctx, map[string]any{"series": []any{lineSeries("RAM", p.ramBuf.snapshot())}})
-			p.diskChart.SetOption(ctx, map[string]any{"series": []any{
+			p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
+			p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))
+			p.diskChart.SetSeries(ctx,
 				lineSeries("Read", p.diskRBuf.snapshot()),
 				lineSeries("Write", p.diskWBuf.snapshot()),
-			}})
-			p.netChart.SetOption(ctx, map[string]any{"series": []any{
+			)
+			p.netChart.SetSeries(ctx,
 				lineSeries("RX", p.netRXBuf.snapshot()),
 				lineSeries("TX", p.netTXBuf.snapshot()),
-			}})
+			)
 		}
 	}()
 	return nil

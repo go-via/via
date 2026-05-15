@@ -97,12 +97,9 @@ func (p *LoginPage) Submit(ctx *via.Ctx) error {
 }
 
 func (p *LoginPage) View(ctx *via.Ctx) h.H {
-	return shell(ctx, "Login", h.Div(
+	return shell(ctx, h.Div(
 		h.H1(h.Text("Login")),
-		h.If(p.Err.Get(ctx) != "", h.Article(
-			h.Style("border-left:3px solid var(--pico-del-color);color:var(--pico-del-color)"),
-			h.Small(h.Text(p.Err.Get(ctx))),
-		)),
+		errBanner(p.Err.Get(ctx)),
 		h.Label(h.Text("Email"),
 			h.Input(h.Type("email"), p.Email.Bind(), h.Placeholder("you@example.com")),
 		),
@@ -136,17 +133,24 @@ func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 }
 
 func (p *RegisterPage) View(ctx *via.Ctx) h.H {
-	return shell(ctx, "Register", h.Div(
+	return shell(ctx, h.Div(
 		h.H1(h.Text("Register")),
-		h.If(p.Err.Get(ctx) != "", h.Article(
-			h.Style("border-left:3px solid var(--pico-del-color);color:var(--pico-del-color)"),
-			h.Small(h.Text(p.Err.Get(ctx))),
-		)),
+		errBanner(p.Err.Get(ctx)),
 		h.Label(h.Text("Name"), h.Input(h.Type("text"), p.Name.Bind())),
 		h.Label(h.Text("Email"), h.Input(h.Type("email"), p.Email.Bind())),
 		h.Label(h.Text("Password"), h.Input(h.Type("password"), p.Password.Bind())),
 		h.Button(h.Text("Create account"), on.Click(p.Submit)),
 	))
+}
+
+func errBanner(msg string) h.H {
+	if msg == "" {
+		return nil
+	}
+	return h.Article(
+		h.Style("border-left:3px solid var(--pico-del-color);color:var(--pico-del-color)"),
+		h.Small(h.Text(msg)),
+	)
 }
 
 type ProfilePage struct{}
@@ -160,7 +164,7 @@ func (p *ProfilePage) Logout(ctx *via.Ctx) error {
 
 func (p *ProfilePage) View(ctx *via.Ctx) h.H {
 	user, _ := via.GetSess[User](ctx)
-	return shell(ctx, "Profile", h.Div(
+	return shell(ctx, h.Div(
 		h.H1(h.Textf("Hello, %s", user.Name)),
 		h.P(h.Text("Signed in as "), h.Code(h.Text(user.Email))),
 		h.Button(h.Class("outline secondary"), h.Text("Log out"), on.Click(p.Logout)),
@@ -170,7 +174,7 @@ func (p *ProfilePage) View(ctx *via.Ctx) h.H {
 type LandingPage struct{}
 
 func (p *LandingPage) View(ctx *via.Ctx) h.H {
-	return shell(ctx, "Home", h.Div(
+	return shell(ctx, h.Div(
 		h.H1(h.Text("Via Auth Demo")),
 		h.P(h.Text("Typed sessions, RotateSession on login, scope.User-style data with auto-render.")),
 	))
@@ -179,7 +183,7 @@ func (p *LandingPage) View(ctx *via.Ctx) h.H {
 // shell wraps every page in the same nav so the auth state shows up in
 // the header. We don't have a Layout primitive yet — composing with a
 // helper function is just as clean for a flat app.
-func shell(ctx *via.Ctx, _ string, content h.H) h.H {
+func shell(ctx *via.Ctx, content h.H) h.H {
 	_, loggedIn := via.GetSess[User](ctx)
 	return h.Div(
 		h.Nav(h.Class("container"),
@@ -221,7 +225,7 @@ func main() {
 	// Protected page
 	protected := app.Group("")
 	protected.Use(requireAuth)
-	via.MountOn[ProfilePage](protected, "/profile")
+	via.Mount[ProfilePage](protected, "/profile")
 
 	_ = http.ListenAndServe(":3000", app)
 }

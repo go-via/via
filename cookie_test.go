@@ -1,13 +1,14 @@
 package via_test
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,62 +21,60 @@ func TestCookie_returnsEmptyWhenAbsent(t *testing.T) {
 	t.Parallel()
 
 	c := &cookiePage{}
-	ctx := via.NewBoundCtx(c)
+	ctx := viatest.NewCtx(t, c)
 	assert.Equal(t, "", ctx.Cookie("flavor"),
 		"missing cookie should yield \"\"")
 }
+
+type cookieEchoPage struct {
+	Flavor via.State[string]
+}
+
+func (p *cookieEchoPage) OnInit(ctx *via.Ctx) error {
+	p.Flavor.Set(ctx, ctx.Cookie("flavor"))
+	return nil
+}
+
+func (p *cookieEchoPage) View(ctx *via.Ctx) h.H { return h.Div(p.Flavor.Text()) }
 
 func TestCookie_readsValueFromRequest(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	via.Mount[cookiePage](app, "/")
+	via.Mount[cookieEchoPage](app, "/")
 	defer server.Close()
 
-	// Issue a render with a flavor cookie set, then peek at how the
-	// underlying Ctx reads it. We test indirectly through the body's
-	// session cookie which renderPage injects.
-	u, err := url.Parse(server.URL + "/")
-	require.NoError(t, err)
-	req, _ := http.NewRequest("GET", u.String(), nil)
+	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.AddCookie(&http.Cookie{Name: "flavor", Value: "mint"})
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	resp.Body.Close()
-	// We can't observe ctx.Cookie's read directly without a custom
-	// Composition. The TestCookie_returnsEmptyWhenAbsent path covers
-	// the nil-request branch; this round-trip just ensures the cookie
-	// flow doesn't crash.
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "mint",
+		"ctx.Cookie should read the named cookie off the in-flight request")
 }
 
-func TestDelCookie_outsideActionScopeIsNoOp(t *testing.T) {
+func TestCookie_methodsNoOpOnEdgeInputs(t *testing.T) {
 	t.Parallel()
 
 	c := &cookiePage{}
-	ctx := via.NewBoundCtx(c)
-	assert.NotPanics(t, func() {
-		ctx.DelCookie("anything")
-	})
-}
+	ctx := viatest.NewCtx(t, c)
 
-func TestDelCookie_emptyNameIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	c := &cookiePage{}
-	ctx := via.NewBoundCtx(c)
-	assert.NotPanics(t, func() {
-		ctx.DelCookie("")
-	})
-}
-
-func TestSetCookie_outsideActionScopeIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	c := &cookiePage{}
-	ctx := via.NewBoundCtx(c)
-	assert.NotPanics(t, func() {
-		ctx.SetCookie(&http.Cookie{Name: "x", Value: "y"})
-	}, "SetCookie outside action scope (Writer nil) should silently no-op")
+	cases := []struct {
+		name string
+		do   func()
+	}{
+		{"DelCookie outside action scope", func() { ctx.DelCookie("anything") }},
+		{"DelCookie empty name", func() { ctx.DelCookie("") }},
+		{"SetCookie outside action scope (Writer nil)",
+			func() { ctx.SetCookie(&http.Cookie{Name: "x", Value: "y"}) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotPanics(t, c.do)
+		})
+	}
 }

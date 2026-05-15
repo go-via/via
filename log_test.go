@@ -52,18 +52,28 @@ type assertError string
 
 func (e assertError) Error() string { return string(e) }
 
+// newLoggedApp wires a captureLogger + httptest.Server onto a fresh App,
+// applies any extra options, and registers a t.Cleanup so callers don't
+// have to track server.Close themselves.
+func newLoggedApp(t *testing.T, level via.LogLevel, opts ...via.Option) (*via.App, *httptest.Server, *captureLogger) {
+	t.Helper()
+	logger := &captureLogger{}
+	var server *httptest.Server
+	full := append([]via.Option{
+		via.WithLogger(logger),
+		via.WithLogLevel(level),
+		via.WithTestServer(&server),
+	}, opts...)
+	app := via.New(full...)
+	t.Cleanup(func() { server.Close() })
+	return app, server, logger
+}
+
 func TestWithLogger_routesActionPanicsThroughLogger(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogDebug),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogDebug)
 	via.Mount[panicPage](app, "/")
-	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
@@ -96,13 +106,7 @@ func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogInfo)
 	via.Defaults(app)
 	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
 		panic("oops")
@@ -110,7 +114,6 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	app.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	// Recover survives the panic.
 	resp, err := http.Get(server.URL + "/boom")
@@ -140,13 +143,7 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogError),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogError)
 	app.Use(via.Recover(app))
 	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
 		panic("kaboom")
@@ -154,7 +151,6 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	app.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := http.Get(server.URL + "/boom")
 	require.NoError(t, err)
@@ -181,16 +177,10 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithTestServer(&server),
-		// LogLevel defaults to LogWarn — no info/debug records should leak.
-	)
+	// LogLevel defaults to LogWarn — no info/debug records should leak.
+	app, server, logger := newLoggedApp(t, via.LogWarn)
 	via.Defaults(app)
 	via.Mount[accessLogPage](app, "/")
-	defer server.Close()
 
 	for range 5 {
 		resp, err := http.Get(server.URL + "/")
@@ -219,16 +209,9 @@ func (p *ridLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogInfo)
 	app.Use(via.RequestID())
 	via.Mount[ridLogPage](app, "/")
-	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Trace").Fire())
@@ -288,17 +271,10 @@ func TestRequestID_passesThroughInboundHeader(t *testing.T) {
 func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogInfo)
 	app.Use(via.RequestID())
 	app.Use(via.AccessLog(app))
 	via.Mount[accessLogPage](app, "/")
-	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Request-ID", "trace-7")
@@ -317,16 +293,9 @@ func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogInfo)
 	app.Use(via.AccessLog(app))
 	via.Mount[accessLogPage](app, "/")
-	defer server.Close()
 
 	for range 3 {
 		resp, err := http.Get(server.URL + "/")
@@ -356,15 +325,8 @@ func (p *loggingPage) View(ctx *via.Ctx) h.H { return h.Div() }
 func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogInfo),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogInfo)
 	via.Mount[loggingPage](app, "/")
-	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())
@@ -389,15 +351,8 @@ func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 func TestLog_respectsLogLevelFilter(t *testing.T) {
 	t.Parallel()
 
-	logger := &captureLogger{}
-	var server *httptest.Server
-	app := via.New(
-		via.WithLogger(logger),
-		via.WithLogLevel(via.LogWarn),
-		via.WithTestServer(&server),
-	)
+	app, server, logger := newLoggedApp(t, via.LogWarn)
 	via.Mount[loggingPage](app, "/")
-	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())

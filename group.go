@@ -2,16 +2,29 @@ package via
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 )
 
 // Group bundles routes under a shared path prefix and (optionally) a shared
 // middleware chain. Middleware registered with g.Use wraps every handler
-// registered via g.HandleFunc / g.Handle / via.MountOn[C](g, ...).
+// registered via g.HandleFunc / g.Handle / via.Mount[C](g, ...).
 type Group struct {
 	app        *App
 	prefix     string
 	middleware []Middleware
+}
+
+// mountDescriptor implements Mountable for *Group: route is joined under
+// the group's prefix and the group's middleware chain is captured on the
+// descriptor so it wraps the rendered route, action POST, and SSE
+// handshake.
+func (g *Group) mountDescriptor(d *cmpDescriptor, route string) {
+	full := joinPath(g.prefix, route)
+	d.route = full
+	d.groupMW = slices.Clone(g.middleware)
+	checkPathParams(d, full)
+	g.app.registerDescriptor(d)
 }
 
 // Group creates a new route group under prefix.
@@ -29,19 +42,19 @@ func (g *Group) Use(mw ...Middleware) {
 // http.ServeMux — `"/users"` is GET-only by convention,
 // `"POST /users"` registers POST. Without a method token, GET is assumed.
 func (g *Group) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
-	full := groupPattern(g.prefix, pattern)
-	g.app.claimRoute(full, "Group("+g.prefix+").HandleFunc")
-	g.app.mux.Handle(full,
-		applyMiddleware(g.middleware, http.HandlerFunc(handler)))
+	g.handle(pattern, http.HandlerFunc(handler), "HandleFunc")
 }
 
 // Handle registers a non-via http.Handler under the group prefix. Same
 // pattern shape as HandleFunc.
 func (g *Group) Handle(pattern string, handler http.Handler) {
+	g.handle(pattern, handler, "Handle")
+}
+
+func (g *Group) handle(pattern string, handler http.Handler, tag string) {
 	full := groupPattern(g.prefix, pattern)
-	g.app.claimRoute(full, "Group("+g.prefix+").Handle")
-	g.app.mux.Handle(full,
-		applyMiddleware(g.middleware, handler))
+	g.app.claimRoute(full, "Group("+g.prefix+")."+tag)
+	g.app.mux.Handle(full, applyMiddleware(g.middleware, handler))
 }
 
 // groupPattern joins a group's prefix with a per-handler pattern, keeping

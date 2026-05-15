@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,28 +36,12 @@ func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
 	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("UseRed").Fire())
-
-	deadline := time.After(2 * time.Second)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				t.Fatalf("SSE closed early; got %q", got.String())
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), "theme=red") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("timeout waiting for theme=red; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 2*time.Second, "theme=red")
 }
 
 type appScopedPage struct {

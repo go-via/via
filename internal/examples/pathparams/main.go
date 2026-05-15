@@ -21,7 +21,7 @@ type CounterPage struct {
 	Step  via.Signal[int] `via:"step,init=1"`
 }
 
-func (c *CounterPage) Init(ctx *via.Ctx) error {
+func (c *CounterPage) OnInit(ctx *via.Ctx) error {
 	if c.StartAtStep > 0 {
 		c.Step.Set(ctx, c.StartAtStep)
 	}

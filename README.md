@@ -68,13 +68,26 @@ via.Add(ctx, &p.Count, 1)                         // numeric delta
 via.Toggle(ctx, &p.Open)                          // bool flip
 ```
 
+`Signal[T]` (client-mirrored) also exposes view helpers for composing
+with `h`:
+
+```go
+s.Bind()  // <input data-bind="key"> two-way binding
+s.Text()  // <span data-text="$key"></span> reactive text node
+s.Show()  // data-show="$key" on parent — toggles display by truthiness
+```
+
+`State[T]` and `scope.User[T] / scope.App[T]` only have `Text()` —
+they're server-side, so the view re-renders the value rather than the
+client reading a signal.
+
 ## Lifecycle hooks
 
 | Method                    | Fires when                                    |
 |---------------------------|-----------------------------------------------|
-| `Init(ctx) error`         | Before View on the page-load request          |
+| `OnInit(ctx) error`       | Before View on the page-load request          |
 | `OnConnect(ctx) error`    | First time the SSE stream opens (one-shot)    |
-| `Dispose(ctx)`            | Tab closed, ctx swept, or app shut down       |
+| `OnDispose(ctx)`          | Tab closed, ctx swept, or app shut down       |
 | `View(ctx) h.H`           | Required; renders the composition             |
 
 `OnConnect` is where long-running per-tab work belongs — bots that hit
@@ -130,6 +143,45 @@ The action method's body can:
 
 Per-tab actions are serialized — concurrent POSTs to one tab will not
 race on State writes.
+
+## File uploads
+
+Add a `via.File` field. The action dispatcher detects multipart bodies
+and binds the named part for the duration of the action:
+
+```go
+type Page struct {
+    Avatar via.File           `via:"avatar"`
+    Note   via.Signal[string] `via:"note"`
+}
+
+func (p *Page) Upload(ctx *via.Ctx) error {
+    if !p.Avatar.Present() { return nil }
+    return p.Avatar.Save("/var/uploads/" + sanitized)
+}
+```
+
+The handle exposes `Filename()` (untrusted), `Size()`, `ContentType()`
+(untrusted), `Open()` for streaming, `Bytes()` for in-memory reads,
+and `Save(path)` for the common "stash to disk" case (mode `0o600`,
+truncate). Text fields in the same multipart POST populate `Signal[T]`
+fields exactly like a JSON action body.
+
+For raw streaming control over a multipart body (mixed parts, custom
+headers, files larger than the in-memory buffer), call
+`ctx.MultipartReader()` for the std-library reader. Once read, typed
+`via.File` fields on the same action will be empty for any parts you
+advanced past.
+
+`WithMaxRequestBody(n)` caps the total body size; oversized requests
+return 413.
+
+A plain HTML `<form enctype=multipart/form-data>` posts to
+`/_action/Method` and the response body shows in the browser, so most
+upload flows finish with `http.Redirect(ctx.Writer(), ctx.Request(),
+"/", 303)` to refresh the page. Any state you want visible after the
+redirect must live in `scope.User[T]` (session-scoped) — `via.State[T]`
+is per-tab and the redirected GET allocates a fresh tab.
 
 ## Path parameters
 
@@ -204,7 +256,7 @@ via.Mount[Counter](app, "/counter/{id}")
 
 api := app.Group("/api")
 api.Use(requireAuth)
-via.MountOn[Profile](api, "/profile")
+via.Mount[Profile](api, "/profile")
 
 api.HandleFunc("POST /widgets", createWidget) // method-prefixed
 api.HandleFunc("/widgets",       listWidgets) // bare path = GET
@@ -236,7 +288,7 @@ app.Use(via.RedirectHTTPS())
 via.Mount[Home](app, "/")
 api := app.Group("/api")
 api.Use(requireAuth)
-via.MountOn[Profile](api, "/profile")
+via.Mount[Profile](api, "/profile")
 
 http.ListenAndServe(":8080", app)
 ```
@@ -266,7 +318,7 @@ deliver via the existing patch queue + SSE drain — no extra wiring.
 | `h.When(cond, build)`               | Lazy `If` — only constructs when true         |
 | `h.WhenElse(cond, then, els)`       | Lazy `IfElse` — only the winning builder runs |
 | `h.Switch(value, h.Case…, h.Default…)` | Tab-style branching by equality            |
-| `h.Group(items)` / `h.Fragment(items…)` | Bundle many nodes into one                |
+| `h.Fragment(items…)`                | Bundle many nodes into one (use `items...` for slices) |
 | `h.Classes(parts...)`               | Join class names; empty parts skipped         |
 | `h.ClassMap(map[string]bool)`       | Render true keys in sorted (stable) order     |
 | `h.IfStr(cond, s)`                  | `s` when cond, `""` otherwise                 |
@@ -280,8 +332,12 @@ app := via.New(via.WithPlugins(
 ))
 ```
 
-Plugins call `app.AppendToHead`, `app.AppendToFoot`, `app.HandleFunc`,
-and `app.RegisterAppSignal(key, value)` for client-driven signals.
+Plugins implement `Register(*via.App)` and call any of `AppendToHead`,
+`AppendToFoot`, `AppendAttrToHTML`, `HandleFunc`, or `RegisterAppSignal`
+during boot to inject document fragments, asset routes, and
+client-driven signals. Call these only from `Register` — the document-
+mutation slices aren't lock-guarded against concurrent appends after
+the server starts.
 
 ## Testing
 
@@ -321,8 +377,16 @@ require.Equal(t, 200, tc.Action(c.Inc).Fire())             // typed: typo → co
 require.Equal(t, 200, tc.Action("Apply").                  // string still works
     WithSignal("step", 5).Fire())
 require.Contains(t, tc.Reload(), ">1<")                    // re-fetch + assert on body
-frames, cancel := tc.SSE(t)
+frames, cancel := tc.SSE()
 defer cancel()
+test.AwaitFrame(t, frames, 2*time.Second, ">3<")    // wait for substring
+
+// Multipart action with a file part — switches the request to
+// multipart/form-data automatically when any file is attached.
+tc.Action(p.Upload).
+    WithFile("avatar", "me.png", pngBytes).
+    WithSignal("note", "from CLI").
+    Fire()
 ```
 
 `tc.Action` accepts either a method value (compile-time typo protection) or
@@ -341,6 +405,7 @@ post-action body assertions are one call instead of a hand-rolled GET.
 - `auth` — typed sessions + `RotateSession` + `requireAuth` middleware
 - `todos` — h.Each + scope.User + on.SetSignal
 - `sysmon` — per-tab ticker streaming CPU/RAM/disk/net charts via `OnConnect`
+- `upload` — `via.File` field driving a multipart `<form>` POST
 
 ```bash
 go run ./internal/examples/counter
@@ -372,6 +437,74 @@ go run ./internal/examples/counter
 | `WithShutdownTimeout(5s)`         | 5 s           |
 | `WithPlugins(...)`                | none          |
 | `WithTestServer(&server)`         | nil           |
+
+## Security
+
+What via defends against by default and what you opt into:
+
+### CSRF
+
+Every page mints a 256-bit `via_tab` id (32 bytes from `crypto/rand`,
+hex-encoded). Every action POST and SSE handshake must carry it; the
+server looks the id up in its in-memory registry and rejects unknown
+ids with 404. Forged requests can't guess a live tab id, and the same-
+origin policy keeps a third-party site from reading one. Action POSTs
+are also session-pinned: if the cookie sent doesn't match the session
+the tab was minted under, the request is 403'd before the action runs.
+The `via_tab` id is the CSRF token — no separate token plumbing.
+
+### Sessions
+
+`via_session` is the cookie name. Defaults: `HttpOnly`, `SameSite=Lax`,
+`Path=/`, 64-char hex value (32 bytes from `crypto/rand`). The `Secure`
+flag is opt-in via `WithSecureCookies()` — some deployments terminate
+TLS at a proxy and run plain HTTP between proxy and app, so the default
+stays off. Pair with `HSTS()` and `RedirectHTTPS()` for a pure-HTTPS
+posture. After authentication state changes, call `RotateSession(ctx)`
+to mint a new id and invalidate the captured pre-auth one (session-
+fixation defence).
+
+### CSP
+
+`StrictCSP()` middleware sets a strict header (`default-src 'self';
+script-src 'self' 'nonce-XYZ'; object-src 'none'; base-uri 'self'`)
+with a per-request nonce threaded through `r.Context` and reachable via
+`ctx.CSPNonce()`. Pass extra directives as variadic args. Without
+`StrictCSP`, no CSP header is sent.
+
+### Body limits
+
+`WithMaxRequestBody(n)` (default 1 MiB) caps action POST and SSE-close
+bodies via `http.MaxBytesReader`. Oversized requests return
+413 Request Entity Too Large.
+
+### Action error sanitization
+
+When an action panics, the default error handler replaces the panic
+message with `"Something went wrong"` before sending it to the client
+— so an accidental `panic("password=" + secret)` doesn't surface
+sensitive internals. User-returned errors (non-panic) flow through
+unmodified — the user controls what's in their own error.
+
+### Random sources
+
+`crypto/rand.Read` failures **panic** rather than fall back to
+zero-byte ids. Failing loud beats shipping predictable session/tab
+tokens.
+
+### Recommended production stack
+
+```go
+app := via.New(
+    via.WithSecureCookies(),
+    via.WithMaxContexts(10000),
+    via.WithLogger(via.SlogLogger(slog.Default())),
+)
+via.Defaults(app)              // RequestID + AccessLog + Recover
+app.Use(via.HSTS())
+app.Use(via.StrictCSP())
+app.Use(via.RedirectHTTPS())
+```
 
 ## License
 

@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,29 +36,13 @@ func TestAction_voidReturnIsRecognised(t *testing.T) {
 	defer server.Close()
 
 	tc := viatest.NewClient(t, server, "/")
-	frames, cancel := tc.SSE(t)
+	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Bump").Fire())
 	require.Equal(t, 200, tc.Action("Bump").Fire())
-
-	deadline := time.After(2 * time.Second)
-	got := strings.Builder{}
-	for {
-		select {
-		case f, ok := <-frames:
-			if !ok {
-				t.Fatalf("SSE closed early; got %q", got.String())
-			}
-			got.WriteString(f)
-			if strings.Contains(got.String(), "<div>2") {
-				return
-			}
-		case <-deadline:
-			t.Fatalf("expected void-action to bump state to 2; got %q", got.String())
-		}
-	}
+	viatest.AwaitFrame(t, frames, 2*time.Second, "<div>2")
 }
 
 type onlyVoidPage struct {

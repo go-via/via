@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -10,12 +9,41 @@ import (
 	"github.com/go-via/via/h"
 	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type broadcastPage struct{}
 
 func (p *broadcastPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+// openSSEStreams spins up n test clients on path and opens an SSE stream
+// for each. Returns the per-client frame channels and a single cancel
+// func that closes them all.
+func openSSEStreams(t *testing.T, server *httptest.Server, path string, n int) (frames []<-chan string, cancel func()) {
+	t.Helper()
+	frames = make([]<-chan string, n)
+	cancels := make([]func(), n)
+	for i := range n {
+		tc := viatest.NewClient(t, server, path)
+		frames[i], cancels[i] = tc.SSE()
+	}
+	// Brief pause so the SSE handshakes complete before broadcast fires.
+	time.Sleep(20 * time.Millisecond)
+	return frames, func() {
+		for _, c := range cancels {
+			c()
+		}
+	}
+}
+
+// awaitNeedleOnAll waits for needle to appear on every frames channel.
+// Channels are buffered (cap 16) so serial waits are safe — frames that
+// arrive on later channels while we're waiting on earlier ones queue up.
+func awaitNeedleOnAll(t *testing.T, frames []<-chan string, needle string, timeout time.Duration) {
+	t.Helper()
+	for _, ch := range frames {
+		viatest.AwaitFrame(t, ch, timeout, needle)
+	}
+}
 
 func TestBroadcast_pushesScriptToEveryLiveTab(t *testing.T) {
 	t.Parallel()
@@ -25,64 +53,13 @@ func TestBroadcast_pushesScriptToEveryLiveTab(t *testing.T) {
 	via.Mount[broadcastPage](app, "/")
 	defer server.Close()
 
-	tcs := []*viatest.Client{
-		viatest.NewClient(t, server, "/"),
-		viatest.NewClient(t, server, "/"),
-		viatest.NewClient(t, server, "/"),
-	}
-
-	frames := make([]<-chan string, len(tcs))
-	cancels := make([]func(), len(tcs))
-	for i, tc := range tcs {
-		f, c := tc.SSE(t)
-		frames[i], cancels[i] = f, c
-	}
-	defer func() {
-		for _, c := range cancels {
-			c()
-		}
-	}()
-	time.Sleep(20 * time.Millisecond)
+	frames, cancel := openSSEStreams(t, server, "/", 3)
+	defer cancel()
 
 	const msg = `console.log("hello broadcast")`
-	got := app.Broadcast(msg)
-	assert.Equal(t, 3, got, "Broadcast should report the tab count it reached")
-
-	// Each tab's SSE stream eventually carries the script.
-	deadline := time.After(2 * time.Second)
-	seen := 0
-	bufs := make([]strings.Builder, len(tcs))
-	for seen < 3 {
-		anyProgress := false
-		for i := range frames {
-			if bufs[i].String() != "" && strings.Contains(bufs[i].String(), msg) {
-				continue
-			}
-			select {
-			case f, ok := <-frames[i]:
-				if !ok {
-					t.Fatalf("SSE %d closed early; got %q", i, bufs[i].String())
-				}
-				bufs[i].WriteString(f)
-				anyProgress = true
-			default:
-			}
-		}
-		seen = 0
-		for i := range bufs {
-			if strings.Contains(bufs[i].String(), msg) {
-				seen++
-			}
-		}
-		if !anyProgress {
-			select {
-			case <-deadline:
-				t.Fatalf("only %d/3 tabs saw the broadcast within 2s", seen)
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	}
-	require.Equal(t, 3, seen)
+	assert.Equal(t, 3, app.Broadcast(msg),
+		"Broadcast should report the tab count it reached")
+	awaitNeedleOnAll(t, frames, msg, 2*time.Second)
 }
 
 func TestBroadcastSignals_pushesPatchToEveryLiveTab(t *testing.T) {
@@ -93,62 +70,13 @@ func TestBroadcastSignals_pushesPatchToEveryLiveTab(t *testing.T) {
 	via.Mount[broadcastPage](app, "/")
 	defer server.Close()
 
-	tcs := []*viatest.Client{
-		viatest.NewClient(t, server, "/"),
-		viatest.NewClient(t, server, "/"),
-	}
-	frames := make([]<-chan string, len(tcs))
-	cancels := make([]func(), len(tcs))
-	for i, tc := range tcs {
-		f, c := tc.SSE(t)
-		frames[i], cancels[i] = f, c
-	}
-	defer func() {
-		for _, c := range cancels {
-			c()
-		}
-	}()
-	time.Sleep(20 * time.Millisecond)
+	frames, cancel := openSSEStreams(t, server, "/", 2)
+	defer cancel()
 
-	got := app.BroadcastSignals(map[string]any{
+	assert.Equal(t, 2, app.BroadcastSignals(map[string]any{
 		"_systemNotice": "maintenance soon",
-	})
-	assert.Equal(t, 2, got)
-
-	deadline := time.After(2 * time.Second)
-	seen := 0
-	bufs := make([]strings.Builder, len(tcs))
-	for seen < 2 {
-		anyProgress := false
-		for i := range frames {
-			if strings.Contains(bufs[i].String(), "maintenance soon") {
-				continue
-			}
-			select {
-			case f, ok := <-frames[i]:
-				if !ok {
-					t.Fatalf("SSE %d closed early", i)
-				}
-				bufs[i].WriteString(f)
-				anyProgress = true
-			default:
-			}
-		}
-		seen = 0
-		for i := range bufs {
-			if strings.Contains(bufs[i].String(), "maintenance soon") {
-				seen++
-			}
-		}
-		if !anyProgress {
-			select {
-			case <-deadline:
-				t.Fatalf("only %d/2 tabs saw the signal patch", seen)
-			case <-time.After(20 * time.Millisecond):
-			}
-		}
-	}
-	require.Equal(t, 2, seen)
+	}))
+	awaitNeedleOnAll(t, frames, "maintenance soon", 2*time.Second)
 }
 
 func TestBroadcastSignals_emptyMapIsNoOp(t *testing.T) {
