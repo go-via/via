@@ -1,20 +1,14 @@
 package via
 
 import (
-	"cmp"
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/signal"
-	"slices"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/go-via/via/h"
@@ -75,38 +69,6 @@ type App struct {
 // ServeHTTP makes *App an http.Handler.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.handler.ServeHTTP(w, r)
-}
-
-// AppendToHead adds nodes to the <head> of every rendered page. Call
-// during boot (e.g. from a plugin's Register) — the underlying slice is
-// not mutex-guarded, so concurrent appends after the server starts race
-// with the page render path.
-func (a *App) AppendToHead(elements ...h.H) {
-	a.documentHeadIncludes = appendNonNil(a.documentHeadIncludes, elements)
-}
-
-// AppendToFoot adds nodes to the end of <body> on every rendered page.
-// Same boot-time-only contract as AppendToHead.
-func (a *App) AppendToFoot(elements ...h.H) {
-	a.documentFootIncludes = appendNonNil(a.documentFootIncludes, elements)
-}
-
-// AppendAttrToHTML adds attributes to the <html> element of every page.
-// Same boot-time-only contract as AppendToHead.
-func (a *App) AppendAttrToHTML(attrs ...h.H) {
-	a.documentHTMLAttrs = appendNonNil(a.documentHTMLAttrs, attrs)
-}
-
-// appendNonNil appends every non-nil element from src onto dst. Used by
-// the document-mutation Append* helpers so they all share one nil-skip
-// loop.
-func appendNonNil(dst, src []h.H) []h.H {
-	for _, n := range src {
-		if n != nil {
-			dst = append(dst, n)
-		}
-	}
-	return dst
 }
 
 // Use installs middleware that wraps every via-served request.
@@ -178,116 +140,6 @@ func (a *App) HandleStatic(prefix string, fsys fs.FS) {
 	a.claimRoute(pattern, "HandleStatic")
 	a.mux.Handle(prefix,
 		http.StripPrefix(prefix, http.FileServer(http.FS(fsys))))
-}
-
-// Broadcast queues a JavaScript snippet on every currently-live tab's
-// patch queue. The next SSE drain on each tab pushes it to the browser.
-// Useful for "page will reload in 30 seconds" maintenance notices,
-// site-wide flash messages, or coordinated state invalidation.
-//
-//	app.Broadcast(`alert("Maintenance in 30 seconds.")`)
-//	time.Sleep(30 * time.Second)
-//	app.Shutdown(ctx)
-//
-// Returns the number of tabs the script was queued on. Empty script is
-// a no-op.
-func (a *App) Broadcast(script string) int {
-	if script == "" {
-		return 0
-	}
-	ctxs := a.snapshotContexts()
-	for _, c := range ctxs {
-		enqueueScript(c, script)
-	}
-	return len(ctxs)
-}
-
-// BroadcastSignals pushes a signal patch to every currently-live tab.
-// Useful for site-wide announcements that drive a banner via a
-// client-only signal (e.g. "$_systemNotice = 'planned maintenance'")
-// without rendering each composition. Returns the tab count.
-func (a *App) BroadcastSignals(values map[string]any) int {
-	if len(values) == 0 {
-		return 0
-	}
-	ctxs := a.snapshotContexts()
-	for _, c := range ctxs {
-		c.PatchSignals(values)
-	}
-	return len(ctxs)
-}
-
-// snapshotContexts copies every live *Ctx into a slice under the
-// registry RLock, so callers can iterate without holding the lock —
-// the per-Ctx work (enqueueScript, PatchSignals) takes its own locks
-// and we don't want the registry lock to gate that.
-func (a *App) snapshotContexts() []*Ctx {
-	a.contextRegistryMu.RLock()
-	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
-	for _, c := range a.contextRegistry {
-		ctxs = append(ctxs, c)
-	}
-	a.contextRegistryMu.RUnlock()
-	return ctxs
-}
-
-// Compositions returns a sorted snapshot of the names of every typed
-// Composition mounted on this app, paired with its route. Useful for
-// boot logging or status pages:
-//
-//	for _, c := range app.Compositions() {
-//	    log.Printf("mounted %-30s at %s", c.Type, c.Route)
-//	}
-func (a *App) Compositions() []CompositionInfo {
-	a.descsMu.RLock()
-	out := make([]CompositionInfo, 0, len(a.descs))
-	for _, d := range a.descs {
-		out = append(out, CompositionInfo{
-			Type:  d.typ.String(),
-			Route: d.route,
-		})
-	}
-	a.descsMu.RUnlock()
-	slices.SortFunc(out, func(a, b CompositionInfo) int { return cmp.Compare(a.Route, b.Route) })
-	return out
-}
-
-// CompositionInfo is one entry in App.Compositions().
-type CompositionInfo struct {
-	Type  string // type name, e.g. "via_test.Counter"
-	Route string // mounted pattern
-}
-
-// LiveTabs returns the number of currently-registered tab contexts.
-// Useful for ops endpoints (/healthz, /metrics) that want to surface
-// concurrency without scraping internal state. The number is a
-// snapshot — it may have changed by the time the caller reads the
-// return value.
-func (a *App) LiveTabs() int {
-	a.contextRegistryMu.RLock()
-	defer a.contextRegistryMu.RUnlock()
-	return len(a.contextRegistry)
-}
-
-// Routes returns a sorted snapshot of every method+pattern registered on
-// this app, paired with the registrar tag (Mount[T], HandleFunc,
-// Group(prefix).Handle, …). Useful for `app.Routes()` debugging and for
-// surfacing registered surface area at boot.
-func (a *App) Routes() []RouteInfo {
-	a.routesMu.Lock()
-	out := make([]RouteInfo, 0, len(a.routes))
-	for pattern, tag := range a.routes {
-		out = append(out, RouteInfo{Pattern: pattern, RegisteredBy: tag})
-	}
-	a.routesMu.Unlock()
-	slices.SortFunc(out, func(a, b RouteInfo) int { return cmp.Compare(a.Pattern, b.Pattern) })
-	return out
-}
-
-// RouteInfo is one entry in App.Routes().
-type RouteInfo struct {
-	Pattern      string // method-and-pattern, e.g. "GET /counter/{id}"
-	RegisteredBy string // who claimed it: "Mount[Counter]", "HandleFunc", …
 }
 
 // claimRoute records that pattern has been claimed by tag and panics if the
@@ -369,88 +221,6 @@ func (a *App) emit(level LogLevel, ctx *Ctx, format string, args ...any) {
 func (a *App) logErr(ctx *Ctx, format string, args ...any)  { a.emit(LogError, ctx, format, args...) }
 func (a *App) logWarn(ctx *Ctx, format string, args ...any) { a.emit(LogWarn, ctx, format, args...) }
 func (a *App) logInfo(ctx *Ctx, format string, args ...any) { a.emit(LogInfo, ctx, format, args...) }
-
-// HTTPServer returns an *http.Server configured with the app as its
-// handler and every WithReadTimeout/WithWriteTimeout/WithIdleTimeout/
-// WithReadHeaderTimeout option applied. Useful when the caller wants
-// to bind directly (TLS, custom listener, ALB sidecar) instead of
-// going through Start. The returned server has no listener attached;
-// the caller drives ListenAndServe / ListenAndServeTLS themselves.
-//
-// HTTPServer is also what Start uses internally — same defaults.
-func (a *App) HTTPServer() *http.Server {
-	srv := &http.Server{
-		Addr:              a.cfg.addr,
-		Handler:           a.handler,
-		ReadHeaderTimeout: cmp.Or(a.cfg.readHeaderTimeout, 10*time.Second),
-		ReadTimeout:       a.cfg.readTimeout,
-		WriteTimeout:      a.cfg.writeTimeout,
-		IdleTimeout:       cmp.Or(a.cfg.idleTimeout, 120*time.Second),
-		MaxHeaderBytes:    1 << 20,
-	}
-	if a.cfg.httpServerHook != nil {
-		a.cfg.httpServerHook(srv)
-	}
-	return srv
-}
-
-// Start binds and serves on the configured address. SIGINT/SIGTERM trigger
-// a graceful Shutdown.
-func (a *App) Start() {
-	srv := a.HTTPServer()
-	a.serverMu.Lock()
-	a.server = srv
-	a.serverMu.Unlock()
-	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stop
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.shutdownTimeout)
-		defer cancel()
-		if err := a.Shutdown(ctx); err != nil {
-			a.logErr(nil, "shutdown error: %v", err)
-		}
-	}()
-
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		panic(fmt.Sprintf("via: %v", err))
-	}
-}
-
-// Shutdown disposes all live tabs and closes the server.
-func (a *App) Shutdown(ctx context.Context) error {
-	a.contextRegistryMu.Lock()
-	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
-	for _, c := range a.contextRegistry {
-		ctxs = append(ctxs, c)
-	}
-	clear(a.contextRegistry)
-	a.contextRegistryMu.Unlock()
-
-	for _, c := range ctxs {
-		a.disposeCtx(c)
-	}
-
-	a.stopSweepOnce.Do(func() {
-		if a.stopSweep != nil {
-			close(a.stopSweep)
-		}
-	})
-
-	a.sessionsMu.Lock()
-	clear(a.sessions)
-	a.sessionsMu.Unlock()
-
-	a.serverMu.Lock()
-	srv := a.server
-	a.serverMu.Unlock()
-	if srv != nil {
-		return srv.Shutdown(ctx)
-	}
-	return nil
-}
 
 // New constructs an *App with the given options.
 func New(opts ...Option) *App {

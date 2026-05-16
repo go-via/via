@@ -1,8 +1,6 @@
 package via
 
 import (
-	"encoding/json"
-	"fmt"
 	"maps"
 	"net/http"
 	"reflect"
@@ -53,11 +51,11 @@ type Ctx struct {
 	// then go through these direct funcs — no reflect.Value.Call on the
 	// hot path. Void-return actions are wrapped to satisfy the unified
 	// `func(*Ctx) error` shape; nil means "no such hook".
-	viewFn     func(*Ctx) h.H
-	initFn     func(*Ctx) error
-	connectFn  func(*Ctx) error
-	disposeFn  func(*Ctx)
-	actionFns  []func(*Ctx) error // indexed by descriptor actionSlot index
+	viewFn    func(*Ctx) h.H
+	initFn    func(*Ctx) error
+	connectFn func(*Ctx) error
+	disposeFn func(*Ctx)
+	actionFns []func(*Ctx) error // indexed by descriptor actionSlot index
 
 	mu sync.Mutex // guards w / r and disposed flag
 
@@ -170,70 +168,6 @@ func (ctx *Ctx) markSignalDirty(slot uint16) {
 	if ctx.queue != nil {
 		ctx.queue.notify()
 	}
-}
-
-// ExecScript queues a JavaScript snippet for execution on the client at
-// the next flush. Use sparingly — most reactivity should flow through
-// signals/state rather than imperative scripts.
-func (ctx *Ctx) ExecScript(s string) {
-	if ctx == nil || s == "" {
-		return
-	}
-	enqueueScript(ctx, s)
-}
-
-// ExecScriptf is ExecScript with fmt-style formatting. Use it to splice
-// numeric / boolean values; for user-controlled strings prefer
-// JSON-encoding so the embedded value parses unambiguously as a JS
-// string literal — Go's %q diverges from JS string syntax in subtle
-// ways (\a, some \u forms). For an alert with arbitrary text, see Toast.
-//
-//	ctx.ExecScriptf("location.href = '/users/%d'", id)
-func (ctx *Ctx) ExecScriptf(format string, args ...any) {
-	if ctx == nil || format == "" {
-		return
-	}
-	enqueueScript(ctx, fmt.Sprintf(format, args...))
-}
-
-// Reload tells the browser to reload the current page on the next
-// flush. Convenience wrapper for the common "the data changed
-// drastically; just refetch" pattern after multi-step actions.
-func (ctx *Ctx) Reload() {
-	if ctx == nil {
-		return
-	}
-	ctx.ExecScript("location.reload()")
-}
-
-// Toast queues a browser alert(message). Sugar for the common
-// "show a quick notice and move on" pattern; for richer toasts use
-// PatchSignal to drive a client-side notice signal instead.
-//
-// The message is JSON-encoded into the alert call so any user-supplied
-// content survives untouched — Go's %q escape rules diverge from
-// JavaScript's in a handful of edge cases (e.g. \a), JSON does not.
-func (ctx *Ctx) Toast(message string) {
-	if ctx == nil || message == "" {
-		return
-	}
-	b, err := json.Marshal(message)
-	if err != nil {
-		return
-	}
-	ctx.ExecScript("alert(" + string(b) + ")")
-}
-
-// Redirect sends a client-side navigation to url at the next flush.
-func (ctx *Ctx) Redirect(url string) {
-	if ctx == nil || url == "" || ctx.queue == nil {
-		return
-	}
-	q := ctx.queue
-	q.mu.Lock()
-	q.redirect = url
-	q.mu.Unlock()
-	q.notify()
 }
 
 // Sync forces a view re-render and flushes pending patches. Marks the

@@ -1,9 +1,7 @@
 package via
 
 import (
-	"encoding/json"
 	"reflect"
-	"strconv"
 
 	"github.com/go-via/via/h"
 )
@@ -231,89 +229,4 @@ func (s *Signal[T]) encode() ([]byte, error) {
 
 func (s *Signal[T]) decodeRaw(raw any) {
 	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
-}
-
-// jsonTrue / jsonFalse cache the only two possible Bool encodings so we
-// don't reallocate the same 4 / 5 bytes on every render. The bytes are
-// fed to json.RawMessage in writePageDocument which never mutates them.
-var (
-	jsonTrue  = []byte("true")
-	jsonFalse = []byte("false")
-)
-
-// scalar JSON encoder, no fmt.Sprintf. Falls back to encoding/json for
-// composites (handled in state.go via reflect path).
-func encodeScalar(v reflect.Value) ([]byte, error) {
-	switch v.Kind() {
-	case reflect.String:
-		return strconv.AppendQuote(nil, v.String()), nil
-	case reflect.Bool:
-		if v.Bool() {
-			return jsonTrue, nil
-		}
-		return jsonFalse, nil
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconv.AppendInt(nil, v.Int(), 10), nil
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return strconv.AppendUint(nil, v.Uint(), 10), nil
-	case reflect.Float32, reflect.Float64:
-		return strconv.AppendFloat(nil, v.Float(), 'g', -1, 64), nil
-	}
-	return json.Marshal(v.Interface())
-}
-
-func decodeScalarInto(dst reflect.Value, raw any) {
-	if raw == nil {
-		return
-	}
-	switch dst.Kind() {
-	case reflect.String:
-		if s, ok := raw.(string); ok {
-			dst.SetString(s)
-		}
-	case reflect.Bool:
-		switch v := raw.(type) {
-		case bool:
-			dst.SetBool(v)
-		case string:
-			// `via:"open,init=true"` arrives as a string from the struct
-			// tag; ParseBool covers "true"/"false"/"1"/"0" and friends.
-			if b, err := strconv.ParseBool(v); err == nil {
-				dst.SetBool(b)
-			}
-		}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		switch n := raw.(type) {
-		case float64:
-			dst.SetInt(int64(n))
-		case int64:
-			dst.SetInt(n)
-		case int:
-			dst.SetInt(int64(n))
-		case string:
-			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
-				dst.SetInt(i)
-			}
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		switch n := raw.(type) {
-		case float64:
-			dst.SetUint(uint64(n))
-		case uint64:
-			dst.SetUint(n)
-		case string:
-			if i, err := strconv.ParseUint(n, 10, 64); err == nil {
-				dst.SetUint(i)
-			}
-		}
-	case reflect.Float32, reflect.Float64:
-		switch n := raw.(type) {
-		case float64:
-			dst.SetFloat(n)
-		case string:
-			if f, err := strconv.ParseFloat(n, 64); err == nil {
-				dst.SetFloat(f)
-			}
-		}
-	}
 }
