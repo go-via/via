@@ -152,6 +152,9 @@ type appKey struct{}
 // SessionLoad reads a value from the per-session store. Used by
 // scope.User[T] to back its Get/Set with shared storage that survives
 // across tabs of the same browser session.
+//
+// Deprecated: scope-package integration hook. End users should access
+// session state through scope.User[T] rather than calling this directly.
 func SessionLoad(ctx *Ctx, key string) (any, bool) {
 	if ctx == nil {
 		return nil, false
@@ -166,6 +169,9 @@ func SessionLoad(ctx *Ctx, key string) (any, bool) {
 // current Ctx dirty so the page re-renders with the new value. If ctx
 // has no session (test path that bypassed the session middleware), the
 // value is held on the ctx itself so within-request reads still work.
+//
+// Deprecated: scope-package integration hook. End users should access
+// session state through scope.User[T] rather than calling this directly.
 func SessionStore(ctx *Ctx, key string, value any) {
 	if ctx == nil {
 		return
@@ -234,6 +240,9 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 }
 
 // AppLoad reads a value from the per-app store. Backs scope.App[T].
+//
+// Deprecated: scope-package integration hook. End users should access
+// app-wide state through scope.App[T] rather than calling this directly.
 func AppLoad(ctx *Ctx, key string) (any, bool) {
 	if ctx == nil || ctx.app == nil {
 		return nil, false
@@ -243,6 +252,9 @@ func AppLoad(ctx *Ctx, key string) (any, bool) {
 
 // AppStore writes a value to the per-app store and marks the current
 // Ctx dirty.
+//
+// Deprecated: scope-package integration hook. End users should access
+// app-wide state through scope.App[T] rather than calling this directly.
 func AppStore(ctx *Ctx, key string, value any) {
 	if ctx == nil || ctx.app == nil {
 		return

@@ -17,14 +17,16 @@ import (
 	gc "maragu.dev/gomponents/components"
 )
 
-// gNode is a local alias for gomponents.Node so Group can hold them
-// without forcing every caller to import gomponents directly.
-type gNode = g.Node
+// H represents a DOM node. It is a type alias for gomponents.Node so
+// element constructors (h.Div, h.HTML5, h.Each, …) can hand children
+// straight through to gomponents without a per-call slice copy. The
+// alias is invisible to callers — they keep writing `h.H` and the
+// rendering surface keeps its shape.
+type H = g.Node
 
-// H represents a DOM node.
-type H interface {
-	Render(w io.Writer) error
-}
+// gNode is kept as a local name so the group type signature stays
+// readable; with the alias above it resolves to the same type as H.
+type gNode = g.Node
 
 // Text creates a text DOM node that Renders the escaped string t.
 func Text(t string) H {
@@ -113,8 +115,8 @@ func Each[T any](items []T, fn func(T) H) H {
 	}
 	out := make(group, 0, len(items))
 	for _, it := range items {
-		if gn, ok := fn(it).(gNode); ok && gn != nil {
-			out = append(out, gn)
+		if n := fn(it); n != nil {
+			out = append(out, n)
 		}
 	}
 	return out
@@ -127,8 +129,8 @@ func EachIndexed[T any](items []T, fn func(i int, v T) H) H {
 	}
 	out := make(group, 0, len(items))
 	for i, it := range items {
-		if gn, ok := fn(i, it).(gNode); ok && gn != nil {
-			out = append(out, gn)
+		if n := fn(i, it); n != nil {
+			out = append(out, n)
 		}
 	}
 	return out
@@ -149,8 +151,8 @@ func EachSeq[T any](seq iter.Seq[T], fn func(T) H) H {
 	}
 	var out group
 	for v := range seq {
-		if gn, ok := fn(v).(gNode); ok && gn != nil {
-			out = append(out, gn)
+		if n := fn(v); n != nil {
+			out = append(out, n)
 		}
 	}
 	if len(out) == 0 {
@@ -171,8 +173,8 @@ func EachSeq2[K, V any](seq iter.Seq2[K, V], fn func(K, V) H) H {
 	}
 	var out group
 	for k, v := range seq {
-		if gn, ok := fn(k, v).(gNode); ok && gn != nil {
-			out = append(out, gn)
+		if n := fn(k, v); n != nil {
+			out = append(out, n)
 		}
 	}
 	if len(out) == 0 {
@@ -221,30 +223,13 @@ func Switch(value any, cases ...SwitchCase) H {
 	return fallback
 }
 
-// retype converts a slice of via's H interface values into the
-// gomponents.Node slice that gomponents element constructors expect.
-// Empty input returns nil — variadic call sites accept that identically
-// to a zero-length slice.
-func retype(nodes []H) []g.Node {
-	if len(nodes) == 0 {
-		return nil
-	}
-	list := make([]g.Node, len(nodes))
-	for i, node := range nodes {
-		// (g.Node)(nil) on a nil interface yields (nil, false) — safe to
-		// drop the explicit nil guard, the zero slice value covers it.
-		list[i], _ = node.(g.Node)
-	}
-	return list
-}
-
 // Fragment bundles many nodes into one H so a function whose signature
 // returns a single H can yield several nodes. With a known list,
 // pass them directly; with a slice, spread:
 //
 //	return h.Fragment(h.H2(h.Text(title)), h.Hr())
 //	return h.Fragment(items...)
-func Fragment(items ...H) H { return group(retype(items)) }
+func Fragment(items ...H) H { return group(items) }
 
 type group []gNode
 
@@ -278,9 +263,9 @@ func HTML5(p HTML5Props) H {
 		Title:       p.Title,
 		Description: p.Description,
 		Language:    p.Language,
-		Head:        retype(p.Head),
-		Body:        retype(p.Body),
-		HTMLAttrs:   retype(p.HTMLAttrs),
+		Head:        p.Head,
+		Body:        p.Body,
+		HTMLAttrs:   p.HTMLAttrs,
 	}
 	gp.Head = append(gp.Head, Script(Type("module"), Src("/_datastar.js")))
 	return gc.HTML5(gp)

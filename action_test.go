@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -254,4 +255,71 @@ func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 	// the per-Ctx mutex were broken, parallel Get/Set would lose updates
 	// and we'd see a number lower than 51.
 	viatest.AwaitFrame(t, frames, 5*time.Second, "<div>51")
+}
+
+type redirectingActionPage struct{}
+
+func (p *redirectingActionPage) Go(ctx *via.Ctx) error {
+	return via.Redirect("/dashboard")
+}
+
+func (p *redirectingActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestRedirect_returnedErrorCarriesURL(t *testing.T) {
+	t.Parallel()
+	err := via.Redirect("/somewhere")
+	require.Error(t, err)
+	var re *via.RedirectError
+	require.True(t, errors.As(err, &re),
+		"via.Redirect must yield a *via.RedirectError so dispatcher and tests can unwrap it")
+	assert.Equal(t, "/somewhere", re.URL)
+}
+
+func TestAction_returningRedirectQueuesPendingRedirect(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[redirectingActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, http.StatusOK, tc.Action("Go").Fire())
+
+	frames, cancel := tc.SSE()
+	defer cancel()
+	viatest.AwaitFrame(t, frames, 2*time.Second, "/dashboard")
+}
+
+type toastingActionPage struct{}
+
+func (p *toastingActionPage) Save(ctx *via.Ctx) error {
+	return via.Toast("saved!")
+}
+
+func (p *toastingActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestToast_returnedErrorCarriesMessage(t *testing.T) {
+	t.Parallel()
+	err := via.Toast("hi")
+	require.Error(t, err)
+	var te *via.ToastError
+	require.True(t, errors.As(err, &te))
+	assert.Equal(t, "hi", te.Message)
+}
+
+func TestAction_returningToastQueuesPendingToast(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[toastingActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, http.StatusOK, tc.Action("Save").Fire())
+
+	frames, cancel := tc.SSE()
+	defer cancel()
+	viatest.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
 }

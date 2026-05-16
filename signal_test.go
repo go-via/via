@@ -192,3 +192,136 @@ func getBody(t *testing.T, server *httptest.Server, path string) string {
 	buf, _ := io.ReadAll(resp.Body)
 	return string(buf)
 }
+
+type feedPage struct {
+	Series via.Signal[[]int] `via:"series"`
+}
+
+func (p *feedPage) Append(ctx *via.Ctx) error {
+	via.Push(ctx, &p.Series, 42)
+	return nil
+}
+
+func (p *feedPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestPush_appendsItemAndMarksSignalDirty(t *testing.T) {
+	t.Parallel()
+	p := &feedPage{}
+	ctx := viatest.NewCtx(t, p)
+	via.Push(ctx, &p.Series, 1)
+	via.Push(ctx, &p.Series, 2)
+	via.Push(ctx, &p.Series, 3)
+	assert.Equal(t, []int{1, 2, 3}, p.Series.Get(ctx))
+}
+
+func TestPush_nilSignalIsNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := viatest.NewCtx(t, &feedPage{})
+	// Must not panic; the nil-handle guard mirrors via.Toggle / via.Add.
+	via.Push[int](ctx, nil, 1)
+}
+
+func TestPushBounded_dropsOldestWhenAtCapacity(t *testing.T) {
+	t.Parallel()
+	p := &feedPage{}
+	ctx := viatest.NewCtx(t, p)
+	for i := 1; i <= 5; i++ {
+		via.PushBounded(ctx, &p.Series, i, 3)
+	}
+	assert.Equal(t, []int{3, 4, 5}, p.Series.Get(ctx),
+		"PushBounded must keep the most recent max items; older items roll off")
+}
+
+func TestPushBounded_zeroMaxIsNoOp(t *testing.T) {
+	t.Parallel()
+	p := &feedPage{}
+	ctx := viatest.NewCtx(t, p)
+	via.PushBounded(ctx, &p.Series, 1, 0)
+	assert.Empty(t, p.Series.Get(ctx))
+}
+
+type attrStylePage struct {
+	Disabled via.Signal[bool]   `via:"disabled"`
+	Hue      via.Signal[string] `via:"hue,init=blue"`
+}
+
+func (p *attrStylePage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Button(p.Disabled.Attr("disabled"), h.Text("Save")),
+		h.Span(p.Hue.Style("color"), h.Text("hi")),
+	)
+}
+
+func TestSignal_Attr_rendersDataAttrSyntax(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[attrStylePage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-attr-disabled="$disabled"`,
+		"Signal.Attr(name) should emit Datastar's data-attr-<name>=\"$key\"")
+}
+
+func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[attrStylePage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-style-color="$hue"`,
+		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
+}
+
+type boolInitPage struct {
+	On via.Signal[bool] `via:"on,init=true"`
+}
+
+func (p *boolInitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[boolInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `&#34;on&#34;:true`,
+		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
+}
+
+type setIfChangedPage struct {
+	Status via.Signal[string] `via:"status,init=idle"`
+}
+
+func (p *setIfChangedPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestSetIfChanged_skipsPatchWhenValueUnchanged(t *testing.T) {
+	t.Parallel()
+	p := &setIfChangedPage{}
+	ctx := viatest.NewCtx(t, p)
+	changed := via.SetIfChanged(ctx, &p.Status, "idle")
+	assert.False(t, changed, "writing the existing value must report changed=false")
+	ctx.Flush()
+	assert.Empty(t, ctx.PendingSignals(),
+		"unchanged Set must not enqueue a signal patch")
+}
+
+func TestSetIfChanged_marksDirtyWhenValueChanges(t *testing.T) {
+	t.Parallel()
+	p := &setIfChangedPage{}
+	ctx := viatest.NewCtx(t, p)
+	changed := via.SetIfChanged(ctx, &p.Status, "busy")
+	assert.True(t, changed, "writing a new value must report changed=true")
+	ctx.Flush()
+	assert.Contains(t, ctx.PendingSignals(), "status",
+		"changed Set must mark the signal dirty so the next flush patches it")
+}
+
+func TestSetIfChanged_nilMutableIsNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := viatest.NewCtx(t, &setIfChangedPage{})
+	changed := via.SetIfChanged[string](ctx, nil, "x")
+	assert.False(t, changed)
+}

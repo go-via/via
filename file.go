@@ -190,24 +190,25 @@ func clearFiles(ctx *Ctx) {
 }
 
 // readMultipartSignals parses the multipart form on r (already
-// MaxBytes-bounded by the caller), copies text fields into a sigs map
-// (JSON-decoding values that look like JSON literals so booleans and
-// numbers come out typed), and returns the form so file fields can be
-// bound. memLimit caps how much non-file content goes through memory
-// before spilling to disk — see http.Request.ParseMultipartForm.
-func readMultipartSignals(r *http.Request, memLimit int64) (map[string]any, *multipart.Form, error) {
+// MaxBytes-bounded by the caller) and writes text fields into the
+// caller-supplied dst map (JSON-decoding values that look like JSON
+// literals so booleans and numbers come out typed). Returns the form so
+// file fields can be bound. memLimit caps how much non-file content
+// goes through memory before spilling to disk — see
+// http.Request.ParseMultipartForm. dst must be non-nil and empty;
+// pre-existing keys are preserved (caller's responsibility to clear).
+func readMultipartSignals(r *http.Request, memLimit int64, dst map[string]any) (*multipart.Form, error) {
 	if err := r.ParseMultipartForm(memLimit); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	form := r.MultipartForm
-	sigs := make(map[string]any, len(form.Value))
 	for k, vs := range form.Value {
 		if len(vs) == 0 {
 			continue
 		}
-		sigs[k] = decodeMultipartValue(vs[0])
+		dst[k] = decodeMultipartValue(vs[0])
 	}
-	return sigs, form, nil
+	return form, nil
 }
 
 // decodeMultipartValue converts a multipart text-field value into the

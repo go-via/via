@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-via/via/h"
 )
 
 // Ctx is the per-request execution context. Created on page load, kept alive
@@ -45,11 +47,17 @@ type Ctx struct {
 	// dirty bits, and Writer/Request assignment.
 	actionMu sync.Mutex
 
-	// reflectArgs is the cached single-element [reflect.ValueOf(ctx)]
-	// used as the argument list for OnInit/View/Action/OnConnect/OnDispose
-	// reflect.Method.Call. Boxing ctx once and re-using the slice
-	// avoids 2 allocations per dispatch.
-	reflectArgs [1]reflect.Value
+	// Typed dispatch funcs, bound once at newCtx by extracting each
+	// reflect-discovered method as a method value (`cmpVal.Method(i).
+	// Interface().(func(*Ctx)…)`). Per-request action/lifecycle calls
+	// then go through these direct funcs — no reflect.Value.Call on the
+	// hot path. Void-return actions are wrapped to satisfy the unified
+	// `func(*Ctx) error` shape; nil means "no such hook".
+	viewFn     func(*Ctx) h.H
+	initFn     func(*Ctx) error
+	connectFn  func(*Ctx) error
+	disposeFn  func(*Ctx)
+	actionFns  []func(*Ctx) error // indexed by descriptor actionSlot index
 
 	mu sync.Mutex // guards w / r and disposed flag
 
@@ -261,8 +269,10 @@ func (ctx *Ctx) Flush() {
 }
 
 // PendingRedirect returns the URL queued by Redirect (if any) without
-// draining it. Reserved for tests that drive actions through
-// test.NewCtx and need to assert that an action queued a redirect.
+// draining it.
+//
+// Deprecated: integration hook for tests driving actions through
+// test.NewCtx. Not part of via's stable user API.
 func (ctx *Ctx) PendingRedirect() string {
 	if ctx == nil || ctx.queue == nil {
 		return ""
@@ -273,7 +283,10 @@ func (ctx *Ctx) PendingRedirect() string {
 }
 
 // PendingScripts returns the JavaScript queued by ExecScript /
-// ExecScriptf, without draining it. Reserved for tests.
+// ExecScriptf, without draining it.
+//
+// Deprecated: integration hook for tests driving actions through
+// test.NewCtx. Not part of via's stable user API.
 func (ctx *Ctx) PendingScripts() string {
 	if ctx == nil || ctx.queue == nil {
 		return ""
@@ -284,7 +297,10 @@ func (ctx *Ctx) PendingScripts() string {
 }
 
 // PendingSignals returns a snapshot of the signals queued for the
-// next flush, without draining them. Reserved for tests.
+// next flush, without draining them.
+//
+// Deprecated: integration hook for tests driving actions through
+// test.NewCtx. Not part of via's stable user API.
 func (ctx *Ctx) PendingSignals() map[string]any {
 	if ctx == nil || ctx.queue == nil {
 		return nil

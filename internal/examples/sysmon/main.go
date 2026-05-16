@@ -228,12 +228,7 @@ type Page struct {
 
 	cpuBuf, ramBuf, diskRBuf, diskWBuf, netRXBuf, netTXBuf *histBuf
 
-	settings chan settings
-}
-
-type settings struct {
-	intervalMs int
-	running    bool
+	ticker *via.Ticker
 }
 
 func (p *Page) OnInit(ctx *via.Ctx) error {
@@ -251,8 +246,6 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 	p.netRXBuf = newHistBuf()
 	p.netTXBuf = newHistBuf()
 
-	p.settings = make(chan settings, 1)
-
 	p.CPUVal.Set(ctx, "--")
 	p.RAMVal.Set(ctx, "--")
 	p.DiskR.Set(ctx, "--")
@@ -263,9 +256,11 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Page) ApplyControls(ctx *via.Ctx) error {
-	p.settings <- settings{
-		intervalMs: p.IntervalMs.Get(ctx),
-		running:    p.Running.Get(ctx),
+	p.ticker.SetInterval(time.Duration(p.IntervalMs.Get(ctx)) * time.Millisecond)
+	if p.Running.Get(ctx) {
+		p.ticker.Resume()
+	} else {
+		p.ticker.Pause()
 	}
 	return nil
 }
@@ -273,9 +268,10 @@ func (p *Page) ApplyControls(ctx *via.Ctx) error {
 func (p *Page) ToggleRunning(ctx *via.Ctx) error {
 	v := !p.Running.Get(ctx)
 	p.Running.Set(ctx, v)
-	p.settings <- settings{
-		intervalMs: p.IntervalMs.Get(ctx),
-		running:    v,
+	if v {
+		p.ticker.Resume()
+	} else {
+		p.ticker.Pause()
 	}
 	return nil
 }
@@ -295,61 +291,42 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 	prevDisk := readDiskCounters()
 	prevNet := readNetCounters()
 
-	go func() {
-		ticker := time.NewTicker(updateInterval)
-		defer ticker.Stop()
-		paused := false
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case s := <-p.settings:
-				paused = !s.running
-				ticker.Reset(time.Duration(s.intervalMs) * time.Millisecond)
-				continue
-			case <-ticker.C:
-				if paused {
-					continue
-				}
-			}
+	p.ticker = via.Stream(ctx, updateInterval, func(ctx *via.Ctx, _ time.Time) {
+		now := time.Now().UnixMilli()
+		cpuPct := readCPUPercent()
+		ramPct := readMemPercent()
+		curDisk := readDiskCounters()
+		dr, dw := diskBPS(prevDisk, curDisk)
+		prevDisk = curDisk
+		curNet := readNetCounters()
+		rx, tx := netBPS(prevNet, curNet)
+		prevNet = curNet
 
-			now := time.Now().UnixMilli()
-			cpuPct := readCPUPercent()
-			ramPct := readMemPercent()
-			curDisk := readDiskCounters()
-			dr, dw := diskBPS(prevDisk, curDisk)
-			prevDisk = curDisk
-			curNet := readNetCounters()
-			rx, tx := netBPS(prevNet, curNet)
-			prevNet = curNet
+		p.cpuBuf.push(now, cpuPct)
+		p.ramBuf.push(now, ramPct)
+		p.diskRBuf.push(now, dr/1e3)
+		p.diskWBuf.push(now, dw/1e3)
+		p.netRXBuf.push(now, rx/1e3)
+		p.netTXBuf.push(now, tx/1e3)
 
-			p.cpuBuf.push(now, cpuPct)
-			p.ramBuf.push(now, ramPct)
-			p.diskRBuf.push(now, dr/1e3)
-			p.diskWBuf.push(now, dw/1e3)
-			p.netRXBuf.push(now, rx/1e3)
-			p.netTXBuf.push(now, tx/1e3)
+		p.CPUVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
+		p.RAMVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
+		p.DiskR.Set(ctx, fmtBytes(dr))
+		p.DiskW.Set(ctx, fmtBytes(dw))
+		p.NetRX.Set(ctx, fmtBytes(rx))
+		p.NetTX.Set(ctx, fmtBytes(tx))
 
-			p.CPUVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
-			p.RAMVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
-			p.DiskR.Set(ctx, fmtBytes(dr))
-			p.DiskW.Set(ctx, fmtBytes(dw))
-			p.NetRX.Set(ctx, fmtBytes(rx))
-			p.NetTX.Set(ctx, fmtBytes(tx))
-			ctx.Sync()
-
-			p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
-			p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))
-			p.diskChart.SetSeries(ctx,
-				lineSeries("Read", p.diskRBuf.snapshot()),
-				lineSeries("Write", p.diskWBuf.snapshot()),
-			)
-			p.netChart.SetSeries(ctx,
-				lineSeries("RX", p.netRXBuf.snapshot()),
-				lineSeries("TX", p.netTXBuf.snapshot()),
-			)
-		}
-	}()
+		p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
+		p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))
+		p.diskChart.SetSeries(ctx,
+			lineSeries("Read", p.diskRBuf.snapshot()),
+			lineSeries("Write", p.diskWBuf.snapshot()),
+		)
+		p.netChart.SetSeries(ctx,
+			lineSeries("RX", p.netRXBuf.snapshot()),
+			lineSeries("TX", p.netTXBuf.snapshot()),
+		)
+	})
 	return nil
 }
 

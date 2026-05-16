@@ -15,6 +15,7 @@ package on
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -160,16 +161,44 @@ func event(name string, fn any, opts ...via.TriggerOption) h.H {
 	return render(spec)
 }
 
+// bareAttrCache memoises the h.H produced for each (event, method) pair so
+// every render of `on.Click(c.Inc)` reuses one interned node instead of
+// rebuilding the @post string and a gomponents attrFunc closure. Hits are
+// allocation-free; misses pay the original cost once. A typed map under
+// RWMutex (rather than sync.Map) avoids boxing the struct key into `any`
+// on every lookup — the boxing alloc dominates after the closure is gone.
+var (
+	bareAttrMu    sync.RWMutex
+	bareAttrCache = map[bareKey]h.H{}
+)
+
+type bareKey struct{ event, method string }
+
 // bareAttr emits the data-on:<event>="@post('/_action/<method>')"
 // attribute used by every binding that has no modifiers, key filter,
 // debounce/throttle, or pre statements. Shared by event's and render's
 // fast paths.
 func bareAttr(eventName, method string) h.H {
+	key := bareKey{eventName, method}
+	bareAttrMu.RLock()
+	cached, ok := bareAttrCache[key]
+	bareAttrMu.RUnlock()
+	if ok {
+		return cached
+	}
 	attr, ok := eventAttrCache[eventName]
 	if !ok {
 		attr = "on:" + eventName
 	}
-	return h.Data(attr, "@post('/_action/"+method+"')")
+	node := h.Data(attr, "@post('/_action/"+method+"')")
+	bareAttrMu.Lock()
+	if existing, ok := bareAttrCache[key]; ok {
+		node = existing
+	} else {
+		bareAttrCache[key] = node
+	}
+	bareAttrMu.Unlock()
+	return node
 }
 
 func render(s *via.TriggerSpec) h.H {

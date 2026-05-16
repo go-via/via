@@ -193,3 +193,57 @@ func TestStream_stopsWhenCtxDone(t *testing.T) {
 	// Race detector catches ticker leaks via the test runner.
 	time.Sleep(80 * time.Millisecond)
 }
+
+// Ticker returned by Stream — pause/resume/set-interval surface
+
+type tickerPage struct {
+	ticks atomic.Int32
+}
+
+func (p *tickerPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestTicker_PauseStopsAndResumeRestartsCallback(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	ticker := via.Stream(ctx, 10*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.ticks.Add(1)
+	})
+	require.NotNil(t, ticker, "Stream should return a *via.Ticker handle")
+
+	time.Sleep(40 * time.Millisecond)
+	pre := p.ticks.Load()
+	require.GreaterOrEqual(t, pre, int32(2),
+		"ticker should fire at least twice in 40ms at 10ms interval")
+
+	ticker.Pause()
+	// Allow one in-flight callback to land, then snapshot.
+	time.Sleep(15 * time.Millisecond)
+	pausedAt := p.ticks.Load()
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, pausedAt, p.ticks.Load(),
+		"no further ticks should fire while paused")
+
+	ticker.Resume()
+	time.Sleep(40 * time.Millisecond)
+	require.Greater(t, p.ticks.Load(), pausedAt,
+		"ticks should resume after Resume")
+}
+
+func TestTicker_SetIntervalChangesCadence(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	// Start slow so we can observe the cadence change.
+	ticker := via.Stream(ctx, 200*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.ticks.Add(1)
+	})
+	time.Sleep(60 * time.Millisecond)
+	require.Zero(t, p.ticks.Load(),
+		"no tick should have fired yet at the slow cadence")
+
+	ticker.SetInterval(10 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	require.GreaterOrEqual(t, p.ticks.Load(), int32(2),
+		"after SetInterval(10ms) the callback should fire several times in 50ms")
+}

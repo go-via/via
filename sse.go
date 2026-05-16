@@ -55,12 +55,11 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// expensive background work (tickers, fan-out goroutines) lives here
 	// rather than in OnInit.
 	ctx.connectOnce.Do(func() {
-		if ctx.desc.connectIdx < 0 {
+		if ctx.connectFn == nil {
 			return
 		}
 		defer recoverLog(ctx, "OnConnect")
-		out := ctx.cmpReflect.Method(ctx.desc.connectIdx).Call(ctx.reflectArgs[:])
-		if err := errFromCallOut(out); err != nil {
+		if err := ctx.connectFn(ctx); err != nil {
 			a.logErr(ctx, "OnConnect: %v", err)
 		}
 	})
@@ -151,8 +150,10 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
 				ctx.app.logErr(ctx, "drainQueue: json.Marshal signals: %v", err)
 			}
 		} else if err := sse.PatchSignals(out); err != nil {
+			recycleSignalsMap(q, signals)
 			return err
 		}
+		recycleSignalsMap(q, signals)
 	}
 	if scripts != "" {
 		if err := sse.ExecuteScript(scripts); err != nil {
@@ -160,6 +161,23 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
 		}
 	}
 	return nil
+}
+
+// recycleSignalsMap returns m to the queue for reuse if no producer
+// has installed a fresh map between drain and now. Clearing-and-
+// recycling avoids reallocating the map on every flush in
+// signal-heavy real-time flows. Cap at a modest size so a single
+// outlier flush doesn't pin a huge map alive.
+func recycleSignalsMap(q *patchQueue, m map[string]any) {
+	if len(m) > 256 {
+		return
+	}
+	clear(m)
+	q.mu.Lock()
+	if q.signals == nil {
+		q.signals = m
+	}
+	q.mu.Unlock()
 }
 
 func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {

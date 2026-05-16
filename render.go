@@ -35,20 +35,15 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	decodePathParams(cmpVal, r, d)
 	decodeQueryParams(cmpVal, r, d)
 
-	ctxArg := ctx.reflectArgs[:]
-
-	if d.initIdx >= 0 {
-		if err := errFromCallOut(ctx.cmpReflect.Method(d.initIdx).Call(ctxArg)); err != nil {
+	if ctx.initFn != nil {
+		if err := ctx.initFn(ctx); err != nil {
 			a.logErr(ctx, "OnInit: %v", err)
 		}
 	}
 
 	a.registerCtx(ctx)
 
-	view := ctx.cmpReflect.Method(d.viewIdx).Call(ctxArg)[0]
-	body := view.Interface().(h.H)
-
-	a.writePageDocument(w, ctx, body)
+	a.writePageDocument(w, ctx, ctx.viewFn(ctx))
 }
 
 func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
@@ -136,10 +131,7 @@ func flushDirty(ctx *Ctx) {
 
 	if ctx.stateDirty {
 		buf := getRenderBuf()
-		view := ctx.cmpReflect.Method(ctx.desc.viewIdx).
-			Call(ctx.reflectArgs[:])[0]
-		body := view.Interface().(h.H)
-		_ = h.Div(h.ID(ctx.id), body).Render(buf)
+		_ = h.Div(h.ID(ctx.id), ctx.viewFn(ctx)).Render(buf)
 		ctx.queue.mu.Lock()
 		ctx.queue.elements = buf.String()
 		ctx.queue.mu.Unlock()

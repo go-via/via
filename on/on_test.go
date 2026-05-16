@@ -1,6 +1,7 @@
 package on_test
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -187,6 +188,38 @@ func TestOn_NamedEventHelpersRenderExpectedTriggers(t *testing.T) {
 		assert.Contains(t, body, want,
 			"each named helper / on.Event must emit on:<name> attribute")
 	}
+}
+
+type internPage struct{}
+
+func (p *internPage) Inc(ctx *via.Ctx) error { return nil }
+func (p *internPage) View(ctx *via.Ctx) h.H  { return h.Div() }
+
+func TestClick_bareBindingRendersIdentically(t *testing.T) {
+	t.Parallel()
+	p := &internPage{}
+	a := on.Click(p.Inc)
+	b := on.Click(p.Inc)
+	var bufA, bufB bytes.Buffer
+	require.NoError(t, a.Render(&bufA))
+	require.NoError(t, b.Render(&bufB))
+	assert.Equal(t, bufA.String(), bufB.String())
+	assert.Contains(t, bufA.String(), `on:click`)
+	assert.Contains(t, bufA.String(), `/_action/Inc`)
+}
+
+func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) {
+	// AllocsPerRun forbids t.Parallel; the runtime asserts on it.
+	// Passing the bound method through `fn any` boxes the 2-word method
+	// value — that's an unavoidable 1 alloc at the call boundary. The
+	// intern cache must contribute zero on top of that.
+	p := &internPage{}
+	on.Click(p.Inc) // prime the intern cache
+	allocs := testing.AllocsPerRun(50, func() {
+		_ = on.Click(p.Inc)
+	})
+	assert.LessOrEqual(t, allocs, float64(1),
+		"bare bindings should be interned — only the fn-to-any boxing may remain")
 }
 
 func getBody(t *testing.T, server *httptest.Server, path string) string {

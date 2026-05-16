@@ -66,15 +66,20 @@ shapes: `Signal[T]`, `State[T]`, `scope.User[T]`, `scope.App[T]`:
 s.Update(ctx, func(n int) int { return n + 1 })  // generic transform
 via.Add(ctx, &p.Count, 1)                         // numeric delta
 via.Toggle(ctx, &p.Open)                          // bool flip
+via.SetIfChanged(ctx, &p.Status, "busy")          // skip patch if unchanged
+via.Push(ctx, &p.Series, point)                   // append-only feed
+via.PushBounded(ctx, &p.Series, point, 100)       // cap to last 100
 ```
 
 `Signal[T]` (client-mirrored) also exposes view helpers for composing
 with `h`:
 
 ```go
-s.Bind()  // <input data-bind="key"> two-way binding
-s.Text()  // <span data-text="$key"></span> reactive text node
-s.Show()  // data-show="$key" on parent — toggles display by truthiness
+s.Bind()              // <input data-bind="key"> two-way binding
+s.Text()              // <span data-text="$key"></span> reactive text node
+s.Show()              // data-show="$key" — toggle display by truthiness
+s.Attr("disabled")    // data-attr-disabled="$key" — drives an HTML attr
+s.Style("color")      // data-style-color="$key" — drives an inline CSS prop
 ```
 
 `State[T]` and `scope.User[T] / scope.App[T]` only have `Text()` —
@@ -90,6 +95,23 @@ client reading a signal.
 | `OnDispose(ctx)`          | Tab closed, ctx swept, or app shut down       |
 | `View(ctx) h.H`           | Required; renders the composition             |
 
+Embed `via.Page` to make the optional hooks discoverable in your
+editor — type `p.On...` and the completion list shows them:
+
+```go
+type Profile struct {
+    via.Page
+    UserID int `path:"id"`
+}
+
+func (p *Profile) OnInit(ctx *via.Ctx) error { /* ... */ return nil }
+func (p *Profile) View(ctx *via.Ctx) h.H     { /* ... */ return h.Div() }
+```
+
+Embedding is optional — compositions that don't embed it work
+exactly the same way (Mount detects whichever hooks are defined and
+skips the rest). `View` is always required.
+
 `OnConnect` is where long-running per-tab work belongs — bots that hit
 GET without ever opening the SSE never trigger it.
 
@@ -101,6 +123,30 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
         p.Now.Set(ctx, t.Format("15:04:05"))
     })
     return nil
+}
+```
+
+`Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Paused`, and
+`SetInterval(d)` for runtime control — useful when actions need to
+toggle the stream on/off or change its cadence:
+
+```go
+type Page struct {
+    Running via.Signal[bool] `via:"running,init=true"`
+    ticker  *via.Ticker
+}
+
+func (p *Page) OnConnect(ctx *via.Ctx) error {
+    p.ticker = via.Stream(ctx, 200*time.Millisecond, p.poll)
+    return nil
+}
+
+func (p *Page) Toggle(ctx *via.Ctx) {
+    if via.Toggle(ctx, &p.Running); p.Running.Get(ctx) {
+        p.ticker.Resume()
+    } else {
+        p.ticker.Pause()
+    }
 }
 ```
 
@@ -132,8 +178,15 @@ The action method's body can:
 - Set typed state: `c.Hits.Set(ctx, …)` or `via.Add(ctx, &c.Hits, 1)`.
 - Push targeted patches: `ctx.SyncElements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.PatchSignal("_picoTheme", "purple")`.
-- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe).
-- Redirect: `ctx.Redirect("/profile")`.
+- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe), or
+  `return via.Toast("saved!")` — the dispatcher recognises the
+  returned `*via.ToastError` and queues the alert without invoking the
+  action-error handler.
+- Redirect: `ctx.Redirect("/profile")` or `return via.Redirect("/profile")`
+  — the dispatcher recognises the returned `*via.RedirectError` and
+  navigates the tab without invoking the action-error handler. Useful
+  when a helper deep in the call chain decides to redirect without
+  having `*Ctx` in scope.
 - Decode the request payload into a typed struct:
 
   ```go
@@ -406,6 +459,7 @@ post-action body assertions are one call instead of a hand-rolled GET.
 - `todos` — h.Each + scope.User + on.SetSignal
 - `sysmon` — per-tab ticker streaming CPU/RAM/disk/net charts via `OnConnect`
 - `upload` — `via.File` field driving a multipart `<form>` POST
+- `feed` — `via.PushBounded` + `Stream` driving an append-only signal
 
 ```bash
 go run ./internal/examples/counter

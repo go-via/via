@@ -70,8 +70,9 @@ func (q *patchQueue) notify() {
 // against a typed *C. The descriptor is the same one Mount[T] would
 // build, but the resulting Ctx is detached from any App.
 //
-// Reserved for tests; the via/test package wraps it in
-// test.NewCtx[T any](t, *T) so production code never imports it.
+// Deprecated: this is an integration point for via/test only and is
+// not part of via's stable user API. Use [test.NewCtx] from
+// github.com/go-via/via/test instead.
 func NewBoundCtx[T any](c *T) *Ctx {
 	return newCtx(buildDescriptor[T](), reflect.ValueOf(c), genTabID("test"))
 }
@@ -94,8 +95,37 @@ func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 	bindSlots(ctx, cmpVal, d)
 	bindScopeKeys(cmpVal, d)
 	bindFileKeys(cmpVal, d)
-	ctx.reflectArgs[0] = reflect.ValueOf(ctx)
+	bindDispatchFns(ctx, cmpVal, d)
 	return ctx
+}
+
+// bindDispatchFns extracts each lifecycle/action method as a typed
+// method value bound to *C, eliminating reflect.Value.Call on the
+// per-request hot path. Called once per newCtx; the resulting funcs
+// dispatch directly.
+func bindDispatchFns(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
+	ctx.viewFn = cmpVal.Method(d.viewIdx).Interface().(func(*Ctx) h.H)
+	if d.initIdx >= 0 {
+		ctx.initFn = cmpVal.Method(d.initIdx).Interface().(func(*Ctx) error)
+	}
+	if d.connectIdx >= 0 {
+		ctx.connectFn = cmpVal.Method(d.connectIdx).Interface().(func(*Ctx) error)
+	}
+	if d.disposeIdx >= 0 {
+		ctx.disposeFn = cmpVal.Method(d.disposeIdx).Interface().(func(*Ctx))
+	}
+	if n := len(d.actionSlots); n > 0 {
+		ctx.actionFns = make([]func(*Ctx) error, n)
+		for i, slot := range d.actionSlots {
+			raw := cmpVal.Method(slot.methodIndex).Interface()
+			if slot.voidReturn {
+				fn := raw.(func(*Ctx))
+				ctx.actionFns[i] = func(c *Ctx) error { fn(c); return nil }
+			} else {
+				ctx.actionFns[i] = raw.(func(*Ctx) error)
+			}
+		}
+	}
 }
 
 // PatchSignal queues a single signal update keyed by name. Plugins use it
@@ -203,18 +233,6 @@ func genTabID(route string) string {
 	return route + "_" + genSecureID()
 }
 
-// errFromCallOut extracts the error from a reflect.Method.Call return
-// slice, handling the typed-nil and zero-output cases. Centralised so
-// the three reflective dispatch sites (OnInit, OnConnect, action) read
-// identically.
-func errFromCallOut(out []reflect.Value) error {
-	if len(out) == 0 || out[0].IsNil() {
-		return nil
-	}
-	err, _ := out[0].Interface().(error)
-	return err
-}
-
 func enqueueScript(ctx *Ctx, s string) {
 	q := ctx.queue
 	q.mu.Lock()
@@ -272,9 +290,9 @@ func (a *App) disposeCtx(ctx *Ctx) {
 	close(ctx.doneChan)
 	ctx.mu.Unlock()
 
-	if ctx.desc != nil && ctx.desc.disposeIdx >= 0 && ctx.cmpReflect.IsValid() {
+	if ctx.disposeFn != nil {
 		defer recoverLog(ctx, "OnDispose")
-		ctx.cmpReflect.Method(ctx.desc.disposeIdx).Call(ctx.reflectArgs[:])
+		ctx.disposeFn(ctx)
 	}
 }
 

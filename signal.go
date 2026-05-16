@@ -93,24 +93,83 @@ func Toggle(ctx *Ctx, m Mutable[bool]) {
 	m.Set(ctx, !m.Get(ctx))
 }
 
-// Numeric is the constraint satisfied by every Go numeric type that
+// numeric is the constraint satisfied by every Go numeric type that
 // supports + on a Signal[T] / State[T] value. Defined inline so we don't
-// pull in golang.org/x/exp/constraints.
-type Numeric interface {
+// pull in golang.org/x/exp/constraints, and kept unexported because no
+// caller outside this package names the constraint — Add's type parameter
+// is inferred at call sites.
+type numeric interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64 |
 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
 		~float32 | ~float64
+}
+
+// SetIfChanged writes v to m only when it differs from the current
+// value. Returns true if a write happened. Use it on chatty real-time
+// streams where many ticks emit the same value — the unchanged ticks
+// skip the dirty flag, SSE patch, and re-render entirely:
+//
+//	via.SetIfChanged(ctx, &p.NetRX, fmtBytes(rx)) // no-op when unchanged
+//
+// Constrained to comparable T; Signal/State of slices, maps, or other
+// non-comparable shapes need their own equality and aren't covered here.
+func SetIfChanged[T comparable](ctx *Ctx, m Mutable[T], v T) bool {
+	if m == nil {
+		return false
+	}
+	if m.Get(ctx) == v {
+		return false
+	}
+	m.Set(ctx, v)
+	return true
 }
 
 // Add increments a numeric reactive field by delta. delta may be negative.
 //
 //	via.Add(ctx, &p.Count, 1)   // increment
 //	via.Add(ctx, &p.Count, -1)  // decrement
-func Add[T Numeric](ctx *Ctx, m Mutable[T], delta T) {
+func Add[T numeric](ctx *Ctx, m Mutable[T], delta T) {
 	if m == nil {
 		return
 	}
 	m.Set(ctx, m.Get(ctx)+delta)
+}
+
+// Push appends item to a slice-valued Signal and marks it dirty so the
+// next flush patches the new tail to the browser. Collapses the common
+// get-append-set pattern for chart series, log feeds, and other
+// append-only flows into one call:
+//
+//	via.Push(ctx, &p.Series, point)
+//
+// nil sig is a no-op. To cap retained items, use [PushBounded].
+func Push[T any](ctx *Ctx, sig *Signal[[]T], item T) {
+	if sig == nil {
+		return
+	}
+	sig.val = append(sig.val, item)
+	if ctx != nil {
+		ctx.markSignalDirty(sig.slot)
+	}
+}
+
+// PushBounded is [Push] with a hard cap on retained items. Once the
+// slice would exceed max, the oldest entries are dropped so only the
+// most recent max items remain. max <= 0 is a no-op (nothing is
+// appended, nothing is marked dirty).
+func PushBounded[T any](ctx *Ctx, sig *Signal[[]T], item T, max int) {
+	if sig == nil || max <= 0 {
+		return
+	}
+	sig.val = append(sig.val, item)
+	if len(sig.val) > max {
+		// Shift-left to keep the backing array; copy handles the overlap.
+		copy(sig.val, sig.val[len(sig.val)-max:])
+		sig.val = sig.val[:max]
+	}
+	if ctx != nil {
+		ctx.markSignalDirty(sig.slot)
+	}
 }
 
 // Bind returns a two-way binding attribute. Use on form inputs.
@@ -126,6 +185,26 @@ func (s *Signal[T]) Text() h.H {
 // Show returns a data-show attribute that toggles display by truthiness.
 func (s *Signal[T]) Show() h.H {
 	return h.Data("show", s.dollar)
+}
+
+// Attr returns a data-attr-<name> attribute that mirrors this signal's
+// truthiness onto the host element's HTML attribute. Truthy → attribute
+// present (boolean form, e.g. `disabled`); falsy → attribute absent.
+// For string-valued attributes, the attribute value tracks the signal.
+//
+//	h.Button(c.Saving.Attr("disabled"), h.Text("Save"))
+//	h.A(c.Target.Attr("href"), h.Text("Open"))
+func (s *Signal[T]) Attr(name string) h.H {
+	return h.Data("attr-"+name, s.dollar)
+}
+
+// Style returns a data-style-<prop> attribute that drives an inline CSS
+// property from this signal's stringified value. Pairs naturally with
+// `Signal[string]` carrying a colour, length, etc.
+//
+//	h.Div(c.Hue.Style("background-color"))
+func (s *Signal[T]) Style(prop string) h.H {
+	return h.Data("style-"+prop, s.dollar)
 }
 
 // Key returns the wire key (qualified field path). Useful in tests.
@@ -193,8 +272,15 @@ func decodeScalarInto(dst reflect.Value, raw any) {
 			dst.SetString(s)
 		}
 	case reflect.Bool:
-		if b, ok := raw.(bool); ok {
-			dst.SetBool(b)
+		switch v := raw.(type) {
+		case bool:
+			dst.SetBool(v)
+		case string:
+			// `via:"open,init=true"` arrives as a string from the struct
+			// tag; ParseBool covers "true"/"false"/"1"/"0" and friends.
+			if b, err := strconv.ParseBool(v); err == nil {
+				dst.SetBool(b)
+			}
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		switch n := raw.(type) {

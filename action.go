@@ -52,6 +52,55 @@ func MethodName(fn any) string {
 	return full
 }
 
+// RedirectError is returned by [Redirect] and recognised by the action
+// dispatcher as an intent to navigate the tab rather than report a
+// failure. The dispatcher unwraps it via errors.As, calls ctx.Redirect
+// with URL, and does not invoke the action-error handler.
+//
+// Returning a typed error (rather than calling ctx.Redirect inline and
+// `return nil`) means a helper deep in the call chain can express the
+// redirect intent without threading *Ctx through every frame.
+type RedirectError struct{ URL string }
+
+func (e *RedirectError) Error() string { return "via: redirect to " + e.URL }
+
+// ToastError is returned by [Toast] and recognised by the action
+// dispatcher as an intent to show a browser alert rather than report
+// a failure. The dispatcher unwraps it via errors.As, calls
+// ctx.Toast(Message), and does not invoke the action-error handler.
+type ToastError struct{ Message string }
+
+func (e *ToastError) Error() string { return "via: toast " + e.Message }
+
+// Toast returns an error that the action dispatcher translates into a
+// JSON-safe browser alert containing msg. Use for "report a result and
+// stop" flows where the message itself is the success outcome:
+//
+//	func (p *Form) Save(ctx *via.Ctx) error {
+//	    if err := store(...); err != nil { return err }
+//	    return via.Toast("saved!")
+//	}
+//
+// Empty msg is a no-op (still treated as a successful return; nothing
+// is pushed to the client). For richer notifications, prefer
+// PatchSignal driving a client-side notice signal.
+func Toast(msg string) error { return &ToastError{Message: msg} }
+
+// Redirect returns an error that the action dispatcher translates into
+// a client-side navigation to url. Idiomatic for "do work, then go
+// somewhere" actions:
+//
+//	func (p *LoginForm) Submit(ctx *via.Ctx) error {
+//	    if err := authenticate(...); err != nil {
+//	        return err // surfaces as a toast / custom error handler
+//	    }
+//	    return via.Redirect("/dashboard")
+//	}
+//
+// Outside an action dispatcher the value behaves like any other error;
+// callers may inspect it via errors.As(err, &*RedirectError).
+func Redirect(url string) error { return &RedirectError{URL: url} }
+
 // TriggerOption is consumed by the on/* sub-package to layer extra
 // behaviour onto a binding (debounce, throttle, key filters, etc.).
 type TriggerOption func(*TriggerSpec)
@@ -87,6 +136,26 @@ func (s *TriggerSpec) AppendPre(stmt string) {
 	s.Pre = append(s.Pre, stmt)
 }
 
+// sigsPool reuses the per-action signals map across requests. json.Unmarshal
+// into a non-nil map merges keys, so acquireSigs returns an already-cleared
+// map ready to be passed by pointer.
+var sigsPool = sync.Pool{
+	New: func() any { return make(map[string]any, 8) },
+}
+
+func acquireSigs() map[string]any {
+	m := sigsPool.Get().(map[string]any)
+	clear(m)
+	return m
+}
+
+func releaseSigs(m map[string]any) {
+	if m == nil || len(m) > 256 {
+		return // drop outliers so a one-off broadcast doesn't pin a giant map
+	}
+	sigsPool.Put(m)
+}
+
 // handleAction dispatches POST /_action/{cmpID}.{methodName} (or just
 // /_action/{methodName} for root). The {id} URL segment encodes both.
 func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
@@ -99,15 +168,22 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	maxBody := cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 
+	sigs := acquireSigs()
+	released := false
+	defer func() {
+		if !released {
+			releaseSigs(sigs)
+		}
+	}()
+
 	var (
-		sigs map[string]any
 		form *multipart.Form
 		err  error
 	)
 	if isMultipart(r) {
 		// Memory cap for buffered text fields — file parts spill to disk.
 		// Reuse maxBody so callers tune one knob.
-		sigs, form, err = readMultipartSignals(r, maxBody)
+		form, err = readMultipartSignals(r, maxBody, sigs)
 	} else {
 		err = datastar.ReadSignals(r, &sigs)
 	}
@@ -144,9 +220,19 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	// requireAuth (or any group-level guard) checks the request before
 	// the action runs — same auth posture as the rendered route.
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runAction(a, ctx, slot, w, r, sigs, form)
+		runAction(a, ctx, slotIdx, slot, w, r, sigs, form)
 	})
 	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
+	// runAction has finished by the time ServeHTTP returns. Release the
+	// sigs map back to the pool. We deliberately don't null out
+	// ctx.lastSignals here — a concurrent action POST on the same tab
+	// (serialized via actionMu inside runAction) will have already
+	// reassigned it, and writing nil from this goroutine would race the
+	// reassignment. The stale pointer between actions is benign:
+	// lastSignals is only read inside an action body, which holds
+	// actionMu, so the pre-read assignment is always under the lock.
+	released = true
+	releaseSigs(sigs)
 }
 
 // isMultipart reports whether r carries a multipart/form-data body.
@@ -155,7 +241,7 @@ func isMultipart(r *http.Request) bool {
 	return strings.HasPrefix(ct, "multipart/form-data")
 }
 
-func runAction(a *App, ctx *Ctx, slot *actionSlot,
+func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 	w http.ResponseWriter, r *http.Request, sigs map[string]any, form *multipart.Form) {
 	// Serialize per-tab so parallel POSTs to the same ctx don't race
 	// on State writes, dirty bits, or Writer/Request assignment.
@@ -200,11 +286,18 @@ func runAction(a *App, ctx *Ctx, slot *actionSlot,
 		defer form.RemoveAll()
 	}
 
-	out := ctx.cmpReflect.Method(slot.methodIndex).Call(ctx.reflectArgs[:])
-	if !slot.voidReturn {
-		if err := errFromCallOut(out); err != nil {
-			a.dispatchActionError(ctx, err, false)
+	if err := ctx.actionFns[slotIdx](ctx); err != nil {
+		var re *RedirectError
+		if errors.As(err, &re) {
+			ctx.Redirect(re.URL)
+			return
 		}
+		var te *ToastError
+		if errors.As(err, &te) {
+			ctx.Toast(te.Message)
+			return
+		}
+		a.dispatchActionError(ctx, err, false)
 	}
 }
 
