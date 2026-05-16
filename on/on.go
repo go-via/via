@@ -164,7 +164,7 @@ func event(name string, fn any, opts ...via.TriggerOption) h.H {
 
 // bareAttrCache memoises the h.H produced for each (event, method) pair so
 // every render of `on.Click(c.Inc)` reuses one interned node instead of
-// rebuilding the @post string and a gomponents attrFunc closure. Hits are
+// rebuilding the @post string and a fresh attribute node. Hits are
 // allocation-free; misses pay the original cost once. A typed map under
 // RWMutex (rather than sync.Map) avoids boxing the struct key into `any`
 // on every lookup — the boxing alloc dominates after the closure is gone.
@@ -179,9 +179,9 @@ type bareKey struct{ event, method string }
 // attribute used by every binding that has no modifiers, key filter,
 // debounce/throttle, or pre statements. Shared by event's and render's
 // fast paths. The cached value is a precomputed []byte that Render
-// writes verbatim — gomponents' Attr would re-escape the value on every
-// render, which is wasted work since the @post expression is constant
-// per (event, method).
+// writes verbatim — building a fresh attribute node and re-escaping
+// every render would be wasted work since the @post expression is
+// constant per (event, method).
 func bareAttr(eventName, method string) h.H {
 	key := bareKey{eventName, method}
 	bareAttrMu.RLock()
@@ -196,8 +196,7 @@ func bareAttr(eventName, method string) h.H {
 	}
 	expr := "@post('/_action/" + method + "')"
 	// Pre-render: leading space + data-on:... + ="<escaped expr>". Matches
-	// gomponents' attribute output byte-for-byte so renderer behaviour is
-	// unchanged.
+	// the renderer's attribute output byte-for-byte.
 	escaped := template.HTMLEscapeString(expr)
 	bytes := make([]byte, 0, len(" data-")+len(attr)+len(`="`)+len(escaped)+1)
 	bytes = append(bytes, " data-"...)
@@ -261,8 +260,8 @@ func render(s *via.TriggerSpec) h.H {
 	expr.WriteString("')")
 	// Emit pre-escaped bytes so Render writes them verbatim — same trick
 	// as bareAttr. The optioned path is non-cached (every TriggerSpec
-	// shape is bespoke), but skipping the per-render escape in gomponents
-	// still wins because the binding is rendered once per View call.
+	// shape is bespoke), but skipping per-render escaping still wins
+	// because the binding is rendered once per View call.
 	escaped := template.HTMLEscapeString(expr.String())
 	name := attr.String()
 	buf := make([]byte, 0, len(" data-")+len(name)+len(`="`)+len(escaped)+1)

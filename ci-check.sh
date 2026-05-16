@@ -11,11 +11,11 @@ cd "$ROOT"
 # generous-but-not-loose so noise doesn't fail CI.
 #
 # Current floors (steady state on the bench page in bench_test.go):
-#   CounterRender         ~200 allocs/op
+#   CounterRender         ~164 allocs/op  (post-gomponents-free h pkg)
 #   CounterAction         ~130 allocs/op
 #   ActionBodyOnly          0 allocs/op  (typed Mutable[T] hot path)
 #   SignalFlush             2 allocs/op  (encoded []byte + json.RawMessage box)
-RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-212}
+RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-180}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
 BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
 SIGNAL_FLUSH_ALLOC_MAX=${SIGNAL_FLUSH_ALLOC_MAX:-3}

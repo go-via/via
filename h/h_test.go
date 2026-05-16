@@ -11,11 +11,87 @@ import (
 
 func render(t *testing.T, n h.H) string {
 	t.Helper()
+	if n == nil {
+		return ""
+	}
 	var buf strings.Builder
 	if err := n.Render(&buf); err != nil {
 		t.Fatal(err)
 	}
 	return buf.String()
+}
+
+func TestDiv_emitsOpenAndClose(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "<div></div>", render(t, h.Div()))
+}
+
+func TestVoidElement_skipsContentChildren(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Br(h.Text("nope")))
+	assert.Equal(t, "<br>", got,
+		"br is a void element — content children must be dropped")
+}
+
+func TestVoidElement_keepsAttributeChildren(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Img(h.Src("/x.png"), h.Text("dropped")))
+	assert.Equal(t, `<img src="/x.png">`, got,
+		"void element must still emit attributes")
+}
+
+func TestText_escapesEntities(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Text(`<x & "y" 'z'>`)))
+	assert.Equal(t, `<div>&lt;x &amp; &#34;y&#34; &#39;z&#39;&gt;</div>`, got)
+}
+
+func TestText_emptyRendersNothing(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Text("")))
+	assert.Equal(t, "<div></div>", got)
+}
+
+func TestRaw_passesThroughUnchanged(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Raw("<x>")))
+	assert.Equal(t, "<div><x></div>", got)
+}
+
+func TestAttr_emittedInsideOpenTag(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.ID("a"), h.Class("b"), h.Text("x")))
+	assert.Equal(t, `<div id="a" class="b">x</div>`, got)
+}
+
+func TestAttr_reorderedToOpenTag(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Text("x"), h.ID("a")))
+	assert.Equal(t, `<div id="a">x</div>`, got,
+		"attributes appearing after content must still emit inside the opening tag")
+}
+
+func TestAttr_valueIsEscaped(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Attr("title", `"oops"`)))
+	assert.Equal(t, `<div title="&#34;oops&#34;"></div>`, got)
+}
+
+func TestAttr_booleanForm(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Input(h.Required()))
+	assert.Equal(t, "<input required>", got)
+}
+
+func TestAttr_tooManyValuesPanics(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { _ = h.Attr("x", "a", "b") })
+}
+
+func TestData_prefixesAttrName(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Data("model", "$x")))
+	assert.Equal(t, `<div data-model="$x"></div>`, got)
 }
 
 func TestEach_rendersOnePerItem(t *testing.T) {
@@ -89,15 +165,12 @@ func TestClassMap_includesOnlyTrueKeys(t *testing.T) {
 		"off": false,
 	})))
 	assert.Contains(t, got, `class="`)
-	assert.Contains(t, got, `on`)
-	assert.NotContains(t, got, `off`)
+	assert.Contains(t, got, "on")
+	assert.NotContains(t, got, "off")
 }
 
 func TestClassMap_emitsKeysInSortedOrder(t *testing.T) {
 	t.Parallel()
-	// Run a few times — Go's map iteration order is randomised, so a
-	// non-deterministic implementation would eventually produce a
-	// different ordering and fail this test.
 	for range 25 {
 		got := render(t, h.Div(h.ClassMap(map[string]bool{
 			"zebra": true,
@@ -112,8 +185,7 @@ func TestClassMap_emitsKeysInSortedOrder(t *testing.T) {
 func TestClassMap_allFalseProducesNoAttribute(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Div(h.ClassMap(map[string]bool{"x": false, "y": false})))
-	assert.Equal(t, `<div></div>`, got,
-		"if no key is true the class attribute must be omitted entirely")
+	assert.Equal(t, `<div></div>`, got)
 }
 
 func TestIfStr_returnsConditional(t *testing.T) {
@@ -169,8 +241,7 @@ func TestFragment_rendersChildrenWithoutWrapper(t *testing.T) {
 		h.H2(h.Text("title")),
 		h.Hr(),
 	)))
-	assert.Equal(t, "<div><h2>title</h2><hr></div>", got,
-		"Fragment must inline its children — no wrapping element")
+	assert.Equal(t, "<div><h2>title</h2><hr></div>", got)
 }
 
 func TestFragment_skipsNilChildren(t *testing.T) {
@@ -180,8 +251,7 @@ func TestFragment_skipsNilChildren(t *testing.T) {
 		nil,
 		h.P(h.Text("b")),
 	)))
-	assert.Equal(t, "<div><p>a</p><p>b</p></div>", got,
-		"nil children must be tolerated so callers can use If/When inside Fragment")
+	assert.Equal(t, "<div><p>a</p><p>b</p></div>", got)
 }
 
 func TestFragment_emptyRendersNothing(t *testing.T) {
@@ -190,20 +260,24 @@ func TestFragment_emptyRendersNothing(t *testing.T) {
 	assert.Equal(t, "<div></div>", got)
 }
 
+func TestFragment_attrInsideGroupBubblesToParent(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.Fragment(h.ID("x"), h.Text("body"))))
+	assert.Equal(t, `<div id="x">body</div>`, got,
+		"attribute inside a Fragment must still land in the parent's open tag")
+}
+
 func TestDataInit_bareLiteralPercentIsNotMangled(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Div(h.DataInit("$progress = '100%'")))
-	assert.Contains(t, got, "100%",
-		"no-arg form must skip Sprintf so a bare % stays literal")
-	assert.NotContains(t, got, "NOVERB",
-		"Sprintf-when-no-args used to corrupt the expression")
+	assert.Contains(t, got, "100%")
+	assert.NotContains(t, got, "NOVERB")
 }
 
 func TestDataShow_formatArgsStillWork(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Div(h.DataShow("$count > %d", 0)))
-	assert.Contains(t, got, "$count &gt; 0",
-		"args path must still format normally")
+	assert.Contains(t, got, "$count &gt; 0")
 }
 
 func TestIf_rendersNodeOnlyWhenTrue(t *testing.T) {
@@ -211,8 +285,7 @@ func TestIf_rendersNodeOnlyWhenTrue(t *testing.T) {
 	on := render(t, h.Div(h.If(true, h.P(h.Text("yes")))))
 	off := render(t, h.Div(h.If(false, h.P(h.Text("yes")))))
 	assert.Equal(t, "<div><p>yes</p></div>", on)
-	assert.Equal(t, "<div></div>", off,
-		"false condition must drop the node entirely, not render any placeholder")
+	assert.Equal(t, "<div></div>", off)
 }
 
 func TestIfElse_picksBranchEagerly(t *testing.T) {
@@ -231,7 +304,6 @@ func TestIfElse_picksBranchEagerly(t *testing.T) {
 
 func TestWhenElse_runsOnlyTheWinningBuilder(t *testing.T) {
 	t.Parallel()
-
 	thenCalls, elsCalls := 0, 0
 	thenB := func() h.H { thenCalls++; return h.P(h.Text("then")) }
 	elsB := func() h.H { elsCalls++; return h.P(h.Text("els")) }
@@ -239,11 +311,11 @@ func TestWhenElse_runsOnlyTheWinningBuilder(t *testing.T) {
 	got := render(t, h.Div(h.WhenElse(true, thenB, elsB)))
 	assert.Equal(t, "<div><p>then</p></div>", got)
 	assert.Equal(t, 1, thenCalls)
-	assert.Equal(t, 0, elsCalls, "else builder must not run when condition is true")
+	assert.Equal(t, 0, elsCalls)
 
 	got = render(t, h.Div(h.WhenElse(false, thenB, elsB)))
 	assert.Equal(t, "<div><p>els</p></div>", got)
-	assert.Equal(t, 1, thenCalls, "then builder must not re-run when condition is false")
+	assert.Equal(t, 1, thenCalls)
 	assert.Equal(t, 1, elsCalls)
 }
 
@@ -257,12 +329,8 @@ func TestWhenElse_toleratesNilBuilders(t *testing.T) {
 
 func TestWhen_buildsOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
-
 	calls := 0
-	build := func() h.H {
-		calls++
-		return h.P(h.Text("yes"))
-	}
+	build := func() h.H { calls++; return h.P(h.Text("yes")) }
 
 	on := render(t, h.Div(h.When(true, build)))
 	assert.Contains(t, on, "<p>yes</p>")
@@ -270,5 +338,38 @@ func TestWhen_buildsOnlyWhenTrue(t *testing.T) {
 
 	off := render(t, h.Div(h.When(false, build)))
 	assert.Equal(t, "<div></div>", off)
-	assert.Equal(t, 1, calls, "build must not run when condition is false")
+	assert.Equal(t, 1, calls)
+}
+
+func TestHTML5_emitsFullDocument(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.HTML5(h.HTML5Props{
+		Title:       "T",
+		Description: "D",
+		Language:    "en",
+		Head:        []h.H{h.Meta(h.Name("custom"))},
+		Body:        []h.H{h.Div(h.Text("body"))},
+	}))
+	assert.True(t, strings.HasPrefix(got, "<!doctype html>"), got)
+	assert.Contains(t, got, `<html lang="en">`)
+	assert.Contains(t, got, `<meta charset="utf-8">`)
+	assert.Contains(t, got, `<title>T</title>`)
+	assert.Contains(t, got, `<meta name="description" content="D">`)
+	assert.Contains(t, got, `<meta name="custom">`)
+	assert.Contains(t, got, `<script type="module" src="/_datastar.js"></script>`)
+	assert.Contains(t, got, "<div>body</div>")
+}
+
+func TestHTML5_omitsOptionalsWhenEmpty(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.HTML5(h.HTML5Props{Title: "T"}))
+	assert.Contains(t, got, "<title>T</title>")
+	assert.NotContains(t, got, "lang=", "Language must be omitted when empty")
+	assert.NotContains(t, got, "description", "Description meta must be omitted when empty")
+}
+
+func TestRawAttr_inlinesPreEscapedBytes(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.RawAttr([]byte(` data-x="1"`))))
+	assert.Equal(t, `<div data-x="1"></div>`, got)
 }

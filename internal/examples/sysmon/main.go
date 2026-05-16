@@ -171,33 +171,37 @@ func lineSeries(name string, data [][]any) map[string]any {
 }
 
 // View helpers
+//
+// value is passed as h.H so callers can hand in a signal-bound text
+// node directly — the rendered span carries `data-text="$key"` and
+// datastar fills its content from each [Signal.Set] patch, so streaming
+// updates skip the View render path entirely.
 
-func metricCard(title string, val string, chart h.H) h.H {
+const metricValueStyle = "text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"
+
+func metricCard(title string, value h.H, chart h.H) h.H {
 	return h.Article(
 		h.Header(
 			h.Div(h.Class("grid"),
-				h.Strong(h.Text(title)),
-				h.Span(
-					h.Style("text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"),
-					h.Text(val),
-				),
+				h.Strong(h.T(title)),
+				h.With(value, h.Style(metricValueStyle)),
 			),
 		),
 		chart,
 	)
 }
 
-func dualMetricCard(title, l1, v1, l2, v2 string, chart h.H) h.H {
-	row := func(label, val string) h.H {
+func dualMetricCard(title, l1 string, v1 h.H, l2 string, v2 h.H, chart h.H) h.H {
+	row := func(label string, val h.H) h.H {
 		return h.Span(
 			h.Style("font-variant-numeric:tabular-nums;white-space:nowrap"),
-			h.Small(h.Text(label+": ")), h.Text(val),
+			h.Small(h.T(label+": ")), val,
 		)
 	}
 	return h.Article(
 		h.Header(
 			h.Div(h.Style("display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
-				h.Strong(h.Text(title)),
+				h.Strong(h.T(title)),
 				h.Div(h.Style("display:flex;gap:1rem"),
 					row(l1, v1),
 					row(l2, v2),
@@ -214,12 +218,17 @@ type Page struct {
 	IntervalMs via.Signal[int]  `via:"intervalMs,init=1000"`
 	Running    via.Signal[bool] `via:"running,init=true"`
 
-	CPUVal via.State[string] `via:",init=--"`
-	RAMVal via.State[string] `via:",init=--"`
-	DiskR  via.State[string] `via:",init=--"`
-	DiskW  via.State[string] `via:",init=--"`
-	NetRX  via.State[string] `via:",init=--"`
-	NetTX  via.State[string] `via:",init=--"`
+	// Metric values are datastar-bound signals: the rendered view
+	// emits `<span data-text="$key">`, then [via.Stream] just queues
+	// signal patches per tick. The View is never re-rendered for a
+	// metric update — bytes are sent as a tiny PatchSignals frame
+	// instead of a full element fragment.
+	CPUVal via.Signal[string] `via:"cpuVal,init=--"`
+	RAMVal via.Signal[string] `via:"ramVal,init=--"`
+	DiskR  via.Signal[string] `via:"diskR,init=--"`
+	DiskW  via.Signal[string] `via:"diskW,init=--"`
+	NetRX  via.Signal[string] `via:"netRX,init=--"`
+	NetTX  via.Signal[string] `via:"netTX,init=--"`
 
 	cpuChart  *echarts.Chart
 	ramChart  *echarts.Chart
@@ -321,17 +330,22 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
+// View emits the page shape once at first load. Every datastar-bound
+// span (the 6 metric values, the interval label, the pause/resume
+// button label) carries `data-text="$key"` — datastar fills it from
+// the per-tab signal store, which the stream callback patches each
+// tick. The view itself never re-renders during streaming.
 func (p *Page) View(ctx *via.Ctx) h.H {
 	return h.Body(
 		h.Nav(h.Class("container-fluid"),
-			h.Ul(h.Li(h.Strong(h.Text("System Monitor")))),
+			h.Ul(h.Li(h.Strong(h.T("System Monitor")))),
 		),
 		h.Main(h.Class("container"),
 			h.Article(
 				h.Div(h.Class("grid"),
 					h.Label(
-						h.Text("Sample interval: "),
-						p.IntervalMs.Text(), h.Text("ms"),
+						h.T("Sample interval: "),
+						p.IntervalMs.Text(), h.T("ms"),
 						h.Input(
 							h.Type("range"),
 							h.Min("50"),
@@ -347,10 +361,16 @@ func (p *Page) View(ctx *via.Ctx) h.H {
 					),
 				),
 			),
-			metricCard("CPU Load", p.CPUVal.Get(ctx), p.cpuChart.Mount()),
-			metricCard("RAM Usage", p.RAMVal.Get(ctx), p.ramChart.Mount()),
-			dualMetricCard("Disk I/O", "Read", p.DiskR.Get(ctx), "Write", p.DiskW.Get(ctx), p.diskChart.Mount()),
-			dualMetricCard("Network", "RX", p.NetRX.Get(ctx), "TX", p.NetTX.Get(ctx), p.netChart.Mount()),
+			metricCard("CPU Load", p.CPUVal.Text(), p.cpuChart.Mount()),
+			metricCard("RAM Usage", p.RAMVal.Text(), p.ramChart.Mount()),
+			dualMetricCard("Disk I/O",
+				"Read", p.DiskR.Text(),
+				"Write", p.DiskW.Text(),
+				p.diskChart.Mount()),
+			dualMetricCard("Network",
+				"RX", p.NetRX.Text(),
+				"TX", p.NetTX.Text(),
+				p.netChart.Mount()),
 		),
 	)
 }

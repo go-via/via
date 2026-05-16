@@ -61,7 +61,7 @@ func checkViewSignature(typ reflect.Type, m reflect.Method) {
 	mt := m.Type
 	// Param shape: receiver + *Ctx, exactly one return.
 	badParams := mt.NumIn() != 2 || mt.NumOut() != 1 || mt.In(1) != ctxPtrType
-	// Return must be assignable to h.H (gomponents.Node interface).
+	// Return must be assignable to h.H.
 	// Catches "View(ctx) int" at Mount time rather than at the first
 	// request's view.Interface().(h.H) type-assert.
 	badReturn := !badParams && !mt.Out(0).AssignableTo(hType)
