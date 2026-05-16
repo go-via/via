@@ -89,7 +89,7 @@ func BenchmarkWideList_render(b *testing.B) {
 
 func BenchmarkDeepNest_render(b *testing.B) {
 	build := func() h.H {
-		n := h.H(h.Text("leaf"))
+		n := h.Text("leaf")
 		for range 12 {
 			n = h.Div(n)
 		}

@@ -113,10 +113,14 @@ func Title(v string) H { return el("title", []H{Text(v)}) }
 
 // Tag emits a custom non-void element. Use it for tags absent from
 // the static constructor list (web components, SVG primitives, etc.).
+// The tag name is written verbatim — callers must supply a valid HTML
+// element name; nothing here validates it.
 func Tag(name string, children ...H) H { return el(name, children) }
 
 // VoidTag emits a custom void element (no closing tag, content
-// children dropped at render time).
+// children dropped at render time). The tag name is written verbatim
+// — callers must supply a valid HTML element name; nothing here
+// validates it.
 func VoidTag(name string, children ...H) H { return elVoid(name, children) }
 
 // NewTag returns a reusable constructor for the given tag name. Use

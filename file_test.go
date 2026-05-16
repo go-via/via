@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -115,6 +116,51 @@ func TestMultipartReader_streamsRawParts(t *testing.T) {
 			WithSignal("a", "1").
 			WithSignal("b", "2").
 			Fire())
+}
+
+type bytesEchoPage struct {
+	Blob   via.File       `via:"blob"`
+	Length via.State[int] `via:"length"`
+}
+
+func (p *bytesEchoPage) Read(ctx *via.Ctx) error {
+	b, err := p.Blob.Bytes()
+	if err != nil {
+		return err
+	}
+	p.Length.Set(ctx, len(b))
+	return nil
+}
+
+func (p *bytesEchoPage) View(ctx *via.Ctx) h.H { return h.Div(p.Length.Text()) }
+
+func TestFile_Bytes_unboundReturnsError(t *testing.T) {
+	t.Parallel()
+	p := &bytesEchoPage{}
+	_ = viatest.NewCtx(t, p)
+	_, err := p.Blob.Bytes()
+	assert.Error(t, err,
+		"Bytes on an unbound File handle must surface an error, not an empty slice")
+}
+
+func TestFile_Bytes_readsMultipartContent(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[bytesEchoPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	payload := []byte("hello-from-Bytes")
+	require.Equal(t, http.StatusOK,
+		tc.Action("Read").
+			WithFile("blob", "x.bin", payload).
+			Fire())
+
+	frames, cancel := tc.SSE()
+	defer cancel()
+	viatest.AwaitFrame(t, frames, 2*time.Second, ">16<")
 }
 
 func TestFile_oversizedRequestReturns413(t *testing.T) {

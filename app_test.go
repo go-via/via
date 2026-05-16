@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,4 +99,78 @@ func TestApp_builtinEndpointsReject404OnUnknownTab(t *testing.T) {
 func TestApp_implementsHTTPHandler(t *testing.T) {
 	t.Parallel()
 	var _ http.Handler = via.New()
+}
+
+type customHandler struct{}
+
+func (customHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Write([]byte("custom-handle"))
+}
+
+func TestApp_Handle_routesCustomPath(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Handle("/raw", customHandler{})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/raw")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "custom-handle", string(body))
+}
+
+func TestApp_ServeHTTP_dispatchesThroughHandler(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	app.HandleFunc("/direct", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("direct"))
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/direct", nil)
+	app.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "direct", rec.Body.String())
+}
+
+type signalSeedingPlugin struct {
+	key string
+	val any
+}
+
+func (p signalSeedingPlugin) Register(app *via.App) {
+	app.RegisterAppSignal(p.key, p.val)
+	app.AppendToHead(h.Meta(h.Name("plugin-head"), h.Content("yes")))
+	app.AppendToFoot(h.Script(h.Type("text/plain"), h.Text("plugin-foot")))
+	app.AppendAttrToHTML(h.Attr("data-plugin", "active"))
+}
+
+type pluginHostPage struct{}
+
+func (pluginHostPage) View(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) }
+
+func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithPlugins(signalSeedingPlugin{key: "_pluginKey", val: "seeded"}),
+	)
+	via.Mount[pluginHostPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-plugin="active"`,
+		"AppendAttrToHTML must surface on <html>")
+	assert.Contains(t, body, `name="plugin-head"`,
+		"AppendToHead must inject into <head>")
+	assert.Contains(t, body, "plugin-foot",
+		"AppendToFoot must inject before </body>")
+	assert.Contains(t, body, "_pluginKey",
+		"RegisterAppSignal must seed the data-signals payload")
+	assert.Contains(t, body, "seeded")
 }

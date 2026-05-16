@@ -373,3 +373,42 @@ func TestRawAttr_inlinesPreEscapedBytes(t *testing.T) {
 	got := render(t, h.Div(h.RawAttr([]byte(` data-x="1"`))))
 	assert.Equal(t, `<div data-x="1"></div>`, got)
 }
+
+func TestElementConstructor_basicShapes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		got  h.H
+		want string
+	}{
+		{"u_emitsUnderline", h.U(h.T("x")), "<u>x</u>"},
+		{"var_emitsVariable", h.Var(h.T("x")), "<var>x</var>"},
+		{"video_emitsClosingTag", h.Video(h.Src("/v.mp4")), `<video src="/v.mp4"></video>`},
+		{"wbr_emitsVoid", h.Wbr(), "<wbr>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, render(t, tt.got))
+		})
+	}
+}
+
+func TestNewVoidTag_returnsReusableConstructor(t *testing.T) {
+	t.Parallel()
+	XInput := h.NewVoidTag("x-input")
+	got := render(t, XInput(h.Attr("name", "field"), h.T("dropped")))
+	assert.Equal(t, `<x-input name="field">`, got)
+}
+
+func TestFragment_topLevelSkipsAttributeFragments(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Fragment(
+		h.ID("dropped"),
+		h.P(h.T("kept")),
+		h.Class("also-dropped"),
+	))
+	assert.Equal(t, "<p>kept</p>", got,
+		"attribute fragments rendered at the top level must be skipped — "+
+			"they would otherwise emit invalid HTML outside any element")
+}

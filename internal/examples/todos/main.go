@@ -93,12 +93,13 @@ func (t *Todos) View(ctx *via.Ctx) h.H {
 		h.Main(h.Class("container"),
 			h.H1(h.Text("Todos")),
 
-			// New-item form: input bound to Draft, button fires Add.
+			// Add is type=button so the wrapping form does not also
+			// submit natively and race the datastar action POST.
 			h.Form(
 				h.Style("display:flex;gap:0.5rem"),
 				h.Input(h.Type("text"), t.Draft.Bind(),
 					h.Placeholder("What needs doing?")),
-				h.Button(h.Text("Add"), on.Click(t.Add)),
+				h.Button(h.Type("button"), h.Text("Add"), on.Click(t.Add)),
 			),
 
 			// Filter row — three buttons that set the filter state

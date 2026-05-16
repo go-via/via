@@ -45,6 +45,20 @@ func main() {
 }
 ```
 
+## Breaking changes since v0.2.x
+
+- `h.H` is now `interface { Render(w io.Writer) error }`. It is no
+  longer a type alias for `maragu.dev/gomponents.Node`. Mixed-imports
+  (e.g. passing `gomponents.El(...)` into `h.Div(...)`) no longer
+  compile.
+- `maragu.dev/gomponents` is no longer a dependency.
+- New surface added to `h`: `T`, variadic `Class`, `Style`, `Styles`,
+  `Maybe`, `With`, `Static`, `Tag`, `VoidTag`, `NewTag`, `NewVoidTag`,
+  `Checked`, `Required`, `Disabled`, `Role`, `Min`, `Max`, `Step`,
+  `For`, `Lang`, `Content`, `Charset`.
+- `h.Classes` is deprecated in favour of variadic `h.Class(parts...)`.
+  Nothing is removed; the call sites can migrate at leisure.
+
 ## Reactive state
 
 | Handle              | Scope          | Lives on        |
@@ -277,15 +291,13 @@ app.Use(requireAuth)            // your own
 
 Built-in factories under `via`:
 
-| Factory                          | What it does                                  |
-|----------------------------------|-----------------------------------------------|
-| `Defaults(app)`                  | install RequestID + AccessLog + Recover       |
-| `RequestID()`                    | stamp X-Request-ID + plant on r.Context       |
-| `AccessLog(app)`                 | one info-line per request, with rid + status  |
-| `Recover(app)`                   | panic → 500 + error log; goroutine survives   |
-| `StrictCSP(extra…)`              | strict CSP header + nonce on r.Context        |
-| `HSTS(opts…)`                    | Strict-Transport-Security for HTTPS deploys   |
-| `RedirectHTTPS()`                | 301 plain HTTP → https; respects XFP header   |
+- `Defaults(app)` — install RequestID + AccessLog + Recover.
+- `RequestID()` — stamp `X-Request-ID` + plant on `r.Context`.
+- `AccessLog(app)` — one info-line per request, with rid + status.
+- `Recover(app)` — panic → 500 + error log; the goroutine survives.
+- `StrictCSP(extra…)` — strict CSP header + nonce on `r.Context`.
+- `HSTS(opts…)` — Strict-Transport-Security for HTTPS deploys.
+- `RedirectHTTPS()` — 301 plain HTTP → https; respects XFP header.
 
 Read it back inside actions / handlers:
 
@@ -353,21 +365,108 @@ deliver via the existing patch queue + SSE drain — no extra wiring.
 
 ## h package helpers
 
-| Helper                              | What it does                                  |
-|-------------------------------------|-----------------------------------------------|
-| `h.Each(items, fn)`                 | One node per element; empty slice → nothing   |
-| `h.EachIndexed(items, fn)`          | Same with `(i, v)`                            |
-| `h.EachSeq(seq, fn)`                | Iter-based variant (slices.Values, maps.Values…) |
-| `h.EachSeq2(seq, fn)`               | Same for `iter.Seq2` (maps.All, slices.All…)  |
-| `h.If(cond, n)`                     | Render `n` when cond, nothing otherwise       |
-| `h.IfElse(cond, then, els)`         | Eager two-branch picker                       |
-| `h.When(cond, build)`               | Lazy `If` — only constructs when true         |
-| `h.WhenElse(cond, then, els)`       | Lazy `IfElse` — only the winning builder runs |
-| `h.Switch(value, h.Case…, h.Default…)` | Tab-style branching by equality            |
-| `h.Fragment(items…)`                | Bundle many nodes into one (use `items...` for slices) |
-| `h.Classes(parts...)`               | Join class names; empty parts skipped         |
-| `h.ClassMap(map[string]bool)`       | Render true keys in sorted (stable) order     |
-| `h.IfStr(cond, s)`                  | `s` when cond, `""` otherwise                 |
+Grouped by responsibility — `go doc github.com/go-via/via/h` has each
+symbol's contract.
+
+Iteration:
+
+- `h.Each(items, fn)` — one node per slice element, nil-pruned.
+- `h.EachIndexed(items, fn)` — same with `(i, v)` passed to fn.
+- `h.EachSeq(seq, fn)` — `iter.Seq` variant (`slices.Values`,
+  `maps.Values`, …).
+- `h.EachSeq2(seq, fn)` — `iter.Seq2` variant (`slices.All`,
+  `maps.All`, …).
+
+Conditional:
+
+- `h.If(cond, n)`, `h.IfElse(cond, then, els)` — eager.
+- `h.When(cond, build)`, `h.WhenElse(cond, then, els)` — lazy; only
+  the winning branch is constructed.
+- `h.Maybe(v, fn)` — render `fn(v)` only when v ≠ zero(T) (T must be
+  `comparable`).
+- `h.Switch(value, h.Case(...), h.Default(...))` — tab-style equality.
+- `h.IfStr(cond, s)` — `s` if cond, `""` otherwise; pairs with
+  `h.Class` and `h.Styles`.
+
+Composition:
+
+- `h.Fragment(items...)` — bundle many nodes into one `h.H`. Pass a
+  slice with `items...`.
+- `h.With(base, more...)` — return a copy of `base` extended with
+  `more`. Non-destructive; supports chaining without variadic
+  signatures.
+- `h.Static(n)` — pre-render `n` once into bytes; every later Render
+  writes them verbatim. Use for layout chrome that doesn't depend on
+  per-request state. See [Held fragments](#held-fragments) below.
+
+Attributes:
+
+- `h.Class(parts...)` — variadic class names; empty parts skipped;
+  returns nil (omits the attribute) when nothing remains.
+- `h.Classes(parts...)` — deprecated alias for `h.Class`; kept so a
+  slice in hand can spread without a rename.
+- `h.ClassMap(m)` — emit each true key in sorted order.
+- `h.Style(v)` — inline `style="..."` attribute. For
+  `<style>...</style>` use `h.StyleEl`.
+- `h.Styles(parts...)` — join non-empty CSS declarations with `;` and
+  emit one inline `style` attribute.
+- `h.Checked()`, `h.Required()`, `h.Disabled()`, `h.Selected()` —
+  boolean attributes (`<input required>`).
+- `h.Role`, `h.Min`, `h.Max`, `h.Step`, `h.For`, `h.Lang`,
+  `h.Content`, `h.Charset` — common single-string attributes.
+
+Custom tags:
+
+- `h.Tag(name, children...)`, `h.VoidTag(name, children...)` — escape
+  hatch for tags absent from the static list (web components, SVG).
+  The name is written verbatim; callers remain responsible for
+  validity.
+- `h.NewTag(name)`, `h.NewVoidTag(name)` — reusable constructors with
+  the same shape as the built-ins.
+
+Text:
+
+- `h.Text(s)`, `h.T(s)` — HTML-escaped text node (`T` is the short
+  alias). `h.Textf(f, args...)` formats first.
+- `h.Raw(s)` — emit `s` verbatim without escaping. Caller-trusted.
+- `h.RawAttr(name, value)` — emit a raw `name="value"` attribute pair
+  without escaping the value. The sanctioned plugin escape hatch for
+  attribute-shaped output (the `attribute` marker is unexported on
+  purpose — see `on` for the canonical pattern).
+
+### Held fragments
+
+For fragments that don't change between renders, `h.Static` pre-renders
+once and writes the captured bytes on every later Render — no
+per-tick allocation for the chrome subtree:
+
+```go
+chrome := h.Static(h.Fragment(
+    h.Nav(h.Class("container-fluid"),
+        h.Ul(h.Li(h.Strong(h.T("System Monitor"))))),
+))
+
+func (p *Page) View(ctx *via.Ctx) h.H {
+    return h.Div(chrome, p.body(ctx))
+}
+```
+
+`internal/examples/sysmon` uses this pattern; the
+`BenchmarkSysmonShape_staticChrome_render` bench shows the per-tick
+allocation win versus rebuilding the same chrome on each tick.
+
+### Custom elements
+
+For tags absent from the static constructor list — web components,
+SVG, MathML — declare them once with `h.NewTag` (or `h.NewVoidTag` for
+void elements):
+
+```go
+var SVG = h.NewTag("svg")
+SVG(h.Attr("xmlns", "http://www.w3.org/2000/svg"), shapes...)
+```
+
+The tag name is written verbatim; supply a valid HTML element name.
 
 ## Plugins
 
@@ -443,16 +542,24 @@ post-action body assertions are one call instead of a hand-rolled GET.
 
 `internal/examples/` ships:
 
-- `counter` — basic state + signal + actions
-- `greeter` — Signal[string] mutated by two actions
-- `pathparams` — typed path:"…" decoding
-- `countercomp` — two nested counter cards on one page
-- `picocss` — theme/dark-mode showcase
-- `auth` — typed sessions + `RotateSession` + `requireAuth` middleware
-- `todos` — h.Each + scope.User + on.SetSignal
-- `sysmon` — per-tab ticker streaming CPU/RAM/disk/net charts via `OnConnect`
-- `upload` — `via.File` field driving a multipart `<form>` POST
-- `feed` — `via.PushBounded` + `Stream` driving an append-only signal
+- `counter` — `State[int]` + `Signal[int]` + a typed action.
+- `greeter` — `Signal[string]` mutated from two distinct actions.
+- `pathparams` — typed `path:"id"` decoding into composition fields.
+- `countercomp` — two independent counter compositions nested on
+  one page; isolation across instances.
+- `picocss` — `picocss.Plugin()` driving theme + dark-mode switching
+  on the client without a full reload.
+- `auth` — typed sessions, `requireAuth` middleware, and
+  `via.RotateSession` after login.
+- `todos` — `scope.User[T]` survives reload, `h.Each`, and
+  `on.SetSignal` for client-bundled writes.
+- `sysmon` — OnConnect-driven ticker streaming CPU/RAM/disk/net into
+  ECharts; also drives an interactive pause + interval-slider UI via
+  `via.Ticker.Pause / SetInterval`.
+- `upload` — `via.File` field bound to a `multipart/form-data`
+  `<form>` POST, persisted to disk, redirect-back-to-/.
+- `feed` — append-only stream via `via.Push` / `via.PushBounded`,
+  paused/cleared from actions.
 
 ```bash
 go run ./internal/examples/counter

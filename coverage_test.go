@@ -204,3 +204,60 @@ func TestAppUse_afterStartPanics(t *testing.T) {
 		next.ServeHTTP(w, r)
 	})
 }
+
+type idAccessorPage struct{}
+
+func (idAccessorPage) View(*via.Ctx) h.H { return h.Div() }
+
+func TestCtx_ID_returnsTabIdentifier(t *testing.T) {
+	t.Parallel()
+	ctx := viatest.NewCtx(t, &idAccessorPage{})
+	assert.NotEmpty(t, ctx.ID(),
+		"NewCtx must bind a non-empty tab ID even outside an HTTP request")
+}
+
+type sessionProbePage struct {
+	Email via.Signal[string]
+}
+
+func (p *sessionProbePage) Probe(ctx *via.Ctx) error {
+	if ctx.Session() != nil {
+		p.Email.Set(ctx, "session-present")
+	}
+	return nil
+}
+
+func (p *sessionProbePage) View(*via.Ctx) h.H { return h.Div() }
+
+func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[sessionProbePage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	require.Equal(t, http.StatusOK, tc.Action("Probe").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "session-present")
+}
+
+type redirectPage struct{}
+
+func (p *redirectPage) Hop(ctx *via.Ctx) error {
+	ctx.Redirect("/elsewhere")
+	return nil
+}
+
+func (redirectPage) View(*via.Ctx) h.H { return h.Div() }
+
+func TestCtx_PendingRedirect_reportsQueuedRedirect(t *testing.T) {
+	t.Parallel()
+	p := &redirectPage{}
+	ctx := viatest.NewCtx(t, p)
+	require.NoError(t, p.Hop(ctx))
+	assert.Equal(t, "/elsewhere", ctx.PendingRedirect(),
+		"PendingRedirect must surface the URL Redirect queued without draining it")
+}

@@ -36,7 +36,8 @@ func TestT_emptyStringRendersNothing(t *testing.T) {
 	assert.Equal(t, "<div></div>", r(t, h.Div(h.T(""))))
 }
 
-// Style as inline attribute (parity bug fix)
+// Regression guard against a future swap of Style and StyleEl: Style
+// must emit an inline `style="..."` attribute, not a <style> element.
 
 func TestStyle_emitsInlineAttribute(t *testing.T) {
 	t.Parallel()

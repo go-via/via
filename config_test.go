@@ -202,3 +202,24 @@ func TestWithTimeouts_passThroughToHTTPServer(t *testing.T) {
 	assert.Equal(t, 45*time.Second, s.IdleTimeout)
 	require.NoError(t, app.Shutdown(context.Background()))
 }
+
+type noopPlugin struct{ called *bool }
+
+func (p noopPlugin) Register(*via.App) { *p.called = true }
+
+func TestConfig_optionsApplyWithoutPanic(t *testing.T) {
+	t.Parallel()
+
+	pluginRan := false
+	app := via.New(
+		via.WithShutdownTimeout(2*time.Second),
+		via.WithSessionTTL(time.Hour),
+		via.WithContextTTL(10*time.Minute),
+		via.WithSSEHeartbeat(30*time.Second),
+		via.WithPlugins(noopPlugin{called: &pluginRan}),
+	)
+	require.NotNil(t, app,
+		"New must return a non-nil App after applying every timeout option")
+	assert.True(t, pluginRan,
+		"WithPlugins must dispatch Register at New time, before serving")
+}

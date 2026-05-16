@@ -431,6 +431,23 @@ func TestTicker_pauseStopsAndResumeRestartsCallback(t *testing.T) {
 		"ticks should resume after Resume")
 }
 
+func TestTicker_Paused_reflectsPauseAndResumeTransitions(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	ticker := via.Stream(ctx, 200*time.Millisecond, func(*via.Ctx, time.Time) {})
+	require.NotNil(t, ticker)
+
+	assert.False(t, ticker.Paused(),
+		"a freshly-started ticker must report Paused() == false")
+	ticker.Pause()
+	assert.True(t, ticker.Paused(),
+		"Pause must flip Paused() to true")
+	ticker.Resume()
+	assert.False(t, ticker.Paused(),
+		"Resume must flip Paused() back to false")
+}
+
 func TestTicker_setIntervalChangesCadence(t *testing.T) {
 	t.Parallel()
 	p := &tickerPage{}

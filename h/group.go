@@ -33,6 +33,9 @@ func (g group) Render(w io.Writer) error {
 //
 //	return Fragment(H2(T("title")), Hr())
 //	return Fragment(items...)
+//
+// The returned node aliases items — there is no defensive copy.
+// Callers must not mutate items after handing it to Fragment.
 func Fragment(items ...H) H {
 	if len(items) == 0 {
 		return nil
@@ -86,7 +89,10 @@ func WhenElse(condition bool, then, els func() H) H {
 
 // Maybe renders fn(v) only when v differs from its zero value, so
 // optional fields and pointer-style data render cleanly without an
-// explicit guard at every call site.
+// explicit guard at every call site. T must be [comparable] because
+// the zero check is `v == zero` — uncomparable types (slices, maps,
+// funcs) fail at compile time rather than via a generics error at
+// instantiation.
 //
 //	h.Maybe(user.Email, func(s string) h.H {
 //	    return h.P("email: ", s)
@@ -213,6 +219,12 @@ func (s *staticNode) Render(w io.Writer) error { _, err := w.Write(s.b); return 
 // on per-request state — site headers, navigation, layout chrome — so
 // they stop allocating across reloads.
 //
+// Capturing a subtree that embeds a [RawAttr] (or any other node
+// derived from per-request data) is almost certainly a bug: the bytes
+// are frozen at construction and will keep emitting the original
+// values regardless of later state. Reserve Static for truly static
+// content built at package-init time.
+//
 // Panics if n.Render returns an error during pre-render; a Static
 // node is built at package-init time where the only realistic failure
 // is a misconfigured writer.
@@ -222,7 +234,7 @@ func Static(n H) H {
 	}
 	var buf bytes.Buffer
 	if err := n.Render(&buf); err != nil {
-		panic("h/v2.Static: " + err.Error())
+		panic("h.Static: " + err.Error())
 	}
 	return &staticNode{b: buf.Bytes()}
 }
@@ -234,9 +246,12 @@ func Static(n H) H {
 //
 //	h.With(Card(myBody), on.Click(open))
 //
-// When base is not an element (a text, group, attribute, raw
-// fragment, etc.) With falls back to a Fragment so the result still
-// renders the base followed by more.
+// When base is not an *element (text, group, attribute, raw
+// fragment, …) With falls back to a Fragment so the result still
+// renders the base followed by more. In that fallback path, attribute
+// children bubble to the wrapping element via Fragment semantics (the
+// renderer skips attribute fragments at the group top level and the
+// parent element consumes them); they do not attach to base itself.
 func With(base H, more ...H) H {
 	if len(more) == 0 {
 		return base

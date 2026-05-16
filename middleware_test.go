@@ -162,3 +162,31 @@ func TestRedirectHTTPS_redirectsPlainHTTP(t *testing.T) {
 		"redirect Location should start with https://, got %q", loc)
 	assert.Contains(t, loc, "/path?q=1")
 }
+
+func TestAccessLog_statusWriterForwardsFlush(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Use(via.AccessLog(app))
+	app.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: a\n\n"))
+		f, ok := w.(http.Flusher)
+		require.True(t, ok,
+			"the AccessLog-wrapped writer must expose http.Flusher; "+
+				"SSE handlers rely on it to push frames in real time")
+		f.Flush()
+		w.Write([]byte("data: b\n\n"))
+		f.Flush()
+	})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/stream")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	buf := make([]byte, 256)
+	n, _ := resp.Body.Read(buf)
+	assert.Contains(t, string(buf[:n]), "data: a",
+		"the first chunk must arrive after Flush, before the handler returns")
+}

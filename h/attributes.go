@@ -67,7 +67,7 @@ func Attr(name string, value ...string) H {
 	case 1:
 		return buildAttr(name, value[0])
 	default:
-		panic("h/v2: attribute must be name or name+value")
+		panic("h: attribute must be name or name+value")
 	}
 }
 
@@ -221,6 +221,9 @@ func Class(parts ...string) H {
 
 // Classes is an alias for [Class] retained so a slice already in hand
 // can be spread without a rename. `Class(parts...)` is equivalent.
+//
+// Deprecated: use [Class]. Classes will be removed in a future major
+// release.
 func Classes(parts ...string) H { return Class(parts...) }
 
 // ClassMap renders a class attribute that includes each key whose value

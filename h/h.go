@@ -20,6 +20,11 @@
 // pre-renders to bytes once and writes verbatim on every Render. For
 // dynamic-tag escape hatches use [Tag] / [NewTag]. For shared
 // composition use [With] to extend an existing element non-destructively.
+//
+// Plugin authors emitting attribute-shaped output must use [RawAttr]:
+// the attribute marker is unexported on purpose so external packages
+// cannot inject raw bytes into the opening-tag region. See the on
+// package for the canonical pattern.
 package h
 
 import "io"

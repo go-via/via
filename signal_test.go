@@ -193,6 +193,23 @@ func TestSignal_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	assert.Contains(t, body, `&#34;myField&#34;:0`)
 }
 
+type signalKeyPage struct {
+	Tagged   via.Signal[int] `via:"customSig"`
+	Defaults via.Signal[string]
+}
+
+func (p *signalKeyPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestSignal_keyReturnsBoundWireKey(t *testing.T) {
+	t.Parallel()
+	p := &signalKeyPage{}
+	_ = viatest.NewCtx(t, p)
+	assert.Equal(t, "customSig", p.Tagged.Key(),
+		"Key must report the explicit `via:` tag when one is set")
+	assert.Equal(t, "defaults", p.Defaults.Key(),
+		"Key must default to the lowercased field name")
+}
+
 // helpers
 
 func getBody(t *testing.T, server *httptest.Server, path string) string {

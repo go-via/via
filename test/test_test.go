@@ -203,6 +203,74 @@ func TestNewCtx_pendingRedirectVisibleViaCtxIntrospection(t *testing.T) {
 	assert.Equal(t, "blue", sigs["_picoTheme"])
 }
 
+type uploadPage struct {
+	Avatar via.File           `via:"avatar"`
+	Note   via.Signal[string] `via:"note"`
+	Tag    via.Signal[int]    `via:"tag"`
+	Live   via.Signal[bool]   `via:"live"`
+	Echo   via.State[string]
+}
+
+func (p *uploadPage) Save(ctx *via.Ctx) error {
+	if !p.Avatar.Present() {
+		p.Echo.Set(ctx, "no-file")
+		return nil
+	}
+	b, err := p.Avatar.Bytes()
+	if err != nil {
+		return err
+	}
+	p.Echo.Set(ctx, p.Avatar.Filename()+":"+
+		string(b)+":"+p.Note.Get(ctx))
+	return nil
+}
+
+func (p *uploadPage) View(ctx *via.Ctx) h.H { return h.Div(p.Echo.Text()) }
+
+func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[uploadPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	body := []byte("PNG-bytes")
+	require.Equal(t, 200,
+		tc.Action("Save").
+			WithFile("avatar", "me.png", body).
+			WithSignal("note", "from-test").
+			Fire(),
+		"the test client must produce a valid multipart body the runtime "+
+			"can decode into via.File + signal fields")
+	viatest.AwaitFrame(t, frames, 2*time.Second,
+		"me.png:PNG-bytes:from-test")
+}
+
+func TestActionRequest_WithFile_andWithSignal_combineScalarTypes(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[uploadPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	// Multipart only requires a file to switch transports; signal scalars
+	// (string / bool / int) must all coerce to form values the server
+	// decodes back into typed signal fields.
+	require.Equal(t, 200,
+		tc.Action("Save").
+			WithFile("avatar", "tiny.bin", []byte("x")).
+			WithSignal("note", "hi").
+			WithSignal("tag", 7).
+			WithSignal("live", true).
+			Fire())
+}
+
 func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	t.Parallel()
 

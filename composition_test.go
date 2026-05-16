@@ -106,7 +106,7 @@ func TestMount_panicShowsActualAndExpectedViewSignature(t *testing.T) {
 			"the panic must show the expected signature so users can read the contract")
 		assert.Contains(t, msg, "got:",
 			"the panic must show the actual signature so users can spot the diff")
-		assert.Contains(t, msg, "func(*via_test.badViewPage) h.H",
+		assert.Regexp(t, `func\(\*\S*badViewPage\) h\.H`, msg,
 			"the 'got:' line must reflect the actual reflect.Type.String() output")
 	}()
 	via.Mount[badViewPage](app, "/")

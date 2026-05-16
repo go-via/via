@@ -168,6 +168,10 @@ func event(name string, fn any, opts ...via.TriggerOption) h.H {
 // allocation-free; misses pay the original cost once. A typed map under
 // RWMutex (rather than sync.Map) avoids boxing the struct key into `any`
 // on every lookup — the boxing alloc dominates after the closure is gone.
+//
+// Never evicted: the map is bounded by the number of distinct
+// (event, method) bindings the application uses, which is statically
+// determined by call sites — tens to hundreds for any real codebase.
 var (
 	bareAttrMu    sync.RWMutex
 	bareAttrCache = map[bareKey]h.H{}

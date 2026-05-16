@@ -159,6 +159,23 @@ func TestGroup_routes404WithoutPrefix(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+func TestGroup_Handle_registersCustomHandler(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	group := app.Group("/api")
+	group.Handle("/widgets", customHandler{})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/api/widgets")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	buf, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "custom-handle", string(buf))
+}
+
 func TestGroup_handleFuncRegistersExplicitMethod(t *testing.T) {
 	t.Parallel()
 

@@ -119,3 +119,20 @@ func TestUpdate_nilFnIsNoOp(t *testing.T) {
 	c.N.Update(ctx, nil)
 	assert.Equal(t, 7, c.N.Get(ctx))
 }
+
+type stateKeyPage struct {
+	Tagged   via.State[int] `via:"customState"`
+	Defaults via.State[string]
+}
+
+func (p *stateKeyPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestState_keyReturnsBoundWireKey(t *testing.T) {
+	t.Parallel()
+	p := &stateKeyPage{}
+	_ = viatest.NewCtx(t, p)
+	assert.Equal(t, "customState", p.Tagged.Key(),
+		"Key must report the explicit `via:` tag when one is set")
+	assert.Equal(t, "defaults", p.Defaults.Key(),
+		"Key must default to the lowercased field name")
+}
