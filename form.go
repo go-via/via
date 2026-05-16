@@ -17,9 +17,7 @@ import (
 //	}
 //	func (p *Page) Submit(ctx *via.Ctx) error {
 //	    var f LoginForm
-//	    if err := via.DecodeForm(ctx, &f); err != nil {
-//	        return err
-//	    }
+//	    via.DecodeForm(ctx, &f)
 //	    ...
 //	}
 //
@@ -27,15 +25,19 @@ import (
 // payload (read off r at dispatch and stored on ctx), then falls back
 // to r.URL.Query() and r.PostForm if present. Tag-less fields use the
 // lower-cased field name as the key.
-func DecodeForm[T any](ctx *Ctx, dst *T) error {
+//
+// Decoding is best-effort: missing keys and unparseable values leave
+// the field at its zero value rather than failing the request. Validate
+// the populated struct in the caller if you need rejection semantics.
+func DecodeForm[T any](ctx *Ctx, dst *T) {
 	if ctx == nil || dst == nil {
-		return nil
+		return
 	}
 	r := ctx.Request()
 	rv := reflect.ValueOf(dst).Elem()
 	rt := rv.Type()
 	if rt.Kind() != reflect.Struct {
-		return nil
+		return
 	}
 
 	signals := ctx.lastSignals
@@ -80,7 +82,6 @@ func DecodeForm[T any](ctx *Ctx, dst *T) error {
 		}
 		decodeScalarString(rv.Field(i), f.Type.Kind(), raw)
 	}
-	return nil
 }
 
 func formatScalar(v any) string {

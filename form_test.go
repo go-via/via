@@ -27,9 +27,7 @@ type loginForm struct {
 
 func (p *formPage) Submit(ctx *via.Ctx) error {
 	var f loginForm
-	if err := via.DecodeForm(ctx, &f); err != nil {
-		return err
-	}
+	via.DecodeForm(ctx, &f)
 	p.Result.Set(ctx, f.Email+"|"+f.Password+"|"+strings.Repeat("*", f.Age))
 	return nil
 }

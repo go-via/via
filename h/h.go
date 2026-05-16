@@ -28,6 +28,17 @@ type H = g.Node
 // readable; with the alias above it resolves to the same type as H.
 type gNode = g.Node
 
+// RawAttr is a pre-rendered attribute fragment that writes its bytes
+// verbatim on Render. The bytes must be a syntactically valid attribute
+// (leading space, name, optional =\"escaped-value\"). Use it to skip
+// gomponents' per-render template.HTMLEscapeString when the attribute
+// value is constant — hand-construct the escaped form once at
+// registration / bind time and return the resulting RawAttr.
+type RawAttr []byte
+
+func (a RawAttr) Render(w io.Writer) error { _, err := w.Write(a); return err }
+func (a RawAttr) Type() g.NodeType         { return g.AttributeType }
+
 // Text creates a text DOM node that Renders the escaped string t.
 func Text(t string) H {
 	return g.Text(t)
@@ -52,6 +63,9 @@ func Attr(name string, value ...string) H {
 	return g.Attr(name, value...)
 }
 
+// If returns n when condition is true, otherwise nil — which renders as
+// nothing. Both branches are evaluated eagerly; use [When] if constructing
+// n is expensive or has side effects you only want when condition holds.
 func If(condition bool, n H) H {
 	if condition {
 		return n

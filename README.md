@@ -57,6 +57,8 @@ func main() {
 Reads and writes go through `Get(ctx) / Set(ctx, v)` — explicit context,
 no hidden globals. Wire keys default to lower-cased field names; override
 with the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
+Skip the name segment to keep the default key but still seed:
+`via:",init=3"` on a `State[int]` field seeds it to 3 without renaming.
 
 For common read-modify-write patterns there are typed helpers that work
 on any handle satisfying `via.Mutable[T]` — that's all four reactive
@@ -67,7 +69,8 @@ s.Update(ctx, func(n int) int { return n + 1 })  // generic transform
 via.Add(ctx, &p.Count, 1)                         // numeric delta
 via.Toggle(ctx, &p.Open)                          // bool flip
 via.SetIfChanged(ctx, &p.Status, "busy")          // skip patch if unchanged
-via.Push(ctx, &p.Series, point)                   // append-only feed
+via.SetIfChanged(ctx, &p.Theme, "dark")           // works on scope.User too
+via.Push(ctx, &p.Series, point)                   // append-only feed (Signal[[]T])
 via.PushBounded(ctx, &p.Series, point, 100)       // cap to last 100
 ```
 
@@ -127,28 +130,18 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 ```
 
 `Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Paused`, and
-`SetInterval(d)` for runtime control — useful when actions need to
-toggle the stream on/off or change its cadence:
+`SetInterval(d)` so actions can toggle the stream on/off or change its
+cadence at runtime:
 
 ```go
-type Page struct {
-    Running via.Signal[bool] `via:"running,init=true"`
-    ticker  *via.Ticker
-}
-
-func (p *Page) OnConnect(ctx *via.Ctx) error {
-    p.ticker = via.Stream(ctx, 200*time.Millisecond, p.poll)
-    return nil
-}
-
-func (p *Page) Toggle(ctx *via.Ctx) {
-    if via.Toggle(ctx, &p.Running); p.Running.Get(ctx) {
-        p.ticker.Resume()
-    } else {
-        p.ticker.Pause()
-    }
-}
+ticker := via.Stream(ctx, 200*time.Millisecond, p.poll)
+ticker.Pause()
+ticker.SetInterval(time.Second)
+ticker.Resume()
 ```
+
+See `internal/examples/sysmon` for a full pause/rate-change UI driven
+by this surface.
 
 Inside actions and `via.Stream` callbacks the flush is automatic. From a
 raw goroutine you started yourself, call `ctx.Flush()` (no-op when nothing
@@ -467,84 +460,33 @@ go run ./internal/examples/counter
 
 ## Configuration
 
-| Option                            | Default       |
-|-----------------------------------|---------------|
-| `WithAddr(":3000")`               | `:3000`       |
-| `WithTitle("Via")`                | `Via`         |
-| `WithLang("en")`                  | unset         |
-| `WithDescription(s)`              | unset         |
-| `WithSessionTTL(30m)`             | 30 min        |
-| `WithContextTTL(15m)`             | 15 min        |
-| `WithSSEHeartbeat(25s)`           | 25 s          |
-| `WithMaxRequestBody(1<<20)`       | 1 MiB         |
-| `WithMaxContexts(n)`              | 0 (no cap)    |
-| `WithReadHeaderTimeout(10s)`      | 10 s          |
-| `WithReadTimeout(d)`              | 0 (disabled)  |
-| `WithWriteTimeout(d)`             | 0 (SSE-safe)  |
-| `WithIdleTimeout(120s)`           | 120 s         |
-| `WithActionErrorHandler(fn)`      | browser alert |
-| `WithSecureCookies()`             | off           |
-| `WithHTTPServer(hook)`            | nil           |
-| `WithLogger(l)`                   | log.Printf    |
-| `WithLogLevel(LogWarn)`           | warn          |
-| `WithNotFound(h)`                 | std 404       |
-| `WithShutdownTimeout(5s)`         | 5 s           |
-| `WithPlugins(...)`                | none          |
-| `WithTestServer(&server)`         | nil           |
+Every `WithX(...)` option is documented in
+[`go doc github.com/go-via/via`](https://pkg.go.dev/github.com/go-via/via)
+with its default and behaviour. The common production knobs:
+
+- `WithSecureCookies()`, `WithMaxContexts(n)`, `WithLogger(SlogLogger(...))`
+- `WithMaxRequestBody(n)`, `WithSessionTTL(d)`, `WithContextTTL(d)`
+- `WithSSEHeartbeat(d)`, `WithReadHeaderTimeout(d)`, `WithIdleTimeout(d)`
+- `WithActionErrorHandler(fn)`, `WithNotFound(h)`, `WithHTTPServer(hook)`
 
 ## Security
 
-What via defends against by default and what you opt into:
+What via defends against by default:
 
-### CSRF
-
-Every page mints a 256-bit `via_tab` id (32 bytes from `crypto/rand`,
-hex-encoded). Every action POST and SSE handshake must carry it; the
-server looks the id up in its in-memory registry and rejects unknown
-ids with 404. Forged requests can't guess a live tab id, and the same-
-origin policy keeps a third-party site from reading one. Action POSTs
-are also session-pinned: if the cookie sent doesn't match the session
-the tab was minted under, the request is 403'd before the action runs.
-The `via_tab` id is the CSRF token — no separate token plumbing.
-
-### Sessions
-
-`via_session` is the cookie name. Defaults: `HttpOnly`, `SameSite=Lax`,
-`Path=/`, 64-char hex value (32 bytes from `crypto/rand`). The `Secure`
-flag is opt-in via `WithSecureCookies()` — some deployments terminate
-TLS at a proxy and run plain HTTP between proxy and app, so the default
-stays off. Pair with `HSTS()` and `RedirectHTTPS()` for a pure-HTTPS
-posture. After authentication state changes, call `RotateSession(ctx)`
-to mint a new id and invalidate the captured pre-auth one (session-
-fixation defence).
-
-### CSP
-
-`StrictCSP()` middleware sets a strict header (`default-src 'self';
-script-src 'self' 'nonce-XYZ'; object-src 'none'; base-uri 'self'`)
-with a per-request nonce threaded through `r.Context` and reachable via
-`ctx.CSPNonce()`. Pass extra directives as variadic args. Without
-`StrictCSP`, no CSP header is sent.
-
-### Body limits
-
-`WithMaxRequestBody(n)` (default 1 MiB) caps action POST and SSE-close
-bodies via `http.MaxBytesReader`. Oversized requests return
-413 Request Entity Too Large.
-
-### Action error sanitization
-
-When an action panics, the default error handler replaces the panic
-message with `"Something went wrong"` before sending it to the client
-— so an accidental `panic("password=" + secret)` doesn't surface
-sensitive internals. User-returned errors (non-panic) flow through
-unmodified — the user controls what's in their own error.
-
-### Random sources
-
-`crypto/rand.Read` failures **panic** rather than fall back to
-zero-byte ids. Failing loud beats shipping predictable session/tab
-tokens.
+- **CSRF**: every page mints a 256-bit `via_tab` id; action POSTs and SSE
+  handshakes carry it as a signal. The id IS the CSRF token — unknown
+  ids 404. Action POSTs are also session-pinned (cookie mismatch → 403).
+- **Sessions**: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit.
+  `WithSecureCookies()` flips on `Secure` for HTTPS. After auth state
+  changes, call `RotateSession(ctx)` (session-fixation defence).
+- **CSP**: `StrictCSP()` middleware emits a strict header with a
+  per-request nonce reachable via `ctx.CSPNonce()`.
+- **Body limits**: `WithMaxRequestBody(n)` (default 1 MiB) caps action
+  POST and SSE-close bodies; oversized requests return 413.
+- **Panic sanitization**: action panics surface as `"Something went
+  wrong"` to the client. User-returned errors flow through unmodified.
+- **Random sources**: `crypto/rand.Read` failures panic rather than
+  fall back to zero-byte ids.
 
 ### Recommended production stack
 

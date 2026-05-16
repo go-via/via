@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// Middleware is the request-wrapping function shape used by App.Use. Each
+// middleware receives the next handler in the chain and decides whether to
+// invoke it, short-circuit (e.g. with a 401), or wrap the response writer
+// before passing through. Registration order is outer-first: the first
+// middleware passed to Use runs first per request.
 type Middleware func(w http.ResponseWriter, r *http.Request, next http.Handler)
 
 func applyMiddleware(chain []Middleware, final http.Handler) http.Handler {
