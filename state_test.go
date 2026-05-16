@@ -77,7 +77,7 @@ type updatablePage struct {
 
 func (p *updatablePage) View(ctx *via.Ctx) h.H { return h.Div() }
 
-func TestUpdate_StateApplyFn(t *testing.T) {
+func TestUpdate_appliesFnToState(t *testing.T) {
 	t.Parallel()
 
 	c := &updatablePage{}
@@ -88,7 +88,7 @@ func TestUpdate_StateApplyFn(t *testing.T) {
 	assert.Equal(t, 10, c.N.Get(ctx))
 }
 
-func TestUpdate_SignalApplyFn(t *testing.T) {
+func TestUpdate_appliesFnToSignal(t *testing.T) {
 	t.Parallel()
 
 	c := &updatablePage{}
@@ -99,7 +99,7 @@ func TestUpdate_SignalApplyFn(t *testing.T) {
 		"init=1 plus +4 from Update = 5")
 }
 
-func TestUpdate_ScopeUserApplyFn(t *testing.T) {
+func TestUpdate_appliesFnToScopeUser(t *testing.T) {
 	t.Parallel()
 
 	c := &updatablePage{}
@@ -110,7 +110,7 @@ func TestUpdate_ScopeUserApplyFn(t *testing.T) {
 	assert.Equal(t, "blue-dark", c.Theme.Get(ctx))
 }
 
-func TestUpdate_NilFnIsNoOp(t *testing.T) {
+func TestUpdate_nilFnIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	c := &updatablePage{}

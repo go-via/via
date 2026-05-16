@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -99,4 +100,31 @@ func TestPage_embeddedAllowsOverridingOnConnect(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, "_pageConnected")
 	assert.GreaterOrEqual(t, connectFiredCount.Load(), int32(1),
 		"the overriding OnConnect must fire when SSE opens")
+}
+
+var disposeFiredCount atomic.Int32
+
+type disposeCounterEmbed struct {
+	via.Page
+}
+
+func (p *disposeCounterEmbed) OnDispose(ctx *via.Ctx) {
+	disposeFiredCount.Add(1)
+}
+
+func (p *disposeCounterEmbed) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
+	disposeFiredCount.Store(0)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[disposeCounterEmbed](app, "/")
+	defer server.Close()
+
+	_ = viatest.NewClient(t, server, "/")
+
+	require.NoError(t, app.Shutdown(context.Background()))
+	require.Eventually(t, func() bool { return disposeFiredCount.Load() == 1 },
+		2*time.Second, 10*time.Millisecond,
+		"the overriding OnDispose on the embedding composition must take precedence over via.Page's no-op default")
 }

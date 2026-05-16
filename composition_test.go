@@ -8,6 +8,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type simpleCounter struct {
@@ -46,14 +47,89 @@ func TestMount_renders404OnUnknownRoute(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+type badOnInitPage struct{}
+
+func (p *badOnInitPage) OnInit(ctx *via.Ctx) {} // missing error return
+
+func (p *badOnInitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestMount_panicShowsActualAndExpectedLifecycleSignature(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount[badOnInit] must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "OnInit has the wrong signature")
+		assert.Contains(t, msg, "expected:")
+		assert.Contains(t, msg, "got:")
+		assert.Contains(t, msg, "func(*via_test.badOnInitPage, *via.Ctx)",
+			"the 'got:' line must reflect the actual reflect.Type.String() output")
+	}()
+	via.Mount[badOnInitPage](app, "/")
+}
+
+type badViewReturnPage struct{}
+
+func (p *badViewReturnPage) View(ctx *via.Ctx) int { return 0 } // wrong return type
+
+func TestMount_panicsWhenViewReturnTypeIsNotAssignableToH(t *testing.T) {
+	t.Parallel()
+	// Mount should catch a View whose return type isn't assignable to
+	// h.H, instead of letting the type-assert at render time blow up
+	// on the first request with no breadcrumb to the bad composition.
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount with non-H View return must panic at registration time")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "View has the wrong signature",
+			"the panic must use the same shape as the param-shape panic")
+		assert.Contains(t, msg, "badViewReturnPage",
+			"the panic must name the offending type")
+	}()
+	via.Mount[badViewReturnPage](app, "/")
+}
+
+type badViewPage struct{}
+
+func (p *badViewPage) View() h.H { return h.Div() } // missing *Ctx arg
+
+func TestMount_panicShowsActualAndExpectedViewSignature(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount[badView] must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "expected:",
+			"the panic must show the expected signature so users can read the contract")
+		assert.Contains(t, msg, "got:",
+			"the panic must show the actual signature so users can spot the diff")
+		// reflect.Type.String() unwraps the h.H = gomponents.Node alias.
+		assert.Contains(t, msg, "func(*via_test.badViewPage) gomponents.Node",
+			"the 'got:' line must reflect the actual reflect.Type.String() output")
+	}()
+	via.Mount[badViewPage](app, "/")
+}
+
 func TestMount_panicsOnMissingView(t *testing.T) {
 	t.Parallel()
 
 	type noView struct{}
 	app := via.New()
-	assert.Panics(t, func() {
-		via.Mount[noView](app, "/test")
-	})
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount[noView] must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "missing required method",
+			"panic must state that a required method is missing")
+		assert.Contains(t, msg, "noView",
+			"panic must name the offending type")
+		assert.Contains(t, msg, "View(ctx *via.Ctx) h.H",
+			"panic must show the expected method signature so the user can paste it in")
+	}()
+	via.Mount[noView](app, "/test")
 }
 
 type pathParamPage struct {
@@ -91,9 +167,18 @@ func TestMount_panicsWhenPathTagHasNoMatchingSegment(t *testing.T) {
 	t.Parallel()
 
 	app := via.New()
-	assert.Panics(t, func() {
-		via.Mount[missingParamPage](app, "/no-id-segment")
-	})
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount with unmatched path tag must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, `path:"id"`,
+			"panic must name the offending tag so the user knows which field to fix")
+		assert.Contains(t, msg, "/no-id-segment",
+			"panic must echo the route so the user knows which Mount call site is wrong")
+		assert.Contains(t, msg, "missingParamPage",
+			"panic must name the composition type")
+	}()
+	via.Mount[missingParamPage](app, "/no-id-segment")
 }
 
 func TestMount_panicsWhenCisNotAStruct(t *testing.T) {
@@ -104,4 +189,20 @@ func TestMount_panicsWhenCisNotAStruct(t *testing.T) {
 		"via.Mount: C must be a struct, got int (kind: int)",
 		func() { via.Mount[int](app, "/") },
 		"non-struct type at C must surface a precise panic listing the offending type")
+}
+
+func TestMount_panicsWithTypeNameWhenCisAnInterface(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount[interface] must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "via.Composition",
+			"the panic message must name the offending interface so the user can find the bad Mount call site")
+		assert.Contains(t, msg, "concrete struct",
+			"the panic message must explain what Mount expects instead")
+	}()
+	via.Mount[via.Composition](app, "/")
 }

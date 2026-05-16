@@ -156,9 +156,12 @@ func filterButton(name, current string, action any) h.H {
 	)
 }
 
-func (t *Todos) FilterAll(ctx *via.Ctx) error    { t.Filter.Set(ctx, "all"); return nil }
-func (t *Todos) FilterActive(ctx *via.Ctx) error { t.Filter.Set(ctx, "active"); return nil }
-func (t *Todos) FilterDone(ctx *via.Ctx) error   { t.Filter.Set(ctx, "done"); return nil }
+// SetIfChanged skips the re-render when the user clicks the already-active
+// filter — clicking "All" while filter == "all" is a no-op rather than a
+// wasted view rebuild + SSE patch.
+func (t *Todos) FilterAll(ctx *via.Ctx)    { via.SetIfChanged(ctx, &t.Filter, "all") }
+func (t *Todos) FilterActive(ctx *via.Ctx) { via.SetIfChanged(ctx, &t.Filter, "active") }
+func (t *Todos) FilterDone(ctx *via.Ctx)   { via.SetIfChanged(ctx, &t.Filter, "done") }
 
 func main() {
 	app := via.New(

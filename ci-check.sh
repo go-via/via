@@ -11,12 +11,14 @@ cd "$ROOT"
 # generous-but-not-loose so noise doesn't fail CI.
 #
 # Current floors (steady state on the bench page in bench_test.go):
-#   CounterRender         ~209 allocs/op
-#   CounterAction         ~146 allocs/op
+#   CounterRender         ~200 allocs/op
+#   CounterAction         ~130 allocs/op
 #   ActionBodyOnly          0 allocs/op  (typed Mutable[T] hot path)
+#   SignalFlush             2 allocs/op  (encoded []byte + json.RawMessage box)
 RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-212}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
 BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
+SIGNAL_FLUSH_ALLOC_MAX=${SIGNAL_FLUSH_ALLOC_MAX:-3}
 
 echo "== CI: Check formatting =="
 unformatted=$(gofmt -l .)
@@ -57,7 +59,7 @@ echo "== CI: Allocation gates =="
 #   BenchmarkCounterRender-20    1000   95012 ns/op   29200 B/op   206 allocs/op
 # Pull the allocs column for the named benchmarks and fail if it
 # exceeds the threshold for that bench.
-bench_out=$(go test ./. -run='^$' -bench='^Benchmark(Counter|ActionBodyOnly)' -benchtime=200x -benchmem 2>&1 || true)
+bench_out=$(go test ./. -run='^$' -bench='^Benchmark(Counter|ActionBodyOnly|SignalFlush)' -benchtime=200x -benchmem 2>&1 || true)
 echo "$bench_out"
 
 check_alloc() {
@@ -85,6 +87,7 @@ check_alloc() {
 check_alloc BenchmarkCounterRender "$RENDER_ALLOC_MAX"
 check_alloc BenchmarkCounterAction "$ACTION_ALLOC_MAX"
 check_alloc BenchmarkActionBodyOnly "$BODY_ALLOC_MAX"
+check_alloc BenchmarkSignalFlush "$SIGNAL_FLUSH_ALLOC_MAX"
 
 echo "SUCCESS: All checks passed."
 exit 0

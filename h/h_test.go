@@ -206,6 +206,15 @@ func TestDataShow_formatArgsStillWork(t *testing.T) {
 		"args path must still format normally")
 }
 
+func TestIf_rendersNodeOnlyWhenTrue(t *testing.T) {
+	t.Parallel()
+	on := render(t, h.Div(h.If(true, h.P(h.Text("yes")))))
+	off := render(t, h.Div(h.If(false, h.P(h.Text("yes")))))
+	assert.Equal(t, "<div><p>yes</p></div>", on)
+	assert.Equal(t, "<div></div>", off,
+		"false condition must drop the node entirely, not render any placeholder")
+}
+
 func TestIfElse_picksBranchEagerly(t *testing.T) {
 	t.Parallel()
 	on := render(t, h.Div(h.IfElse(true,

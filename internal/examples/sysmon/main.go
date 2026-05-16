@@ -214,12 +214,12 @@ type Page struct {
 	IntervalMs via.Signal[int]  `via:"intervalMs,init=1000"`
 	Running    via.Signal[bool] `via:"running,init=true"`
 
-	CPUVal via.State[string]
-	RAMVal via.State[string]
-	DiskR  via.State[string]
-	DiskW  via.State[string]
-	NetRX  via.State[string]
-	NetTX  via.State[string]
+	CPUVal via.State[string] `via:",init=--"`
+	RAMVal via.State[string] `via:",init=--"`
+	DiskR  via.State[string] `via:",init=--"`
+	DiskW  via.State[string] `via:",init=--"`
+	NetRX  via.State[string] `via:",init=--"`
+	NetTX  via.State[string] `via:",init=--"`
 
 	cpuChart  *echarts.Chart
 	ramChart  *echarts.Chart
@@ -245,27 +245,19 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 	p.diskWBuf = newHistBuf()
 	p.netRXBuf = newHistBuf()
 	p.netTXBuf = newHistBuf()
-
-	p.CPUVal.Set(ctx, "--")
-	p.RAMVal.Set(ctx, "--")
-	p.DiskR.Set(ctx, "--")
-	p.DiskW.Set(ctx, "--")
-	p.NetRX.Set(ctx, "--")
-	p.NetTX.Set(ctx, "--")
 	return nil
 }
 
-func (p *Page) ApplyControls(ctx *via.Ctx) error {
+func (p *Page) ApplyControls(ctx *via.Ctx) {
 	p.ticker.SetInterval(time.Duration(p.IntervalMs.Get(ctx)) * time.Millisecond)
 	if p.Running.Get(ctx) {
 		p.ticker.Resume()
 	} else {
 		p.ticker.Pause()
 	}
-	return nil
 }
 
-func (p *Page) ToggleRunning(ctx *via.Ctx) error {
+func (p *Page) ToggleRunning(ctx *via.Ctx) {
 	v := !p.Running.Get(ctx)
 	p.Running.Set(ctx, v)
 	if v {
@@ -273,7 +265,6 @@ func (p *Page) ToggleRunning(ctx *via.Ctx) error {
 	} else {
 		p.ticker.Pause()
 	}
-	return nil
 }
 
 func (p *Page) OnConnect(ctx *via.Ctx) error {

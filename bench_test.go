@@ -111,3 +111,19 @@ func BenchmarkCounterActionWithLogger(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSignalFlush measures the alloc cost of the inner reactive
+// loop: mutate a signal, encode the dirty set, queue a PatchSignals
+// frame. This is the hot path for via.Stream callbacks and any tight
+// reactive driver. Steady state should stay flat once the patch-queue
+// signals map is recycled across drains.
+func BenchmarkSignalFlush(b *testing.B) {
+	page := &benchPage{}
+	ctx := viatest.NewCtx(b, page)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := range b.N {
+		page.Step.Set(ctx, i)
+		ctx.Flush()
+	}
+}

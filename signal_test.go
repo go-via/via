@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +99,16 @@ func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	assert.Equal(t, 13, page.Count.Get(c))
 	via.Add(c, &page.Count, -5)
 	assert.Equal(t, 8, page.Count.Get(c), "negative delta = decrement")
+}
+
+func TestAdd_nilMutableIsNoOp(t *testing.T) {
+	t.Parallel()
+	// Mirrors via.Toggle / via.SetIfChanged / via.Push: nil handle must
+	// not panic. The constraint via.numeric forces T to a numeric kind,
+	// so the test instantiates explicitly with [int].
+	assert.NotPanics(t, func() {
+		via.Add[int](viatest.NewCtx(t, &adderPage{}), nil, 1)
+	})
 }
 
 func TestAdd_floatSignalRespectsType(t *testing.T) {
@@ -232,6 +243,16 @@ func TestPushBounded_dropsOldestWhenAtCapacity(t *testing.T) {
 		"PushBounded must keep the most recent max items; older items roll off")
 }
 
+func TestPushBounded_nilSignalIsNoOp(t *testing.T) {
+	t.Parallel()
+	ctx := viatest.NewCtx(t, &feedPage{})
+	// Mirrors TestPush_nilSignalIsNoOp; PushBounded's combined
+	// `sig == nil || max <= 0` guard means each half needs its own pin.
+	assert.NotPanics(t, func() {
+		via.PushBounded[int](ctx, nil, 1, 10)
+	})
+}
+
 func TestPushBounded_zeroMaxIsNoOp(t *testing.T) {
 	t.Parallel()
 	p := &feedPage{}
@@ -274,6 +295,40 @@ func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
 		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
 }
 
+type stateIntInitPage struct {
+	N via.State[int] `via:",init=3"`
+}
+
+func (p *stateIntInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
+
+func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateIntInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "<div>3</div>",
+		"State[int] with init=3 must render the seeded value on first load")
+}
+
+type stateStringInitPage struct {
+	Label via.State[string] `via:",init=--"`
+}
+
+func (p *stateStringInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.Label.Text()) }
+
+func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateStringInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "<div>--</div>",
+		"State[string] with init=-- must render the seeded value on first load")
+}
+
 type boolInitPage struct {
 	On via.Signal[bool] `via:"on,init=true"`
 }
@@ -289,6 +344,41 @@ func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `&#34;on&#34;:true`,
 		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
+}
+
+type viewHelperPage struct {
+	Step via.Signal[int]  `via:"step,init=1"`
+	Open via.Signal[bool] `via:"open,init=false"`
+}
+
+func (p *viewHelperPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestSignal_viewHelpersRenderAllocFreeAfterBind(t *testing.T) {
+	// AllocsPerRun forbids t.Parallel.
+	// Drive bind via viatest.NewCtx so Signal.{Text,Bind,Show} have wire keys.
+	p := &viewHelperPage{}
+	_ = viatest.NewCtx(t, p)
+
+	cases := []struct {
+		name string
+		node h.H
+	}{
+		{"Text", p.Step.Text()},
+		{"Bind", p.Step.Bind()},
+		{"Show", p.Open.Show()},
+	}
+	var buf bytes.Buffer
+	for _, c := range cases {
+		require.NoError(t, c.node.Render(&buf))
+	}
+	for _, c := range cases {
+		allocs := testing.AllocsPerRun(50, func() {
+			buf.Reset()
+			_ = c.node.Render(&buf)
+		})
+		assert.Zero(t, allocs,
+			"%s rendered output should be pre-baked bytes — Render must not allocate", c.name)
+	}
 }
 
 type setIfChangedPage struct {

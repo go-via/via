@@ -84,9 +84,10 @@ func (a *App[T]) Get(ctx *via.Ctx) T {
 	return t
 }
 
-// Set writes the app value and re-renders the current tab. Other tabs do
-// not auto-update — they re-fetch on their next render or via the user's
-// own broadcast mechanism.
+// Set writes the app value and re-renders the current tab. Other tabs
+// do not auto-update — they re-fetch on their next render. To push the
+// new value to every live tab in one shot, follow Set with
+// [via.App.BroadcastSignals] or trigger a [via.App.Broadcast] reload.
 func (a *App[T]) Set(ctx *via.Ctx, v T) {
 	via.AppStore(ctx, a.wireKey, v)
 }

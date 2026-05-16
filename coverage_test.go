@@ -191,9 +191,16 @@ func TestAppUse_afterStartPanics(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	assert.Panics(t, func() {
-		app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-			next.ServeHTTP(w, r)
-		})
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "App.Use after Start must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "App.Use called after Start",
+			"panic must state the violation so the user spots the boot-only contract")
+		assert.Contains(t, msg, "boot",
+			"panic must hint at the fix (install middleware during boot)")
+	}()
+	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		next.ServeHTTP(w, r)
 	})
 }

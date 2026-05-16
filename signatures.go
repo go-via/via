@@ -3,6 +3,8 @@ package via
 import (
 	"fmt"
 	"reflect"
+
+	"github.com/go-via/via/h"
 )
 
 // expected method signatures for lifecycle hooks; Mount validates against
@@ -26,6 +28,7 @@ var (
 	// still allocates an interface header — cache once at package init.
 	ctxPtrType = reflect.TypeOf((*Ctx)(nil))
 	errorType  = reflect.TypeOf((*error)(nil)).Elem()
+	hType      = reflect.TypeOf((*h.H)(nil)).Elem()
 )
 
 // checkAndIndexLifecycle validates the lifecycle method's signature and
@@ -47,25 +50,29 @@ func checkAndIndexLifecycle(typ, ptrTyp reflect.Type, name string, want lifecycl
 		panic(fmt.Sprintf(
 			"via.Mount(%s): %s has the wrong signature\n"+
 				"\n"+
-				"  expected: "+want.repr+"\n",
-			typ.String(), name, name))
+				"  expected: "+want.repr+"\n"+
+				"       got: %s\n",
+			typ.String(), name, name, mt.String()))
 	}
 	return m.Index
 }
 
 func checkViewSignature(typ reflect.Type, m reflect.Method) {
 	mt := m.Type
-	if mt.NumIn() != 2 || mt.NumOut() != 1 ||
-		mt.In(1) != ctxPtrType {
+	// Param shape: receiver + *Ctx, exactly one return.
+	badParams := mt.NumIn() != 2 || mt.NumOut() != 1 || mt.In(1) != ctxPtrType
+	// Return must be assignable to h.H (gomponents.Node interface).
+	// Catches "View(ctx) int" at Mount time rather than at the first
+	// request's view.Interface().(h.H) type-assert.
+	badReturn := !badParams && !mt.Out(0).AssignableTo(hType)
+	if badParams || badReturn {
 		panic(fmt.Sprintf(
 			"via.Mount(%s): View has the wrong signature\n"+
 				"\n"+
-				"  expected: func (c *%s) View(ctx *via.Ctx) h.H\n",
-			typ.String(), typ.Name()))
+				"  expected: func (c *%s) View(ctx *via.Ctx) h.H\n"+
+				"       got: %s\n",
+			typ.String(), typ.Name(), mt.String()))
 	}
-	// View's return type is checked structurally — h.H is an interface so
-	// the concrete return type can be anything assignable to it; we trust
-	// the assertion at render time.
 }
 
 // actionMethodKind reports whether m is a valid action method and its

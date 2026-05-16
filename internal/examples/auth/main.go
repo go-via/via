@@ -92,8 +92,7 @@ func (p *LoginPage) Submit(ctx *via.Ctx) error {
 	}
 	via.RotateSession(ctx)
 	via.PutSess(ctx, user)
-	ctx.Redirect("/profile")
-	return nil
+	return via.Redirect("/profile")
 }
 
 func (p *LoginPage) View(ctx *via.Ctx) h.H {
@@ -128,8 +127,7 @@ func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 		p.Err.Set(ctx, err.Error())
 		return nil
 	}
-	ctx.Redirect("/login")
-	return nil
+	return via.Redirect("/login")
 }
 
 func (p *RegisterPage) View(ctx *via.Ctx) h.H {
@@ -158,8 +156,7 @@ type ProfilePage struct{}
 func (p *ProfilePage) Logout(ctx *via.Ctx) error {
 	via.ClearSess[User](ctx)
 	via.RotateSession(ctx)
-	ctx.Redirect("/")
-	return nil
+	return via.Redirect("/")
 }
 
 func (p *ProfilePage) View(ctx *via.Ctx) h.H {

@@ -14,6 +14,7 @@ package on
 
 import (
 	"encoding/json"
+	"html/template"
 	"strings"
 	"sync"
 
@@ -177,7 +178,10 @@ type bareKey struct{ event, method string }
 // bareAttr emits the data-on:<event>="@post('/_action/<method>')"
 // attribute used by every binding that has no modifiers, key filter,
 // debounce/throttle, or pre statements. Shared by event's and render's
-// fast paths.
+// fast paths. The cached value is a precomputed []byte that Render
+// writes verbatim — gomponents' Attr would re-escape the value on every
+// render, which is wasted work since the @post expression is constant
+// per (event, method).
 func bareAttr(eventName, method string) h.H {
 	key := bareKey{eventName, method}
 	bareAttrMu.RLock()
@@ -190,7 +194,18 @@ func bareAttr(eventName, method string) h.H {
 	if !ok {
 		attr = "on:" + eventName
 	}
-	node := h.Data(attr, "@post('/_action/"+method+"')")
+	expr := "@post('/_action/" + method + "')"
+	// Pre-render: leading space + data-on:... + ="<escaped expr>". Matches
+	// gomponents' attribute output byte-for-byte so renderer behaviour is
+	// unchanged.
+	escaped := template.HTMLEscapeString(expr)
+	bytes := make([]byte, 0, len(" data-")+len(attr)+len(`="`)+len(escaped)+1)
+	bytes = append(bytes, " data-"...)
+	bytes = append(bytes, attr...)
+	bytes = append(bytes, `="`...)
+	bytes = append(bytes, escaped...)
+	bytes = append(bytes, '"')
+	node := h.H(h.RawAttr(bytes))
 	bareAttrMu.Lock()
 	if existing, ok := bareAttrCache[key]; ok {
 		node = existing
@@ -244,5 +259,17 @@ func render(s *via.TriggerSpec) h.H {
 	expr.WriteString("@post('/_action/")
 	expr.WriteString(method)
 	expr.WriteString("')")
-	return h.Data(attr.String(), expr.String())
+	// Emit pre-escaped bytes so Render writes them verbatim — same trick
+	// as bareAttr. The optioned path is non-cached (every TriggerSpec
+	// shape is bespoke), but skipping the per-render escape in gomponents
+	// still wins because the binding is rendered once per View call.
+	escaped := template.HTMLEscapeString(expr.String())
+	name := attr.String()
+	buf := make([]byte, 0, len(" data-")+len(name)+len(`="`)+len(escaped)+1)
+	buf = append(buf, " data-"...)
+	buf = append(buf, name...)
+	buf = append(buf, `="`...)
+	buf = append(buf, escaped...)
+	buf = append(buf, '"')
+	return h.RawAttr(buf)
 }

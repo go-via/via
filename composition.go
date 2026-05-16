@@ -78,7 +78,12 @@ func buildDescriptor[C any]() *cmpDescriptor {
 	var zero C
 	typ := reflect.TypeOf(zero)
 	if typ == nil {
-		panic("via.Mount: C must be a concrete struct type")
+		// C is an interface (zero value is nil interface) — reflect.TypeOf
+		// on a zero-interface returns nil. Use reflect.TypeOf(new(C)).Elem()
+		// to recover the interface's type name for the error message.
+		ifaceTyp := reflect.TypeOf(new(C)).Elem()
+		panic("via.Mount: C must be a concrete struct, got interface type " +
+			ifaceTyp.String())
 	}
 	if typ.Kind() == reflect.Ptr {
 		typ = typ.Elem()

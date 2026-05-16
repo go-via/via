@@ -208,6 +208,34 @@ func TestClick_bareBindingRendersIdentically(t *testing.T) {
 	assert.Contains(t, bufA.String(), `/_action/Inc`)
 }
 
+func TestClick_bareBindingRenderIsAllocFree(t *testing.T) {
+	// AllocsPerRun forbids t.Parallel.
+	p := &internPage{}
+	node := on.Click(p.Inc)
+	var buf bytes.Buffer
+	require.NoError(t, node.Render(&buf)) // warm any internal state
+	allocs := testing.AllocsPerRun(50, func() {
+		buf.Reset()
+		_ = node.Render(&buf)
+	})
+	assert.Zero(t, allocs,
+		"rendering a cached bare binding should write pre-escaped bytes without allocating")
+}
+
+func TestClick_optionedBindingRenderIsAllocFree(t *testing.T) {
+	// AllocsPerRun forbids t.Parallel.
+	p := &internPage{}
+	node := on.Click(p.Inc, on.Debounce("200ms"))
+	var buf bytes.Buffer
+	require.NoError(t, node.Render(&buf)) // warm
+	allocs := testing.AllocsPerRun(50, func() {
+		buf.Reset()
+		_ = node.Render(&buf)
+	})
+	assert.Zero(t, allocs,
+		"rendering an optioned binding should write pre-escaped bytes without allocating")
+}
+
 func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) {
 	// AllocsPerRun forbids t.Parallel; the runtime asserts on it.
 	// Passing the bound method through `fn any` boxes the 2-word method

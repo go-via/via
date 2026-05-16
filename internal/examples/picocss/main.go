@@ -27,26 +27,19 @@ var allFeatures = []Feature{
 }
 
 type Page struct {
-	Visible via.State[int]
+	Visible via.State[int] `via:",init=3"`
 }
 
-func (p *Page) OnInit(ctx *via.Ctx) error {
-	p.Visible.Set(ctx, 3)
-	return nil
-}
-
-func (p *Page) Inc(ctx *via.Ctx) error {
+func (p *Page) Inc(ctx *via.Ctx) {
 	if p.Visible.Get(ctx) < len(allFeatures) {
 		via.Add(ctx, &p.Visible, 1)
 	}
-	return nil
 }
 
-func (p *Page) Dec(ctx *via.Ctx) error {
+func (p *Page) Dec(ctx *via.Ctx) {
 	if p.Visible.Get(ctx) > 1 {
 		via.Add(ctx, &p.Visible, -1)
 	}
-	return nil
 }
 
 func (p *Page) View(ctx *via.Ctx) h.H {

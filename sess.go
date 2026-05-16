@@ -240,26 +240,39 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 }
 
 // AppLoad reads a value from the per-app store. Backs scope.App[T].
+// When ctx has no App attached (test path that bypassed New), falls
+// back to the ctx's local scope so a paired AppStore/AppLoad on the
+// same Ctx still round-trips — mirrors SessionLoad's contract.
 //
 // Deprecated: scope-package integration hook. End users should access
 // app-wide state through scope.App[T] rather than calling this directly.
 func AppLoad(ctx *Ctx, key string) (any, bool) {
-	if ctx == nil || ctx.app == nil {
+	if ctx == nil {
 		return nil, false
 	}
-	return ctx.app.appStore.Load(key)
+	if ctx.app != nil {
+		return ctx.app.appStore.Load(key)
+	}
+	return ctx.localScope.Load(key)
 }
 
 // AppStore writes a value to the per-app store and marks the current
-// Ctx dirty.
+// Ctx dirty. When ctx has no App attached (test path that bypassed
+// New), the value is held on the ctx's local scope so within-request
+// reads still work — mirrors SessionStore's contract.
 //
 // Deprecated: scope-package integration hook. End users should access
 // app-wide state through scope.App[T] rather than calling this directly.
 func AppStore(ctx *Ctx, key string, value any) {
-	if ctx == nil || ctx.app == nil {
+	if ctx == nil {
 		return
 	}
-	ctx.app.appStore.Store(key, value)
+	if ctx.app != nil {
+		ctx.app.appStore.Store(key, value)
+	} else {
+		// ephemeral fallback so AppLoad on the same Ctx returns v
+		ctx.localScope.Store(key, value)
+	}
 	ctx.markStateDirty()
 }
 
