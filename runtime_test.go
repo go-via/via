@@ -448,6 +448,58 @@ func TestTicker_Paused_reflectsPauseAndResumeTransitions(t *testing.T) {
 		"Resume must flip Paused() back to false")
 }
 
+// streamRacePage exercises Stream-driven writes against action-driven
+// writes on the same composition; both touch the same Signal/State.
+type streamRacePage struct {
+	N via.Signal[int]
+	M via.State[int]
+}
+
+func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
+	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.N.Set(ctx, p.N.Get(ctx)+1)
+		via.Add(ctx, &p.M, 1)
+	})
+	return nil
+}
+
+func (p *streamRacePage) Bump(ctx *via.Ctx) error {
+	p.N.Set(ctx, p.N.Get(ctx)+1)
+	via.Add(ctx, &p.M, 1)
+	return nil
+}
+
+func (p *streamRacePage) View(ctx *via.Ctx) h.H {
+	return h.Div(p.N.Text(), p.M.Text())
+}
+
+// TestStream_doesNotRaceWithConcurrentActions hammers a Stream-driven
+// signal write at the same time as POSTed action handlers that mutate
+// the same composition. Without the per-Ctx actionMu around streamTick
+// the race detector trips on Signal.val / dirty-bit writes; with the
+// lock in place this must stay clean.
+func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[streamRacePage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	_, cancel := tc.SSE()
+	defer cancel()
+
+	// Let OnConnect fire and the Stream goroutine spin up.
+	time.Sleep(20 * time.Millisecond)
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		// Action POST contends with Stream tick for actionMu / Signal.val.
+		_ = tc.Action("Bump").Fire()
+	}
+}
+
 func TestTicker_setIntervalChangesCadence(t *testing.T) {
 	t.Parallel()
 	p := &tickerPage{}

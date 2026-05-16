@@ -83,6 +83,15 @@ func RequestIDFrom(r *http.Request) string {
 //
 // The redirect is applied to every request; pair with WithSecureCookies
 // and HSTS for a complete TLS-only deployment posture.
+//
+// Security caveat: X-Forwarded-Proto is trusted unconditionally. Deploy
+// this middleware ONLY behind a trusted reverse proxy / load balancer
+// that overwrites the header on inbound requests. If the app is exposed
+// directly (no fronting proxy) a client can send X-Forwarded-Proto:
+// https over plain HTTP and bypass the redirect entirely — every
+// subsequent request stays unprotected. When binding directly to :443
+// + :80, use HTTPS detection via r.TLS instead by stripping the header
+// in your own middleware before this one runs.
 func RedirectHTTPS() Middleware {
 	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		if isHTTPS(r) {

@@ -11,12 +11,15 @@ cd "$ROOT"
 # generous-but-not-loose so noise doesn't fail CI.
 #
 # Current floors (steady state on the bench page in bench_test.go):
-#   CounterRender         ~164 allocs/op  (post-gomponents-free h pkg)
-#   CounterAction         ~130 allocs/op
-#   ActionBodyOnly          0 allocs/op  (typed Mutable[T] hot path)
-#   SignalFlush             2 allocs/op  (encoded []byte + json.RawMessage box)
+#   CounterRender              ~164 allocs/op  (post-gomponents-free h pkg)
+#   CounterAction              ~129 allocs/op
+#   CounterActionWithLogger    ~129 allocs/op  (logger path must stay flat
+#                                               vs CounterAction)
+#   ActionBodyOnly                0 allocs/op  (typed Mutable[T] hot path)
+#   SignalFlush                   2 allocs/op  (encoded []byte + json.RawMessage box)
 RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-180}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
+LOGGER_ACTION_ALLOC_MAX=${LOGGER_ACTION_ALLOC_MAX:-149}
 BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
 SIGNAL_FLUSH_ALLOC_MAX=${SIGNAL_FLUSH_ALLOC_MAX:-3}
 
@@ -86,6 +89,7 @@ check_alloc() {
 
 check_alloc BenchmarkCounterRender "$RENDER_ALLOC_MAX"
 check_alloc BenchmarkCounterAction "$ACTION_ALLOC_MAX"
+check_alloc BenchmarkCounterActionWithLogger "$LOGGER_ACTION_ALLOC_MAX"
 check_alloc BenchmarkActionBodyOnly "$BODY_ALLOC_MAX"
 check_alloc BenchmarkSignalFlush "$SIGNAL_FLUSH_ALLOC_MAX"
 

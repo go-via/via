@@ -69,6 +69,11 @@ func (t *Ticker) SetInterval(d time.Duration) {
 // Long work should be offloaded with its own goroutine that observes
 // ctx.Done(). After fn returns, dirty signals/state are auto-flushed.
 //
+// Stream takes the per-Ctx action mutex for the duration of fn, so the
+// fn body has the same exclusivity guarantees as an action handler:
+// Signal/State writes don't race with concurrent action POSTs or with
+// other Stream callbacks on the same Ctx.
+//
 // The returned [*Ticker] lets the caller pause, resume, or change the
 // cadence at runtime. It is safe to ignore the return value if those
 // controls are not needed.
@@ -92,17 +97,20 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) *T
 					continue
 				}
 				streamTick(ctx, now, fn)
-				// Flush is a no-op when nothing is dirty and serialises
-				// with concurrent action handlers, so the ticker
-				// doesn't race a POST mid-flight.
-				ctx.Flush()
 			}
 		}
 	}()
 	return t
 }
 
+// streamTick runs one fn invocation under actionMu and flushes any
+// dirty state before releasing the lock — same exclusivity as an
+// action handler, so fn's reads/writes don't race with a concurrent
+// POST or another Stream callback on the same Ctx.
 func streamTick(ctx *Ctx, t time.Time, fn func(*Ctx, time.Time)) {
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
+	defer flushDirty(ctx)
 	defer recoverLog(ctx, "Stream callback")
 	fn(ctx, t)
 }

@@ -192,6 +192,14 @@ func Case(key any, node H) SwitchCase { return SwitchCase{key: key, node: node} 
 func Default(node H) SwitchCase { return SwitchCase{node: node, isDefault: true} }
 
 // Switch renders the first matching [SwitchCase] and nothing else.
+//
+// Comparison is `==`, so both value and every [Case] key must be of a
+// comparable type. Passing a slice, map, or function (or a key that
+// contains one) will panic at render time with the standard "comparing
+// uncomparable type" runtime error — Go's interface-equality semantics,
+// not something h can soften. For tab-style branching on a non-
+// comparable value, project it to a comparable key first (e.g. a tag
+// string or enum) and Switch on that.
 func Switch(value any, cases ...SwitchCase) H {
 	var fallback H
 	for _, c := range cases {
