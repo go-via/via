@@ -1,66 +1,56 @@
+// Pathparams demonstrates path:"name" tag-driven decoding into typed fields.
+//
+//	go run ./internal/examples/pathparams
+//	open http://localhost:3000/counters/foo/5
 package main
 
 import (
-	"strconv"
+	"net/http"
 
 	"github.com/go-via/via"
-	. "github.com/go-via/via/h"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/plugins/picocss"
 )
 
+type CounterPage struct {
+	CounterID   string `path:"counter_id"`
+	StartAtStep int    `path:"start_at_step"`
+
+	Count via.State[int]
+	Step  via.Signal[int] `via:"step,init=1"`
+}
+
+func (c *CounterPage) OnInit(ctx *via.Ctx) error {
+	if c.StartAtStep > 0 {
+		c.Step.Set(ctx, c.StartAtStep)
+	}
+	return nil
+}
+
+func (c *CounterPage) Increment(ctx *via.Ctx) error {
+	via.Add(ctx, &c.Count, c.Step.Get(ctx))
+	return nil
+}
+
+func (c *CounterPage) View(ctx *via.Ctx) h.H {
+	return h.Main(h.Class("container"),
+		h.H3(h.Text(c.CounterID)),
+		h.Hr(),
+		h.H5(h.Textf("Count %d", c.Count.Get(ctx))),
+		h.P(h.Text("Step: "), c.Step.Text()),
+		h.FieldSet(h.Role("group"),
+			h.Input(h.Type("number"), c.Step.Bind()),
+			h.Button(h.Text("Increment"), on.Click(c.Increment)),
+		),
+	)
+}
+
 func main() {
-	v := via.New(via.WithPlugins(picocss.Plugin()))
-
-	v.Page("/counters/{counter_id}/{start_at_step}", func(cmp *via.Cmp) {
-		count := via.State(cmp, 0)
-		step := via.Signal(cmp, 1)
-
-		increment := cmp.Action(func(ctx *via.Ctx) error {
-			count.Set(ctx, count.Get(ctx)+step.Get(ctx))
-			return nil
-		})
-
-		cmp.View(func(ctx *via.Ctx) H {
-			counterID := ctx.GetPathParam("counter_id")
-			startAtStepStr := ctx.GetPathParam("start_at_step")
-			startAtStep, _ := strconv.Atoi(startAtStepStr)
-			_ = startAtStep
-
-			return Main(Class("container"),
-
-				Nav(
-					Ul(
-						Li(
-							Strong(Text("⚡Via Example")),
-						),
-					),
-					Ul(
-						Li(
-							Raw(`<svg xmlns="http://www.w3.org/2000/svg" height="18" width="24.25" viewBox="0 0 496 512" class="icon-github"><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"></path></svg>`),
-							A(Class("contrast"),
-								Text(" GitHub"),
-								Href("https://github.com/go-via/via"),
-							),
-						),
-					),
-				),
-
-				Section(
-					Article(
-						H3(Text(counterID)),
-						Hr(),
-						H5(Textf("Count %d", count.Get(ctx))),
-						H6(Text("Step "), step.Text()),
-						FieldSet(Role("group"),
-							Input(Type("number"), step.Bind()),
-							Button(Text("Increment"), increment.OnClick()),
-						),
-					),
-				),
-			)
-		})
-
-	})
-
-	v.Start()
+	app := via.New(
+		via.WithTitle("Path Params"),
+		via.WithPlugins(picocss.Plugin()),
+	)
+	via.Mount[CounterPage](app, "/counters/{counter_id}/{start_at_step}")
+	_ = http.ListenAndServe(":3000", app)
 }

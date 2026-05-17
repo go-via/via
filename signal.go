@@ -1,213 +1,232 @@
 package via
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
 
 	"github.com/go-via/via/h"
 )
 
-// signalMeta is the runtime interface for signal metadata on Cmp.
-type signalMeta interface {
-	displayID() string
-	initialTypedValue() any
-	initialRawValue() any
-	rawValueOf(v any) any
-	coerce(v any) any
-	hasError() bool
+// Signal is a typed reactive value mirrored to the browser. The value lives
+// inside the composition struct; Get/Set go through the bound *Ctx so
+// changes are tracked and propagated over SSE.
+//
+//	type Counter struct {
+//	    Step via.Signal[int] `via:"step,init=1"`
+//	}
+//	c.Step.Get(ctx)        // returns int
+//	c.Step.Set(ctx, 5)     // marks dirty, browser updates next flush
+//	c.Step.Bind()          // <input> two-way bind: data-bind="step"
+//	c.Step.Text()          // <span data-text="$step"></span>
+//
+// Untyped, untagged Signal[T] fields use the lower-cased field name as the
+// wire key. Tag form: `via:"name,init=value"`; either part is optional.
+type Signal[T any] struct {
+	val    T
+	slot   uint16
+	key    string
+	dollar string // "$" + key, precomputed for Text/Show — saves a concat per render
 }
 
-// signalValue holds the per-tab runtime state for one signal.
-type signalValue struct {
-	raw     any
-	changed bool
+// Get returns the current value. The ctx is unused today but kept so
+// every reactive-handle Get/Set has the same shape (and so future tab-
+// scoped reads can move into the runtime without an API break).
+func (s *Signal[T]) Get(_ *Ctx) T {
+	return s.val
 }
 
-// signalOf is a typed handle created at definition time, shared across all tabs.
-type signalOf[T any] struct {
-	id      string
-	tag     string
-	display string
-	initial T
-	err     error
-}
-
-// --- signalMeta implementation (consumed by runtime) ---
-
-func (s *signalOf[T]) displayID() string {
-	if s.display != "" {
-		return s.display
-	}
-	if s.tag != "" {
-		return s.tag + "_" + s.id
-	}
-	return s.id
-}
-
-func (s *signalOf[T]) initialTypedValue() any { return s.initial }
-
-func (s *signalOf[T]) initialRawValue() any {
-	return s.rawValueOf(any(s.initial))
-}
-
-func (s *signalOf[T]) rawValueOf(v any) any {
-	rv := reflect.ValueOf(v)
-	if rv.IsValid() {
-		switch rv.Kind() {
-		case reflect.Slice, reflect.Map, reflect.Struct, reflect.Pointer:
-			if j, err := json.Marshal(v); err == nil {
-				return string(j)
-			}
-		}
-	}
-	return v
-}
-
-func (s *signalOf[T]) coerce(v any) any {
-	if _, ok := v.(T); ok {
-		return v
-	}
-	// JSON numbers arrive as float64; coerce to the signal's concrete type.
-	if f64, ok := v.(float64); ok {
-		var zero T
-		switch any(zero).(type) {
-		case int:
-			return int(f64)
-		case int8:
-			return int8(f64)
-		case int16:
-			return int16(f64)
-		case int32:
-			return int32(f64)
-		case int64:
-			return int64(f64)
-		case uint:
-			return uint(f64)
-		case uint8:
-			return uint8(f64)
-		case uint16:
-			return uint16(f64)
-		case uint32:
-			return uint32(f64)
-		case uint64:
-			return uint64(f64)
-		case float32:
-			return float32(f64)
-		case float64:
-			return f64
-		}
-	}
-	return v
-}
-
-func (s *signalOf[T]) hasError() bool { return s.err != nil }
-
-// --- public API (consumed by user code) ---
-
-// ID returns the unique identifier for this signal.
-func (s *signalOf[T]) ID() string { return s.id }
-
-// Tag prepends a label to the signal's display ID.
-func (s *signalOf[T]) Tag(name string) { s.tag = name }
-
-// resolveID returns the internal signal ID to use for ctx.signalValues.
-// For app-level signals (display set), the handle may belong to a different
-// app registration, so we look up the actual ID by display name.
-func (s *signalOf[T]) resolveID(ctx *Ctx) string {
-	if s.display == "" || ctx == nil || ctx.cmp == nil {
-		return s.id
-	}
-	for sigID, sig := range ctx.cmp.app.signals {
-		if sm, ok := sig.(signalMeta); ok && sm.displayID() == s.display {
-			return sigID
-		}
-	}
-	return s.id
-}
-
-// Get returns the current typed value of the signal for this tab.
-func (s *signalOf[T]) Get(ctx *Ctx) T {
+// Set writes a new value and marks the signal dirty so the next flush
+// patches it to the browser. From inside an action method or a
+// via.Stream callback, the flush is automatic. From a raw goroutine
+// you started yourself, call ctx.Sync() at a coalescing boundary —
+// the dirty bit alone won't reach the browser without a flush.
+func (s *Signal[T]) Set(ctx *Ctx, v T) {
+	s.val = v
 	if ctx != nil {
-		if sv, ok := ctx.signalValues[s.resolveID(ctx)]; ok {
-			if typed, ok := sv.raw.(T); ok {
-				return typed
-			}
-		}
+		ctx.markSignalDirty(s.slot)
 	}
-	return s.initial
 }
 
-// SetValue updates the signal value for this tab and marks it dirty for sync.
-func (s *signalOf[T]) SetValue(ctx *Ctx, v T) {
-	id := s.resolveID(ctx)
-	sv := ctx.signalValues[id]
-	if sv == nil {
-		ctx.signalValues[id] = &signalValue{raw: v, changed: true}
+// Update applies fn to the current value and stores the result. Saves
+// a Get/Set pair on transform-the-current-value patterns.
+func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
+	if fn == nil {
 		return
 	}
-	sv.raw = v
-	sv.changed = true
-}
-
-// Err returns any error associated with this signal.
-func (s *signalOf[T]) Err() error { return s.err }
-
-// Bind returns an h.H attribute that binds this signal to an input element.
-func (s *signalOf[T]) Bind() h.H {
-	return h.Data("bind", s.displayID())
-}
-
-// Text returns an h.H element that displays the signal value reactively.
-func (s *signalOf[T]) Text() h.H {
-	return h.Span(h.Data("text", "$"+s.displayID()))
-}
-
-// Show returns an h.H attribute that toggles visibility based on the signal value.
-func (s *signalOf[T]) Show() h.H {
-	return h.Data("show", "$"+s.displayID())
-}
-
-// Ref returns the signal reference string for use in datastar expressions.
-func (s *signalOf[T]) Ref() string {
-	return "$" + s.displayID()
-}
-
-// AppSignalHandle is the exported type for app-level signal handles.
-type AppSignalHandle[T any] = signalOf[T]
-
-// AppSignal creates a typed reactive signal scoped to the app.
-// The displayID is the exact key that appears in the browser's signal store.
-func AppSignal[T any](app *App, displayID string, initial T) *AppSignalHandle[T] {
-	sigID := "via_" + genRandID()
-	sig := &signalOf[T]{
-		id:      sigID,
-		display: displayID,
-		initial: initial,
+	s.val = fn(s.val)
+	if ctx != nil {
+		ctx.markSignalDirty(s.slot)
 	}
-	app.signals[sigID] = sig
-	return sig
 }
 
+// Mutable is the common get/set surface shared by Signal[T] and State[T].
+// Helpers like Toggle / Add accept any Mutable so they work uniformly on
+// either flavor of reactive field — the wire-side difference (Signal
+// mirrors to the browser, State stays server-side) doesn't matter for a
+// pure read-modify-write.
+type Mutable[T any] interface {
+	Get(ctx *Ctx) T
+	Set(ctx *Ctx, v T)
+}
 
-// Signal creates a typed reactive signal with the given initial value.
-func Signal[T any](cmp *Cmp, initial T) *signalOf[T] {
-	sigID := "via_" + genRandID()
+// Compile-time guards: every reactive handle in this package satisfies
+// Mutable[T]. A breaking refactor (e.g. dropping Set) shows up here
+// rather than at every call site that uses Toggle / Add.
+var (
+	_ Mutable[int]  = (*Signal[int])(nil)
+	_ Mutable[bool] = (*State[bool])(nil)
+)
 
-	if rv := reflect.ValueOf(any(initial)); !rv.IsValid() {
-		var zero T
-		return &signalOf[T]{
-			id:      sigID,
-			initial: zero,
-			err:     fmt.Errorf("failed to bind signal '%s': nil signal value", sigID),
-		}
+// Toggle flips a boolean reactive field. Free function (rather than a
+// method) so the type parameter can be locked down to bool — methods on
+// a generic type can't constrain T.
+//
+//	func (p *Sidebar) ToggleOpen(ctx *via.Ctx) error {
+//	    via.Toggle(ctx, &p.Open)
+//	    return nil
+//	}
+func Toggle(ctx *Ctx, m Mutable[bool]) {
+	if m == nil {
+		return
 	}
+	m.Set(ctx, !m.Get(ctx))
+}
 
-	sig := &signalOf[T]{
-		id:      sigID,
-		initial: initial,
+// numeric is the constraint satisfied by every Go numeric type that
+// supports + on a Signal[T] / State[T] value. Defined inline so we don't
+// pull in golang.org/x/exp/constraints, and kept unexported because no
+// caller outside this package names the constraint — Add's type parameter
+// is inferred at call sites.
+type numeric interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~float32 | ~float64
+}
+
+// SetIfChanged writes v to m only when it differs from the current
+// value. Returns true if a write happened. Use it on chatty real-time
+// streams where many ticks emit the same value — the unchanged ticks
+// skip the dirty flag, SSE patch, and re-render entirely:
+//
+//	via.SetIfChanged(ctx, &p.NetRX, fmtBytes(rx)) // no-op when unchanged
+//
+// Constrained to comparable T; Signal/State of slices, maps, or other
+// non-comparable shapes need their own equality and aren't covered here.
+func SetIfChanged[T comparable](ctx *Ctx, m Mutable[T], v T) bool {
+	if m == nil {
+		return false
 	}
+	if m.Get(ctx) == v {
+		return false
+	}
+	m.Set(ctx, v)
+	return true
+}
 
-	cmp.signals[sigID] = sig
-	return sig
+// Add increments a numeric reactive field by delta. delta may be negative.
+//
+//	via.Add(ctx, &p.Count, 1)   // increment
+//	via.Add(ctx, &p.Count, -1)  // decrement
+func Add[T numeric](ctx *Ctx, m Mutable[T], delta T) {
+	if m == nil {
+		return
+	}
+	m.Set(ctx, m.Get(ctx)+delta)
+}
+
+// Push appends item to a slice-valued Signal and marks it dirty so the
+// next flush patches the new tail to the browser. Collapses the common
+// get-append-set pattern for chart series, log feeds, and other
+// append-only flows into one call:
+//
+//	via.Push(ctx, &p.Series, point)
+//
+// nil sig is a no-op. To cap retained items, use [PushBounded].
+func Push[T any](ctx *Ctx, sig *Signal[[]T], item T) {
+	if sig == nil {
+		return
+	}
+	sig.val = append(sig.val, item)
+	if ctx != nil {
+		ctx.markSignalDirty(sig.slot)
+	}
+}
+
+// PushBounded is [Push] with a hard cap on retained items. Once the
+// slice would exceed max, the oldest entries are dropped so only the
+// most recent max items remain. max <= 0 is a no-op (nothing is
+// appended, nothing is marked dirty).
+func PushBounded[T any](ctx *Ctx, sig *Signal[[]T], item T, max int) {
+	if sig == nil || max <= 0 {
+		return
+	}
+	sig.val = append(sig.val, item)
+	if len(sig.val) > max {
+		// Shift-left to keep the backing array; copy handles the overlap.
+		copy(sig.val, sig.val[len(sig.val)-max:])
+		sig.val = sig.val[:max]
+	}
+	if ctx != nil {
+		ctx.markSignalDirty(sig.slot)
+	}
+}
+
+// Bind returns a two-way binding attribute. Use on form inputs.
+func (s *Signal[T]) Bind() h.H {
+	return h.Data("bind", s.key)
+}
+
+// Text returns a reactive text span: <span data-text="$key"></span>.
+func (s *Signal[T]) Text() h.H {
+	return h.Span(h.Data("text", s.dollar))
+}
+
+// Show returns a data-show attribute that toggles display by truthiness.
+func (s *Signal[T]) Show() h.H {
+	return h.Data("show", s.dollar)
+}
+
+// Attr returns a data-attr-<name> attribute that mirrors this signal's
+// truthiness onto the host element's HTML attribute. Truthy → attribute
+// present (boolean form, e.g. `disabled`); falsy → attribute absent.
+// For string-valued attributes, the attribute value tracks the signal.
+//
+//	h.Button(c.Saving.Attr("disabled"), h.Text("Save"))
+//	h.A(c.Target.Attr("href"), h.Text("Open"))
+func (s *Signal[T]) Attr(name string) h.H {
+	return h.Data("attr-"+name, s.dollar)
+}
+
+// Style returns a data-style-<prop> attribute that drives an inline CSS
+// property from this signal's stringified value. Pairs naturally with
+// `Signal[string]` carrying a colour, length, etc.
+//
+//	h.Div(c.Hue.Style("background-color"))
+func (s *Signal[T]) Style(prop string) h.H {
+	return h.Data("style-"+prop, s.dollar)
+}
+
+// Key returns the wire key (qualified field path). Useful in tests.
+func (s *Signal[T]) Key() string { return s.key }
+
+// signalRef is the internal interface implemented by every Signal[T] /
+// State[T] handle. It lets the runtime perform reflection-free per-request
+// initialization across mixed-type fields.
+type signalRef interface {
+	bindSlot(slot uint16, key string)
+	encode() ([]byte, error)
+	decodeRaw(raw any)
+}
+
+func (s *Signal[T]) bindSlot(slot uint16, key string) {
+	s.slot = slot
+	s.key = key
+	s.dollar = "$" + key
+}
+
+func (s *Signal[T]) encode() ([]byte, error) {
+	return encodeScalar(reflect.ValueOf(s.val))
+}
+
+func (s *Signal[T]) decodeRaw(raw any) {
+	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
 }

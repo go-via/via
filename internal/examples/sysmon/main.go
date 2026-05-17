@@ -1,13 +1,23 @@
+// Sysmon is a live system monitor: CPU, RAM, disk I/O, and network
+// throughput, streamed to the browser over SSE. The data-collection
+// goroutine fires only on OnConnect so bots that never open the SSE
+// stream don't pay the cost.
+//
+//	go run ./internal/examples/sysmon
 package main
 
 import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/plugins/echarts"
 	"github.com/go-via/via/plugins/picocss"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -21,7 +31,7 @@ const (
 	maxPoints      = 200
 )
 
-// --- metric readers ---
+// Metric readers
 
 func readCPUPercent() float64 {
 	pcts, err := cpu.Percent(0, false)
@@ -45,14 +55,14 @@ type diskSnapshot struct {
 }
 
 func readDiskCounters() diskSnapshot {
-	counters, err := disk.IOCountersWithContext(context.Background())
+	c, err := disk.IOCountersWithContext(context.Background())
 	if err != nil {
 		return diskSnapshot{t: time.Now()}
 	}
 	var r, w uint64
-	for _, c := range counters {
-		r += c.ReadBytes
-		w += c.WriteBytes
+	for _, x := range c {
+		r += x.ReadBytes
+		w += x.WriteBytes
 	}
 	return diskSnapshot{r, w, time.Now()}
 }
@@ -71,11 +81,11 @@ type netSnapshot struct {
 }
 
 func readNetCounters() netSnapshot {
-	counters, err := net.IOCountersWithContext(context.Background(), false)
-	if err != nil || len(counters) == 0 {
+	c, err := net.IOCountersWithContext(context.Background(), false)
+	if err != nil || len(c) == 0 {
 		return netSnapshot{t: time.Now()}
 	}
-	return netSnapshot{counters[0].BytesRecv, counters[0].BytesSent, time.Now()}
+	return netSnapshot{c[0].BytesRecv, c[0].BytesSent, time.Now()}
 }
 
 func netBPS(prev, cur netSnapshot) (float64, float64) {
@@ -85,8 +95,6 @@ func netBPS(prev, cur netSnapshot) (float64, float64) {
 	}
 	return float64(cur.rx-prev.rx) / dt, float64(cur.tx-prev.tx) / dt
 }
-
-// --- helpers ---
 
 func fmtBytes(bps float64) string {
 	switch {
@@ -101,14 +109,9 @@ func fmtBytes(bps float64) string {
 	}
 }
 
-// histBuf is a fixed-capacity sliding-window buffer for chart data points.
-type histBuf struct{ pts [][]any }
-
-func (b *histBuf) push(tsMs int64, v float64) {
-	if len(b.pts) >= maxPoints {
-		b.pts = b.pts[1:]
-	}
-	b.pts = append(b.pts, []any{tsMs, math.Round(v*10) / 10})
+type histBuf struct {
+	mu  sync.Mutex
+	pts [][]any
 }
 
 func newHistBuf() *histBuf {
@@ -121,7 +124,22 @@ func newHistBuf() *histBuf {
 	return &histBuf{pts: pts}
 }
 
-// --- chart option builders ---
+func (b *histBuf) push(tsMs int64, v float64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.pts) >= maxPoints {
+		b.pts = b.pts[1:]
+	}
+	b.pts = append(b.pts, []any{tsMs, math.Round(v*10) / 10})
+}
+
+func (b *histBuf) snapshot() [][]any {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.pts)
+}
+
+// Chart-option builders
 
 func timeAxisOpt(yName string, series ...map[string]any) map[string]any {
 	s := make([]any, len(series))
@@ -152,37 +170,41 @@ func lineSeries(name string, data [][]any) map[string]any {
 	}
 }
 
-// --- view helpers ---
+// View helpers
+//
+// value is passed as h.H so callers can hand in a signal-bound text
+// node directly — the rendered span carries `data-text="$key"` and
+// datastar fills its content from each [Signal.Set] patch, so streaming
+// updates skip the View render path entirely.
 
-func metricCard(title string, valElem h.H, chart h.H) h.H {
+const metricValueStyle = "text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"
+
+func metricCard(title string, value h.H, chart h.H) h.H {
 	return h.Article(
 		h.Header(
 			h.Div(h.Class("grid"),
-				h.Strong(h.Text(title)),
-				h.Span(
-					h.Style( "text-align:right;font-size:1.4rem;font-weight:bold;font-variant-numeric:tabular-nums;white-space:nowrap"),
-					valElem,
-				),
+				h.Strong(h.T(title)),
+				h.With(value, h.Style(metricValueStyle)),
 			),
 		),
 		chart,
 	)
 }
 
-func dualMetricCard(title, label1 string, val1 h.H, label2 string, val2 h.H, chart h.H) h.H {
-	valSpan := func(label string, val h.H) h.H {
+func dualMetricCard(title, l1 string, v1 h.H, l2 string, v2 h.H, chart h.H) h.H {
+	row := func(label string, val h.H) h.H {
 		return h.Span(
-			h.Style( "font-variant-numeric:tabular-nums;white-space:nowrap"),
-			h.Small(h.Text(label+": ")), val,
+			h.Style("font-variant-numeric:tabular-nums;white-space:nowrap"),
+			h.Small(h.T(label+": ")), val,
 		)
 	}
 	return h.Article(
 		h.Header(
-			h.Div(h.Style( "display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
-				h.Strong(h.Text(title)),
-				h.Div(h.Style( "display:flex;gap:1rem"),
-					valSpan(label1, val1),
-					valSpan(label2, val2),
+			h.Div(h.Style("display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap"),
+				h.Strong(h.T(title)),
+				h.Div(h.Style("display:flex;gap:1rem"),
+					row(l1, v1),
+					row(l2, v2),
 				),
 			),
 		),
@@ -190,10 +212,171 @@ func dualMetricCard(title, label1 string, val1 h.H, label2 string, val2 h.H, cha
 	)
 }
 
-// --- main ---
+// Composition
+
+type Page struct {
+	IntervalMs via.Signal[int]  `via:"intervalMs,init=1000"`
+	Running    via.Signal[bool] `via:"running,init=true"`
+
+	// Metric values are datastar-bound signals: the rendered view
+	// emits `<span data-text="$key">`, then [via.Stream] just queues
+	// signal patches per tick. The View is never re-rendered for a
+	// metric update — bytes are sent as a tiny PatchSignals frame
+	// instead of a full element fragment.
+	CPUVal via.Signal[string] `via:"cpuVal,init=--"`
+	RAMVal via.Signal[string] `via:"ramVal,init=--"`
+	DiskR  via.Signal[string] `via:"diskR,init=--"`
+	DiskW  via.Signal[string] `via:"diskW,init=--"`
+	NetRX  via.Signal[string] `via:"netRX,init=--"`
+	NetTX  via.Signal[string] `via:"netTX,init=--"`
+
+	cpuChart  *echarts.Chart
+	ramChart  *echarts.Chart
+	diskChart *echarts.Chart
+	netChart  *echarts.Chart
+
+	cpuBuf, ramBuf, diskRBuf, diskWBuf, netRXBuf, netTXBuf *histBuf
+
+	ticker *via.Ticker
+}
+
+func (p *Page) OnInit(ctx *via.Ctx) error {
+	dims := echarts.WithDimensions("100%", "220px")
+	dark := echarts.WithThemeOverride(echarts.ThemeDark)
+	p.cpuChart = echarts.NewChart(echarts.WithElementID("chart-cpu"), dims, dark)
+	p.ramChart = echarts.NewChart(echarts.WithElementID("chart-ram"), dims, dark)
+	p.diskChart = echarts.NewChart(echarts.WithElementID("chart-disk"), dims, dark)
+	p.netChart = echarts.NewChart(echarts.WithElementID("chart-net"), dims, dark)
+
+	p.cpuBuf = newHistBuf()
+	p.ramBuf = newHistBuf()
+	p.diskRBuf = newHistBuf()
+	p.diskWBuf = newHistBuf()
+	p.netRXBuf = newHistBuf()
+	p.netTXBuf = newHistBuf()
+	return nil
+}
+
+func (p *Page) ApplyControls(ctx *via.Ctx) {
+	p.ticker.SetInterval(time.Duration(p.IntervalMs.Get(ctx)) * time.Millisecond)
+	if p.Running.Get(ctx) {
+		p.ticker.Resume()
+	} else {
+		p.ticker.Pause()
+	}
+}
+
+func (p *Page) ToggleRunning(ctx *via.Ctx) {
+	v := !p.Running.Get(ctx)
+	p.Running.Set(ctx, v)
+	if v {
+		p.ticker.Resume()
+	} else {
+		p.ticker.Pause()
+	}
+}
+
+func (p *Page) OnConnect(ctx *via.Ctx) error {
+	p.cpuChart.SetOption(ctx, timeAxisOpt("%", lineSeries("CPU", nil)))
+	p.ramChart.SetOption(ctx, timeAxisOpt("%", lineSeries("RAM", nil)))
+	p.diskChart.SetOption(ctx, timeAxisOpt("KB/s",
+		lineSeries("Read", nil),
+		lineSeries("Write", nil),
+	))
+	p.netChart.SetOption(ctx, timeAxisOpt("KB/s",
+		lineSeries("RX", nil),
+		lineSeries("TX", nil),
+	))
+
+	prevDisk := readDiskCounters()
+	prevNet := readNetCounters()
+
+	p.ticker = via.Stream(ctx, updateInterval, func(ctx *via.Ctx, _ time.Time) {
+		now := time.Now().UnixMilli()
+		cpuPct := readCPUPercent()
+		ramPct := readMemPercent()
+		curDisk := readDiskCounters()
+		dr, dw := diskBPS(prevDisk, curDisk)
+		prevDisk = curDisk
+		curNet := readNetCounters()
+		rx, tx := netBPS(prevNet, curNet)
+		prevNet = curNet
+
+		p.cpuBuf.push(now, cpuPct)
+		p.ramBuf.push(now, ramPct)
+		p.diskRBuf.push(now, dr/1e3)
+		p.diskWBuf.push(now, dw/1e3)
+		p.netRXBuf.push(now, rx/1e3)
+		p.netTXBuf.push(now, tx/1e3)
+
+		p.CPUVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
+		p.RAMVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
+		p.DiskR.Set(ctx, fmtBytes(dr))
+		p.DiskW.Set(ctx, fmtBytes(dw))
+		p.NetRX.Set(ctx, fmtBytes(rx))
+		p.NetTX.Set(ctx, fmtBytes(tx))
+
+		p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
+		p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))
+		p.diskChart.SetSeries(ctx,
+			lineSeries("Read", p.diskRBuf.snapshot()),
+			lineSeries("Write", p.diskWBuf.snapshot()),
+		)
+		p.netChart.SetSeries(ctx,
+			lineSeries("RX", p.netRXBuf.snapshot()),
+			lineSeries("TX", p.netTXBuf.snapshot()),
+		)
+	})
+	return nil
+}
+
+// View emits the page shape once at first load. Every datastar-bound
+// span (the 6 metric values, the interval label, the pause/resume
+// button label) carries `data-text="$key"` — datastar fills it from
+// the per-tab signal store, which the stream callback patches each
+// tick. The view itself never re-renders during streaming.
+func (p *Page) View(ctx *via.Ctx) h.H {
+	return h.Body(
+		h.Nav(h.Class("container-fluid"),
+			h.Ul(h.Li(h.Strong(h.T("System Monitor")))),
+		),
+		h.Main(h.Class("container"),
+			h.Article(
+				h.Div(h.Class("grid"),
+					h.Label(
+						h.T("Sample interval: "),
+						p.IntervalMs.Text(), h.T("ms"),
+						h.Input(
+							h.Type("range"),
+							h.Min("50"),
+							h.Max("2000"),
+							h.Step("50"),
+							p.IntervalMs.Bind(),
+							on.Change(p.ApplyControls),
+						),
+					),
+					h.Button(
+						h.Data("text", "$running?'Pause':'Resume'"),
+						on.Click(p.ToggleRunning),
+					),
+				),
+			),
+			metricCard("CPU Load", p.CPUVal.Text(), p.cpuChart.Mount()),
+			metricCard("RAM Usage", p.RAMVal.Text(), p.ramChart.Mount()),
+			dualMetricCard("Disk I/O",
+				"Read", p.DiskR.Text(),
+				"Write", p.DiskW.Text(),
+				p.diskChart.Mount()),
+			dualMetricCard("Network",
+				"RX", p.NetRX.Text(),
+				"TX", p.NetTX.Text(),
+				p.netChart.Mount()),
+		),
+	)
+}
 
 func main() {
-	v := via.New(
+	app := via.New(
 		via.WithTitle("System Monitor"),
 		via.WithPlugins(
 			picocss.Plugin(
@@ -203,201 +386,6 @@ func main() {
 			echarts.Plugin(),
 		),
 	)
-
-	v.Page("/", func(cmp *via.Cmp) {
-		// control signals
-		intervalMs := via.Signal(cmp, int(updateInterval/time.Millisecond))
-		running := via.Signal(cmp, true)
-
-		type settings struct {
-			intervalMs int
-			running    bool
-		}
-		settingsCh := make(chan settings, 1)
-
-		applyControls := cmp.Action(func(ctx *via.Ctx) error {
-			settingsCh <- settings{
-				intervalMs: intervalMs.Get(ctx),
-				running:    running.Get(ctx),
-			}
-			return nil
-		})
-		toggleRunning := cmp.Action(func(ctx *via.Ctx) error {
-			newVal := !running.Get(ctx)
-			running.SetValue(ctx, newVal)
-			settingsCh <- settings{
-				intervalMs: intervalMs.Get(ctx),
-				running:    newVal,
-			}
-			return nil
-		})
-
-		darkMode := via.Signal(cmp, true)
-
-		// current-value state (pre-formatted strings)
-		cpuVal := via.State(cmp, "--")
-		ramVal := via.State(cmp, "--")
-		diskR := via.State(cmp, "--")
-		diskW := via.State(cmp, "--")
-		netRX := via.State(cmp, "--")
-		netTX := via.State(cmp, "--")
-
-		// charts
-		dims := echarts.WithDimensions("100%", "220px")
-		dark := echarts.WithThemeOverride(echarts.ThemeDark)
-		cpuChart := echarts.NewChart(echarts.WithElementID("chart-cpu"), dims, dark)
-		ramChart := echarts.NewChart(echarts.WithElementID("chart-ram"), dims, dark)
-		diskChart := echarts.NewChart(echarts.WithElementID("chart-disk"), dims, dark)
-		netChart := echarts.NewChart(echarts.WithElementID("chart-net"), dims, dark)
-
-		toggleDarkMode := cmp.Action(func(ctx *via.Ctx) error {
-			isDark := !darkMode.Get(ctx)
-			darkMode.SetValue(ctx, isDark)
-			theme := echarts.ThemeLight
-			if isDark {
-				theme = echarts.ThemeDark
-			}
-			ctx.MarshalAndPatchSignals(map[string]any{"_picoDarkMode": isDark})
-			cpuChart.SetTheme(ctx, theme)
-			ramChart.SetTheme(ctx, theme)
-			diskChart.SetTheme(ctx, theme)
-			netChart.SetTheme(ctx, theme)
-			return nil
-		})
-
-		// history buffers pre-filled so the full time window shows immediately
-		cpuBuf := newHistBuf()
-		ramBuf := newHistBuf()
-		diskRBuf := newHistBuf()
-		diskWBuf := newHistBuf()
-		netRXBuf := newHistBuf()
-		netTXBuf := newHistBuf()
-
-		cmp.Init(func(ctx *via.Ctx) {
-			cpuChart.SetOption(ctx, timeAxisOpt("%", lineSeries("CPU", nil)))
-			ramChart.SetOption(ctx, timeAxisOpt("%", lineSeries("RAM", nil)))
-			diskChart.SetOption(ctx, timeAxisOpt("KB/s",
-				lineSeries("Read", nil),
-				lineSeries("Write", nil),
-			))
-			netChart.SetOption(ctx, timeAxisOpt("KB/s",
-				lineSeries("RX", nil),
-				lineSeries("TX", nil),
-			))
-
-			prevDisk := readDiskCounters()
-			prevNet := readNetCounters()
-
-			ticker := time.NewTicker(updateInterval)
-			go func() {
-				defer ticker.Stop()
-				paused := false
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case s := <-settingsCh:
-						paused = !s.running
-						newInterval := time.Duration(s.intervalMs) * time.Millisecond
-						ticker.Reset(newInterval)
-						continue
-					case <-ticker.C:
-						if paused {
-							continue
-						}
-					}
-
-					now := time.Now().UnixMilli()
-
-					cpuPct := readCPUPercent()
-					ramPct := readMemPercent()
-
-					curDisk := readDiskCounters()
-					dr, dw := diskBPS(prevDisk, curDisk)
-					prevDisk = curDisk
-
-					curNet := readNetCounters()
-					rx, tx := netBPS(prevNet, curNet)
-					prevNet = curNet
-
-					cpuBuf.push(now, cpuPct)
-					ramBuf.push(now, ramPct)
-					diskRBuf.push(now, dr/1e3)
-					diskWBuf.push(now, dw/1e3)
-					netRXBuf.push(now, rx/1e3)
-					netTXBuf.push(now, tx/1e3)
-
-					cpuVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
-					ramVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
-					diskR.Set(ctx, fmtBytes(dr))
-					diskW.Set(ctx, fmtBytes(dw))
-					netRX.Set(ctx, fmtBytes(rx))
-					netTX.Set(ctx, fmtBytes(tx))
-					ctx.Sync()
-
-					cpuChart.SetOption(ctx, map[string]any{
-						"series": []any{lineSeries("CPU", cpuBuf.pts)},
-					})
-					ramChart.SetOption(ctx, map[string]any{
-						"series": []any{lineSeries("RAM", ramBuf.pts)},
-					})
-					diskChart.SetOption(ctx, map[string]any{
-						"series": []any{
-							lineSeries("Read", diskRBuf.pts),
-							lineSeries("Write", diskWBuf.pts),
-						},
-					})
-					netChart.SetOption(ctx, map[string]any{
-						"series": []any{
-							lineSeries("RX", netRXBuf.pts),
-							lineSeries("TX", netTXBuf.pts),
-						},
-					})
-				}
-			}()
-		})
-
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Body(
-				h.Nav(h.Class("container-fluid"),
-					h.Ul(h.Li(h.Strong(h.Text("System Monitor")))),
-					h.Ul(h.Li(
-						h.Button(
-							h.Class("outline secondary"),
-							toggleDarkMode.OnClick(),
-							h.Text("Toggle dark mode"),
-						),
-					)),
-				),
-				h.Main(h.Class("container"),
-					h.Article(
-						h.Div(h.Class("grid"),
-							h.Label(
-								h.Text("Sample interval: "),
-								intervalMs.Text(), h.Text("ms"),
-								h.Input(
-									h.Type("range"),
-									h.Min("50"),
-									h.Max("2000"),
-									h.Step("50"),
-									intervalMs.Bind(),
-									applyControls.OnChange(),
-								),
-							),
-							h.Button(
-								h.Data("text", running.Ref()+"?'Pause':'Resume'"),
-								toggleRunning.OnClick(),
-							),
-						),
-					),
-					metricCard("CPU Load", h.Text(cpuVal.Get(ctx)), cpuChart.Mount()),
-					metricCard("RAM Usage", h.Text(ramVal.Get(ctx)), ramChart.Mount()),
-					dualMetricCard("Disk I/O", "Read", h.Text(diskR.Get(ctx)), "Write", h.Text(diskW.Get(ctx)), diskChart.Mount()),
-					dualMetricCard("Network", "RX", h.Text(netRX.Get(ctx)), "TX", h.Text(netTX.Get(ctx)), netChart.Mount()),
-				),
-			)
-		})
-	})
-
-	v.Start()
+	via.Mount[Page](app, "/")
+	_ = http.ListenAndServe(":3000", app)
 }

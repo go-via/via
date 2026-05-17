@@ -41,5 +41,12 @@ go.work.sum
 # Air artifacts
 *tmp/
 
-# Compiled example binaries
-sysmon
+# Stray go-build outputs from example dirs
+/counter
+/countercomp
+/greeter
+/pathparams
+/picocss
+/sysmon
+/auth
+/todos

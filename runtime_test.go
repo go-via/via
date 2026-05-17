@@ -1,1069 +1,519 @@
 package via_test
 
 import (
-	"bytes"
-	"net/http"
+	"context"
 	"net/http/httptest"
-	"sync"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- SSE tests ---
+// Disposed flag + OnDispose hook
 
-func TestSSE_reconnectAfterDisconnect(t *testing.T) {
-	t.Parallel()
+var disposed atomic.Int32
 
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		n := via.State(cmp, 0)
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			n.Set(ctx, n.Get(ctx)+1)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("n=%d", n.Get(ctx)), act.OnClick())
-		})
-	})
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	_, cancel1 := connectSSE(t, server, ctxID)
-
-	cancel1()
-	time.Sleep(50 * time.Millisecond)
-
-	stream2, cancel2 := connectSSE(t, server, ctxID)
-	defer cancel2()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream2, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "n=1")
+type disposable struct {
+	N via.State[int]
 }
 
-func TestSSE_establishesConnection(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		n := via.State(cmp, 0)
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			n.Set(ctx, n.Get(ctx)+1)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("n=%d", n.Get(ctx)), act.OnClick())
-		})
-	})
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "n=1")
+func (d *disposable) OnDispose(ctx *via.Ctx) {
+	disposed.Add(1)
 }
 
-func TestSSE_elementPatchUsesDatastarWireFormat(t *testing.T) {
+func (d *disposable) View(ctx *via.Ctx) h.H { return h.Div() }
+
+type disposedFlagPage struct{}
+
+func (p *disposedFlagPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestDisposed_falseWhileLive(t *testing.T) {
 	t.Parallel()
 
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		syncAct := cmp.Action(func(ctx *via.Ctx) error {
-			ctx.SyncElements(h.Div(h.ID("box"), h.Text("updated")))
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Div(h.ID("box"), h.Text("initial")),
-				syncAct.OnClick(),
-			)
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "elements <div", "element patch must use Datastar 'elements' data prefix")
+	c := &disposedFlagPage{}
+	ctx := viatest.NewCtx(t, c)
+	require.False(t, ctx.Disposed(),
+		"a freshly-bound Ctx should not be marked disposed")
 }
 
-func TestSSE_execScriptWrapsInScriptTag(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		scriptAct := cmp.Action(func(ctx *via.Ctx) error {
-			ctx.ExecScript("console.log('hello')")
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(scriptAct.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "<script", "ExecScript must wrap content in a script tag")
-	assert.Contains(t, ev.data, "console.log")
-}
-
-func TestSSE_signalPatchUsesDatastarWireFormat(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		s := via.State(cmp, 0)
-		sig := via.Signal(cmp, "initial")
-
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			s.Set(ctx, 1)
-			sig.SetValue(ctx, "modified")
-			return nil
-		})
-
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Textf("state=%d", s.Get(ctx)),
-				h.Input(sig.Bind()),
-				act.OnClick(),
-			)
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	readSSEEvent(t, stream, sseTimeout) // consume element patch
-
-	sigEv := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-signals", sigEv.eventType)
-	assert.Contains(t, sigEv.data, "signals ", "signal patch must use Datastar 'signals' data prefix")
-}
-
-func TestSSE_actionTriggersSyncUpdate(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		n := via.State(cmp, 0)
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			n.Set(ctx, n.Get(ctx)+1)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("n=%d", n.Get(ctx)), act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "n=1")
-}
-
-func TestSSE_injectedSignalNotEchoedWhenStateMutated(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		s := via.State(cmp, 0)
-		sig := via.Signal(cmp, "original")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			s.Set(ctx, 1)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Textf("val=%d", s.Get(ctx)),
-				h.Input(sig.Bind()),
-				act.OnClick(),
-			)
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "fromBrowser")
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "val=1")
-
-	gotSigPatch, sigEv := tryReadEvent(t, stream, 50*time.Millisecond)
-	assert.False(t, gotSigPatch, "signal injected from browser must not be echoed back, got: %s %s", sigEv.eventType, sigEv.data)
-}
-
-func TestSSE_actionReceivesInjectedSignal(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "initial")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			assert.Equal(t, "injected", sig.Get(ctx))
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Input(sig.Bind()),
-				sig.Text(),
-				act.OnClick(),
-			)
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
-
-	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
-	assert.False(t, got, "no SSE event expected when action does not modify state, got: %s %s", ev.eventType, ev.data)
-}
-
-func TestSSE_noSignalSyncWhenSignalNotModifiedInAction(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "initial")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			t.Logf("Action read: %s", sig.Get(ctx))
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Input(sig.Bind()),
-				sig.Text(),
-				act.OnClick(),
-			)
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "injected")
-
-	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
-	assert.False(t, got, "no SSE event expected when signal is not modified in action, got: %s %s", ev.eventType, ev.data)
-}
-
-func TestSSE_signalOnlyMutationSendsSignalPatchWithoutElementPatch(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "initial")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			sig.SetValue(ctx, "updated")
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Text(), act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-signals", ev.eventType, "signal-only mutation must send signal patch")
-	assert.Contains(t, ev.data, "updated")
-}
-
-func TestSSE_injectedSignalNotEchoedBack(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "original")
-		act := cmp.Action(func(ctx *via.Ctx) error { return nil })
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Input(sig.Bind()), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "newvalue")
-
-	got, ev := tryReadEvent(t, stream, 50*time.Millisecond)
-	assert.False(t, got, "injected signal must not be echoed back to the browser, got event: %s %s", ev.eventType, ev.data)
-}
-
-func TestSSE_noSignalPatchWhenSignalUnchanged(t *testing.T) {
-	t.Parallel()
-
-	counter := 0
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "original")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			counter++
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.Textf("val=%s", sig.Get(ctx)),
-				act.OnClick(),
-			)
-		})
-	})
-
-	require.Equal(t, 0, counter)
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	gotEvent, ev := tryReadEvent(t, stream, 50*time.Millisecond)
-
-	t.Logf("After action - event: type=%s, data=%s, counter=%d", ev.eventType, ev.data, counter)
-
-	assert.False(t, gotEvent, "no patch should be sent when signal is unchanged")
-}
-
-// --- View tests ---
-
-func TestView_rendersInDivWithContextID(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.P(h.Text("content")) })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, `<div id=`)
-	assert.Contains(t, body, "content")
-}
-
-// --- Component tests ---
-
-func TestComponent_rendersNestedInView(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		compView := cmp.Component(func(comp *via.Cmp) {
-			comp.View(func(ctx *via.Ctx) h.H { return h.Span(h.Text("from-component")) })
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(compView(ctx))
-		})
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "from-component")
-}
-
-func TestComponent_runsInitOnPageLoad(t *testing.T) {
-	t.Parallel()
-
-	initCalled := false
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Component(func(comp *via.Cmp) {
-			comp.Init(func(ctx *via.Ctx) { initCalled = true })
-			comp.View(func(ctx *via.Ctx) h.H { return h.Span(h.Text("component")) })
-		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-
-	assert.True(t, initCalled, "init should run when component is created during page load")
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(50 * time.Millisecond)
-	assert.True(t, initCalled, "init should persist across SSE connections")
-}
-
-func TestComponent_disposeCallback(t *testing.T) {
-	t.Parallel()
-
-	disposeCalled := false
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Dispose(func() { disposeCalled = true })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(20 * time.Millisecond)
-	assert.False(t, disposeCalled, "dispose should not run before close")
-
-	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	require.NoError(t, err)
-	resp, err := clientFor(server.URL).Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	assert.True(t, disposeCalled, "dispose should run after session close")
-}
-
-// --- Ctx tests ---
-
-func TestGetPathParam_returnsEmptyForMissingParam(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var got string
-	v.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H {
-			got = ctx.GetPathParam("missing")
-			return h.Div()
-		})
-	})
-	assert.Equal(t, "", got)
-}
-
-func TestCtx_runsInitOnPageLoad(t *testing.T) {
-	t.Parallel()
-
-	initRanCount := 0
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) { initRanCount++ })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
-	})
-
-	getPageBody(t, server, "/")
-	assert.Equal(t, 1, initRanCount, "init must run on first page load")
-
-	getPageBody(t, server, "/")
-	assert.Equal(t, 2, initRanCount, "init must run on every page load")
-}
-
-func TestCtx_syncReRendersAndPushesView(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		s := via.State(cmp, "before")
-
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			s.Set(ctx, "after")
-			ctx.Sync()
-			return nil
-		})
-
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("val=%s", s.Get(ctx)), act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	assert.Contains(t, body, "val=before")
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "val=after", "Sync must re-render and push the updated view")
-}
-
-func TestCtx_syncFlushesSignalPatches(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "original")
-
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			sig.SetValue(ctx, "pushed")
-			ctx.Sync()
-			return nil
-		})
-
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Text(), act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev1 := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev1.eventType)
-
-	ev2 := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-signals", ev2.eventType)
-	assert.Contains(t, ev2.data, "pushed")
-}
-
-func TestCtx_marshalAndPatchSignalsPushesArbitrarySignals(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			ctx.MarshalAndPatchSignals(map[string]any{
-				"_customFlag": true,
-				"_theme":      "dark",
-			})
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-signals", ev.eventType)
-	assert.Contains(t, ev.data, "_customFlag")
-	assert.Contains(t, ev.data, "_theme")
-}
-
-func TestCtx_doneClosedOnDispose(t *testing.T) {
-	t.Parallel()
-
-	doneClosed := make(chan struct{})
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			go func() {
-				<-ctx.Done()
-				close(doneClosed)
-			}()
-		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	resp, err := clientFor(server.URL).Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
+var (
+	disposedFalseInsideOnConnect atomic.Bool
+	doneOpenInsideOnConnect      atomic.Bool
+)
+
+type connectStateCheck struct{}
+
+func (c *connectStateCheck) OnConnect(ctx *via.Ctx) error {
+	if !ctx.Disposed() {
+		disposedFalseInsideOnConnect.Store(true)
+	}
 	select {
-	case <-doneClosed:
-	case <-time.After(sseTimeout):
-		t.Fatal("Done() must close on dispose")
+	case <-ctx.Done():
+		// channel closed — failure, leaves doneOpenInsideOnConnect false
+	default:
+		doneOpenInsideOnConnect.Store(true)
 	}
+	// Drive a signal so the SSE drain has something to flush — that's
+	// the await condition below.
+	ctx.PatchSignal("_connected", true)
+	return nil
 }
 
-func TestCtx_doneNotClosedBeforeDispose(t *testing.T) {
+func (c *connectStateCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestOnConnect_ctxIsLiveAndDoneIsOpen(t *testing.T) {
 	t.Parallel()
+	// Symmetric to TestDisposed_trueInsideOnDispose / TestDone_channelClosedInsideOnDispose:
+	// while OnConnect runs, the ctx is fully live. Disposed must be
+	// false; Done's channel must NOT be closed yet.
+	disposedFalseInsideOnConnect.Store(false)
+	doneOpenInsideOnConnect.Store(false)
 
-	doneClosed := make(chan struct{})
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			go func() {
-				<-ctx.Done()
-				close(doneClosed)
-			}()
-		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[connectStateCheck](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	select {
-	case <-doneClosed:
-		t.Fatal("Done() must not close before session ends")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	req, err := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	require.NoError(t, err)
-	resp, err := clientFor(server.URL).Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	select {
-	case <-doneClosed:
-	case <-time.After(sseTimeout):
-		t.Fatal("Done() must close when session ends")
-	}
-}
-
-func TestCtx_exposeWAndRDuringAction(t *testing.T) {
-	t.Parallel()
-
-	type result struct{ hasW, hasR bool }
-	gotCh := make(chan result, 1)
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
+	viatest.AwaitFrame(t, frames, 2*time.Second, "_connected")
 
-	triggerAction(t, server.URL, ctxID, actionID)
+	assert.True(t, disposedFalseInsideOnConnect.Load(),
+		"ctx.Disposed() must be false while OnConnect runs")
+	assert.True(t, doneOpenInsideOnConnect.Load(),
+		"ctx.Done() must not be closed while OnConnect runs")
+}
 
+var doneChanClosedInsideOnDispose atomic.Bool
+
+type doneSelfCheck struct{}
+
+func (d *doneSelfCheck) OnDispose(ctx *via.Ctx) {
 	select {
-	case r := <-gotCh:
-		assert.True(t, r.hasW, "ctx.W should be set during action")
-		assert.True(t, r.hasR, "ctx.R should be set during action")
-	case <-time.After(sseTimeout):
-		require.Fail(t, "timed out waiting for action")
+	case <-ctx.Done():
+		doneChanClosedInsideOnDispose.Store(true)
+	case <-time.After(100 * time.Millisecond):
+		// Channel not closed yet — assertion below will fail.
 	}
 }
 
-func TestCtx_WriterAndRequestAreNilAfterActionReturns(t *testing.T) {
+func (d *doneSelfCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestDone_channelClosedInsideOnDispose(t *testing.T) {
 	t.Parallel()
+	// Sibling to TestDisposed_trueInsideOnDispose: disposeCtx closes
+	// ctx.doneChan before invoking the user's OnDispose, so a select
+	// on ctx.Done() returns immediately throughout the callback body.
+	doneChanClosedInsideOnDispose.Store(false)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[doneSelfCheck](app, "/")
+	defer server.Close()
 
-	type result struct{ hasW, hasR bool }
-	gotCh := make(chan result, 1)
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
-			}()
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	select {
-	case r := <-gotCh:
-		assert.False(t, r.hasW, "Writer() must return nil from a goroutine that outlives the action")
-		assert.False(t, r.hasR, "Request() must return nil from a goroutine that outlives the action")
-	case <-time.After(sseTimeout):
-		require.Fail(t, "timed out waiting for late goroutine")
-	}
+	_ = viatest.NewClient(t, server, "/")
+	require.NoError(t, app.Shutdown(context.Background()))
+	require.Eventually(t,
+		func() bool { return doneChanClosedInsideOnDispose.Load() },
+		2*time.Second, 10*time.Millisecond,
+		"ctx.Done() must be a closed channel by the time OnDispose runs")
 }
 
-func TestCtx_WAndRAreNilDuringInit(t *testing.T) {
-	t.Parallel()
+var disposedFlagSeenInsideOnDispose atomic.Bool
 
-	type result struct{ hasW, hasR bool }
-	var got result
+type disposedSelfCheck struct{}
 
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			got = result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
-		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-
-	getPageBody(t, server, "/")
-
-	assert.False(t, got.hasW, "ctx.W should be nil during Init")
-	assert.False(t, got.hasR, "ctx.R should be nil during Init")
+func (d *disposedSelfCheck) OnDispose(ctx *via.Ctx) {
+	disposedFlagSeenInsideOnDispose.Store(ctx.Disposed())
 }
 
-func TestCtx_actionsSerializedPerCtx(t *testing.T) {
+func (d *disposedSelfCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestDisposed_trueInsideOnDispose(t *testing.T) {
 	t.Parallel()
+	// disposeCtx flips ctx.disposed and closes doneChan before invoking
+	// the user's OnDispose. The user contract is "ctx.Disposed() returns
+	// true throughout the OnDispose body" — pin it.
+	disposedFlagSeenInsideOnDispose.Store(false)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[disposedSelfCheck](app, "/")
+	defer server.Close()
 
-	var mu sync.Mutex
-	var concurrent int
-	var maxConcurrent int
-	enterCh := make(chan struct{}, 3)
-	proceedCh := make(chan struct{})
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			mu.Lock()
-			concurrent++
-			if concurrent > maxConcurrent {
-				maxConcurrent = concurrent
-			}
-			mu.Unlock()
-
-			enterCh <- struct{}{}
-			<-proceedCh
-
-			mu.Lock()
-			concurrent--
-			mu.Unlock()
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	var wg sync.WaitGroup
-	for range 3 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			triggerAction(t, server.URL, ctxID, actionID)
-		}()
-	}
-
-	select {
-	case <-enterCh:
-	case <-time.After(sseTimeout):
-		require.Fail(t, "no action entered")
-	}
-	time.Sleep(50 * time.Millisecond)
-
-	mu.Lock()
-	max := maxConcurrent
-	mu.Unlock()
-
-	close(proceedCh)
-	wg.Wait()
-
-	assert.Equal(t, 1, max, "actions should be serialized (max 1 concurrent)")
+	_ = viatest.NewClient(t, server, "/")
+	require.NoError(t, app.Shutdown(context.Background()))
+	require.Eventually(t,
+		func() bool { return disposedFlagSeenInsideOnDispose.Load() },
+		2*time.Second, 10*time.Millisecond,
+		"ctx.Disposed() must already be true by the time OnDispose runs")
 }
 
-func TestCtx_WAndRClearedAfterActionPanics(t *testing.T) {
+func TestDispose_runsOnAppShutdown(t *testing.T) {
 	t.Parallel()
 
-	type result struct{ hasW, hasR bool }
-	gotCh := make(chan result, 1)
+	disposed.Store(0)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[disposable](app, "/")
+	defer server.Close()
 
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		panicAct := cmp.Action(func(ctx *via.Ctx) error {
-			panic("boom")
-		})
-		checkAct := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(panicAct.OnClick(), checkAct.OnClick())
-		})
-	})
+	_ = viatest.NewClient(t, server, "/")
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionIDs := extractActionIDs(t, body)
-	require.Len(t, actionIDs, 2)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	// Fire the panicking action
-	triggerAction(t, server.URL, ctxID, actionIDs[0])
-	time.Sleep(50 * time.Millisecond)
-
-	// Fire the check action — W/R must be freshly set, not stale
-	triggerAction(t, server.URL, ctxID, actionIDs[1])
-
-	select {
-	case r := <-gotCh:
-		assert.True(t, r.hasW, "ctx.W should be set for action after panic")
-		assert.True(t, r.hasR, "ctx.R should be set for action after panic")
-	case <-time.After(sseTimeout):
-		require.Fail(t, "check action never ran — mutex likely stuck after panic")
-	}
+	require.NoError(t, app.Shutdown(context.Background()))
+	require.Eventually(t, func() bool { return disposed.Load() == 1 },
+		2*time.Second, 10*time.Millisecond,
+		"OnDispose not called after Shutdown")
 }
 
-func TestCtx_redirectSendsScriptPatchDuringAction(t *testing.T) {
-	t.Parallel()
+// SyncElements / PatchSignal / ExecScriptf — push helpers
 
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			ctx.Redirect("/dashboard")
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick())
-		})
-	})
+type syncPage struct{}
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	stream, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionID)
-
-	ev := readSSEEvent(t, stream, sseTimeout)
-	assert.Equal(t, "datastar-patch-elements", ev.eventType)
-	assert.Contains(t, ev.data, "/dashboard")
-	assert.Contains(t, ev.data, "<script")
+func (p *syncPage) PushList(ctx *via.Ctx) error {
+	ctx.SyncElements(
+		h.Ul(h.ID("results"),
+			h.Li(h.Text("first")),
+			h.Li(h.Text("second")),
+		),
+	)
+	return nil
 }
 
-func TestCtx_WAndRAreNilAfterActionCompletes(t *testing.T) {
-	t.Parallel()
-
-	type result struct{ hasW, hasR bool }
-	gotCh := make(chan result, 1)
-	actionDone := make(chan struct{})
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			close(actionDone)
-			return nil
-		})
-		act2 := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- result{hasW: ctx.Writer() != nil, hasR: ctx.Request() != nil}
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(act.OnClick(), act2.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionIDs := extractActionIDs(t, body)
-	require.Len(t, actionIDs, 2)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	// Trigger first action and wait for it to complete
-	triggerAction(t, server.URL, ctxID, actionIDs[0])
-	select {
-	case <-actionDone:
-	case <-time.After(sseTimeout):
-		require.Fail(t, "first action never completed")
-	}
-
-	// Trigger second action — W/R must be set fresh (not leftover nil from first)
-	triggerAction(t, server.URL, ctxID, actionIDs[1])
-	select {
-	case r := <-gotCh:
-		assert.True(t, r.hasW, "ctx.W should be set for each action invocation")
-		assert.True(t, r.hasR, "ctx.R should be set for each action invocation")
-	case <-time.After(sseTimeout):
-		require.Fail(t, "second action never ran")
-	}
+func (p *syncPage) Toast(ctx *via.Ctx) error {
+	ctx.ExecScriptf("console.log(%q)", "hello world")
+	return nil
 }
 
-func TestCtx_signalSetValueInViewAppearsInInitialHTML(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		s := via.Signal(cmp, "default_val")
-		cmp.View(func(ctx *via.Ctx) h.H {
-			s.SetValue(ctx, "overridden_val")
-			return h.Div(h.Text("page"))
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "overridden_val", "signal set during view should appear in initial HTML")
-	assert.NotContains(t, body, "default_val", "compile-time default should be replaced")
+func (p *syncPage) PickTheme(ctx *via.Ctx) error {
+	ctx.PatchSignal("_picoTheme", "purple")
+	return nil
 }
 
-func TestAppSignal_appearsInInitialHTML(t *testing.T) {
+func (p *syncPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.ID("root"), h.P(h.Text("ready")))
+}
+
+func TestSyncElements_pushesManualPatchOverSSE(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	s := via.AppSignal(app, "_customSig", "default_val")
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("val=%s", s.Get(ctx)))
-		})
-	})
-	t.Cleanup(server.Close)
+	via.Mount[syncPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, `"_customSig":"default_val"`)
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("PushList").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `id="results"`, "first")
 }
 
-func TestAppSignal_setValueInInitAppearsInHTML(t *testing.T) {
+func TestDisposed_trueOnNilReceiver(t *testing.T) {
 	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	s := via.AppSignal(app, "_mode", "default")
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			s.SetValue(ctx, "custom")
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("mode=%s", s.Get(ctx)))
-		})
-	})
-	t.Cleanup(server.Close)
-
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, `"_mode":"custom"`)
-	assert.Contains(t, body, "mode=custom")
+	// A nil *Ctx is by definition no longer live — Disposed returns true
+	// so callers can short-circuit safely instead of dereferencing.
+	var ctx *via.Ctx
+	assert.True(t, ctx.Disposed())
 }
 
-func TestInit_runsOnPageLoad(t *testing.T) {
+func TestCtx_coreHelpersTolerateNilReceiver(t *testing.T) {
 	t.Parallel()
-
-	initRan := make(chan struct{}, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			select {
-			case initRan <- struct{}{}:
-			default:
-			}
+	// Sibling to TestCtx_pushHelpersToleratesNilReceiver — covers the
+	// nil-receiver guards in ctx.go itself (not push.go).
+	var ctx *via.Ctx
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"Sync", func() { ctx.Sync() }},
+		{"Flush", func() { ctx.Flush() }},
+		{"SetCookie", func() { ctx.SetCookie(nil) }},
+		{"DelCookie", func() { ctx.DelCookie("") }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotPanics(t, c.fn)
 		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) })
-	})
-
-	getPageBody(t, server, "/")
-
-	select {
-	case <-initRan:
-	case <-time.After(sseTimeout):
-		t.Fatal("init must run on page load")
 	}
 }
 
-func TestInit_runsBeforeView(t *testing.T) {
+func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
+	t.Parallel()
+	// Every push.go helper has `if ctx == nil { return }` as its first
+	// line. A regression that dropped any one of those guards would
+	// panic on a nil-pointer method call. None of these are realistic
+	// user code, but the defensive guards are part of the contract.
+	var ctx *via.Ctx
+	cases := []struct {
+		name string
+		fn   func()
+	}{
+		{"ExecScript", func() { ctx.ExecScript("x") }},
+		{"ExecScriptf", func() { ctx.ExecScriptf("x %d", 1) }},
+		{"Reload", func() { ctx.Reload() }},
+		{"Toast", func() { ctx.Toast("hi") }},
+		{"Redirect", func() { ctx.Redirect("/") }},
+		{"PatchSignals", func() { ctx.PatchSignals(map[string]any{"k": 1}) }},
+		{"SyncElements", func() { ctx.SyncElements(h.Div()) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.NotPanics(t, c.fn)
+		})
+	}
+}
+
+func TestPatchSignals_emptyAndNilMapAreNoOps(t *testing.T) {
+	t.Parallel()
+	// Plural counterpart to PatchSignal's empty-key guard. The body has
+	// `if len(values) == 0 { return }` which covers both nil maps and
+	// zero-length maps. Pin both shapes so a refactor that drops the
+	// guard doesn't start enqueueing empty signal frames.
+	p := &syncPage{}
+	ctx := viatest.NewCtx(t, p)
+
+	ctx.PatchSignals(nil)
+	assert.Empty(t, ctx.PendingSignals(),
+		"PatchSignals(nil) must not enqueue anything")
+
+	ctx.PatchSignals(map[string]any{})
+	assert.Empty(t, ctx.PendingSignals(),
+		"PatchSignals(empty map) must not enqueue anything")
+}
+
+func TestPatchSignal_emptyKeyIsNoOp(t *testing.T) {
+	t.Parallel()
+	// Empty key short-circuits before reaching the queue — documented
+	// in PatchSignal's body. Pin it so a refactor that drops the guard
+	// doesn't start enqueueing meaningless `"": value` entries that
+	// json.Marshal would faithfully forward to the client.
+	p := &syncPage{}
+	ctx := viatest.NewCtx(t, p)
+	ctx.PatchSignal("", "ignored")
+	assert.Empty(t, ctx.PendingSignals(),
+		"PatchSignal with empty key must not enqueue anything")
+}
+
+func TestPatchSignal_pushesKeyedValueToClient(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	s := via.AppSignal(app, "_pref", "default")
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Init(func(ctx *via.Ctx) {
-			s.SetValue(ctx, "from_init")
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(h.Textf("pref=%s", s.Get(ctx)))
-		})
-	})
-	t.Cleanup(server.Close)
+	via.Mount[syncPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "pref=from_init", "init must run before view")
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("PickTheme").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"purple"`)
 }
 
+func TestExecScriptf_formatsArgsBeforeQueueing(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("Toast").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `console.log("hello world")`)
+}
+
+// Stream — periodic ticker helper
+
+type clockPage struct {
+	Tick via.State[int]
+
+	ticks atomic.Int32
+}
+
+func (p *clockPage) OnConnect(ctx *via.Ctx) error {
+	via.Stream(ctx, 20*time.Millisecond, func(ctx *via.Ctx, t time.Time) {
+		p.ticks.Add(1)
+		p.Tick.Set(ctx, int(p.ticks.Load()))
+	})
+	return nil
+}
+
+func (p *clockPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.P(p.Tick.Text()))
+}
+
+func TestStream_pushesPeriodicUpdatesOverSSE(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[clockPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+
+	// <p>3</p> proves the ticker fired at least 3x.
+	viatest.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
+}
+
+func TestStream_stopsWhenCtxDone(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[clockPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	_, cancel := tc.SSE()
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+
+	resp, err := server.Client().Post(server.URL+"/_sse/close", "text/plain", strings.NewReader(tc.TabID()))
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	// Race detector catches ticker leaks via the test runner.
+	time.Sleep(80 * time.Millisecond)
+}
+
+// Ticker returned by Stream — pause/resume/set-interval surface
+
+type tickerPage struct {
+	ticks atomic.Int32
+}
+
+func (p *tickerPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestTicker_pauseStopsAndResumeRestartsCallback(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	ticker := via.Stream(ctx, 10*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.ticks.Add(1)
+	})
+	require.NotNil(t, ticker, "Stream should return a *via.Ticker handle")
+
+	time.Sleep(40 * time.Millisecond)
+	pre := p.ticks.Load()
+	require.GreaterOrEqual(t, pre, int32(2),
+		"ticker should fire at least twice in 40ms at 10ms interval")
+
+	ticker.Pause()
+	// Allow one in-flight callback to land, then snapshot.
+	time.Sleep(15 * time.Millisecond)
+	pausedAt := p.ticks.Load()
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, pausedAt, p.ticks.Load(),
+		"no further ticks should fire while paused")
+
+	ticker.Resume()
+	time.Sleep(40 * time.Millisecond)
+	require.Greater(t, p.ticks.Load(), pausedAt,
+		"ticks should resume after Resume")
+}
+
+func TestTicker_Paused_reflectsPauseAndResumeTransitions(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	ticker := via.Stream(ctx, 200*time.Millisecond, func(*via.Ctx, time.Time) {})
+	require.NotNil(t, ticker)
+
+	assert.False(t, ticker.Paused(),
+		"a freshly-started ticker must report Paused() == false")
+	ticker.Pause()
+	assert.True(t, ticker.Paused(),
+		"Pause must flip Paused() to true")
+	ticker.Resume()
+	assert.False(t, ticker.Paused(),
+		"Resume must flip Paused() back to false")
+}
+
+// streamRacePage exercises Stream-driven writes against action-driven
+// writes on the same composition; both touch the same Signal/State.
+type streamRacePage struct {
+	N via.Signal[int]
+	M via.State[int]
+}
+
+func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
+	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.N.Set(ctx, p.N.Get(ctx)+1)
+		via.Add(ctx, &p.M, 1)
+	})
+	return nil
+}
+
+func (p *streamRacePage) Bump(ctx *via.Ctx) error {
+	p.N.Set(ctx, p.N.Get(ctx)+1)
+	via.Add(ctx, &p.M, 1)
+	return nil
+}
+
+func (p *streamRacePage) View(ctx *via.Ctx) h.H {
+	return h.Div(p.N.Text(), p.M.Text())
+}
+
+// TestStream_doesNotRaceWithConcurrentActions hammers a Stream-driven
+// signal write at the same time as POSTed action handlers that mutate
+// the same composition. Without the per-Ctx actionMu around streamTick
+// the race detector trips on Signal.val / dirty-bit writes; with the
+// lock in place this must stay clean.
+func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[streamRacePage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	_, cancel := tc.SSE()
+	defer cancel()
+
+	// Let OnConnect fire and the Stream goroutine spin up.
+	time.Sleep(20 * time.Millisecond)
+
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		// Action POST contends with Stream tick for actionMu / Signal.val.
+		_ = tc.Action("Bump").Fire()
+	}
+}
+
+func TestTicker_setIntervalChangesCadence(t *testing.T) {
+	t.Parallel()
+	p := &tickerPage{}
+	ctx := viatest.NewCtx(t, p)
+	// Start slow so we can observe the cadence change.
+	ticker := via.Stream(ctx, 200*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
+		p.ticks.Add(1)
+	})
+	time.Sleep(60 * time.Millisecond)
+	require.Zero(t, p.ticks.Load(),
+		"no tick should have fired yet at the slow cadence")
+
+	ticker.SetInterval(10 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	require.GreaterOrEqual(t, p.ticks.Load(), int32(2),
+		"after SetInterval(10ms) the callback should fire several times in 50ms")
+}

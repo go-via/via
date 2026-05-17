@@ -1,34 +1,38 @@
+// Greeter demonstrates a server-side Signal[string] driven by two actions.
+//
+//	go run ./internal/examples/greeter
 package main
 
 import (
+	"net/http"
+
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
+type Greeter struct {
+	Greeting via.Signal[string] `via:"greeting,init=Hello..."`
+}
+
+func (g *Greeter) GreetBob(ctx *via.Ctx) {
+	g.Greeting.Set(ctx, "Hello Bob!")
+}
+
+func (g *Greeter) GreetAlice(ctx *via.Ctx) {
+	g.Greeting.Set(ctx, "Hello Alice!")
+}
+
+func (g *Greeter) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.P(h.Text("Greeting: "), g.Greeting.Text()),
+		h.Button(h.Text("Greet Bob"), on.Click(g.GreetBob)),
+		h.Button(h.Text("Greet Alice"), on.Click(g.GreetAlice)),
+	)
+}
+
 func main() {
-	v := via.New()
-
-	v.Page("/", func(cmp *via.Cmp) {
-		greeting := via.Signal(cmp, "Hello...")
-
-		greetBob := cmp.Action(func(ctx *via.Ctx) error {
-			greeting.SetValue(ctx, "Hello Bob!")
-			return nil
-		})
-
-		greetAlice := cmp.Action(func(ctx *via.Ctx) error {
-			greeting.SetValue(ctx, "Hello Alice!")
-			return nil
-		})
-
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(
-				h.P(h.Span(h.Text("Greeting: ")), h.Span(greeting.Text())),
-				h.Button(h.Text("Greet Bob"), greetBob.OnClick()),
-				h.Button(h.Text("Greet Alice"), greetAlice.OnClick()),
-			)
-		})
-	})
-
-	v.Start()
+	app := via.New(via.WithTitle("Greeter"))
+	via.Mount[Greeter](app, "/")
+	_ = http.ListenAndServe(":3000", app)
 }

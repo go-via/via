@@ -1,92 +1,44 @@
-// Package h provides a Go-native DSL for HTML composition.
-// Every element, attribute, and text node is constructed as a function that returns a [h.H] DOM node.
+// Package h is a Go-native DSL for HTML composition.
 //
-// Example:
+// Every element, attribute, and text node is a value implementing [H],
+// the single render-to-writer interface. Trees compose as ordinary Go
+// values — `h.Div(h.ID("c"), h.H1(h.T("Counter")))` — and render with
+// one Write per node, no per-render escaping, and no template engine.
 //
-//	h.Div(
-//		h.H1(h.Text("Hello, Via")),
-//		h.P(h.Text("Pure Go. No tmplates.")),
-//	)
+// Design properties:
+//   - one heap allocation per element (the element pointer + its
+//     variadic children slice fold into one object when the compiler
+//     can stack-promote the slice, otherwise two);
+//   - attributes are pre-escaped at construction so re-renders write
+//     their bytes verbatim;
+//   - text nodes carry the HTML-escaped payload directly;
+//   - rendering walks each child twice — attributes-pass then
+//     content-pass — using a concrete type switch rather than an
+//     interface-method indirection.
+//
+// For fragments that don't depend on per-request state, [Static]
+// pre-renders to bytes once and writes verbatim on every Render. For
+// dynamic-tag escape hatches use [Tag] / [NewTag]. For shared
+// composition use [With] to extend an existing element non-destructively.
+//
+// Plugin authors emitting attribute-shaped output must use [RawAttr]:
+// the attribute marker is unexported on purpose so external packages
+// cannot inject raw bytes into the opening-tag region. See the on
+// package for the canonical pattern.
 package h
 
-import (
-	"io"
+import "io"
 
-	g "maragu.dev/gomponents"
-	gc "maragu.dev/gomponents/components"
-)
-
-// H represents a DOM node.
+// H is anything that renders itself to an [io.Writer].
 type H interface {
 	Render(w io.Writer) error
 }
 
-// Text creates a text DOM node that Renders the escaped string t.
-func Text(t string) H {
-	return g.Text(t)
-}
-
-// Textf creates a text DOM node that Renders the interpolated and escaped string format.
-func Textf(format string, a ...any) H {
-	return g.Textf(format, a...)
-}
-
-// Raw creates a text DOM [Node] that just Renders the unescaped string t.
-func Raw(s string) H {
-	return g.Raw(s)
-}
-
-// Rawf creates a text DOM [Node] that just Renders the interpolated and
-// unescaped string format.
-func Rawf(format string, a ...any) H {
-	return g.Rawf(format, a...)
-}
-
-// Attr creates an attribute DOM [Node] with a name and optional value.
-// If only a name is passed, it's a name-only (boolean) attribute (like "required").
-// If a name and value are passed, it's a name-value attribute (like `class="header"`).
-// More than one value make [Attr] panic.
-// Use this if no convenience creator exists in the h package.
-func Attr(name string, value ...string) H {
-	return g.Attr(name, value...)
-}
-
-func If(condition bool, n H) H {
-	if condition {
-		return n
-	}
-	return nil
-}
-
-// HTML5Props defines properties for HTML5 pages. Title is set always set, Description
-// and Language elements only if the strings are non-empty.
-type HTML5Props struct {
-	Title       string
-	Description string
-	Language    string
-	Head        []H
-	Body        []H
-	HTMLAttrs   []H
-}
-
-// HTML5 document template.
-func HTML5(p HTML5Props) H {
-	gp := gc.HTML5Props{
-		Title:       p.Title,
-		Description: p.Description,
-		Language:    p.Language,
-		Head:        retype(p.Head),
-		Body:        retype(p.Body),
-		HTMLAttrs:   retype(p.HTMLAttrs),
-	}
-	gp.Head = append(gp.Head, Script(Type("module"), Src("/_datastar.js")))
-	return gc.HTML5(gp)
-}
-
-// JoinAttrs with the given name only on the first level of the given nodes. This means that
-// attributes on non-direct descendants are ignored. Attribute values are joined by spaces.
-//
-// Note that this renders all first-level attributes to check whether they should be processed.
-func JoinAttrs(name string, children ...H) H {
-	return gc.JoinAttrs(name, retype(children)...)
+// attribute marks nodes that belong inside the opening tag of their
+// parent element. Implementations also satisfy [H]. The marker is an
+// unexported method so external packages cannot impersonate an
+// attribute and inject raw bytes into the open-tag region.
+type attribute interface {
+	H
+	isAttr()
 }

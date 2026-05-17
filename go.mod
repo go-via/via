@@ -2,8 +2,6 @@ module github.com/go-via/via
 
 go 1.25.4
 
-require maragu.dev/gomponents v1.2.0
-
 require (
 	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/starfederation/datastar-go v1.0.3

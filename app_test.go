@@ -1,12 +1,11 @@
 package via_test
 
 import (
-	"bytes"
-	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
-	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -14,312 +13,210 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNew_returnsNonNil(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	assert.NotNil(t, v)
-}
-
-func TestNew_appliesTitle(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTitle("My App"), via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "My App")
-}
-
-func TestNew_usesDefaultTitle(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "Via")
-}
-
-func TestPage_rendersViewInDocument(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.H1(h.Text("Hello Via!")) })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "Hello Via!")
-}
-
-func TestPage_includesDatastarScript(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "_datastar.js")
-}
-
-func TestPage_includesViaCtxSignal(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "via_tab")
-}
-
-func TestPage_panicsOnNilView(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	assert.Panics(t, func() {
-		v.Page("/", func(cmp *via.Cmp) {
-			cmp.View(nil)
-		})
-	})
-}
-
-func TestPage_rendersPathParam(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/users/{id}", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H {
-			id := ctx.GetPathParam("id")
-			return h.Div(h.Textf("user-%s", id))
-		})
-	})
-	body := getPageBody(t, server, "/users/42")
-	assert.Contains(t, body, "user-42")
-}
-
-func TestAppendToHead_addsElement(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	v := via.New(via.WithTestServer(&server))
-	v.AppendToHead(h.Link(h.Rel("stylesheet"), h.Href("/app.css")))
-	v.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "/app.css")
-}
-
-func TestAppendToFoot_addsElement(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	v := via.New(via.WithTestServer(&server))
-	v.AppendToFoot(h.Script(h.Src("/foot.js")))
-	v.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, "/foot.js")
-}
-
-func TestPage_embedsInitialSignalValuesInHTML(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		s := via.Signal(cmp, 42)
-		s.Tag("count")
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div(s.Text()) })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, `count_`, "signal display ID must appear in initial HTML")
-	assert.Contains(t, body, `42`, "signal initial value must appear in initial HTML")
-}
-
-func TestNew_acceptsShutdownTimeout(t *testing.T) {
-	t.Parallel()
-
-	v := via.New(via.WithShutdownTimeout(10 * time.Second))
-	assert.NotNil(t, v)
-}
-
-func TestShutdown_disposesActiveContexts(t *testing.T) {
-	t.Parallel()
-	disposed := make(chan struct{})
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Dispose(func() { close(disposed) })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	err := app.Shutdown(context.Background())
-	assert.NoError(t, err)
-
-	select {
-	case <-disposed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("dispose callback not called after Shutdown")
-	}
-}
-
-func TestShutdown_disposesComponentsOfActiveContexts(t *testing.T) {
-	t.Parallel()
-	disposed := make(chan struct{})
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Component(func(comp *via.Cmp) {
-			comp.Dispose(func() { close(disposed) })
-			comp.View(func(ctx *via.Ctx) h.H { return h.Span() })
-		})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	require.NoError(t, app.Shutdown(context.Background()))
-
-	select {
-	case <-disposed:
-	case <-time.After(2 * time.Second):
-		t.Fatal("component dispose callback not called after Shutdown")
-	}
-}
-
-func TestShutdown_closesSSEStream(t *testing.T) {
-	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	scanner, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-
-	time.Sleep(50 * time.Millisecond)
-
-	require.NoError(t, app.Shutdown(context.Background()))
-
-	done := make(chan struct{})
-	go func() {
-		for scanner.Scan() {
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("SSE stream did not close after Shutdown")
-	}
-}
-
-func TestDispose_shutdownAfterSSECloseDoesNotPanic(t *testing.T) {
-	t.Parallel()
-
-	disposeCount := 0
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Dispose(func() { disposeCount++ })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	// Close via beacon first
-	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	r, _ := clientFor(server.URL).Do(req)
-	if r != nil {
-		r.Body.Close()
-	}
-
-	time.Sleep(50 * time.Millisecond)
-
-	// SSE disconnect triggers disposeCtx on same ctx — must not panic
-	assert.NotPanics(t, func() {
-		cancel()
-		time.Sleep(50 * time.Millisecond)
-	})
-
-	assert.Equal(t, 1, disposeCount, "dispose callback must run exactly once")
-}
-
-func TestDispose_panickingCallbackDoesNotCrashServer(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.Dispose(func() { panic("boom") })
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	defer server.Close()
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	// Close session — dispose panics but server must survive
-	req, _ := http.NewRequest("POST", server.URL+"/_sse/close", bytes.NewBufferString(ctxID))
-	resp, err := clientFor(server.URL).Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	// Server must still be alive
-	resp2, err := http.Get(server.URL + "/_datastar.js")
-	require.NoError(t, err)
-	resp2.Body.Close()
-	assert.Equal(t, http.StatusOK, resp2.StatusCode, "server must survive panicking dispose callback")
-}
-
-func TestShutdown_succeedsWithNoActiveContexts(t *testing.T) {
-	t.Parallel()
-	app := via.New()
-	app.Page("/", func(cmp *via.Cmp) {
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	err := app.Shutdown(context.Background())
-	assert.NoError(t, err)
-}
-
-func TestDatastarJS_served(t *testing.T) {
+func TestApp_servesDatastarJS(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	via.New(via.WithTestServer(&server))
 	defer server.Close()
+
 	resp, err := http.Get(server.URL + "/_datastar.js")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestApp_routes404ForUnknownPath(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.HandleFunc("/known", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("known"))
+	})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/unknown-path")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestApp_handlesMultipleRoutes(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.HandleFunc("/first", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("first"))
+	})
+	app.HandleFunc("/second", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("second"))
+	})
+	defer server.Close()
+
+	resp1, err := http.Get(server.URL + "/first")
+	require.NoError(t, err)
+	buf1, _ := io.ReadAll(resp1.Body)
+	resp1.Body.Close()
+	assert.Contains(t, string(buf1), "first")
+
+	resp2, err := http.Get(server.URL + "/second")
+	require.NoError(t, err)
+	buf2, _ := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	assert.Contains(t, string(buf2), "second")
+}
+
+func TestApp_builtinEndpointsReject404OnUnknownTab(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	via.New(via.WithTestServer(&server))
+	t.Cleanup(func() { server.Close() })
+
+	cases := []struct {
+		name string
+		do   func() (*http.Response, error)
+	}{
+		{"GET /_sse", func() (*http.Response, error) {
+			return http.Get(server.URL + "/_sse")
+		}},
+		{"POST /_action/Inc", func() (*http.Response, error) {
+			return http.Post(server.URL+"/_action/Inc", "text/plain", nil)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			resp, err := c.do()
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		})
+	}
+}
+
+func TestApp_implementsHTTPHandler(t *testing.T) {
+	t.Parallel()
+	var _ http.Handler = via.New()
+}
+
+type customHandler struct{}
+
+func (customHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	w.Write([]byte("custom-handle"))
+}
+
+func TestApp_Handle_routesCustomPath(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	app.Handle("/raw", customHandler{})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/raw")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "custom-handle", string(body))
+}
+
+func TestApp_ServeHTTP_dispatchesThroughHandler(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	app.HandleFunc("/direct", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("direct"))
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/direct", nil)
+	app.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "direct", rec.Body.String())
+}
+
+type signalSeedingPlugin struct {
+	key string
+	val any
+}
+
+func (p signalSeedingPlugin) Register(app *via.App) {
+	app.RegisterAppSignal(p.key, p.val)
+	app.AppendToHead(h.Meta(h.Name("plugin-head"), h.Content("yes")))
+	app.AppendToFoot(h.Script(h.Type("text/plain"), h.Text("plugin-foot")))
+	app.AppendAttrToHTML(h.Attr("data-plugin", "active"))
+}
+
+type pluginHostPage struct{}
+
+func (pluginHostPage) View(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) }
+
+func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
+	t.Parallel()
+
+	const N = 32
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	t.Cleanup(func() { server.Close() })
+
+	var counter int32
+	var counterMu sync.Mutex
+	mw := func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		counterMu.Lock()
+		counter++
+		counterMu.Unlock()
+		next.ServeHTTP(w, r)
+	}
+
+	// Two concurrent Use calls race on a.middleware append without a
+	// guard — the race detector flags the slice write, and lost entries
+	// would surface as a counter lower than N after one request.
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for range N {
+		go func() {
+			defer wg.Done()
+			app.Use(mw)
+		}()
+	}
+	wg.Wait()
+
+	app.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	resp, err := http.Get(server.URL + "/ping")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	counterMu.Lock()
+	got := counter
+	counterMu.Unlock()
+	assert.Equal(t, int32(N), got,
+		"every concurrently-registered middleware must be in the chain")
+}
+
+func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithPlugins(signalSeedingPlugin{key: "_pluginKey", val: "seeded"}),
+	)
+	via.Mount[pluginHostPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-plugin="active"`,
+		"AppendAttrToHTML must surface on <html>")
+	assert.Contains(t, body, `name="plugin-head"`,
+		"AppendToHead must inject into <head>")
+	assert.Contains(t, body, "plugin-foot",
+		"AppendToFoot must inject before </body>")
+	assert.Contains(t, body, "_pluginKey",
+		"RegisterAppSignal must seed the data-signals payload")
+	assert.Contains(t, body, "seeded")
 }

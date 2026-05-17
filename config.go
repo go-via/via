@@ -1,11 +1,12 @@
 package via
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"time"
 )
 
-// LogLevel controls the minimum severity written to stdout.
+// LogLevel selects the minimum log severity written to stdout.
 type LogLevel int
 
 const (
@@ -16,80 +17,130 @@ const (
 )
 
 type config struct {
-	addr            string
-	title           string
-	logLevel        LogLevel
-	plugins         []Plugin
-	shutdownTimeout time.Duration
-	sessionTTL      time.Duration
-	contextTTL      time.Duration
-	sseHeartbeat    time.Duration
-	secureCookies   bool
-	testServer      **httptest.Server
+	addr               string
+	title              string
+	lang               string
+	description        string
+	logLevel           LogLevel
+	plugins            []Plugin
+	shutdownTimeout    time.Duration
+	sessionTTL         time.Duration
+	contextTTL         time.Duration
+	sseHeartbeat       time.Duration
+	secureCookies      bool
+	testServer         **httptest.Server
+	httpServerHook     func(*http.Server)
+	readHeaderTimeout  time.Duration
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	idleTimeout        time.Duration
+	maxRequestBody     int64
+	maxContexts        int
+	actionErrorHandler func(*Ctx, error)
+	logger             Logger
+	notFoundHandler    http.Handler
 }
 
-// Option configures a Via App.
+// Option configures a via App.
 type Option func(*config)
 
-// WithAddr sets the HTTP server listen address (e.g. ":3000").
-func WithAddr(addr string) Option {
-	return func(c *config) { c.addr = addr }
-}
+// WithAddr sets the HTTP listen address.
+func WithAddr(addr string) Option { return func(c *config) { c.addr = addr } }
 
-// WithTitle sets the HTML document title.
-func WithTitle(title string) Option {
-	return func(c *config) { c.title = title }
-}
+// WithTitle sets the rendered <title> on every page.
+func WithTitle(title string) Option { return func(c *config) { c.title = title } }
 
-// WithLogLevel sets the minimum log level to write to stdout.
-func WithLogLevel(level LogLevel) Option {
-	return func(c *config) { c.logLevel = level }
-}
+// WithLang sets the <html lang="…"> attribute. Required for screen
+// readers and language-aware browser features.
+func WithLang(lang string) Option { return func(c *config) { c.lang = lang } }
 
-// WithShutdownTimeout sets the graceful shutdown timeout for draining connections.
-// Defaults to 5 seconds.
-func WithShutdownTimeout(d time.Duration) Option {
-	return func(c *config) { c.shutdownTimeout = d }
-}
+// WithDescription sets the <meta name="description"> tag included in
+// every rendered page. Search engines and link previews use it.
+func WithDescription(d string) Option { return func(c *config) { c.description = d } }
 
-// WithSessionTTL sets the session expiry duration. Defaults to 30 minutes.
-func WithSessionTTL(d time.Duration) Option {
-	return func(c *config) { c.sessionTTL = d }
-}
+// WithLogLevel sets the minimum log severity.
+func WithLogLevel(level LogLevel) Option { return func(c *config) { c.logLevel = level } }
 
-// WithContextTTL sets the idle timeout for per-tab contexts (Ctx). A context
-// is swept when it hasn't been touched by an SSE event, action, or registration
-// for longer than d. Use 0 to disable the sweep. Defaults to 15 minutes.
-func WithContextTTL(d time.Duration) Option {
-	return func(c *config) { c.contextTTL = d }
-}
+// WithShutdownTimeout sets the graceful shutdown timeout.
+func WithShutdownTimeout(d time.Duration) Option { return func(c *config) { c.shutdownTimeout = d } }
 
-// WithSSEHeartbeat sets the interval between no-op SSE frames sent to keep
-// the connection alive through reverse proxies and to detect dead sockets.
-// Use 0 to disable. Defaults to 25 seconds.
-func WithSSEHeartbeat(d time.Duration) Option {
-	return func(c *config) { c.sseHeartbeat = d }
-}
+// WithSessionTTL sets the per-session expiry. Default 30 minutes.
+func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.sessionTTL = d } }
 
-// WithSecureCookies marks the session cookie as Secure so browsers only send
-// it over HTTPS. Enable this in production behind TLS.
-func WithSecureCookies() Option {
-	return func(c *config) { c.secureCookies = true }
-}
+// WithContextTTL sets the per-tab Ctx idle expiry. Default 15 minutes.
+func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
 
-// WithPlugins registers plugins with the App.
+// WithSSEHeartbeat sets the SSE keep-alive interval.
+func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
+
+// WithSecureCookies marks the session cookie Secure for HTTPS deployments.
+func WithSecureCookies() Option { return func(c *config) { c.secureCookies = true } }
+
+// WithPlugins registers plugins. They run Register at New time.
 func WithPlugins(plugins ...Plugin) Option {
 	return func(c *config) { c.plugins = append(c.plugins, plugins...) }
 }
 
-// WithTestServer creates an httptest.Server backed by the app's mux and writes
-// it to *server before New returns. The caller must call (*server).Close.
+// WithTestServer creates an httptest.Server bound to the app's handler and
+// writes it to *server before New returns. Caller must Close it.
 func WithTestServer(server **httptest.Server) Option {
 	return func(c *config) { c.testServer = server }
 }
 
-// Plugin integrates with the Via app runtime. Implement Register to inject
-// head elements, HTTP handlers, or other app-level concerns.
+// WithHTTPServer hands the user the *http.Server before listening so
+// non-default fields (TLSConfig, ConnState, …) can be set.
+func WithHTTPServer(hook func(*http.Server)) Option {
+	return func(c *config) { c.httpServerHook = hook }
+}
+
+// WithReadHeaderTimeout overrides the default 10 s read-header timeout.
+func WithReadHeaderTimeout(d time.Duration) Option {
+	return func(c *config) { c.readHeaderTimeout = d }
+}
+
+// WithReadTimeout sets http.Server.ReadTimeout. The SSE handler doesn't
+// honor it (the stream is meant to be long-lived), but action POSTs do.
+func WithReadTimeout(d time.Duration) Option { return func(c *config) { c.readTimeout = d } }
+
+// WithWriteTimeout sets http.Server.WriteTimeout. Be cautious: SSE
+// streams are long-lived, so a non-zero WriteTimeout can cut them off
+// mid-stream. Default 0 (no timeout) is safer for SSE-heavy apps.
+func WithWriteTimeout(d time.Duration) Option { return func(c *config) { c.writeTimeout = d } }
+
+// WithIdleTimeout overrides the default 120 s idle-timeout. Affects the
+// lifetime of HTTP/1.1 keep-alive connections; SSE streams are exempt.
+func WithIdleTimeout(d time.Duration) Option { return func(c *config) { c.idleTimeout = d } }
+
+// WithMaxRequestBody caps body bytes for action and close requests.
+// Default 1 MiB.
+func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestBody = n } }
+
+// WithMaxContexts caps the number of concurrent live tabs. New page
+// renders past the cap return 503 instead of registering a Ctx — a
+// crude but effective floor against tab-spam DoS. Default 0 (no
+// cap). Tune to (expected peak users × tabs per user × 2).
+func WithMaxContexts(n int) Option { return func(c *config) { c.maxContexts = n } }
+
+// WithActionErrorHandler replaces the default browser-alert with a custom
+// callback for action errors and panics. The error from a panic is wrapped
+// as fmt.Errorf("panic: %v", recovered).
+func WithActionErrorHandler(fn func(*Ctx, error)) Option {
+	return func(c *config) { c.actionErrorHandler = fn }
+}
+
+// WithLogger replaces the default log.Printf-backed logger with a custom
+// Logger (slog, zap, zerolog, a test buffer, …). All runtime warnings
+// and errors flow through this callback as level + message + key/value
+// pairs.
+func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
+
+// WithNotFound replaces the default 404 page with a custom handler. The
+// handler runs after the session middleware, so it can read the session
+// and decide whether to redirect, render a "not found" composition, or
+// short-circuit with an empty body.
+func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHandler = h } }
+
+// Plugin extends the App at registration time.
 type Plugin interface {
 	Register(*App)
 }

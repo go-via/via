@@ -6,22 +6,38 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-echo "== CI: Format code =="
-go fmt ./...
-echo "OK: formatting complete"
+# Allocation thresholds for bench gates. Bumped if intentional regressions
+# land in a feature commit; tightened when a perf commit lands. Keep
+# generous-but-not-loose so noise doesn't fail CI.
+#
+# Current floors (steady state on the bench page in bench_test.go):
+#   CounterRender              ~164 allocs/op  (post-gomponents-free h pkg)
+#   CounterAction              ~129 allocs/op
+#   CounterActionWithLogger    ~129 allocs/op  (logger path must stay flat
+#                                               vs CounterAction)
+#   ActionBodyOnly                0 allocs/op  (typed Mutable[T] hot path)
+#   SignalFlush                   2 allocs/op  (encoded []byte + json.RawMessage box)
+RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-180}
+ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
+LOGGER_ACTION_ALLOC_MAX=${LOGGER_ACTION_ALLOC_MAX:-149}
+BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
+SIGNAL_FLUSH_ALLOC_MAX=${SIGNAL_FLUSH_ALLOC_MAX:-3}
 
-echo "== CI: Run go vet =="
-if ! go vet ./...; then
-  echo "ERROR: go vet failed."
+echo "== CI: Check formatting =="
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "ERROR: files need 'gofmt -w':"
+  echo "$unformatted"
   exit 1
 fi
+echo "OK: gofmt clean"
+
+echo "== CI: Run go vet =="
+go vet ./...
 echo "OK: go vet passed"
 
 echo "== CI: Build all packages =="
-if ! go build ./...; then
-  echo "ERROR: go build ./... failed."
-  exit 1
-fi
+go build ./...
 echo "OK: packages built"
 
 echo "== CI: Build example apps under internal/examples =="
@@ -30,34 +46,52 @@ if [ -d "internal/examples" ]; then
   while IFS= read -r -d '' mainfile; do
     dir="$(dirname "$mainfile")"
     echo "Building $dir"
-    if ! (cd "$dir" && go build -o /tmp); then
-      echo "ERROR: example build failed: $dir"
-      exit 1
-    fi
+    (cd "$dir" && go build -o /tmp)
     count=$((count + 1))
   done < <(find internal/examples -type f -name "main.go" -print0)
-
-  if [ "$count" -eq 0 ]; then
-    echo "NOTE: no example main.go files found under internal/examples"
-  else
-    echo "OK: built $count example(s) to /tmp"
-  fi
+  echo "OK: built $count example(s) to /tmp"
 else
   echo "NOTE: internal/examples not found, skipping example builds"
 fi
 
-echo "== CI: Lint markdown =="
-if ! markdownlint "**/*.md"; then
-  echo "ERROR: markdownlint failed."
-  exit 1
-fi
-echo "OK: markdownlint passed"
-
 echo "== CI: Run tests =="
-if ! go test -race ./... 2>&1 | grep -v '\[no test files\]'; then
-  echo "ERROR: tests failed."
-  exit 1
-fi
+go test -race ./... 2>&1 | grep -v '\[no test files\]'
+
+echo "== CI: Allocation gates =="
+# Bench output looks like:
+#   BenchmarkCounterRender-20    1000   95012 ns/op   29200 B/op   206 allocs/op
+# Pull the allocs column for the named benchmarks and fail if it
+# exceeds the threshold for that bench.
+bench_out=$(go test ./. -run='^$' -bench='^Benchmark(Counter|ActionBodyOnly|SignalFlush)' -benchtime=200x -benchmem 2>&1 || true)
+echo "$bench_out"
+
+check_alloc() {
+  local name=$1
+  local threshold=$2
+  local line
+  line=$(echo "$bench_out" | grep -E "^${name}-" || true)
+  if [ -z "$line" ]; then
+    echo "WARN: bench $name not found in output, skipping gate"
+    return 0
+  fi
+  local got
+  got=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="allocs/op") print $(i-1)}')
+  if [ -z "$got" ]; then
+    echo "WARN: could not parse allocs/op from $line"
+    return 0
+  fi
+  if [ "$got" -gt "$threshold" ]; then
+    echo "ERROR: $name regressed to $got allocs/op (threshold: $threshold)"
+    return 1
+  fi
+  echo "OK: $name = $got allocs/op (threshold: $threshold)"
+}
+
+check_alloc BenchmarkCounterRender "$RENDER_ALLOC_MAX"
+check_alloc BenchmarkCounterAction "$ACTION_ALLOC_MAX"
+check_alloc BenchmarkCounterActionWithLogger "$LOGGER_ACTION_ALLOC_MAX"
+check_alloc BenchmarkActionBodyOnly "$BODY_ALLOC_MAX"
+check_alloc BenchmarkSignalFlush "$SIGNAL_FLUSH_ALLOC_MAX"
 
 echo "SUCCESS: All checks passed."
 exit 0

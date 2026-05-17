@@ -2,53 +2,51 @@ package via
 
 import (
 	"bytes"
-	"encoding/json"
-	"fmt"
-	"io"
-	"net/http"
+	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-via/via/h"
-	"github.com/starfederation/datastar-go/datastar"
 )
 
-type patchType int
+// tabSignalKey is the wire-protocol signal name carrying a Ctx's tab id.
+// Every datastar payload (action POST, SSE handshake) must carry it; it
+// doubles as the CSRF token (see memory: via_tab IS the CSRF token).
+const tabSignalKey = "via_tab"
 
-const (
-	patchTypeElements = iota
-	patchTypeSignals
-	patchTypeScript
-	patchTypeRedirect
-)
-
-type patch struct {
-	typ     patchType
-	content string
+// renderBufPool reduces alloc churn on the patch render path. Buffers
+// start at 8 KiB and grow as needed; we keep them around for the next
+// render.
+var renderBufPool = sync.Pool{
+	New: func() any { return bytes.NewBuffer(make([]byte, 0, 8192)) },
 }
 
-const maxPendingScriptBytes = 256 * 1024
+func getRenderBuf() *bytes.Buffer {
+	b := renderBufPool.Get().(*bytes.Buffer)
+	b.Reset()
+	return b
+}
 
-// patchQueue coalesces outgoing patches so bursts do not lose state. Elements
-// use a last-wins slot (each element patch is a full re-render, so only the
-// latest is observable). Signals merge by key into a map (latest value wins
-// per signal). Scripts concatenate into one buffer with per-script try/catch
-// wrapping to preserve order without losing siblings on a single failure.
-// Redirects use a last-wins slot and, when set, preempt every other pending
-// patch on drain so the client does not apply work to a page about to navigate.
+func putRenderBuf(b *bytes.Buffer) {
+	if b.Cap() > 1<<20 { // drop >1 MiB outliers
+		return
+	}
+	renderBufPool.Put(b)
+}
+
+// patchQueue coalesces outgoing patches between SSE flushes. The
+// presence flags for elements and redirect are encoded as empty-string
+// vs non-empty; Redirect short-circuits on empty input and SyncElements
+// / flushDirty only set elements after rendering non-empty content, so
+// the implication holds in both directions.
 type patchQueue struct {
-	mu              sync.Mutex
-	pendingElems    string
-	hasElems        bool
-	pendingSignals  map[string]any
-	pendingScripts  strings.Builder
-	scriptOverflow  bool
-	pendingRedirect string
-	hasRedirect     bool
-	disposed        bool
-	wake            chan struct{}
+	mu       sync.Mutex
+	elements string
+	signals  map[string]any
+	scripts  strings.Builder
+	redirect string
+	wake     chan struct{}
 }
 
 func newPatchQueue() *patchQueue {
@@ -56,590 +54,202 @@ func newPatchQueue() *patchQueue {
 }
 
 func (q *patchQueue) notify() {
+	if q == nil {
+		return
+	}
 	select {
 	case q.wake <- struct{}{}:
 	default:
 	}
 }
 
-// Ctx is the execution context — created per request, passed to view and action functions.
-type Ctx struct {
-	mux          sync.RWMutex
-	id           string
-	routeParams  map[string]string
-	cmp          *Cmp
-	queue        *patchQueue
-	doneChan     chan struct{}
-	signalValues map[string]*signalValue
-	stateMod     bool
-	disposed     bool
-	session      *session
-	lastAccess   atomic.Int64
-	actionMu     sync.Mutex
-
-	// w and r hold raw HTTP access during action execution. Read via the
-	// Writer / Request accessors, which guard against stale reads from
-	// goroutines that outlive the action.
-	w http.ResponseWriter
-	r *http.Request
+// NewBoundCtx returns a *Ctx bound to c with all Signal[T]/State[T]/
+// scope fields wired up, ready for direct unit testing of action
+// methods. No HTTP server, no session, no SSE — just a typed Ctx
+// against a typed *C. The descriptor is the same one Mount[T] would
+// build, but the resulting Ctx is detached from any App.
+//
+// Deprecated: this is an integration point for via/test only and is
+// not part of via's stable user API. Use [test.NewCtx] from
+// github.com/go-via/via/test instead.
+func NewBoundCtx[T any](c *T) *Ctx {
+	return newCtx(buildDescriptor[T](), reflect.ValueOf(c), genTabID("test"))
 }
 
-// Writer returns the raw http.ResponseWriter for the currently executing
-// action, or nil if called outside of action scope (for example from a
-// goroutine that outlived the action). A nil read is logged at warn level.
-func (ctx *Ctx) Writer() http.ResponseWriter {
-	ctx.mux.RLock()
-	w := ctx.w
-	ctx.mux.RUnlock()
-	if w == nil && ctx.cmp != nil && ctx.cmp.app != nil {
-		ctx.cmp.app.logWarn(ctx, "Writer() called outside action scope; returning nil")
+// newCtx allocates a Ctx wired to the descriptor's slot bindings and
+// scope keys. Shared between the production page-render path and
+// NewBoundCtx for tests; the production path layers app / session /
+// writer / request on top of the returned ctx.
+func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
+	ctx := &Ctx{
+		id:           id,
+		desc:         d,
+		signalRefs:   make([]signalRef, len(d.signalSlots)),
+		dirtySignals: newBitset(len(d.signalSlots)),
+		queue:        newPatchQueue(),
+		doneChan:     make(chan struct{}),
 	}
-	return w
+	ctx.touch()
+	ctx.cmpReflect = cmpVal
+	bindSlots(ctx, cmpVal, d)
+	bindScopeKeys(cmpVal, d)
+	bindFileKeys(cmpVal, d)
+	bindDispatchFns(ctx, cmpVal, d)
+	return ctx
 }
 
-// Request returns the raw *http.Request for the currently executing action,
-// or nil if called outside of action scope.
-func (ctx *Ctx) Request() *http.Request {
-	ctx.mux.RLock()
-	r := ctx.r
-	ctx.mux.RUnlock()
-	if r == nil && ctx.cmp != nil && ctx.cmp.app != nil {
-		ctx.cmp.app.logWarn(ctx, "Request() called outside action scope; returning nil")
+// bindDispatchFns extracts each lifecycle/action method as a typed
+// method value bound to *C, eliminating reflect.Value.Call on the
+// per-request hot path. Called once per newCtx; the resulting funcs
+// dispatch directly.
+func bindDispatchFns(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
+	ctx.viewFn = cmpVal.Method(d.viewIdx).Interface().(func(*Ctx) h.H)
+	if d.initIdx >= 0 {
+		ctx.initFn = cmpVal.Method(d.initIdx).Interface().(func(*Ctx) error)
 	}
-	return r
-}
-
-func (ctx *Ctx) touch() {
-	ctx.lastAccess.Store(time.Now().UnixNano())
-}
-
-// GetPathParam returns the value of a named path parameter from the request URL.
-func (ctx *Ctx) GetPathParam(name string) string {
-	ctx.mux.RLock()
-	defer ctx.mux.RUnlock()
-	return ctx.routeParams[name]
-}
-
-// SyncElements sends HTML element patches to the browser immediately.
-func (ctx *Ctx) SyncElements(elem ...h.H) {
-	b := bytes.NewBuffer(nil)
-	for _, el := range elem {
-		if el == nil {
-			continue
-		}
-		_ = el.Render(b)
+	if d.connectIdx >= 0 {
+		ctx.connectFn = cmpVal.Method(d.connectIdx).Interface().(func(*Ctx) error)
 	}
-	ctx.sendPatch(patch{patchTypeElements, b.String()})
-}
-
-// Redirect navigates the browser to the given URL.
-func (ctx *Ctx) Redirect(url string) {
-	if url == "" {
-		return
+	if d.disposeIdx >= 0 {
+		ctx.disposeFn = cmpVal.Method(d.disposeIdx).Interface().(func(*Ctx))
 	}
-	ctx.sendPatch(patch{patchTypeRedirect, url})
-}
-
-// ExecScript sends a JavaScript snippet to the browser for execution.
-func (ctx *Ctx) ExecScript(s string) {
-	if s == "" {
-		return
-	}
-	ctx.sendPatch(patch{patchTypeScript, s})
-}
-
-// Sync explicitly re-renders the view and flushes all pending patches to the browser.
-func (ctx *Ctx) Sync() {
-	ctx.stateMod = true
-	ctx.flushPatches()
-}
-
-// MarshalAndPatchSignals marshals the given key-value pairs and pushes them
-// to the browser as a signal patch. Use this for signals outside via's scope
-// (e.g. plugin-owned frontend signals like _picoDarkMode).
-func (ctx *Ctx) MarshalAndPatchSignals(signals map[string]any) {
-	if len(signals) == 0 {
-		return
-	}
-	out, _ := json.Marshal(signals)
-	ctx.sendPatch(patch{patchTypeSignals, string(out)})
-}
-
-// Done returns a channel that is closed when the context is disposed.
-func (ctx *Ctx) Done() <-chan struct{} {
-	return ctx.doneChan
-}
-
-func (ctx *Ctx) flushPatches() {
-	cmp := ctx.cmp
-	if cmp == nil || cmp.viewFn == nil {
-		return
-	}
-
-	if ctx.stateMod {
-		ctx.stateMod = false
-		elemsPatch := &bytes.Buffer{}
-		wrapped := h.Div(h.ID(ctx.id), cmp.viewFn(ctx))
-		if err := wrapped.Render(elemsPatch); err != nil {
-			return
-		}
-		ctx.sendPatch(patch{patchTypeElements, elemsPatch.String()})
-	}
-
-	updatedSigs := ctx.prepareSignalsForPatch()
-	if len(updatedSigs) != 0 {
-		outgoingSigs, _ := json.Marshal(updatedSigs)
-		ctx.sendPatch(patch{patchTypeSignals, string(outgoingSigs)})
-	}
-}
-
-func (ctx *Ctx) hasSignalChanges() bool {
-	for _, sv := range ctx.signalValues {
-		if sv.changed {
-			return true
+	if n := len(d.actionSlots); n > 0 {
+		ctx.actionFns = make([]func(*Ctx) error, n)
+		for i, slot := range d.actionSlots {
+			raw := cmpVal.Method(slot.methodIndex).Interface()
+			if slot.voidReturn {
+				fn := raw.(func(*Ctx))
+				ctx.actionFns[i] = func(c *Ctx) error { fn(c); return nil }
+			} else {
+				ctx.actionFns[i] = raw.(func(*Ctx) error)
+			}
 		}
 	}
-	return false
 }
 
-func (ctx *Ctx) sendPatch(p patch) {
+// bindSlots writes the slot index and wire key into every Signal[T] / State[T]
+// field of the freshly allocated *C (including nested children), stashes a
+// typed signalRef pointer for reflection-free dispatch, and applies the
+// init=… tag value if any. Combined into one pass so we walk
+// d.signalSlots only once per Ctx setup.
+func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
+	elem := cmpVal.Elem()
+	for i, s := range d.signalSlots {
+		field := fieldByPath(elem, s.fieldPath)
+		ref := field.Addr().Interface().(signalRef)
+		ref.bindSlot(uint16(i), s.wireKey)
+		ctx.signalRefs[i] = ref
+		if s.initRaw != "" {
+			ref.decodeRaw(s.initRaw)
+		}
+	}
+}
+
+// bindScopeKeys writes the wire key into every scope.User[T] / scope.App[T]
+// field of the freshly allocated *C by calling the handle's BindWireKey
+// method. The scopeBinder interface assertion is checked once at Mount
+// time, so the per-request path is a straight method call.
+func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
+	if len(d.scopeSlots) == 0 {
+		return
+	}
+	elem := cmpVal.Elem()
+	for _, s := range d.scopeSlots {
+		field := fieldByPath(elem, s.fieldPath)
+		field.Addr().Interface().(scopeBinder).BindWireKey(s.wireKey)
+	}
+}
+
+// fieldByPath walks a chain of struct field indices, dereferencing pointer
+// fields along the way.
+func fieldByPath(v reflect.Value, path []int) reflect.Value {
+	for _, idx := range path {
+		v = v.Field(idx)
+		if v.Kind() == reflect.Ptr {
+			if v.IsNil() {
+				v.Set(reflect.New(v.Type().Elem()))
+			}
+			v = v.Elem()
+		}
+	}
+	return v
+}
+
+// genTabID returns a route-prefixed random id for human-readable tab traces.
+func genTabID(route string) string {
+	return route + "_" + genSecureID()
+}
+
+func enqueueScript(ctx *Ctx, s string) {
 	q := ctx.queue
-	if q == nil {
-		return
-	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.disposed {
-		return
-	}
-	switch p.typ {
-	case patchTypeElements:
-		q.pendingElems = p.content
-		q.hasElems = true
-	case patchTypeSignals:
-		var incoming map[string]any
-		if err := json.Unmarshal([]byte(p.content), &incoming); err != nil {
-			ctx.cmp.app.logErr(ctx, "signal patch unmarshal failed: %v", err)
-			return
-		}
-		if q.pendingSignals == nil {
-			q.pendingSignals = make(map[string]any, len(incoming))
-		}
-		for k, v := range incoming {
-			q.pendingSignals[k] = v
-		}
-	case patchTypeScript:
-		const prefix = "try{"
-		const suffix = "}catch(e){console.error(e)};"
-		if q.pendingScripts.Len()+len(prefix)+len(p.content)+len(suffix) > maxPendingScriptBytes {
-			q.scriptOverflow = true
-			ctx.cmp.app.logErr(ctx, "script buffer overflow: patch dropped")
-			break
-		}
-		q.pendingScripts.WriteString(prefix)
-		q.pendingScripts.WriteString(p.content)
-		q.pendingScripts.WriteString(suffix)
-	case patchTypeRedirect:
-		q.pendingRedirect = p.content
-		q.hasRedirect = true
-	}
+	q.scripts.WriteString("try{")
+	q.scripts.WriteString(s)
+	q.scripts.WriteString("}catch(e){console.error(e)};")
 	q.notify()
 }
 
-func (ctx *Ctx) markStateModified() {
-	ctx.stateMod = true
-}
-
-func (ctx *Ctx) injectSignals(sigs map[string]any) {
-	if sigs == nil {
-		return
+// runSweep drives a sweep goroutine: it ticks at interval and calls sweep
+// on every tick, exiting when stopSweep closes. Used by both the session
+// and context expirers — the only thing that varies is the cadence and
+// the per-tick action. interval ≤ 0 falls back to the supplied default.
+func (a *App) runSweep(interval, fallback time.Duration, sweep func()) {
+	if interval <= 0 {
+		interval = fallback
 	}
-	for incomingID, val := range sigs {
-		if incomingID == "via_tab" {
-			continue
-		}
-		for _, sigMap := range []map[string]any{ctx.cmp.app.signals, ctx.cmp.signals} {
-			found := false
-			for sigID, sig := range sigMap {
-				if sm, ok := sig.(signalMeta); ok && sm.displayID() == incomingID {
-					ctx.signalValues[sigID] = &signalValue{raw: sm.coerce(val)}
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-	}
-}
-
-func (ctx *Ctx) prepareSignalsForPatch() map[string]any {
-	updatedSigs := make(map[string]any)
-	for _, sigMap := range []map[string]any{ctx.cmp.app.signals, ctx.cmp.signals} {
-		for sigID, sig := range sigMap {
-			if sm, ok := sig.(signalMeta); ok {
-				if sv, exists := ctx.signalValues[sigID]; exists && sv.changed {
-					updatedSigs[sm.displayID()] = sv.raw
-					sv.changed = false
-				}
-			}
-		}
-	}
-	return updatedSigs
-}
-
-// Page registers a route and its associated page handler.
-func (a *App) Page(route string, initCmpFn func(cmp *Cmp)) {
-	a.pageWithOptions(route, initCmpFn, nil, a.layoutFn)
-}
-
-func (a *App) pageWithOptions(route string, initCmpFn func(cmp *Cmp), groupMW []Middleware, layoutFn func(cmp *Cmp)) {
-	var cmp *Cmp
-	// Definition phase: run once at startup to register page
-	func() {
-		defer func() {
-			if err := recover(); err != nil {
-				a.logPanic("failed to register page with init func that panics: %v", err)
-				panic(err)
-			}
-		}()
-
-		if layoutFn != nil {
-			// Layout wraps the page: shared action/signal maps
-			layoutCmp := &Cmp{
-				app:       a,
-				route:     route,
-				actionFns: make(map[string]func(ctx *Ctx) error),
-				signals:   make(map[string]any),
-			}
-			pageCmp := &Cmp{
-				app:       a,
-				route:     route,
-				actionFns: layoutCmp.actionFns,
-				signals:   layoutCmp.signals,
-			}
-			initCmpFn(pageCmp)
-			if pageCmp.viewFn == nil {
-				panic("composition has no view")
-			}
-			contentID := "via_content_" + genRandID()
-			layoutCmp.contentFn = func(ctx *Ctx) h.H {
-				return h.Div(h.ID(contentID), pageCmp.viewFn(ctx))
-			}
-			layoutFn(layoutCmp)
-			if layoutCmp.viewFn == nil {
-				panic("layout has no view")
-			}
-			layoutCmp.components = append(layoutCmp.components, pageCmp)
-			cmp = layoutCmp
-		} else {
-			cmp = &Cmp{
-				app:       a,
-				route:     route,
-				actionFns: make(map[string]func(ctx *Ctx) error),
-				signals:   make(map[string]any),
-			}
-			initCmpFn(cmp)
-			if cmp.viewFn == nil {
-				panic("composition has no view")
-			}
-		}
-
-		// Call view during definition phase to run any side effects
-		defCtx := &Ctx{
-			cmp:          cmp,
-			queue:        newPatchQueue(),
-			doneChan:     make(chan struct{}),
-			signalValues: initSignalValues(a, cmp),
-		}
-		cmp.viewFn(defCtx)
-		// Run component init during definition phase
-		for _, comp := range cmp.components {
-			if comp.initFn != nil {
-				comp.initFn(defCtx)
-			}
-		}
-	}()
-
-	paramNames := extractParamNames(route)
-
-	a.mux.HandleFunc("GET "+route, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		a.logDebug(nil, "GET %s", r.URL.String())
-		if r.URL.Path == "/favicon.ico" ||
-			strings.HasPrefix(r.URL.Path, "/.well-known/") ||
-			strings.HasSuffix(r.URL.Path, ".js.map") {
-			return
-		}
-
-		// Build middleware chain: global → group
-		mwChain := append([]Middleware{}, a.middleware...)
-		mwChain = append(mwChain, groupMW...)
-
-		final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			params := make(map[string]string, len(paramNames))
-			for _, name := range paramNames {
-				params[name] = r.PathValue(name)
-			}
-			id := fmt.Sprintf("%s_/%s", route, genRandID())
-			ctx := &Ctx{
-				id:           id,
-				routeParams:  params,
-				cmp:          cmp,
-				queue:        newPatchQueue(),
-				doneChan:     make(chan struct{}),
-				signalValues: initSignalValues(a, cmp),
-				session:      sessionFromRequest(r),
-			}
-			ctx.touch()
-			a.registerCtx(id, ctx)
-
-			if cmp.initFn != nil {
-				cmp.initFn(ctx)
-			}
-			for _, comp := range cmp.components {
-				if comp.initFn != nil {
-					comp.initFn(ctx)
-				}
-			}
-
-			bodyElements := []h.H{h.Div(h.ID(id), cmp.viewFn(ctx))}
-
-			headElements := []h.H{}
-			initialSigs := map[string]any{"via_tab": id}
-			for _, sigMap := range []map[string]any{a.signals, cmp.signals} {
-				for sigID, sig := range sigMap {
-					if sm, ok := sig.(signalMeta); ok && !sm.hasError() {
-						if sv, ok := ctx.signalValues[sigID]; ok {
-							initialSigs[sm.displayID()] = sm.rawValueOf(sv.raw)
-						} else {
-							initialSigs[sm.displayID()] = sm.initialRawValue()
-						}
-					}
-				}
-			}
-			// Reset changed flags so the first action doesn't re-send
-			// values that are already in the initial HTML.
-			for _, sv := range ctx.signalValues {
-				sv.changed = false
-			}
-			initialSigsJSON, _ := json.Marshal(initialSigs)
-			headElements = append(headElements,
-				h.Meta(h.Data("signals", string(initialSigsJSON))),
-			)
-			headElements = append(headElements, a.documentHeadIncludes...)
-			headElements = append(headElements,
-				h.Meta(h.Data("init", "@get('/_sse')")),
-				h.Meta(h.Data("init", fmt.Sprintf(`window.addEventListener('beforeunload', (evt) => {
-				navigator.sendBeacon('/_sse/close', '%s');});`, id))),
-			)
-			bodyElements = append(bodyElements, a.documentFootIncludes...)
-			view := h.HTML5(h.HTML5Props{
-				Title:     a.cfg.title,
-				Head:      headElements,
-				Body:      bodyElements,
-				HTMLAttrs: a.documentHTMLAttrs,
-			})
-			_ = view.Render(w)
-		})
-
-		runMiddleware(mwChain, w, r, final)
-	}))
-}
-
-func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
-	var sigs map[string]any
-	_ = datastar.ReadSignals(r, &sigs)
-	cID, _ := sigs["via_tab"].(string)
-
-	ctx, err := a.getCtx(cID)
-	if err != nil {
-		a.logErr(nil, "sse stream failed to start: %v", err)
-		return
-	}
-	if ctx.session != sessionFromRequest(r) {
-		a.logErr(nil, "sse stream failed: session mismatch for ctx '%s'", cID)
-		return
-	}
-	ctx.touch()
-
-	sse := datastar.NewSSE(w, r, datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(5))))
-
-	a.logDebug(ctx, "SSE connection established")
-
-	var heartbeat <-chan time.Time
-	if a.cfg.sseHeartbeat > 0 {
-		t := time.NewTicker(a.cfg.sseHeartbeat)
-		defer t.Stop()
-		heartbeat = t.C
-	}
-
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
-		case <-sse.Context().Done():
+		case <-a.stopSweep:
 			return
-		case <-ctx.doneChan:
-			return
-		case <-heartbeat:
-			if err := sse.PatchSignals([]byte("{}")); err != nil {
-				return
-			}
-			ctx.touch()
-		case <-ctx.queue.wake:
-			if err := drainPatchQueue(sse, ctx); err != nil {
-				return
-			}
-			ctx.touch()
+		case <-ticker.C:
+			sweep()
 		}
 	}
 }
 
-func drainPatchQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
-	q := ctx.queue
-	q.mu.Lock()
-	elems, hasElems := q.pendingElems, q.hasElems
-	signals := q.pendingSignals
-	scripts := q.pendingScripts.String()
-	redirect, hasRedirect := q.pendingRedirect, q.hasRedirect
-	overflow := q.scriptOverflow
-	q.pendingElems = ""
-	q.hasElems = false
-	q.pendingSignals = nil
-	q.pendingScripts.Reset()
-	q.pendingRedirect = ""
-	q.hasRedirect = false
-	q.scriptOverflow = false
-	q.mu.Unlock()
-
-	if hasRedirect {
-		return sse.Redirect(redirect)
-	}
-	if hasElems {
-		if err := sse.PatchElements(elems); err != nil {
-			return err
+func (a *App) removeExpiredContexts() {
+	cutoff := time.Now().Add(-a.cfg.contextTTL).UnixNano()
+	a.contextRegistryMu.Lock()
+	var expired []*Ctx
+	for id, c := range a.contextRegistry {
+		if c.lastAccess.Load() < cutoff {
+			expired = append(expired, c)
+			delete(a.contextRegistry, id)
 		}
 	}
-	if len(signals) > 0 {
-		sigBytes, _ := json.Marshal(signals)
-		if err := sse.PatchSignals(sigBytes); err != nil {
-			return err
-		}
-	}
-	if scripts != "" {
-		if err := sse.ExecuteScript(scripts); err != nil {
-			return err
-		}
-	}
-	if overflow {
-		_ = sse.ExecuteScript(`console.error("via: script buffer overflowed; some updates were dropped")`)
-	}
-	return nil
-}
-
-func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
-	actionID := r.PathValue("id")
-	var sigs map[string]any
-	_ = datastar.ReadSignals(r, &sigs)
-	cID, _ := sigs["via_tab"].(string)
-	ctx, err := a.getCtx(cID)
-	if err != nil {
-		a.logErr(nil, "action '%s' failed: %v", actionID, err)
-		return
-	}
-	if ctx.session != sessionFromRequest(r) {
-		a.logErr(nil, "action '%s' failed: session mismatch for ctx '%s'", actionID, cID)
-		return
-	}
-	ctx.touch()
-	cmp := ctx.cmp
-	if cmp == nil || cmp.actionFns == nil {
-		a.logDebug(ctx, "action '%s' failed: composition not found", actionID)
-		return
-	}
-	actionFn, ok := cmp.actionFns[actionID]
-	if !ok {
-		a.logDebug(ctx, "action '%s' failed: not found", actionID)
-		return
-	}
-
-	// Serialize actions per Ctx to prevent data races on W/R, signals, state
-	ctx.actionMu.Lock()
-	ctx.mux.Lock()
-	ctx.w = w
-	ctx.r = r
-	ctx.mux.Unlock()
-	defer func() {
-		ctx.mux.Lock()
-		ctx.w = nil
-		ctx.r = nil
-		ctx.mux.Unlock()
-		ctx.actionMu.Unlock()
-	}()
-
-	defer func() {
-		if r := recover(); r != nil {
-			a.logErr(ctx, "action '%s' failed: %v", actionID, r)
-			ctx.ExecScript(`alert('Something went wrong')`)
-		}
-	}()
-
-	// Inject signals from the request
-	ctx.injectSignals(sigs)
-
-	if err := actionFn(ctx); err != nil {
-		msg, _ := json.Marshal(err.Error())
-		ctx.ExecScript(`alert(` + string(msg) + `)`)
-	}
-
-	// Auto-sync: re-render and flush if state or signals were modified
-	if ctx.stateMod || ctx.hasSignalChanges() {
-		ctx.flushPatches()
+	a.contextRegistryMu.Unlock()
+	for _, c := range expired {
+		a.disposeCtx(c)
 	}
 }
 
-func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	r.Body.Close()
-	if err != nil {
-		a.logErr(nil, "sse close: failed to read body: %v", err)
-		w.WriteHeader(http.StatusBadRequest)
+// disposeCtx closes the ctx and runs OnDispose if defined.
+func (a *App) disposeCtx(ctx *Ctx) {
+	ctx.mu.Lock()
+	if ctx.disposed {
+		ctx.mu.Unlock()
 		return
 	}
-	cID := string(body)
-	ctx, err := a.getCtx(cID)
-	if err != nil {
-		a.logErr(ctx, "failed to handle session close: %v", err)
-		return
+	ctx.disposed = true
+	close(ctx.doneChan)
+	ctx.mu.Unlock()
+
+	if ctx.disposeFn != nil {
+		defer recoverLog(ctx, "OnDispose")
+		ctx.disposeFn(ctx)
 	}
-	if ctx.session != sessionFromRequest(r) {
-		a.logErr(ctx, "sse close: session mismatch for ctx '%s'", cID)
-		return
-	}
-	a.disposeCtx(ctx)
-	a.unregisterCtx(cID)
 }
 
-func initSignalValues(app *App, cmp *Cmp) map[string]*signalValue {
-	vals := make(map[string]*signalValue, len(app.signals)+len(cmp.signals))
-	for id, sig := range app.signals {
-		if sm, ok := sig.(signalMeta); ok {
-			vals[id] = &signalValue{raw: sm.initialTypedValue()}
-		}
+// recoverLog is a deferred-recover helper that logs the panic value via
+// the App's logger. Use it as `defer recoverLog(ctx, "OnConnect")` from
+// any callsite that wants to log-and-swallow a callback panic. recover()
+// only works directly in a deferred func, so this helper IS the deferred
+// func — it cannot be wrapped in another helper that calls it.
+func recoverLog(ctx *Ctx, what string) {
+	if rec := recover(); rec != nil && ctx != nil && ctx.app != nil {
+		ctx.app.logErr(ctx, "%s panicked: %v", what, rec)
 	}
-	for id, sig := range cmp.signals {
-		if sm, ok := sig.(signalMeta); ok {
-			vals[id] = &signalValue{raw: sm.initialTypedValue()}
-		}
-	}
-	return vals
-}
-
-func extractParamNames(pattern string) []string {
-	var names []string
-	for _, seg := range strings.Split(pattern, "/") {
-		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
-			names = append(names, seg[1:len(seg)-1])
-		}
-	}
-	return names
 }
