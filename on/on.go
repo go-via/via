@@ -81,6 +81,12 @@ func Load(fn any, opts ...via.TriggerOption) h.H { return event("load", fn, opts
 // (e.g. "scroll", "wheel", "contextmenu"):
 //
 //	h.Div(on.Event("scroll", p.OnScroll, on.Throttle("100ms")))
+//
+// name should be a compile-time constant string. The bare-binding cache
+// keys on (event, method) and is never evicted, so deriving name from
+// user input or per-request data would grow the cache unboundedly. The
+// cache is sized correctly when call sites are static — tens to
+// hundreds of bindings for any real app.
 func Event(name string, fn any, opts ...via.TriggerOption) h.H {
 	return event(name, fn, opts...)
 }
@@ -151,7 +157,7 @@ func event(name string, fn any, opts ...via.TriggerOption) h.H {
 	if len(opts) == 0 {
 		method := via.MethodName(fn)
 		if method == "" {
-			return nil
+			panic("on: " + name + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
 		}
 		return bareAttr(name, method)
 	}
@@ -222,7 +228,7 @@ func bareAttr(eventName, method string) h.H {
 func render(s *via.TriggerSpec) h.H {
 	method := via.MethodName(s.Method)
 	if method == "" {
-		return nil
+		panic("on: " + s.Event + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
 	}
 
 	// Fast path for the bare `on.Click(c.Inc)` shape — no modifiers, no

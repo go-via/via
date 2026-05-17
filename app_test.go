@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/go-via/via"
@@ -151,6 +152,51 @@ func (p signalSeedingPlugin) Register(app *via.App) {
 type pluginHostPage struct{}
 
 func (pluginHostPage) View(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) }
+
+func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
+	t.Parallel()
+
+	const N = 32
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	t.Cleanup(func() { server.Close() })
+
+	var counter int32
+	var counterMu sync.Mutex
+	mw := func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		counterMu.Lock()
+		counter++
+		counterMu.Unlock()
+		next.ServeHTTP(w, r)
+	}
+
+	// Two concurrent Use calls race on a.middleware append without a
+	// guard — the race detector flags the slice write, and lost entries
+	// would surface as a counter lower than N after one request.
+	var wg sync.WaitGroup
+	wg.Add(N)
+	for range N {
+		go func() {
+			defer wg.Done()
+			app.Use(mw)
+		}()
+	}
+	wg.Wait()
+
+	app.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte("ok"))
+	})
+
+	resp, err := http.Get(server.URL + "/ping")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	counterMu.Lock()
+	got := counter
+	counterMu.Unlock()
+	assert.Equal(t, int32(N), got,
+		"every concurrently-registered middleware must be in the chain")
+}
 
 func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
 	t.Parallel()

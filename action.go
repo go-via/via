@@ -26,8 +26,15 @@ var methodNameCache sync.Map // map[uintptr]string
 //
 //	pkg.(*Counter).Inc-fm
 //
-// We strip the package, receiver, and -fm suffix to recover "Inc". Returns
-// "" if the function value is not recognizable as a bound method.
+// We require the trailing "-fm" suffix so anonymous closures and
+// top-level functions — which have no such suffix — return "" rather
+// than a wrong-looking name like "func1" or "myHandler". Strip the
+// package, receiver, and "-fm" suffix to recover "Inc". Returns "" if
+// the function value is not recognizable as a bound method.
+//
+// The "-fm" suffix is a Go runtime internal, not a language contract.
+// TestMethodName_resolvesBoundMethod doubles as a canary that fires
+// loudly if a Go toolchain upgrade changes the trampoline naming.
 func MethodName(fn any) string {
 	v := reflect.ValueOf(fn)
 	if !v.IsValid() || v.Kind() != reflect.Func {
@@ -42,9 +49,11 @@ func MethodName(fn any) string {
 		return ""
 	}
 	full := fnPC.Name()
-	// Trim trailing "-fm" (Go's bound-method suffix).
+	if !strings.HasSuffix(full, "-fm") {
+		methodNameCache.Store(pc, "")
+		return ""
+	}
 	full = strings.TrimSuffix(full, "-fm")
-	// Last dot separates receiver/package from method name.
 	if i := strings.LastIndex(full, "."); i >= 0 {
 		full = full[i+1:]
 	}

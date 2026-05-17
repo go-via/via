@@ -59,7 +59,8 @@ type App struct {
 	stopSweep     chan struct{}
 	stopSweepOnce sync.Once
 
-	middleware []Middleware
+	middlewareMu sync.Mutex
+	middleware   []Middleware
 
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
@@ -73,10 +74,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Use installs middleware that wraps every via-served request.
 //
-// Boot-only: panics if called after Start has bound the server. The
-// middleware slice is not guarded by a mutex; serving and rebuildChain
-// happen via atomic.Value so reads are safe, but two concurrent Use
-// calls would race on the underlying slice append.
+// Boot-only: panics if called after Start has bound the server.
+// Concurrent Use calls are safe — the middleware slice and the chain
+// rebuild are serialized under one mutex.
 func (a *App) Use(mw ...Middleware) {
 	a.serverMu.Lock()
 	started := a.server != nil
@@ -84,8 +84,12 @@ func (a *App) Use(mw ...Middleware) {
 	if started {
 		panic("via: App.Use called after Start; install middleware during boot")
 	}
+	a.middlewareMu.Lock()
 	a.middleware = append(a.middleware, mw...)
-	a.rebuildChain()
+	chain := applyMiddleware(a.middleware, a.mux)
+	a.middlewareMu.Unlock()
+	hf := http.HandlerFunc(chain.ServeHTTP)
+	a.cachedChain.Store(&hf)
 }
 
 // rebuildChain caches the post-middleware http.Handler used by every

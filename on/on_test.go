@@ -250,6 +250,43 @@ func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) {
 		"bare bindings should be interned — only the fn-to-any boxing may remain")
 }
 
+// TestClick_panicsOnAnonymousFunction guards the contract that
+// every on.* helper accepts a bound *method value* — not an arbitrary
+// closure. via.MethodName parses the runtime "-fm" trampoline suffix
+// to recover the method name; anonymous functions and top-level funcs
+// have no such suffix, so via.MethodName returns "". Previously the
+// helpers swallowed this as a silently-dead binding (return nil);
+// the helpers must instead panic so the programming error surfaces
+// at the first render rather than as a button that does nothing.
+func TestClick_panicsOnAnonymousFunction(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "on.Click with a non-method must panic, not return nil")
+		msg, ok := rec.(string)
+		require.True(t, ok, "panic value should be a string, got %T", rec)
+		assert.Contains(t, msg, "on:",
+			"panic message should be package-prefixed for grep-ability")
+		assert.Contains(t, msg, "bound method",
+			"panic message should explain the required input shape")
+	}()
+	on.Click(func(ctx *via.Ctx) error { return nil })
+}
+
+func TestKey_panicsOnAnonymousFunction(t *testing.T) {
+	t.Parallel()
+	// on.Key drives the optioned render() path; cover that branch too.
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "on.Key with a non-method must panic")
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "bound method")
+	}()
+	on.Key("Enter", func(ctx *via.Ctx) error { return nil })
+}
+
 func getBody(t *testing.T, server *httptest.Server, path string) string {
 	t.Helper()
 	resp, err := http.Get(server.URL + path)

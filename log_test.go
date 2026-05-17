@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -230,6 +231,39 @@ func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 		}
 	}
 	assert.True(t, got, "via.Log should include rid when RequestID middleware ran")
+}
+
+type leakyLogPage struct{}
+
+func (p *leakyLogPage) Start(ctx *via.Ctx) error {
+	// Goroutine outlives the action: by the time it runs, runAction's
+	// exit defer is racing to clear ctx.r under ctx.mu. via.Log reading
+	// ctx.r without that lock would be flagged by the race detector.
+	go func() {
+		for range 200 {
+			via.Log(ctx).Log(via.LogInfo, "from-goroutine")
+		}
+	}()
+	return nil
+}
+
+func (p *leakyLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestLog_isRaceFreeWhenCalledOffActionGoroutine(t *testing.T) {
+	t.Parallel()
+
+	app, server, _ := newLoggedApp(t, via.LogInfo)
+	app.Use(via.RequestID())
+	via.Mount[leakyLogPage](app, "/")
+
+	tc := viatest.NewClient(t, server, "/")
+	// Fire many actions back to back so each entry/exit write of ctx.r
+	// overlaps in time with leakyLogPage's still-running goroutines.
+	for range 20 {
+		require.Equal(t, 200, tc.Action("Start").Fire())
+	}
+	// Drain time for the spawned goroutines so the race window stays open.
+	time.Sleep(100 * time.Millisecond)
 }
 
 func TestRequestID_generatesWhenAbsent(t *testing.T) {

@@ -63,12 +63,42 @@ func TestAction_unknownMethodReturns404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
+// TestMethodName_resolvesBoundMethod doubles as a Go-runtime canary:
+// via.MethodName recovers a method name by stripping the "-fm"
+// trampoline suffix that the Go runtime emits for bound method values
+// (e.g. "pkg.(*counterPage).Inc-fm"). The "-fm" suffix is a runtime
+// internal, not a language contract — a Go release that changes the
+// trampoline naming would silently break every `on.Click(c.Inc)` call
+// site in via and downstream apps. If this test ever starts failing
+// after a Go upgrade, fix MethodName before bumping the toolchain.
 func TestMethodName_resolvesBoundMethod(t *testing.T) {
 	t.Parallel()
 
 	c := &counterPage{}
 	assert.Equal(t, "Inc", via.MethodName(c.Inc))
 }
+
+func TestMethodName_returnsEmptyForAnonymousFunction(t *testing.T) {
+	t.Parallel()
+	// Anonymous closures have no "-fm" suffix; MethodName returns "".
+	// The on/* helpers turn that empty string into a panic so misuse
+	// is loud — see TestClick_panicsOnAnonymousFunction.
+	assert.Equal(t, "", via.MethodName(func() {}))
+}
+
+func TestMethodName_returnsEmptyForTopLevelFunction(t *testing.T) {
+	t.Parallel()
+	// Package-level funcs (no receiver) have no "-fm" suffix either, so
+	// MethodName must reject them just like anonymous closures.
+	assert.Equal(t, "", via.MethodName(topLevelHandler))
+}
+
+func TestMethodName_returnsEmptyForNil(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "", via.MethodName(nil))
+}
+
+func topLevelHandler(ctx *via.Ctx) error { return nil }
 
 func TestMethodName_returnsSameStringForSameMethod(t *testing.T) {
 	t.Parallel()

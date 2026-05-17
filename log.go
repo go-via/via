@@ -42,8 +42,8 @@ func Log(ctx *Ctx) Logger {
 		base = defaultLogger{}
 	}
 	rid := ""
-	if ctx.r != nil {
-		rid = RequestIDFrom(ctx.r)
+	if r := ctx.Request(); r != nil {
+		rid = RequestIDFrom(r)
 	}
 	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
 		if level < app.cfg.logLevel {

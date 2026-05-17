@@ -46,6 +46,13 @@ func encodeScalar(v reflect.Value) ([]byte, error) {
 // raw-string form struct tags arrive in. Unrecognised combinations
 // leave dst at its zero value — best-effort decode is the contract
 // (parse failures don't fail the request).
+//
+// Numeric truncation is silent: a float64 value that overflows the
+// destination's narrower int/uint kind (e.g. 9999 into an int8) is
+// truncated by the Set{Int,Uint,Float} reflect operation rather than
+// clamped or rejected. Choose Signal[T]'s T to match the value range
+// you accept from the client; validate explicitly inside the action
+// handler if untrusted input might overflow.
 func decodeScalarInto(dst reflect.Value, raw any) {
 	if raw == nil {
 		return
