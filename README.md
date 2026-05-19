@@ -23,7 +23,7 @@ JSON payloads.
   are the framework's job.
 - `*App` implements `http.Handler` — drops into any std mux.
 
-![Counter demo](docs/counter.gif)
+![Local vs app-scoped counters across two browsers — from `internal/examples/counterscope`](docs/counter-scope.gif)
 
 ## Quick start
 
@@ -585,6 +585,8 @@ post-action body assertions are one call instead of a hand-rolled GET.
 - `pathparams` — typed `path:"id"` decoding into composition fields.
 - `countercomp` — two independent counter compositions nested on
   one page; isolation across instances.
+- `counterscope` — `State[int]` (tab-local) vs `scope.App[int]`
+  (shared across every session) side-by-side.
 - `picocss` — `picocss.Plugin()` driving theme + dark-mode switching
   on the client without a full reload.
 - `auth` — typed sessions, `requireAuth` middleware, and
