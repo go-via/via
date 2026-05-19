@@ -132,6 +132,152 @@ func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {
 		"scope.App value must be shared across sessions")
 }
 
+type silentUserPage struct {
+	// Same wireKey "theme" as userRoundTripPage, but the View never
+	// reads it — used to prove session-scoped broadcasts skip
+	// non-displaying tabs.
+	Theme scope.User[string]
+}
+
+func (p *silentUserPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("mute"), h.Text("no readers here")))
+}
+
+func TestUser_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/reader")
+	via.Mount[silentUserPage](app, "/silent")
+	defer server.Close()
+
+	reader := viatest.NewClient(t, server, "/reader")
+	silent := reader.Fork("/silent")
+
+	framesS, cancelS := silent.SSE()
+	defer cancelS()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, reader.Action("Set").Fire())
+
+	select {
+	case frame := <-framesS:
+		assert.Failf(t, "non-reader peer was woken",
+			"scope.User write must skip tabs whose View did not read the key; got %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+type silentAppPage struct {
+	// Same wireKey "visits" as appCounterPage, but the View never reads
+	// it — used to prove that broadcasts skip non-displaying tabs.
+	Visits scope.App[int]
+}
+
+func (p *silentAppPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("mute"), h.Text("no readers here")))
+}
+
+func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[appCounterPage](app, "/reader")
+	via.Mount[silentAppPage](app, "/silent")
+	defer server.Close()
+
+	reader := viatest.NewClient(t, server, "/reader")
+	silent := viatest.NewClient(t, server, "/silent")
+
+	framesR, cancelR := reader.SSE()
+	defer cancelR()
+	framesS, cancelS := silent.SSE()
+	defer cancelS()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, reader.Action("Bump").Fire())
+
+	viatest.AwaitFrame(t, framesR, 2*time.Second, `<span id="visits">1</span>`)
+
+	// Heartbeat default is 25s — any frame inside this window can only
+	// come from an unintended re-render of a tab that does not display
+	// the key.
+	select {
+	case frame := <-framesS:
+		assert.Failf(t, "non-reader peer was woken",
+			"scope.App write must skip tabs whose View did not read the key; got %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/")
+	defer server.Close()
+
+	a := viatest.NewClient(t, server, "/")
+	b := a.Fork("/")
+
+	framesB, cancelB := b.SSE()
+	defer cancelB()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, a.Action("Set").Fire())
+	viatest.AwaitFrame(t, framesB, 2*time.Second, `<span id="theme">midnight</span>`)
+}
+
+func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/")
+	defer server.Close()
+
+	a := viatest.NewClient(t, server, "/")
+	b := viatest.NewClient(t, server, "/")
+
+	framesB, cancelB := b.SSE()
+	defer cancelB()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, a.Action("Set").Fire())
+
+	// Heartbeat default is 25s; any frame inside this window can only
+	// come from an unintended re-render of b, which would mean the
+	// session filter on the fan-out is wrong.
+	select {
+	case frame := <-framesB:
+		assert.Failf(t, "unexpected SSE frame on a peer session",
+			"scope.User write must not fan out to other sessions; got %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestApp_writePropagatesLiveToEveryOtherTab(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[appCounterPage](app, "/")
+	defer server.Close()
+
+	a := viatest.NewClient(t, server, "/")
+	b := viatest.NewClient(t, server, "/")
+
+	framesB, cancelB := b.SSE()
+	defer cancelB()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, a.Action("Bump").Fire())
+	viatest.AwaitFrame(t, framesB, 2*time.Second, `<span id="visits">1</span>`)
+}
+
 // SetIfChanged on scope.User: same key+value short-circuits, different
 // value reaches the wire as a signal patch.
 

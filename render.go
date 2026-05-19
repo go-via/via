@@ -59,7 +59,10 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	a.writePageDocument(w, ctx, ctx.viewFn(ctx))
+	ctx.beginRender()
+	body := ctx.viewFn(ctx)
+	ctx.endRender()
+	a.writePageDocument(w, ctx, body)
 	a.metricsOrNoop().Counter("via.render.total", "route", d.route)
 }
 
@@ -162,7 +165,10 @@ func flushDirty(ctx *Ctx) {
 		// View runs without queue.mu held — user code is allowed to
 		// call ctx.PatchSignal / ctx.SyncElements, which would deadlock
 		// on a re-entrant queue.mu acquisition.
-		_ = h.Div(h.ID(ctx.id), ctx.viewFn(ctx)).Render(buf)
+		ctx.beginRender()
+		body := ctx.viewFn(ctx)
+		ctx.endRender()
+		_ = h.Div(h.ID(ctx.id), body).Render(buf)
 		ctx.queue.mu.Lock()
 		// Prepend the auto re-render so any user-explicit SyncElements
 		// patches already queued (e.g. from inside the action body) end

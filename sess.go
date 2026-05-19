@@ -183,6 +183,9 @@ func SessionStore(ctx *Ctx, key string, value any) {
 		ctx.localScope.Store(key, value)
 	}
 	ctx.markStateDirty()
+	if ctx.app != nil && ctx.session != nil {
+		ctx.app.broadcastRender(ctx, ctx.session, key)
+	}
 }
 
 // RotateSession issues a fresh session id, copies the existing session's
@@ -249,6 +252,21 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 	}
 }
 
+// TrackRead records that the current View execution read key, so a
+// subsequent AppStore/SessionStore on the same key knows to wake this
+// ctx. Outside a View the call is a no-op; this is intentional so that
+// action handlers and lifecycle hooks don't accidentally subscribe.
+//
+// Deprecated: scope-package integration hook. End users should access
+// scoped state through scope.User[T] / scope.App[T] rather than calling
+// this directly.
+func TrackRead(ctx *Ctx, key string) {
+	if ctx == nil {
+		return
+	}
+	ctx.trackRead(key)
+}
+
 // AppLoad reads a value from the per-app store. Backs scope.App[T].
 // When ctx has no App attached (test path that bypassed New), falls
 // back to the ctx's local scope so a paired AppStore/AppLoad on the
@@ -284,6 +302,9 @@ func AppStore(ctx *Ctx, key string, value any) {
 		ctx.localScope.Store(key, value)
 	}
 	ctx.markStateDirty()
+	if ctx.app != nil {
+		ctx.app.broadcastRender(ctx, nil, key)
+	}
 }
 
 // sessionFromRequest returns the session for the cookie on r, or nil if

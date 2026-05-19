@@ -37,6 +37,27 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 	return len(ctxs)
 }
 
+// broadcastRender forces a view re-render on every live *Ctx whose
+// most recent render read key, except the writer (skipping it avoids
+// re-entering its action mutex). When sess is non-nil only ctxs on
+// that session are included — the scope for session-scoped writes
+// that must not wake unrelated sessions. The writer's own re-render
+// happens through the action's autoflush.
+func (a *App) broadcastRender(skip *Ctx, sess *session, key string) {
+	for _, c := range a.snapshotContexts() {
+		if c == skip {
+			continue
+		}
+		if sess != nil && c.session != sess {
+			continue
+		}
+		if !c.subscribed(key) {
+			continue
+		}
+		go c.Sync()
+	}
+}
+
 // snapshotContexts copies every live *Ctx into a slice under the
 // registry RLock, so callers can iterate without holding the lock —
 // the per-Ctx work (enqueueScript, PatchSignals) takes its own locks

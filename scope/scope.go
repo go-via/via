@@ -33,7 +33,10 @@ func (s *User[T]) BindWireKey(k string) { s.wireKey = k }
 func (s *User[T]) Key() string { return s.wireKey }
 
 // Get returns the current session value, or the zero value of T if unset.
+// A Get that happens during View execution subscribes the ctx so a
+// subsequent Set on the same key fans out to it.
 func (s *User[T]) Get(ctx *via.Ctx) T {
+	via.TrackRead(ctx, s.wireKey)
 	v, ok := via.SessionLoad(ctx, s.wireKey)
 	if !ok {
 		var zero T
@@ -43,7 +46,9 @@ func (s *User[T]) Get(ctx *via.Ctx) T {
 	return t
 }
 
-// Set writes the session value and re-renders the current tab.
+// Set writes the session value, re-renders the current tab, and
+// fans out a re-render to every other live tab on the same session
+// so all of the user's open tabs converge automatically.
 func (s *User[T]) Set(ctx *via.Ctx, v T) {
 	via.SessionStore(ctx, s.wireKey, v)
 }
@@ -74,7 +79,10 @@ func (a *App[T]) BindWireKey(k string) { a.wireKey = k }
 func (a *App[T]) Key() string { return a.wireKey }
 
 // Get returns the current app value, or the zero value of T if unset.
+// A Get that happens during View execution subscribes the ctx so a
+// subsequent Set on the same key fans out to it.
 func (a *App[T]) Get(ctx *via.Ctx) T {
+	via.TrackRead(ctx, a.wireKey)
 	v, ok := via.AppLoad(ctx, a.wireKey)
 	if !ok {
 		var zero T
@@ -84,10 +92,9 @@ func (a *App[T]) Get(ctx *via.Ctx) T {
 	return t
 }
 
-// Set writes the app value and re-renders the current tab. Other tabs
-// do not auto-update — they re-fetch on their next render. To push the
-// new value to every live tab in one shot, follow Set with
-// [via.App.BroadcastSignals] or trigger a [via.App.Broadcast] reload.
+// Set writes the app value, re-renders the current tab, and fans out
+// a re-render to every other live tab so the new value lands on every
+// open session without per-call broadcast glue.
 func (a *App[T]) Set(ctx *via.Ctx, v T) {
 	via.AppStore(ctx, a.wireKey, v)
 }

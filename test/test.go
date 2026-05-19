@@ -64,6 +64,25 @@ func NewClient(t testing.TB, server *httptest.Server, path string) *Client {
 // TabID returns the active tab id.
 func (c *Client) TabID() string { return c.tabID }
 
+// Fork opens a second tab against path that shares this client's cookie
+// jar, so both tabs land on the same session — the only way to drive
+// scope.User behavior that spans tabs.
+func (c *Client) Fork(path string) *Client {
+	c.t.Helper()
+	httpc := &http.Client{Jar: c.jar, Timeout: 5 * time.Second}
+	resp, err := httpc.Get(c.server.URL + path)
+	if err != nil {
+		c.t.Fatalf("test.Client.Fork: GET %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	tab := tabIDFrom(string(body))
+	if tab == "" {
+		c.t.Fatalf("test.Client.Fork: no tab id in body of %s", path)
+	}
+	return &Client{t: c.t, server: c.server, tabID: tab, path: path, jar: c.jar, httpc: httpc, lastBody: string(body)}
+}
+
 // HTML returns the most recently fetched page body.
 func (c *Client) HTML() string {
 	c.mu.Lock()

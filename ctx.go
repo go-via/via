@@ -44,6 +44,14 @@ type Ctx struct {
 	// dirty bits, and Writer/Request assignment.
 	actionMu sync.Mutex
 
+	// readsMu guards the render-time subscription tracker. lastReads is
+	// read by broadcastRender from any goroutine, so a lock is required
+	// even though per-ctx renders are serialized through actionMu.
+	readsMu       sync.Mutex
+	rendering     bool
+	inflightReads map[string]struct{}
+	lastReads     map[string]struct{}
+
 	// Typed dispatch funcs, bound once at newCtx by extracting each
 	// reflect-discovered method as a method value (`cmpVal.Method(i).
 	// Interface().(func(*Ctx)…)`). Per-request action/lifecycle calls
@@ -223,4 +231,47 @@ func (ctx *Ctx) markStateDirty() {
 	ctx.stateDirty = true
 	ctx.queue.mu.Unlock()
 	ctx.queue.notify()
+}
+
+// beginRender opens a "currently rendering" window during which every
+// trackRead call records its wireKey into the in-flight subscription
+// set. Paired with endRender, which publishes the set so broadcastRender
+// can read it from another goroutine.
+func (ctx *Ctx) beginRender() {
+	ctx.readsMu.Lock()
+	ctx.rendering = true
+	ctx.inflightReads = make(map[string]struct{})
+	ctx.readsMu.Unlock()
+}
+
+// endRender closes the render window and publishes the inflight read
+// set as the ctx's current subscription set.
+func (ctx *Ctx) endRender() {
+	ctx.readsMu.Lock()
+	ctx.rendering = false
+	ctx.lastReads = ctx.inflightReads
+	ctx.inflightReads = nil
+	ctx.readsMu.Unlock()
+}
+
+// trackRead records that the current render touched key. No-op outside
+// a beginRender/endRender window so action handlers and lifecycle hooks
+// don't accidentally subscribe.
+func (ctx *Ctx) trackRead(key string) {
+	ctx.readsMu.Lock()
+	if ctx.rendering {
+		ctx.inflightReads[key] = struct{}{}
+	}
+	ctx.readsMu.Unlock()
+}
+
+// subscribed reports whether the ctx's most recently published render
+// read key. A ctx that has never completed a render returns false — its
+// first render will read fresh state anyway, so skipping the broadcast
+// is correct.
+func (ctx *Ctx) subscribed(key string) bool {
+	ctx.readsMu.Lock()
+	_, ok := ctx.lastReads[key]
+	ctx.readsMu.Unlock()
+	return ok
 }
