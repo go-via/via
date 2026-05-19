@@ -103,6 +103,25 @@ func RedirectHTTPS() Middleware {
 	}
 }
 
+// RedirectHTTPSStrict is the direct-bind variant of [RedirectHTTPS]:
+// it ignores X-Forwarded-Proto entirely and only treats r.TLS != nil as
+// HTTPS. Use this when the app listens on :443 + :80 itself, with no
+// reverse proxy in front — a client cannot forge r.TLS, so this closes
+// the bypass that [RedirectHTTPS]'s header trust opens.
+//
+// Use [RedirectHTTPS] (not Strict) behind a trusted proxy that
+// terminates TLS and overwrites X-Forwarded-Proto on inbound requests.
+func RedirectHTTPSStrict() Middleware {
+	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		if r.TLS != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		target := "https://" + r.Host + r.URL.RequestURI()
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+	}
+}
+
 func isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true

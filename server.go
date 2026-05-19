@@ -61,7 +61,21 @@ func (a *App) Start() {
 	}
 }
 
-// Shutdown disposes all live tabs and closes the server.
+// Shutdown gracefully tears down the app:
+//
+//  1. Every live Ctx's Done channel is closed so SSE drain loops and
+//     Stream goroutines exit promptly.
+//  2. The registry is cleared so concurrent action POSTs that arrive
+//     after this point 404 instead of running against a half-disposed
+//     Ctx.
+//  3. The underlying http.Server is drained (waits for in-flight non-SSE
+//     handlers up to ctx's deadline).
+//  4. Per-Ctx OnDispose runs, serialized against any in-flight action
+//     via the per-Ctx action mutex.
+//
+// Sessions and the TTL sweeper are torn down last. The error from the
+// http.Server's Shutdown is returned; a wedged OnDispose handler does
+// not propagate but is logged.
 func (a *App) Shutdown(ctx context.Context) error {
 	a.contextRegistryMu.Lock()
 	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
@@ -71,6 +85,25 @@ func (a *App) Shutdown(ctx context.Context) error {
 	clear(a.contextRegistry)
 	a.contextRegistryMu.Unlock()
 
+	// Step 1: wake every long-lived loop on this Ctx (SSE drain,
+	// Stream goroutines, user code watching Done) so they exit before
+	// we wait for action drain.
+	for _, c := range ctxs {
+		a.signalDispose(c)
+	}
+
+	// Step 2: drain in-flight non-SSE handlers via the http.Server.
+	a.serverMu.Lock()
+	srv := a.server
+	a.serverMu.Unlock()
+	var srvErr error
+	if srv != nil {
+		srvErr = srv.Shutdown(ctx)
+	}
+
+	// Step 3: run OnDispose under actionMu. Done after srv.Shutdown so
+	// handlers that were mid-action have finished their work and OnDispose
+	// sees a quiescent composition.
 	for _, c := range ctxs {
 		a.disposeCtx(c)
 	}
@@ -85,11 +118,5 @@ func (a *App) Shutdown(ctx context.Context) error {
 	clear(a.sessions)
 	a.sessionsMu.Unlock()
 
-	a.serverMu.Lock()
-	srv := a.server
-	a.serverMu.Unlock()
-	if srv != nil {
-		return srv.Shutdown(ctx)
-	}
-	return nil
+	return srvErr
 }

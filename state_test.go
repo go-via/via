@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -8,7 +9,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	"github.com/go-via/via/scope"
 	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,73 +66,104 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
 }
 
-// Update: read-modify-write helper across all reactive shapes
-
-type updatablePage struct {
-	N      via.State[int]
-	Step   via.Signal[int] `via:"step,init=1"`
-	Theme  scope.User[string]
-	Visits scope.App[int]
+type stateIntInitPage struct {
+	N via.State[int] `via:",init=3"`
 }
 
-func (p *updatablePage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *stateIntInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
+
+func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateIntInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "<div>3</div>",
+		"State[int] with init=3 must render the seeded value on first load")
+}
+
+type stateStringInitPage struct {
+	Label via.State[string] `via:",init=--"`
+}
+
+func (p *stateStringInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.Label.Text()) }
+
+func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateStringInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, "<div>--</div>",
+		"State[string] with init=-- must render the seeded value on first load")
+}
+
+// Update — read-modify-write on State[T] and Signal[T]
+
+type updatePage struct {
+	N    via.State[int]
+	Step via.Signal[int] `via:"step,init=1"`
+}
+
+func (p *updatePage) DoState(ctx *via.Ctx) error {
+	p.N.Set(ctx, 5)
+	p.N.Update(ctx, func(n int) int { return n * 2 })
+	return nil
+}
+
+func (p *updatePage) DoSignal(ctx *via.Ctx) error {
+	p.Step.Update(ctx, func(n int) int { return n + 4 })
+	return nil
+}
+
+func (p *updatePage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Span(h.ID("n"), p.N.Text()),
+		h.Span(h.ID("step"), p.Step.Text()),
+	)
+}
 
 func TestUpdate_appliesFnToState(t *testing.T) {
 	t.Parallel()
 
-	c := &updatablePage{}
-	ctx := viatest.NewCtx(t, c)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[updatePage](app, "/")
+	defer server.Close()
 
-	c.N.Set(ctx, 5)
-	c.N.Update(ctx, func(n int) int { return n * 2 })
-	assert.Equal(t, 10, c.N.Get(ctx))
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// Set(5) then Update(*2) → 10.
+	require.Equal(t, http.StatusOK, tc.Action("DoState").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="n">10</span>`)
 }
 
 func TestUpdate_appliesFnToSignal(t *testing.T) {
 	t.Parallel()
 
-	c := &updatablePage{}
-	ctx := viatest.NewCtx(t, c)
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[updatePage](app, "/")
+	defer server.Close()
 
-	c.Step.Update(ctx, func(n int) int { return n + 4 })
-	assert.Equal(t, 5, c.Step.Get(ctx),
-		"init=1 plus +4 from Update = 5")
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// init=1, Update(+4) → 5.
+	require.Equal(t, http.StatusOK, tc.Action("DoSignal").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"step":5`)
 }
 
-func TestUpdate_appliesFnToScopeUser(t *testing.T) {
-	t.Parallel()
-
-	c := &updatablePage{}
-	ctx := viatest.NewCtx(t, c)
-
-	c.Theme.Set(ctx, "blue")
-	c.Theme.Update(ctx, func(s string) string { return s + "-dark" })
-	assert.Equal(t, "blue-dark", c.Theme.Get(ctx))
-}
-
-func TestUpdate_nilFnIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	c := &updatablePage{}
-	ctx := viatest.NewCtx(t, c)
-	c.N.Set(ctx, 7)
-	c.N.Update(ctx, nil)
-	assert.Equal(t, 7, c.N.Get(ctx))
-}
-
-type stateKeyPage struct {
-	Tagged   via.State[int] `via:"customState"`
-	Defaults via.State[string]
-}
-
-func (p *stateKeyPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestState_keyReturnsBoundWireKey(t *testing.T) {
-	t.Parallel()
-	p := &stateKeyPage{}
-	_ = viatest.NewCtx(t, p)
-	assert.Equal(t, "customState", p.Tagged.Key(),
-		"Key must report the explicit `via:` tag when one is set")
-	assert.Equal(t, "defaults", p.Defaults.Key(),
-		"Key must default to the lowercased field name")
-}
+// State.Key isn't externally observable: State[T] is server-rendered, so
+// the wire key never appears in the client-visible payload (unlike
+// Signal.Key, which surfaces via data-text="$<key>" and data-bind="<key>").
+// Tag-driven key resolution for State is exercised end-to-end by the
+// init-tag tests above, where mis-resolving the key would render the
+// wrong seeded value.

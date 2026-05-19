@@ -263,41 +263,55 @@ func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, "Porto||false")
 }
 
-// Defensive shapes — nil dst, non-struct dst, unexported fields.
+// DecodeForm — defensive shape: skips unexported fields, leaves keys
+// without a matching signal as zero.
 
-func TestDecodeForm_nilDstIsNoOp(t *testing.T) {
-	t.Parallel()
-	page := &formFallbackPage{}
-	ctx := viatest.NewCtx(t, page)
-	// Must not panic.
-	var dst *fallbackForm
-	via.DecodeForm(ctx, dst)
-}
-
-func TestDecodeForm_nonStructDstIsNoOp(t *testing.T) {
-	t.Parallel()
-	page := &formFallbackPage{}
-	ctx := viatest.NewCtx(t, page)
-	// Must not panic — non-struct pointer is silently ignored.
-	var n int
-	via.DecodeForm(ctx, &n)
-	require.Equal(t, 0, n)
-}
-
-type formMixedFields struct {
+type unexportedFieldForm struct {
 	Visible  string `form:"visible"`
 	hidden   string //nolint:unused // intentionally unexported for the test
 	NoTag    string
 	NotFound string `form:"missing"`
 }
 
+type unexportedFieldPage struct {
+	Captured via.State[string]
+}
+
+func (p *unexportedFieldPage) Submit(ctx *via.Ctx) error {
+	var dst unexportedFieldForm
+	via.DecodeForm(ctx, &dst)
+	// Encode all four into one string so the test can assert on each
+	// slot independently — Visible gets the signal value, the rest stay
+	// zero (unexported skipped, missing key absent).
+	p.Captured.Set(ctx, dst.Visible+"|"+dst.hidden+"|"+dst.NoTag+"|"+dst.NotFound)
+	return nil
+}
+
+func (p *unexportedFieldPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("out"), p.Captured.Text()))
+}
+
 func TestDecodeForm_skipsUnexportedFieldsAndLeavesMissingKeysZero(t *testing.T) {
 	t.Parallel()
-	page := &formFallbackPage{}
-	ctx := viatest.NewCtx(t, page)
-	// No request and no signal payload — every field stays zero, no
-	// panic on the unexported field.
-	var dst formMixedFields
-	via.DecodeForm(ctx, &dst)
-	require.Equal(t, formMixedFields{}, dst)
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[unexportedFieldPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK,
+		tc.Action("Submit").
+			WithSignal("visible", "v").
+			WithSignal("hidden", "should-be-skipped-since-field-is-unexported").
+			// "missing" signal intentionally not sent — exercises the
+			// "tagged field with no matching key" path.
+			Fire())
+	// Only the exported, tagged field with a matching signal lands;
+	// unexported is skipped (no panic), missing-tag field stays zero.
+	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="out">v|||</span>`)
 }

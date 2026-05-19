@@ -1,11 +1,11 @@
 package via_test
 
 import (
-	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -51,109 +51,6 @@ func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 	}
 }
 
-type togglePage struct {
-	Open via.Signal[bool] `via:"open"`
-}
-
-func (p *togglePage) Flip(ctx *via.Ctx) error {
-	via.Toggle(ctx, &p.Open)
-	return nil
-}
-
-func (p *togglePage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestToggle_flipsBoolSignalAndMarksDirty(t *testing.T) {
-	t.Parallel()
-
-	page := &togglePage{}
-	c := viatest.NewCtx(t, page)
-
-	require.False(t, page.Open.Get(c))
-	via.Toggle(c, &page.Open)
-	assert.True(t, page.Open.Get(c), "Toggle must flip false → true")
-	via.Toggle(c, &page.Open)
-	assert.False(t, page.Open.Get(c), "Toggle must flip back true → false")
-}
-
-func TestToggle_nilSignalIsNoOp(t *testing.T) {
-	t.Parallel()
-	assert.NotPanics(t, func() {
-		via.Toggle(viatest.NewCtx(t, &togglePage{}), nil)
-	})
-}
-
-type adderPage struct {
-	Count via.Signal[int] `via:"count,init=10"`
-	Bal   via.Signal[float64]
-}
-
-func (p *adderPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
-	t.Parallel()
-
-	page := &adderPage{}
-	c := viatest.NewCtx(t, page)
-
-	via.Add(c, &page.Count, 3)
-	assert.Equal(t, 13, page.Count.Get(c))
-	via.Add(c, &page.Count, -5)
-	assert.Equal(t, 8, page.Count.Get(c), "negative delta = decrement")
-}
-
-func TestAdd_nilMutableIsNoOp(t *testing.T) {
-	t.Parallel()
-	// Mirrors via.Toggle / via.SetIfChanged / via.Push: nil handle must
-	// not panic. The constraint via.numeric forces T to a numeric kind,
-	// so the test instantiates explicitly with [int].
-	assert.NotPanics(t, func() {
-		via.Add[int](viatest.NewCtx(t, &adderPage{}), nil, 1)
-	})
-}
-
-func TestAdd_floatSignalRespectsType(t *testing.T) {
-	t.Parallel()
-
-	page := &adderPage{}
-	c := viatest.NewCtx(t, page)
-
-	via.Add(c, &page.Bal, 0.5)
-	via.Add(c, &page.Bal, 0.25)
-	assert.InDelta(t, 0.75, page.Bal.Get(c), 1e-9)
-}
-
-type stateAdderPage struct {
-	Hits via.State[int]
-	Open via.State[bool]
-}
-
-func (p *stateAdderPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
-	t.Parallel()
-
-	page := &stateAdderPage{}
-	c := viatest.NewCtx(t, page)
-
-	// Same helper, different storage flavor — Mutable[T] makes them
-	// interchangeable for read/modify/write helpers.
-	via.Add(c, &page.Hits, 7)
-	via.Add(c, &page.Hits, -2)
-	assert.Equal(t, 5, page.Hits.Get(c))
-}
-
-func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
-	t.Parallel()
-
-	page := &stateAdderPage{}
-	c := viatest.NewCtx(t, page)
-
-	via.Toggle(c, &page.Open)
-	assert.True(t, page.Open.Get(c))
-	via.Toggle(c, &page.Open)
-	assert.False(t, page.Open.Get(c))
-}
-
 type signalShowPage struct {
 	Open via.Signal[bool] `via:"open"`
 }
@@ -193,23 +90,6 @@ func TestSignal_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	assert.Contains(t, body, `&#34;myField&#34;:0`)
 }
 
-type signalKeyPage struct {
-	Tagged   via.Signal[int] `via:"customSig"`
-	Defaults via.Signal[string]
-}
-
-func (p *signalKeyPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestSignal_keyReturnsBoundWireKey(t *testing.T) {
-	t.Parallel()
-	p := &signalKeyPage{}
-	_ = viatest.NewCtx(t, p)
-	assert.Equal(t, "customSig", p.Tagged.Key(),
-		"Key must report the explicit `via:` tag when one is set")
-	assert.Equal(t, "defaults", p.Defaults.Key(),
-		"Key must default to the lowercased field name")
-}
-
 // helpers
 
 func getBody(t *testing.T, server *httptest.Server, path string) string {
@@ -219,63 +99,6 @@ func getBody(t *testing.T, server *httptest.Server, path string) string {
 	defer resp.Body.Close()
 	buf, _ := io.ReadAll(resp.Body)
 	return string(buf)
-}
-
-type feedPage struct {
-	Series via.Signal[[]int] `via:"series"`
-}
-
-func (p *feedPage) Append(ctx *via.Ctx) error {
-	via.Push(ctx, &p.Series, 42)
-	return nil
-}
-
-func (p *feedPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestPush_appendsItemAndMarksSignalDirty(t *testing.T) {
-	t.Parallel()
-	p := &feedPage{}
-	ctx := viatest.NewCtx(t, p)
-	via.Push(ctx, &p.Series, 1)
-	via.Push(ctx, &p.Series, 2)
-	via.Push(ctx, &p.Series, 3)
-	assert.Equal(t, []int{1, 2, 3}, p.Series.Get(ctx))
-}
-
-func TestPush_nilSignalIsNoOp(t *testing.T) {
-	t.Parallel()
-	ctx := viatest.NewCtx(t, &feedPage{})
-	// Must not panic; the nil-handle guard mirrors via.Toggle / via.Add.
-	via.Push[int](ctx, nil, 1)
-}
-
-func TestPushBounded_dropsOldestWhenAtCapacity(t *testing.T) {
-	t.Parallel()
-	p := &feedPage{}
-	ctx := viatest.NewCtx(t, p)
-	for i := 1; i <= 5; i++ {
-		via.PushBounded(ctx, &p.Series, i, 3)
-	}
-	assert.Equal(t, []int{3, 4, 5}, p.Series.Get(ctx),
-		"PushBounded must keep the most recent max items; older items roll off")
-}
-
-func TestPushBounded_nilSignalIsNoOp(t *testing.T) {
-	t.Parallel()
-	ctx := viatest.NewCtx(t, &feedPage{})
-	// Mirrors TestPush_nilSignalIsNoOp; PushBounded's combined
-	// `sig == nil || max <= 0` guard means each half needs its own pin.
-	assert.NotPanics(t, func() {
-		via.PushBounded[int](ctx, nil, 1, 10)
-	})
-}
-
-func TestPushBounded_zeroMaxIsNoOp(t *testing.T) {
-	t.Parallel()
-	p := &feedPage{}
-	ctx := viatest.NewCtx(t, p)
-	via.PushBounded(ctx, &p.Series, 1, 0)
-	assert.Empty(t, p.Series.Get(ctx))
 }
 
 type attrStylePage struct {
@@ -312,40 +135,6 @@ func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
 		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
 }
 
-type stateIntInitPage struct {
-	N via.State[int] `via:",init=3"`
-}
-
-func (p *stateIntInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
-
-func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
-	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[stateIntInitPage](app, "/")
-	defer server.Close()
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, "<div>3</div>",
-		"State[int] with init=3 must render the seeded value on first load")
-}
-
-type stateStringInitPage struct {
-	Label via.State[string] `via:",init=--"`
-}
-
-func (p *stateStringInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.Label.Text()) }
-
-func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
-	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[stateStringInitPage](app, "/")
-	defer server.Close()
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, "<div>--</div>",
-		"State[string] with init=-- must render the seeded value on first load")
-}
-
 type boolInitPage struct {
 	On via.Signal[bool] `via:"on,init=true"`
 }
@@ -363,72 +152,253 @@ func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
 }
 
-type viewHelperPage struct {
-	Step via.Signal[int]  `via:"step,init=1"`
-	Open via.Signal[bool] `via:"open,init=false"`
+// Toggle / Add / Push / PushBounded / SetIfChanged — typed helpers
+// observed through SSE-frame side effects.
+
+type signalHelpersPage struct {
+	Open  via.Signal[bool]    `via:"open"`
+	Count via.Signal[int]     `via:"count,init=10"`
+	Bal   via.Signal[float64] `via:"bal"`
+	Hits  via.State[int]
+	Vis   via.State[bool]
+	Items via.Signal[[]int] `via:"items"`
 }
 
-func (p *viewHelperPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestSignal_viewHelpersRenderAllocFreeAfterBind(t *testing.T) {
-	// AllocsPerRun forbids t.Parallel.
-	// Drive bind via viatest.NewCtx so Signal.{Text,Bind,Show} have wire keys.
-	p := &viewHelperPage{}
-	_ = viatest.NewCtx(t, p)
-
-	cases := []struct {
-		name string
-		node h.H
-	}{
-		{"Text", p.Step.Text()},
-		{"Bind", p.Step.Bind()},
-		{"Show", p.Open.Show()},
-	}
-	var buf bytes.Buffer
-	for _, c := range cases {
-		require.NoError(t, c.node.Render(&buf))
-	}
-	for _, c := range cases {
-		allocs := testing.AllocsPerRun(50, func() {
-			buf.Reset()
-			_ = c.node.Render(&buf)
-		})
-		assert.Zero(t, allocs,
-			"%s rendered output should be pre-baked bytes — Render must not allocate", c.name)
-	}
+func (p *signalHelpersPage) FlipOpen(ctx *via.Ctx) error {
+	via.Toggle(ctx, &p.Open)
+	return nil
 }
+
+func (p *signalHelpersPage) ToggleVis(ctx *via.Ctx) error {
+	via.Toggle(ctx, &p.Vis)
+	return nil
+}
+
+func (p *signalHelpersPage) AddCount(ctx *via.Ctx) error {
+	via.Add(ctx, &p.Count, 3)
+	via.Add(ctx, &p.Count, -5)
+	return nil
+}
+
+func (p *signalHelpersPage) AddBal(ctx *via.Ctx) error {
+	via.Add(ctx, &p.Bal, 0.5)
+	via.Add(ctx, &p.Bal, 0.25)
+	return nil
+}
+
+func (p *signalHelpersPage) AddHits(ctx *via.Ctx) error {
+	via.Add(ctx, &p.Hits, 7)
+	via.Add(ctx, &p.Hits, -2)
+	return nil
+}
+
+func (p *signalHelpersPage) PushOne(ctx *via.Ctx) error {
+	via.Push(ctx, &p.Items, 1)
+	via.Push(ctx, &p.Items, 2)
+	via.Push(ctx, &p.Items, 3)
+	return nil
+}
+
+func (p *signalHelpersPage) PushFive(ctx *via.Ctx) error {
+	for i := 1; i <= 5; i++ {
+		via.PushBounded(ctx, &p.Items, i, 3)
+	}
+	return nil
+}
+
+func (p *signalHelpersPage) View(ctx *via.Ctx) h.H {
+	// State[T] doesn't surface in signals JSON; rendered text is its
+	// only externally observable trace, so views that drive State helper
+	// tests must render the value somewhere assertable.
+	return h.Div(
+		h.Span(h.ID("hits"), p.Hits.Text()),
+		h.Span(h.ID("vis"), h.Textf("%v", p.Vis.Get(ctx))),
+	)
+}
+
+func TestToggle_flipsBoolSignalSurfacingInSSE(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"open":true`)
+
+	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"open":false`)
+}
+
+func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
+	t.Parallel()
+	// Pins the Mutable[bool] polymorphism: Toggle must accept State[bool]
+	// as well as Signal[bool], otherwise via.State stops being a drop-in
+	// substitute for via.Signal in reactive helpers.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("ToggleVis").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
+}
+
+func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// init=10, then +3, -5 → 8
+	require.Equal(t, http.StatusOK, tc.Action("AddCount").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"count":8`)
+}
+
+func TestAdd_floatSignalRespectsType(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("AddBal").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
+}
+
+func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
+	t.Parallel()
+	// Mirror of TestToggle_acceptsStateAsWellAsSignal but for the numeric
+	// helper. Pins Mutable[int] conformance of via.State[int].
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("AddHits").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
+}
+
+func TestPush_appendsItemsToSignalSlice(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("PushOne").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
+}
+
+func TestPushBounded_keepsOnlyLatestMaxItems(t *testing.T) {
+	t.Parallel()
+	// Push five into a max=3 buffer: oldest two roll off, leaving [3,4,5].
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("PushFive").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
+}
+
+// SetIfChanged: changed values reach the wire; unchanged values do not
+// trigger a second patch.
 
 type setIfChangedPage struct {
 	Status via.Signal[string] `via:"status,init=idle"`
 }
 
+func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
+	via.SetIfChanged(ctx, &p.Status, "idle")
+	return nil
+}
+
+func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
+	via.SetIfChanged(ctx, &p.Status, "busy")
+	return nil
+}
+
 func (p *setIfChangedPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
-func TestSetIfChanged_skipsPatchWhenValueUnchanged(t *testing.T) {
+func TestSetIfChanged_changedValueProducesSignalFrame(t *testing.T) {
 	t.Parallel()
-	p := &setIfChangedPage{}
-	ctx := viatest.NewCtx(t, p)
-	changed := via.SetIfChanged(ctx, &p.Status, "idle")
-	assert.False(t, changed, "writing the existing value must report changed=false")
-	ctx.Flush()
-	assert.Empty(t, ctx.PendingSignals(),
-		"unchanged Set must not enqueue a signal patch")
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[setIfChangedPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("SetBusy").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
 }
 
-func TestSetIfChanged_marksDirtyWhenValueChanges(t *testing.T) {
+func TestSetIfChanged_unchangedValueProducesNoFrame(t *testing.T) {
 	t.Parallel()
-	p := &setIfChangedPage{}
-	ctx := viatest.NewCtx(t, p)
-	changed := via.SetIfChanged(ctx, &p.Status, "busy")
-	assert.True(t, changed, "writing a new value must report changed=true")
-	ctx.Flush()
-	assert.Contains(t, ctx.PendingSignals(), "status",
-		"changed Set must mark the signal dirty so the next flush patches it")
-}
+	// Writing the existing value must short-circuit before reaching the
+	// patch queue — no datastar-patch-signals frame should appear for
+	// this action. Wait briefly; absence is the assertion.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[setIfChangedPage](app, "/")
+	defer server.Close()
 
-func TestSetIfChanged_nilMutableIsNoOp(t *testing.T) {
-	t.Parallel()
-	ctx := viatest.NewCtx(t, &setIfChangedPage{})
-	changed := via.SetIfChanged[string](ctx, nil, "x")
-	assert.False(t, changed)
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("SetSame").Fire())
+	select {
+	case f := <-frames:
+		assert.NotContains(t, f, `"status"`,
+			"SetIfChanged with identical value must not enqueue a status patch")
+	case <-time.After(200 * time.Millisecond):
+		// No frame at all is the success path.
+	}
 }

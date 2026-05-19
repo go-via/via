@@ -28,11 +28,12 @@ var datastarJS []byte
 //	parent := http.NewServeMux()
 //	parent.Handle("/", app)
 type App struct {
-	cfg         config
-	mux         *http.ServeMux
-	handler     http.Handler
-	server      *http.Server
-	cachedChain atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.mux), rebuilt on Use
+	cfg                 config
+	mux                 *http.ServeMux
+	handler             http.Handler
+	server              *http.Server
+	cachedChain         atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.mux), rebuilt on Use
+	cachedNotFoundChain atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.cfg.notFoundHandler), nil if no custom 404
 
 	descs    []*cmpDescriptor
 	descsMu  sync.RWMutex
@@ -104,6 +105,16 @@ func (a *App) rebuildChain() {
 	chain := applyMiddleware(a.middleware, a.mux)
 	hf := http.HandlerFunc(chain.ServeHTTP)
 	a.cachedChain.Store(&hf)
+	if a.cfg.notFoundHandler != nil {
+		// Wrap the custom 404 handler with the same middleware chain
+		// as matched routes so CSP / RequestID / Recover / AccessLog
+		// still apply on the not-found path. Without this the user's
+		// 404 page renders without any of the cross-cutting behavior
+		// they configured for the rest of the app.
+		nf := applyMiddleware(a.middleware, a.cfg.notFoundHandler)
+		nfHf := http.HandlerFunc(nf.ServeHTTP)
+		a.cachedNotFoundChain.Store(&nfHf)
+	}
 }
 
 // RegisterAppSignal sets the initial value of a named, app-wide signal.
@@ -182,14 +193,36 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 
 func (a *App) registerCtx(ctx *Ctx) {
 	a.contextRegistryMu.Lock()
-	defer a.contextRegistryMu.Unlock()
 	a.contextRegistry[ctx.id] = ctx
+	live := len(a.contextRegistry)
+	a.contextRegistryMu.Unlock()
+	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
+}
+
+// tryRegisterCtx enforces the maxContexts cap atomically with the
+// registry write. Returns false if the cap is set and already met —
+// the caller must respond with 503 instead of registering. Separate
+// "live count" check + register opens a TOCTOU race under heavy
+// concurrent page loads; this fuses both steps under a single Lock.
+func (a *App) tryRegisterCtx(ctx *Ctx, limit int) bool {
+	a.contextRegistryMu.Lock()
+	if limit > 0 && len(a.contextRegistry) >= limit {
+		a.contextRegistryMu.Unlock()
+		return false
+	}
+	a.contextRegistry[ctx.id] = ctx
+	live := len(a.contextRegistry)
+	a.contextRegistryMu.Unlock()
+	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
+	return true
 }
 
 func (a *App) unregisterCtx(id string) {
 	a.contextRegistryMu.Lock()
-	defer a.contextRegistryMu.Unlock()
 	delete(a.contextRegistry, id)
+	live := len(a.contextRegistry)
+	a.contextRegistryMu.Unlock()
+	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
 }
 
 // getCtx returns the live Ctx for id and ok=true; ok=false if the id is
@@ -228,6 +261,12 @@ func (a *App) logInfo(ctx *Ctx, format string, args ...any) { a.emit(LogInfo, ct
 
 // New constructs an *App with the given options.
 func New(opts ...Option) *App {
+	// MethodName parses the Go runtime's "-fm" trampoline naming —
+	// undocumented internal. Verify it still produces the expected
+	// shape so a Go toolchain upgrade that changes the format trips
+	// at startup, not at the first action POST six hours later.
+	verifyMethodNameTrampoline()
+
 	mux := http.NewServeMux()
 	a := &App{
 		mux:             mux,
@@ -243,7 +282,9 @@ func New(opts ...Option) *App {
 			sessionTTL:      30 * time.Minute,
 			contextTTL:      15 * time.Minute,
 			sseHeartbeat:    25 * time.Second,
+			sseWriteTimeout: 10 * time.Second,
 			maxRequestBody:  1 << 20,
+			maxUploadSize:   32 << 20,
 		},
 	}
 	for _, opt := range opts {
@@ -284,17 +325,23 @@ func New(opts ...Option) *App {
 
 func (a *App) withSession() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = a.getOrCreateSession(w, r)
+		// mux.Handler resolves the route without serving — used both
+		// to gate session creation (unmatched paths get no session,
+		// bounding memory under crawler / 404 floods) and to pick the
+		// right chain (custom 404 if configured).
+		_, pattern := a.mux.Handler(r)
+		matched := pattern != ""
+
+		if matched {
+			_ = a.getOrCreateSession(w, r)
+		}
 		// Stamp the app pointer into r so middleware can resolve the
 		// session via via.GetSess[T](r) without holding a *Ctx yet.
 		r = r.WithContext(context.WithValue(r.Context(), appKey{}, a))
-		// Detour through a 404 sniffer if a custom not-found handler
-		// is configured. The mux's default 404 path is opaque, so we
-		// pre-check via mux.Handler — if it returns the "not found"
-		// handler, we run the user's WithNotFound callback instead.
-		if a.cfg.notFoundHandler != nil {
-			if _, pattern := a.mux.Handler(r); pattern == "" {
-				a.cfg.notFoundHandler.ServeHTTP(w, r)
+
+		if !matched {
+			if nf := a.cachedNotFoundChain.Load(); nf != nil {
+				(*nf).ServeHTTP(w, r)
 				return
 			}
 		}

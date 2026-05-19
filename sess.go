@@ -228,6 +228,16 @@ func RotateSession(ctx *Ctx) string {
 // sessionCookie returns the canonical via_session cookie for id with the
 // app's configured Secure flag applied. Single source of truth shared by
 // getOrCreateSession and RotateSession so the two paths can never drift.
+//
+// SameSite=Lax is chosen (over Strict) so users following an inbound
+// link from another origin still see their session on the first page
+// load — a Strict cookie would force them to re-auth after every
+// external referral, which is hostile to e-mailed deep links. The CSRF
+// surface that Lax leaves open is closed separately by the via_tab
+// signal binding (see feedback_csrf_threat_model.md): every action
+// POST and SSE handshake validates via_tab against the session, so a
+// cross-site form submission can't reach an action even if the cookie
+// rides along.
 func (a *App) sessionCookie(id string) *http.Cookie {
 	return &http.Cookie{
 		Name:     sessionCookieName,

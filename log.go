@@ -26,9 +26,9 @@ type Logger interface {
 // Log returns the logger configured on the App that owns ctx, stamped
 // with the current via_tab so every record is correlated to the tab
 // that produced it. Falls back to the default logger if ctx is nil or
-// detached (e.g. constructed via test.NewCtx without an App attached).
-// Use it inside actions / OnInit / OnConnect to write app-level
-// structured logs through the same pipe via uses for its own warnings:
+// otherwise has no App attached. Use it inside actions / OnInit /
+// OnConnect to write app-level structured logs through the same pipe
+// via uses for its own warnings:
 //
 //	via.Log(ctx).Log(via.LogInfo, "checkout", "user", id, "amount", n)
 func Log(ctx *Ctx) Logger {

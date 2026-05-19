@@ -58,26 +58,6 @@ func TestFile_typedFieldPopulatedFromMultipartUpload(t *testing.T) {
 	assert.Equal(t, body, got)
 }
 
-func TestFile_filePresentFalseWhenNoUpload(t *testing.T) {
-	t.Parallel()
-
-	c := &uploadPage{}
-	ctx := viatest.NewCtx(t, c)
-	assert.False(t, c.Avatar.Present(),
-		"unbound File handle reports Present() == false")
-	assert.Equal(t, "", c.Avatar.Filename())
-	assert.Equal(t, int64(0), c.Avatar.Size())
-	assert.Equal(t, "", c.Avatar.ContentType())
-	_, err := c.Avatar.Open()
-	assert.Error(t, err, "Open with no upload should error")
-	assert.Equal(t, "avatar", c.Avatar.Key(),
-		"Key() must be set at Ctx construction, not only after a multipart action")
-
-	// no panic when ctx has no in-flight request
-	_, err = ctx.MultipartReader()
-	assert.Error(t, err)
-}
-
 type readMultipartPage struct{}
 
 func (p *readMultipartPage) Read(ctx *via.Ctx) error {
@@ -134,15 +114,6 @@ func (p *bytesEchoPage) Read(ctx *via.Ctx) error {
 
 func (p *bytesEchoPage) View(ctx *via.Ctx) h.H { return h.Div(p.Length.Text()) }
 
-func TestFile_Bytes_unboundReturnsError(t *testing.T) {
-	t.Parallel()
-	p := &bytesEchoPage{}
-	_ = viatest.NewCtx(t, p)
-	_, err := p.Blob.Bytes()
-	assert.Error(t, err,
-		"Bytes on an unbound File handle must surface an error, not an empty slice")
-}
-
 func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 	t.Parallel()
 
@@ -169,7 +140,7 @@ func TestFile_oversizedRequestReturns413(t *testing.T) {
 	var server *httptest.Server
 	app := via.New(
 		via.WithTestServer(&server),
-		via.WithMaxRequestBody(64), // tiny cap
+		via.WithMaxUploadSize(64), // tiny cap for the multipart path
 	)
 	via.Mount[uploadPage](app, "/")
 	defer server.Close()

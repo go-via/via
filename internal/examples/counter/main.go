@@ -10,6 +10,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
+	"github.com/go-via/via/plugins/picocss"
 )
 
 type Counter struct {
@@ -30,18 +31,26 @@ func (c *Counter) Reset(ctx *via.Ctx) {
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
-	return h.Div(
-		h.H1(h.Text("Counter")),
-		h.P(h.Text("Step: "), c.Step.Text()),
-		h.P(h.Text("Count: "), c.Hits.Text()),
-		h.Input(h.Type("number"), h.Min("1"), c.Step.Bind()),
-		h.Button(h.Text("+"), on.Click(c.Inc)),
-		h.Button(h.Text("Reset"), on.Click(c.Reset)),
+	return h.Main(h.Class("container"),
+		h.Article(
+			h.H1(h.Text("Counter")),
+			h.P(h.Text("Step: "), c.Step.Text()),
+			h.P(h.Text("Count: "), c.Hits.Text()),
+			h.Input(h.Type("number"), h.Min("1"), c.Step.Bind()),
+			h.Div(
+				h.Style("display:flex;gap:0.5rem"),
+				h.Button(h.Style("margin:0"), h.Text("+"), on.Click(c.Inc)),
+				h.Button(h.Style("margin:0"), h.Class("secondary"), h.Text("Reset"), on.Click(c.Reset)),
+			),
+		),
 	)
 }
 
 func main() {
-	app := via.New(via.WithTitle("Counter"))
+	app := via.New(
+		via.WithTitle("Counter"),
+		via.WithPlugins(picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeAmber}))),
+	)
 	via.Mount[Counter](app, "/")
 	_ = http.ListenAndServe(":3000", app)
 }

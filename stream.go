@@ -11,8 +11,10 @@ import (
 // Resume / SetInterval on a stopped ticker is a no-op.
 type Ticker struct {
 	paused   atomic.Bool
+	stopped  atomic.Bool
 	interval atomic.Int64  // nanoseconds; read by the goroutine after each reset
 	reset    chan struct{} // wakes the goroutine when interval changes
+	stop     chan struct{} // closed by Stop to wake the goroutine for exit
 }
 
 // Pause stops further callbacks from firing until Resume is called.
@@ -38,6 +40,24 @@ func (t *Ticker) Paused() bool {
 		return false
 	}
 	return t.paused.Load()
+}
+
+// Stop terminates the ticker permanently. After Stop returns, no further
+// callbacks fire and the underlying goroutine exits — Pause/Resume on a
+// stopped ticker are no-ops. Idempotent; calling Stop on an already-
+// stopped ticker is safe.
+//
+// Stop is the explicit-shutdown counterpart to Ctx disposal: use it
+// when the user navigates away from a sub-region but the page itself
+// stays mounted (e.g. closing a modal that owned a polling ticker).
+func (t *Ticker) Stop() {
+	if t == nil {
+		return
+	}
+	if t.stopped.Swap(true) {
+		return
+	}
+	close(t.stop)
 }
 
 // SetInterval changes the tick cadence to d. The new interval takes
@@ -81,7 +101,10 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) *T
 	if ctx == nil || interval <= 0 || fn == nil {
 		return nil
 	}
-	t := &Ticker{reset: make(chan struct{}, 1)}
+	t := &Ticker{
+		reset: make(chan struct{}, 1),
+		stop:  make(chan struct{}),
+	}
 	t.interval.Store(int64(interval))
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -89,6 +112,8 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) *T
 		for {
 			select {
 			case <-ctx.doneChan:
+				return
+			case <-t.stop:
 				return
 			case <-t.reset:
 				ticker.Reset(time.Duration(t.interval.Load()))

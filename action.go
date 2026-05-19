@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/starfederation/datastar-go/datastar"
 )
@@ -35,6 +37,28 @@ var methodNameCache sync.Map // map[uintptr]string
 // The "-fm" suffix is a Go runtime internal, not a language contract.
 // TestMethodName_resolvesBoundMethod doubles as a canary that fires
 // loudly if a Go toolchain upgrade changes the trampoline naming.
+// methodNameCanary is the well-known target for verifyMethodNameTrampoline.
+// Defined as a method (not a free function) so the boot-time canary can
+// pass a bound method value through MethodName and check the result.
+type methodNameCanary struct{}
+
+func (methodNameCanary) Probe() {}
+
+// verifyMethodNameTrampoline fails fast at App construction if a Go
+// runtime change has broken MethodName's trampoline-name parsing. The
+// expected result for a bound method value is the method name minus
+// receiver and "-fm" suffix; a regression that returns "" or anything
+// else means every on.Click-style binding would silently fail to
+// resolve at request time.
+func verifyMethodNameTrampoline() {
+	got := MethodName(methodNameCanary{}.Probe)
+	if got != "Probe" {
+		panic("via: MethodName canary failed; got " + strconv.Quote(got) +
+			", want \"Probe\". The Go runtime trampoline format may have " +
+			"changed — file a bug.")
+	}
+}
+
 func MethodName(fn any) string {
 	v := reflect.ValueOf(fn)
 	if !v.IsValid() || v.Kind() != reflect.Func {
@@ -125,7 +149,15 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	maxBody := cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
+	// JSON action bodies and multipart upload bodies have very different
+	// size profiles; pick the right cap per content-type so file uploads
+	// don't trip the JSON-tuned ceiling.
+	var maxBody int64
+	if isMultipart(r) {
+		maxBody = cmp.Or(a.cfg.maxUploadSize, int64(32<<20))
+	} else {
+		maxBody = cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
 
 	sigs := acquireSigs()
@@ -142,7 +174,6 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	)
 	if isMultipart(r) {
 		// Memory cap for buffered text fields — file parts spill to disk.
-		// Reuse maxBody so callers tune one knob.
 		form, err = readMultipartSignals(r, maxBody, sigs)
 	} else {
 		err = datastar.ReadSignals(r, &sigs)
@@ -203,6 +234,16 @@ func isMultipart(r *http.Request) bool {
 
 func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 	w http.ResponseWriter, r *http.Request, sigs map[string]any, form *multipart.Form) {
+	// Action latency timing covers the per-tab serialization wait *and*
+	// the handler body — the metric reflects the user-perceived time
+	// from POST receipt to handler return, which is what an SLO cares
+	// about. Recorded in seconds for prom/otel convention.
+	started := time.Now()
+	m := a.metricsOrNoop()
+	defer func() {
+		m.Histogram("via.action.latency", time.Since(started).Seconds(), "method", slot.name)
+		m.Counter("via.action.total", "method", slot.name)
+	}()
 	// Serialize per-tab so parallel POSTs to the same ctx don't race
 	// on State writes, dirty bits, or Writer/Request assignment.
 	ctx.actionMu.Lock()

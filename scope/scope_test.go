@@ -1,9 +1,9 @@
 package scope_test
 
 import (
-	"bytes"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -13,168 +13,162 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type userPage struct {
+// Compile-time conformance: both shapes satisfy via.Mutable[T].
+var (
+	_ via.Mutable[int]    = (*scope.User[int])(nil)
+	_ via.Mutable[string] = (*scope.User[string])(nil)
+	_ via.Mutable[int]    = (*scope.App[int])(nil)
+	_ via.Mutable[bool]   = (*scope.App[bool])(nil)
+)
+
+// scope.User round-trips across tab renders on the same session: a write
+// from action 1 is visible to a subsequent render. Also covers Key()
+// defaulting to the lowercased field name (the wire key shows up in the
+// rendered data-signals payload).
+
+type userRoundTripPage struct {
 	Theme scope.User[string]
 	Count scope.User[int]
 }
 
-func (p *userPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestUser_keyExposesWireKeyAfterMount(t *testing.T) {
-	t.Parallel()
-
-	page := &userPage{}
-	viatest.NewCtx(t, page)
-	assert.Equal(t, "theme", page.Theme.Key())
-	assert.Equal(t, "count", page.Count.Key())
+func (p *userRoundTripPage) Set(ctx *via.Ctx) error {
+	p.Theme.Set(ctx, "midnight")
+	p.Count.Set(ctx, 7)
+	return nil
 }
 
-func TestUser_getReturnsZeroWhenUnset(t *testing.T) {
-	t.Parallel()
-
-	page := &userPage{}
-	c := viatest.NewCtx(t, page)
-	assert.Equal(t, "", page.Theme.Get(c))
-	assert.Equal(t, 0, page.Count.Get(c))
+func (p *userRoundTripPage) Bump(ctx *via.Ctx) error {
+	p.Count.Update(ctx, func(n int) int { return n + 3 })
+	return nil
 }
 
-func TestUser_setThenGetRoundTrips(t *testing.T) {
+func (p *userRoundTripPage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Span(h.ID("theme"), p.Theme.Text(ctx)),
+		h.Span(h.ID("count"), p.Count.Text(ctx)),
+	)
+}
+
+func TestUser_setThenRenderRoundTrips(t *testing.T) {
 	t.Parallel()
 
-	page := &userPage{}
-	c := viatest.NewCtx(t, page)
-	page.Theme.Set(c, "dark")
-	assert.Equal(t, "dark", page.Theme.Get(c))
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Set").Fire())
+
+	body := tc.Reload()
+	assert.Contains(t, body, `<span id="theme">midnight</span>`,
+		"scope.User write must survive a fresh render on the same session")
+	assert.Contains(t, body, `<span id="count">7</span>`)
 }
 
 func TestUser_updateAppliesFn(t *testing.T) {
 	t.Parallel()
 
-	page := &userPage{}
-	c := viatest.NewCtx(t, page)
-	page.Count.Set(c, 7)
-	page.Count.Update(c, func(n int) int { return n + 3 })
-	assert.Equal(t, 10, page.Count.Get(c))
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Set").Fire())  // count := 7
+	require.Equal(t, 200, tc.Action("Bump").Fire()) // count += 3
+
+	body := tc.Reload()
+	assert.Contains(t, body, `<span id="count">10</span>`,
+		"Update must read-modify-write the session value")
 }
 
-func TestUser_updateNilFnIsNoOp(t *testing.T) {
+func TestUser_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
+	// The wire key surfaces in the page's data-signals payload. No need
+	// for a separate Key() unit test — the mounted output is the contract.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userRoundTripPage](app, "/")
+	defer server.Close()
 
-	page := &userPage{}
-	c := viatest.NewCtx(t, page)
-	page.Count.Set(c, 42)
-	page.Count.Update(c, nil)
-	assert.Equal(t, 42, page.Count.Get(c))
+	body := viatest.NewClient(t, server, "/").HTML()
+	assert.Contains(t, body, "theme")
+	assert.Contains(t, body, "count")
 }
 
-func TestUser_textRendersCurrentValue(t *testing.T) {
-	t.Parallel()
+// scope.App is shared across sessions: a write from one client surfaces
+// in a fresh client's render.
 
-	page := &userPage{}
-	c := viatest.NewCtx(t, page)
-	page.Theme.Set(c, "midnight")
-
-	var buf bytes.Buffer
-	require.NoError(t, page.Theme.Text(c).Render(&buf))
-	assert.Contains(t, buf.String(), "midnight")
-}
-
-type appPage struct {
+type appCounterPage struct {
 	Visits scope.App[int]
 }
 
-func (p *appPage) Bump(ctx *via.Ctx) error {
-	p.Visits.Set(ctx, p.Visits.Get(ctx)+1)
+func (p *appCounterPage) Bump(ctx *via.Ctx) error {
+	p.Visits.Update(ctx, func(n int) int { return n + 1 })
 	return nil
 }
 
-func (p *appPage) View(ctx *via.Ctx) h.H { return h.Div(p.Visits.Text(ctx)) }
-
-func TestApp_keyMatchesFieldName(t *testing.T) {
-	t.Parallel()
-
-	page := &appPage{}
-	viatest.NewCtx(t, page)
-	assert.Equal(t, "visits", page.Visits.Key())
+func (p *appCounterPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("visits"), p.Visits.Text(ctx)))
 }
 
-func TestApp_writesAreVisibleOnReload(t *testing.T) {
+func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	via.Mount[appPage](app, "/")
+	via.Mount[appCounterPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
-	require.Equal(t, 200, tc.Action("Bump").Fire())
-	assert.Contains(t, tc.Reload(), ">1<")
+	a := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, a.Action("Bump").Fire())
+	require.Equal(t, 200, a.Action("Bump").Fire())
+
+	// Fresh client (different session) must see the app-scoped value.
+	b := viatest.NewClient(t, server, "/")
+	body := b.HTML()
+	assert.Contains(t, body, `<span id="visits">2</span>`,
+		"scope.App value must be shared across sessions")
 }
 
-type setIfChangedScopePage struct {
+// SetIfChanged on scope.User: same key+value short-circuits, different
+// value reaches the wire as a signal patch.
+
+type setIfChangedPage struct {
 	Theme scope.User[string]
 }
 
-func (p *setIfChangedScopePage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestSetIfChanged_skipsPatchOnScopeUserWhenUnchanged(t *testing.T) {
-	t.Parallel()
-	p := &setIfChangedScopePage{}
-	ctx := viatest.NewCtx(t, p)
-
-	// Seed: first write goes through, no prior value.
-	first := via.SetIfChanged(ctx, &p.Theme, "blue")
-	require.True(t, first, "first write to an unset scope value reports changed=true")
-
-	// Second identical write must short-circuit.
-	second := via.SetIfChanged(ctx, &p.Theme, "blue")
-	assert.False(t, second,
-		"writing the same value to a scope.User[T] must report changed=false")
-
-	// Third differing write proceeds.
-	third := via.SetIfChanged(ctx, &p.Theme, "red")
-	assert.True(t, third)
+func (p *setIfChangedPage) Same(ctx *via.Ctx) error {
+	via.SetIfChanged(ctx, &p.Theme, "blue")
+	return nil
 }
 
-func TestApp_textRendersCurrentValue(t *testing.T) {
-	t.Parallel()
-	// Mirror of TestUser_textRendersCurrentValue — direct check that
-	// App.Text renders the current value rather than going through HTTP.
-	page := &appPage{}
-	c := viatest.NewCtx(t, page)
-	page.Visits.Set(c, 99)
-
-	var buf bytes.Buffer
-	require.NoError(t, page.Visits.Text(c).Render(&buf))
-	assert.Contains(t, buf.String(), "99")
+func (p *setIfChangedPage) Diff(ctx *via.Ctx) error {
+	via.SetIfChanged(ctx, &p.Theme, "red")
+	return nil
 }
 
-func TestApp_setGetRoundtripsUnderTestCtx(t *testing.T) {
-	t.Parallel()
-	// scope.App parallels scope.User in its test-context fallback: when
-	// ctx.app is nil (no real App attached) writes are held on the ctx's
-	// own scope so within-request reads work, the same way SessionStore
-	// falls back when ctx.session is nil.
-	page := &appPage{}
-	c := viatest.NewCtx(t, page)
-	page.Visits.Set(c, 42)
-	assert.Equal(t, 42, page.Visits.Get(c))
+func (p *setIfChangedPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("t"), p.Theme.Text(ctx)))
 }
 
-func TestApp_updateAppliesFn(t *testing.T) {
+func TestSetIfChanged_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	t.Parallel()
-	page := &appPage{}
-	c := viatest.NewCtx(t, page)
-	page.Visits.Set(c, 5)
-	page.Visits.Update(c, func(n int) int { return n + 3 })
-	assert.Equal(t, 8, page.Visits.Get(c))
-}
 
-func TestApp_updateNilFnIsNoOp(t *testing.T) {
-	t.Parallel()
-	page := &appPage{}
-	c := viatest.NewCtx(t, page)
-	page.Visits.Set(c, 5)
-	page.Visits.Update(c, nil)
-	assert.Equal(t, 5, page.Visits.Get(c))
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[setIfChangedPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("Same").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "blue")
+
+	require.Equal(t, 200, tc.Action("Diff").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "red")
 }

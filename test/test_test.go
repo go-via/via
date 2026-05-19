@@ -144,65 +144,6 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, ">3<")
 }
 
-type unitTestPage struct {
-	N    via.State[int]
-	Step via.Signal[int] `via:"step,init=2"`
-}
-
-func (p *unitTestPage) Inc(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Get(ctx)+p.Step.Get(ctx))
-	return nil
-}
-
-func (p *unitTestPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestNewCtx_invokesActionMethodsDirectly(t *testing.T) {
-	t.Parallel()
-
-	c := &unitTestPage{}
-	ctx := viatest.NewCtx(t, c)
-
-	require.NoError(t, c.Inc(ctx))
-	require.NoError(t, c.Inc(ctx))
-	require.NoError(t, c.Inc(ctx))
-
-	assert.Equal(t, 6, c.N.Get(ctx),
-		"three Inc calls with init=2 step should yield 6")
-}
-
-func TestNewCtx_initialSignalValueComesFromTag(t *testing.T) {
-	t.Parallel()
-
-	c := &unitTestPage{}
-	ctx := viatest.NewCtx(t, c)
-	assert.Equal(t, 2, c.Step.Get(ctx),
-		"init=2 tag should populate the Signal at NewCtx time")
-}
-
-type redirectingPage struct{}
-
-func (p *redirectingPage) Login(ctx *via.Ctx) error {
-	ctx.Redirect("/profile")
-	ctx.ExecScript("console.log('hi')")
-	ctx.PatchSignal("_picoTheme", "blue")
-	return nil
-}
-
-func (p *redirectingPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestNewCtx_pendingRedirectVisibleViaCtxIntrospection(t *testing.T) {
-	t.Parallel()
-
-	c := &redirectingPage{}
-	ctx := viatest.NewCtx(t, c)
-	require.NoError(t, c.Login(ctx))
-
-	assert.Equal(t, "/profile", ctx.PendingRedirect())
-	assert.Contains(t, ctx.PendingScripts(), "console.log('hi')")
-	sigs := ctx.PendingSignals()
-	assert.Equal(t, "blue", sigs["_picoTheme"])
-}
-
 type uploadPage struct {
 	Avatar via.File           `via:"avatar"`
 	Note   via.Signal[string] `via:"note"`

@@ -14,36 +14,53 @@ import (
 // path params + initial signal values, optionally calls OnInit, renders the
 // view inside the HTML5 envelope.
 func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Request) {
-	if limit := a.cfg.maxContexts; limit > 0 {
-		a.contextRegistryMu.RLock()
-		live := len(a.contextRegistry)
-		a.contextRegistryMu.RUnlock()
-		if live >= limit {
-			a.logWarn(nil, "max contexts reached (%d); rejecting page render", limit)
-			http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
-			return
-		}
-	}
-
 	cmpVal := reflect.New(d.typ)
 	ctx := newCtx(d, cmpVal, genTabID(d.route))
 	ctx.app = a
 	ctx.session = a.sessionFromRequest(r)
+	ctx.mu.Lock()
 	ctx.w = w
 	ctx.r = r
+	ctx.mu.Unlock()
+	// Writer / Request are scoped to the synchronous render only — any
+	// goroutine the user launches from OnInit must not see a dangling
+	// reference to a writer that's already been released back to the
+	// server. Mirrors the same clear in runAction.
+	defer func() {
+		ctx.mu.Lock()
+		ctx.w = nil
+		ctx.r = nil
+		ctx.mu.Unlock()
+	}()
 
 	decodePathParams(cmpVal, r, d)
 	decodeQueryParams(cmpVal, r, d)
 
 	if ctx.initFn != nil {
-		if err := ctx.initFn(ctx); err != nil {
-			a.logErr(ctx, "OnInit: %v", err)
-		}
+		// Symmetric with OnConnect / OnDispose (see sse.go, runtime.go):
+		// a panicking OnInit must not propagate up through renderPage
+		// without being logged. Without this guard the only backstop is
+		// the user's Recover middleware (or http.Server's default panic
+		// handler) — meaning the panic message reaches the wire as a 500
+		// HTML body instead of as a structured log line.
+		func() {
+			defer recoverLog(ctx, "OnInit")
+			if err := ctx.initFn(ctx); err != nil {
+				a.logErr(ctx, "OnInit: %v", err)
+			}
+		}()
 	}
 
-	a.registerCtx(ctx)
+	// Cap check is fused with the registry insert so two concurrent
+	// renders can't both observe live==limit-1 and both proceed.
+	if !a.tryRegisterCtx(ctx, a.cfg.maxContexts) {
+		a.logWarn(nil, "max contexts reached (%d); rejecting page render", a.cfg.maxContexts)
+		http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
+		return
+	}
 
 	a.writePageDocument(w, ctx, ctx.viewFn(ctx))
+	a.metricsOrNoop().Counter("via.render.total", "route", d.route)
 }
 
 func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
@@ -124,22 +141,40 @@ func decodeQueryParams(cmpVal reflect.Value, r *http.Request, d *cmpDescriptor) 
 
 // flushDirty re-renders the view fragment if any State changed and patches
 // any dirty signals to the browser.
+//
+// The dirty flags are read+cleared under queue.mu before the work runs,
+// so a concurrent markStateDirty/markSignalDirty after clear sets the
+// flag again and a subsequent notify drives a fresh flush (no missed
+// updates, at most an extra render of the latest state).
 func flushDirty(ctx *Ctx) {
-	if !ctx.stateDirty && !ctx.dirtySignals.any() {
+	ctx.queue.mu.Lock()
+	needRender := ctx.stateDirty
+	hasSignals := ctx.dirtySignals.any()
+	if !needRender && !hasSignals {
+		ctx.queue.mu.Unlock()
 		return
 	}
+	ctx.stateDirty = false
+	ctx.queue.mu.Unlock()
 
-	if ctx.stateDirty {
+	if needRender {
 		buf := getRenderBuf()
+		// View runs without queue.mu held — user code is allowed to
+		// call ctx.PatchSignal / ctx.SyncElements, which would deadlock
+		// on a re-entrant queue.mu acquisition.
 		_ = h.Div(h.ID(ctx.id), ctx.viewFn(ctx)).Render(buf)
 		ctx.queue.mu.Lock()
-		ctx.queue.elements = buf.String()
+		// Prepend the auto re-render so any user-explicit SyncElements
+		// patches already queued (e.g. from inside the action body) end
+		// up later in the wire frame. Datastar's morph applies patches
+		// in document order with last-write-wins per id, so this keeps
+		// the user's targeted override the authoritative one.
+		ctx.queue.elements = buf.String() + ctx.queue.elements
 		ctx.queue.mu.Unlock()
 		putRenderBuf(buf)
-		ctx.stateDirty = false
 	}
 
-	if ctx.dirtySignals.any() {
+	if hasSignals {
 		// Encode-and-merge directly under the queue lock so we don't
 		// have to allocate a staging map only to copy it across the
 		// lock boundary. encode() is cheap (scalar paths skip fmt /

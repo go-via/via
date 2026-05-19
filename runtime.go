@@ -63,23 +63,9 @@ func (q *patchQueue) notify() {
 	}
 }
 
-// NewBoundCtx returns a *Ctx bound to c with all Signal[T]/State[T]/
-// scope fields wired up, ready for direct unit testing of action
-// methods. No HTTP server, no session, no SSE — just a typed Ctx
-// against a typed *C. The descriptor is the same one Mount[T] would
-// build, but the resulting Ctx is detached from any App.
-//
-// Deprecated: this is an integration point for via/test only and is
-// not part of via's stable user API. Use [test.NewCtx] from
-// github.com/go-via/via/test instead.
-func NewBoundCtx[T any](c *T) *Ctx {
-	return newCtx(buildDescriptor[T](), reflect.ValueOf(c), genTabID("test"))
-}
-
 // newCtx allocates a Ctx wired to the descriptor's slot bindings and
-// scope keys. Shared between the production page-render path and
-// NewBoundCtx for tests; the production path layers app / session /
-// writer / request on top of the returned ctx.
+// scope keys. The production path layers app / session / writer /
+// request on top of the returned ctx.
 func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 	ctx := &Ctx{
 		id:           id,
@@ -226,21 +212,38 @@ func (a *App) removeExpiredContexts() {
 	}
 }
 
-// disposeCtx closes the ctx and runs OnDispose if defined.
-func (a *App) disposeCtx(ctx *Ctx) {
+// signalDispose marks the ctx disposed and closes its Done channel so
+// any SSE drain loop or Stream goroutine wakes and exits. Does not run
+// OnDispose; idempotent. Used to break long-lived selects early during
+// Shutdown, before waiting for in-flight actions to drain.
+func (a *App) signalDispose(ctx *Ctx) {
 	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
 	if ctx.disposed {
-		ctx.mu.Unlock()
 		return
 	}
 	ctx.disposed = true
 	close(ctx.doneChan)
-	ctx.mu.Unlock()
+}
 
-	if ctx.disposeFn != nil {
-		defer recoverLog(ctx, "OnDispose")
-		ctx.disposeFn(ctx)
+// disposeCtx closes the ctx (idempotent with signalDispose) and runs
+// OnDispose if defined. Serialized against in-flight actions via
+// actionMu so OnDispose sees a composition that isn't being mutated by
+// a concurrent handler.
+func (a *App) disposeCtx(ctx *Ctx) {
+	a.signalDispose(ctx)
+
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
+
+	if ctx.disposeFn == nil {
+		return
 	}
+	defer recoverLog(ctx, "OnDispose")
+	// disposeFn may itself observe ctx.disposed; the flag was set in
+	// signalDispose before actionMu was taken, so OnDispose sees a
+	// consistent "yes, disposed" view.
+	ctx.disposeFn(ctx)
 }
 
 // recoverLog is a deferred-recover helper that logs the panic value via

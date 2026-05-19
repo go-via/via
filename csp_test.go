@@ -4,13 +4,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,47 +17,6 @@ func readAll(t *testing.T, r io.Reader) string {
 	t.Helper()
 	b, _ := io.ReadAll(r)
 	return string(b)
-}
-
-type cspPage struct{}
-
-func (p *cspPage) View(ctx *via.Ctx) h.H { return h.Div() }
-
-func TestCSPNonce_returnsRandomBase64URLString(t *testing.T) {
-	t.Parallel()
-
-	c := &cspPage{}
-	ctx := viatest.NewCtx(t, c)
-
-	n1 := ctx.CSPNonce()
-	require.NotEmpty(t, n1)
-
-	urlSafe := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	assert.True(t, urlSafe.MatchString(n1),
-		"nonce should be base64url (no = padding); got %q", n1)
-	assert.GreaterOrEqual(t, len(n1), 22,
-		"16 bytes ≈ 22 url-safe base64 chars")
-}
-
-func TestCSPNonce_isStablePerCtx(t *testing.T) {
-	t.Parallel()
-
-	c := &cspPage{}
-	ctx := viatest.NewCtx(t, c)
-	a := ctx.CSPNonce()
-	b := ctx.CSPNonce()
-	assert.Equal(t, a, b,
-		"same Ctx should hand out the same nonce on repeated calls")
-}
-
-func TestCSPNonce_differsAcrossCtx(t *testing.T) {
-	t.Parallel()
-
-	c := &cspPage{}
-	ctx1 := viatest.NewCtx(t, c)
-	ctx2 := viatest.NewCtx(t, c)
-	assert.NotEqual(t, ctx1.CSPNonce(), ctx2.CSPNonce(),
-		"two Ctxs must produce distinct nonces")
 }
 
 type cspEchoPage struct{}
@@ -143,4 +100,109 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 	body := readAll(t, resp.Body)
 	assert.Contains(t, body, `<div id="nonce">`+nonce+`</div>`,
 		"View should observe the nonce middleware injected via r.Context")
+}
+
+// CSP nonce — externally observable via rendered HTML in views that
+// embed ctx.CSPNonce(). Format / stability / uniqueness all assertable
+// without reaching into Ctx internals.
+
+type cspTwoNoncePage struct{}
+
+func (p *cspTwoNoncePage) View(ctx *via.Ctx) h.H {
+	// Two embeds within the same render: stability means both spans
+	// contain the same value.
+	return h.Div(
+		h.Span(h.ID("a"), h.Text(ctx.CSPNonce())),
+		h.Span(h.ID("b"), h.Text(ctx.CSPNonce())),
+	)
+}
+
+func extractNonceFromSpan(body, id string) string {
+	prefix := `<span id="` + id + `">`
+	i := strings.Index(body, prefix)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(body[i+len(prefix):], "</span>")
+	if j < 0 {
+		return ""
+	}
+	return body[i+len(prefix) : i+len(prefix)+j]
+}
+
+func TestCSPNonce_renderedValueIsBase64URLFormatted(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[cspEchoPage](app, "/")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body := readAll(t, resp.Body)
+
+	prefix := `<div id="nonce">`
+	i := strings.Index(body, prefix)
+	require.NotEqual(t, -1, i)
+	j := strings.Index(body[i+len(prefix):], "</div>")
+	require.NotEqual(t, -1, j)
+	nonce := body[i+len(prefix) : i+len(prefix)+j]
+
+	require.NotEmpty(t, nonce)
+	assert.GreaterOrEqual(t, len(nonce), 22,
+		"16 bytes ≈ 22 url-safe base64 chars; got %q", nonce)
+	for _, r := range nonce {
+		ok := (r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z') ||
+			(r >= '0' && r <= '9') ||
+			r == '_' || r == '-'
+		assert.True(t, ok, "nonce char %q must be url-safe base64", r)
+	}
+}
+
+func TestCSPNonce_isStableAcrossCallsInSameRequest(t *testing.T) {
+	t.Parallel()
+	// A view that embeds the nonce twice must observe the same value —
+	// otherwise the script tag the view writes and the header the
+	// middleware writes would desync on every request.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[cspTwoNoncePage](app, "/")
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body := readAll(t, resp.Body)
+
+	a := extractNonceFromSpan(body, "a")
+	b := extractNonceFromSpan(body, "b")
+	require.NotEmpty(t, a)
+	assert.Equal(t, a, b,
+		"two ctx.CSPNonce() calls in the same render must return the same value")
+}
+
+func TestCSPNonce_differsAcrossRequests(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[cspEchoPage](app, "/")
+	defer server.Close()
+
+	get := func() string {
+		resp, err := http.Get(server.URL + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body := readAll(t, resp.Body)
+		prefix := `<div id="nonce">`
+		i := strings.Index(body, prefix)
+		j := strings.Index(body[i+len(prefix):], "</div>")
+		return body[i+len(prefix) : i+len(prefix)+j]
+	}
+
+	assert.NotEqual(t, get(), get(),
+		"two separate requests must produce distinct nonces")
 }

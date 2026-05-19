@@ -45,6 +45,12 @@ func (ctx *Ctx) PatchSignals(values map[string]any) {
 // patches at the next flush. Useful for action-driven, targeted DOM
 // updates that bypass the full view re-render. Each element should carry
 // h.ID("...") so the client knows where to morph it.
+//
+// Multiple SyncElements calls within the same action — and any view
+// re-render queued by State mutations earlier in the same action — are
+// concatenated, not overwritten. The browser's morph applies each
+// element patch independently by ID, so a State write followed by a
+// targeted SyncElements both reach the DOM in one SSE frame.
 func (ctx *Ctx) SyncElements(elements ...h.H) {
 	if ctx == nil || ctx.queue == nil || len(elements) == 0 {
 		return
@@ -61,7 +67,9 @@ func (ctx *Ctx) SyncElements(elements ...h.H) {
 		return
 	}
 	ctx.queue.mu.Lock()
-	ctx.queue.elements = buf.String()
+	// Append rather than overwrite so we don't silently drop a view
+	// fragment already queued by flushDirty or a previous SyncElements.
+	ctx.queue.elements += buf.String()
 	ctx.queue.mu.Unlock()
 	ctx.queue.notify()
 }

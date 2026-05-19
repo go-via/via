@@ -147,8 +147,14 @@ func buildDescriptor[C any]() *cmpDescriptor {
 	descriptorMu.Lock()
 	descriptorCache[typ] = desc
 	descriptorMu.Unlock()
-	// Return a clone so the per-mount route + groupMW writes don't race
-	// with concurrent buildDescriptor reads on the cached entry.
+	// Return a shallow clone so the per-mount route + groupMW writes
+	// don't race with concurrent buildDescriptor reads on the cached
+	// entry. Invariant: every other descriptor field is treated as
+	// read-only after this point — slot slices (signalSlots /
+	// actionSlots / scopeSlots / paramSlots / querySlots / fileSlots)
+	// are shared across clones of the same C, and mutating them on
+	// one mount would silently corrupt every other mount. Only
+	// per-mount fields (route, groupMW) may be assigned post-clone.
 	clone := *desc
 	return &clone
 }

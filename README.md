@@ -1,14 +1,35 @@
 # Via
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-via/via.svg)](https://pkg.go.dev/github.com/go-via/via)
+[![Go Report Card](https://goreportcard.com/badge/github.com/go-via/via)](https://goreportcard.com/report/github.com/go-via/via)
+[![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Real-time engine for building reactive web apps in pure Go. A composition
 is a struct. Reactive state is a typed field. Actions are methods. The
 compiler understands your UI.
 
-- No templates. No hand-written JavaScript. No transpilation. No hydration.
-- Single SSE stream per tab.
+The runtime is split where it matters: **the server owns truth, the
+client owns view reactivity.** Server-side state (`State`, `scope.User`,
+`scope.App`) lives only in Go; `Signal[T]` values are mirrored into a
+fine-grained reactive graph in the browser (Alien Signals, via
+Datastar), so DOM updates driven by a client-set signal never
+round-trip. The two halves talk over one SSE stream per tab with typed
+JSON payloads.
+
+- No templates. No hand-written JavaScript. No transpilation. No
+  hydration. No bundler.
+- Single SSE stream per tab; reconnect, heartbeat, and tab-death cleanup
+  are the framework's job.
 - `*App` implements `http.Handler` — drops into any std mux.
 
+![Counter demo](docs/counter.gif)
+
 ## Quick start
+
+```bash
+go get github.com/go-via/via
+```
 
 ```go
 package main
@@ -45,19 +66,77 @@ func main() {
 }
 ```
 
-## Breaking changes since v0.2.x
+## Why Via, not X
 
-- `h.H` is now `interface { Render(w io.Writer) error }`. It is no
-  longer a type alias for `maragu.dev/gomponents.Node`. Mixed-imports
-  (e.g. passing `gomponents.El(...)` into `h.Div(...)`) no longer
-  compile.
-- `maragu.dev/gomponents` is no longer a dependency.
-- New surface added to `h`: `T`, variadic `Class`, `Style`, `Styles`,
-  `Maybe`, `With`, `Static`, `Tag`, `VoidTag`, `NewTag`, `NewVoidTag`,
-  `Checked`, `Required`, `Disabled`, `Role`, `Min`, `Max`, `Step`,
-  `For`, `Lang`, `Content`, `Charset`.
-- `h.Classes` is deprecated in favour of variadic `h.Class(parts...)`.
-  Nothing is removed; the call sites can migrate at leisure.
+|                       | Language | Authoring                | Client runtime              | Build step             | Reactive state                |
+|-----------------------|----------|--------------------------|-----------------------------|------------------------|-------------------------------|
+| **Via**               | Go       | typed structs + `h` DSL  | Datastar (Alien Signals)    | none                   | typed fields, client + server |
+| HTMX                  | any      | HTML + `hx-*` attributes | tiny attribute interpreter  | none                   | server-only, manual           |
+| Phoenix LiveView      | Elixir   | EEx templates + macros   | morphdom + tiny JS          | none                   | `assigns` (Elixir-typed)      |
+| templ                 | Go       | `.templ` template files  | none (BYO)                  | yes (`templ generate`) | none built-in                 |
+| Datastar (direct)     | any      | HTML + `data-*` attrs    | Datastar (Alien Signals)    | none                   | client signals, manual        |
+
+Via is the only row that gives you typed end-to-end state (server + client),
+no build step, and a fine-grained reactive client runtime in the same
+package. Pick another row if you want a different language, a template
+file format, or a different state-ownership split.
+
+## How reactivity runs
+
+```
+   ┌──────────────────────────┐                       ┌──────────────────────────┐
+   │  Browser                 │  ◀──── SSE patches ── │  Server (Go)             │
+   │                          │     + signal deltas   │                          │
+   │  Alien Signals graph     │                       │  Compositions            │
+   │   Signal[T] nodes        │                       │   State[T]               │
+   │   data-* subscriptions   │                       │   scope.User[T]          │
+   │                          │                       │   scope.App[T]           │
+   │                          │  ────── POST ──────▶  │   per-tab action mutex   │
+   │                          │       actions         │                          │
+   └──────────────────────────┘                       └──────────────────────────┘
+        view reactivity                                  truth + side effects
+```
+
+Two reactive runtimes, one typed boundary.
+
+**Server.** Go owns truth. `State[T]`, `scope.User[T]`, and
+`scope.App[T]` live only on the server; `Signal[T]` is mirrored. A
+re-render walks the View, diffs the resulting tree against the previous
+emission, and ships targeted element/attribute patches plus a
+signal-payload delta over SSE. The per-tab action mutex serialises
+writes — concurrent POSTs to one tab can't race.
+
+**Client.** Datastar runs a fine-grained Alien Signals graph in the
+browser. `Signal[T]` values are nodes in that graph; the `data-*`
+attributes emitted by `s.Bind()`, `s.Text()`, `s.Show()`, `s.Attr()`,
+`s.Style()` are subscriptions. Mutating a signal — from an `<input>`
+edit, from `on.SetSignal`, or from a server-pushed patch — propagates
+through derived bindings without a re-render and without a round-trip.
+
+The split shows up at the field level: a `Signal[int]` IS a client
+signal, a `State[int]` IS server-only. The author decides in the
+struct, not in the rendering code. UI state the client owns (modal
+open, current tab, filter string, derived counts) reacts instantly with
+zero SSE traffic; state the server owns (DB rows, cross-tab
+invariants, secrets) flows through actions and re-renders.
+
+## Performance
+
+Representative numbers from `go test -bench -benchmem` on a 13th-gen
+Intel laptop (`linux/amd64`, Go 1.25). Re-run on your target hardware
+before quoting.
+
+| Bench                                          |    ns/op |   B/op | allocs/op |
+|------------------------------------------------|---------:|-------:|----------:|
+| `SignalFlush` — single `Set` + flush           |       83 |     39 |         2 |
+| `CounterShape_render` — view subtree → bytes   |      848 |    848 |        24 |
+| `CounterAction` — full action turn (POST→SSE)  |   35 098 |  9 954 |       130 |
+
+Bench files: [`bench_test.go`](bench_test.go) (root) and
+[`h/h_bench_test.go`](h/h_bench_test.go) (DSL only). `h.Static(...)`
+pre-renders fragments that don't depend on per-request state — see
+`BenchmarkSysmonShape_staticChrome_render` for the per-tick allocation
+delta against rebuilding the same chrome on every tick.
 
 ## Reactive state
 
@@ -88,8 +167,11 @@ via.Push(ctx, &p.Series, point)                   // append-only feed (Signal[[]
 via.PushBounded(ctx, &p.Series, point, 100)       // cap to last 100
 ```
 
-`Signal[T]` (client-mirrored) also exposes view helpers for composing
-with `h`:
+`Signal[T]` is mirrored into the browser's reactive graph. The view
+helpers below compile to Datastar `data-*` attributes that subscribe to
+that graph — when the signal changes (a client edit, an `on.SetSignal`,
+or a server-pushed patch), the DOM updates fine-grained without a
+re-render and without a round-trip:
 
 ```go
 s.Bind()              // <input data-bind="key"> two-way binding
@@ -351,6 +433,44 @@ via.Mount[Profile](api, "/profile")
 http.ListenAndServe(":8080", app)
 ```
 
+### Restart and tab survivability
+
+A live tab's state lives in memory on the server (the `*via.Ctx` and its
+`session`). It does **not** survive a process restart:
+
+- After a deploy, every client's `via_tab` is unknown to the new
+  process. The next SSE reconnect 404s and the next action POST 404s.
+- The client (Datastar) retries the SSE connection forever, so a user
+  watching a stale tab sees it freeze rather than recover. Tell users
+  to reload, or pair the deploy with a sticky load balancer that
+  drains long enough for tabs to close naturally.
+- Sessions are also in-memory; logged-in users will need to re-auth
+  unless you back the session store with something durable (not built
+  in; users with auth flows generally roll their own
+  `via.PutSess` keyed off a real session store).
+
+If you need session survivability across restarts, persist the
+`via.PutSess`-stored payload (e.g. a JWT or an opaque token your auth
+layer recognizes) to a database keyed by the `via_session` cookie value,
+and rehydrate inside an `OnInit` hook on the relevant compositions.
+
+### Operations: metrics
+
+`via.WithMetrics(m)` accepts an implementation of the [`Metrics`] interface
+and emits structured events for ops dashboards:
+
+| Event                  | Kind      | Labels             |
+|------------------------|-----------|--------------------|
+| `via.action.total`     | counter   | `method`           |
+| `via.action.latency`   | histogram | `method`           |
+| `via.render.total`     | counter   | `route`            |
+| `via.sse.connect`      | counter   |                    |
+| `via.sse.disconnect`   | counter   |                    |
+| `via.ctx.live`         | gauge     |                    |
+
+Adapt to Prometheus, OTel, or expvar by implementing three methods
+(`Counter`, `Gauge`, `Histogram`) that forward to your backend.
+
 ## Cross-tab broadcast
 
 ```go
@@ -365,108 +485,26 @@ deliver via the existing patch queue + SSE drain — no extra wiring.
 
 ## h package helpers
 
-Grouped by responsibility — `go doc github.com/go-via/via/h` has each
-symbol's contract.
+`h` is the HTML DSL — elements, attributes, text, iteration,
+conditionals, static pre-render, custom tags. The full reference (every
+constructor with its contract) lives in
+[`docs/h-helpers.md`](docs/h-helpers.md) and in
+[`go doc github.com/go-via/via/h`](https://pkg.go.dev/github.com/go-via/via/h).
 
-Iteration:
-
-- `h.Each(items, fn)` — one node per slice element, nil-pruned.
-- `h.EachIndexed(items, fn)` — same with `(i, v)` passed to fn.
-- `h.EachSeq(seq, fn)` — `iter.Seq` variant (`slices.Values`,
-  `maps.Values`, …).
-- `h.EachSeq2(seq, fn)` — `iter.Seq2` variant (`slices.All`,
-  `maps.All`, …).
-
-Conditional:
-
-- `h.If(cond, n)`, `h.IfElse(cond, then, els)` — eager.
-- `h.When(cond, build)`, `h.WhenElse(cond, then, els)` — lazy; only
-  the winning branch is constructed.
-- `h.Maybe(v, fn)` — render `fn(v)` only when v ≠ zero(T) (T must be
-  `comparable`).
-- `h.Switch(value, h.Case(...), h.Default(...))` — tab-style equality.
-- `h.IfStr(cond, s)` — `s` if cond, `""` otherwise; pairs with
-  `h.Class` and `h.Styles`.
-
-Composition:
-
-- `h.Fragment(items...)` — bundle many nodes into one `h.H`. Pass a
-  slice with `items...`.
-- `h.With(base, more...)` — return a copy of `base` extended with
-  `more`. Non-destructive; supports chaining without variadic
-  signatures.
-- `h.Static(n)` — pre-render `n` once into bytes; every later Render
-  writes them verbatim. Use for layout chrome that doesn't depend on
-  per-request state. See [Held fragments](#held-fragments) below.
-
-Attributes:
-
-- `h.Class(parts...)` — variadic class names; empty parts skipped;
-  returns nil (omits the attribute) when nothing remains.
-- `h.Classes(parts...)` — deprecated alias for `h.Class`; kept so a
-  slice in hand can spread without a rename.
-- `h.ClassMap(m)` — emit each true key in sorted order.
-- `h.Style(v)` — inline `style="..."` attribute. For
-  `<style>...</style>` use `h.StyleEl`.
-- `h.Styles(parts...)` — join non-empty CSS declarations with `;` and
-  emit one inline `style` attribute.
-- `h.Checked()`, `h.Required()`, `h.Disabled()`, `h.Selected()` —
-  boolean attributes (`<input required>`).
-- `h.Role`, `h.Min`, `h.Max`, `h.Step`, `h.For`, `h.Lang`,
-  `h.Content`, `h.Charset` — common single-string attributes.
-
-Custom tags:
-
-- `h.Tag(name, children...)`, `h.VoidTag(name, children...)` — escape
-  hatch for tags absent from the static list (web components, SVG).
-  The name is written verbatim; callers remain responsible for
-  validity.
-- `h.NewTag(name)`, `h.NewVoidTag(name)` — reusable constructors with
-  the same shape as the built-ins.
-
-Text:
-
-- `h.Text(s)`, `h.T(s)` — HTML-escaped text node (`T` is the short
-  alias). `h.Textf(f, args...)` formats first.
-- `h.Raw(s)` — emit `s` verbatim without escaping. Caller-trusted.
-- `h.RawAttr(name, value)` — emit a raw `name="value"` attribute pair
-  without escaping the value. The sanctioned plugin escape hatch for
-  attribute-shaped output (the `attribute` marker is unexported on
-  purpose — see `on` for the canonical pattern).
-
-### Held fragments
-
-For fragments that don't change between renders, `h.Static` pre-renders
-once and writes the captured bytes on every later Render — no
-per-tick allocation for the chrome subtree:
+The shapes you reach for daily:
 
 ```go
-chrome := h.Static(h.Fragment(
-    h.Nav(h.Class("container-fluid"),
-        h.Ul(h.Li(h.Strong(h.T("System Monitor"))))),
-))
-
-func (p *Page) View(ctx *via.Ctx) h.H {
-    return h.Div(chrome, p.body(ctx))
-}
+h.Div(h.Class("card"),
+    h.H1(h.T("Title")),
+    h.Each(items, func(it Item) h.H { return h.Li(h.T(it.Name)) }),
+)
 ```
 
-`internal/examples/sysmon` uses this pattern; the
-`BenchmarkSysmonShape_staticChrome_render` bench shows the per-tick
-allocation win versus rebuilding the same chrome on each tick.
-
-### Custom elements
-
-For tags absent from the static constructor list — web components,
-SVG, MathML — declare them once with `h.NewTag` (or `h.NewVoidTag` for
-void elements):
-
-```go
-var SVG = h.NewTag("svg")
-SVG(h.Attr("xmlns", "http://www.w3.org/2000/svg"), shapes...)
-```
-
-The tag name is written verbatim; supply a valid HTML element name.
+`h.Static(n)` pre-renders fragments that don't depend on per-request
+state (layout chrome, headers); every later Render writes the captured
+bytes verbatim. `h.NewTag("svg")` declares constructors for tags
+outside the built-in list (web components, SVG, MathML).
+`h.With(base, more...)` extends an existing element non-destructively.
 
 ## Plugins
 

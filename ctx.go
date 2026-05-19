@@ -1,7 +1,6 @@
 package via
 
 import (
-	"maps"
 	"net/http"
 	"reflect"
 	"sync"
@@ -92,16 +91,20 @@ func (ctx *Ctx) Disposed() bool {
 // ID returns the tab id (the wire key for via_tab).
 func (ctx *Ctx) ID() string { return ctx.id }
 
-// Writer returns the http.ResponseWriter for the current action, or nil
-// outside of action scope.
+// Writer returns the http.ResponseWriter for the in-flight request, or
+// nil if the caller isn't on the action or page-render goroutine. The
+// pointer is cleared as soon as the synchronous handler returns, so it
+// is unsafe to capture from a background goroutine and use later.
 func (ctx *Ctx) Writer() http.ResponseWriter {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	return ctx.w
 }
 
-// Request returns the *http.Request for the current action, or nil outside
-// of action scope.
+// Request returns the *http.Request for the in-flight request, or nil
+// if the caller isn't on the action or page-render goroutine. Same
+// lifetime caveat as [Writer]: cleared on handler return, do not
+// capture for later use.
 func (ctx *Ctx) Request() *http.Request {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
@@ -163,11 +166,18 @@ func (ctx *Ctx) touch() {
 	ctx.lastAccess.Store(time.Now().UnixNano())
 }
 
+// markSignalDirty records that slot needs a signal patch on the next
+// flush. Synchronized via queue.mu so Set on a typed Signal handle is
+// safe from any goroutine (including user-launched ones reaching the
+// Ctx through Done/Stream).
 func (ctx *Ctx) markSignalDirty(slot uint16) {
-	ctx.dirtySignals.set(int(slot))
-	if ctx.queue != nil {
-		ctx.queue.notify()
+	if ctx.queue == nil {
+		return
 	}
+	ctx.queue.mu.Lock()
+	ctx.dirtySignals.set(int(slot))
+	ctx.queue.mu.Unlock()
+	ctx.queue.notify()
 }
 
 // Sync forces a view re-render and flushes pending patches. Marks the
@@ -202,54 +212,15 @@ func (ctx *Ctx) Flush() {
 	flushDirty(ctx)
 }
 
-// PendingRedirect returns the URL queued by Redirect (if any) without
-// draining it.
-//
-// Deprecated: integration hook for tests driving actions through
-// test.NewCtx. Not part of via's stable user API.
-func (ctx *Ctx) PendingRedirect() string {
-	if ctx == nil || ctx.queue == nil {
-		return ""
-	}
-	ctx.queue.mu.Lock()
-	defer ctx.queue.mu.Unlock()
-	return ctx.queue.redirect
-}
-
-// PendingScripts returns the JavaScript queued by ExecScript /
-// ExecScriptf, without draining it.
-//
-// Deprecated: integration hook for tests driving actions through
-// test.NewCtx. Not part of via's stable user API.
-func (ctx *Ctx) PendingScripts() string {
-	if ctx == nil || ctx.queue == nil {
-		return ""
-	}
-	ctx.queue.mu.Lock()
-	defer ctx.queue.mu.Unlock()
-	return ctx.queue.scripts.String()
-}
-
-// PendingSignals returns a snapshot of the signals queued for the
-// next flush, without draining them.
-//
-// Deprecated: integration hook for tests driving actions through
-// test.NewCtx. Not part of via's stable user API.
-func (ctx *Ctx) PendingSignals() map[string]any {
-	if ctx == nil || ctx.queue == nil {
-		return nil
-	}
-	ctx.queue.mu.Lock()
-	defer ctx.queue.mu.Unlock()
-	if len(ctx.queue.signals) == 0 {
-		return nil
-	}
-	return maps.Clone(ctx.queue.signals)
-}
-
+// markStateDirty records that the view needs a re-render on the next
+// flush. Synchronized via queue.mu so scope.User/scope.App writes from
+// a user goroutine don't race with the SSE drain loop.
 func (ctx *Ctx) markStateDirty() {
-	ctx.stateDirty = true
-	if ctx.queue != nil {
-		ctx.queue.notify()
+	if ctx.queue == nil {
+		return
 	}
+	ctx.queue.mu.Lock()
+	ctx.stateDirty = true
+	ctx.queue.mu.Unlock()
+	ctx.queue.notify()
 }

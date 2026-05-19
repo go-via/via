@@ -1,11 +1,13 @@
 package via_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -219,4 +221,51 @@ func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
 	assert.Contains(t, body, "_pluginKey",
 		"RegisterAppSignal must seed the data-signals payload")
 	assert.Contains(t, body, "seeded")
+}
+
+type useAfterStartPage struct{}
+
+func (p *useAfterStartPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func TestAppUse_afterStartPanics(t *testing.T) {
+	t.Parallel()
+
+	app := via.New(via.WithAddr("127.0.0.1:0"))
+	via.Mount[useAfterStartPage](app, "/")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		app.Start()
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = app.Shutdown(ctx)
+		<-done
+	})
+
+	// Spin briefly until Start has flipped a.server. Start sets it
+	// synchronously before ListenAndServe, so 200ms is generous.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if app.LiveTabs() >= 0 { // touches App, just to settle goroutine
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "App.Use after Start must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "App.Use called after Start",
+			"panic must state the violation so the user spots the boot-only contract")
+		assert.Contains(t, msg, "boot",
+			"panic must hint at the fix (install middleware during boot)")
+	}()
+	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		next.ServeHTTP(w, r)
+	})
 }

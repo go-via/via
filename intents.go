@@ -39,6 +39,12 @@ func (e *RedirectError) Error() string { return "via: redirect to " + e.URL }
 //	    return via.Redirect("/dashboard")
 //	}
 //
+// IMPORTANT: the intent only fires if the value is returned from the
+// action handler. A bare call (`via.Redirect("/x")` without `return`)
+// constructs the error and throws it away — no redirect ever happens.
+// Use [Ctx.Redirect] for the imperative form when you don't want the
+// return-value idiom.
+//
 // Outside an action dispatcher the value behaves like any other error;
 // callers may inspect it via errors.As(err, &*RedirectError).
 func Redirect(url string) error { return &RedirectError{URL: url} }
@@ -59,6 +65,10 @@ func (e *ToastError) Error() string { return "via: toast " + e.Message }
 //	    if err := store(...); err != nil { return err }
 //	    return via.Toast("saved!")
 //	}
+//
+// IMPORTANT: same return-value requirement as [Redirect] — `via.Toast`
+// without `return` is a dead allocation; the message never reaches the
+// client. Use [Ctx.Toast] for the imperative form.
 //
 // Empty msg is a no-op (still treated as a successful return; nothing
 // is pushed to the client). For richer notifications, prefer

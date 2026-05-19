@@ -27,6 +27,7 @@ type config struct {
 	sessionTTL         time.Duration
 	contextTTL         time.Duration
 	sseHeartbeat       time.Duration
+	sseWriteTimeout    time.Duration
 	secureCookies      bool
 	testServer         **httptest.Server
 	httpServerHook     func(*http.Server)
@@ -35,10 +36,12 @@ type config struct {
 	writeTimeout       time.Duration
 	idleTimeout        time.Duration
 	maxRequestBody     int64
+	maxUploadSize      int64
 	maxContexts        int
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
+	metrics            Metrics
 }
 
 // Option configures a via App.
@@ -72,6 +75,15 @@ func WithContextTTL(d time.Duration) Option { return func(c *config) { c.context
 
 // WithSSEHeartbeat sets the SSE keep-alive interval.
 func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
+
+// WithSSEWriteTimeout caps how long a single SSE drain may block on the
+// underlying connection before the stream is torn down. Bounds the
+// blast radius of slow / stalled clients (without this, a wedged TCP
+// peer pins the server goroutine for the lifetime of the tab). Default
+// 10 seconds; set 0 to disable the deadline.
+func WithSSEWriteTimeout(d time.Duration) Option {
+	return func(c *config) { c.sseWriteTimeout = d }
+}
 
 // WithSecureCookies marks the session cookie Secure for HTTPS deployments.
 func WithSecureCookies() Option { return func(c *config) { c.secureCookies = true } }
@@ -111,9 +123,18 @@ func WithWriteTimeout(d time.Duration) Option { return func(c *config) { c.write
 // lifetime of HTTP/1.1 keep-alive connections; SSE streams are exempt.
 func WithIdleTimeout(d time.Duration) Option { return func(c *config) { c.idleTimeout = d } }
 
-// WithMaxRequestBody caps body bytes for action and close requests.
-// Default 1 MiB.
+// WithMaxRequestBody caps body bytes for action POSTs that ship as
+// application/json (Datastar's default action payload). Default 1 MiB.
+// File-upload actions use a multipart body and are governed by the
+// separate [WithMaxUploadSize] knob, since file parts inflate body
+// size beyond what a typed-signal JSON payload ever needs.
 func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestBody = n } }
+
+// WithMaxUploadSize caps total multipart body bytes for action POSTs
+// that include file parts. Default 32 MiB. The cap applies to the wire
+// body (all files + form fields combined); the per-file in-memory cap
+// is the lower of this value and 32 MiB before parts spill to disk.
+func WithMaxUploadSize(n int64) Option { return func(c *config) { c.maxUploadSize = n } }
 
 // WithMaxContexts caps the number of concurrent live tabs. New page
 // renders past the cap return 503 instead of registering a Ctx — a
@@ -139,6 +160,12 @@ func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
 // and decide whether to redirect, render a "not found" composition, or
 // short-circuit with an empty body.
 func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHandler = h } }
+
+// WithMetrics installs a [Metrics] backend that receives counter / gauge
+// / histogram events for actions, renders, SSE connect/disconnect, and
+// tab-count gauges. Default is a no-op backend, so configuring this is
+// purely additive. See the [Metrics] godoc for the event catalogue.
+func WithMetrics(m Metrics) Option { return func(c *config) { c.metrics = m } }
 
 // Plugin extends the App at registration time.
 type Plugin interface {

@@ -3,23 +3,40 @@ package via
 import "github.com/go-via/via/h"
 
 // AppendToHead adds nodes to the <head> of every rendered page. Call
-// during boot (e.g. from a plugin's Register) — the underlying slice is
-// not mutex-guarded, so concurrent appends after the server starts race
-// with the page render path.
+// during boot (e.g. from a plugin's Register).
+//
+// Boot-only: panics if called after Start has bound the server. The
+// read-side (page rendering) is lock-free for speed, so post-boot
+// mutations would race with concurrent renders.
 func (a *App) AppendToHead(elements ...h.H) {
+	a.requireBoot("AppendToHead")
 	a.documentHeadIncludes = appendNonNil(a.documentHeadIncludes, elements)
 }
 
 // AppendToFoot adds nodes to the end of <body> on every rendered page.
-// Same boot-time-only contract as AppendToHead.
+// Boot-only: panics if called after Start has bound the server.
 func (a *App) AppendToFoot(elements ...h.H) {
+	a.requireBoot("AppendToFoot")
 	a.documentFootIncludes = appendNonNil(a.documentFootIncludes, elements)
 }
 
 // AppendAttrToHTML adds attributes to the <html> element of every page.
-// Same boot-time-only contract as AppendToHead.
+// Boot-only: panics if called after Start has bound the server.
 func (a *App) AppendAttrToHTML(attrs ...h.H) {
+	a.requireBoot("AppendAttrToHTML")
 	a.documentHTMLAttrs = appendNonNil(a.documentHTMLAttrs, attrs)
+}
+
+// requireBoot panics if Start has already bound the server. Used by
+// every boot-only mutator to surface the "configured too late" mistake
+// at the call site rather than as a subtle race weeks later.
+func (a *App) requireBoot(method string) {
+	a.serverMu.Lock()
+	started := a.server != nil
+	a.serverMu.Unlock()
+	if started {
+		panic("via: App." + method + " called after Start; configure during boot")
+	}
 }
 
 // appendNonNil appends every non-nil element from src onto dst. Used by

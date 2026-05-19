@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
+	"github.com/go-via/via/scope"
 	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -128,3 +130,73 @@ func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
 		2*time.Second, 10*time.Millisecond,
 		"the overriding OnDispose on the embedding composition must take precedence over via.Page's no-op default")
 }
+
+type userScopedPage struct {
+	Theme scope.User[string]
+}
+
+func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
+	p.Theme.Set(ctx, "red")
+	return nil
+}
+
+func (p *userScopedPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.P(h.Text("theme="), p.Theme.Text(ctx)), h.Button(h.Text("red"), on.Click(p.UseRed)))
+}
+
+func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[userScopedPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("UseRed").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "theme=red")
+}
+
+type appScopedPage struct {
+	Visits scope.App[int]
+}
+
+func (p *appScopedPage) Bump(ctx *via.Ctx) error {
+	p.Visits.Set(ctx, p.Visits.Get(ctx)+1)
+	return nil
+}
+
+func (p *appScopedPage) View(ctx *via.Ctx) h.H {
+	return h.Div(p.Visits.Text(ctx))
+}
+
+func TestScopeApp_sharedAcrossSessions(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[appScopedPage](app, "/")
+	defer server.Close()
+
+	a := viatest.NewClient(t, server, "/")
+	require.Equal(t, 200, a.Action("Bump").Fire())
+	require.Equal(t, 200, a.Action("Bump").Fire())
+
+	b := viatest.NewClient(t, server, "/")
+	body := b.HTML()
+	assert.Contains(t, body, ">2<",
+		"App-scoped Visits must be 2 even on a fresh session")
+}
+
+// Compile-time assertions: scope.User[T] and scope.App[T] both satisfy
+// via.Mutable[T]. If a future refactor breaks this we'd get a build
+// error here, which is stronger than any runtime test could be.
+var (
+	_ via.Mutable[int]  = (*scope.User[int])(nil)
+	_ via.Mutable[bool] = (*scope.User[bool])(nil)
+	_ via.Mutable[bool] = (*scope.App[bool])(nil)
+)

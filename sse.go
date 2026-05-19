@@ -50,6 +50,9 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
+	m := a.metricsOrNoop()
+	m.Counter("via.sse.connect")
+	defer m.Counter("via.sse.disconnect")
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
 	// that hit GET without ever opening the SSE never see this fire, so
 	// expensive background work (tickers, fan-out goroutines) lives here
@@ -73,7 +76,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// never sent if the previous drain was mid-flight). Without this,
 	// the reconnected client sees stale UI until the next notify.
 	if hasPending(ctx.queue) {
-		if err := drainQueue(sse, ctx); err != nil {
+		if err := drainQueue(sse, ctx, w, a.cfg.sseWriteTimeout); err != nil {
 			return
 		}
 	}
@@ -92,17 +95,30 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		case <-ctx.doneChan:
 			return
 		case <-heartbeat:
+			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 			if err := sse.PatchSignals(heartbeatPayload); err != nil {
 				return
 			}
 			ctx.touch()
 		case <-ctx.queue.wake:
-			if err := drainQueue(sse, ctx); err != nil {
+			if err := drainQueue(sse, ctx, w, a.cfg.sseWriteTimeout); err != nil {
 				return
 			}
 			ctx.touch()
 		}
 	}
+}
+
+// setSSEWriteDeadline installs a per-call write deadline so a stalled
+// peer can't pin the SSE goroutine forever. Wrapped to swallow the
+// "not supported" case the response writer may surface when the runtime
+// doesn't expose deadline control (rare, but possible behind some
+// reverse-proxy middlewares).
+func setSSEWriteDeadline(w http.ResponseWriter, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
 }
 
 // hasPending reports whether the patch queue holds anything to flush.
@@ -119,7 +135,8 @@ func hasPending(q *patchQueue) bool {
 		len(q.signals) > 0 || q.scripts.Len() > 0
 }
 
-func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx) error {
+func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.ResponseWriter, writeTimeout time.Duration) error {
+	setSSEWriteDeadline(w, writeTimeout)
 	q := ctx.queue
 	q.mu.Lock()
 	elems := q.elements

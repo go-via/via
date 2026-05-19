@@ -1,8 +1,10 @@
 package echarts_test
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -95,38 +97,68 @@ func (p *chartActionPage) AppendPoints(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *chartActionPage) View(ctx *via.Ctx) h.H { return p.Chart.Mount() }
+func (p *chartActionPage) OnInit(ctx *via.Ctx) error {
+	// Bind a fresh Chart per ctx so each test gets a distinct element ID.
+	if p.Chart == nil {
+		p.Chart = echarts.NewChart(echarts.WithElementID("ch"))
+	}
+	return nil
+}
 
-func TestChartAPI_SetOption_pushesExecScript(t *testing.T) {
+func (p *chartActionPage) View(ctx *via.Ctx) h.H {
+	if p.Chart == nil {
+		return h.Div()
+	}
+	return p.Chart.Mount()
+}
+
+func TestChartAPI_SetOption_emitsSetOptionScript(t *testing.T) {
 	t.Parallel()
-	p := &chartActionPage{Chart: echarts.NewChart(echarts.WithElementID("ch"))}
-	ctx := viatest.NewCtx(t, p)
-	require.NoError(t, p.SetOpt(ctx))
-	scripts := ctx.PendingScripts()
-	assert.Contains(t, scripts, "setOption",
-		"SetOption must queue a setOption(...) JS statement")
-	assert.Contains(t, scripts, "backgroundColor")
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[chartActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("SetOpt").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "setOption", "backgroundColor")
 }
 
 func TestChartAPI_SetSeries_emitsSeriesUpdate(t *testing.T) {
 	t.Parallel()
-	p := &chartActionPage{Chart: echarts.NewChart(echarts.WithElementID("ch2"))}
-	ctx := viatest.NewCtx(t, p)
-	require.NoError(t, p.SetSer(ctx))
-	scripts := ctx.PendingScripts()
-	assert.Contains(t, scripts, `"series"`,
-		"SetSeries must wrap its argument in a series key")
-	assert.Contains(t, scripts, `"line"`,
-		"the series payload should still carry the original Line() shape")
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[chartActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("SetSer").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, `"series"`, `"line"`)
 }
 
 func TestChartAPI_AppendData_emitsAppendDataCall(t *testing.T) {
 	t.Parallel()
-	p := &chartActionPage{Chart: echarts.NewChart(echarts.WithElementID("ch3"))}
-	ctx := viatest.NewCtx(t, p)
-	require.NoError(t, p.AppendPoints(ctx))
-	scripts := ctx.PendingScripts()
-	assert.Contains(t, scripts, "appendData",
-		"AppendData must dispatch a chart.appendData call")
-	assert.Contains(t, scripts, "seriesIndex:0")
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[chartActionPage](app, "/")
+	defer server.Close()
+
+	tc := viatest.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, 200, tc.Action("AppendPoints").Fire())
+	viatest.AwaitFrame(t, frames, 2*time.Second, "appendData", "seriesIndex:0")
 }

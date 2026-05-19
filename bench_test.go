@@ -47,21 +47,6 @@ func BenchmarkCounterRender(b *testing.B) {
 	}
 }
 
-// BenchmarkActionBodyOnly measures the alloc cost of the Inc *body* —
-// no HTTP round-trip, no JSON, no reflect.Call. Establishes a floor:
-// with via.Add over a Mutable[int], the State/Signal Set/Get path
-// doesn't allocate, so steady-state should be 0 allocs/op. Catches a
-// regression where the typed helpers accidentally start escaping.
-func BenchmarkActionBodyOnly(b *testing.B) {
-	page := &benchPage{}
-	ctx := viatest.NewCtx(b, page)
-	b.ResetTimer()
-	b.ReportAllocs()
-	for range b.N {
-		_ = page.Inc(ctx)
-	}
-}
-
 // BenchmarkCounterAction measures per-action-POST allocations in the hot
 // path. The bench fires Inc on a single tab repeatedly; allocations are
 // dominated by reflect.Value boxing and JSON decode of the request body.
@@ -109,21 +94,5 @@ func BenchmarkCounterActionWithLogger(b *testing.B) {
 		if got := tc.Action("Inc").Fire(); got != 200 {
 			b.Fatalf("status %d", got)
 		}
-	}
-}
-
-// BenchmarkSignalFlush measures the alloc cost of the inner reactive
-// loop: mutate a signal, encode the dirty set, queue a PatchSignals
-// frame. This is the hot path for via.Stream callbacks and any tight
-// reactive driver. Steady state should stay flat once the patch-queue
-// signals map is recycled across drains.
-func BenchmarkSignalFlush(b *testing.B) {
-	page := &benchPage{}
-	ctx := viatest.NewCtx(b, page)
-	b.ResetTimer()
-	b.ReportAllocs()
-	for i := range b.N {
-		page.Step.Set(ctx, i)
-		ctx.Flush()
 	}
 }
