@@ -10,6 +10,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
+	"github.com/go-via/via/sess"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,17 +74,17 @@ type authPage struct {
 }
 
 func (p *authPage) LogIn(ctx *via.Ctx) error {
-	via.PutSess(ctx, sessUser{Email: p.Email.Get(ctx), Name: "Alice"})
+	sess.Put(ctx, sessUser{Email: p.Email.Get(ctx), Name: "Alice"})
 	return nil
 }
 
 func (p *authPage) LogOut(ctx *via.Ctx) error {
-	via.ClearSess[sessUser](ctx)
+	sess.Clear[sessUser](ctx)
 	return nil
 }
 
 func (p *authPage) View(ctx *via.Ctx) h.H {
-	if u, ok := via.GetSess[sessUser](ctx); ok {
+	if u, ok := sess.Get[sessUser](ctx); ok {
 		return h.Div(h.P(h.Textf("hello %s", u.Name)),
 			h.Button(h.Text("logout"), on.Click(p.LogOut)))
 	}
@@ -119,7 +120,7 @@ func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-		if u, ok := via.GetSess[sessUser](r); ok {
+		if u, ok := sess.Get[sessUser](r); ok {
 			s := u.Email
 			sawEmail.Store(&s)
 		}
@@ -167,7 +168,7 @@ type loginPage struct {
 
 func (p *loginPage) Login(ctx *via.Ctx) error {
 	p.UserID.Update(ctx, func(string) string { return "alice" })
-	via.RotateSession(ctx)
+	sess.Rotate(ctx)
 	return nil
 }
 

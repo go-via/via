@@ -361,7 +361,8 @@ func (a *App) withSession() http.Handler {
 			_ = a.getOrCreateSession(w, r)
 		}
 		// Stamp the app pointer into r so middleware can resolve the
-		// session via via.GetSess[T](r) without holding a *Ctx yet.
+		// session via via.RequestSession(r) (used by via/sess.Get on
+		// the *http.Request branch) without holding a *Ctx yet.
 		r = r.WithContext(context.WithValue(r.Context(), appKey{}, a))
 
 		if !matched {

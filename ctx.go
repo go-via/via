@@ -115,9 +115,19 @@ func (ctx *Ctx) Request() *http.Request {
 	return ctx.r
 }
 
-// Session returns the per-browser session value bag. Survives tab close;
-// expires per WithSessionTTL.
-func (ctx *Ctx) Session() *session { return ctx.session }
+// Session returns a [Session] bound to ctx. Stores performed through
+// the returned handle mark the page dirty and fan out to subscribed
+// tabs. Survives tab close; expires per [WithSessionTTL].
+//
+// Typed access lives in the via/sess subpackage — most code reaches
+// for sess.Get[T] / sess.Put[T] / sess.Clear[T] rather than this
+// handle directly.
+func (ctx *Ctx) Session() *Session {
+	if ctx == nil {
+		return &Session{}
+	}
+	return &Session{data: ctx.session, ctx: ctx, app: ctx.app}
+}
 
 // Cookie returns the value of the named cookie on the in-flight request,
 // or "" if the cookie isn't present. Convenience over Request().Cookie

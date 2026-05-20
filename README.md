@@ -356,20 +356,22 @@ once at Mount; per-request decoding writes directly into the typed field.
 ## Sessions
 
 ```go
+import "github.com/go-via/via/sess"
+
 type User struct{ Email, Name string }
 
-via.PutSess(ctx, User{Email: "alice@example.com", Name: "Alice"})
-u, ok := via.GetSess[User](ctx)              // inside a handler/action
-u, ok := via.GetSess[User](r)                // inside a Middleware
-via.ClearSess[User](ctx)
-via.RotateSession(ctx)                       // after login/privilege change
+sess.Put(ctx, User{Email: "alice@example.com", Name: "Alice"})
+u, ok := sess.Get[User](ctx)                 // inside a handler/action
+u, ok := sess.Get[User](r)                   // inside a Middleware
+sess.Clear[User](ctx)
+sess.Rotate(ctx)                             // after login/privilege change
 ```
 
 `requireAuth` is a one-line middleware:
 
 ```go
 func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
-    if u, ok := via.GetSess[User](r); !ok || u.Email == "" {
+    if u, ok := sess.Get[User](r); !ok || u.Email == "" {
         http.Redirect(w, r, "/login", http.StatusSeeOther)
         return
     }
@@ -464,10 +466,10 @@ A live tab's state lives in memory on the server (the `*via.Ctx` and its
 - Sessions are also in-memory; logged-in users will need to re-auth
   unless you back the session store with something durable (not built
   in; users with auth flows generally roll their own
-  `via.PutSess` keyed off a real session store).
+  `sess.Put` keyed off a real session store).
 
 If you need session survivability across restarts, persist the
-`via.PutSess`-stored payload (e.g. a JWT or an opaque token your auth
+`sess.Put`-stored payload (e.g. a JWT or an opaque token your auth
 layer recognizes) to a database keyed by the `via_session` cookie value,
 and rehydrate inside an `OnInit` hook on the relevant compositions.
 
@@ -597,7 +599,7 @@ jar — the only way to drive `StateSess` behaviour that spans tabs.
 - `picocss` — `picocss.Plugin()` driving theme + dark-mode switching
   on the client without a full reload.
 - `auth` — typed sessions, `requireAuth` middleware, and
-  `via.RotateSession` after login.
+  `sess.Rotate` after login.
 - `todos` — `StateSess[T]` survives reload, `h.Each`, and
   `on.SetSignal` for client-bundled writes.
 - `sysmon` — OnConnect-driven ticker streaming CPU/RAM/disk/net into

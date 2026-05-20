@@ -2,8 +2,6 @@ package via
 
 import (
 	"net/http"
-	"reflect"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,6 +15,117 @@ type session struct {
 	id         string
 	data       kvStore
 	lastAccess atomic.Int64
+}
+
+// Session is the per-browser session value bag. Survives tab close;
+// expires per [WithSessionTTL].
+//
+// A Session obtained via [Ctx.Session] marks the page dirty + fans out
+// to subscribed tabs on Store; one obtained via [RequestSession] (in a
+// middleware, before a Ctx exists) is cookie-only and does not trigger
+// re-render.
+//
+// Typed access lives in the via/sess subpackage — most code reaches
+// for sess.Get[T] / sess.Put[T] / sess.Clear[T] rather than this type
+// directly.
+type Session struct {
+	data *session
+	ctx  *Ctx
+	app  *App
+}
+
+// Load reads the value stored under key, or nil/false if absent or if
+// the Session is detached (no underlying session record).
+func (s *Session) Load(key string) (any, bool) {
+	if s == nil || s.data == nil {
+		return nil, false
+	}
+	return s.data.data.Load(key)
+}
+
+// Store writes value under key. When the Session is bound to a Ctx,
+// also marks the page dirty so the view re-renders and fans the write
+// out to every other live tab on the same session subscribed to key.
+func (s *Session) Store(key string, value any) {
+	if s == nil || s.data == nil {
+		return
+	}
+	s.data.data.Store(key, value)
+	if s.ctx != nil {
+		s.ctx.markStateDirty()
+	}
+	if s.app != nil {
+		s.app.broadcastRender(s.ctx, s.data, key)
+	}
+}
+
+// Delete removes the value stored under key. When the Session is bound
+// to a Ctx, also marks the page dirty so the view re-renders.
+func (s *Session) Delete(key string) {
+	if s == nil || s.data == nil {
+		return
+	}
+	s.data.data.Delete(key)
+	if s.ctx != nil {
+		s.ctx.markStateDirty()
+	}
+}
+
+// Rotate issues a fresh session id, copies the existing session's data
+// into it, and points the bound Ctx + the cookie on the in-flight
+// response at the new session. Returns the new session id, or "" if
+// rotation could not be performed (no bound Ctx, no Writer, no App).
+//
+// Use after authentication state changes (login, privilege elevation,
+// password reset) so any captured pre-auth session id can no longer
+// impersonate the user.
+func (s *Session) Rotate() string {
+	if s == nil || s.app == nil || s.ctx == nil {
+		return ""
+	}
+	app := s.app
+	old := s.data
+
+	fresh := &session{id: genSecureID()}
+	fresh.lastAccess.Store(time.Now().UnixNano())
+
+	if old != nil {
+		old.data.Range(func(k, v any) bool {
+			fresh.data.Store(k.(string), v)
+			return true
+		})
+	}
+
+	app.sessionsMu.Lock()
+	app.sessions[fresh.id] = fresh
+	if old != nil {
+		delete(app.sessions, old.id)
+	}
+	app.sessionsMu.Unlock()
+
+	s.ctx.session = fresh
+	s.data = fresh
+
+	if w := s.ctx.Writer(); w != nil {
+		http.SetCookie(w, app.sessionCookie(fresh.id))
+	}
+	return fresh.id
+}
+
+// RequestSession returns the [Session] cookie-resolved off r, or a
+// detached Session (Load/Store no-op) if the request carries no via
+// session yet. Use this from middleware that needs to read or write
+// session state before any composition is rendered.
+//
+// Writes performed via the returned Session do not trigger a tab
+// re-render — there is no Ctx attached. Use [Ctx.Session] from inside
+// actions / handlers when re-render fan-out is required.
+func RequestSession(r *http.Request) *Session {
+	a, _ := r.Context().Value(appKey{}).(*App)
+	if a == nil {
+		return &Session{}
+	}
+	return &Session{data: a.sessionFromRequest(r), app: a}
 }
 
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
@@ -47,175 +156,12 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 	return sess
 }
 
-// PutSess stores a typed value in the session, keyed by the type name.
-// Use it to attach "the logged-in user" or any struct that is one-per-
-// session. Marks the current Ctx dirty so the page re-renders.
-//
-//	type User struct { Email, Name string }
-//	via.PutSess(ctx, User{Email: "alice@example.com"})
-func PutSess[T any](ctx *Ctx, v T) {
-	if ctx == nil {
-		return
-	}
-	sessionStore(ctx, sessionTypeKey[T](), v)
-}
-
-// GetSess reads the typed value stored with PutSess, returning the zero
-// value of T and false if nothing matches. The src argument may be a
-// *Ctx or an *http.Request — the latter form lets middleware check the
-// session before any composition is rendered.
-//
-//	func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
-//	    if u, ok := via.GetSess[User](r); !ok || u.Email == "" {
-//	        http.Redirect(w, r, "/login", 303)
-//	        return
-//	    }
-//	    next.ServeHTTP(w, r)
-//	}
-func GetSess[T any](src any) (T, bool) {
-	var zero T
-	switch s := src.(type) {
-	case *Ctx:
-		v, ok := sessionLoad(s, sessionTypeKey[T]())
-		if !ok {
-			return zero, false
-		}
-		t, ok := v.(T)
-		return t, ok
-	case *http.Request:
-		sess := sessionFromRequestCtx(s)
-		if sess == nil {
-			return zero, false
-		}
-		v, ok := sess.data.Load(sessionTypeKey[T]())
-		if !ok {
-			return zero, false
-		}
-		t, ok := v.(T)
-		return t, ok
-	}
-	return zero, false
-}
-
-// ClearSess removes the value stored under T's key from the session.
-func ClearSess[T any](src any) {
-	switch s := src.(type) {
-	case *Ctx:
-		if s != nil && s.session != nil {
-			s.session.data.Delete(sessionTypeKey[T]())
-			s.markStateDirty()
-		}
-	case *http.Request:
-		sess := sessionFromRequestCtx(s)
-		if sess != nil {
-			sess.data.Delete(sessionTypeKey[T]())
-		}
-	}
-}
-
-// sessionTypeKeyCache memoises sessionTypeKey results so PutSess/GetSess/
-// ClearSess hot paths avoid repeated string concatenation. Keyed by
-// reflect.Type which is canonical and comparable.
-var sessionTypeKeyCache sync.Map // map[reflect.Type]string
-
-// sessionTypeKey returns a stable string key for a Go type used as a
-// typed-session value. We use the reflect type's full string ("pkg.Name")
-// so distinct types in different packages don't collide.
-func sessionTypeKey[T any]() string {
-	var zero T
-	rt := reflect.TypeOf(&zero).Elem()
-	if v, ok := sessionTypeKeyCache.Load(rt); ok {
-		return v.(string)
-	}
-	key := "type:" + rt.String()
-	sessionTypeKeyCache.Store(rt, key)
-	return key
-}
-
-// sessionFromRequestCtx looks up the session associated with the request's
-// cookie, but only if the request originated from this app's session
-// middleware. Resolved via the App pointer stamped into each request's
-// context (see withSession).
-func sessionFromRequestCtx(r *http.Request) *session {
-	if r == nil {
-		return nil
-	}
-	a, _ := r.Context().Value(appKey{}).(*App)
-	if a == nil {
-		return nil
-	}
-	return a.sessionFromRequest(r)
-}
-
 type appKey struct{}
 
-// sessionLoad reads a value from the per-session store. Backs
-// StateSess[T] with shared storage that survives across tabs of the
-// same browser session.
-func sessionLoad(ctx *Ctx, key string) (any, bool) {
-	if ctx == nil || ctx.session == nil {
-		return nil, false
-	}
-	return ctx.session.data.Load(key)
-}
-
-// sessionStore writes a value to the per-session store, marks the
-// current Ctx dirty so the page re-renders, and fans the write out to
-// every other tab on the same session that subscribed to key.
-func sessionStore(ctx *Ctx, key string, value any) {
-	if ctx == nil || ctx.session == nil {
-		return
-	}
-	ctx.session.data.Store(key, value)
-	ctx.markStateDirty()
-	if ctx.app != nil {
-		ctx.app.broadcastRender(ctx, ctx.session, key)
-	}
-}
-
-// RotateSession issues a fresh session id, copies the existing session's
-// data into it, and points the current Ctx + the cookie on the in-flight
-// response at the new session. Use after authentication state changes
-// (login, privilege elevation, password reset) so any captured pre-auth
-// session id can no longer impersonate the user.
-//
-// Must be called from inside an action handler — Writer() must be non-nil.
-// Returns the new session id, or "" if the rotation could not be performed.
-func RotateSession(ctx *Ctx) string {
-	if ctx == nil || ctx.app == nil {
-		return ""
-	}
-	old := ctx.session
-	app := ctx.app
-
-	fresh := &session{id: genSecureID()}
-	fresh.lastAccess.Store(time.Now().UnixNano())
-
-	if old != nil {
-		old.data.Range(func(k, v any) bool {
-			fresh.data.Store(k.(string), v)
-			return true
-		})
-	}
-
-	app.sessionsMu.Lock()
-	app.sessions[fresh.id] = fresh
-	if old != nil {
-		delete(app.sessions, old.id)
-	}
-	app.sessionsMu.Unlock()
-
-	ctx.session = fresh
-
-	if w := ctx.Writer(); w != nil {
-		http.SetCookie(w, app.sessionCookie(fresh.id))
-	}
-	return fresh.id
-}
-
-// sessionCookie returns the canonical via_session cookie for id with the
-// app's configured Secure flag applied. Single source of truth shared by
-// getOrCreateSession and RotateSession so the two paths can never drift.
+// sessionCookie returns the canonical via_session cookie for id with
+// the app's configured Secure flag applied. Single source of truth
+// shared by getOrCreateSession and Session.Rotate so the two paths
+// can never drift.
 //
 // SameSite=Lax is chosen (over Strict) so users following an inbound
 // link from another origin still see their session on the first page
@@ -237,10 +183,10 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 	}
 }
 
-// sessionFromRequest returns the session for the cookie on r, or nil if
-// there's no session yet (no cookie or unknown id). The session is
-// established by the withSession middleware on the first request, so by
-// the time SSE/action handlers run there is always a session present.
+// sessionFromRequest returns the session for the cookie on r, or nil
+// if there's no session yet (no cookie or unknown id). The session is
+// established by the withSession middleware on the first request, so
+// by the time SSE/action handlers run there is always a session present.
 func (a *App) sessionFromRequest(r *http.Request) *session {
 	c, err := r.Cookie(sessionCookieName)
 	if err != nil {

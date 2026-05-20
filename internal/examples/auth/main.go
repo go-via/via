@@ -16,6 +16,7 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/plugins/picocss"
+	"github.com/go-via/via/sess"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -90,8 +91,8 @@ func (p *LoginPage) Submit(ctx *via.Ctx) error {
 		p.Err.Set(ctx, err.Error())
 		return nil
 	}
-	via.RotateSession(ctx)
-	via.PutSess(ctx, user)
+	sess.Rotate(ctx)
+	sess.Put(ctx, user)
 	return via.Redirect("/profile")
 }
 
@@ -154,13 +155,13 @@ func errBanner(msg string) h.H {
 type ProfilePage struct{}
 
 func (p *ProfilePage) Logout(ctx *via.Ctx) error {
-	via.ClearSess[User](ctx)
-	via.RotateSession(ctx)
+	sess.Clear[User](ctx)
+	sess.Rotate(ctx)
 	return via.Redirect("/")
 }
 
 func (p *ProfilePage) View(ctx *via.Ctx) h.H {
-	user, _ := via.GetSess[User](ctx)
+	user, _ := sess.Get[User](ctx)
 	return shell(ctx, h.Div(
 		h.H1(h.Textf("Hello, %s", user.Name)),
 		h.P(h.Text("Signed in as "), h.Code(h.Text(user.Email))),
@@ -173,7 +174,7 @@ type LandingPage struct{}
 func (p *LandingPage) View(ctx *via.Ctx) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Via Auth Demo")),
-		h.P(h.Text("Typed sessions, RotateSession on login, StateSess-style data with auto-render.")),
+		h.P(h.Text("Typed sessions, sess.Rotate on login, StateSess-style data with auto-render.")),
 	))
 }
 
@@ -181,7 +182,7 @@ func (p *LandingPage) View(ctx *via.Ctx) h.H {
 // the header. We don't have a Layout primitive yet — composing with a
 // helper function is just as clean for a flat app.
 func shell(ctx *via.Ctx, content h.H) h.H {
-	_, loggedIn := via.GetSess[User](ctx)
+	_, loggedIn := sess.Get[User](ctx)
 	return h.Div(
 		h.Nav(h.Class("container"),
 			h.Ul(h.Li(h.A(h.Href("/"), h.Strong(h.Text("⚡ Via Auth"))))),
@@ -199,7 +200,7 @@ func shell(ctx *via.Ctx, content h.H) h.H {
 
 // Middleware: redirect to /login if no User in the session.
 func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	if u, ok := via.GetSess[User](r); !ok || u.Email == "" {
+	if u, ok := sess.Get[User](r); !ok || u.Email == "" {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
