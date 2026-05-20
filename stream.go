@@ -135,7 +135,14 @@ func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) *T
 func streamTick(ctx *Ctx, t time.Time, fn func(*Ctx, time.Time)) {
 	ctx.actionMu.Lock()
 	defer ctx.actionMu.Unlock()
-	defer flushDirty(ctx)
+	ctx.silent.Store(false)
+	defer func() {
+		if ctx.silent.Load() {
+			ctx.discardDirty()
+			return
+		}
+		flushDirty(ctx)
+	}()
 	defer recoverLog(ctx, "Stream callback")
 	fn(ctx, t)
 }

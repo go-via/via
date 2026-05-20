@@ -44,6 +44,9 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 // that must not wake unrelated sessions. The writer's own re-render
 // happens through the action's autoflush.
 func (a *App) broadcastRender(skip *Ctx, sess *session, key string) {
+	if skip != nil && skip.silent.Load() {
+		return
+	}
 	for _, c := range a.snapshotContexts() {
 		if c == skip {
 			continue
@@ -54,7 +57,7 @@ func (a *App) broadcastRender(skip *Ctx, sess *session, key string) {
 		if !c.subscribed(key) {
 			continue
 		}
-		go c.Sync()
+		go c.SyncNow()
 	}
 }
 

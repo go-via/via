@@ -20,11 +20,16 @@ type Ctx struct {
 	signalRefs   []signalRef   // indexed by slot
 	dirtySignals bitset        // size = len(signalRefs)
 	stateDirty   bool          // any StateTab[T] mutated → re-render needed
-	queue        *patchQueue
-	doneChan     chan struct{}
-	disposed     bool
-	session      *session
-	lastAccess   atomic.Int64
+	// silent gates the end-of-action flush + in-line broadcasts. Atomic
+	// so a user-launched goroutine that drives a broadcast (Update →
+	// broadcastRender) doesn't race with a concurrent action handler
+	// resetting the flag on entry.
+	silent     atomic.Bool
+	queue      *patchQueue
+	doneChan   chan struct{}
+	disposed   bool
+	session    *session
+	lastAccess atomic.Int64
 
 	// lastSignals holds the most recent signals payload from an action
 	// POST so via.DecodeForm can read keys that aren't tracked by typed
@@ -194,15 +199,18 @@ func (ctx *Ctx) markSignalDirty(slot uint16) {
 	ctx.queue.notify()
 }
 
-// Sync forces a view re-render and flushes pending patches. Marks the
+// SyncNow forces a view re-render and flushes pending patches now,
+// without waiting for the auto-flush at end of action. Marks the
 // composition dirty even if nothing changed since the last flush —
 // use it when an external (non-State) source of truth changed and you
-// need the rendered HTML to reflect it. For "flush whatever's dirty
-// now," use Flush.
+// need the rendered HTML to reflect it.
 //
-// Safe to call from any goroutine: serialized against in-flight action
-// handlers via the per-Ctx action mutex.
-func (ctx *Ctx) Sync() {
+// Designed for raw goroutines that mutate Ctx-bound State or Signal
+// values outside an action handler. Safe to call from any goroutine:
+// serialized against in-flight action handlers via the per-Ctx action
+// mutex. Calling from inside an action handler deadlocks (the action
+// holds the mutex); rely on the auto-flush at handler return instead.
+func (ctx *Ctx) SyncNow() {
 	if ctx == nil {
 		return
 	}
@@ -212,18 +220,52 @@ func (ctx *Ctx) Sync() {
 	flushDirty(ctx)
 }
 
-// Flush sends any State / Signal mutations queued since the last
-// flush, but doesn't force a re-render if nothing is dirty. Use it
-// from raw goroutines that just want their Sets to reach the browser
-// without paying for an unnecessary re-render. Safe to call from any
-// goroutine.
-func (ctx *Ctx) Flush() {
+// SyncOff opts the current action handler out of publishing. While
+// off, the deferred end-of-action flush is skipped, accumulated dirty
+// bits are dropped at handler return, and shared-state writes
+// (StateSess/StateApp.Update, Session.Store) skip their in-line
+// broadcast to subscribed sibling tabs. Local State/Signal writes
+// still land in the underlying stores — they just don't reach any
+// browser this action. A later loud action that re-touches the state
+// surfaces the value via the normal dirty-bit path.
+//
+// Explicit publish primitives (PatchSignal/PatchSignals, SyncElements,
+// ExecScript, Toast, Reload, Redirect) are NOT suppressed by SyncOff
+// — they enqueue patches directly rather than through the dirty-bit
+// flush. This is deliberate so a panic-recovery error toast still
+// reaches the user even when the action was running silent.
+//
+// SyncOff is action-scoped: every action handler, stream tick, and
+// lifecycle hook starts loud. The flag is intentionally not propagated
+// to user-launched goroutines — they observe whatever value the flag
+// holds at the moment they read it.
+//
+// Use it for try-before-commit flows, bulk reconciliation, composing
+// plugin handlers whose writes you don't want to publish, or any path
+// where partial state must not leak on error. SyncOff is one-way for
+// the duration of the handler — there is no companion to re-enable
+// publishing mid-handler. Structure code so the publish-worthy writes
+// happen in their own loud action, or wait until handler return.
+func (ctx *Ctx) SyncOff() {
 	if ctx == nil {
 		return
 	}
-	ctx.actionMu.Lock()
-	defer ctx.actionMu.Unlock()
-	flushDirty(ctx)
+	ctx.silent.Store(true)
+}
+
+// discardDirty drops any pending dirty bits without flushing. Used by
+// handler wrappers when the handler ran with ctx.SyncOff set: the
+// writes land in their stores, but the local re-render and signal
+// patches are suppressed instead of being deferred to the next loud
+// action.
+func (ctx *Ctx) discardDirty() {
+	if ctx.queue == nil {
+		return
+	}
+	ctx.queue.mu.Lock()
+	ctx.stateDirty = false
+	ctx.dirtySignals.clear()
+	ctx.queue.mu.Unlock()
 }
 
 // markStateDirty records that the view needs a re-render on the next

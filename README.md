@@ -200,6 +200,34 @@ s.Style("color")      // data-style-color="$key" — drives an inline CSS prop
 they're server-side, so the view re-renders the value rather than the
 client reading a signal.
 
+### Silent actions (escape hatch)
+
+Loud writes drive UI: `Set` / `Update` on `StateTab[T]` mark the
+composition dirty so the next flush re-renders the view, and `Update`
+on `StateSess[T] / StateApp[T]` additionally fans out a re-render to
+every other live tab subscribed to the key. When you want neither —
+try-before-commit flows, bulk reconciliation, composing plugin
+handlers, or any path where partial state must not leak on error —
+opt the whole action out with `ctx.SyncOff()`:
+
+```go
+func (p *Page) Reconcile(ctx *via.Ctx) error {
+    ctx.SyncOff()
+    for _, entry := range entries {
+        p.Cursor.Set(ctx, entry.Cursor)
+        p.Theme.Update(ctx, applyTheme(entry))
+    }
+    return nil // nothing reaches the browser
+}
+```
+
+Writes still land in their stores; they just skip the dirty mark, the
+end-of-action flush, and the in-line broadcast. A subsequent loud
+action re-touching the state surfaces values via the normal `Get`
+path, or call `ctx.SyncNow()` from a goroutine to force a publish.
+Explicit primitives (`Toast`, `Reload`, `Redirect`, `PatchSignal`,
+`SyncElements`) bypass SyncOff so error toasts still reach the user.
+
 ## Lifecycle hooks
 
 | Method                    | Fires when                                    |
@@ -254,11 +282,10 @@ ticker.Resume()
 See `internal/examples/sysmon` for a full pause/rate-change UI driven
 by this surface.
 
-Inside actions and `via.Stream` callbacks the flush is automatic. From a
-raw goroutine you started yourself, call `ctx.Flush()` (no-op when nothing
-is dirty) to push pending Set values to the browser, or `ctx.Sync()` to
-force a re-render even if no signal/state changed. Both serialise with
-in-flight action handlers via the per-tab action mutex.
+Inside actions and `via.Stream` callbacks the flush is automatic. From
+a raw goroutine you started yourself, call `ctx.SyncNow()` to force a
+re-render and push pending Set values to the browser. It serialises
+with in-flight action handlers via the per-tab action mutex.
 
 ## Actions
 

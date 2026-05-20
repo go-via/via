@@ -283,8 +283,8 @@ func TestCtx_coreHelpersTolerateNilReceiver(t *testing.T) {
 		name string
 		fn   func()
 	}{
-		{"Sync", func() { ctx.Sync() }},
-		{"Flush", func() { ctx.Flush() }},
+		{"SyncNow", func() { ctx.SyncNow() }},
+		{"SyncOff", func() { ctx.SyncOff() }},
 		{"SetCookie", func() { ctx.SetCookie(nil) }},
 		{"DelCookie", func() { ctx.DelCookie("") }},
 	}
@@ -394,4 +394,379 @@ func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, tc.Action("DoRedirect").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "/elsewhere")
+}
+
+// SyncOff — action-scoped publish suppression.
+
+type syncOffPage struct {
+	N     via.StateTab[int]
+	Theme via.StateSess[string]
+}
+
+func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	p.N.Set(ctx, 9)
+	p.Theme.Update(ctx, func(string) string { return "midnight" })
+	return nil
+}
+
+func (p *syncOffPage) LoudAfter(ctx *via.Ctx) error {
+	p.N.Set(ctx, p.N.Get(ctx))
+	return nil
+}
+
+func (p *syncOffPage) NoOp(ctx *via.Ctx) error { return nil }
+
+func (p *syncOffPage) View(ctx *via.Ctx) h.H {
+	return h.Div(
+		h.Span(h.ID("n"), p.N.Text()),
+		h.Span(h.ID("theme"), p.Theme.Text(ctx)),
+	)
+}
+
+func TestSyncOff_skipsEndOfActionFlush(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("SilentWrite").Fire())
+
+	select {
+	case frame := <-frames:
+		assert.Failf(t, "Silent action must not flush",
+			"unexpected SSE frame %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+type syncOffAppPage struct {
+	Visits via.StateApp[int]
+}
+
+func (p *syncOffAppPage) BumpSilently(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	p.Visits.Update(ctx, func(n int) int { return n + 1 })
+	return nil
+}
+
+func (p *syncOffAppPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("visits"), p.Visits.Text(ctx)))
+}
+
+func TestSyncOff_skipsStateAppBroadcastAcrossSessions(t *testing.T) {
+	t.Parallel()
+	// StateApp fans out across every session, not just same-session
+	// siblings. The sibling-tab test (same session via Fork) doesn't
+	// cover this fan-out scope, so we exercise it directly with two
+	// distinct sessions.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffAppPage](app, "/")
+	defer server.Close()
+
+	a := vt.NewClient(t, server, "/")
+	b := vt.NewClient(t, server, "/") // different session
+
+	framesB, cancelB := b.SSE()
+	defer cancelB()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, a.Action("BumpSilently").Fire())
+
+	select {
+	case frame := <-framesB:
+		assert.Failf(t, "SyncOff must suppress StateApp cross-session broadcast",
+			"unrelated session got SSE frame %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestSyncOff_skipsBroadcastToSiblingTabs(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffPage](app, "/")
+	defer server.Close()
+
+	a := vt.NewClient(t, server, "/")
+	b := a.Fork("/")
+
+	framesB, cancelB := b.SSE()
+	defer cancelB()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, a.Action("SilentWrite").Fire())
+
+	select {
+	case frame := <-framesB:
+		assert.Failf(t, "Silent action must not fan out",
+			"sibling tab got SSE frame %q", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestSyncOff_writesPersistAndSurfaceOnNextLoudAction(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("SilentWrite").Fire())
+	// Loud action re-renders; both N and Theme should reflect prior silent writes.
+	require.Equal(t, http.StatusOK, tc.Action("LoudAfter").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second,
+		`<span id="n">9</span>`, `<span id="theme">midnight</span>`)
+}
+
+func TestSyncOff_dirtyBitsDoNotLeakIntoNextActionFlush(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	// Silent action accumulates dirty bits but skips its own flush.
+	// If discardDirty isn't called, the next handler's deferred flush
+	// would surface the silent writes (the values persist in their
+	// stores) — which would defeat the whole "publish nothing" contract.
+	require.Equal(t, http.StatusOK, tc.Action("SilentWrite").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("NoOp").Fire())
+
+	select {
+	case frame := <-frames:
+		assert.Failf(t, "silent dirty bits leaked into next action's flush",
+			"got SSE frame %q after a NoOp following a Silent write", frame)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestSyncOff_nilCtxIsANoOp(t *testing.T) {
+	t.Parallel()
+	var ctx *via.Ctx
+	require.NotPanics(t, func() { ctx.SyncOff() })
+}
+
+type syncOffStreamPage struct {
+	N      via.StateTab[int]
+	silent atomic.Bool
+}
+
+func (p *syncOffStreamPage) OnConnect(ctx *via.Ctx) error {
+	via.Stream(ctx, 10*time.Millisecond, func(c *via.Ctx, _ time.Time) {
+		if p.silent.Load() {
+			c.SyncOff()
+		}
+		p.N.Update(c, func(n int) int { return n + 1 })
+	})
+	return nil
+}
+
+func (p *syncOffStreamPage) GoSilent(ctx *via.Ctx) error {
+	p.silent.Store(true)
+	return nil
+}
+
+func (p *syncOffStreamPage) GoLoud(ctx *via.Ctx) error {
+	p.silent.Store(false)
+	return nil
+}
+
+func (p *syncOffStreamPage) View(ctx *via.Ctx) h.H {
+	return h.Div(h.Span(h.ID("n"), p.N.Text()))
+}
+
+func TestSyncOff_suppressesStreamTickPublish(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffStreamPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="n">1</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("GoSilent").Fire())
+	drainFrames(frames, 50*time.Millisecond)
+
+	select {
+	case frame := <-frames:
+		assert.Failf(t, "Silent stream tick must not flush",
+			"unexpected SSE frame %q", frame)
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// drainFrames consumes any frames sitting in the channel for d.
+func drainFrames(frames <-chan string, d time.Duration) {
+	deadline := time.After(d)
+	for {
+		select {
+		case <-frames:
+		case <-deadline:
+			return
+		}
+	}
+}
+
+type syncOffRacePage struct {
+	N via.StateApp[int]
+}
+
+func (p *syncOffRacePage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text(ctx)) }
+
+func (p *syncOffRacePage) Spawn(ctx *via.Ctx) error {
+	go func() {
+		for i := 0; i < 100; i++ {
+			p.N.Update(ctx, func(n int) int { return n + 1 })
+			time.Sleep(time.Microsecond)
+		}
+	}()
+	return nil
+}
+
+func (p *syncOffRacePage) Toggle(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	time.Sleep(time.Microsecond)
+	return nil
+}
+
+func TestSyncOff_doesNotRaceWithRawGoroutineUpdate(t *testing.T) {
+	t.Parallel()
+	// User goroutine driving StateApp.Update → broadcastRender reads
+	// ctx.silent without holding actionMu, while a parallel action
+	// resets the flag at entry. Plain-bool implementation tripped -race;
+	// atomic.Bool keeps the contract goroutine-safe.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[syncOffRacePage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	_, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("Spawn").Fire())
+
+	for i := 0; i < 50; i++ {
+		require.Equal(t, http.StatusOK, tc.Action("Toggle").Fire())
+	}
+	time.Sleep(50 * time.Millisecond)
+}
+
+type syncOffPanicPage struct {
+	N via.StateTab[int]
+}
+
+func (p *syncOffPanicPage) BoomSilently(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	p.N.Set(ctx, 42)
+	panic("boom-while-silent")
+}
+
+func (p *syncOffPanicPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
+
+func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
+	t.Parallel()
+	// dispatchActionError enqueues a script (alert) directly onto the
+	// patch queue. SyncOff suppresses dirty-bit flushes but must not
+	// swallow explicit publish primitives — otherwise a panicking
+	// silent action would fail without any user-visible signal.
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithLogLevel(via.LogError),
+	)
+	via.Mount[syncOffPanicPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
+
+	require.Equal(t, http.StatusOK, tc.Action("BoomSilently").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, "Something went wrong")
+}
+
+type syncOffExplicitPage struct{}
+
+func (p *syncOffExplicitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+
+func (p *syncOffExplicitPage) SilentToast(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	ctx.Toast("ping")
+	return nil
+}
+
+func (p *syncOffExplicitPage) SilentPatchSignal(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	ctx.PatchSignal("_marker", "hello")
+	return nil
+}
+
+func (p *syncOffExplicitPage) SilentSyncElements(ctx *via.Ctx) error {
+	ctx.SyncOff()
+	ctx.SyncElements(h.Div(h.ID("marker"), h.Text("morphed")))
+	return nil
+}
+
+func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
+	t.Parallel()
+	// SyncOff gates dirty-bit-driven publishing. PatchSignal /
+	// SyncElements / Toast write directly onto the patch queue and
+	// must surface even while silent — they're how user code signals
+	// "publish this regardless of pending dirty bits".
+	cases := []struct {
+		name   string
+		action string
+		expect string
+	}{
+		{"Toast", "SilentToast", `alert("ping")`},
+		{"PatchSignal", "SilentPatchSignal", "hello"},
+		{"SyncElements", "SilentSyncElements", `id="marker"`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var server *httptest.Server
+			app := via.New(via.WithTestServer(&server))
+			via.Mount[syncOffExplicitPage](app, "/")
+			defer server.Close()
+
+			tc := vt.NewClient(t, server, "/")
+			frames, cancel := tc.SSE()
+			defer cancel()
+			time.Sleep(20 * time.Millisecond)
+
+			require.Equal(t, http.StatusOK, tc.Action(c.action).Fire())
+			vt.AwaitFrame(t, frames, 2*time.Second, c.expect)
+		})
+	}
 }

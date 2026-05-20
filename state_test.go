@@ -167,3 +167,4 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 // Tag-driven key resolution for State is exercised end-to-end by the
 // init-tag tests above, where mis-resolving the key would render the
 // wrong seeded value.
+

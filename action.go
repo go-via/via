@@ -176,11 +176,23 @@ func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 		ctx.r = nil
 		ctx.mu.Unlock()
 	}()
+	// Every handler entry starts loud — Silent doesn't leak between
+	// actions. Atomic store so concurrent reads from user-launched
+	// goroutines driving Update → broadcastRender aren't racy.
+	ctx.silent.Store(false)
 	// flushDirty runs even on panic so state mutated before the panic
 	// still reaches the browser alongside the error toast. Placed
 	// *before* the recover defer so the recover runs first (defers are
-	// LIFO) and turns the panic back into a normal return.
-	defer flushDirty(ctx)
+	// LIFO) and turns the panic back into a normal return. If the
+	// handler ended in silent mode, drop any accumulated dirty bits so
+	// they don't leak into a subsequent loud action's flush.
+	defer func() {
+		if ctx.silent.Load() {
+			ctx.discardDirty()
+			return
+		}
+		flushDirty(ctx)
+	}()
 	defer func() {
 		rec := recover()
 		if rec == nil {

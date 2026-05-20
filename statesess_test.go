@@ -216,3 +216,4 @@ func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	require.Equal(t, 200, tc.Action("Diff").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "red")
 }
+
