@@ -259,6 +259,31 @@ func (a *App) logErr(ctx *Ctx, format string, args ...any)  { a.emit(LogError, c
 func (a *App) logWarn(ctx *Ctx, format string, args ...any) { a.emit(LogWarn, ctx, format, args...) }
 func (a *App) logInfo(ctx *Ctx, format string, args ...any) { a.emit(LogInfo, ctx, format, args...) }
 
+// Logger returns the [Logger] configured on a — either the user's
+// WithLogger, or the default log.Printf-backed implementation when
+// none was set. Records emitted below the App's configured log level
+// (see [WithLogLevel]) are dropped, matching the behaviour the via
+// runtime applies to its own warnings.
+//
+// Used by middleware in via/mw to emit access logs and panic reports
+// through the same pipe as the runtime's own warnings.
+func (a *App) Logger() Logger {
+	if a == nil {
+		return defaultLogger{}
+	}
+	base := a.cfg.logger
+	if base == nil {
+		base = defaultLogger{}
+	}
+	minLevel := a.cfg.logLevel
+	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
+		if level < minLevel {
+			return
+		}
+		base.Log(level, msg, kv...)
+	})
+}
+
 // New constructs an *App with the given options.
 func New(opts ...Option) *App {
 	// MethodName parses the Go runtime's "-fm" trampoline naming —

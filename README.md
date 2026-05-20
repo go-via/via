@@ -380,28 +380,30 @@ func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
 ## Middleware
 
 ```go
+import "github.com/go-via/via/mw"
+
 app := via.New()
-via.Defaults(app)               // RequestID + AccessLog + Recover
-app.Use(via.StrictCSP())        // strict CSP with per-request nonce
+mw.Defaults(app)                // RequestID + AccessLog + Recover
+app.Use(mw.CSP())               // strict CSP with per-request nonce
 app.Use(requireAuth)            // your own
 ```
 
-Built-in factories under `via`:
+Factories under `via/mw`:
 
-- `Defaults(app)` — install RequestID + AccessLog + Recover.
-- `RequestID()` — stamp `X-Request-ID` + plant on `r.Context`.
-- `AccessLog(app)` — one info-line per request, with rid + status.
-- `Recover(app)` — panic → 500 + error log; the goroutine survives.
-- `StrictCSP(extra…)` — strict CSP header + nonce on `r.Context`.
-- `HSTS(opts…)` — Strict-Transport-Security for HTTPS deploys.
-- `RedirectHTTPS()` — 301 plain HTTP → https; respects XFP header.
+- `mw.Defaults(app)` — install RequestID + AccessLog + Recover.
+- `mw.RequestID()` — stamp `X-Request-ID` + plant on `r.Context`.
+- `mw.AccessLog(app)` — one info-line per request, with rid + status.
+- `mw.Recover(app)` — panic → 500 + error log; the goroutine survives.
+- `mw.CSP(extra…)` — strict CSP header + nonce on `r.Context`.
+- `mw.HSTS(opts…)` — Strict-Transport-Security for HTTPS deploys.
+- `mw.RedirectHTTPS()` — 301 plain HTTP → https; respects XFP header.
 
 Read it back inside actions / handlers:
 
 ```go
 via.RequestIDFrom(r)             // string or ""
 via.Log(ctx).Log(via.LogInfo, "checkout", "amount", n)
-ctx.CSPNonce()                   // matches header set by StrictCSP
+ctx.CSPNonce()                   // matches header set by mw.CSP
 ```
 
 ## Routing & groups
@@ -435,10 +437,10 @@ app := via.New(
     via.WithMaxContexts(10000),
     via.WithSSEHeartbeat(25*time.Second),
 )
-via.Defaults(app)
-app.Use(via.HSTS())
-app.Use(via.StrictCSP())
-app.Use(via.RedirectHTTPS())
+mw.Defaults(app)
+app.Use(mw.HSTS())
+app.Use(mw.CSP())
+app.Use(mw.RedirectHTTPS())
 
 via.Mount[Home](app, "/")
 api := app.Group("/api")
@@ -648,10 +650,10 @@ app := via.New(
     via.WithMaxContexts(10000),
     via.WithLogger(via.SlogLogger(slog.Default())),
 )
-via.Defaults(app)              // RequestID + AccessLog + Recover
-app.Use(via.HSTS())
-app.Use(via.StrictCSP())
-app.Use(via.RedirectHTTPS())
+mw.Defaults(app)               // RequestID + AccessLog + Recover
+app.Use(mw.HSTS())
+app.Use(mw.CSP())
+app.Use(mw.RedirectHTTPS())
 ```
 
 ## License

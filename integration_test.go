@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/mw"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -43,8 +44,8 @@ func TestIntegration_fullProductionStack(t *testing.T) {
 		via.WithTitle("KS"),
 		via.WithLang("en"),
 	)
-	via.Defaults(app)
-	app.Use(via.StrictCSP())
+	mw.Defaults(app)
+	app.Use(mw.CSP())
 	via.Mount[kitchenSinkPage](app, "/page")
 
 	// Page render with query param.

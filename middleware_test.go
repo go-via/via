@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/mw"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +84,7 @@ func TestHSTS_defaultHeaderHasOneYearAndSubdomains(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.HSTS())
+	app.Use(mw.HSTS())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 	defer server.Close()
 
@@ -100,10 +101,10 @@ func TestHSTS_optionsCustomiseHeader(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.HSTS(
-		via.HSTSMaxAge(60*60*24*30), // 30 days
-		via.HSTSIncludeSubdomains(false),
-		via.HSTSPreload(true),
+	app.Use(mw.HSTS(
+		mw.HSTSMaxAge(60*60*24*30), // 30 days
+		mw.HSTSIncludeSubdomains(false),
+		mw.HSTSPreload(true),
 	))
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 	defer server.Close()
@@ -123,7 +124,7 @@ func TestRedirectHTTPS_passesHTTPSThroughViaXForwardedProto(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.RedirectHTTPS())
+	app.Use(mw.RedirectHTTPS())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -143,7 +144,7 @@ func TestRedirectHTTPS_redirectsPlainHTTP(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.RedirectHTTPS())
+	app.Use(mw.RedirectHTTPS())
 	app.HandleFunc("/path", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
@@ -170,7 +171,7 @@ func TestAccessLog_statusWriterForwardsFlush(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.AccessLog(app))
+	app.Use(mw.AccessLog(app))
 	app.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte("data: a\n\n"))
@@ -198,7 +199,7 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.Recover(app))
+	app.Use(mw.Recover(app))
 	app.HandleFunc("/half", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("partial"))
@@ -235,7 +236,7 @@ func TestRequestID_generatesWhenAbsent(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.RequestID())
+	app.Use(mw.RequestID())
 	via.Mount[ridProbePage](app, "/")
 	defer server.Close()
 
@@ -253,7 +254,7 @@ func TestRequestID_passesThroughInboundHeader(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.RequestID())
+	app.Use(mw.RequestID())
 	via.Mount[ridProbePage](app, "/")
 	defer server.Close()
 
@@ -270,7 +271,7 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	t.Parallel()
 
 	app, server, logger := newLoggedApp(t, via.LogInfo)
-	via.Defaults(app)
+	mw.Defaults(app)
 	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
 		panic("oops")
 	})
@@ -307,7 +308,7 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 	t.Parallel()
 
 	app, server, logger := newLoggedApp(t, via.LogError)
-	app.Use(via.Recover(app))
+	app.Use(mw.Recover(app))
 	app.HandleFunc("/boom", func(w http.ResponseWriter, r *http.Request) {
 		panic("kaboom")
 	})
@@ -341,8 +342,8 @@ func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 	t.Parallel()
 
 	app, server, logger := newLoggedApp(t, via.LogInfo)
-	app.Use(via.RequestID())
-	app.Use(via.AccessLog(app))
+	app.Use(mw.RequestID())
+	app.Use(mw.AccessLog(app))
 	via.Mount[accessLogPage](app, "/")
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
@@ -363,7 +364,7 @@ func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	t.Parallel()
 
 	app, server, logger := newLoggedApp(t, via.LogInfo)
-	app.Use(via.AccessLog(app))
+	app.Use(mw.AccessLog(app))
 	via.Mount[accessLogPage](app, "/")
 
 	for range 3 {
@@ -389,7 +390,7 @@ func TestRedirectHTTPSStrict_ignoresXForwardedProto(t *testing.T) {
 	// where Strict accidentally fell back to header sniffing.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.RedirectHTTPSStrict())
+	app.Use(mw.RedirectHTTPSStrict())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("served"))
 	})

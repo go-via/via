@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/mw"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,7 +110,7 @@ func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 
 	// LogLevel defaults to LogWarn — no info/debug records should leak.
 	app, server, logger := newLoggedApp(t, via.LogWarn)
-	via.Defaults(app)
+	mw.Defaults(app)
 	via.Mount[accessLogPage](app, "/")
 
 	for range 5 {
@@ -140,7 +141,7 @@ func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 	t.Parallel()
 
 	app, server, logger := newLoggedApp(t, via.LogInfo)
-	app.Use(via.RequestID())
+	app.Use(mw.RequestID())
 	via.Mount[ridLogPage](app, "/")
 
 	tc := vt.NewClient(t, server, "/")
@@ -182,7 +183,7 @@ func TestLog_isRaceFreeWhenCalledOffActionGoroutine(t *testing.T) {
 	t.Parallel()
 
 	app, server, _ := newLoggedApp(t, via.LogInfo)
-	app.Use(via.RequestID())
+	app.Use(mw.RequestID())
 	via.Mount[leakyLogPage](app, "/")
 
 	tc := vt.NewClient(t, server, "/")

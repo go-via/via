@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/mw"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +37,7 @@ func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.StrictCSP())
+	app.Use(mw.CSP())
 	via.Mount[strictCSPPage](app, "/")
 	defer server.Close()
 
@@ -68,7 +69,7 @@ func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Use(via.StrictCSP("img-src 'self' data:"))
+	app.Use(mw.CSP("img-src 'self' data:"))
 	via.Mount[strictCSPPage](app, "/")
 	defer server.Close()
 
