@@ -252,9 +252,9 @@ func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) {
 
 // TestClick_panicsOnAnonymousFunction guards the contract that
 // every on.* helper accepts a bound *method value* — not an arbitrary
-// closure. via.MethodName parses the runtime "-fm" trampoline suffix
+// closure. spec.MethodName parses the runtime "-fm" trampoline suffix
 // to recover the method name; anonymous functions and top-level funcs
-// have no such suffix, so via.MethodName returns "". Previously the
+// have no such suffix, so spec.MethodName returns "". Previously the
 // helpers swallowed this as a silently-dead binding (return nil);
 // the helpers must instead panic so the programming error surfaces
 // at the first render rather than as a button that does nothing.

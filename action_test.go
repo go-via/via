@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/spec"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -62,7 +63,7 @@ func TestAction_unknownMethodReturns404(t *testing.T) {
 }
 
 // TestMethodName_resolvesBoundMethod doubles as a Go-runtime canary:
-// via.MethodName recovers a method name by stripping the "-fm"
+// spec.MethodName recovers a method name by stripping the "-fm"
 // trampoline suffix that the Go runtime emits for bound method values
 // (e.g. "pkg.(*counterPage).Inc-fm"). The "-fm" suffix is a runtime
 // internal, not a language contract — a Go release that changes the
@@ -73,7 +74,7 @@ func TestMethodName_resolvesBoundMethod(t *testing.T) {
 	t.Parallel()
 
 	c := &counterPage{}
-	assert.Equal(t, "Inc", via.MethodName(c.Inc))
+	assert.Equal(t, "Inc", spec.MethodName(c.Inc))
 }
 
 func TestMethodName_returnsEmptyForAnonymousFunction(t *testing.T) {
@@ -81,19 +82,19 @@ func TestMethodName_returnsEmptyForAnonymousFunction(t *testing.T) {
 	// Anonymous closures have no "-fm" suffix; MethodName returns "".
 	// The on/* helpers turn that empty string into a panic so misuse
 	// is loud — see TestClick_panicsOnAnonymousFunction.
-	assert.Equal(t, "", via.MethodName(func() {}))
+	assert.Equal(t, "", spec.MethodName(func() {}))
 }
 
 func TestMethodName_returnsEmptyForTopLevelFunction(t *testing.T) {
 	t.Parallel()
 	// Package-level funcs (no receiver) have no "-fm" suffix either, so
 	// MethodName must reject them just like anonymous closures.
-	assert.Equal(t, "", via.MethodName(topLevelHandler))
+	assert.Equal(t, "", spec.MethodName(topLevelHandler))
 }
 
 func TestMethodName_returnsEmptyForNil(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", via.MethodName(nil))
+	assert.Equal(t, "", spec.MethodName(nil))
 }
 
 func topLevelHandler(ctx *via.Ctx) error { return nil }
@@ -107,8 +108,8 @@ func TestMethodName_returnsSameStringForSameMethod(t *testing.T) {
 	// PC would silently re-parse.
 	a := &counterPage{}
 	b := &counterPage{}
-	assert.Equal(t, via.MethodName(a.Inc), via.MethodName(b.Inc))
-	assert.Equal(t, "Inc", via.MethodName(b.Inc))
+	assert.Equal(t, spec.MethodName(a.Inc), spec.MethodName(b.Inc))
+	assert.Equal(t, "Inc", spec.MethodName(b.Inc))
 }
 
 type erroringActionPage struct{}
