@@ -20,10 +20,12 @@ type signalSlot struct {
 	initRaw   string
 }
 
-// scopeBinder is implemented by scope.User[T] / scope.App[T] (pointer
+// scopeBinder is implemented by StateSess[T] / StateApp[T] (pointer
 // receiver) so the runtime can write the wire key into the handle's
 // unexported storage without going through reflect.FieldByName.
-type scopeBinder interface{ BindWireKey(string) }
+// The method is unexported so the binding seam is package-private —
+// application code can't reach in and desync a handle from its slot.
+type scopeBinder interface{ bindWireKey(string) }
 
 type scopeSlot struct {
 	fieldPath []int  // index path from root *C

@@ -10,8 +10,8 @@ is a struct. Reactive state is a typed field. Actions are methods. The
 compiler understands your UI.
 
 The runtime is split where it matters: **the server owns truth, the
-client owns view reactivity.** Server-side state (`State`, `scope.User`,
-`scope.App`) lives only in Go; `Signal[T]` values are mirrored into a
+client owns view reactivity.** Server-side state (`StateTab`, `StateSess`,
+`StateApp`) lives only in Go; `Signal[T]` values are mirrored into a
 fine-grained reactive graph in the browser (Alien Signals, via
 Datastar), so DOM updates driven by a client-set signal never
 round-trip. The two halves talk over one SSE stream per tab with typed
@@ -43,12 +43,12 @@ import (
 )
 
 type Counter struct {
-    Hits via.State[int]
+    Hits via.StateTab[int]
     Step via.Signal[int] `via:"step,init=1"`
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    via.Add(ctx, &c.Hits, c.Step.Get(ctx))
+    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
@@ -88,9 +88,9 @@ file format, or a different state-ownership split.
    │  Browser                 │  ◀──── SSE patches ── │  Server (Go)             │
    │                          │     + signal deltas   │                          │
    │  Alien Signals graph     │                       │  Compositions            │
-   │   Signal[T] nodes        │                       │   State[T]               │
-   │   data-* subscriptions   │                       │   scope.User[T]          │
-   │                          │                       │   scope.App[T]           │
+   │   Signal[T] nodes        │                       │   StateTab[T]            │
+   │   data-* subscriptions   │                       │   StateSess[T]           │
+   │                          │                       │   StateApp[T]            │
    │                          │  ────── POST ──────▶  │   per-tab action mutex   │
    │                          │       actions         │                          │
    └──────────────────────────┘                       └──────────────────────────┘
@@ -99,8 +99,8 @@ file format, or a different state-ownership split.
 
 Two reactive runtimes, one typed boundary.
 
-**Server.** Go owns truth. `State[T]`, `scope.User[T]`, and
-`scope.App[T]` live only on the server; `Signal[T]` is mirrored. A
+**Server.** Go owns truth. `StateTab[T]`, `StateSess[T]`, and
+`StateApp[T]` live only on the server; `Signal[T]` is mirrored. A
 re-render walks the View, diffs the resulting tree against the previous
 emission, and ships targeted element/attribute patches plus a
 signal-payload delta over SSE. The per-tab action mutex serialises
@@ -114,7 +114,7 @@ edit, from `on.SetSignal`, or from a server-pushed patch — propagates
 through derived bindings without a re-render and without a round-trip.
 
 The split shows up at the field level: a `Signal[int]` IS a client
-signal, a `State[int]` IS server-only. The author decides in the
+signal, a `StateTab[int]` IS server-only. The author decides in the
 struct, not in the rendering code. UI state the client owns (modal
 open, current tab, filter string, derived counts) reacts instantly with
 zero SSE traffic; state the server owns (DB rows, cross-tab
@@ -122,49 +122,64 @@ invariants, secrets) flows through actions and re-renders.
 
 ## Performance
 
-Representative numbers from `go test -bench -benchmem` on a 13th-gen
-Intel laptop (`linux/amd64`, Go 1.25). Re-run on your target hardware
-before quoting.
+Bench files: [`bench_test.go`](bench_test.go) (full request → SSE turn)
+and [`h/h_bench_test.go`](h/h_bench_test.go) (DSL only). Run with
+`go test -bench=. -benchmem` against your target hardware — quoting
+numbers from someone else's laptop is rarely useful. `ci-check.sh`
+gates the steady-state allocation floors on `CounterRender`,
+`CounterAction`, and `CounterActionWithLogger` so regressions fail CI.
 
-| Bench                                          |    ns/op |   B/op | allocs/op |
-|------------------------------------------------|---------:|-------:|----------:|
-| `SignalFlush` — single `Set` + flush           |       83 |     39 |         2 |
-| `CounterShape_render` — view subtree → bytes   |      848 |    848 |        24 |
-| `CounterAction` — full action turn (POST→SSE)  |   35 098 |  9 954 |       130 |
-
-Bench files: [`bench_test.go`](bench_test.go) (root) and
-[`h/h_bench_test.go`](h/h_bench_test.go) (DSL only). `h.Static(...)`
-pre-renders fragments that don't depend on per-request state — see
-`BenchmarkSysmonShape_staticChrome_render` for the per-tick allocation
-delta against rebuilding the same chrome on every tick.
+`h.Static(...)` pre-renders fragments that don't depend on per-request
+state — see `BenchmarkSysmonShape_staticChrome_render` for the
+per-tick allocation delta against rebuilding the same chrome on every
+tick.
 
 ## Reactive state
 
 | Handle              | Scope          | Lives on        |
 |---------------------|----------------|-----------------|
 | `via.Signal[T]`     | per-tab        | client + server |
-| `via.State[T]`      | per-tab        | server only     |
-| `scope.User[T]`     | per-session    | server only     |
-| `scope.App[T]`      | global         | server only     |
+| `via.StateTab[T]`      | per-tab        | server only     |
+| `via.StateSess[T]`  | per-session    | server only     |
+| `via.StateApp[T]`   | global         | server only     |
 
-Reads and writes go through `Get(ctx) / Set(ctx, v)` — explicit context,
-no hidden globals. Wire keys default to lower-cased field names; override
-with the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
+Reads go through `Get(ctx)` and writes through `Update(ctx, fn)` —
+explicit context, no hidden globals. `Signal[T]` and `StateTab[T]` also
+expose `Set(ctx, v)` since per-tab writes are already serialized by the
+action mutex; `StateSess[T]` and `StateApp[T]` deliberately don't, since
+a blind `Set` on shared state is almost always a read-modify-write race
+in disguise — `Update` holds a per-key mutex across the load → fn →
+store sequence so concurrent writers from different ctxs cannot lose
+increments. Wire keys default to lower-cased field names; override with
+the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
 Skip the name segment to keep the default key but still seed:
-`via:",init=3"` on a `State[int]` field seeds it to 3 without renaming.
+`via:",init=3"` on a `StateTab[int]` field seeds it to 3 without renaming.
 
-For common read-modify-write patterns there are typed helpers that work
-on any handle satisfying `via.Mutable[T]` — that's all four reactive
-shapes: `Signal[T]`, `State[T]`, `scope.User[T]`, `scope.App[T]`:
+All four reactive shapes (`Signal[T]`, `StateTab[T]`, `StateSess[T]`,
+`StateApp[T]`) speak the same `Update(ctx, fn)` surface, so common
+read-modify-write patterns are one call regardless of scope. `Update`
+holds the per-key mutex on shared-state handles, so the load → fn →
+store sequence is atomic:
 
 ```go
-s.Update(ctx, func(n int) int { return n + 1 })  // generic transform
-via.Add(ctx, &p.Count, 1)                         // numeric delta
-via.Toggle(ctx, &p.Open)                          // bool flip
-via.SetIfChanged(ctx, &p.Status, "busy")          // skip patch if unchanged
-via.SetIfChanged(ctx, &p.Theme, "dark")           // works on scope.User too
-via.Push(ctx, &p.Series, point)                   // append-only feed (Signal[[]T])
-via.PushBounded(ctx, &p.Series, point, 100)       // cap to last 100
+p.Count.Update(ctx, func(n int) int { return n + 1 })  // numeric delta
+p.Open.Update(ctx, func(b bool) bool { return !b })    // bool flip
+
+if p.Status.Get(ctx) != "busy" {                       // skip patch if unchanged
+    p.Status.Update(ctx, func(string) string { return "busy" })
+}
+
+p.Series.Update(ctx, func(s []Point) []Point {         // append-only feed
+    return append(s, point)
+})
+p.Series.Update(ctx, func(s []Point) []Point {         // cap to last 100
+    s = append(s, point)
+    if len(s) > 100 {
+        copy(s, s[len(s)-100:])
+        s = s[:100]
+    }
+    return s
+})
 ```
 
 `Signal[T]` is mirrored into the browser's reactive graph. The view
@@ -181,7 +196,7 @@ s.Attr("disabled")    // data-attr-disabled="$key" — drives an HTML attr
 s.Style("color")      // data-style-color="$key" — drives an inline CSS prop
 ```
 
-`State[T]` and `scope.User[T] / scope.App[T]` only have `Text()` —
+`StateTab[T]` and `StateSess[T] / StateApp[T]` only have `Text()` —
 they're server-side, so the view re-renders the value rather than the
 client reading a signal.
 
@@ -264,7 +279,7 @@ action so the value updates client-side _before_ the POST fires.
 
 The action method's body can:
 
-- Set typed state: `c.Hits.Set(ctx, …)` or `via.Add(ctx, &c.Hits, 1)`.
+- Set typed state: `c.Hits.Set(ctx, …)` or `c.Hits.Update(ctx, func(n int) int { return n + 1 })`.
 - Push targeted patches: `ctx.SyncElements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.PatchSignal("_picoTheme", "purple")`.
 - Show a quick alert: `ctx.Toast("saved!")` (JSON-safe), or
@@ -322,7 +337,7 @@ A plain HTML `<form enctype=multipart/form-data>` posts to
 `/_action/Method` and the response body shows in the browser, so most
 upload flows finish with `http.Redirect(ctx.Writer(), ctx.Request(),
 "/", 303)` to refresh the page. Any state you want visible after the
-redirect must live in `scope.User[T]` (session-scoped) — `via.State[T]`
+redirect must live in `via.StateSess[T]` (session-scoped) — `via.StateTab[T]`
 is per-tab and the redirected GET allocates a fresh tab.
 
 ## Path parameters
@@ -580,26 +595,26 @@ post-action body assertions are one call instead of a hand-rolled GET.
 
 `internal/examples/` ships:
 
-- `counter` — `State[int]` + `Signal[int]` + a typed action.
+- `counter` — `StateTab[int]` + `Signal[int]` + a typed action.
 - `greeter` — `Signal[string]` mutated from two distinct actions.
 - `pathparams` — typed `path:"id"` decoding into composition fields.
 - `countercomp` — two independent counter compositions nested on
   one page; isolation across instances.
-- `counterscope` — `State[int]` (tab-local) vs `scope.App[int]`
+- `counterscope` — `StateTab[int]` (tab-local) vs `StateApp[int]`
   (shared across every session) side-by-side.
 - `picocss` — `picocss.Plugin()` driving theme + dark-mode switching
   on the client without a full reload.
 - `auth` — typed sessions, `requireAuth` middleware, and
   `via.RotateSession` after login.
-- `todos` — `scope.User[T]` survives reload, `h.Each`, and
+- `todos` — `StateSess[T]` survives reload, `h.Each`, and
   `on.SetSignal` for client-bundled writes.
 - `sysmon` — OnConnect-driven ticker streaming CPU/RAM/disk/net into
   ECharts; also drives an interactive pause + interval-slider UI via
   `via.Ticker.Pause / SetInterval`.
 - `upload` — `via.File` field bound to a `multipart/form-data`
   `<form>` POST, persisted to disk, redirect-back-to-/.
-- `feed` — append-only stream via `via.Push` / `via.PushBounded`,
-  paused/cleared from actions.
+- `feed` — append-only / bounded-ring slice stream driven by
+  `Signal[[]T].Update`, paused/cleared from actions.
 
 ```bash
 go run ./internal/examples/counter

@@ -11,7 +11,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	"github.com/go-via/via/scope"
 	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +18,7 @@ import (
 
 type bareEmbedPage struct {
 	via.Page
-	Hits via.State[int]
+	Hits via.StateTab[int]
 }
 
 func (p *bareEmbedPage) View(ctx *via.Ctx) h.H {
@@ -132,11 +131,11 @@ func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
 }
 
 type userScopedPage struct {
-	Theme scope.User[string]
+	Theme via.StateSess[string]
 }
 
 func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
-	p.Theme.Set(ctx, "red")
+	p.Theme.Update(ctx, func(string) string { return "red" })
 	return nil
 }
 
@@ -162,11 +161,11 @@ func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
 }
 
 type appScopedPage struct {
-	Visits scope.App[int]
+	Visits via.StateApp[int]
 }
 
 func (p *appScopedPage) Bump(ctx *via.Ctx) error {
-	p.Visits.Set(ctx, p.Visits.Get(ctx)+1)
+	p.Visits.Update(ctx, func(n int) int { return n + 1 })
 	return nil
 }
 
@@ -191,12 +190,3 @@ func TestScopeApp_sharedAcrossSessions(t *testing.T) {
 	assert.Contains(t, body, ">2<",
 		"App-scoped Visits must be 2 even on a fresh session")
 }
-
-// Compile-time assertions: scope.User[T] and scope.App[T] both satisfy
-// via.Mutable[T]. If a future refactor breaks this we'd get a build
-// error here, which is stronger than any runtime test could be.
-var (
-	_ via.Mutable[int]  = (*scope.User[int])(nil)
-	_ via.Mutable[bool] = (*scope.User[bool])(nil)
-	_ via.Mutable[bool] = (*scope.App[bool])(nil)
-)

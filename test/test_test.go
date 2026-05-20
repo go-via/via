@@ -15,7 +15,7 @@ import (
 )
 
 type tcPage struct {
-	N     via.State[int]
+	N     via.StateTab[int]
 	Label via.Signal[string] `via:"label,init=hello"`
 }
 
@@ -149,7 +149,7 @@ type uploadPage struct {
 	Note   via.Signal[string] `via:"note"`
 	Tag    via.Signal[int]    `via:"tag"`
 	Live   via.Signal[bool]   `via:"live"`
-	Echo   via.State[string]
+	Echo   via.StateTab[string]
 }
 
 func (p *uploadPage) Save(ctx *via.Ctx) error {

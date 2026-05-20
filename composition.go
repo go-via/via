@@ -1,15 +1,15 @@
 // Package via builds reactive web UIs from typed Go structs.
 //
 // A composition is a struct. Its fields declare reactive state (Signal[T],
-// State[T]) and path parameters (path:"name" tag). Its methods of signature
+// StateTab[T]) and path parameters (path:"name" tag). Its methods of signature
 // func(*Ctx) error become server actions. View(*Ctx) h.H draws it.
 //
 //	type Counter struct {
-//	    Hits via.State[int]
+//	    Hits via.StateTab[int]
 //	    Step via.Signal[int] `via:"step,init=1"`
 //	}
 //	func (c *Counter) Inc(ctx *via.Ctx) error {
-//	    via.Add(ctx, &c.Hits, c.Step.Get(ctx))
+//	    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 //	    return nil
 //	}
 //	func (c *Counter) View(ctx *via.Ctx) h.H { ... }
@@ -60,7 +60,7 @@ type Mountable interface {
 //
 //   - validate View, OnInit, OnConnect, OnDispose signatures (panics with
 //     a format-the-fix-yourself message on a mismatch);
-//   - collect Signal[T] / State[T] / scope.User[T] / scope.App[T]
+//   - collect Signal[T] / StateTab[T] / StateSess[T] / StateApp[T]
 //     fields and assign their wire keys (lowercased field name, or
 //     `via:"name"` tag override);
 //   - collect path:"name" / query:"name" tagged fields;

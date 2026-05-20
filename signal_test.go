@@ -152,62 +152,71 @@ func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
 }
 
-// Toggle / Add / Push / PushBounded / SetIfChanged — typed helpers
-// observed through SSE-frame side effects.
+// Update-driven read-modify-write patterns observed through SSE-frame
+// side effects: bool flip, numeric delta, slice append, bounded ring.
 
 type signalHelpersPage struct {
 	Open  via.Signal[bool]    `via:"open"`
 	Count via.Signal[int]     `via:"count,init=10"`
 	Bal   via.Signal[float64] `via:"bal"`
-	Hits  via.State[int]
-	Vis   via.State[bool]
+	Hits  via.StateTab[int]
+	Vis   via.StateTab[bool]
 	Items via.Signal[[]int] `via:"items"`
 }
 
 func (p *signalHelpersPage) FlipOpen(ctx *via.Ctx) error {
-	via.Toggle(ctx, &p.Open)
+	p.Open.Update(ctx, func(b bool) bool { return !b })
 	return nil
 }
 
 func (p *signalHelpersPage) ToggleVis(ctx *via.Ctx) error {
-	via.Toggle(ctx, &p.Vis)
+	p.Vis.Update(ctx, func(b bool) bool { return !b })
 	return nil
 }
 
 func (p *signalHelpersPage) AddCount(ctx *via.Ctx) error {
-	via.Add(ctx, &p.Count, 3)
-	via.Add(ctx, &p.Count, -5)
+	p.Count.Update(ctx, func(n int) int { return n + 3 })
+	p.Count.Update(ctx, func(n int) int { return n - 5 })
 	return nil
 }
 
 func (p *signalHelpersPage) AddBal(ctx *via.Ctx) error {
-	via.Add(ctx, &p.Bal, 0.5)
-	via.Add(ctx, &p.Bal, 0.25)
+	p.Bal.Update(ctx, func(v float64) float64 { return v + 0.5 })
+	p.Bal.Update(ctx, func(v float64) float64 { return v + 0.25 })
 	return nil
 }
 
 func (p *signalHelpersPage) AddHits(ctx *via.Ctx) error {
-	via.Add(ctx, &p.Hits, 7)
-	via.Add(ctx, &p.Hits, -2)
+	p.Hits.Update(ctx, func(n int) int { return n + 7 })
+	p.Hits.Update(ctx, func(n int) int { return n - 2 })
 	return nil
 }
 
 func (p *signalHelpersPage) PushOne(ctx *via.Ctx) error {
-	via.Push(ctx, &p.Items, 1)
-	via.Push(ctx, &p.Items, 2)
-	via.Push(ctx, &p.Items, 3)
+	p.Items.Update(ctx, func(s []int) []int { return append(s, 1) })
+	p.Items.Update(ctx, func(s []int) []int { return append(s, 2) })
+	p.Items.Update(ctx, func(s []int) []int { return append(s, 3) })
 	return nil
 }
 
 func (p *signalHelpersPage) PushFive(ctx *via.Ctx) error {
+	const max = 3
 	for i := 1; i <= 5; i++ {
-		via.PushBounded(ctx, &p.Items, i, 3)
+		item := i
+		p.Items.Update(ctx, func(s []int) []int {
+			s = append(s, item)
+			if len(s) > max {
+				copy(s, s[len(s)-max:])
+				s = s[:max]
+			}
+			return s
+		})
 	}
 	return nil
 }
 
 func (p *signalHelpersPage) View(ctx *via.Ctx) h.H {
-	// State[T] doesn't surface in signals JSON; rendered text is its
+	// StateTab[T] doesn't surface in signals JSON; rendered text is its
 	// only externally observable trace, so views that drive State helper
 	// tests must render the value somewhere assertable.
 	return h.Div(
@@ -216,7 +225,7 @@ func (p *signalHelpersPage) View(ctx *via.Ctx) h.H {
 	)
 }
 
-func TestToggle_flipsBoolSignalSurfacingInSSE(t *testing.T) {
+func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -236,11 +245,11 @@ func TestToggle_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"open":false`)
 }
 
-func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
+func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	t.Parallel()
-	// Pins the Mutable[bool] polymorphism: Toggle must accept State[bool]
-	// as well as Signal[bool], otherwise via.State stops being a drop-in
-	// substitute for via.Signal in reactive helpers.
+	// Pins that StateTab[bool].Update works the same as Signal[bool].Update —
+	// via.State stays a drop-in substitute for via.Signal in reactive
+	// read-modify-write code.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[signalHelpersPage](app, "/")
@@ -255,7 +264,7 @@ func TestToggle_acceptsStateAsWellAsSignal(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
 }
 
-func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
+func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -273,7 +282,7 @@ func TestAdd_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"count":8`)
 }
 
-func TestAdd_floatSignalRespectsType(t *testing.T) {
+func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -290,10 +299,10 @@ func TestAdd_floatSignalRespectsType(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
 }
 
-func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
+func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	t.Parallel()
-	// Mirror of TestToggle_acceptsStateAsWellAsSignal but for the numeric
-	// helper. Pins Mutable[int] conformance of via.State[int].
+	// Mirror of TestUpdate_flipsBoolStateTabSurfacingInView for numeric
+	// state: StateTab[int].Update + Text() must produce the running total.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[signalHelpersPage](app, "/")
@@ -308,7 +317,7 @@ func TestAdd_acceptsStateAsWellAsSignal(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
 }
 
-func TestPush_appendsItemsToSignalSlice(t *testing.T) {
+func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -325,7 +334,7 @@ func TestPush_appendsItemsToSignalSlice(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
 }
 
-func TestPushBounded_keepsOnlyLatestMaxItems(t *testing.T) {
+func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 	t.Parallel()
 	// Push five into a max=3 buffer: oldest two roll off, leaving [3,4,5].
 	var server *httptest.Server
@@ -342,26 +351,30 @@ func TestPushBounded_keepsOnlyLatestMaxItems(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
 }
 
-// SetIfChanged: changed values reach the wire; unchanged values do not
-// trigger a second patch.
+// Inline "set if changed" guard: changed values reach the wire;
+// unchanged values do not trigger a second patch.
 
 type setIfChangedPage struct {
 	Status via.Signal[string] `via:"status,init=idle"`
 }
 
 func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
-	via.SetIfChanged(ctx, &p.Status, "idle")
+	if p.Status.Get(ctx) != "idle" {
+		p.Status.Update(ctx, func(string) string { return "idle" })
+	}
 	return nil
 }
 
 func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
-	via.SetIfChanged(ctx, &p.Status, "busy")
+	if p.Status.Get(ctx) != "busy" {
+		p.Status.Update(ctx, func(string) string { return "busy" })
+	}
 	return nil
 }
 
 func (p *setIfChangedPage) View(ctx *via.Ctx) h.H { return h.Div() }
 
-func TestSetIfChanged_changedValueProducesSignalFrame(t *testing.T) {
+func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -378,11 +391,11 @@ func TestSetIfChanged_changedValueProducesSignalFrame(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
 }
 
-func TestSetIfChanged_unchangedValueProducesNoFrame(t *testing.T) {
+func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 	t.Parallel()
-	// Writing the existing value must short-circuit before reaching the
-	// patch queue — no datastar-patch-signals frame should appear for
-	// this action. Wait briefly; absence is the assertion.
+	// The inline Get != v guard must short-circuit before the Update
+	// call, so no datastar-patch-signals frame should appear for this
+	// action. Wait briefly; absence is the assertion.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[setIfChangedPage](app, "/")
@@ -397,7 +410,7 @@ func TestSetIfChanged_unchangedValueProducesNoFrame(t *testing.T) {
 	select {
 	case f := <-frames:
 		assert.NotContains(t, f, `"status"`,
-			"SetIfChanged with identical value must not enqueue a status patch")
+			"identical-value guard must not enqueue a status patch")
 	case <-time.After(200 * time.Millisecond):
 		// No frame at all is the success path.
 	}

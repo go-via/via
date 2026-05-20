@@ -1,7 +1,7 @@
-// Feed demo for the append-only Signal[[]T] surface: via.PushBounded
-// streams random values to the browser five times per second, keeping
-// the most recent 50. The view binds to the entire array via Datastar's
-// reactive expressions — no client JS, no DOM bookkeeping.
+// Feed demo for the append-only Signal[[]T] surface: a bounded ring
+// buffer streams random values to the browser five times per second,
+// keeping the most recent 50. The view binds to the entire array via
+// Datastar's reactive expressions — no client JS, no DOM bookkeeping.
 //
 //	go run ./internal/examples/feed
 //	open http://localhost:3000
@@ -25,7 +25,7 @@ type Feed struct {
 }
 
 func (p *Feed) Toggle(ctx *via.Ctx) {
-	via.Toggle(ctx, &p.Running)
+	p.Running.Update(ctx, func(b bool) bool { return !b })
 }
 
 func (p *Feed) Clear(ctx *via.Ctx) {
@@ -37,7 +37,14 @@ func (p *Feed) OnConnect(ctx *via.Ctx) error {
 		if !p.Running.Get(ctx) {
 			return
 		}
-		via.PushBounded(ctx, &p.Points, rand.Float64()*100, windowSize)
+		p.Points.Update(ctx, func(s []float64) []float64 {
+			s = append(s, rand.Float64()*100)
+			if len(s) > windowSize {
+				copy(s, s[len(s)-windowSize:])
+				s = s[:windowSize]
+			}
+			return s
+		})
 	})
 	return nil
 }

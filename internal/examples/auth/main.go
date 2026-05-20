@@ -81,7 +81,7 @@ var store = NewStore()
 type LoginPage struct {
 	Email    via.Signal[string]
 	Password via.Signal[string]
-	Err      via.State[string]
+	Err      via.StateTab[string]
 }
 
 func (p *LoginPage) Submit(ctx *via.Ctx) error {
@@ -115,7 +115,7 @@ type RegisterPage struct {
 	Name     via.Signal[string]
 	Email    via.Signal[string]
 	Password via.Signal[string]
-	Err      via.State[string]
+	Err      via.StateTab[string]
 }
 
 func (p *RegisterPage) Submit(ctx *via.Ctx) error {
@@ -173,7 +173,7 @@ type LandingPage struct{}
 func (p *LandingPage) View(ctx *via.Ctx) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Via Auth Demo")),
-		h.P(h.Text("Typed sessions, RotateSession on login, scope.User-style data with auto-render.")),
+		h.P(h.Text("Typed sessions, RotateSession on login, StateSess-style data with auto-render.")),
 	))
 }
 

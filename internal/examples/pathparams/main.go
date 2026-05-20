@@ -17,7 +17,7 @@ type CounterPage struct {
 	CounterID   string `path:"counter_id"`
 	StartAtStep int    `path:"start_at_step"`
 
-	Count via.State[int]
+	Count via.StateTab[int]
 	Step  via.Signal[int] `via:"step,init=1"`
 }
 
@@ -29,7 +29,7 @@ func (c *CounterPage) OnInit(ctx *via.Ctx) error {
 }
 
 func (c *CounterPage) Increment(ctx *via.Ctx) error {
-	via.Add(ctx, &c.Count, c.Step.Get(ctx))
+	c.Count.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 	return nil
 }
 

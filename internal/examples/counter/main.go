@@ -14,15 +14,15 @@ import (
 )
 
 type Counter struct {
-	Hits via.State[int]
+	Hits via.StateTab[int]
 	Step via.Signal[int] `via:"step,init=1"`
 }
 
 // Action methods drop the error return when nothing in the body can
-// fail meaningfully — via.Add / Set don't surface errors.
+// fail meaningfully — Update / Set don't surface errors.
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-	via.Add(ctx, &c.Hits, c.Step.Get(ctx))
+	c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 }
 
 func (c *Counter) Reset(ctx *via.Ctx) {

@@ -28,7 +28,7 @@ type formPage struct {
 	Email    via.Signal[string]
 	Password via.Signal[string]
 	Age      via.Signal[int]
-	Result   via.State[string]
+	Result   via.StateTab[string]
 }
 
 type loginForm struct {
@@ -70,7 +70,7 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 
 type formNoTag struct {
 	UserName via.Signal[string]
-	Captured via.State[string]
+	Captured via.StateTab[string]
 }
 
 type lazyForm struct {
@@ -107,7 +107,7 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 // Fallback chain — query string and unparseable values.
 
 type formFallbackPage struct {
-	Captured via.State[string]
+	Captured via.StateTab[string]
 }
 
 type fallbackForm struct {
@@ -274,7 +274,7 @@ type unexportedFieldForm struct {
 }
 
 type unexportedFieldPage struct {
-	Captured via.State[string]
+	Captured via.StateTab[string]
 }
 
 func (p *unexportedFieldPage) Submit(ctx *via.Ctx) error {

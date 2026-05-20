@@ -17,11 +17,10 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/scope"
 )
 
 // LastUpload survives the post-upload redirect because it's session-
-// scoped. via.State[T] would be lost when the redirected GET allocates
+// scoped. via.StateTab[T] would be lost when the redirected GET allocates
 // a fresh tab + composition.
 type LastUpload struct {
 	Name string
@@ -30,7 +29,7 @@ type LastUpload struct {
 
 type Page struct {
 	Avatar via.File `via:"avatar"`
-	Last   scope.User[LastUpload]
+	Last   via.StateSess[LastUpload]
 }
 
 func (p *Page) Upload(ctx *via.Ctx) error {
@@ -46,7 +45,8 @@ func (p *Page) Upload(ctx *via.Ctx) error {
 		if err := p.Avatar.Save(out); err != nil {
 			return err
 		}
-		p.Last.Set(ctx, LastUpload{Name: p.Avatar.Filename(), Size: p.Avatar.Size()})
+		next := LastUpload{Name: p.Avatar.Filename(), Size: p.Avatar.Size()}
+		p.Last.Update(ctx, func(LastUpload) LastUpload { return next })
 	}
 	// Plain <form> submit: the response body of /_action/Upload reaches
 	// the browser as the new page. Redirect back to "/" so the user

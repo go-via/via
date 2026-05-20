@@ -10,7 +10,6 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	"github.com/go-via/via/scope"
 	viatest "github.com/go-via/via/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -163,11 +162,11 @@ func TestPutSess_andClearSess_roundTrip(t *testing.T) {
 // RotateSession
 
 type loginPage struct {
-	UserID scope.User[string]
+	UserID via.StateSess[string]
 }
 
 func (p *loginPage) Login(ctx *via.Ctx) error {
-	p.UserID.Set(ctx, "alice")
+	p.UserID.Update(ctx, func(string) string { return "alice" })
 	via.RotateSession(ctx)
 	return nil
 }

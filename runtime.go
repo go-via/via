@@ -113,7 +113,7 @@ func bindDispatchFns(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 	}
 }
 
-// bindSlots writes the slot index and wire key into every Signal[T] / State[T]
+// bindSlots writes the slot index and wire key into every Signal[T] / StateTab[T]
 // field of the freshly allocated *C (including nested children), stashes a
 // typed signalRef pointer for reflection-free dispatch, and applies the
 // init=… tag value if any. Combined into one pass so we walk
@@ -131,8 +131,8 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 	}
 }
 
-// bindScopeKeys writes the wire key into every scope.User[T] / scope.App[T]
-// field of the freshly allocated *C by calling the handle's BindWireKey
+// bindScopeKeys writes the wire key into every StateSess[T] / StateApp[T]
+// field of the freshly allocated *C by calling the handle's bindWireKey
 // method. The scopeBinder interface assertion is checked once at Mount
 // time, so the per-request path is a straight method call.
 func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
@@ -142,7 +142,7 @@ func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
 	elem := cmpVal.Elem()
 	for _, s := range d.scopeSlots {
 		field := fieldByPath(elem, s.fieldPath)
-		field.Addr().Interface().(scopeBinder).BindWireKey(s.wireKey)
+		field.Addr().Interface().(scopeBinder).bindWireKey(s.wireKey)
 	}
 }
 

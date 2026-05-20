@@ -14,16 +14,19 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/plugins/picocss"
-	"github.com/go-via/via/scope"
 )
 
 type Page struct {
-	Local  via.State[int]
-	Shared scope.App[int]
+	Local  via.StateTab[int]
+	Shared via.StateApp[int]
 }
 
-func (p *Page) IncLocal(ctx *via.Ctx)  { via.Add(ctx, &p.Local, 1) }
-func (p *Page) IncShared(ctx *via.Ctx) { p.Shared.Set(ctx, p.Shared.Get(ctx)+1) }
+func (p *Page) IncLocal(ctx *via.Ctx) {
+	p.Local.Update(ctx, func(n int) int { return n + 1 })
+}
+func (p *Page) IncShared(ctx *via.Ctx) {
+	p.Shared.Update(ctx, func(n int) int { return n + 1 })
+}
 
 func (p *Page) View(ctx *via.Ctx) h.H {
 	return h.Main(h.Class("container"),

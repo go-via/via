@@ -1,5 +1,5 @@
 // Todos exercises a slice of items, list rendering with h.Each, an
-// input + signal, scope.User-backed persistence across tabs, and a
+// input + signal, StateSess-backed persistence across tabs, and a
 // filter signal — without ever leaving Go.
 //
 //	go run ./internal/examples/todos
@@ -14,7 +14,6 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/plugins/picocss"
-	"github.com/go-via/via/scope"
 )
 
 type Item struct {
@@ -23,10 +22,10 @@ type Item struct {
 }
 
 type Todos struct {
-	Draft  via.Signal[string] `via:"draft"`
-	Filter via.State[string]  `via:"filter,init=all"`
-	Index  via.Signal[int]    `via:"index"`
-	Items  scope.User[[]Item]
+	Draft  via.Signal[string]   `via:"draft"`
+	Filter via.StateTab[string] `via:"filter,init=all"`
+	Index  via.Signal[int]      `via:"index"`
+	Items  via.StateSess[[]Item]
 }
 
 func (t *Todos) Add(ctx *via.Ctx) error {
@@ -34,33 +33,36 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 	if text == "" {
 		return nil
 	}
-	items := t.Items.Get(ctx)
-	items = append(items, Item{Text: text})
-	t.Items.Set(ctx, items)
+	t.Items.Update(ctx, func(items []Item) []Item {
+		return append(items, Item{Text: text})
+	})
 	t.Draft.Set(ctx, "")
 	return nil
 }
 
 func (t *Todos) Toggle(ctx *via.Ctx) error {
 	idx := t.Index.Get(ctx)
-	items := slices.Clone(t.Items.Get(ctx))
-	if idx < 0 || idx >= len(items) {
-		return nil
-	}
-	items[idx].Done = !items[idx].Done
-	t.Items.Set(ctx, items)
+	t.Items.Update(ctx, func(items []Item) []Item {
+		if idx < 0 || idx >= len(items) {
+			return items
+		}
+		next := slices.Clone(items)
+		next[idx].Done = !next[idx].Done
+		return next
+	})
 	return nil
 }
 
 func (t *Todos) Clear(ctx *via.Ctx) error {
-	items := t.Items.Get(ctx)
-	live := make([]Item, 0, len(items))
-	for _, it := range items {
-		if !it.Done {
-			live = append(live, it)
+	t.Items.Update(ctx, func(items []Item) []Item {
+		live := make([]Item, 0, len(items))
+		for _, it := range items {
+			if !it.Done {
+				live = append(live, it)
+			}
 		}
-	}
-	t.Items.Set(ctx, live)
+		return live
+	})
 	return nil
 }
 
@@ -157,12 +159,24 @@ func filterButton(name, current string, action any) h.H {
 	)
 }
 
-// SetIfChanged skips the re-render when the user clicks the already-active
+// Each filter action short-circuits when the user clicks the already-active
 // filter — clicking "All" while filter == "all" is a no-op rather than a
 // wasted view rebuild + SSE patch.
-func (t *Todos) FilterAll(ctx *via.Ctx)    { via.SetIfChanged(ctx, &t.Filter, "all") }
-func (t *Todos) FilterActive(ctx *via.Ctx) { via.SetIfChanged(ctx, &t.Filter, "active") }
-func (t *Todos) FilterDone(ctx *via.Ctx)   { via.SetIfChanged(ctx, &t.Filter, "done") }
+func (t *Todos) FilterAll(ctx *via.Ctx) {
+	if t.Filter.Get(ctx) != "all" {
+		t.Filter.Update(ctx, func(string) string { return "all" })
+	}
+}
+func (t *Todos) FilterActive(ctx *via.Ctx) {
+	if t.Filter.Get(ctx) != "active" {
+		t.Filter.Update(ctx, func(string) string { return "active" })
+	}
+}
+func (t *Todos) FilterDone(ctx *via.Ctx) {
+	if t.Filter.Get(ctx) != "done" {
+		t.Filter.Update(ctx, func(string) string { return "done" })
+	}
+}
 
 func main() {
 	app := via.New(

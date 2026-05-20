@@ -11,12 +11,12 @@ import (
 )
 
 type benchPage struct {
-	Hits via.State[int]
+	Hits via.StateTab[int]
 	Step via.Signal[int] `via:"step,init=1"`
 }
 
 func (p *benchPage) Inc(ctx *via.Ctx) error {
-	via.Add(ctx, &p.Hits, p.Step.Get(ctx))
+	p.Hits.Update(ctx, func(n int) int { return n + p.Step.Get(ctx) })
 	return nil
 }
 

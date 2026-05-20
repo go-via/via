@@ -15,7 +15,7 @@ import (
 )
 
 type statePage struct {
-	Hits via.State[int]
+	Hits via.StateTab[int]
 }
 
 func (p *statePage) Inc(ctx *via.Ctx) error {
@@ -40,7 +40,7 @@ func TestState_initialZeroValueAppearsInRender(t *testing.T) {
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<p>0</p>",
-		"State[int] zero value renders inside view fragment")
+		"StateTab[int] zero value renders inside view fragment")
 }
 
 func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
@@ -67,7 +67,7 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 }
 
 type stateIntInitPage struct {
-	N via.State[int] `via:",init=3"`
+	N via.StateTab[int] `via:",init=3"`
 }
 
 func (p *stateIntInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
@@ -80,11 +80,11 @@ func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
 	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<div>3</div>",
-		"State[int] with init=3 must render the seeded value on first load")
+		"StateTab[int] with init=3 must render the seeded value on first load")
 }
 
 type stateStringInitPage struct {
-	Label via.State[string] `via:",init=--"`
+	Label via.StateTab[string] `via:",init=--"`
 }
 
 func (p *stateStringInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.Label.Text()) }
@@ -97,13 +97,13 @@ func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<div>--</div>",
-		"State[string] with init=-- must render the seeded value on first load")
+		"StateTab[string] with init=-- must render the seeded value on first load")
 }
 
-// Update — read-modify-write on State[T] and Signal[T]
+// Update — read-modify-write on StateTab[T] and Signal[T]
 
 type updatePage struct {
-	N    via.State[int]
+	N    via.StateTab[int]
 	Step via.Signal[int] `via:"step,init=1"`
 }
 
@@ -161,7 +161,7 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 	viatest.AwaitFrame(t, frames, 2*time.Second, `"step":5`)
 }
 
-// State.Key isn't externally observable: State[T] is server-rendered, so
+// State.Key isn't externally observable: StateTab[T] is server-rendered, so
 // the wire key never appears in the client-visible payload (unlike
 // Signal.Key, which surfaces via data-text="$<key>" and data-bind="<key>").
 // Tag-driven key resolution for State is exercised end-to-end by the

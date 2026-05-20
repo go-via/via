@@ -14,11 +14,11 @@ import (
 )
 
 // kitchenSinkPage exercises the full surface area in one composition:
-// Signal[T] + State[T] + a typed query param + a method-value action +
+// Signal[T] + StateTab[T] + a typed query param + a method-value action +
 // the typed-via.Log helper.
 type kitchenSinkPage struct {
 	Q     string `query:"q"`
-	N     via.State[int]
+	N     via.StateTab[int]
 	Theme via.Signal[string] `via:"theme,init=blue"`
 }
 

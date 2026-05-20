@@ -27,18 +27,18 @@ var allFeatures = []Feature{
 }
 
 type Page struct {
-	Visible via.State[int] `via:",init=3"`
+	Visible via.StateTab[int] `via:",init=3"`
 }
 
 func (p *Page) Inc(ctx *via.Ctx) {
 	if p.Visible.Get(ctx) < len(allFeatures) {
-		via.Add(ctx, &p.Visible, 1)
+		p.Visible.Update(ctx, func(n int) int { return n + 1 })
 	}
 }
 
 func (p *Page) Dec(ctx *via.Ctx) {
 	if p.Visible.Get(ctx) > 1 {
-		via.Add(ctx, &p.Visible, -1)
+		p.Visible.Update(ctx, func(n int) int { return n - 1 })
 	}
 }
 

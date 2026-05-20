@@ -15,13 +15,9 @@ cd "$ROOT"
 #   CounterAction              ~129 allocs/op
 #   CounterActionWithLogger    ~129 allocs/op  (logger path must stay flat
 #                                               vs CounterAction)
-#   ActionBodyOnly                0 allocs/op  (typed Mutable[T] hot path)
-#   SignalFlush                   2 allocs/op  (encoded []byte + json.RawMessage box)
 RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-180}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
 LOGGER_ACTION_ALLOC_MAX=${LOGGER_ACTION_ALLOC_MAX:-149}
-BODY_ALLOC_MAX=${BODY_ALLOC_MAX:-0}
-SIGNAL_FLUSH_ALLOC_MAX=${SIGNAL_FLUSH_ALLOC_MAX:-3}
 
 echo "== CI: Check formatting =="
 unformatted=$(gofmt -l .)
@@ -62,7 +58,7 @@ echo "== CI: Allocation gates =="
 #   BenchmarkCounterRender-20    1000   95012 ns/op   29200 B/op   206 allocs/op
 # Pull the allocs column for the named benchmarks and fail if it
 # exceeds the threshold for that bench.
-bench_out=$(go test ./. -run='^$' -bench='^Benchmark(Counter|ActionBodyOnly|SignalFlush)' -benchtime=200x -benchmem 2>&1 || true)
+bench_out=$(go test ./. -run='^$' -bench='^BenchmarkCounter' -benchtime=200x -benchmem 2>&1 || true)
 echo "$bench_out"
 
 check_alloc() {
@@ -90,8 +86,6 @@ check_alloc() {
 check_alloc BenchmarkCounterRender "$RENDER_ALLOC_MAX"
 check_alloc BenchmarkCounterAction "$ACTION_ALLOC_MAX"
 check_alloc BenchmarkCounterActionWithLogger "$LOGGER_ACTION_ALLOC_MAX"
-check_alloc BenchmarkActionBodyOnly "$BODY_ALLOC_MAX"
-check_alloc BenchmarkSignalFlush "$SIGNAL_FLUSH_ALLOC_MAX"
 
 echo "SUCCESS: All checks passed."
 exit 0

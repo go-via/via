@@ -135,7 +135,7 @@ internals are bound by the runtime via reflection — exposing fields
 would let callers desync the wire key, slot index, and stored value.
 
 Rule: For types whose zero value is meaningful via reflection-driven
-binding (Signal, State, scope.User, scope.App), keep all stored state
+binding (Signal, StateTab, StateSess, StateApp), keep all stored state
 in unexported fields. The type name is exported; the contents aren't.
 
 ```go

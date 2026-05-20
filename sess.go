@@ -15,7 +15,7 @@ const sessionCookieName = "via_session"
 
 type session struct {
 	id         string
-	data       sync.Map
+	data       kvStore
 	lastAccess atomic.Int64
 }
 
@@ -57,7 +57,7 @@ func PutSess[T any](ctx *Ctx, v T) {
 	if ctx == nil {
 		return
 	}
-	SessionStore(ctx, sessionTypeKey[T](), v)
+	sessionStore(ctx, sessionTypeKey[T](), v)
 }
 
 // GetSess reads the typed value stored with PutSess, returning the zero
@@ -76,7 +76,7 @@ func GetSess[T any](src any) (T, bool) {
 	var zero T
 	switch s := src.(type) {
 	case *Ctx:
-		v, ok := SessionLoad(s, sessionTypeKey[T]())
+		v, ok := sessionLoad(s, sessionTypeKey[T]())
 		if !ok {
 			return zero, false
 		}
@@ -149,41 +149,26 @@ func sessionFromRequestCtx(r *http.Request) *session {
 
 type appKey struct{}
 
-// SessionLoad reads a value from the per-session store. Used by
-// scope.User[T] to back its Get/Set with shared storage that survives
-// across tabs of the same browser session.
-//
-// Deprecated: scope-package integration hook. End users should access
-// session state through scope.User[T] rather than calling this directly.
-func SessionLoad(ctx *Ctx, key string) (any, bool) {
-	if ctx == nil {
+// sessionLoad reads a value from the per-session store. Backs
+// StateSess[T] with shared storage that survives across tabs of the
+// same browser session.
+func sessionLoad(ctx *Ctx, key string) (any, bool) {
+	if ctx == nil || ctx.session == nil {
 		return nil, false
 	}
-	if ctx.session != nil {
-		return ctx.session.data.Load(key)
-	}
-	return ctx.localScope.Load(key)
+	return ctx.session.data.Load(key)
 }
 
-// SessionStore writes a value to the per-session store and marks the
-// current Ctx dirty so the page re-renders with the new value. If ctx
-// has no session (test path that bypassed the session middleware), the
-// value is held on the ctx itself so within-request reads still work.
-//
-// Deprecated: scope-package integration hook. End users should access
-// session state through scope.User[T] rather than calling this directly.
-func SessionStore(ctx *Ctx, key string, value any) {
-	if ctx == nil {
+// sessionStore writes a value to the per-session store, marks the
+// current Ctx dirty so the page re-renders, and fans the write out to
+// every other tab on the same session that subscribed to key.
+func sessionStore(ctx *Ctx, key string, value any) {
+	if ctx == nil || ctx.session == nil {
 		return
 	}
-	if ctx.session != nil {
-		ctx.session.data.Store(key, value)
-	} else {
-		// ephemeral fallback so Get(ctx) within the same request returns v
-		ctx.localScope.Store(key, value)
-	}
+	ctx.session.data.Store(key, value)
 	ctx.markStateDirty()
-	if ctx.app != nil && ctx.session != nil {
+	if ctx.app != nil {
 		ctx.app.broadcastRender(ctx, ctx.session, key)
 	}
 }
@@ -208,7 +193,7 @@ func RotateSession(ctx *Ctx) string {
 
 	if old != nil {
 		old.data.Range(func(k, v any) bool {
-			fresh.data.Store(k, v)
+			fresh.data.Store(k.(string), v)
 			return true
 		})
 	}
@@ -249,61 +234,6 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 		HttpOnly: true,
 		Secure:   a.cfg.secureCookies,
 		SameSite: http.SameSiteLaxMode,
-	}
-}
-
-// TrackRead records that the current View execution read key, so a
-// subsequent AppStore/SessionStore on the same key knows to wake this
-// ctx. Outside a View the call is a no-op; this is intentional so that
-// action handlers and lifecycle hooks don't accidentally subscribe.
-//
-// Deprecated: scope-package integration hook. End users should access
-// scoped state through scope.User[T] / scope.App[T] rather than calling
-// this directly.
-func TrackRead(ctx *Ctx, key string) {
-	if ctx == nil {
-		return
-	}
-	ctx.trackRead(key)
-}
-
-// AppLoad reads a value from the per-app store. Backs scope.App[T].
-// When ctx has no App attached (test path that bypassed New), falls
-// back to the ctx's local scope so a paired AppStore/AppLoad on the
-// same Ctx still round-trips — mirrors SessionLoad's contract.
-//
-// Deprecated: scope-package integration hook. End users should access
-// app-wide state through scope.App[T] rather than calling this directly.
-func AppLoad(ctx *Ctx, key string) (any, bool) {
-	if ctx == nil {
-		return nil, false
-	}
-	if ctx.app != nil {
-		return ctx.app.appStore.Load(key)
-	}
-	return ctx.localScope.Load(key)
-}
-
-// AppStore writes a value to the per-app store and marks the current
-// Ctx dirty. When ctx has no App attached (test path that bypassed
-// New), the value is held on the ctx's local scope so within-request
-// reads still work — mirrors SessionStore's contract.
-//
-// Deprecated: scope-package integration hook. End users should access
-// app-wide state through scope.App[T] rather than calling this directly.
-func AppStore(ctx *Ctx, key string, value any) {
-	if ctx == nil {
-		return
-	}
-	if ctx.app != nil {
-		ctx.app.appStore.Store(key, value)
-	} else {
-		// ephemeral fallback so AppLoad on the same Ctx returns v
-		ctx.localScope.Store(key, value)
-	}
-	ctx.markStateDirty()
-	if ctx.app != nil {
-		ctx.app.broadcastRender(ctx, nil, key)
 	}
 }
 

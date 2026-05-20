@@ -66,7 +66,7 @@ func (c *Client) TabID() string { return c.tabID }
 
 // Fork opens a second tab against path that shares this client's cookie
 // jar, so both tabs land on the same session — the only way to drive
-// scope.User behavior that spans tabs.
+// StateSess behavior that spans tabs.
 func (c *Client) Fork(path string) *Client {
 	c.t.Helper()
 	httpc := &http.Client{Jar: c.jar, Timeout: 5 * time.Second}

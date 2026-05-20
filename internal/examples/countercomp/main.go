@@ -14,12 +14,12 @@ import (
 )
 
 type CounterCard struct {
-	Count via.State[int]
+	Count via.StateTab[int]
 	Step  via.Signal[int] `via:"step,init=1"`
 }
 
 func (c *CounterCard) Inc(ctx *via.Ctx) {
-	via.Add(ctx, &c.Count, c.Step.Get(ctx))
+	c.Count.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 }
 
 // View takes the click attribute as a parameter so the parent can decide

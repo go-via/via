@@ -47,9 +47,9 @@ type App struct {
 	appSignals   map[string]any
 	appSignalsMu sync.RWMutex
 
-	// appStore backs scope.App[T] with shared storage across every
+	// appStore backs StateApp[T] with shared storage across every
 	// session and tab. Keyed by the handle's wire key.
-	appStore sync.Map
+	appStore kvStore
 
 	contextRegistry   map[string]*Ctx
 	contextRegistryMu sync.RWMutex

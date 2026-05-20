@@ -55,7 +55,7 @@ func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 }
 
 type clockPage struct {
-	Tick via.State[int]
+	Tick via.StateTab[int]
 
 	ticks atomic.Int32
 }
@@ -113,20 +113,20 @@ func TestStream_stopsWhenCtxDone(t *testing.T) {
 // writes on the same composition; both touch the same Signal/State.
 type streamRacePage struct {
 	N via.Signal[int]
-	M via.State[int]
+	M via.StateTab[int]
 }
 
 func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
 		p.N.Set(ctx, p.N.Get(ctx)+1)
-		via.Add(ctx, &p.M, 1)
+		p.M.Update(ctx, func(n int) int { return n + 1 })
 	})
 	return nil
 }
 
 func (p *streamRacePage) Bump(ctx *via.Ctx) error {
 	p.N.Set(ctx, p.N.Get(ctx)+1)
-	via.Add(ctx, &p.M, 1)
+	p.M.Update(ctx, func(n int) int { return n + 1 })
 	return nil
 }
 
@@ -165,7 +165,7 @@ func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
 // of SSE element-patch frames driven by a Stream callback.
 
 type tickerControlPage struct {
-	N      via.State[int]
+	N      via.StateTab[int]
 	ticker *via.Ticker
 }
 
@@ -265,7 +265,7 @@ func TestTicker_setIntervalChangesCadence(t *testing.T) {
 // after Stop, even after Resume.
 
 type tickerStopPage struct {
-	N      via.State[int]
+	N      via.StateTab[int]
 	ticker *via.Ticker
 }
 

@@ -11,8 +11,8 @@ const (
 	roleNone fieldRole = iota
 	roleSignal
 	roleState
-	roleScopeUser
-	roleScopeApp
+	roleStateSess
+	roleStateApp
 	roleParam
 	roleQuery
 	roleFile
@@ -48,15 +48,7 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
 				initRaw:   parseInitTag(f),
 			})
-		case roleScopeUser, roleScopeApp:
-			handleType := f.Type
-			if handleType.Kind() == reflect.Ptr {
-				handleType = handleType.Elem()
-			}
-			if !reflect.PointerTo(handleType).Implements(reflect.TypeOf((*scopeBinder)(nil)).Elem()) {
-				panic("via.Mount: scope handle " + handleType.String() +
-					" must implement BindWireKey(string)")
-			}
+		case roleStateSess, roleStateApp:
 			d.scopeSlots = append(d.scopeSlots, scopeSlot{
 				fieldPath: fieldPath,
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
@@ -101,11 +93,11 @@ func classifyField(f reflect.StructField) fieldRole {
 	if isStateType(f.Type) {
 		return roleState
 	}
-	if isScopeUserType(f.Type) {
-		return roleScopeUser
+	if isStateSessType(f.Type) {
+		return roleStateSess
 	}
-	if isScopeAppType(f.Type) {
-		return roleScopeApp
+	if isStateAppType(f.Type) {
+		return roleStateApp
 	}
 	if isFileType(f.Type) {
 		return roleFile
@@ -116,33 +108,30 @@ func classifyField(f reflect.StructField) fieldRole {
 	return roleNone
 }
 
-// Package paths used to identify our own handle types via reflection.
-// Stored as constants so the four classifyField helpers below all
-// reference the same canonical strings.
-const (
-	viaPkgPath   = "github.com/go-via/via"
-	scopePkgPath = "github.com/go-via/via/scope"
-)
+// Package path used to identify our own handle types via reflection.
+// Shared by every classifyField helper below so they reference the
+// same canonical string.
+const viaPkgPath = "github.com/go-via/via"
 
-func isScopeUserType(t reflect.Type) bool {
+func isStateSessType(t reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	return strings.HasPrefix(t.Name(), "User[") && t.PkgPath() == scopePkgPath
+	return strings.HasPrefix(t.Name(), "StateSess[") && t.PkgPath() == viaPkgPath
 }
 
-func isScopeAppType(t reflect.Type) bool {
+func isStateAppType(t reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	return strings.HasPrefix(t.Name(), "App[") && t.PkgPath() == scopePkgPath
+	return strings.HasPrefix(t.Name(), "StateApp[") && t.PkgPath() == viaPkgPath
 }
 
 // isChildComposition reports whether t is a struct (or pointer-to-struct)
 // in a third-party package whose pointer type implements via.Composition.
 // Path-tag and Signal/State handles are special-cased earlier and do not
 // recurse here. We exclude types whose package matches our own to avoid
-// recursing into Signal[T]/State[T]'s internal struct.
+// recursing into Signal[T]/StateTab[T]'s internal struct.
 func isChildComposition(t reflect.Type) bool {
 	tt := t
 	if tt.Kind() == reflect.Ptr {
@@ -151,7 +140,7 @@ func isChildComposition(t reflect.Type) bool {
 	if tt.Kind() != reflect.Struct {
 		return false
 	}
-	// our own handle types (Signal[T], State[T]) live in the via package;
+	// our own handle types (Signal[T], StateTab[T]) live in the via package;
 	// skip them so we don't recurse into private fields.
 	if tt.PkgPath() == viaPkgPath {
 		return false
@@ -174,7 +163,7 @@ func isStateType(t reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	return strings.HasPrefix(t.Name(), "State[") && t.PkgPath() == viaPkgPath
+	return strings.HasPrefix(t.Name(), "StateTab[") && t.PkgPath() == viaPkgPath
 }
 
 // qualify joins a dotted path prefix and a name into a wire key. Returns

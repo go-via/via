@@ -6,7 +6,7 @@ import (
 	"strconv"
 )
 
-// Scalar encode / decode shared between Signal[T] and State[T] (both
+// Scalar encode / decode shared between Signal[T] and StateTab[T] (both
 // implement signalRef and route through these helpers). Lives here
 // rather than in signal.go because the logic is value-shape driven, not
 // reactive-type driven — keeping it isolated makes the field-decoding

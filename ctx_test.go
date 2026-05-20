@@ -18,7 +18,7 @@ import (
 )
 
 type cookieEchoPage struct {
-	Flavor via.State[string]
+	Flavor via.StateTab[string]
 }
 
 func (p *cookieEchoPage) OnInit(ctx *via.Ctx) error {
@@ -128,7 +128,7 @@ func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
 var disposed atomic.Int32
 
 type disposable struct {
-	N via.State[int]
+	N via.StateTab[int]
 }
 
 func (d *disposable) OnDispose(ctx *via.Ctx) {

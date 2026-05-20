@@ -99,8 +99,8 @@ func TestMultipartReader_streamsRawParts(t *testing.T) {
 }
 
 type bytesEchoPage struct {
-	Blob   via.File       `via:"blob"`
-	Length via.State[int] `via:"length"`
+	Blob   via.File          `via:"blob"`
+	Length via.StateTab[int] `via:"length"`
 }
 
 func (p *bytesEchoPage) Read(ctx *via.Ctx) error {

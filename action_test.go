@@ -18,7 +18,7 @@ import (
 )
 
 type counterPage struct {
-	Hits via.State[int]
+	Hits via.StateTab[int]
 	Step via.Signal[int] `via:"step,init=1"`
 }
 
@@ -238,7 +238,7 @@ func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
 // Per-Ctx serialization
 
 type serialPage struct {
-	N via.State[int]
+	N via.StateTab[int]
 }
 
 // Bump is intentionally non-atomic on N.Get/N.Set so the only thing

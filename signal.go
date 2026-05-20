@@ -58,118 +58,6 @@ func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
 	}
 }
 
-// Mutable is the common get/set surface shared by Signal[T] and State[T].
-// Helpers like Toggle / Add accept any Mutable so they work uniformly on
-// either flavor of reactive field — the wire-side difference (Signal
-// mirrors to the browser, State stays server-side) doesn't matter for a
-// pure read-modify-write.
-type Mutable[T any] interface {
-	Get(ctx *Ctx) T
-	Set(ctx *Ctx, v T)
-}
-
-// Compile-time guards: every reactive handle in this package satisfies
-// Mutable[T]. A breaking refactor (e.g. dropping Set) shows up here
-// rather than at every call site that uses Toggle / Add.
-var (
-	_ Mutable[int]  = (*Signal[int])(nil)
-	_ Mutable[bool] = (*State[bool])(nil)
-)
-
-// Toggle flips a boolean reactive field. Free function (rather than a
-// method) so the type parameter can be locked down to bool — methods on
-// a generic type can't constrain T.
-//
-//	func (p *Sidebar) ToggleOpen(ctx *via.Ctx) error {
-//	    via.Toggle(ctx, &p.Open)
-//	    return nil
-//	}
-func Toggle(ctx *Ctx, m Mutable[bool]) {
-	if m == nil {
-		return
-	}
-	m.Set(ctx, !m.Get(ctx))
-}
-
-// numeric is the constraint satisfied by every Go numeric type that
-// supports + on a Signal[T] / State[T] value. Defined inline so we don't
-// pull in golang.org/x/exp/constraints, and kept unexported because no
-// caller outside this package names the constraint — Add's type parameter
-// is inferred at call sites.
-type numeric interface {
-	~int | ~int8 | ~int16 | ~int32 | ~int64 |
-		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
-		~float32 | ~float64
-}
-
-// SetIfChanged writes v to m only when it differs from the current
-// value. Returns true if a write happened. Use it on chatty real-time
-// streams where many ticks emit the same value — the unchanged ticks
-// skip the dirty flag, SSE patch, and re-render entirely:
-//
-//	via.SetIfChanged(ctx, &p.NetRX, fmtBytes(rx)) // no-op when unchanged
-//
-// Constrained to comparable T; Signal/State of slices, maps, or other
-// non-comparable shapes need their own equality and aren't covered here.
-func SetIfChanged[T comparable](ctx *Ctx, m Mutable[T], v T) bool {
-	if m == nil {
-		return false
-	}
-	if m.Get(ctx) == v {
-		return false
-	}
-	m.Set(ctx, v)
-	return true
-}
-
-// Add increments a numeric reactive field by delta. delta may be negative.
-//
-//	via.Add(ctx, &p.Count, 1)   // increment
-//	via.Add(ctx, &p.Count, -1)  // decrement
-func Add[T numeric](ctx *Ctx, m Mutable[T], delta T) {
-	if m == nil {
-		return
-	}
-	m.Set(ctx, m.Get(ctx)+delta)
-}
-
-// Push appends item to a slice-valued Signal and marks it dirty so the
-// next flush patches the new tail to the browser. Collapses the common
-// get-append-set pattern for chart series, log feeds, and other
-// append-only flows into one call:
-//
-//	via.Push(ctx, &p.Series, point)
-//
-// nil sig is a no-op. To cap retained items, use [PushBounded].
-func Push[T any](ctx *Ctx, sig *Signal[[]T], item T) {
-	if sig == nil {
-		return
-	}
-	sig.val = append(sig.val, item)
-	if ctx != nil {
-		ctx.markSignalDirty(sig.slot)
-	}
-}
-
-// PushBounded is [Push] with a hard cap on retained items. Once the
-// slice would exceed max, the oldest entries are dropped so only the
-// most recent max items remain. max <= 0 is a no-op (nothing is
-// appended, nothing is marked dirty).
-func PushBounded[T any](ctx *Ctx, sig *Signal[[]T], item T, max int) {
-	if sig == nil || max <= 0 {
-		return
-	}
-	sig.val = append(sig.val, item)
-	if len(sig.val) > max {
-		// Shift-left to keep the backing array; copy handles the overlap.
-		copy(sig.val, sig.val[len(sig.val)-max:])
-		sig.val = sig.val[:max]
-	}
-	if ctx != nil {
-		ctx.markSignalDirty(sig.slot)
-	}
-}
-
 // Bind returns a two-way binding attribute. Use on form inputs.
 func (s *Signal[T]) Bind() h.H {
 	return h.Data("bind", s.key)
@@ -209,7 +97,7 @@ func (s *Signal[T]) Style(prop string) h.H {
 func (s *Signal[T]) Key() string { return s.key }
 
 // signalRef is the internal interface implemented by every Signal[T] /
-// State[T] handle. It lets the runtime perform reflection-free per-request
+// StateTab[T] handle. It lets the runtime perform reflection-free per-request
 // initialization across mixed-type fields.
 type signalRef interface {
 	bindSlot(slot uint16, key string)

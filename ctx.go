@@ -19,16 +19,12 @@ type Ctx struct {
 	cmpReflect   reflect.Value // reflect.ValueOf(<bound *C>), boxed once at request entry
 	signalRefs   []signalRef   // indexed by slot
 	dirtySignals bitset        // size = len(signalRefs)
-	stateDirty   bool          // any State[T] mutated → re-render needed
+	stateDirty   bool          // any StateTab[T] mutated → re-render needed
 	queue        *patchQueue
 	doneChan     chan struct{}
 	disposed     bool
 	session      *session
 	lastAccess   atomic.Int64
-
-	// localScope backs scope.User[T] when the request had no session
-	// (test path or unauth scenarios). Per-Ctx, not shared.
-	localScope sync.Map
 
 	// lastSignals holds the most recent signals payload from an action
 	// POST so via.DecodeForm can read keys that aren't tracked by typed
@@ -221,7 +217,7 @@ func (ctx *Ctx) Flush() {
 }
 
 // markStateDirty records that the view needs a re-render on the next
-// flush. Synchronized via queue.mu so scope.User/scope.App writes from
+// flush. Synchronized via queue.mu so StateSess/StateApp writes from
 // a user goroutine don't race with the SSE drain loop.
 func (ctx *Ctx) markStateDirty() {
 	if ctx.queue == nil {
