@@ -8,7 +8,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,14 +35,14 @@ func TestAction_voidReturnIsRecognised(t *testing.T) {
 	via.Mount[voidActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Bump").Fire())
 	require.Equal(t, 200, tc.Action("Bump").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "<div>2")
+	vt.AwaitFrame(t, frames, 2*time.Second, "<div>2")
 }
 
 type onlyVoidPage struct {

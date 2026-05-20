@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,13 +46,13 @@ func TestSyncElements_pushesManualPatchOverSSE(t *testing.T) {
 	via.Mount[syncPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PushList").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `id="results"`, "first")
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="results"`, "first")
 }
 
 func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
@@ -90,13 +90,13 @@ func TestPatchSignal_pushesKeyedValueToClient(t *testing.T) {
 	via.Mount[syncPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PickTheme").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"purple"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"purple"`)
 }
 
 func TestExecScriptf_formatsArgsBeforeQueueing(t *testing.T) {
@@ -107,11 +107,11 @@ func TestExecScriptf_formatsArgsBeforeQueueing(t *testing.T) {
 	via.Mount[syncPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Toast").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `console.log("hello world")`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `console.log("hello world")`)
 }

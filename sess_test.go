@@ -10,7 +10,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,14 +101,14 @@ func TestPutSess_makesValueAvailableInRender(t *testing.T) {
 	via.Mount[authPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("LogIn").
 		WithSignal("email", "alice@example.com").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "hello Alice")
+	vt.AwaitFrame(t, frames, 2*time.Second, "hello Alice")
 }
 
 func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
@@ -128,7 +128,7 @@ func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 	via.Mount[authPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "bob@example.com").Fire())
 
 	// Subsequent action POST through the same client should run through
@@ -149,11 +149,11 @@ func TestPutSess_andClearSess_roundTrip(t *testing.T) {
 	via.Mount[authPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "alice").Fire())
 	require.Equal(t, 200, tc.Action("LogOut").Fire())
 
-	tc2 := viatest.NewClient(t, server, "/")
+	tc2 := vt.NewClient(t, server, "/")
 	body := tc2.HTML()
 	assert.NotContains(t, body, "hello",
 		"a fresh session should not see the previous user's data")
@@ -183,7 +183,7 @@ func TestRotateSession_changesCookieValue(t *testing.T) {
 	via.Mount[loginPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	originalHTML := tc.HTML()
 	require.NotEmpty(t, originalHTML)
@@ -192,7 +192,7 @@ func TestRotateSession_changesCookieValue(t *testing.T) {
 
 	// A separate client with no shared cookie jar should get a fresh
 	// session and not observe the rotated tab's data.
-	tc2 := viatest.NewClient(t, server, "/")
+	tc2 := vt.NewClient(t, server, "/")
 	body2 := tc2.HTML()
 	assert.NotContains(t, body2, ">alice<",
 		"a fresh cookie jar should NOT see another session's User-scoped data")
@@ -201,5 +201,5 @@ func TestRotateSession_changesCookieValue(t *testing.T) {
 	frames, cancel := tc.SSE()
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Login").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, ">alice<")
+	vt.AwaitFrame(t, frames, 2*time.Second, ">alice<")
 }

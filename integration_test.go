@@ -8,7 +8,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +64,7 @@ func TestIntegration_fullProductionStack(t *testing.T) {
 	assert.Contains(t, body, `&#34;theme&#34;:&#34;blue&#34;`)
 
 	// Action through the test client also rides the full stack.
-	tc := viatest.NewClient(t, server, "/page?q=world")
+	tc := vt.NewClient(t, server, "/page?q=world")
 	require.Equal(t, 200, tc.Action("Bump").Fire())
 
 	// AccessLog records both the page render and the action POST,

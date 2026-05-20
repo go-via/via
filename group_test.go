@@ -11,7 +11,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -237,7 +237,7 @@ func TestGroupMiddleware_appliesToActionPOST(t *testing.T) {
 	via.Mount[protectedPage](g, "/secret")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/p/secret")
+	tc := vt.NewClient(t, server, "/p/secret")
 	require.True(t, seenAuth.Load(), "middleware must run on the page render")
 
 	seenAuth.Store(false)
@@ -266,7 +266,7 @@ func TestGroupMiddleware_appliesToSSEHandshake(t *testing.T) {
 	via.Mount[protectedPage](g, "/secret")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/p/secret")
+	tc := vt.NewClient(t, server, "/p/secret")
 	require.True(t, seen.Load(), "render hit middleware")
 
 	seen.Store(false)

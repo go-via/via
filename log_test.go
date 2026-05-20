@@ -13,7 +13,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +76,7 @@ func TestWithLogger_routesActionPanicsThroughLogger(t *testing.T) {
 	app, server, logger := newLoggedApp(t, via.LogDebug)
 	via.Mount[panicPage](app, "/")
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
 
 	recs := logger.snapshot()
@@ -143,7 +143,7 @@ func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 	app.Use(via.RequestID())
 	via.Mount[ridLogPage](app, "/")
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Trace").Fire())
 
 	// The action's Log call should have appended both via_tab and rid.
@@ -185,7 +185,7 @@ func TestLog_isRaceFreeWhenCalledOffActionGoroutine(t *testing.T) {
 	app.Use(via.RequestID())
 	via.Mount[leakyLogPage](app, "/")
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	// Fire many actions back to back so each entry/exit write of ctx.r
 	// overlaps in time with leakyLogPage's still-running goroutines.
 	for range 20 {
@@ -210,7 +210,7 @@ func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 	app, server, logger := newLoggedApp(t, via.LogInfo)
 	via.Mount[loggingPage](app, "/")
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())
 
 	recs := logger.snapshot()
@@ -236,7 +236,7 @@ func TestLog_respectsLogLevelFilter(t *testing.T) {
 	app, server, logger := newLoggedApp(t, via.LogWarn)
 	via.Mount[loggingPage](app, "/")
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("DoIt").Fire())
 
 	recs := logger.snapshot()
@@ -262,7 +262,7 @@ func TestSlogLogger_routesRecordsToProvidedSlog(t *testing.T) {
 	via.Mount[panicPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
 
 	out := buf.String()

@@ -12,7 +12,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,14 +131,14 @@ func TestAction_defaultErrorPathAlertsTheBrowser(t *testing.T) {
 	via.Mount[erroringActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Save").Fire())
 
 	// The default action-error handler queues alert("…"). The script
 	// arrives in the SSE stream as a datastar-execute-script event.
-	viatest.AwaitFrame(t, frames, 2*time.Second, `alert("validation: email required")`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `alert("validation: email required")`)
 }
 
 type customErrPage struct{}
@@ -165,12 +165,12 @@ func TestAction_defaultPanicAlertHidesInternalMessage(t *testing.T) {
 	via.Mount[panicStringPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Crash").Fire())
 
-	got := viatest.AwaitFrame(t, frames, 2*time.Second, `alert("Something went wrong")`)
+	got := vt.AwaitFrame(t, frames, 2*time.Second, `alert("Something went wrong")`)
 	assert.NotContains(t, got, "secret-leaks-here",
 		"default panic alert must not leak the internal panic message")
 }
@@ -203,7 +203,7 @@ func TestAction_panicWithTypedErrorPreservesType(t *testing.T) {
 	via.Mount[panicTypedPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
 
 	require.NotNil(t, got)
@@ -227,7 +227,7 @@ func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
 	via.Mount[customErrPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Save").Fire())
 
 	got := seenErr.Load()
@@ -262,7 +262,7 @@ func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 	via.Mount[serialPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	const N = 50
 	var wg sync.WaitGroup
@@ -283,5 +283,5 @@ func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 	// After 51 serialized increments the rendered count must be 51 — if
 	// the per-Ctx mutex were broken, parallel Get/Set would lose updates
 	// and we'd see a number lower than 51.
-	viatest.AwaitFrame(t, frames, 5*time.Second, "<div>51")
+	vt.AwaitFrame(t, frames, 5*time.Second, "<div>51")
 }

@@ -1,14 +1,14 @@
-// Package test holds testing helpers for via compositions. It lets tests
-// drive a Composition by HTTP without parsing HTML, by name-addressing
-// actions and signals through the descriptor.
+// Package vt (via test) holds testing helpers for via compositions. It
+// lets tests drive a Composition by HTTP without parsing HTML, by
+// name-addressing actions and signals through the descriptor.
 //
 //	var srv *httptest.Server
 //	app := via.New(via.WithTestServer(&srv))
 //	via.Mount[Counter](app, "/")
-//	tc := test.NewClient(t, srv, "/")
+//	tc := vt.NewClient(t, srv, "/")
 //	tc.Action(p.Inc).WithSignal("step", 3).Fire()
 //	require.Contains(t, tc.Reload(), ">3<")
-package test
+package vt
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-via/via"
+	"github.com/go-via/via/internal/spec"
 )
 
 // Client drives a mounted Composition over HTTP for tests.
@@ -50,13 +50,13 @@ func NewClient(t testing.TB, server *httptest.Server, path string) *Client {
 	httpc := &http.Client{Jar: jar, Timeout: 5 * time.Second}
 	resp, err := httpc.Get(server.URL + path)
 	if err != nil {
-		t.Fatalf("test.NewClient: GET %s: %v", path, err)
+		t.Fatalf("vt.NewClient: GET %s: %v", path, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	tab := tabIDFrom(string(body))
 	if tab == "" {
-		t.Fatalf("test.NewClient: no tab id in body of %s", path)
+		t.Fatalf("vt.NewClient: no tab id in body of %s", path)
 	}
 	return &Client{t: t, server: server, tabID: tab, path: path, jar: jar, httpc: httpc, lastBody: string(body)}
 }
@@ -72,13 +72,13 @@ func (c *Client) Fork(path string) *Client {
 	httpc := &http.Client{Jar: c.jar, Timeout: 5 * time.Second}
 	resp, err := httpc.Get(c.server.URL + path)
 	if err != nil {
-		c.t.Fatalf("test.Client.Fork: GET %s: %v", path, err)
+		c.t.Fatalf("vt.Client.Fork: GET %s: %v", path, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	tab := tabIDFrom(string(body))
 	if tab == "" {
-		c.t.Fatalf("test.Client.Fork: no tab id in body of %s", path)
+		c.t.Fatalf("vt.Client.Fork: no tab id in body of %s", path)
 	}
 	return &Client{t: c.t, server: c.server, tabID: tab, path: path, jar: c.jar, httpc: httpc, lastBody: string(body)}
 }
@@ -105,7 +105,7 @@ func (c *Client) Reload() string {
 	c.t.Helper()
 	resp, err := c.httpc.Get(c.server.URL + c.path)
 	if err != nil {
-		c.t.Fatalf("test.Client.Reload: GET %s: %v", c.path, err)
+		c.t.Fatalf("vt.Client.Reload: GET %s: %v", c.path, err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -117,16 +117,16 @@ func (c *Client) Reload() string {
 }
 
 // Action returns a handle that fires an action. The target may be either
-// the action's name as a string, or a bound method value resolved via
-// via.MethodName — the typed form gives the test compile-time protection
-// against typos:
+// the action's name as a string, or a bound method value whose method
+// name is resolved via the runtime — the typed form gives the test
+// compile-time protection against typos:
 //
 //	tc.Action("Bump").Fire()         // string form
 //	tc.Action(p.Bump).Fire()         // typed form (preferred)
 func (c *Client) Action(target any) *ActionCall {
 	name, ok := target.(string)
 	if !ok {
-		name = via.MethodName(target)
+		name = spec.MethodName(target)
 	}
 	return &ActionCall{client: c, name: name}
 }
@@ -182,7 +182,7 @@ func (a *ActionCall) Fire() int {
 		bytes.NewReader(buf),
 	)
 	if err != nil {
-		a.client.t.Fatalf("test.Action(%s).Fire: %v", a.name, err)
+		a.client.t.Fatalf("vt.Action(%s).Fire: %v", a.name, err)
 	}
 	resp.Body.Close()
 	return resp.StatusCode
@@ -209,7 +209,7 @@ func (a *ActionCall) fireMultipart() int {
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := a.client.httpc.Do(req)
 	if err != nil {
-		a.client.t.Fatalf("test.Action(%s).Fire: %v", a.name, err)
+		a.client.t.Fatalf("vt.Action(%s).Fire: %v", a.name, err)
 	}
 	resp.Body.Close()
 	return resp.StatusCode
@@ -237,7 +237,7 @@ func scalarToFormValue(v any) string {
 //	frames, cancel := tc.SSE()
 //	defer cancel()
 //	tc.Action("Bump").Fire()
-//	body := test.AwaitFrame(t, frames, 2*time.Second, "<div>3</div>")
+//	body := vt.AwaitFrame(t, frames, 2*time.Second, "<div>3</div>")
 //	assert.NotContains(t, body, "stale")
 func AwaitFrame(t testing.TB, frames <-chan string, timeout time.Duration, needles ...string) string {
 	t.Helper()
@@ -286,7 +286,7 @@ func (c *Client) SSE() (frames <-chan string, cancel func()) {
 	if err != nil {
 		cancelF()
 		close(out)
-		c.t.Fatalf("test.SSE: %v", err)
+		c.t.Fatalf("vt.SSE: %v", err)
 	}
 	go func() {
 		defer close(out)

@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,7 +81,7 @@ func TestWithSSEWriteTimeout_doesNotBreakNormalDrains(t *testing.T) {
 	via.Mount[sseDeadlinePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 

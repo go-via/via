@@ -549,14 +549,14 @@ the Public API*).
 ```go
 import (
     "github.com/go-via/via"
-    "github.com/go-via/via/test"
+    "github.com/go-via/via/vt"
 )
 
 var server *httptest.Server
 app := via.New(via.WithTestServer(&server))
 via.Mount[Counter](app, "/")
 
-tc := test.NewClient(t, server, "/")
+tc := vt.NewClient(t, server, "/")
 c := &Counter{}
 require.Equal(t, 200, tc.Action(c.Inc).Fire())             // typed: typo → compile error
 require.Equal(t, 200, tc.Action("Apply").                  // string still works
@@ -565,7 +565,7 @@ require.Contains(t, tc.Reload(), ">1<")                    // re-fetch + assert 
 
 frames, cancel := tc.SSE()
 defer cancel()
-test.AwaitFrame(t, frames, 2*time.Second, ">3<")           // wait for substring
+vt.AwaitFrame(t, frames, 2*time.Second, ">3<")             // wait for substring
 
 // Multipart action with a file part — switches the request to
 // multipart/form-data automatically when any file is attached.

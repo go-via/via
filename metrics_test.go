@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,7 +71,7 @@ func TestMetrics_emitsActionAndRenderEvents(t *testing.T) {
 	via.Mount[metricsPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Bump").Fire())
 
 	m.mu.Lock()

@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,7 +48,7 @@ func TestUser_setThenRenderRoundTrips(t *testing.T) {
 	via.Mount[userRoundTripPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Set").Fire())
 
 	body := tc.Reload()
@@ -65,7 +65,7 @@ func TestUser_updateAppliesFn(t *testing.T) {
 	via.Mount[userRoundTripPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Set").Fire())  // count := 7
 	require.Equal(t, 200, tc.Action("Bump").Fire()) // count += 3
 
@@ -83,7 +83,7 @@ func TestUser_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	via.Mount[userRoundTripPage](app, "/")
 	defer server.Close()
 
-	body := viatest.NewClient(t, server, "/").HTML()
+	body := vt.NewClient(t, server, "/").HTML()
 	assert.Contains(t, body, "theme")
 	assert.Contains(t, body, "count")
 }
@@ -108,7 +108,7 @@ func TestUser_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	via.Mount[silentUserPage](app, "/silent")
 	defer server.Close()
 
-	reader := viatest.NewClient(t, server, "/reader")
+	reader := vt.NewClient(t, server, "/reader")
 	silent := reader.Fork("/silent")
 
 	framesS, cancelS := silent.SSE()
@@ -133,7 +133,7 @@ func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
 	via.Mount[userRoundTripPage](app, "/")
 	defer server.Close()
 
-	a := viatest.NewClient(t, server, "/")
+	a := vt.NewClient(t, server, "/")
 	b := a.Fork("/")
 
 	framesB, cancelB := b.SSE()
@@ -141,7 +141,7 @@ func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, a.Action("Set").Fire())
-	viatest.AwaitFrame(t, framesB, 2*time.Second, `<span id="theme">midnight</span>`)
+	vt.AwaitFrame(t, framesB, 2*time.Second, `<span id="theme">midnight</span>`)
 }
 
 func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
@@ -152,8 +152,8 @@ func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
 	via.Mount[userRoundTripPage](app, "/")
 	defer server.Close()
 
-	a := viatest.NewClient(t, server, "/")
-	b := viatest.NewClient(t, server, "/")
+	a := vt.NewClient(t, server, "/")
+	b := vt.NewClient(t, server, "/")
 
 	framesB, cancelB := b.SSE()
 	defer cancelB()
@@ -205,14 +205,14 @@ func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	via.Mount[setIfChangedSessPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Same").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "blue")
+	vt.AwaitFrame(t, frames, 2*time.Second, "blue")
 
 	require.Equal(t, 200, tc.Action("Diff").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "red")
+	vt.AwaitFrame(t, frames, 2*time.Second, "red")
 }

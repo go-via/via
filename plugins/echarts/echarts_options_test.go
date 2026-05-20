@@ -9,7 +9,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/echarts"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,13 +120,13 @@ func TestChartAPI_SetOption_emitsSetOptionScript(t *testing.T) {
 	via.Mount[chartActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("SetOpt").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "setOption", "backgroundColor")
+	vt.AwaitFrame(t, frames, 2*time.Second, "setOption", "backgroundColor")
 }
 
 func TestChartAPI_SetSeries_emitsSeriesUpdate(t *testing.T) {
@@ -137,13 +137,13 @@ func TestChartAPI_SetSeries_emitsSeriesUpdate(t *testing.T) {
 	via.Mount[chartActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("SetSer").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"series"`, `"line"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"series"`, `"line"`)
 }
 
 func TestChartAPI_AppendData_emitsAppendDataCall(t *testing.T) {
@@ -154,11 +154,11 @@ func TestChartAPI_AppendData_emitsAppendDataCall(t *testing.T) {
 	via.Mount[chartActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("AppendPoints").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "appendData", "seriesIndex:0")
+	vt.AwaitFrame(t, frames, 2*time.Second, "appendData", "seriesIndex:0")
 }

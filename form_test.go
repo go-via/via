@@ -16,12 +16,12 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/require"
 )
 
 // tabRawRE mirrors test.tabRE — the raw fallback tests need their own
-// jar/client pair, so they can't go through viatest.NewClient.
+// jar/client pair, so they can't go through vt.NewClient.
 var tabRawRE = regexp.MustCompile(`&#34;via_tab&#34;:&#34;([^"&]+)&#34;`)
 
 type formPage struct {
@@ -56,7 +56,7 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 	via.Mount[formPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -65,7 +65,7 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 		WithSignal("email", "alice@example.com").
 		WithSignal("password", "secret").
 		WithSignal("age", 3).Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "alice@example.com|secret|***")
+	vt.AwaitFrame(t, frames, 2*time.Second, "alice@example.com|secret|***")
 }
 
 type formNoTag struct {
@@ -94,14 +94,14 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 	via.Mount[formNoTag](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Submit").
 		WithSignal("userName", "bob").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, ">bob<")
+	vt.AwaitFrame(t, frames, 2*time.Second, ">bob<")
 }
 
 // Fallback chain — query string and unparseable values.
@@ -216,7 +216,7 @@ func TestDecodeForm_fallsBackToURLQueryWhenSignalAbsent(t *testing.T) {
 		// No signal payload — every value must come from the URL query.
 		map[string]any{},
 	))
-	viatest.AwaitFrame(t, frames, 2*time.Second, "Lisbon|yyy|true")
+	vt.AwaitFrame(t, frames, 2*time.Second, "Lisbon|yyy|true")
 }
 
 func TestDecodeForm_signalPayloadWinsOverQuery(t *testing.T) {
@@ -236,7 +236,7 @@ func TestDecodeForm_signalPayloadWinsOverQuery(t *testing.T) {
 	require.Equal(t, 200, c.FireWithQuery("Submit",
 		"city=FromQuery", map[string]any{"city": "FromSignal"},
 	))
-	viatest.AwaitFrame(t, frames, 2*time.Second, "FromSignal||false")
+	vt.AwaitFrame(t, frames, 2*time.Second, "FromSignal||false")
 }
 
 func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
@@ -247,7 +247,7 @@ func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
 	via.Mount[formFallbackPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -260,7 +260,7 @@ func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
 		WithSignal("age", "not-an-int").
 		WithSignal("on", "maybe").
 		Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "Porto||false")
+	vt.AwaitFrame(t, frames, 2*time.Second, "Porto||false")
 }
 
 // DecodeForm — defensive shape: skips unexported fields, leaves keys
@@ -299,7 +299,7 @@ func TestDecodeForm_skipsUnexportedFieldsAndLeavesMissingKeysZero(t *testing.T) 
 	via.Mount[unexportedFieldPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -313,5 +313,5 @@ func TestDecodeForm_skipsUnexportedFieldsAndLeavesMissingKeysZero(t *testing.T) 
 			Fire())
 	// Only the exported, tagged field with a matching signal lands;
 	// unexported is skipped (no panic), missing-tag field stays zero.
-	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="out">v|||</span>`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="out">v|||</span>`)
 }

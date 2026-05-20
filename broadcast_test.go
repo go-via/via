@@ -7,7 +7,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -23,7 +23,7 @@ func openSSEStreams(t *testing.T, server *httptest.Server, path string, n int) (
 	frames = make([]<-chan string, n)
 	cancels := make([]func(), n)
 	for i := range n {
-		tc := viatest.NewClient(t, server, path)
+		tc := vt.NewClient(t, server, path)
 		frames[i], cancels[i] = tc.SSE()
 	}
 	// Brief pause so the SSE handshakes complete before broadcast fires.
@@ -41,7 +41,7 @@ func openSSEStreams(t *testing.T, server *httptest.Server, path string, n int) (
 func awaitNeedleOnAll(t *testing.T, frames []<-chan string, needle string, timeout time.Duration) {
 	t.Helper()
 	for _, ch := range frames {
-		viatest.AwaitFrame(t, ch, timeout, needle)
+		vt.AwaitFrame(t, ch, timeout, needle)
 	}
 }
 
@@ -87,7 +87,7 @@ func TestBroadcastSignals_emptyMapIsNoOp(t *testing.T) {
 	via.Mount[broadcastPage](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 	assert.Equal(t, 0, app.BroadcastSignals(nil),
 		"nil map should be reported as 0 tabs")
 	assert.Equal(t, 0, app.BroadcastSignals(map[string]any{}),
@@ -102,7 +102,7 @@ func TestBroadcast_emptyIsNoOp(t *testing.T) {
 	via.Mount[broadcastPage](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 	assert.Equal(t, 0, app.Broadcast(""),
 		"empty script should be reported as 0 tabs")
 }

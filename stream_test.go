@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +39,7 @@ func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 	via.Mount[streamPanicPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSE()
 	defer cancel()
 
@@ -80,12 +80,12 @@ func TestStream_pushesPeriodicUpdatesOverSSE(t *testing.T) {
 	via.Mount[clockPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
 	// <p>3</p> proves the ticker fired at least 3x.
-	viatest.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
+	vt.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
 }
 
 func TestStream_stopsWhenCtxDone(t *testing.T) {
@@ -96,7 +96,7 @@ func TestStream_stopsWhenCtxDone(t *testing.T) {
 	via.Mount[clockPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSE()
 	time.Sleep(120 * time.Millisecond)
 	cancel()
@@ -147,7 +147,7 @@ func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
 	via.Mount[streamRacePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSE()
 	defer cancel()
 
@@ -198,12 +198,12 @@ func TestTicker_pauseStopsAndResumeRestartsCallback(t *testing.T) {
 	via.Mount[tickerControlPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
 	// Wait for at least one pre-pause tick.
-	viatest.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
 
 	require.Equal(t, http.StatusOK, tc.Action("Pause").Fire())
 	// Drain any in-flight tick or action frame, then assert silence.
@@ -224,7 +224,7 @@ drain:
 	}
 
 	require.Equal(t, http.StatusOK, tc.Action("Resume").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
 }
 
 func TestTicker_setIntervalChangesCadence(t *testing.T) {
@@ -237,11 +237,11 @@ func TestTicker_setIntervalChangesCadence(t *testing.T) {
 	via.Mount[tickerControlPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
-	viatest.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
 	require.Equal(t, http.StatusOK, tc.Action("SpeedUp").Fire())
 
 	// At 10ms, ~5 ticks fit in 50ms; the bound is loose to tolerate
@@ -292,11 +292,11 @@ func TestTicker_stopPermanentlyTerminatesCallbacks(t *testing.T) {
 	via.Mount[tickerStopPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
-	viatest.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
 
 	require.Equal(t, http.StatusOK, tc.Action("Halt").Fire())
 	// Drain any in-flight tick + the action's auto-flush frame.

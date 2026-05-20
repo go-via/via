@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +43,7 @@ func TestFile_typedFieldPopulatedFromMultipartUpload(t *testing.T) {
 	via.Mount[uploadPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	dir := t.TempDir()
 
 	body := []byte("PNG-bytes-pretend")
@@ -88,7 +88,7 @@ func TestMultipartReader_streamsRawParts(t *testing.T) {
 	via.Mount[readMultipartPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	require.Equal(t, http.StatusOK,
 		tc.Action("Read").
@@ -122,7 +122,7 @@ func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 	via.Mount[bytesEchoPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	payload := []byte("hello-from-Bytes")
 	require.Equal(t, http.StatusOK,
 		tc.Action("Read").
@@ -131,7 +131,7 @@ func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, ">16<")
+	vt.AwaitFrame(t, frames, 2*time.Second, ">16<")
 }
 
 func TestFile_oversizedRequestReturns413(t *testing.T) {
@@ -145,7 +145,7 @@ func TestFile_oversizedRequestReturns413(t *testing.T) {
 	via.Mount[uploadPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	got := tc.Action("Upload").
 		WithFile("avatar", "big.bin", bytes.Repeat([]byte("X"), 4096)).

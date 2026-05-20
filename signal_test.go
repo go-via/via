@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -233,16 +233,16 @@ func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"open":true`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"open":true`)
 
 	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"open":false`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"open":false`)
 }
 
 func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
@@ -255,13 +255,13 @@ func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("ToggleVis").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
 }
 
 func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
@@ -272,14 +272,14 @@ func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	// init=10, then +3, -5 → 8
 	require.Equal(t, http.StatusOK, tc.Action("AddCount").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"count":8`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"count":8`)
 }
 
 func TestUpdate_floatSignalRespectsType(t *testing.T) {
@@ -290,13 +290,13 @@ func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("AddBal").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
 }
 
 func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
@@ -308,13 +308,13 @@ func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("AddHits").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
 }
 
 func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
@@ -325,13 +325,13 @@ func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("PushOne").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
 }
 
 func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
@@ -342,13 +342,13 @@ func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 	via.Mount[signalHelpersPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("PushFive").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
 }
 
 // Inline "set if changed" guard: changed values reach the wire;
@@ -382,13 +382,13 @@ func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	via.Mount[setIfChangedPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SetBusy").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
 }
 
 func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
@@ -401,7 +401,7 @@ func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 	via.Mount[setIfChangedPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)

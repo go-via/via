@@ -1,4 +1,4 @@
-package test_test
+package vt_test
 
 import (
 	"net/http/httptest"
@@ -9,7 +9,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func TestNewClient_picksUpTabIDFromRender(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	tab := tc.TabID()
 	assert.NotEmpty(t, tab)
 	assert.True(t, strings.HasPrefix(tab, "/_"),
@@ -51,7 +51,7 @@ func TestClient_HTML_returnsLastFetchedBody(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	body := tc.HTML()
 	assert.Contains(t, body, "<button")
 	assert.Contains(t, body, ">+<")
@@ -65,7 +65,7 @@ func TestClient_Reload_refetchesAndReturnsCurrentBody(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	originalTab := tc.TabID()
 	original := tc.HTML()
 	require.NotEmpty(t, original)
@@ -88,7 +88,7 @@ func TestActionCall_Fire_returnsResponseStatus(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Bump").Fire())
 }
 
@@ -100,7 +100,7 @@ func TestAction_acceptsBoundMethodValue(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	page := &tcPage{}
 	// Typed form: pass the bound method, get the action name resolved
 	// via reflect — typo-proof since Bump is referenced, not stringified.
@@ -115,7 +115,7 @@ func TestActionCall_Fire_returns404OnUnknownMethod(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	assert.Equal(t, 404, tc.Action("DoesNotExist").Fire())
 }
 
@@ -127,7 +127,7 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	// Fire 3 increments, each carrying a different incoming "label"
 	// signal value. The state should grow to 3 and the latest signal
@@ -141,7 +141,7 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, ">3<")
+	vt.AwaitFrame(t, frames, 2*time.Second, ">3<")
 }
 
 type uploadPage struct {
@@ -176,7 +176,7 @@ func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 	via.Mount[uploadPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	body := []byte("PNG-bytes")
@@ -187,7 +187,7 @@ func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 			Fire(),
 		"the test client must produce a valid multipart body the runtime "+
 			"can decode into via.File + signal fields")
-	viatest.AwaitFrame(t, frames, 2*time.Second,
+	vt.AwaitFrame(t, frames, 2*time.Second,
 		"me.png:PNG-bytes:from-test")
 }
 
@@ -199,7 +199,7 @@ func TestActionRequest_WithFile_andWithSignal_combineScalarTypes(t *testing.T) {
 	via.Mount[uploadPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	// Multipart only requires a file to switch transports; signal scalars
 	// (string / bool / int) must all coerce to form values the server
 	// decodes back into typed signal fields.
@@ -223,11 +223,11 @@ func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	via.Mount[tcPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
 	// Without firing any action we should still observe at least one
 	// heartbeat frame within 1s thanks to the short heartbeat interval.
-	viatest.AwaitFrame(t, frames, 1500*time.Millisecond, "datastar-patch-signals")
+	vt.AwaitFrame(t, frames, 1500*time.Millisecond, "datastar-patch-signals")
 }

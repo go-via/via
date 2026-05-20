@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,12 +37,12 @@ func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {
 	via.Mount[appCounterPage](app, "/")
 	defer server.Close()
 
-	a := viatest.NewClient(t, server, "/")
+	a := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, a.Action("Bump").Fire())
 	require.Equal(t, 200, a.Action("Bump").Fire())
 
 	// Fresh client (different session) must see the app-scoped value.
-	b := viatest.NewClient(t, server, "/")
+	b := vt.NewClient(t, server, "/")
 	body := b.HTML()
 	assert.Contains(t, body, `<span id="visits">2</span>`,
 		"StateApp value must be shared across sessions")
@@ -67,8 +67,8 @@ func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	via.Mount[silentAppPage](app, "/silent")
 	defer server.Close()
 
-	reader := viatest.NewClient(t, server, "/reader")
-	silent := viatest.NewClient(t, server, "/silent")
+	reader := vt.NewClient(t, server, "/reader")
+	silent := vt.NewClient(t, server, "/silent")
 
 	framesR, cancelR := reader.SSE()
 	defer cancelR()
@@ -78,7 +78,7 @@ func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 
 	require.Equal(t, 200, reader.Action("Bump").Fire())
 
-	viatest.AwaitFrame(t, framesR, 2*time.Second, `<span id="visits">1</span>`)
+	vt.AwaitFrame(t, framesR, 2*time.Second, `<span id="visits">1</span>`)
 
 	// Heartbeat default is 25s — any frame inside this window can only
 	// come from an unintended re-render of a tab that does not display
@@ -99,15 +99,15 @@ func TestApp_writePropagatesLiveToEveryOtherTab(t *testing.T) {
 	via.Mount[appCounterPage](app, "/")
 	defer server.Close()
 
-	a := viatest.NewClient(t, server, "/")
-	b := viatest.NewClient(t, server, "/")
+	a := vt.NewClient(t, server, "/")
+	b := vt.NewClient(t, server, "/")
 
 	framesB, cancelB := b.SSE()
 	defer cancelB()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, a.Action("Bump").Fire())
-	viatest.AwaitFrame(t, framesB, 2*time.Second, `<span id="visits">1</span>`)
+	vt.AwaitFrame(t, framesB, 2*time.Second, `<span id="visits">1</span>`)
 }
 
 func TestApp_concurrentUpdatesDoNotLoseIncrements(t *testing.T) {
@@ -121,15 +121,15 @@ func TestApp_concurrentUpdatesDoNotLoseIncrements(t *testing.T) {
 	const writers = 4
 	const perWriter = 50
 
-	clients := make([]*viatest.Client, writers)
+	clients := make([]*vt.Client, writers)
 	for i := range clients {
-		clients[i] = viatest.NewClient(t, server, "/")
+		clients[i] = vt.NewClient(t, server, "/")
 	}
 
 	var wg sync.WaitGroup
 	for _, c := range clients {
 		wg.Add(1)
-		go func(c *viatest.Client) {
+		go func(c *vt.Client) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
 				require.Equal(t, 200, c.Action("Bump").Fire())
@@ -138,7 +138,7 @@ func TestApp_concurrentUpdatesDoNotLoseIncrements(t *testing.T) {
 	}
 	wg.Wait()
 
-	final := viatest.NewClient(t, server, "/")
+	final := vt.NewClient(t, server, "/")
 	assert.Contains(t, final.HTML(), `<span id="visits">200</span>`,
 		"concurrent Update calls across sessions must converge to the exact final count")
 }

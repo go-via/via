@@ -7,7 +7,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 )
 
 type benchPage struct {
@@ -56,7 +56,7 @@ func BenchmarkCounterAction(b *testing.B) {
 	via.Mount[benchPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(b, server, "/")
+	tc := vt.NewClient(b, server, "/")
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -86,7 +86,7 @@ func BenchmarkCounterActionWithLogger(b *testing.B) {
 	via.Mount[benchPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(b, server, "/")
+	tc := vt.NewClient(b, server, "/")
 
 	b.ResetTimer()
 	b.ReportAllocs()

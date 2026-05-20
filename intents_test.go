@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,12 +42,12 @@ func TestAction_returningRedirectEmitsRedirectFrame(t *testing.T) {
 	via.Mount[redirectingActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Go").Fire())
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, "/dashboard")
+	vt.AwaitFrame(t, frames, 2*time.Second, "/dashboard")
 }
 
 type toastingActionPage struct{}
@@ -85,12 +85,12 @@ func TestToast_intentSurvivesFmtErrorfWrapping(t *testing.T) {
 	via.Mount[wrappedToastPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Save").Fire())
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, `alert("wrapped-message")`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `alert("wrapped-message")`)
 }
 
 type wrappedRedirectPage struct{}
@@ -112,12 +112,12 @@ func TestRedirect_intentSurvivesFmtErrorfWrapping(t *testing.T) {
 	via.Mount[wrappedRedirectPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Go").Fire())
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, "/wrapped-target")
+	vt.AwaitFrame(t, frames, 2*time.Second, "/wrapped-target")
 }
 
 func TestSentinelIntents_doNotFireActionErrorHandler(t *testing.T) {
@@ -153,7 +153,7 @@ func TestSentinelIntents_doNotFireActionErrorHandler(t *testing.T) {
 			c.mount(app)
 			defer server.Close()
 
-			tc := viatest.NewClient(t, server, "/")
+			tc := vt.NewClient(t, server, "/")
 			require.Equal(t, http.StatusOK, tc.Action(c.method).Fire())
 			// Yield so the dispatch goroutine fully settles.
 			time.Sleep(50 * time.Millisecond)
@@ -178,7 +178,7 @@ func TestRedirect_emptyIntentEnqueuesNothing(t *testing.T) {
 	via.Mount[emptyRedirectPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Pulse").Fire())
 
 	frames, cancel := tc.SSE()
@@ -207,7 +207,7 @@ func TestToast_emptyIntentEnqueuesNothing(t *testing.T) {
 	via.Mount[emptyToastPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Pulse").Fire())
 
 	frames, cancel := tc.SSE()
@@ -231,10 +231,10 @@ func TestAction_returningToastQueuesPendingToast(t *testing.T) {
 	via.Mount[toastingActionPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Save").Fire())
 
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
 }

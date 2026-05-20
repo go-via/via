@@ -11,7 +11,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,11 +94,11 @@ func TestPage_embeddedAllowsOverridingOnConnect(t *testing.T) {
 	via.Mount[connectCounterEmbed](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 
-	viatest.AwaitFrame(t, frames, 2*time.Second, "_pageConnected")
+	vt.AwaitFrame(t, frames, 2*time.Second, "_pageConnected")
 	assert.GreaterOrEqual(t, connectFiredCount.Load(), int32(1),
 		"the overriding OnConnect must fire when SSE opens")
 }
@@ -122,7 +122,7 @@ func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
 	via.Mount[disposeCounterEmbed](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 
 	require.NoError(t, app.Shutdown(context.Background()))
 	require.Eventually(t, func() bool { return disposeFiredCount.Load() == 1 },
@@ -151,13 +151,13 @@ func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
 	via.Mount[userScopedPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("UseRed").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "theme=red")
+	vt.AwaitFrame(t, frames, 2*time.Second, "theme=red")
 }
 
 type appScopedPage struct {
@@ -181,11 +181,11 @@ func TestScopeApp_sharedAcrossSessions(t *testing.T) {
 	via.Mount[appScopedPage](app, "/")
 	defer server.Close()
 
-	a := viatest.NewClient(t, server, "/")
+	a := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, a.Action("Bump").Fire())
 	require.Equal(t, 200, a.Action("Bump").Fire())
 
-	b := viatest.NewClient(t, server, "/")
+	b := vt.NewClient(t, server, "/")
 	body := b.HTML()
 	assert.Contains(t, body, ">2<",
 		"App-scoped Visits must be 2 even on a fresh session")

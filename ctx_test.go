@@ -12,7 +12,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,11 +116,11 @@ func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
 	via.Mount[sessionProbePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	require.Equal(t, http.StatusOK, tc.Action("Probe").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "session-present")
+	vt.AwaitFrame(t, frames, 2*time.Second, "session-present")
 }
 
 // Disposed flag + OnDispose hook — Ctx lifecycle
@@ -175,10 +175,10 @@ func TestOnConnect_ctxIsLiveAndDoneIsOpen(t *testing.T) {
 	via.Mount[connectStateCheck](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
-	viatest.AwaitFrame(t, frames, 2*time.Second, "_connected")
+	vt.AwaitFrame(t, frames, 2*time.Second, "_connected")
 
 	assert.True(t, disposedFalseInsideOnConnect.Load(),
 		"ctx.Disposed() must be false while OnConnect runs")
@@ -212,7 +212,7 @@ func TestDone_channelClosedInsideOnDispose(t *testing.T) {
 	via.Mount[doneSelfCheck](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 	require.NoError(t, app.Shutdown(context.Background()))
 	require.Eventually(t,
 		func() bool { return doneChanClosedInsideOnDispose.Load() },
@@ -241,7 +241,7 @@ func TestDisposed_trueInsideOnDispose(t *testing.T) {
 	via.Mount[disposedSelfCheck](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 	require.NoError(t, app.Shutdown(context.Background()))
 	require.Eventually(t,
 		func() bool { return disposedFlagSeenInsideOnDispose.Load() },
@@ -258,7 +258,7 @@ func TestDispose_runsOnAppShutdown(t *testing.T) {
 	via.Mount[disposable](app, "/")
 	defer server.Close()
 
-	_ = viatest.NewClient(t, server, "/")
+	_ = vt.NewClient(t, server, "/")
 
 	require.NoError(t, app.Shutdown(context.Background()))
 	require.Eventually(t, func() bool { return disposed.Load() == 1 },
@@ -332,13 +332,13 @@ func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	via.Mount[ctxScriptPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoReload").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "location.reload()")
+	vt.AwaitFrame(t, frames, 2*time.Second, "location.reload()")
 }
 
 func TestCtx_Toast_emitsAlertScript(t *testing.T) {
@@ -349,13 +349,13 @@ func TestCtx_Toast_emitsAlertScript(t *testing.T) {
 	via.Mount[ctxScriptPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToast").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
 }
 
 func TestCtx_Toast_JSONEncodesSpecialChars(t *testing.T) {
@@ -369,13 +369,13 @@ func TestCtx_Toast_JSONEncodesSpecialChars(t *testing.T) {
 	via.Mount[ctxScriptPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToastSpecial").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second,
+	vt.AwaitFrame(t, frames, 2*time.Second,
 		`alert("he said \"ok\\n done\"")`)
 }
 
@@ -387,11 +387,11 @@ func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 	via.Mount[ctxScriptPage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoRedirect").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, "/elsewhere")
+	vt.AwaitFrame(t, frames, 2*time.Second, "/elsewhere")
 }

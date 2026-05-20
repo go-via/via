@@ -9,7 +9,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
-	viatest "github.com/go-via/via/test"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +51,7 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 	via.Mount[statePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 
 	// Open SSE first so flushed patches land in the stream.
 	frames, cancel := tc.SSE()
@@ -63,7 +63,7 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 	require.Equal(t, 200, tc.Action("Inc").Fire())
 
 	// We expect at least one element patch with "<p>3</p>".
-	viatest.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
+	vt.AwaitFrame(t, frames, 2*time.Second, "<p>3</p>")
 }
 
 type stateIntInitPage struct {
@@ -133,14 +133,14 @@ func TestUpdate_appliesFnToState(t *testing.T) {
 	via.Mount[updatePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	// Set(5) then Update(*2) → 10.
 	require.Equal(t, http.StatusOK, tc.Action("DoState").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `<span id="n">10</span>`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="n">10</span>`)
 }
 
 func TestUpdate_appliesFnToSignal(t *testing.T) {
@@ -151,14 +151,14 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 	via.Mount[updatePage](app, "/")
 	defer server.Close()
 
-	tc := viatest.NewClient(t, server, "/")
+	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
 	// init=1, Update(+4) → 5.
 	require.Equal(t, http.StatusOK, tc.Action("DoSignal").Fire())
-	viatest.AwaitFrame(t, frames, 2*time.Second, `"step":5`)
+	vt.AwaitFrame(t, frames, 2*time.Second, `"step":5`)
 }
 
 // State.Key isn't externally observable: StateTab[T] is server-rendered, so
