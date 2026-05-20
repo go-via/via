@@ -539,32 +539,19 @@ the server starts.
 
 ## Testing
 
-Two test surfaces, picked by what you want to verify:
+Tests drive the composition through HTTP — same path as a real
+browser, so the full middleware stack, session cookie, and SSE
+machinery run end-to-end. There is no "direct method" seam: assertions
+hit rendered HTML or SSE frames, never internal state (see
+[CONVENTIONS.md](CONVENTIONS.md) — *Test Scope: Outside-In Through
+the Public API*).
 
 ```go
 import (
     "github.com/go-via/via"
     "github.com/go-via/via/test"
 )
-```
 
-**Direct method tests** (no HTTP, no SSE, no session):
-
-```go
-c := &Counter{}
-ctx := test.NewCtx(t, c)
-c.Inc(ctx)
-require.Equal(t, 1, c.Hits.Get(ctx))
-
-// Inspect non-state side effects:
-require.Equal(t, "/profile", ctx.PendingRedirect())
-require.Contains(t, ctx.PendingScripts(), "console.log")
-require.Equal(t, "blue", ctx.PendingSignals()["theme"])
-```
-
-**End-to-end through HTTP** (SSE, session, full middleware stack):
-
-```go
 var server *httptest.Server
 app := via.New(via.WithTestServer(&server))
 via.Mount[Counter](app, "/")
@@ -575,9 +562,10 @@ require.Equal(t, 200, tc.Action(c.Inc).Fire())             // typed: typo → co
 require.Equal(t, 200, tc.Action("Apply").                  // string still works
     WithSignal("step", 5).Fire())
 require.Contains(t, tc.Reload(), ">1<")                    // re-fetch + assert on body
+
 frames, cancel := tc.SSE()
 defer cancel()
-test.AwaitFrame(t, frames, 2*time.Second, ">3<")    // wait for substring
+test.AwaitFrame(t, frames, 2*time.Second, ">3<")           // wait for substring
 
 // Multipart action with a file part — switches the request to
 // multipart/form-data automatically when any file is attached.
@@ -587,9 +575,11 @@ tc.Action(p.Upload).
     Fire()
 ```
 
-`tc.Action` accepts either a method value (compile-time typo protection) or
-the action's name as a string. `tc.Reload` re-fetches the mounted page so
-post-action body assertions are one call instead of a hand-rolled GET.
+`tc.Action` accepts either a method value (compile-time typo protection)
+or the action's name as a string. `tc.Reload` re-fetches the mounted
+page so post-action body assertions are one call instead of a
+hand-rolled GET. `tc.Fork(path)` opens a second tab on the same cookie
+jar — the only way to drive `StateSess` behaviour that spans tabs.
 
 ## Examples
 

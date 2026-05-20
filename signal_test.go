@@ -248,7 +248,7 @@ func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	t.Parallel()
 	// Pins that StateTab[bool].Update works the same as Signal[bool].Update —
-	// via.State stays a drop-in substitute for via.Signal in reactive
+	// via.StateTab stays a drop-in substitute for via.Signal in reactive
 	// read-modify-write code.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
