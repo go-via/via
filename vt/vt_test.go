@@ -24,7 +24,7 @@ func (p *tcPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *tcPage) View(ctx *via.Ctx) h.H {
+func (p *tcPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.N.Text(), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
@@ -166,7 +166,7 @@ func (p *uploadPage) Save(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *uploadPage) View(ctx *via.Ctx) h.H { return h.Div(p.Echo.Text()) }
+func (p *uploadPage) View(ctx *via.CtxR) h.H { return h.Div(p.Echo.Text()) }
 
 func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 	t.Parallel()

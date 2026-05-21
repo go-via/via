@@ -28,7 +28,7 @@ func (p *Page) IncShared(ctx *via.Ctx) {
 	p.Shared.Update(ctx, func(n int) int { return n + 1 })
 }
 
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
 	return h.Main(h.Class("container"),
 		h.Article(
 			h.H2(h.Text("Local (tab-scoped)")),

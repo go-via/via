@@ -16,7 +16,7 @@ import (
 
 type introspectPage struct{}
 
-func (p *introspectPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *introspectPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestRoutes_returnsRegisteredPatternsWithRegistrarTag(t *testing.T) {
 	t.Parallel()
@@ -57,11 +57,11 @@ func TestRoutes_orderedAlphabetically(t *testing.T) {
 
 type infoA struct{}
 
-func (a *infoA) View(ctx *via.Ctx) h.H { return h.Div() }
+func (a *infoA) View(ctx *via.CtxR) h.H { return h.Div() }
 
 type infoB struct{}
 
-func (b *infoB) View(ctx *via.Ctx) h.H { return h.Div() }
+func (b *infoB) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestCompositions_listsMountedTypesSorted(t *testing.T) {
 	t.Parallel()
@@ -125,11 +125,11 @@ func TestWithNotFound_doesNotInterceptKnownRoutes(t *testing.T) {
 
 type pageA struct{}
 
-func (a *pageA) View(ctx *via.Ctx) h.H { return h.Div() }
+func (a *pageA) View(ctx *via.CtxR) h.H { return h.Div() }
 
 type pageB struct{}
 
-func (b *pageB) View(ctx *via.Ctx) h.H { return h.Div() }
+func (b *pageB) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestRoute_panicsOnDuplicateMount(t *testing.T) {
 	t.Parallel()

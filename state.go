@@ -30,8 +30,9 @@ type StateTab[T any] struct {
 
 // Get returns the current value. The ctx is unused today but kept so
 // StateTab[T] mirrors Signal[T]'s shape (and so future tab-scoped reads
-// can move into the runtime without an API break).
-func (s *StateTab[T]) Get(_ *Ctx) T {
+// can move into the runtime without an API break). Accepts either *Ctx
+// (action handlers) or *CtxR (View).
+func (s *StateTab[T]) Get(_ readCtx) T {
 	return s.val
 }
 

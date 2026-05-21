@@ -28,7 +28,7 @@ func (p *kitchenSinkPage) Bump(ctx *via.Ctx) {
 	p.N.Update(ctx, func(n int) int { return n + 1 })
 }
 
-func (p *kitchenSinkPage) View(ctx *via.Ctx) h.H {
+func (p *kitchenSinkPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.P(h.Textf("q=%s", p.Q)),
 		h.P(p.N.Text()),

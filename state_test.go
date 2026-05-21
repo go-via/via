@@ -23,7 +23,7 @@ func (p *statePage) Inc(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *statePage) View(ctx *via.Ctx) h.H {
+func (p *statePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(h.Text("+"), on.Click(p.Inc)),
 		h.P(p.Hits.Text()),
@@ -70,7 +70,7 @@ type stateIntInitPage struct {
 	N via.StateTab[int] `via:",init=3"`
 }
 
-func (p *stateIntInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
+func (p *stateIntInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text()) }
 
 func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
 	t.Parallel()
@@ -87,7 +87,7 @@ type stateStringInitPage struct {
 	Label via.StateTab[string] `via:",init=--"`
 }
 
-func (p *stateStringInitPage) View(ctx *via.Ctx) h.H { return h.Div(p.Label.Text()) }
+func (p *stateStringInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.Label.Text()) }
 
 func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 	t.Parallel()
@@ -118,7 +118,7 @@ func (p *updatePage) DoSignal(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *updatePage) View(ctx *via.Ctx) h.H {
+func (p *updatePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.ID("n"), p.N.Text()),
 		h.Span(h.ID("step"), p.Step.Text()),
@@ -167,4 +167,3 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 // Tag-driven key resolution for State is exercised end-to-end by the
 // init-tag tests above, where mis-resolving the key would render the
 // wrong seeded value.
-

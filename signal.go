@@ -29,8 +29,9 @@ type Signal[T any] struct {
 
 // Get returns the current value. The ctx is unused today but kept so
 // every reactive-handle Get/Set has the same shape (and so future tab-
-// scoped reads can move into the runtime without an API break).
-func (s *Signal[T]) Get(_ *Ctx) T {
+// scoped reads can move into the runtime without an API break). Accepts
+// either *Ctx (action handlers) or *CtxR (View).
+func (s *Signal[T]) Get(_ readCtx) T {
 	return s.val
 }
 

@@ -17,7 +17,7 @@ package via
 //	    return nil
 //	}
 //
-//	func (p *Profile) View(ctx *via.Ctx) h.H { ... }
+//	func (p *Profile) View(ctx *via.CtxR) h.H { ... }
 //
 // Embedding is optional. Compositions that don't embed Page work
 // exactly as before — Mount detects whichever lifecycle methods are

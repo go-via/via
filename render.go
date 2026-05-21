@@ -60,7 +60,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx.beginRender()
-	body := ctx.viewFn(ctx)
+	body := ctx.viewFn(ctx.readView())
 	ctx.endRender()
 	a.writePageDocument(w, ctx, body)
 	a.metricsOrNoop().Counter("via.render.total", "route", d.route)
@@ -166,7 +166,7 @@ func flushDirty(ctx *Ctx) {
 		// call ctx.PatchSignal / ctx.SyncElements, which would deadlock
 		// on a re-entrant queue.mu acquisition.
 		ctx.beginRender()
-		body := ctx.viewFn(ctx)
+		body := ctx.viewFn(ctx.readView())
 		ctx.endRender()
 		_ = h.Div(h.ID(ctx.id), body).Render(buf)
 		ctx.queue.mu.Lock()

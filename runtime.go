@@ -75,6 +75,7 @@ func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 		queue:        newPatchQueue(),
 		doneChan:     make(chan struct{}),
 	}
+	ctx.ctxR = &CtxR{ctx: ctx}
 	ctx.touch()
 	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
@@ -89,7 +90,7 @@ func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 // per-request hot path. Called once per newCtx; the resulting funcs
 // dispatch directly.
 func bindDispatchFns(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
-	ctx.viewFn = cmpVal.Method(d.viewIdx).Interface().(func(*Ctx) h.H)
+	ctx.viewFn = cmpVal.Method(d.viewIdx).Interface().(func(*CtxR) h.H)
 	if d.initIdx >= 0 {
 		ctx.initFn = cmpVal.Method(d.initIdx).Interface().(func(*Ctx) error)
 	}

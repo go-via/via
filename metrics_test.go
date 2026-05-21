@@ -58,7 +58,7 @@ func (p *metricsPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *metricsPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *metricsPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestMetrics_emitsActionAndRenderEvents(t *testing.T) {
 	t.Parallel()

@@ -24,7 +24,7 @@ func (c *CounterCard) Inc(ctx *via.Ctx) {
 
 // View takes the click attribute as a parameter so the parent can decide
 // which action drives this card.
-func (c *CounterCard) View(ctx *via.Ctx, onClick h.H) h.H {
+func (c *CounterCard) View(ctx *via.CtxR, onClick h.H) h.H {
 	return h.Div(
 		h.P(h.Textf("Count: %d", c.Count.Get(ctx))),
 		h.P(h.Text("Step: "), c.Step.Text()),
@@ -44,7 +44,7 @@ type Page struct {
 func (p *Page) IncA(ctx *via.Ctx) { p.A.Inc(ctx) }
 func (p *Page) IncB(ctx *via.Ctx) { p.B.Inc(ctx) }
 
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.H1(h.Text("Counter 1")),
 		p.A.View(ctx, on.Click(p.IncA)),

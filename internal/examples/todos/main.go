@@ -66,7 +66,7 @@ func (t *Todos) Clear(ctx *via.Ctx) error {
 	return nil
 }
 
-func (t *Todos) View(ctx *via.Ctx) h.H {
+func (t *Todos) View(ctx *via.CtxR) h.H {
 	items := t.Items.Get(ctx)
 	filter := t.Filter.Get(ctx)
 	visible := make([]int, 0, len(items))

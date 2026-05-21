@@ -21,7 +21,7 @@ type bareEmbedPage struct {
 	Hits via.StateTab[int]
 }
 
-func (p *bareEmbedPage) View(ctx *via.Ctx) h.H {
+func (p *bareEmbedPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.Hits.Text())
 }
 
@@ -54,7 +54,7 @@ func (p *initCounterEmbed) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *initCounterEmbed) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *initCounterEmbed) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestPage_embeddedAllowsOverridingOnInit(t *testing.T) {
 	initFiredCount.Store(0) // shared with other tests in this package; isolate
@@ -85,7 +85,7 @@ func (p *connectCounterEmbed) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *connectCounterEmbed) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *connectCounterEmbed) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestPage_embeddedAllowsOverridingOnConnect(t *testing.T) {
 	connectFiredCount.Store(0)
@@ -113,7 +113,7 @@ func (p *disposeCounterEmbed) OnDispose(ctx *via.Ctx) {
 	disposeFiredCount.Add(1)
 }
 
-func (p *disposeCounterEmbed) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *disposeCounterEmbed) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
 	disposeFiredCount.Store(0)
@@ -139,7 +139,7 @@ func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *userScopedPage) View(ctx *via.Ctx) h.H {
+func (p *userScopedPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.P(h.Text("theme="), p.Theme.Text(ctx)), h.Button(h.Text("red"), on.Click(p.UseRed)))
 }
 
@@ -169,7 +169,7 @@ func (p *appScopedPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *appScopedPage) View(ctx *via.Ctx) h.H {
+func (p *appScopedPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.Visits.Text(ctx))
 }
 

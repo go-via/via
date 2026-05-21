@@ -26,9 +26,10 @@ var (
 	// Cached reflect.Type values used by Mount-time signature checks.
 	// reflect.TypeOf returns the same canonical type per call but each call
 	// still allocates an interface header — cache once at package init.
-	ctxPtrType = reflect.TypeOf((*Ctx)(nil))
-	errorType  = reflect.TypeOf((*error)(nil)).Elem()
-	hType      = reflect.TypeOf((*h.H)(nil)).Elem()
+	ctxPtrType  = reflect.TypeOf((*Ctx)(nil))
+	ctxRPtrType = reflect.TypeOf((*CtxR)(nil))
+	errorType   = reflect.TypeOf((*error)(nil)).Elem()
+	hType       = reflect.TypeOf((*h.H)(nil)).Elem()
 )
 
 // checkAndIndexLifecycle validates the lifecycle method's signature and
@@ -59,8 +60,10 @@ func checkAndIndexLifecycle(typ, ptrTyp reflect.Type, name string, want lifecycl
 
 func checkViewSignature(typ reflect.Type, m reflect.Method) {
 	mt := m.Type
-	// Param shape: receiver + *Ctx, exactly one return.
-	badParams := mt.NumIn() != 2 || mt.NumOut() != 1 || mt.In(1) != ctxPtrType
+	// Param shape: receiver + *CtxR (read-only render context), exactly
+	// one return. Reject *via.Ctx so View can't accidentally hold the
+	// mutator surface.
+	badParams := mt.NumIn() != 2 || mt.NumOut() != 1 || mt.In(1) != ctxRPtrType
 	// Return must be assignable to h.H.
 	// Catches "View(ctx) int" at Mount time rather than at the first
 	// request's view.Interface().(h.H) type-assert.
@@ -69,7 +72,7 @@ func checkViewSignature(typ reflect.Type, m reflect.Method) {
 		panic(fmt.Sprintf(
 			"via.Mount(%s): View has the wrong signature\n"+
 				"\n"+
-				"  expected: func (c *%s) View(ctx *via.Ctx) h.H\n"+
+				"  expected: func (c *%s) View(ctx *via.CtxR) h.H\n"+
 				"       got: %s\n",
 			typ.String(), typ.Name(), mt.String()))
 	}
@@ -83,26 +86,44 @@ func checkViewSignature(typ reflect.Type, m reflect.Method) {
 //
 // Lifecycle method names are excluded so they don't masquerade as
 // actions when their signature happens to match.
+//
+// Panics if a method named like an action (one param, action-shaped
+// return) takes *via.CtxR instead of *via.Ctx — the read-only context
+// has no Set/Update, so this is always a user typo and silently
+// dropping the method would make the missing-action mystery hard to
+// debug.
 func actionMethodKind(m reflect.Method) (void bool, ok bool) {
 	mt := m.Type
 	if mt.NumIn() != 2 {
-		return false, false
-	}
-	if mt.In(1) != ctxPtrType {
 		return false, false
 	}
 	switch m.Name {
 	case "View", "OnInit", "OnConnect", "OnDispose":
 		return false, false
 	}
-	switch mt.NumOut() {
-	case 0:
-		return true, true
-	case 1:
-		if mt.Out(0) != errorType {
-			return false, false
-		}
-		return false, true
+	// Detect action-shaped return early so the *CtxR diagnostic only
+	// fires on methods the user clearly intended as actions.
+	actionShape := mt.NumOut() == 0 ||
+		(mt.NumOut() == 1 && mt.Out(0) == errorType)
+	if !actionShape {
+		return false, false
 	}
-	return false, false
+	if mt.In(1) == ctxRPtrType {
+		panic(fmt.Sprintf(
+			"via.Mount: action %s takes *via.CtxR, but actions must take *via.Ctx\n"+
+				"\n"+
+				"  expected: func (c *T) %s(ctx *via.Ctx) error\n"+
+				"       got: %s\n"+
+				"\n"+
+				"*via.CtxR is the read-only render context; it has no Set/Update,\n"+
+				"so an action handler bound to it could not mutate state.\n",
+			m.Name, m.Name, mt.String()))
+	}
+	if mt.In(1) != ctxPtrType {
+		return false, false
+	}
+	if mt.NumOut() == 0 {
+		return true, true
+	}
+	return false, true
 }

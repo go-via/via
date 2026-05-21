@@ -105,7 +105,7 @@ func (p *chartActionPage) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *chartActionPage) View(ctx *via.Ctx) h.H {
+func (p *chartActionPage) View(ctx *via.CtxR) h.H {
 	if p.Chart == nil {
 		return h.Div()
 	}

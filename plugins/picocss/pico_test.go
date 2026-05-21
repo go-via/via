@@ -14,7 +14,7 @@ import (
 
 type emptyPage struct{}
 
-func (e *emptyPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (e *emptyPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func renderPage(t *testing.T, opts ...picocss.PicoOption) string {
 	t.Helper()

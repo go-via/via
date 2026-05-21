@@ -18,7 +18,7 @@ import (
 
 type langPage struct{}
 
-func (p *langPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *langPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestRender_documentMetadataOptions(t *testing.T) {
 	t.Parallel()
@@ -67,7 +67,7 @@ func TestRender_documentMetadataOptions(t *testing.T) {
 
 type maxCtxPage struct{}
 
-func (p *maxCtxPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *maxCtxPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 	t.Parallel()

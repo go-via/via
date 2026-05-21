@@ -83,7 +83,7 @@ func TestGroup_middlewareCanShortCircuit(t *testing.T) {
 
 type groupedComp struct{}
 
-func (g *groupedComp) View(ctx *via.Ctx) h.H { return h.Div() }
+func (g *groupedComp) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestGroup_middlewareAppliesToMountedComposition(t *testing.T) {
 	t.Parallel()
@@ -110,7 +110,7 @@ type tenantPage struct {
 	UserID int    `path:"id"`
 }
 
-func (p *tenantPage) View(ctx *via.Ctx) h.H {
+func (p *tenantPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.Textf("tenant=%s", p.Tenant)),
 		h.Span(h.Textf("user=%d", p.UserID)))
 }
@@ -211,7 +211,7 @@ func (p *protectedPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *protectedPage) View(ctx *via.Ctx) h.H {
+func (p *protectedPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.N.Text(), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 

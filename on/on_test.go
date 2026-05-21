@@ -20,7 +20,7 @@ type setSignalPage struct {
 
 func (p *setSignalPage) Apply(ctx *via.Ctx) error { return nil }
 
-func (p *setSignalPage) View(ctx *via.Ctx) h.H {
+func (p *setSignalPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(
 			h.Text("Set step to 5"),
@@ -48,7 +48,7 @@ type setSignalStringPage struct {
 
 func (p *setSignalStringPage) Pick(ctx *via.Ctx) error { return nil }
 
-func (p *setSignalStringPage) View(ctx *via.Ctx) h.H {
+func (p *setSignalStringPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(
 			h.Text("Use red"),
@@ -62,7 +62,7 @@ type modifierPage struct{}
 func (p *modifierPage) Submit(ctx *via.Ctx) error { return nil }
 func (p *modifierPage) Search(ctx *via.Ctx) error { return nil }
 
-func (p *modifierPage) View(ctx *via.Ctx) h.H {
+func (p *modifierPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Form(on.Submit(p.Submit, on.Prevent())),
 		h.Input(on.Input(p.Search, on.Debounce("200ms"))),
@@ -100,7 +100,7 @@ type keyFilterPage struct{}
 
 func (p *keyFilterPage) Send(ctx *via.Ctx) error { return nil }
 
-func (p *keyFilterPage) View(ctx *via.Ctx) h.H {
+func (p *keyFilterPage) View(ctx *via.CtxR) h.H {
 	return h.Div(on.Key("Enter", p.Send))
 }
 
@@ -156,7 +156,7 @@ type eventCoveragePage struct{}
 
 func (p *eventCoveragePage) Hit(ctx *via.Ctx) error { return nil }
 
-func (p *eventCoveragePage) View(ctx *via.Ctx) h.H {
+func (p *eventCoveragePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Input(on.Focus(p.Hit)),
 		h.Input(on.Blur(p.Hit)),
@@ -193,7 +193,7 @@ func TestOn_NamedEventHelpersRenderExpectedTriggers(t *testing.T) {
 type internPage struct{}
 
 func (p *internPage) Inc(ctx *via.Ctx) error { return nil }
-func (p *internPage) View(ctx *via.Ctx) h.H  { return h.Div() }
+func (p *internPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestClick_bareBindingRendersIdentically(t *testing.T) {
 	t.Parallel()

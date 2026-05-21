@@ -83,7 +83,7 @@ func (p *authPage) LogOut(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *authPage) View(ctx *via.Ctx) h.H {
+func (p *authPage) View(ctx *via.CtxR) h.H {
 	if u, ok := sess.Get[sessUser](ctx); ok {
 		return h.Div(h.P(h.Textf("hello %s", u.Name)),
 			h.Button(h.Text("logout"), on.Click(p.LogOut)))
@@ -172,7 +172,7 @@ func (p *loginPage) Login(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *loginPage) View(ctx *via.Ctx) h.H {
+func (p *loginPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.UserID.Text(ctx))
 }
 

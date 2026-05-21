@@ -22,7 +22,7 @@ func (p *redirectingActionPage) Go(ctx *via.Ctx) error {
 	return via.Redirect("/dashboard")
 }
 
-func (p *redirectingActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *redirectingActionPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestRedirect_returnedErrorCarriesURL(t *testing.T) {
 	t.Parallel()
@@ -56,7 +56,7 @@ func (p *toastingActionPage) Save(ctx *via.Ctx) error {
 	return via.Toast("saved!")
 }
 
-func (p *toastingActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *toastingActionPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestToast_returnedErrorCarriesMessage(t *testing.T) {
 	t.Parallel()
@@ -73,7 +73,7 @@ func (p *wrappedToastPage) Save(ctx *via.Ctx) error {
 	return fmt.Errorf("save flow: %w", via.Toast("wrapped-message"))
 }
 
-func (p *wrappedToastPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *wrappedToastPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestToast_intentSurvivesFmtErrorfWrapping(t *testing.T) {
 	t.Parallel()
@@ -99,7 +99,7 @@ func (p *wrappedRedirectPage) Go(ctx *via.Ctx) error {
 	return fmt.Errorf("auth check: %w", via.Redirect("/wrapped-target"))
 }
 
-func (p *wrappedRedirectPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *wrappedRedirectPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestRedirect_intentSurvivesFmtErrorfWrapping(t *testing.T) {
 	t.Parallel()
@@ -166,7 +166,7 @@ func TestSentinelIntents_doNotFireActionErrorHandler(t *testing.T) {
 type emptyRedirectPage struct{}
 
 func (p *emptyRedirectPage) Pulse(ctx *via.Ctx) error { return via.Redirect("") }
-func (p *emptyRedirectPage) View(ctx *via.Ctx) h.H    { return h.Div() }
+func (p *emptyRedirectPage) View(ctx *via.CtxR) h.H   { return h.Div() }
 
 func TestRedirect_emptyIntentEnqueuesNothing(t *testing.T) {
 	t.Parallel()
@@ -195,7 +195,7 @@ func TestRedirect_emptyIntentEnqueuesNothing(t *testing.T) {
 type emptyToastPage struct{}
 
 func (p *emptyToastPage) Pulse(ctx *via.Ctx) error { return via.Toast("") }
-func (p *emptyToastPage) View(ctx *via.Ctx) h.H    { return h.Div() }
+func (p *emptyToastPage) View(ctx *via.CtxR) h.H   { return h.Div() }
 
 func TestToast_emptyIntentEnqueuesNothing(t *testing.T) {
 	t.Parallel()

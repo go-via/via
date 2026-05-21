@@ -335,7 +335,7 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 // button label) carries `data-text="$key"` — datastar fills it from
 // the per-tab signal store, which the stream callback patches each
 // tick. The view itself never re-renders during streaming.
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
 	return h.Body(
 		h.Nav(h.Class("container-fluid"),
 			h.Ul(h.Li(h.Strong(h.T("System Monitor")))),

@@ -34,7 +34,7 @@ func (p *syncPage) PickTheme(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *syncPage) View(ctx *via.Ctx) h.H {
+func (p *syncPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.ID("root"), h.P(h.Text("ready")))
 }
 

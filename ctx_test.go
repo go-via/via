@@ -26,7 +26,7 @@ func (p *cookieEchoPage) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *cookieEchoPage) View(ctx *via.Ctx) h.H { return h.Div(p.Flavor.Text()) }
+func (p *cookieEchoPage) View(ctx *via.CtxR) h.H { return h.Div(p.Flavor.Text()) }
 
 func TestCookie_readsValueFromRequest(t *testing.T) {
 	t.Parallel()
@@ -53,7 +53,7 @@ type searchPage struct {
 	Debug bool   `query:"debug"`
 }
 
-func (s *searchPage) View(ctx *via.Ctx) h.H {
+func (s *searchPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.Textf("q=%q", s.Q)),
 		h.Span(h.Textf("page=%d", s.Page)),
@@ -106,7 +106,7 @@ func (p *sessionProbePage) Probe(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *sessionProbePage) View(*via.Ctx) h.H { return h.Div() }
+func (p *sessionProbePage) View(*via.CtxR) h.H { return h.Div() }
 
 func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
 	t.Parallel()
@@ -135,7 +135,7 @@ func (d *disposable) OnDispose(ctx *via.Ctx) {
 	disposed.Add(1)
 }
 
-func (d *disposable) View(ctx *via.Ctx) h.H { return h.Div() }
+func (d *disposable) View(ctx *via.CtxR) h.H { return h.Div() }
 
 var (
 	disposedFalseInsideOnConnect atomic.Bool
@@ -160,7 +160,7 @@ func (c *connectStateCheck) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (c *connectStateCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+func (c *connectStateCheck) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestOnConnect_ctxIsLiveAndDoneIsOpen(t *testing.T) {
 	t.Parallel()
@@ -199,7 +199,7 @@ func (d *doneSelfCheck) OnDispose(ctx *via.Ctx) {
 	}
 }
 
-func (d *doneSelfCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+func (d *doneSelfCheck) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestDone_channelClosedInsideOnDispose(t *testing.T) {
 	t.Parallel()
@@ -228,7 +228,7 @@ func (d *disposedSelfCheck) OnDispose(ctx *via.Ctx) {
 	disposedFlagSeenInsideOnDispose.Store(ctx.Disposed())
 }
 
-func (d *disposedSelfCheck) View(ctx *via.Ctx) h.H { return h.Div() }
+func (d *disposedSelfCheck) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestDisposed_trueInsideOnDispose(t *testing.T) {
 	t.Parallel()
@@ -322,7 +322,7 @@ func (p *ctxScriptPage) DoRedirect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *ctxScriptPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *ctxScriptPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	t.Parallel()
@@ -417,7 +417,7 @@ func (p *syncOffPage) LoudAfter(ctx *via.Ctx) error {
 
 func (p *syncOffPage) NoOp(ctx *via.Ctx) error { return nil }
 
-func (p *syncOffPage) View(ctx *via.Ctx) h.H {
+func (p *syncOffPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.ID("n"), p.N.Text()),
 		h.Span(h.ID("theme"), p.Theme.Text(ctx)),
@@ -457,7 +457,7 @@ func (p *syncOffAppPage) BumpSilently(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *syncOffAppPage) View(ctx *via.Ctx) h.H {
+func (p *syncOffAppPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("visits"), p.Visits.Text(ctx)))
 }
 
@@ -593,7 +593,7 @@ func (p *syncOffStreamPage) GoLoud(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *syncOffStreamPage) View(ctx *via.Ctx) h.H {
+func (p *syncOffStreamPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("n"), p.N.Text()))
 }
 
@@ -638,7 +638,7 @@ type syncOffRacePage struct {
 	N via.StateApp[int]
 }
 
-func (p *syncOffRacePage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text(ctx)) }
+func (p *syncOffRacePage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx)) }
 
 func (p *syncOffRacePage) Spawn(ctx *via.Ctx) error {
 	go func() {
@@ -690,7 +690,7 @@ func (p *syncOffPanicPage) BoomSilently(ctx *via.Ctx) error {
 	panic("boom-while-silent")
 }
 
-func (p *syncOffPanicPage) View(ctx *via.Ctx) h.H { return h.Div(p.N.Text()) }
+func (p *syncOffPanicPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text()) }
 
 func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
 	t.Parallel()
@@ -717,7 +717,7 @@ func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
 
 type syncOffExplicitPage struct{}
 
-func (p *syncOffExplicitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *syncOffExplicitPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func (p *syncOffExplicitPage) SilentToast(ctx *via.Ctx) error {
 	ctx.SyncOff()

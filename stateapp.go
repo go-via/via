@@ -24,9 +24,14 @@ func (a *StateApp[T]) Key() string { return a.wireKey }
 
 // Get returns the current app value, or the zero value of T if unset.
 // A Get that happens during View execution subscribes the ctx so a
-// subsequent Update on the same key fans out to it.
-func (a *StateApp[T]) Get(ctx *Ctx) T {
+// subsequent Update on the same key fans out to it. Accepts either
+// *Ctx (action handlers) or *CtxR (View).
+func (a *StateApp[T]) Get(rc readCtx) T {
 	var zero T
+	if rc == nil {
+		return zero
+	}
+	ctx := rc.rctx()
 	if ctx == nil || ctx.app == nil {
 		return zero
 	}
@@ -59,5 +64,6 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) T) {
 	ctx.app.broadcastRender(ctx, nil, a.wireKey)
 }
 
-// Text renders the current value as a static text node.
-func (a *StateApp[T]) Text(ctx *Ctx) h.H { return h.Textf("%v", a.Get(ctx)) }
+// Text renders the current value as a static text node. Accepts either
+// *Ctx or *CtxR.
+func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Get(rc)) }

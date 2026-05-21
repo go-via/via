@@ -229,7 +229,7 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 
 type ridProbePage struct{}
 
-func (p *ridProbePage) View(*via.Ctx) h.H { return h.Div() }
+func (p *ridProbePage) View(*via.CtxR) h.H { return h.Div() }
 
 func TestRequestID_generatesWhenAbsent(t *testing.T) {
 	t.Parallel()

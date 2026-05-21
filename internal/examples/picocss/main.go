@@ -42,7 +42,7 @@ func (p *Page) Dec(ctx *via.Ctx) {
 	}
 }
 
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
 	visible := allFeatures[:p.Visible.Get(ctx)]
 
 	itemList := make([]h.H, 0, len(visible)+1)

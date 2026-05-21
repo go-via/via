@@ -96,7 +96,7 @@ func (p *LoginPage) Submit(ctx *via.Ctx) error {
 	return via.Redirect("/profile")
 }
 
-func (p *LoginPage) View(ctx *via.Ctx) h.H {
+func (p *LoginPage) View(ctx *via.CtxR) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Login")),
 		errBanner(p.Err.Get(ctx)),
@@ -131,7 +131,7 @@ func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 	return via.Redirect("/login")
 }
 
-func (p *RegisterPage) View(ctx *via.Ctx) h.H {
+func (p *RegisterPage) View(ctx *via.CtxR) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Register")),
 		errBanner(p.Err.Get(ctx)),
@@ -160,7 +160,7 @@ func (p *ProfilePage) Logout(ctx *via.Ctx) error {
 	return via.Redirect("/")
 }
 
-func (p *ProfilePage) View(ctx *via.Ctx) h.H {
+func (p *ProfilePage) View(ctx *via.CtxR) h.H {
 	user, _ := sess.Get[User](ctx)
 	return shell(ctx, h.Div(
 		h.H1(h.Textf("Hello, %s", user.Name)),
@@ -171,7 +171,7 @@ func (p *ProfilePage) View(ctx *via.Ctx) h.H {
 
 type LandingPage struct{}
 
-func (p *LandingPage) View(ctx *via.Ctx) h.H {
+func (p *LandingPage) View(ctx *via.CtxR) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Via Auth Demo")),
 		h.P(h.Text("Typed sessions, sess.Rotate on login, StateSess-style data with auto-render.")),
@@ -181,7 +181,7 @@ func (p *LandingPage) View(ctx *via.Ctx) h.H {
 // shell wraps every page in the same nav so the auth state shows up in
 // the header. We don't have a Layout primitive yet — composing with a
 // helper function is just as clean for a flat app.
-func shell(ctx *via.Ctx, content h.H) h.H {
+func shell(ctx *via.CtxR, content h.H) h.H {
 	_, loggedIn := sess.Get[User](ctx)
 	return h.Div(
 		h.Nav(h.Class("container"),

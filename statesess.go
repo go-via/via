@@ -24,9 +24,14 @@ func (s *StateSess[T]) Key() string { return s.wireKey }
 
 // Get returns the current session value, or the zero value of T if unset.
 // A Get that happens during View execution subscribes the ctx so a
-// subsequent Update on the same key fans out to it.
-func (s *StateSess[T]) Get(ctx *Ctx) T {
+// subsequent Update on the same key fans out to it. Accepts either
+// *Ctx (action handlers) or *CtxR (View).
+func (s *StateSess[T]) Get(rc readCtx) T {
 	var zero T
+	if rc == nil {
+		return zero
+	}
+	ctx := rc.rctx()
 	if ctx == nil || ctx.session == nil {
 		return zero
 	}
@@ -60,5 +65,6 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) T) {
 	ctx.app.broadcastRender(ctx, ctx.session, s.wireKey)
 }
 
-// Text renders the current value as a static text node.
-func (s *StateSess[T]) Text(ctx *Ctx) h.H { return h.Textf("%v", s.Get(ctx)) }
+// Text renders the current value as a static text node. Accepts either
+// *Ctx or *CtxR.
+func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Get(rc)) }

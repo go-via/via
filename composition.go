@@ -12,7 +12,7 @@
 //	    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
 //	    return nil
 //	}
-//	func (c *Counter) View(ctx *via.Ctx) h.H { ... }
+//	func (c *Counter) View(ctx *via.CtxR) h.H { ... }
 //
 //	app := via.New()
 //	via.Mount[Counter](app, "/counter")
@@ -27,10 +27,10 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// Composition is anything that renders a view from a Ctx. Types whose pointer
-// satisfies this interface are mountable.
+// Composition is anything that renders a view from a read-only Ctx.
+// Types whose pointer satisfies this interface are mountable.
 type Composition interface {
-	View(ctx *Ctx) h.H
+	View(ctx *CtxR) h.H
 }
 
 // Mountable is the target of [Mount]. Implemented by *App (mounts at
@@ -106,7 +106,7 @@ func buildDescriptor[C any]() *cmpDescriptor {
 		panic(fmt.Sprintf(
 			"via.Mount(%s): missing required method\n"+
 				"\n"+
-				"  func (c *%s) View(ctx *via.Ctx) h.H { ... }\n",
+				"  func (c *%s) View(ctx *via.CtxR) h.H { ... }\n",
 			typ.String(), typ.Name()))
 	}
 	checkViewSignature(typ, viewMethod)

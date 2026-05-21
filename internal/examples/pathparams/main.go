@@ -33,7 +33,7 @@ func (c *CounterPage) Increment(ctx *via.Ctx) error {
 	return nil
 }
 
-func (c *CounterPage) View(ctx *via.Ctx) h.H {
+func (c *CounterPage) View(ctx *via.CtxR) h.H {
 	return h.Main(h.Class("container"),
 		h.H3(h.Text(c.CounterID)),
 		h.Hr(),

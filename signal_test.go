@@ -19,7 +19,7 @@ type signalCounter struct {
 	Name via.Signal[string]
 }
 
-func (c *signalCounter) View(ctx *via.Ctx) h.H {
+func (c *signalCounter) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Input(h.Type("number"), c.Step.Bind()),
 		h.P(c.Step.Text()),
@@ -55,7 +55,7 @@ type signalShowPage struct {
 	Open via.Signal[bool] `via:"open"`
 }
 
-func (p *signalShowPage) View(ctx *via.Ctx) h.H {
+func (p *signalShowPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.Open.Show(), h.Text("hello"))
 }
 
@@ -76,7 +76,7 @@ type fieldNameKey struct {
 	MyField via.Signal[int]
 }
 
-func (c *fieldNameKey) View(ctx *via.Ctx) h.H { return h.Div() }
+func (c *fieldNameKey) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestSignal_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
@@ -106,7 +106,7 @@ type attrStylePage struct {
 	Hue      via.Signal[string] `via:"hue,init=blue"`
 }
 
-func (p *attrStylePage) View(ctx *via.Ctx) h.H {
+func (p *attrStylePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(p.Disabled.Attr("disabled"), h.Text("Save")),
 		h.Span(p.Hue.Style("color"), h.Text("hi")),
@@ -139,7 +139,7 @@ type boolInitPage struct {
 	On via.Signal[bool] `via:"on,init=true"`
 }
 
-func (p *boolInitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *boolInitPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 	t.Parallel()
@@ -215,7 +215,7 @@ func (p *signalHelpersPage) PushFive(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *signalHelpersPage) View(ctx *via.Ctx) h.H {
+func (p *signalHelpersPage) View(ctx *via.CtxR) h.H {
 	// StateTab[T] doesn't surface in signals JSON; rendered text is its
 	// only externally observable trace, so views that drive State helper
 	// tests must render the value somewhere assertable.
@@ -372,7 +372,7 @@ func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *setIfChangedPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *setIfChangedPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	t.Parallel()

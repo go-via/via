@@ -13,7 +13,7 @@ import (
 
 type broadcastPage struct{}
 
-func (p *broadcastPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *broadcastPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 // openSSEStreams spins up n test clients on path and opens an SSE stream
 // for each. Returns the per-client frame channels and a single cancel

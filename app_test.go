@@ -153,7 +153,7 @@ func (p signalSeedingPlugin) Register(app *via.App) {
 
 type pluginHostPage struct{}
 
-func (pluginHostPage) View(ctx *via.Ctx) h.H { return h.Div(h.Text("page")) }
+func (pluginHostPage) View(ctx *via.CtxR) h.H { return h.Div(h.Text("page")) }
 
 func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
 	t.Parallel()
@@ -225,7 +225,7 @@ func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
 
 type useAfterStartPage struct{}
 
-func (p *useAfterStartPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *useAfterStartPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestAppUse_afterStartPanics(t *testing.T) {
 	t.Parallel()

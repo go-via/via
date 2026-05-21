@@ -28,7 +28,7 @@ func (c *counterPage) Inc(ctx *via.Ctx) error {
 	return nil
 }
 
-func (c *counterPage) View(ctx *via.Ctx) h.H {
+func (c *counterPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(h.Text("+"), on.Click(c.Inc)),
 		c.Hits.Text(),
@@ -118,7 +118,7 @@ func (p *erroringActionPage) Save(ctx *via.Ctx) error {
 	return assertSaveErr("validation: email required")
 }
 
-func (p *erroringActionPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *erroringActionPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 type assertSaveErr string
 
@@ -148,7 +148,7 @@ func (p *customErrPage) Save(ctx *via.Ctx) error {
 	return assertSaveErr("nope")
 }
 
-func (p *customErrPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *customErrPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 type panicStringPage struct{}
 
@@ -156,7 +156,7 @@ func (p *panicStringPage) Crash(ctx *via.Ctx) error {
 	panic("internal database connection string: secret-leaks-here")
 }
 
-func (p *panicStringPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *panicStringPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestAction_defaultPanicAlertHidesInternalMessage(t *testing.T) {
 	t.Parallel()
@@ -188,7 +188,7 @@ func (p *panicTypedPage) Boom(ctx *via.Ctx) error {
 	panic(&panicTypedErr{Code: "E_TYPED"})
 }
 
-func (p *panicTypedPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *panicTypedPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestAction_panicWithTypedErrorPreservesType(t *testing.T) {
 	t.Parallel()
@@ -251,7 +251,7 @@ func (p *serialPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *serialPage) View(ctx *via.Ctx) h.H {
+func (p *serialPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.N.Text(), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 

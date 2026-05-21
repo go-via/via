@@ -20,7 +20,7 @@ func (p *benchPage) Inc(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *benchPage) View(ctx *via.Ctx) h.H {
+func (p *benchPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.P(p.Hits.Text()),
 		h.Button(h.Text("+"), on.Click(p.Inc)),

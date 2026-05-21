@@ -13,7 +13,7 @@ import (
 
 type liveTabsPage struct{}
 
-func (p *liveTabsPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *liveTabsPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestLiveTabs_reflectsRegisteredCount(t *testing.T) {
 	t.Parallel()

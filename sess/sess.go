@@ -56,6 +56,8 @@ func Get[T any](src any) (T, bool) {
 	switch v := src.(type) {
 	case *via.Ctx:
 		s = v.Session()
+	case *via.CtxR:
+		s = v.Session()
 	case *http.Request:
 		s = via.RequestSession(v)
 	default:

@@ -33,7 +33,7 @@ func (p *userRoundTripPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *userRoundTripPage) View(ctx *via.Ctx) h.H {
+func (p *userRoundTripPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.ID("theme"), p.Theme.Text(ctx)),
 		h.Span(h.ID("count"), p.Count.Text(ctx)),
@@ -95,7 +95,7 @@ type silentUserPage struct {
 	Theme via.StateSess[string]
 }
 
-func (p *silentUserPage) View(ctx *via.Ctx) h.H {
+func (p *silentUserPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("mute"), h.Text("no readers here")))
 }
 
@@ -193,7 +193,7 @@ func (p *setIfChangedSessPage) Diff(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *setIfChangedSessPage) View(ctx *via.Ctx) h.H {
+func (p *setIfChangedSessPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("t"), p.Theme.Text(ctx)))
 }
 
@@ -216,4 +216,3 @@ func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	require.Equal(t, 200, tc.Action("Diff").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "red")
 }
-

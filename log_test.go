@@ -48,7 +48,7 @@ func (p *erroringPage) Boom(ctx *via.Ctx) error {
 	return assertError("kaboom")
 }
 
-func (p *erroringPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *erroringPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 type assertError string
 
@@ -99,11 +99,11 @@ func TestWithLogger_routesActionPanicsThroughLogger(t *testing.T) {
 type panicPage struct{}
 
 func (p *panicPage) Boom(ctx *via.Ctx) error { panic("boom") }
-func (p *panicPage) View(ctx *via.Ctx) h.H   { return h.Div() }
+func (p *panicPage) View(ctx *via.CtxR) h.H  { return h.Div() }
 
 type accessLogPage struct{}
 
-func (p *accessLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *accessLogPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 	t.Parallel()
@@ -135,7 +135,7 @@ func (p *ridLogPage) Trace(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *ridLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *ridLogPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestLog_includesRequestIDFromCtxRequest(t *testing.T) {
 	t.Parallel()
@@ -177,7 +177,7 @@ func (p *leakyLogPage) Start(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *leakyLogPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *leakyLogPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestLog_isRaceFreeWhenCalledOffActionGoroutine(t *testing.T) {
 	t.Parallel()
@@ -203,7 +203,7 @@ func (p *loggingPage) DoIt(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *loggingPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *loggingPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestLog_emitsThroughConfiguredLoggerWithTabContext(t *testing.T) {
 	t.Parallel()

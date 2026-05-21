@@ -26,7 +26,7 @@ func (p *streamPanicPage) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *streamPanicPage) View(ctx *via.Ctx) h.H { return h.Div(p.ticks.Text()) }
+func (p *streamPanicPage) View(ctx *via.CtxR) h.H { return h.Div(p.ticks.Text()) }
 
 func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 	t.Parallel()
@@ -68,7 +68,7 @@ func (p *clockPage) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *clockPage) View(ctx *via.Ctx) h.H {
+func (p *clockPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.P(p.Tick.Text()))
 }
 
@@ -130,7 +130,7 @@ func (p *streamRacePage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *streamRacePage) View(ctx *via.Ctx) h.H {
+func (p *streamRacePage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.N.Text(), p.M.Text())
 }
 
@@ -183,7 +183,7 @@ func (p *tickerControlPage) SpeedUp(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *tickerControlPage) View(ctx *via.Ctx) h.H {
+func (p *tickerControlPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("n"), p.N.Text()))
 }
 
@@ -278,7 +278,7 @@ func (p *tickerStopPage) OnConnect(ctx *via.Ctx) error {
 
 func (p *tickerStopPage) Halt(ctx *via.Ctx) error { p.ticker.Stop(); return nil }
 func (p *tickerStopPage) Wake(ctx *via.Ctx) error { p.ticker.Resume(); return nil }
-func (p *tickerStopPage) View(ctx *via.Ctx) h.H {
+func (p *tickerStopPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("n"), p.N.Text()))
 }
 

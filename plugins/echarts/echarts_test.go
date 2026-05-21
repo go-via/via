@@ -14,7 +14,7 @@ import (
 
 type echartsPage struct{}
 
-func (p *echartsPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *echartsPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestPlugin_appendsCDNScriptToHead(t *testing.T) {
 	t.Parallel()

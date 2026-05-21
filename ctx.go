@@ -59,7 +59,8 @@ type Ctx struct {
 	// then go through these direct funcs — no reflect.Value.Call on the
 	// hot path. Void-return actions are wrapped to satisfy the unified
 	// `func(*Ctx) error` shape; nil means "no such hook".
-	viewFn    func(*Ctx) h.H
+	viewFn    func(*CtxR) h.H
+	ctxR      *CtxR // read-only view, allocated eagerly in newCtx
 	initFn    func(*Ctx) error
 	connectFn func(*Ctx) error
 	disposeFn func(*Ctx)
@@ -69,6 +70,80 @@ type Ctx struct {
 
 	w http.ResponseWriter
 	r *http.Request
+}
+
+// CtxR is the read-only render context passed to View(ctx *CtxR) h.H.
+// It exposes the read-side of the per-tab runtime — the keys, the
+// session, lookups — but withholds every mutator (Set/Update, the
+// publish primitives, SyncNow/SyncOff, response-Writer access). Calls
+// that would change observable state are not on this type, so writing
+// into a View becomes a compile error.
+//
+// Use *Ctx (not *CtxR) for action handlers, lifecycle hooks, Stream
+// callbacks, and any goroutine that needs to mutate state.
+type CtxR struct {
+	ctx *Ctx
+}
+
+// readView returns the cached *CtxR for this Ctx. The CtxR is
+// allocated eagerly in newCtx so this accessor is a plain field load
+// with no synchronization required — multiple renders (initial page,
+// broadcast-driven SyncNow, action autoflush) may run on different
+// goroutines and all observe the same pointer.
+func (ctx *Ctx) readView() *CtxR {
+	return ctx.ctxR
+}
+
+// readCtx is the package-private surface that State/Signal reads
+// accept. Both *Ctx and *CtxR satisfy it, so callers in View and in
+// action handlers pass their concrete type without manual conversion.
+// External types can't satisfy it (unexported method), so the
+// read-only contract stays inside this package.
+type readCtx interface {
+	rctx() *Ctx
+}
+
+func (ctx *Ctx) rctx() *Ctx { return ctx }
+func (r *CtxR) rctx() *Ctx  { return r.ctx }
+
+// ID returns the tab id (the wire key for via_tab). Mirrors Ctx.ID.
+func (r *CtxR) ID() string {
+	if r == nil || r.ctx == nil {
+		return ""
+	}
+	return r.ctx.id
+}
+
+// Cookie returns the value of the named cookie on the in-flight
+// request, or "" if absent. Mirrors Ctx.Cookie — safe in View where
+// the page-render request is still live.
+func (r *CtxR) Cookie(name string) string {
+	if r == nil || r.ctx == nil {
+		return ""
+	}
+	return r.ctx.Cookie(name)
+}
+
+// CSPNonce mirrors Ctx.CSPNonce — returns this request's strict-CSP
+// nonce so View can embed it on inline <script>/<style> tags.
+func (r *CtxR) CSPNonce() string {
+	if r == nil || r.ctx == nil {
+		return ""
+	}
+	return r.ctx.CSPNonce()
+}
+
+// Session mirrors Ctx.Session — returns a handle bound to this tab's
+// session. Useful for reading session-scoped values during a render.
+// Writes to the returned handle (Store, Delete) still trigger a
+// broadcast; calling them from a View defeats the read-only contract.
+// Prefer sess.Get[T] for typed reads and reserve writes for action
+// handlers / lifecycle hooks that hold *via.Ctx.
+func (r *CtxR) Session() *Session {
+	if r == nil || r.ctx == nil {
+		return &Session{}
+	}
+	return r.ctx.Session()
 }
 
 // Done returns a channel closed on context disposal (tab close or shutdown).

@@ -30,7 +30,7 @@ func (c *Counter) Reset(ctx *via.Ctx) {
 	c.Step.Set(ctx, 1)
 }
 
-func (c *Counter) View(ctx *via.Ctx) h.H {
+func (c *Counter) View(ctx *via.CtxR) h.H {
 	return h.Main(h.Class("container"),
 		h.Article(
 			h.H1(h.Text("Counter")),

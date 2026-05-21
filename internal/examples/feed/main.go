@@ -49,7 +49,7 @@ func (p *Feed) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *Feed) View(ctx *via.Ctx) h.H {
+func (p *Feed) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.H1(h.Text("Live feed")),
 		h.P(h.Text("Latest "), h.Strong(h.Text("50")),

@@ -25,7 +25,7 @@ func (p *appCounterPage) Bump(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *appCounterPage) View(ctx *via.Ctx) h.H {
+func (p *appCounterPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("visits"), p.Visits.Text(ctx)))
 }
 
@@ -54,7 +54,7 @@ type silentAppPage struct {
 	Visits via.StateApp[int]
 }
 
-func (p *silentAppPage) View(ctx *via.Ctx) h.H {
+func (p *silentAppPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("mute"), h.Text("no readers here")))
 }
 

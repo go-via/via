@@ -19,7 +19,7 @@ type unmarshalablePage struct {
 	Bad via.Signal[marshalUnfriendly]
 }
 
-func (p *unmarshalablePage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *unmarshalablePage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestWritePageDocument_marshalFailureStillRenders(t *testing.T) {
 	t.Parallel()

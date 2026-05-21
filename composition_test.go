@@ -15,7 +15,7 @@ type simpleCounter struct {
 	Name string
 }
 
-func (c *simpleCounter) View(ctx *via.Ctx) h.H {
+func (c *simpleCounter) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Text(c.Name))
 }
 
@@ -51,7 +51,7 @@ type badOnInitPage struct{}
 
 func (p *badOnInitPage) OnInit(ctx *via.Ctx) {} // missing error return
 
-func (p *badOnInitPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *badOnInitPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestMount_panicShowsActualAndExpectedLifecycleSignature(t *testing.T) {
 	t.Parallel()
@@ -71,7 +71,7 @@ func TestMount_panicShowsActualAndExpectedLifecycleSignature(t *testing.T) {
 
 type badViewReturnPage struct{}
 
-func (p *badViewReturnPage) View(ctx *via.Ctx) int { return 0 } // wrong return type
+func (p *badViewReturnPage) View(ctx *via.CtxR) int { return 0 } // wrong return type
 
 func TestMount_panicsWhenViewReturnTypeIsNotAssignableToH(t *testing.T) {
 	t.Parallel()
@@ -125,7 +125,7 @@ func TestMount_panicsOnMissingView(t *testing.T) {
 			"panic must state that a required method is missing")
 		assert.Contains(t, msg, "noView",
 			"panic must name the offending type")
-		assert.Contains(t, msg, "View(ctx *via.Ctx) h.H",
+		assert.Contains(t, msg, "View(ctx *via.CtxR) h.H",
 			"panic must show the expected method signature so the user can paste it in")
 	}()
 	via.Mount[noView](app, "/test")
@@ -136,7 +136,7 @@ type pathParamPage struct {
 	Slug   string `path:"slug"`
 }
 
-func (p *pathParamPage) View(ctx *via.Ctx) h.H {
+func (p *pathParamPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.Textf("user=%d", p.UserID)),
 		h.Span(h.Textf("slug=%s", p.Slug)),
@@ -160,7 +160,7 @@ type missingParamPage struct {
 	UserID int `path:"id"`
 }
 
-func (p *missingParamPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *missingParamPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestMount_panicsWhenPathTagHasNoMatchingSegment(t *testing.T) {
 	t.Parallel()

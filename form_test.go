@@ -44,7 +44,7 @@ func (p *formPage) Submit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *formPage) View(ctx *via.Ctx) h.H {
+func (p *formPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.Result.Text())
 }
 
@@ -84,7 +84,7 @@ func (p *formNoTag) Submit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *formNoTag) View(ctx *via.Ctx) h.H { return h.Div(p.Captured.Text()) }
+func (p *formNoTag) View(ctx *via.CtxR) h.H { return h.Div(p.Captured.Text()) }
 
 func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
@@ -127,7 +127,7 @@ func (p *formFallbackPage) Submit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *formFallbackPage) View(ctx *via.Ctx) h.H { return h.Div(p.Captured.Text()) }
+func (p *formFallbackPage) View(ctx *via.CtxR) h.H { return h.Div(p.Captured.Text()) }
 
 // rawTabClient does a GET to acquire a tab id + session cookie on a
 // shared jar, then exposes a Fire that drives /_action/{name} with
@@ -287,7 +287,7 @@ func (p *unexportedFieldPage) Submit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *unexportedFieldPage) View(ctx *via.Ctx) h.H {
+func (p *unexportedFieldPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.Span(h.ID("out"), p.Captured.Text()))
 }
 

@@ -17,7 +17,7 @@ import (
 
 type sseEmptyPage struct{}
 
-func (p *sseEmptyPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *sseEmptyPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestHandleSSEClose_oversizedBodyReturns413(t *testing.T) {
 	t.Parallel()
@@ -68,7 +68,7 @@ func TestHandleSSEClose_unknownTabIsNoOp200(t *testing.T) {
 
 type sseDeadlinePage struct{}
 
-func (p *sseDeadlinePage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *sseDeadlinePage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestWithSSEWriteTimeout_doesNotBreakNormalDrains(t *testing.T) {
 	t.Parallel()

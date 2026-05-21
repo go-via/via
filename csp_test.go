@@ -22,13 +22,13 @@ func readAll(t *testing.T, r io.Reader) string {
 
 type cspEchoPage struct{}
 
-func (p *cspEchoPage) View(ctx *via.Ctx) h.H {
+func (p *cspEchoPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
 }
 
 type strictCSPPage struct{}
 
-func (p *strictCSPPage) View(ctx *via.Ctx) h.H {
+func (p *strictCSPPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
 }
 
@@ -109,7 +109,7 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 
 type cspTwoNoncePage struct{}
 
-func (p *cspTwoNoncePage) View(ctx *via.Ctx) h.H {
+func (p *cspTwoNoncePage) View(ctx *via.CtxR) h.H {
 	// Two embeds within the same render: stability means both spans
 	// contain the same value.
 	return h.Div(

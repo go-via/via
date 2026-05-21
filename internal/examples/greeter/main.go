@@ -23,7 +23,7 @@ func (g *Greeter) GreetAlice(ctx *via.Ctx) {
 	g.Greeting.Set(ctx, "Hello Alice!")
 }
 
-func (g *Greeter) View(ctx *via.Ctx) h.H {
+func (g *Greeter) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.P(h.Text("Greeting: "), g.Greeting.Text()),
 		h.Button(h.Text("Greet Bob"), on.Click(g.GreetBob)),

@@ -33,7 +33,7 @@ func (p *uploadPage) Upload(ctx *via.Ctx) error {
 	return p.Avatar.Save(filepath.Join(dir, "out.bin"))
 }
 
-func (p *uploadPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *uploadPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestFile_typedFieldPopulatedFromMultipartUpload(t *testing.T) {
 	t.Parallel()
@@ -78,7 +78,7 @@ func (p *readMultipartPage) Read(ctx *via.Ctx) error {
 	}
 }
 
-func (p *readMultipartPage) View(ctx *via.Ctx) h.H { return h.Div() }
+func (p *readMultipartPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestMultipartReader_streamsRawParts(t *testing.T) {
 	t.Parallel()
@@ -112,7 +112,7 @@ func (p *bytesEchoPage) Read(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *bytesEchoPage) View(ctx *via.Ctx) h.H { return h.Div(p.Length.Text()) }
+func (p *bytesEchoPage) View(ctx *via.CtxR) h.H { return h.Div(p.Length.Text()) }
 
 func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 	t.Parallel()
