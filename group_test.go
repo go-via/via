@@ -207,7 +207,7 @@ type protectedPage struct {
 }
 
 func (p *protectedPage) Bump(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Get(ctx)+1)
+	p.N.Set(ctx, p.N.Read(ctx)+1)
 	return nil
 }
 

@@ -180,14 +180,14 @@ type setIfChangedSessPage struct {
 }
 
 func (p *setIfChangedSessPage) Same(ctx *via.Ctx) error {
-	if p.Theme.Get(ctx) != "blue" {
+	if p.Theme.Read(ctx) != "blue" {
 		p.Theme.Update(ctx, func(string) string { return "blue" })
 	}
 	return nil
 }
 
 func (p *setIfChangedSessPage) Diff(ctx *via.Ctx) error {
-	if p.Theme.Get(ctx) != "red" {
+	if p.Theme.Read(ctx) != "red" {
 		p.Theme.Update(ctx, func(string) string { return "red" })
 	}
 	return nil

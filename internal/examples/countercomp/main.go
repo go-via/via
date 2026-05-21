@@ -19,14 +19,14 @@ type CounterCard struct {
 }
 
 func (c *CounterCard) Inc(ctx *via.Ctx) {
-	c.Count.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
+	c.Count.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
 }
 
 // View takes the click attribute as a parameter so the parent can decide
 // which action drives this card.
 func (c *CounterCard) View(ctx *via.CtxR, onClick h.H) h.H {
 	return h.Div(
-		h.P(h.Textf("Count: %d", c.Count.Get(ctx))),
+		h.P(h.Textf("Count: %d", c.Count.Read(ctx))),
 		h.P(h.Text("Step: "), c.Step.Text()),
 		h.Label(
 			h.Text("Update Step: "),

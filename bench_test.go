@@ -16,7 +16,7 @@ type benchPage struct {
 }
 
 func (p *benchPage) Inc(ctx *via.Ctx) error {
-	p.Hits.Update(ctx, func(n int) int { return n + p.Step.Get(ctx) })
+	p.Hits.Update(ctx, func(n int) int { return n + p.Step.Read(ctx) })
 	return nil
 }
 

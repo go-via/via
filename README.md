@@ -48,7 +48,7 @@ type Counter struct {
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
+    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
@@ -165,7 +165,7 @@ store sequence is atomic:
 p.Count.Update(ctx, func(n int) int { return n + 1 })  // numeric delta
 p.Open.Update(ctx, func(b bool) bool { return !b })    // bool flip
 
-if p.Status.Get(ctx) != "busy" {                       // skip patch if unchanged
+if p.Status.Read(ctx) != "busy" {                      // skip patch if unchanged
     p.Status.Update(ctx, func(string) string { return "busy" })
 }
 

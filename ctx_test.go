@@ -413,7 +413,7 @@ func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
 }
 
 func (p *syncOffPage) LoudAfter(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Get(ctx))
+	p.N.Set(ctx, p.N.Read(ctx))
 	return nil
 }
 

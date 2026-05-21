@@ -17,7 +17,7 @@ import (
 //	    Hits   via.StateTab[int]
 //	    Filter via.StateTab[string] `via:"filter,init=all"`
 //	}
-//	c.Hits.Get(ctx)        // returns int
+//	c.Hits.Read(ctx)       // returns int
 //	c.Hits.Set(ctx, 0)     // direct write
 //	c.Hits.Update(ctx, func(n int) int { return n + 1 }) // numeric delta
 //
@@ -28,11 +28,11 @@ type StateTab[T any] struct {
 	key string
 }
 
-// Get returns the current value. The ctx is unused today but kept so
+// Read returns the current value. The ctx is unused today but kept so
 // StateTab[T] mirrors Signal[T]'s shape (and so future tab-scoped reads
 // can move into the runtime without an API break). Accepts either *Ctx
 // (action handlers) or *CtxR (View).
-func (s *StateTab[T]) Get(_ readCtx) T {
+func (s *StateTab[T]) Read(_ readCtx) T {
 	return s.val
 }
 
@@ -49,7 +49,7 @@ func (s *StateTab[T]) Set(ctx *Ctx, v T) {
 }
 
 // Update applies fn to the current value and stores the result. Saves
-// a Get/Set pair on common increment/transform patterns:
+// a Read/Set pair on common increment/transform patterns:
 //
 //	c.Hits.Update(ctx, func(n int) int { return n + 1 })
 func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) T) {

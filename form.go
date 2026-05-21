@@ -9,7 +9,7 @@ import (
 // Datastar action POSTs send signals as JSON; this helper lets actions
 // pull a strongly-typed view of selected signals into a struct, decoded
 // by `form:"name"` tags. Useful when the action wants a value-object
-// instead of N separate Signal[T].Get(ctx) calls.
+// instead of N separate Signal[T].Read(ctx) calls.
 //
 //	type LoginForm struct {
 //	    Email    string `form:"email"`

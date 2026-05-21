@@ -31,19 +31,19 @@ type Page struct {
 }
 
 func (p *Page) Inc(ctx *via.Ctx) {
-	if p.Visible.Get(ctx) < len(allFeatures) {
+	if p.Visible.Read(ctx) < len(allFeatures) {
 		p.Visible.Update(ctx, func(n int) int { return n + 1 })
 	}
 }
 
 func (p *Page) Dec(ctx *via.Ctx) {
-	if p.Visible.Get(ctx) > 1 {
+	if p.Visible.Read(ctx) > 1 {
 		p.Visible.Update(ctx, func(n int) int { return n - 1 })
 	}
 }
 
 func (p *Page) View(ctx *via.CtxR) h.H {
-	visible := allFeatures[:p.Visible.Get(ctx)]
+	visible := allFeatures[:p.Visible.Read(ctx)]
 
 	itemList := make([]h.H, 0, len(visible)+1)
 	itemList = append(itemList, h.Style("padding:0;margin:0;display:flex;flex-direction:column;gap:0.75rem"))
@@ -120,14 +120,14 @@ func (p *Page) View(ctx *via.CtxR) h.H {
 			h.Article(
 				h.Header(h.HGroup(
 					h.H3(h.Text("Features")),
-					h.P(h.Textf("Showing %d of %d.", p.Visible.Get(ctx), len(allFeatures))),
+					h.P(h.Textf("Showing %d of %d.", p.Visible.Read(ctx), len(allFeatures))),
 				)),
 				h.Div(
 					h.Style("display:flex;align-items:center;justify-content:center;gap:1rem;margin-bottom:1.5rem"),
 					h.Button(h.Style("margin:0;min-width:3.5rem"), h.Text("−"), on.Click(p.Dec)),
 					h.Strong(
 						h.Style("font-size:1.75rem;min-width:2.5rem;text-align:center"),
-						h.Textf("%d", p.Visible.Get(ctx)),
+						h.Textf("%d", p.Visible.Read(ctx)),
 					),
 					h.Button(h.Style("margin:0;min-width:3.5rem"), h.Text("+"), on.Click(p.Inc)),
 				),

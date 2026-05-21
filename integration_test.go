@@ -24,7 +24,7 @@ type kitchenSinkPage struct {
 }
 
 func (p *kitchenSinkPage) Bump(ctx *via.Ctx) {
-	via.Log(ctx).Log(via.LogInfo, "bump", "n", p.N.Get(ctx))
+	via.Log(ctx).Log(via.LogInfo, "bump", "n", p.N.Read(ctx))
 	p.N.Update(ctx, func(n int) int { return n + 1 })
 }
 

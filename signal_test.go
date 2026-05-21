@@ -221,7 +221,7 @@ func (p *signalHelpersPage) View(ctx *via.CtxR) h.H {
 	// tests must render the value somewhere assertable.
 	return h.Div(
 		h.Span(h.ID("hits"), p.Hits.Text(ctx)),
-		h.Span(h.ID("vis"), h.Textf("%v", p.Vis.Get(ctx))),
+		h.Span(h.ID("vis"), h.Textf("%v", p.Vis.Read(ctx))),
 	)
 }
 
@@ -359,14 +359,14 @@ type setIfChangedPage struct {
 }
 
 func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
-	if p.Status.Get(ctx) != "idle" {
+	if p.Status.Read(ctx) != "idle" {
 		p.Status.Update(ctx, func(string) string { return "idle" })
 	}
 	return nil
 }
 
 func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
-	if p.Status.Get(ctx) != "busy" {
+	if p.Status.Read(ctx) != "busy" {
 		p.Status.Update(ctx, func(string) string { return "busy" })
 	}
 	return nil

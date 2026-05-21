@@ -20,11 +20,11 @@ func (s *StateSess[T]) bindWireKey(k string) { s.wireKey = k }
 // Key returns the wire key (lowercase field name unless overridden by tag).
 func (s *StateSess[T]) Key() string { return s.wireKey }
 
-// Get returns the current session value, or the zero value of T if unset.
-// A Get that happens during View execution subscribes the ctx so a
-// subsequent Update on the same key fans out to it. Accepts either
-// *Ctx (action handlers) or *CtxR (View).
-func (s *StateSess[T]) Get(rc readCtx) T {
+// Read returns the current session value, or the zero value of T if
+// unset. A Read that happens during View execution subscribes the ctx
+// so a subsequent Update on the same key fans out to it. Accepts
+// either *Ctx (action handlers) or *CtxR (View).
+func (s *StateSess[T]) Read(rc readCtx) T {
 	var zero T
 	if rc == nil {
 		return zero
@@ -65,4 +65,4 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) T) {
 
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
-func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Get(rc)) }
+func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Read(rc)) }

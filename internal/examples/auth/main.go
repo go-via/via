@@ -86,7 +86,7 @@ type LoginPage struct {
 }
 
 func (p *LoginPage) Submit(ctx *via.Ctx) error {
-	user, err := store.Authenticate(strings.TrimSpace(p.Email.Get(ctx)), p.Password.Get(ctx))
+	user, err := store.Authenticate(strings.TrimSpace(p.Email.Read(ctx)), p.Password.Read(ctx))
 	if err != nil {
 		p.Err.Set(ctx, err.Error())
 		return nil
@@ -99,7 +99,7 @@ func (p *LoginPage) Submit(ctx *via.Ctx) error {
 func (p *LoginPage) View(ctx *via.CtxR) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Login")),
-		errBanner(p.Err.Get(ctx)),
+		errBanner(p.Err.Read(ctx)),
 		h.Label(h.Text("Email"),
 			h.Input(h.Type("email"), p.Email.Bind(), h.Placeholder("you@example.com")),
 		),
@@ -121,9 +121,9 @@ type RegisterPage struct {
 
 func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 	if err := store.Register(
-		strings.TrimSpace(p.Name.Get(ctx)),
-		strings.TrimSpace(p.Email.Get(ctx)),
-		p.Password.Get(ctx),
+		strings.TrimSpace(p.Name.Read(ctx)),
+		strings.TrimSpace(p.Email.Read(ctx)),
+		p.Password.Read(ctx),
 	); err != nil {
 		p.Err.Set(ctx, err.Error())
 		return nil
@@ -134,7 +134,7 @@ func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 func (p *RegisterPage) View(ctx *via.CtxR) h.H {
 	return shell(ctx, h.Div(
 		h.H1(h.Text("Register")),
-		errBanner(p.Err.Get(ctx)),
+		errBanner(p.Err.Read(ctx)),
 		h.Label(h.Text("Name"), h.Input(h.Type("text"), p.Name.Bind())),
 		h.Label(h.Text("Email"), h.Input(h.Type("email"), p.Email.Bind())),
 		h.Label(h.Text("Password"), h.Input(h.Type("password"), p.Password.Bind())),

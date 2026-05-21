@@ -29,7 +29,7 @@ func (c *CounterPage) OnInit(ctx *via.Ctx) error {
 }
 
 func (c *CounterPage) Increment(ctx *via.Ctx) error {
-	c.Count.Update(ctx, func(n int) int { return n + c.Step.Get(ctx) })
+	c.Count.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
 	return nil
 }
 
@@ -37,7 +37,7 @@ func (c *CounterPage) View(ctx *via.CtxR) h.H {
 	return h.Main(h.Class("container"),
 		h.H3(h.Text(c.CounterID)),
 		h.Hr(),
-		h.H5(h.Textf("Count %d", c.Count.Get(ctx))),
+		h.H5(h.Textf("Count %d", c.Count.Read(ctx))),
 		h.P(h.Text("Step: "), c.Step.Text()),
 		h.FieldSet(h.Role("group"),
 			h.Input(h.Type("number"), c.Step.Bind()),

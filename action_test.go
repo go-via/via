@@ -24,7 +24,7 @@ type counterPage struct {
 }
 
 func (c *counterPage) Inc(ctx *via.Ctx) error {
-	c.Hits.Set(ctx, c.Hits.Get(ctx)+c.Step.Get(ctx))
+	c.Hits.Set(ctx, c.Hits.Read(ctx)+c.Step.Read(ctx))
 	return nil
 }
 
@@ -246,7 +246,7 @@ type serialPage struct {
 // keeping a parallel race from corrupting it is the runtime's per-Ctx
 // action serialization.
 func (p *serialPage) Bump(ctx *via.Ctx) error {
-	cur := p.N.Get(ctx)
+	cur := p.N.Read(ctx)
 	p.N.Set(ctx, cur+1)
 	return nil
 }

@@ -74,7 +74,7 @@ type authPage struct {
 }
 
 func (p *authPage) LogIn(ctx *via.Ctx) error {
-	sess.Put(ctx, sessUser{Email: p.Email.Get(ctx), Name: "Alice"})
+	sess.Put(ctx, sessUser{Email: p.Email.Read(ctx), Name: "Alice"})
 	return nil
 }
 

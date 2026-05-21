@@ -22,8 +22,8 @@ type ctxRPage struct {
 
 func (p *ctxRPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
-		h.Span(h.ID("hits"), h.Textf("%d", p.Hits.Get(ctx))),
-		h.Span(h.ID("theme"), h.Text(p.Theme.Get(ctx))),
+		h.Span(h.ID("hits"), h.Textf("%d", p.Hits.Read(ctx))),
+		h.Span(h.ID("theme"), h.Text(p.Theme.Read(ctx))),
 	)
 }
 

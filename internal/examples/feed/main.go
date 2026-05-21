@@ -34,7 +34,7 @@ func (p *Feed) Clear(ctx *via.Ctx) {
 
 func (p *Feed) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 200*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
-		if !p.Running.Get(ctx) {
+		if !p.Running.Read(ctx) {
 			return
 		}
 		p.Points.Update(ctx, func(s []float64) []float64 {

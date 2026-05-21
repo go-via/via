@@ -118,14 +118,14 @@ type streamRacePage struct {
 
 func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
-		p.N.Set(ctx, p.N.Get(ctx)+1)
+		p.N.Set(ctx, p.N.Read(ctx)+1)
 		p.M.Update(ctx, func(n int) int { return n + 1 })
 	})
 	return nil
 }
 
 func (p *streamRacePage) Bump(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Get(ctx)+1)
+	p.N.Set(ctx, p.N.Read(ctx)+1)
 	p.M.Update(ctx, func(n int) int { return n + 1 })
 	return nil
 }

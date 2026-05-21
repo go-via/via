@@ -56,7 +56,7 @@ func (p *Page) Upload(ctx *via.Ctx) error {
 }
 
 func (p *Page) View(ctx *via.CtxR) h.H {
-	last := p.Last.Get(ctx)
+	last := p.Last.Read(ctx)
 	return h.Body(
 		h.Main(h.Style("font-family:sans-serif;max-width:480px;margin:2rem auto;padding:0 1rem"),
 			h.H1(h.Text("Upload demo")),

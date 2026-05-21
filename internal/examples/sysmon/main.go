@@ -258,8 +258,8 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Page) ApplyControls(ctx *via.Ctx) {
-	p.ticker.SetInterval(time.Duration(p.IntervalMs.Get(ctx)) * time.Millisecond)
-	if p.Running.Get(ctx) {
+	p.ticker.SetInterval(time.Duration(p.IntervalMs.Read(ctx)) * time.Millisecond)
+	if p.Running.Read(ctx) {
 		p.ticker.Resume()
 	} else {
 		p.ticker.Pause()
@@ -267,7 +267,7 @@ func (p *Page) ApplyControls(ctx *via.Ctx) {
 }
 
 func (p *Page) ToggleRunning(ctx *via.Ctx) {
-	v := !p.Running.Get(ctx)
+	v := !p.Running.Read(ctx)
 	p.Running.Set(ctx, v)
 	if v {
 		p.ticker.Resume()

@@ -26,7 +26,7 @@ func (p *uploadPage) Upload(ctx *via.Ctx) error {
 	if !p.Avatar.Present() {
 		return nil
 	}
-	dir := p.SaveTo.Get(ctx)
+	dir := p.SaveTo.Read(ctx)
 	if dir == "" {
 		return nil
 	}

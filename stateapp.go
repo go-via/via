@@ -20,11 +20,11 @@ func (a *StateApp[T]) bindWireKey(k string) { a.wireKey = k }
 // Key returns the wire key (lowercase field name unless overridden by tag).
 func (a *StateApp[T]) Key() string { return a.wireKey }
 
-// Get returns the current app value, or the zero value of T if unset.
-// A Get that happens during View execution subscribes the ctx so a
+// Read returns the current app value, or the zero value of T if unset.
+// A Read that happens during View execution subscribes the ctx so a
 // subsequent Update on the same key fans out to it. Accepts either
 // *Ctx (action handlers) or *CtxR (View).
-func (a *StateApp[T]) Get(rc readCtx) T {
+func (a *StateApp[T]) Read(rc readCtx) T {
 	var zero T
 	if rc == nil {
 		return zero
@@ -64,4 +64,4 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) T) {
 
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
-func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Get(rc)) }
+func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Read(rc)) }

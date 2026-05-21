@@ -19,7 +19,7 @@ type statePage struct {
 }
 
 func (p *statePage) Inc(ctx *via.Ctx) error {
-	p.Hits.Set(ctx, p.Hits.Get(ctx)+1)
+	p.Hits.Set(ctx, p.Hits.Read(ctx)+1)
 	return nil
 }
 

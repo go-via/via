@@ -29,7 +29,7 @@ type Todos struct {
 }
 
 func (t *Todos) Add(ctx *via.Ctx) error {
-	text := strings.TrimSpace(t.Draft.Get(ctx))
+	text := strings.TrimSpace(t.Draft.Read(ctx))
 	if text == "" {
 		return nil
 	}
@@ -41,7 +41,7 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 }
 
 func (t *Todos) Toggle(ctx *via.Ctx) error {
-	idx := t.Index.Get(ctx)
+	idx := t.Index.Read(ctx)
 	t.Items.Update(ctx, func(items []Item) []Item {
 		if idx < 0 || idx >= len(items) {
 			return items
@@ -67,8 +67,8 @@ func (t *Todos) Clear(ctx *via.Ctx) error {
 }
 
 func (t *Todos) View(ctx *via.CtxR) h.H {
-	items := t.Items.Get(ctx)
-	filter := t.Filter.Get(ctx)
+	items := t.Items.Read(ctx)
+	filter := t.Filter.Read(ctx)
 	visible := make([]int, 0, len(items))
 	for i, it := range items {
 		switch filter {
@@ -163,17 +163,17 @@ func filterButton(name, current string, action any) h.H {
 // filter — clicking "All" while filter == "all" is a no-op rather than a
 // wasted view rebuild + SSE patch.
 func (t *Todos) FilterAll(ctx *via.Ctx) {
-	if t.Filter.Get(ctx) != "all" {
+	if t.Filter.Read(ctx) != "all" {
 		t.Filter.Update(ctx, func(string) string { return "all" })
 	}
 }
 func (t *Todos) FilterActive(ctx *via.Ctx) {
-	if t.Filter.Get(ctx) != "active" {
+	if t.Filter.Read(ctx) != "active" {
 		t.Filter.Update(ctx, func(string) string { return "active" })
 	}
 }
 func (t *Todos) FilterDone(ctx *via.Ctx) {
-	if t.Filter.Get(ctx) != "done" {
+	if t.Filter.Read(ctx) != "done" {
 		t.Filter.Update(ctx, func(string) string { return "done" })
 	}
 }

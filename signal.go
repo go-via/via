@@ -7,13 +7,13 @@ import (
 )
 
 // Signal is a typed reactive value mirrored to the browser. The value lives
-// inside the composition struct; Get/Set go through the bound *Ctx so
+// inside the composition struct; Read/Set go through the bound *Ctx so
 // changes are tracked and propagated over SSE.
 //
 //	type Counter struct {
 //	    Step via.Signal[int] `via:"step,init=1"`
 //	}
-//	c.Step.Get(ctx)        // returns int
+//	c.Step.Read(ctx)       // returns int
 //	c.Step.Set(ctx, 5)     // marks dirty, browser updates next flush
 //	c.Step.Bind()          // <input> two-way bind: data-bind="step"
 //	c.Step.Text()          // <span data-text="$step"></span>
@@ -27,11 +27,11 @@ type Signal[T any] struct {
 	dollar string // "$" + key, precomputed for Text/Show — saves a concat per render
 }
 
-// Get returns the current value. The ctx is unused today but kept so
-// every reactive-handle Get/Set has the same shape (and so future tab-
+// Read returns the current value. The ctx is unused today but kept so
+// every reactive-handle Read has the same shape (and so future tab-
 // scoped reads can move into the runtime without an API break). Accepts
 // either *Ctx (action handlers) or *CtxR (View).
-func (s *Signal[T]) Get(_ readCtx) T {
+func (s *Signal[T]) Read(_ readCtx) T {
 	return s.val
 }
 
@@ -48,7 +48,7 @@ func (s *Signal[T]) Set(ctx *Ctx, v T) {
 }
 
 // Update applies fn to the current value and stores the result. Saves
-// a Get/Set pair on transform-the-current-value patterns.
+// a Read/Set pair on transform-the-current-value patterns.
 func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
 	if fn == nil {
 		return
