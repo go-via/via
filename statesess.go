@@ -73,3 +73,9 @@ func (s *StateSess[T]) Op(ctx *Ctx) *Ops[T] {
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
 func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Read(rc)) }
+
+// stateSessMarker tags StateSess[T] (and types that embed it). See
+// signalMarker for the rationale.
+type stateSessMarker interface{ isStateSess() }
+
+func (*StateSess[T]) isStateSess() {}

@@ -1,0 +1,49 @@
+package via
+
+// BoolOps is the chain returned by Op(ctx) on every Bool* reactive
+// type. Embeds Ops[bool] for Apply/To plus the boolean verbs.
+type BoolOps struct {
+	Ops[bool]
+}
+
+// Toggle flips the value.
+func (o *BoolOps) Toggle() { o.Apply(func(b bool) bool { return !b }) }
+
+// True sets the value to true.
+func (o *BoolOps) True() { o.To(true) }
+
+// False sets the value to false.
+func (o *BoolOps) False() { o.To(false) }
+
+// SignalBool is the bool-specialized Signal — client-mirrored reactive
+// bool with a typed Op(ctx) chain.
+type SignalBool struct{ Signal[bool] }
+
+// Op returns a bool chain bound to ctx.
+func (s *SignalBool) Op(ctx *Ctx) *BoolOps {
+	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+}
+
+// StateTabBool is the bool-specialized StateTab.
+type StateTabBool struct{ StateTab[bool] }
+
+// Op returns a bool chain bound to ctx.
+func (s *StateTabBool) Op(ctx *Ctx) *BoolOps {
+	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+}
+
+// StateSessBool is the bool-specialized StateSess.
+type StateSessBool struct{ StateSess[bool] }
+
+// Op returns a bool chain bound to ctx.
+func (s *StateSessBool) Op(ctx *Ctx) *BoolOps {
+	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+}
+
+// StateAppBool is the bool-specialized StateApp.
+type StateAppBool struct{ StateApp[bool] }
+
+// Op returns a bool chain bound to ctx.
+func (a *StateAppBool) Op(ctx *Ctx) *BoolOps {
+	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { a.Update(ctx, fn) }}}
+}

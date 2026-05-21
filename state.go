@@ -97,6 +97,12 @@ func (s *StateTab[T]) decodeRaw(raw any) {
 	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
 }
 
+// stateTabMarker tags StateTab[T] (and types that embed it). See
+// signalMarker for the rationale.
+type stateTabMarker interface{ isStateTab() }
+
+func (*StateTab[T]) isStateTab() {}
+
 // scalarString returns the string form of a scalar value without going
 // through fmt.Sprintf (which costs interface boxing for every call).
 func scalarString(v reflect.Value) string {

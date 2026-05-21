@@ -72,3 +72,9 @@ func (a *StateApp[T]) Op(ctx *Ctx) *Ops[T] {
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
 func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Read(rc)) }
+
+// stateAppMarker tags StateApp[T] (and types that embed it). See
+// signalMarker for the rationale.
+type stateAppMarker interface{ isStateApp() }
+
+func (*StateApp[T]) isStateApp() {}

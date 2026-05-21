@@ -113,19 +113,31 @@ func classifyField(f reflect.StructField) fieldRole {
 // same canonical string.
 const viaPkgPath = "github.com/go-via/via"
 
-func isStateSessType(t reflect.Type) bool {
+// Marker interface reflect.Types. Cached once because reflect.TypeOf
+// on an interface allocates each call.
+var (
+	signalMarkerType    = reflect.TypeOf((*signalMarker)(nil)).Elem()
+	stateTabMarkerType  = reflect.TypeOf((*stateTabMarker)(nil)).Elem()
+	stateSessMarkerType = reflect.TypeOf((*stateSessMarker)(nil)).Elem()
+	stateAppMarkerType  = reflect.TypeOf((*stateAppMarker)(nil)).Elem()
+)
+
+// implements reports whether *t (pointer-to-t) implements iface. Used
+// to detect handle kinds through their unexported marker methods,
+// which promote across embedded specialized wrappers (SignalNum,
+// StateTabBool, etc.) for free.
+func implements(t, iface reflect.Type) bool {
 	if t.Kind() != reflect.Struct {
 		return false
 	}
-	return strings.HasPrefix(t.Name(), "StateSess[") && t.PkgPath() == viaPkgPath
+	if t.PkgPath() != viaPkgPath {
+		return false
+	}
+	return reflect.PointerTo(t).Implements(iface)
 }
 
-func isStateAppType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	return strings.HasPrefix(t.Name(), "StateApp[") && t.PkgPath() == viaPkgPath
-}
+func isStateSessType(t reflect.Type) bool { return implements(t, stateSessMarkerType) }
+func isStateAppType(t reflect.Type) bool  { return implements(t, stateAppMarkerType) }
 
 // isChildComposition reports whether t is a struct (or pointer-to-struct)
 // in a third-party package whose pointer type implements via.Composition.
@@ -150,21 +162,13 @@ func isChildComposition(t reflect.Type) bool {
 	return hasView
 }
 
-// isSignalType returns true if t is a Signal[T] for some T. We detect by
-// the type name prefix to avoid relying on a sentinel field.
-func isSignalType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	return strings.HasPrefix(t.Name(), "Signal[") && t.PkgPath() == viaPkgPath
-}
-
-func isStateType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	return strings.HasPrefix(t.Name(), "StateTab[") && t.PkgPath() == viaPkgPath
-}
+// isSignalType / isStateType detect handle kinds via unexported marker
+// interface methods (isSignal / isStateTab). Specialized wrappers
+// (SignalNum[T], StateTabBool, ...) inherit the marker via embedded
+// promotion, so the same check works for both generic and specialized
+// shapes.
+func isSignalType(t reflect.Type) bool { return implements(t, signalMarkerType) }
+func isStateType(t reflect.Type) bool  { return implements(t, stateTabMarkerType) }
 
 // qualify joins a dotted path prefix and a name into a wire key. Returns
 // the bare name when the prefix is empty so the top-level composition's

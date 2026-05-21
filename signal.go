@@ -113,6 +113,15 @@ type signalRef interface {
 	decodeRaw(raw any)
 }
 
+// signalMarker tags Signal[T] (and types that embed it). Used by the
+// walker to classify a field as a Signal regardless of whether the
+// concrete type is Signal[T] or a specialized wrapper (SignalNum[T],
+// SignalBool, ...). The marker method is promoted via embedding, so
+// every wrapper inherits it for free.
+type signalMarker interface{ isSignal() }
+
+func (*Signal[T]) isSignal() {}
+
 func (s *Signal[T]) bindSlot(slot uint16, key string) {
 	s.slot = slot
 	s.key = key
