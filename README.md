@@ -337,15 +337,8 @@ The action method's body can:
 - Write typed state: `c.Hits.Write(ctx, …)` or `c.Hits.Op(ctx).Add(1)`.
 - Push targeted patches: `ctx.Patch.Elements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.Patch.Signal("_picoTheme", "purple")`.
-- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe), or
-  `return via.Toast("saved!")` — the dispatcher recognises the
-  returned `*via.ToastError` and queues the alert without invoking the
-  action-error handler.
-- Redirect: `ctx.Redirect("/profile")` or `return via.Redirect("/profile")`
-  — the dispatcher recognises the returned `*via.RedirectError` and
-  navigates the tab without invoking the action-error handler. Useful
-  when a helper deep in the call chain decides to redirect without
-  having `*Ctx` in scope.
+- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe).
+- Redirect: `ctx.Redirect("/profile")`.
 - Decode the request payload into a typed struct:
 
   ```go

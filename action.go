@@ -217,16 +217,6 @@ func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 	}
 
 	if err := ctx.actionFns[slotIdx](ctx); err != nil {
-		var re *RedirectError
-		if errors.As(err, &re) {
-			ctx.Redirect(re.URL)
-			return
-		}
-		var te *ToastError
-		if errors.As(err, &te) {
-			ctx.Toast(te.Message)
-			return
-		}
 		a.dispatchActionError(ctx, err, false)
 	}
 }
