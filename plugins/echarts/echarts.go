@@ -224,10 +224,10 @@ func (c *Chart) AppendData(ctx *via.Ctx, seriesIdx int, data [][]any) {
 		return
 	}
 	varName := c.varName()
-	ctx.ExecScriptf(
+	ctx.ExecScript(fmt.Sprintf(
 		"if(%s){%s.appendData({seriesIndex:%d,data:%s})}",
 		varName, varName, seriesIdx, mustJSON(data),
-	)
+	))
 }
 
 // Line returns a line series options map suitable for SetSeries / SetOption.

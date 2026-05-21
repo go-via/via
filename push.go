@@ -2,7 +2,6 @@ package via
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 
 	"github.com/go-via/via/h"
@@ -111,20 +110,6 @@ func (ctx *Ctx) ExecScript(s string) {
 		return
 	}
 	enqueueScript(ctx, s)
-}
-
-// ExecScriptf is ExecScript with fmt-style formatting. Use it to splice
-// numeric / boolean values; for user-controlled strings prefer
-// JSON-encoding so the embedded value parses unambiguously as a JS
-// string literal — Go's %q diverges from JS string syntax in subtle
-// ways (\a, some \u forms). For an alert with arbitrary text, see Toast.
-//
-//	ctx.ExecScriptf("location.href = '/users/%d'", id)
-func (ctx *Ctx) ExecScriptf(format string, args ...any) {
-	if ctx == nil || format == "" {
-		return
-	}
-	enqueueScript(ctx, fmt.Sprintf(format, args...))
 }
 
 // Reload tells the browser to reload the current page on the next

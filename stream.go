@@ -34,14 +34,6 @@ func (t *Ticker) Resume() {
 	t.paused.Store(false)
 }
 
-// Paused reports whether the ticker is currently paused.
-func (t *Ticker) Paused() bool {
-	if t == nil {
-		return false
-	}
-	return t.paused.Load()
-}
-
 // Stop terminates the ticker permanently. After Stop returns, no further
 // callbacks fire and the underlying goroutine exits — Pause/Resume on a
 // stopped ticker are no-ops. Idempotent; calling Stop on an already-

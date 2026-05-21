@@ -265,22 +265,18 @@ Explicit primitives (`Toast`, `Reload`, `Redirect`, `PatchSignal`,
 | `OnDispose(ctx)`          | Tab closed, ctx swept, or app shut down       |
 | `View(ctx) h.H`           | Required; renders the composition             |
 
-Embed `via.Page` to make the optional hooks discoverable in your
-editor — type `p.On...` and the completion list shows them:
+Implement any subset of the optional hooks on your composition; `Mount`
+detects whichever are defined and skips the rest. `View` is the only
+method that's required.
 
 ```go
 type Profile struct {
-    via.Page
     UserID int `path:"id"`
 }
 
 func (p *Profile) OnInit(ctx *via.Ctx) error { /* ... */ return nil }
-func (p *Profile) View(ctx *via.Ctx) h.H     { /* ... */ return h.Div() }
+func (p *Profile) View(ctx *via.CtxR) h.H    { /* ... */ return h.Div() }
 ```
-
-Embedding is optional — compositions that don't embed it work
-exactly the same way (Mount detects whichever hooks are defined and
-skips the rest). `View` is always required.
 
 `OnConnect` is where long-running per-tab work belongs — bots that hit
 GET without ever opening the SSE never trigger it.
@@ -296,7 +292,7 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 }
 ```
 
-`Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Paused`, and
+`Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Stop`, and
 `SetInterval(d)` so actions can toggle the stream on/off or change its
 cadence at runtime:
 

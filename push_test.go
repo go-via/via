@@ -24,11 +24,6 @@ func (p *syncPage) PushList(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *syncPage) Toast(ctx *via.Ctx) error {
-	ctx.ExecScriptf("console.log(%q)", "hello world")
-	return nil
-}
-
 func (p *syncPage) PickTheme(ctx *via.Ctx) error {
 	ctx.Patch.Signal("_picoTheme", "purple")
 	return nil
@@ -67,7 +62,6 @@ func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
 		fn   func()
 	}{
 		{"ExecScript", func() { ctx.ExecScript("x") }},
-		{"ExecScriptf", func() { ctx.ExecScriptf("x %d", 1) }},
 		{"Reload", func() { ctx.Reload() }},
 		{"Toast", func() { ctx.Toast("hi") }},
 		{"Redirect", func() { ctx.Redirect("/") }},
@@ -95,21 +89,4 @@ func TestPatchSignal_pushesKeyedValueToClient(t *testing.T) {
 
 	require.Equal(t, 200, tc.Action("PickTheme").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"purple"`)
-}
-
-func TestExecScriptf_formatsArgsBeforeQueueing(t *testing.T) {
-	t.Parallel()
-
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	via.Mount[syncPage](app, "/")
-	defer server.Close()
-
-	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	require.Equal(t, 200, tc.Action("Toast").Fire())
-	vt.AwaitFrame(t, frames, 2*time.Second, `console.log("hello world")`)
 }
