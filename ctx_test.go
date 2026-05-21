@@ -408,7 +408,7 @@ type syncOffPage struct {
 func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
 	ctx.SyncOff()
 	p.N.Write(ctx, 9)
-	p.Theme.Op(ctx).To("midnight")
+	_ = p.Theme.Update(ctx, func(string) (string, error) { return "midnight", nil })
 	return nil
 }
 

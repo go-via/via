@@ -185,14 +185,19 @@ typed wrappers shrink the call site and expose shape-aware verbs:
 | `via.SignalSlice[T]`                | `Append(v) / Prepend(v) / Pop() / Shift() / Take(n) / Drop(n) / Filter(pred) / Empty()` |
 | `via.StateAppMap[K,V]`              | `Put(k,v) / Delete(k) / Empty()`            |
 
-Every Op chain has the universal `To(v)` for constant replacement;
-custom transforms with optional error go through the handle's
-`Update(ctx, fn)` directly:
+The chain exposes shape-specific verbs only. To replace with a
+constant value, use the per-tab handle's `Write(ctx, v)` (Signal /
+StateTab kinds) or `Update(ctx, fn)` with a value-returning fn
+(StateSess / StateApp kinds, which deliberately have no Write to
+discourage blind cross-tab overwrites):
 
 ```go
 p.Count.Op(ctx).Inc()                 // was: Update(ctx, func(n int) int { return n + 1 })
 p.Open.Op(ctx).Toggle()               // was: Update(ctx, func(b bool) bool { return !b })
-p.Status.Op(ctx).To("busy")           // was: Update(ctx, func(string) string { return "busy" })
+p.Status.Write(ctx, "busy")           // SignalStr / StateTabStr: direct Write
+_ = p.Theme.Update(ctx, func(string) (string, error) {
+    return "dark", nil                 // StateSessStr: no Write, go through Update
+})
 p.Series.Op(ctx).Append(point)        // was: Update with append(...)
 p.Settings.Op(ctx).Put("theme", "dark")
 _ = p.Count.Update(ctx, custom)       // escape hatch for custom transforms
@@ -200,8 +205,9 @@ _ = p.Count.Update(ctx, custom)       // escape hatch for custom transforms
 
 The generic `Signal[T]` / `StateTab[T]` / `StateSess[T]` / `StateApp[T]`
 remain for custom `T` (structs, interfaces, anything that doesn't fit
-the shape buckets); their `Op(ctx)` exposes just `To(v)`, and custom
-transforms go through `Update(ctx, fn)` directly.
+the shape buckets) have no `Op(ctx)` at all — every interaction goes
+through `Read(ctx)`, `Write(ctx, v)` (per-tab only), or
+`Update(ctx, fn)` directly.
 
 `Signal[T]` is mirrored into the browser's reactive graph. The view
 helpers below compile to Datastar `data-*` attributes that subscribe to

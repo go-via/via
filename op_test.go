@@ -46,22 +46,22 @@ func (p *opGenericPage) AddApp(ctx *via.Ctx) error {
 }
 
 func (p *opGenericPage) ToSignal(ctx *via.Ctx) error {
-	p.Signal.Op(ctx).To(42)
+	p.Signal.Write(ctx, 42)
 	return nil
 }
 
 func (p *opGenericPage) ToTab(ctx *via.Ctx) error {
-	p.Tab.Op(ctx).To(99)
+	p.Tab.Write(ctx, 99)
 	return nil
 }
 
 func (p *opGenericPage) ToSess(ctx *via.Ctx) error {
-	p.Sess.Op(ctx).To(33)
+	_ = p.Sess.Update(ctx, func(int) (int, error) { return 33, nil })
 	return nil
 }
 
 func (p *opGenericPage) ToApp(ctx *via.Ctx) error {
-	p.AppV.Op(ctx).To(77)
+	_ = p.AppV.Update(ctx, func(int) (int, error) { return 77, nil })
 	return nil
 }
 

@@ -46,7 +46,7 @@ func (p *Page) Upload(ctx *via.Ctx) error {
 			return err
 		}
 		next := LastUpload{Name: p.Avatar.Filename(), Size: p.Avatar.Size()}
-		p.Last.Op(ctx).To(next)
+		_ = p.Last.Update(ctx, func(LastUpload) (LastUpload, error) { return next, nil })
 	}
 	// Plain <form> submit: the response body of /_action/Upload reaches
 	// the browser as the new page. Redirect back to "/" so the user

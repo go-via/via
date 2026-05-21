@@ -69,13 +69,6 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. The generic chain
-// surfaces To(v) only; shape-specialized types (StateAppNum /
-// StateAppBool / …) extend it with type-aware verbs.
-func (a *StateApp[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}
-}
-
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
 func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Read(rc)) }

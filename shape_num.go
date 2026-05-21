@@ -14,7 +14,7 @@ type Number interface {
 // Embeds Ops[T] for the universal To(v); numeric verbs route through
 // the handle's Update path.
 type NumOps[T Number] struct {
-	Ops[T]
+	ops[T]
 }
 
 // Add increments by v.
@@ -45,7 +45,9 @@ func (o *NumOps[T]) Inc() { o.Add(1) }
 func (o *NumOps[T]) Dec() { o.Sub(1) }
 
 // Zero replaces the value with the type's zero.
-func (o *NumOps[T]) Zero() { var z T; o.To(z) }
+func (o *NumOps[T]) Zero() {
+	_ = o.update(func(T) (T, error) { var z T; return z, nil })
+}
 
 // Min clamps the lower bound: new = max(cur, lo). After this call the
 // value is at least lo.
@@ -75,7 +77,7 @@ type SignalNum[T Number] struct{ Signal[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *SignalNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
+	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateTabNum is the numeric-specialized StateTab.
@@ -83,7 +85,7 @@ type StateTabNum[T Number] struct{ StateTab[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateTabNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
+	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateSessNum is the numeric-specialized StateSess.
@@ -91,7 +93,7 @@ type StateSessNum[T Number] struct{ StateSess[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateSessNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
+	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateAppNum is the numeric-specialized StateApp.
@@ -99,5 +101,5 @@ type StateAppNum[T Number] struct{ StateApp[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (a *StateAppNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}}
+	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}}
 }

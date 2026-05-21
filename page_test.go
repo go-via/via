@@ -135,7 +135,7 @@ type userScopedPage struct {
 }
 
 func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
-	p.Theme.Op(ctx).To("red")
+	_ = p.Theme.Update(ctx, func(string) (string, error) { return "red", nil })
 	return nil
 }
 

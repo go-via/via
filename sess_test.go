@@ -167,7 +167,7 @@ type loginPage struct {
 }
 
 func (p *loginPage) Login(ctx *via.Ctx) error {
-	p.UserID.Op(ctx).To("alice")
+	_ = p.UserID.Update(ctx, func(string) (string, error) { return "alice", nil })
 	sess.Rotate(ctx)
 	return nil
 }

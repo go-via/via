@@ -360,14 +360,14 @@ type setIfChangedPage struct {
 
 func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
 	if p.Status.Read(ctx) != "idle" {
-		p.Status.Op(ctx).To("idle")
+		p.Status.Write(ctx, "idle")
 	}
 	return nil
 }
 
 func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
 	if p.Status.Read(ctx) != "busy" {
-		p.Status.Op(ctx).To("busy")
+		p.Status.Write(ctx, "busy")
 	}
 	return nil
 }

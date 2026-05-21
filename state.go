@@ -74,13 +74,6 @@ func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. The generic chain
-// surfaces To(v) only; shape-specialized types (StateTabNum /
-// StateTabBool / …) extend it with type-aware verbs.
-func (s *StateTab[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}
-}
-
 // Text returns a static text node carrying the current value. Re-renders
 // happen as part of the view fragment, not via a client signal. Mirrors
 // StateSess/StateApp.Text so every reactive-value Text(ctx) reads the

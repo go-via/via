@@ -4,7 +4,7 @@ package via
 // type. Embeds Ops[[]T] for the universal To(v); slice verbs route
 // through the handle's Update path.
 type SliceOps[T any] struct {
-	Ops[[]T]
+	ops[[]T]
 }
 
 // Append adds v to the end.
@@ -44,7 +44,9 @@ func (o *SliceOps[T]) Shift() {
 }
 
 // Empty replaces the value with nil (zero-length slice).
-func (o *SliceOps[T]) Empty() { o.To(nil) }
+func (o *SliceOps[T]) Empty() {
+	_ = o.update(func([]T) ([]T, error) { return nil, nil })
+}
 
 // Take keeps the first n elements. n <= 0 clears; n >= len is a no-op.
 func (o *SliceOps[T]) Take(n int) {
@@ -95,7 +97,7 @@ type SignalSlice[T any] struct{ Signal[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *SignalSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
-	return &SliceOps[T]{Ops: Ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
+	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateTabSlice is the slice-specialized StateTab.
@@ -103,7 +105,7 @@ type StateTabSlice[T any] struct{ StateTab[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *StateTabSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
-	return &SliceOps[T]{Ops: Ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
+	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateSessSlice is the slice-specialized StateSess.
@@ -111,7 +113,7 @@ type StateSessSlice[T any] struct{ StateSess[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *StateSessSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
-	return &SliceOps[T]{Ops: Ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
+	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateAppSlice is the slice-specialized StateApp.
@@ -119,5 +121,5 @@ type StateAppSlice[T any] struct{ StateApp[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (a *StateAppSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
-	return &SliceOps[T]{Ops: Ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return a.Update(ctx, fn) }}}
+	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return a.Update(ctx, fn) }}}
 }

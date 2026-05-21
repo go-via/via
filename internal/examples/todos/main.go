@@ -164,17 +164,17 @@ func filterButton(name, current string, action any) h.H {
 // wasted view rebuild + SSE patch.
 func (t *Todos) FilterAll(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "all" {
-		t.Filter.Op(ctx).To("all")
+		t.Filter.Write(ctx, "all")
 	}
 }
 func (t *Todos) FilterActive(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "active" {
-		t.Filter.Op(ctx).To("active")
+		t.Filter.Write(ctx, "active")
 	}
 }
 func (t *Todos) FilterDone(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "done" {
-		t.Filter.Op(ctx).To("done")
+		t.Filter.Write(ctx, "done")
 	}
 }
 
