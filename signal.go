@@ -7,14 +7,14 @@ import (
 )
 
 // Signal is a typed reactive value mirrored to the browser. The value lives
-// inside the composition struct; Read/Set go through the bound *Ctx so
+// inside the composition struct; Read/Write go through the bound *Ctx so
 // changes are tracked and propagated over SSE.
 //
 //	type Counter struct {
 //	    Step via.Signal[int] `via:"step,init=1"`
 //	}
 //	c.Step.Read(ctx)       // returns int
-//	c.Step.Set(ctx, 5)     // marks dirty, browser updates next flush
+//	c.Step.Write(ctx, 5)   // marks dirty, browser updates next flush
 //	c.Step.Bind()          // <input> two-way bind: data-bind="step"
 //	c.Step.Text()          // <span data-text="$step"></span>
 //
@@ -35,12 +35,12 @@ func (s *Signal[T]) Read(_ readCtx) T {
 	return s.val
 }
 
-// Set writes a new value and marks the signal dirty so the next flush
-// patches it to the browser. From inside an action method or a
+// Write stores a new value and marks the signal dirty so the next
+// flush patches it to the browser. From inside an action method or a
 // via.Stream callback, the flush is automatic. From a raw goroutine
 // you started yourself, call ctx.SyncNow() at a coalescing boundary —
 // the dirty bit alone won't reach the browser without a flush.
-func (s *Signal[T]) Set(ctx *Ctx, v T) {
+func (s *Signal[T]) Write(ctx *Ctx, v T) {
 	s.val = v
 	if ctx != nil {
 		ctx.markSignalDirty(s.slot)
@@ -48,7 +48,7 @@ func (s *Signal[T]) Set(ctx *Ctx, v T) {
 }
 
 // Update applies fn to the current value and stores the result. Saves
-// a Read/Set pair on transform-the-current-value patterns.
+// a Read/Write pair on transform-the-current-value patterns.
 func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
 	if fn == nil {
 		return

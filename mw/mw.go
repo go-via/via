@@ -142,6 +142,7 @@ func CSP(extra ...string) via.Middleware {
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; script-src 'self' 'nonce-"+n+"'; "+
 				"object-src 'none'; base-uri 'self'"+tail)
+
 		next.ServeHTTP(w, via.RequestWithCSPNonce(r, n))
 	}
 }

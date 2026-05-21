@@ -29,7 +29,7 @@ func (p *Feed) Toggle(ctx *via.Ctx) {
 }
 
 func (p *Feed) Clear(ctx *via.Ctx) {
-	p.Points.Set(ctx, nil)
+	p.Points.Write(ctx, nil)
 }
 
 func (p *Feed) OnConnect(ctx *via.Ctx) error {

@@ -268,7 +268,7 @@ func (p *Page) ApplyControls(ctx *via.Ctx) {
 
 func (p *Page) ToggleRunning(ctx *via.Ctx) {
 	v := !p.Running.Read(ctx)
-	p.Running.Set(ctx, v)
+	p.Running.Write(ctx, v)
 	if v {
 		p.ticker.Resume()
 	} else {
@@ -309,12 +309,12 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 		p.netRXBuf.push(now, rx/1e3)
 		p.netTXBuf.push(now, tx/1e3)
 
-		p.CPUVal.Set(ctx, fmt.Sprintf("%.1f%%", cpuPct))
-		p.RAMVal.Set(ctx, fmt.Sprintf("%.1f%%", ramPct))
-		p.DiskR.Set(ctx, fmtBytes(dr))
-		p.DiskW.Set(ctx, fmtBytes(dw))
-		p.NetRX.Set(ctx, fmtBytes(rx))
-		p.NetTX.Set(ctx, fmtBytes(tx))
+		p.CPUVal.Write(ctx, fmt.Sprintf("%.1f%%", cpuPct))
+		p.RAMVal.Write(ctx, fmt.Sprintf("%.1f%%", ramPct))
+		p.DiskR.Write(ctx, fmtBytes(dr))
+		p.DiskW.Write(ctx, fmtBytes(dw))
+		p.NetRX.Write(ctx, fmtBytes(rx))
+		p.NetTX.Write(ctx, fmtBytes(tx))
 
 		p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
 		p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))

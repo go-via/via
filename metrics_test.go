@@ -54,7 +54,7 @@ type metricsPage struct {
 }
 
 func (p *metricsPage) Bump(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Read(ctx)+1)
+	p.N.Write(ctx, p.N.Read(ctx)+1)
 	return nil
 }
 

@@ -80,7 +80,7 @@ func (t *Ticker) SetInterval(d time.Duration) {
 //
 //	func (p *Page) OnConnect(ctx *via.Ctx) error {
 //	    via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
-//	        p.Now.Set(ctx, t.Format("15:04:05"))
+//	        p.Now.Write(ctx, t.Format("15:04:05"))
 //	    })
 //	    return nil
 //	}

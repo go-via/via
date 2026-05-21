@@ -20,7 +20,7 @@ type tcPage struct {
 }
 
 func (p *tcPage) Bump(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Read(ctx)+1)
+	p.N.Write(ctx, p.N.Read(ctx)+1)
 	return nil
 }
 
@@ -154,15 +154,16 @@ type uploadPage struct {
 
 func (p *uploadPage) Save(ctx *via.Ctx) error {
 	if !p.Avatar.Present() {
-		p.Echo.Set(ctx, "no-file")
+		p.Echo.Write(ctx, "no-file")
 		return nil
 	}
 	b, err := p.Avatar.Bytes()
 	if err != nil {
 		return err
 	}
-	p.Echo.Set(ctx, p.Avatar.Filename()+":"+
+	p.Echo.Write(ctx, p.Avatar.Filename()+":"+
 		string(b)+":"+p.Note.Read(ctx))
+
 	return nil
 }
 

@@ -89,6 +89,7 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("Content-Security-Policy",
 			"script-src 'self' 'nonce-"+nonce+"'")
+
 		next.ServeHTTP(w, via.RequestWithCSPNonce(r, nonce))
 	})
 	via.Mount[cspEchoPage](app, "/")

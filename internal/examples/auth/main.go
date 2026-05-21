@@ -88,7 +88,7 @@ type LoginPage struct {
 func (p *LoginPage) Submit(ctx *via.Ctx) error {
 	user, err := store.Authenticate(strings.TrimSpace(p.Email.Read(ctx)), p.Password.Read(ctx))
 	if err != nil {
-		p.Err.Set(ctx, err.Error())
+		p.Err.Write(ctx, err.Error())
 		return nil
 	}
 	sess.Rotate(ctx)
@@ -125,7 +125,7 @@ func (p *RegisterPage) Submit(ctx *via.Ctx) error {
 		strings.TrimSpace(p.Email.Read(ctx)),
 		p.Password.Read(ctx),
 	); err != nil {
-		p.Err.Set(ctx, err.Error())
+		p.Err.Write(ctx, err.Error())
 		return nil
 	}
 	return via.Redirect("/login")

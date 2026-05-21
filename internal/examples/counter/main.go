@@ -26,8 +26,8 @@ func (c *Counter) Inc(ctx *via.Ctx) {
 }
 
 func (c *Counter) Reset(ctx *via.Ctx) {
-	c.Hits.Set(ctx, 0)
-	c.Step.Set(ctx, 1)
+	c.Hits.Write(ctx, 0)
+	c.Step.Write(ctx, 1)
 }
 
 func (c *Counter) View(ctx *via.CtxR) h.H {

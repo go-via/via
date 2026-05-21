@@ -63,7 +63,7 @@ type clockPage struct {
 func (p *clockPage) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 20*time.Millisecond, func(ctx *via.Ctx, t time.Time) {
 		p.ticks.Add(1)
-		p.Tick.Set(ctx, int(p.ticks.Load()))
+		p.Tick.Write(ctx, int(p.ticks.Load()))
 	})
 	return nil
 }
@@ -118,14 +118,14 @@ type streamRacePage struct {
 
 func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
-		p.N.Set(ctx, p.N.Read(ctx)+1)
+		p.N.Write(ctx, p.N.Read(ctx)+1)
 		p.M.Update(ctx, func(n int) int { return n + 1 })
 	})
 	return nil
 }
 
 func (p *streamRacePage) Bump(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Read(ctx)+1)
+	p.N.Write(ctx, p.N.Read(ctx)+1)
 	p.M.Update(ctx, func(n int) int { return n + 1 })
 	return nil
 }

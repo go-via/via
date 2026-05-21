@@ -23,7 +23,7 @@ type CounterPage struct {
 
 func (c *CounterPage) OnInit(ctx *via.Ctx) error {
 	if c.StartAtStep > 0 {
-		c.Step.Set(ctx, c.StartAtStep)
+		c.Step.Write(ctx, c.StartAtStep)
 	}
 	return nil
 }

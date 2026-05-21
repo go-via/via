@@ -40,7 +40,7 @@ type loginForm struct {
 func (p *formPage) Submit(ctx *via.Ctx) error {
 	var f loginForm
 	via.DecodeForm(ctx, &f)
-	p.Result.Set(ctx, f.Email+"|"+f.Password+"|"+strings.Repeat("*", f.Age))
+	p.Result.Write(ctx, f.Email+"|"+f.Password+"|"+strings.Repeat("*", f.Age))
 	return nil
 }
 
@@ -80,7 +80,7 @@ type lazyForm struct {
 func (p *formNoTag) Submit(ctx *via.Ctx) error {
 	var f lazyForm
 	via.DecodeForm(ctx, &f)
-	p.Captured.Set(ctx, f.UserName)
+	p.Captured.Write(ctx, f.UserName)
 	return nil
 }
 
@@ -123,7 +123,7 @@ func (p *formFallbackPage) Submit(ctx *via.Ctx) error {
 	if f.On {
 		on = "true"
 	}
-	p.Captured.Set(ctx, f.City+"|"+strings.Repeat("y", f.Age)+"|"+on)
+	p.Captured.Write(ctx, f.City+"|"+strings.Repeat("y", f.Age)+"|"+on)
 	return nil
 }
 
@@ -285,7 +285,7 @@ func (p *unexportedFieldPage) Submit(ctx *via.Ctx) error {
 	// Encode all four into one string so the test can assert on each
 	// slot independently — Visible gets the signal value, the rest stay
 	// zero (unexported skipped, missing key absent).
-	p.Captured.Set(ctx, dst.Visible+"|"+dst.hidden+"|"+dst.NoTag+"|"+dst.NotFound)
+	p.Captured.Write(ctx, dst.Visible+"|"+dst.hidden+"|"+dst.NoTag+"|"+dst.NotFound)
 	return nil
 }
 

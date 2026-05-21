@@ -36,7 +36,7 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 	t.Items.Update(ctx, func(items []Item) []Item {
 		return append(items, Item{Text: text})
 	})
-	t.Draft.Set(ctx, "")
+	t.Draft.Write(ctx, "")
 	return nil
 }
 

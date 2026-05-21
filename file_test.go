@@ -108,7 +108,7 @@ func (p *bytesEchoPage) Read(ctx *via.Ctx) error {
 	if err != nil {
 		return err
 	}
-	p.Length.Set(ctx, len(b))
+	p.Length.Write(ctx, len(b))
 	return nil
 }
 

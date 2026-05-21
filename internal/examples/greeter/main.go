@@ -16,11 +16,11 @@ type Greeter struct {
 }
 
 func (g *Greeter) GreetBob(ctx *via.Ctx) {
-	g.Greeting.Set(ctx, "Hello Bob!")
+	g.Greeting.Write(ctx, "Hello Bob!")
 }
 
 func (g *Greeter) GreetAlice(ctx *via.Ctx) {
-	g.Greeting.Set(ctx, "Hello Alice!")
+	g.Greeting.Write(ctx, "Hello Alice!")
 }
 
 func (g *Greeter) View(ctx *via.CtxR) h.H {

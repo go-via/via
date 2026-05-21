@@ -18,7 +18,7 @@ import (
 //	    Filter via.StateTab[string] `via:"filter,init=all"`
 //	}
 //	c.Hits.Read(ctx)       // returns int
-//	c.Hits.Set(ctx, 0)     // direct write
+//	c.Hits.Write(ctx, 0)   // direct write
 //	c.Hits.Update(ctx, func(n int) int { return n + 1 }) // numeric delta
 //
 // The optional `via:"name,init=value"` tag mirrors Signal[T]: either part
@@ -36,12 +36,13 @@ func (s *StateTab[T]) Read(_ readCtx) T {
 	return s.val
 }
 
-// Set writes a new value and marks the composition dirty so the next
-// flush re-renders the view fragment. From inside an action method or
-// a via.Stream callback, the flush is automatic. From a raw goroutine
-// you started yourself, call ctx.SyncNow() at a coalescing boundary —
-// the dirty bit alone won't reach the browser without a flush.
-func (s *StateTab[T]) Set(ctx *Ctx, v T) {
+// Write stores a new value and marks the composition dirty so the
+// next flush re-renders the view fragment. From inside an action
+// method or a via.Stream callback, the flush is automatic. From a raw
+// goroutine you started yourself, call ctx.SyncNow() at a coalescing
+// boundary — the dirty bit alone won't reach the browser without a
+// flush.
+func (s *StateTab[T]) Write(ctx *Ctx, v T) {
 	s.val = v
 	if ctx != nil {
 		ctx.markStateDirty()
@@ -49,7 +50,7 @@ func (s *StateTab[T]) Set(ctx *Ctx, v T) {
 }
 
 // Update applies fn to the current value and stores the result. Saves
-// a Read/Set pair on common increment/transform patterns:
+// a Read/Write pair on common increment/transform patterns:
 //
 //	c.Hits.Update(ctx, func(n int) int { return n + 1 })
 func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) T) {

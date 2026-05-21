@@ -19,7 +19,7 @@ type statePage struct {
 }
 
 func (p *statePage) Inc(ctx *via.Ctx) error {
-	p.Hits.Set(ctx, p.Hits.Read(ctx)+1)
+	p.Hits.Write(ctx, p.Hits.Read(ctx)+1)
 	return nil
 }
 
@@ -110,7 +110,7 @@ type updatePage struct {
 }
 
 func (p *updatePage) DoState(ctx *via.Ctx) error {
-	p.N.Set(ctx, 5)
+	p.N.Write(ctx, 5)
 	p.N.Update(ctx, func(n int) int { return n * 2 })
 	return nil
 }

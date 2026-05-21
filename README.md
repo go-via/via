@@ -236,7 +236,7 @@ opt the whole action out with `ctx.SyncOff()`:
 func (p *Page) Reconcile(ctx *via.Ctx) error {
     ctx.SyncOff()
     for _, entry := range entries {
-        p.Cursor.Set(ctx, entry.Cursor)
+        p.Cursor.Write(ctx, entry.Cursor)
         p.Theme.Update(ctx, applyTheme(entry))
     }
     return nil // nothing reaches the browser
@@ -284,7 +284,7 @@ GET without ever opening the SSE never trigger it.
 ```go
 func (p *Page) OnConnect(ctx *via.Ctx) error {
     via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
-        p.Now.Set(ctx, t.Format("15:04:05"))
+        p.Now.Write(ctx, t.Format("15:04:05"))
     })
     return nil
 }
@@ -328,7 +328,7 @@ action so the value updates client-side _before_ the POST fires.
 
 The action method's body can:
 
-- Set typed state: `c.Hits.Set(ctx, …)` or `c.Hits.Update(ctx, func(n int) int { return n + 1 })`.
+- Write typed state: `c.Hits.Write(ctx, …)` or `c.Hits.Op(ctx).Add(1)`.
 - Push targeted patches: `ctx.Patch.Elements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.Patch.Signal("_picoTheme", "purple")`.
 - Show a quick alert: `ctx.Toast("saved!")` (JSON-safe), or

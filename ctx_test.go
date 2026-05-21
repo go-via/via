@@ -22,7 +22,7 @@ type cookieEchoPage struct {
 }
 
 func (p *cookieEchoPage) OnInit(ctx *via.Ctx) error {
-	p.Flavor.Set(ctx, ctx.Cookie("flavor"))
+	p.Flavor.Write(ctx, ctx.Cookie("flavor"))
 	return nil
 }
 
@@ -103,7 +103,7 @@ type sessionProbePage struct {
 
 func (p *sessionProbePage) Probe(ctx *via.Ctx) error {
 	if ctx.Session() != nil {
-		p.Email.Set(ctx, "session-present")
+		p.Email.Write(ctx, "session-present")
 	}
 	return nil
 }
@@ -407,13 +407,13 @@ type syncOffPage struct {
 
 func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	p.N.Set(ctx, 9)
+	p.N.Write(ctx, 9)
 	p.Theme.Update(ctx, func(string) string { return "midnight" })
 	return nil
 }
 
 func (p *syncOffPage) LoudAfter(ctx *via.Ctx) error {
-	p.N.Set(ctx, p.N.Read(ctx))
+	p.N.Write(ctx, p.N.Read(ctx))
 	return nil
 }
 
@@ -688,7 +688,7 @@ type syncOffPanicPage struct {
 
 func (p *syncOffPanicPage) BoomSilently(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	p.N.Set(ctx, 42)
+	p.N.Write(ctx, 42)
 	panic("boom-while-silent")
 }
 
