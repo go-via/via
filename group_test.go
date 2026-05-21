@@ -212,7 +212,7 @@ func (p *protectedPage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *protectedPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Textf("%d", p.N.Get(ctx)), h.Button(h.Text("+"), on.Click(p.Bump)))
+	return h.Div(p.N.Text(ctx), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
 func TestGroupMiddleware_appliesToActionPOST(t *testing.T) {

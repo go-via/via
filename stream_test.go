@@ -69,7 +69,7 @@ func (p *clockPage) OnConnect(ctx *via.Ctx) error {
 }
 
 func (p *clockPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.P(h.Textf("%d", p.Tick.Get(ctx))))
+	return h.Div(h.P(p.Tick.Text(ctx)))
 }
 
 func TestStream_pushesPeriodicUpdatesOverSSE(t *testing.T) {
@@ -131,7 +131,7 @@ func (p *streamRacePage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *streamRacePage) View(ctx *via.CtxR) h.H {
-	return h.Div(p.N.Text(), h.Textf("%d", p.M.Get(ctx)))
+	return h.Div(p.N.Text(), p.M.Text(ctx))
 }
 
 // TestStream_doesNotRaceWithConcurrentActions hammers a Stream-driven
@@ -184,7 +184,7 @@ func (p *tickerControlPage) SpeedUp(ctx *via.Ctx) error {
 }
 
 func (p *tickerControlPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Span(h.ID("n"), h.Textf("%d", p.N.Get(ctx))))
+	return h.Div(h.Span(h.ID("n"), p.N.Text(ctx)))
 }
 
 func TestTicker_pauseStopsAndResumeRestartsCallback(t *testing.T) {
@@ -279,7 +279,7 @@ func (p *tickerStopPage) OnConnect(ctx *via.Ctx) error {
 func (p *tickerStopPage) Halt(ctx *via.Ctx) error { p.ticker.Stop(); return nil }
 func (p *tickerStopPage) Wake(ctx *via.Ctx) error { p.ticker.Resume(); return nil }
 func (p *tickerStopPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Span(h.ID("n"), h.Textf("%d", p.N.Get(ctx))))
+	return h.Div(h.Span(h.ID("n"), p.N.Text(ctx)))
 }
 
 func TestTicker_stopPermanentlyTerminatesCallbacks(t *testing.T) {

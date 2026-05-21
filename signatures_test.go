@@ -24,7 +24,7 @@ func (p *voidActionPage) Bump(ctx *via.Ctx) {
 }
 
 func (p *voidActionPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Textf("%d", p.N.Get(ctx)), h.Button(h.Text("+"), on.Click(p.Bump)))
+	return h.Div(p.N.Text(ctx), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
 func TestAction_voidReturnIsRecognised(t *testing.T) {

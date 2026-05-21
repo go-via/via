@@ -1,5 +1,7 @@
 package via
 
+import "github.com/go-via/via/h"
+
 // StateApp is an app-scoped reactive value: shared across every session,
 // every tab. Use sparingly (no tenant isolation).
 //
@@ -59,3 +61,7 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) T) {
 	ctx.markStateDirty()
 	ctx.app.broadcastRender(ctx, nil, a.wireKey)
 }
+
+// Text returns a static text node carrying the current value. Accepts
+// either *Ctx (action handlers) or *CtxR (View).
+func (a *StateApp[T]) Text(rc readCtx) h.H { return h.Textf("%v", a.Get(rc)) }

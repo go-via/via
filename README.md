@@ -196,10 +196,10 @@ s.Attr("disabled")    // data-attr-disabled="$key" — drives an HTML attr
 s.Style("color")      // data-style-color="$key" — drives an inline CSS prop
 ```
 
-`StateTab[T] / StateSess[T] / StateApp[T]` are server-side: render their
-values with `h.Text(s.Get(ctx))` (for strings) or `h.Textf("%v", s.Get(ctx))`
-(for any T). The view re-renders the value on the next flush rather than
-the client reading a signal.
+`StateTab[T]` / `StateSess[T]` / `StateApp[T]` share `Text(ctx)` —
+they're server-side, so the view re-renders the value rather than the
+client reading a signal. (The ctx is unused on StateTab; required on
+StateSess/StateApp because the value lives in a session/app store.)
 
 ### Silent actions (escape hatch)
 

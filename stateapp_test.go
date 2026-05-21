@@ -26,7 +26,7 @@ func (p *appCounterPage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *appCounterPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Span(h.ID("visits"), h.Textf("%d", p.Visits.Get(ctx))))
+	return h.Div(h.Span(h.ID("visits"), p.Visits.Text(ctx)))
 }
 
 func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {

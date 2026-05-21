@@ -31,7 +31,7 @@ func (p *kitchenSinkPage) Bump(ctx *via.Ctx) {
 func (p *kitchenSinkPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.P(h.Textf("q=%s", p.Q)),
-		h.P(h.Textf("%d", p.N.Get(ctx))),
+		h.P(p.N.Text(ctx)),
 		h.Span(p.Theme.Text()),
 		h.Button(h.Text("+"), on.Click(p.Bump)),
 	)

@@ -112,9 +112,7 @@ func (p *bytesEchoPage) Read(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *bytesEchoPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Textf("%d", p.Length.Get(ctx)))
-}
+func (p *bytesEchoPage) View(ctx *via.CtxR) h.H { return h.Div(p.Length.Text(ctx)) }
 
 func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 	t.Parallel()

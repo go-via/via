@@ -22,7 +22,7 @@ type bareEmbedPage struct {
 }
 
 func (p *bareEmbedPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Textf("%d", p.Hits.Get(ctx)))
+	return h.Div(p.Hits.Text(ctx))
 }
 
 func TestPage_embeddedDefaultsDoNotInterfereWithRender(t *testing.T) {
@@ -140,7 +140,7 @@ func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
 }
 
 func (p *userScopedPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.P(h.Text("theme="), h.Text(p.Theme.Get(ctx))), h.Button(h.Text("red"), on.Click(p.UseRed)))
+	return h.Div(h.P(h.Text("theme="), p.Theme.Text(ctx)), h.Button(h.Text("red"), on.Click(p.UseRed)))
 }
 
 func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
@@ -170,7 +170,7 @@ func (p *appScopedPage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *appScopedPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Textf("%d", p.Visits.Get(ctx)))
+	return h.Div(p.Visits.Text(ctx))
 }
 
 func TestScopeApp_sharedAcrossSessions(t *testing.T) {

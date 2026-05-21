@@ -22,7 +22,7 @@ func (p *benchPage) Inc(ctx *via.Ctx) error {
 
 func (p *benchPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
-		h.P(h.Textf("%d", p.Hits.Get(ctx))),
+		h.P(p.Hits.Text(ctx)),
 		h.Button(h.Text("+"), on.Click(p.Inc)),
 	)
 }
