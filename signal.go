@@ -59,6 +59,13 @@ func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
 	}
 }
 
+// Op returns a typed chain entry bound to ctx. Apply/To are the
+// universal verbs available on every reactive kind; shape-specialized
+// types (SignalNum/SignalBool/…) extend it with type-aware verbs.
+func (s *Signal[T]) Op(ctx *Ctx) *Ops[T] {
+	return &Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}
+}
+
 // Bind returns a two-way binding attribute. Use on form inputs.
 func (s *Signal[T]) Bind() h.H {
 	return h.Data("bind", s.key)

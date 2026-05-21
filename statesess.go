@@ -63,6 +63,13 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) T) {
 	ctx.app.broadcastRender(ctx, ctx.session, s.wireKey)
 }
 
+// Op returns a typed chain entry bound to ctx. Apply/To are the
+// universal verbs available on every reactive kind; shape-specialized
+// types (StateSessNum/StateSessBool/…) extend it with type-aware verbs.
+func (s *StateSess[T]) Op(ctx *Ctx) *Ops[T] {
+	return &Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}
+}
+
 // Text returns a static text node carrying the current value. Accepts
 // either *Ctx (action handlers) or *CtxR (View).
 func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Read(rc)) }
