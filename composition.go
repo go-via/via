@@ -33,6 +33,38 @@ type Composition interface {
 	View(ctx *CtxR) h.H
 }
 
+// Initializer is the optional lifecycle hook that runs on the
+// page-render request before View. Use it to seed reactive state from
+// the request (cookies, query params), kick off OnInit-time fetches,
+// or prepare any data View needs. A non-nil error is logged but does
+// not abort the render.
+//
+// The framework discovers OnInit via reflection on the method name —
+// satisfying this interface is not required, but declaring it on the
+// composition makes the hook self-documenting and surfaces it in Go
+// tooling.
+type Initializer interface {
+	OnInit(ctx *Ctx) error
+}
+
+// Connector is the optional lifecycle hook that fires once when the
+// SSE stream first opens for this tab. Bots that hit GET without ever
+// opening the SSE never see this fire, so expensive background work
+// (Stream tickers, fan-out goroutines) belongs here rather than in
+// OnInit. A non-nil error is logged.
+type Connector interface {
+	OnConnect(ctx *Ctx) error
+}
+
+// Disposer is the optional lifecycle hook that fires when the tab's
+// Ctx is torn down — page unload, ctx-TTL sweep, or app shutdown.
+// Release resources, close goroutines, persist final state. Runs
+// under the per-Ctx action mutex so it observes a composition that
+// isn't being mutated by a concurrent handler.
+type Disposer interface {
+	OnDispose(ctx *Ctx)
+}
+
 // Mountable is the target of [Mount]. Implemented by *App (mounts at
 // route on the app) and *Group (mounts under the group's prefix with
 // the group's middleware applied to page render, action POST, and SSE
