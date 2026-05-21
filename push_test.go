@@ -15,7 +15,7 @@ import (
 type syncPage struct{}
 
 func (p *syncPage) PushList(ctx *via.Ctx) error {
-	ctx.SyncElements(
+	ctx.Patch.Elements(
 		h.Ul(h.ID("results"),
 			h.Li(h.Text("first")),
 			h.Li(h.Text("second")),
@@ -30,7 +30,7 @@ func (p *syncPage) Toast(ctx *via.Ctx) error {
 }
 
 func (p *syncPage) PickTheme(ctx *via.Ctx) error {
-	ctx.PatchSignal("_picoTheme", "purple")
+	ctx.Patch.Signal("_picoTheme", "purple")
 	return nil
 }
 
@@ -71,8 +71,6 @@ func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
 		{"Reload", func() { ctx.Reload() }},
 		{"Toast", func() { ctx.Toast("hi") }},
 		{"Redirect", func() { ctx.Redirect("/") }},
-		{"PatchSignals", func() { ctx.PatchSignals(map[string]any{"k": 1}) }},
-		{"SyncElements", func() { ctx.SyncElements(h.Div()) }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -60,7 +60,8 @@ type Ctx struct {
 	// hot path. Void-return actions are wrapped to satisfy the unified
 	// `func(*Ctx) error` shape; nil means "no such hook".
 	viewFn    func(*CtxR) h.H
-	ctxR      *CtxR // read-only view, allocated eagerly in newCtx
+	ctxR      *CtxR  // read-only view, allocated eagerly in newCtx
+	Patch     *Patch // wire-push primitives, allocated eagerly in newCtx
 	initFn    func(*Ctx) error
 	connectFn func(*Ctx) error
 	disposeFn func(*Ctx)
@@ -304,7 +305,7 @@ func (ctx *Ctx) SyncNow() {
 // browser this action. A later loud action that re-touches the state
 // surfaces the value via the normal dirty-bit path.
 //
-// Explicit publish primitives (PatchSignal/PatchSignals, SyncElements,
+// Explicit publish primitives (ctx.Patch.{Signal,Signals,Element,Elements},
 // ExecScript, Toast, Reload, Redirect) are NOT suppressed by SyncOff
 // — they enqueue patches directly rather than through the dirty-bit
 // flush. This is deliberate so a panic-recovery error toast still

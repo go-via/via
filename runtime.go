@@ -37,7 +37,7 @@ func putRenderBuf(b *bytes.Buffer) {
 
 // patchQueue coalesces outgoing patches between SSE flushes. The
 // presence flags for elements and redirect are encoded as empty-string
-// vs non-empty; Redirect short-circuits on empty input and SyncElements
+// vs non-empty; Redirect short-circuits on empty input and Patch.Elements
 // / flushDirty only set elements after rendering non-empty content, so
 // the implication holds in both directions.
 type patchQueue struct {
@@ -76,6 +76,7 @@ func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 		doneChan:     make(chan struct{}),
 	}
 	ctx.ctxR = &CtxR{ctx: ctx}
+	ctx.Patch = &Patch{ctx: ctx}
 	ctx.touch()
 	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
@@ -152,7 +153,7 @@ func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
 func fieldByPath(v reflect.Value, path []int) reflect.Value {
 	for _, idx := range path {
 		v = v.Field(idx)
-		if v.Kind() == reflect.Ptr {
+		if v.Kind() == reflect.Pointer {
 			if v.IsNil() {
 				v.Set(reflect.New(v.Type().Elem()))
 			}

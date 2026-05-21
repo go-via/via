@@ -6,6 +6,10 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# Pinned tool versions. Bump deliberately; @latest in CI breaks reproducibility.
+GOLANGCI_VERSION="${GOLANGCI_VERSION:-v2.12.2}"
+GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.1.4}"
+
 # Allocation thresholds for bench gates. Bumped if intentional regressions
 # land in a feature commit; tightened when a perf commit lands. Keep
 # generous-but-not-loose so noise doesn't fail CI.
@@ -31,6 +35,20 @@ echo "OK: gofmt clean"
 echo "== CI: Run go vet =="
 go vet ./...
 echo "OK: go vet passed"
+
+echo "== CI: golangci-lint =="
+if ! command -v golangci-lint >/dev/null 2>&1; then
+  go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_VERSION}"
+fi
+golangci-lint run ./...
+echo "OK: golangci-lint passed"
+
+echo "== CI: govulncheck =="
+if ! command -v govulncheck >/dev/null 2>&1; then
+  go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+fi
+govulncheck ./...
+echo "OK: govulncheck passed"
 
 echo "== CI: Build all packages =="
 go build ./...

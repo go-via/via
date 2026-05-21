@@ -163,14 +163,14 @@ func flushDirty(ctx *Ctx) {
 	if needRender {
 		buf := getRenderBuf()
 		// View runs without queue.mu held — user code is allowed to
-		// call ctx.PatchSignal / ctx.SyncElements, which would deadlock
+		// call ctx.Patch.Signal / ctx.Patch.Elements, which would deadlock
 		// on a re-entrant queue.mu acquisition.
 		ctx.beginRender()
 		body := ctx.viewFn(ctx.readView())
 		ctx.endRender()
 		_ = h.Div(h.ID(ctx.id), body).Render(buf)
 		ctx.queue.mu.Lock()
-		// Prepend the auto re-render so any user-explicit SyncElements
+		// Prepend the auto re-render so any user-explicit Patch.Elements
 		// patches already queued (e.g. from inside the action body) end
 		// up later in the wire frame. Datastar's morph applies patches
 		// in document order with last-write-wins per id, so this keeps

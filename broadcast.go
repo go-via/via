@@ -32,7 +32,7 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 	}
 	ctxs := a.snapshotContexts()
 	for _, c := range ctxs {
-		c.PatchSignals(values)
+		c.Patch.Signals(values)
 	}
 	return len(ctxs)
 }
@@ -63,7 +63,7 @@ func (a *App) broadcastRender(skip *Ctx, sess *session, key string) {
 
 // snapshotContexts copies every live *Ctx into a slice under the
 // registry RLock, so callers can iterate without holding the lock —
-// the per-Ctx work (enqueueScript, PatchSignals) takes its own locks
+// the per-Ctx work (enqueueScript, Patch.Signals) takes its own locks
 // and we don't want the registry lock to gate that.
 func (a *App) snapshotContexts() []*Ctx {
 	a.contextRegistryMu.RLock()

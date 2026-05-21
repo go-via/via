@@ -77,11 +77,11 @@ type connectCounterEmbed struct {
 	via.Page
 }
 
-// PatchSignal queues a frame the SSE drain emits without needing a
+// Patch.Signal queues a frame the SSE drain emits without needing a
 // flush, giving us a deterministic frame to await for the assertion.
 func (p *connectCounterEmbed) OnConnect(ctx *via.Ctx) error {
 	connectFiredCount.Add(1)
-	ctx.PatchSignal("_pageConnected", true)
+	ctx.Patch.Signal("_pageConnected", true)
 	return nil
 }
 

@@ -72,7 +72,7 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 			})
 		case roleChild:
 			child := f.Type
-			if child.Kind() == reflect.Ptr {
+			if child.Kind() == reflect.Pointer {
 				child = child.Elem()
 			}
 			walkStruct(d, child, fieldPath, qualify(pathPrefix, f.Name))
@@ -134,7 +134,7 @@ func isStateAppType(t reflect.Type) bool {
 // recursing into Signal[T]/StateTab[T]'s internal struct.
 func isChildComposition(t reflect.Type) bool {
 	tt := t
-	if tt.Kind() == reflect.Ptr {
+	if tt.Kind() == reflect.Pointer {
 		tt = tt.Elem()
 	}
 	if tt.Kind() != reflect.Struct {

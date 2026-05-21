@@ -85,7 +85,7 @@ func buildDescriptor[C any]() *cmpDescriptor {
 		panic("via.Mount: C must be a concrete struct, got interface type " +
 			ifaceTyp.String())
 	}
-	if typ.Kind() == reflect.Ptr {
+	if typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 	if typ.Kind() != reflect.Struct {

@@ -42,18 +42,6 @@ func (c *captureLogger) snapshot() []logRec {
 	return slices.Clone(c.records)
 }
 
-type erroringPage struct{}
-
-func (p *erroringPage) Boom(ctx *via.Ctx) error {
-	return assertError("kaboom")
-}
-
-func (p *erroringPage) View(ctx *via.CtxR) h.H { return h.Div() }
-
-type assertError string
-
-func (e assertError) Error() string { return string(e) }
-
 // newLoggedApp wires a captureLogger + httptest.Server onto a fresh App,
 // applies any extra options, and registers a t.Cleanup so callers don't
 // have to track server.Close themselves.

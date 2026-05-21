@@ -308,8 +308,8 @@ action so the value updates client-side _before_ the POST fires.
 The action method's body can:
 
 - Set typed state: `c.Hits.Set(ctx, …)` or `c.Hits.Update(ctx, func(n int) int { return n + 1 })`.
-- Push targeted patches: `ctx.SyncElements(h.Ul(h.ID("list"), …))`.
-- Push raw signals: `ctx.PatchSignal("_picoTheme", "purple")`.
+- Push targeted patches: `ctx.Patch.Elements(h.Ul(h.ID("list"), …))`.
+- Push raw signals: `ctx.Patch.Signal("_picoTheme", "purple")`.
 - Show a quick alert: `ctx.Toast("saved!")` (JSON-safe), or
   `return via.Toast("saved!")` — the dispatcher recognises the
   returned `*via.ToastError` and queues the alert without invoking the

@@ -14,45 +14,73 @@ import (
 // [Redirect] / [Toast] sentinel-error intents in action.go — those
 // return errors; these queue side effects directly on the patch queue.
 
-// PatchSignal queues a single signal update keyed by name. Plugins use it
-// to push values to client-only signals they own (e.g. picocss's
-// "_picoTheme") without going through a typed Signal[T] handle. Multiple
-// PatchSignal calls within the same flush window are merged — last write
-// wins per key.
-func (ctx *Ctx) PatchSignal(key string, value any) {
+// Patch groups the low-level wire-push primitives — push a signal value
+// for a key not bound to a typed Signal[T] field, or morph an arbitrary
+// element fragment into the live DOM. Reach for these only when the
+// typed path (Signal[T].Set, View re-render) doesn't fit:
+//
+//	ctx.Patch.Signal("_picoTheme", "purple")           // ad-hoc client signal
+//	ctx.Patch.Signals(map[string]any{"a": 1, "b": 2})  // batched merge
+//	ctx.Patch.Element(h.Div(h.ID("toast"), ...))       // single morph
+//	ctx.Patch.Elements(div1, div2)                     // variadic morph batch
+//
+// The Patch handle is allocated eagerly in newCtx; access is a plain
+// field load with no allocation. Mirrors how *CtxR is cached.
+type Patch struct {
+	ctx *Ctx
+}
+
+// Signal queues a single signal update keyed by name. Plugins use it to
+// push values to client-only signals they own (e.g. picocss's
+// "_picoTheme") without going through a typed Signal[T] handle.
+// Multiple Signal/Signals calls within the same flush window are merged
+// — last write wins per key. Empty key is a no-op.
+func (p *Patch) Signal(key string, value any) {
 	if key == "" {
 		return
 	}
-	ctx.PatchSignals(map[string]any{key: value})
+	p.Signals(map[string]any{key: value})
 }
 
-// PatchSignals queues many signal updates as a single batched merge. Same
-// last-wins-per-key semantics as PatchSignal.
-func (ctx *Ctx) PatchSignals(values map[string]any) {
-	if ctx == nil || ctx.queue == nil || len(values) == 0 {
+// Signals queues many signal updates as a single batched merge. Same
+// last-wins-per-key semantics as Signal. Empty / nil map is a no-op.
+func (p *Patch) Signals(values map[string]any) {
+	if p == nil || p.ctx == nil || p.ctx.queue == nil || len(values) == 0 {
 		return
 	}
-	ctx.queue.mu.Lock()
-	if ctx.queue.signals == nil {
-		ctx.queue.signals = make(map[string]any, len(values))
+	q := p.ctx.queue
+	q.mu.Lock()
+	if q.signals == nil {
+		q.signals = make(map[string]any, len(values))
 	}
-	maps.Copy(ctx.queue.signals, values)
-	ctx.queue.mu.Unlock()
-	ctx.queue.notify()
+	maps.Copy(q.signals, values)
+	q.mu.Unlock()
+	q.notify()
 }
 
-// SyncElements pushes one or more h.H trees to the client as element
-// patches at the next flush. Useful for action-driven, targeted DOM
-// updates that bypass the full view re-render. Each element should carry
-// h.ID("...") so the client knows where to morph it.
+// Element pushes a single h.H tree to the client as an element patch at
+// the next flush. The element should carry h.ID("…") so the client
+// knows where to morph it. Nil element is a no-op.
+func (p *Patch) Element(el h.H) {
+	if el == nil {
+		return
+	}
+	p.Elements(el)
+}
+
+// Elements pushes one or more h.H trees to the client as element patches
+// at the next flush. Useful for action-driven, targeted DOM updates
+// that bypass the full view re-render. Each element should carry
+// h.ID("…") so the client knows where to morph it.
 //
-// Multiple SyncElements calls within the same action — and any view
+// Multiple Elements calls within the same action — and any view
 // re-render queued by State mutations earlier in the same action — are
 // concatenated, not overwritten. The browser's morph applies each
 // element patch independently by ID, so a State write followed by a
-// targeted SyncElements both reach the DOM in one SSE frame.
-func (ctx *Ctx) SyncElements(elements ...h.H) {
-	if ctx == nil || ctx.queue == nil || len(elements) == 0 {
+// targeted Elements call both reach the DOM in one SSE frame. Nil
+// elements within the variadic list are skipped.
+func (p *Patch) Elements(elements ...h.H) {
+	if p == nil || p.ctx == nil || p.ctx.queue == nil || len(elements) == 0 {
 		return
 	}
 	buf := getRenderBuf()
@@ -66,12 +94,13 @@ func (ctx *Ctx) SyncElements(elements ...h.H) {
 	if buf.Len() == 0 {
 		return
 	}
-	ctx.queue.mu.Lock()
+	q := p.ctx.queue
+	q.mu.Lock()
 	// Append rather than overwrite so we don't silently drop a view
-	// fragment already queued by flushDirty or a previous SyncElements.
-	ctx.queue.elements += buf.String()
-	ctx.queue.mu.Unlock()
-	ctx.queue.notify()
+	// fragment already queued by flushDirty or a previous Elements call.
+	q.elements += buf.String()
+	q.mu.Unlock()
+	q.notify()
 }
 
 // ExecScript queues a JavaScript snippet for execution on the client at
@@ -110,7 +139,7 @@ func (ctx *Ctx) Reload() {
 
 // Toast queues a browser alert(message). Sugar for the common
 // "show a quick notice and move on" pattern; for richer toasts use
-// PatchSignal to drive a client-side notice signal instead.
+// ctx.Patch.Signal to drive a client-side notice signal instead.
 //
 // The message is JSON-encoded into the alert call so any user-supplied
 // content survives untouched — Go's %q escape rules diverge from

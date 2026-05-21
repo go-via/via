@@ -2,6 +2,8 @@ module github.com/go-via/via
 
 go 1.24.0
 
+toolchain go1.26.3
+
 require (
 	github.com/shirou/gopsutil/v4 v4.26.3
 	github.com/starfederation/datastar-go v1.0.3

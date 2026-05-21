@@ -191,14 +191,6 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 	a.mux.Handle(pattern, applyMiddleware(d.groupMW, final))
 }
 
-func (a *App) registerCtx(ctx *Ctx) {
-	a.contextRegistryMu.Lock()
-	a.contextRegistry[ctx.id] = ctx
-	live := len(a.contextRegistry)
-	a.contextRegistryMu.Unlock()
-	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
-}
-
 // tryRegisterCtx enforces the maxContexts cap atomically with the
 // registry write. Returns false if the cap is set and already met —
 // the caller must respond with 503 instead of registering. Separate
