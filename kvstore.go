@@ -18,18 +18,22 @@ func (s *kvStore) Store(key string, v any)      { s.values.Store(key, v) }
 func (s *kvStore) Delete(key string)            { s.values.Delete(key) }
 func (s *kvStore) Range(fn func(k, v any) bool) { s.values.Range(fn) }
 
-// Update atomically applies fn to the current value for key and stores
-// the result. fn receives the old value (or nil if absent) and returns
-// the new value. Held under a per-key mutex for the duration of fn —
+// Update atomically applies fn to the current value for key. fn
+// receives the old value (or nil if absent) and returns (new, err).
+// On non-nil error the store is unchanged and the error is returned
+// to the caller. Held under a per-key mutex for the duration of fn —
 // fn must not call back into this store on the same key.
-func (s *kvStore) Update(key string, fn func(old any) any) any {
+func (s *kvStore) Update(key string, fn func(old any) (any, error)) (any, error) {
 	m := s.lockFor(key)
 	m.Lock()
 	defer m.Unlock()
 	old, _ := s.values.Load(key)
-	next := fn(old)
+	next, err := fn(old)
+	if err != nil {
+		return old, err
+	}
 	s.values.Store(key, next)
-	return next
+	return next, nil
 }
 
 func (s *kvStore) lockFor(key string) *sync.Mutex {

@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,8 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Op(ctx) returns an Ops[T] with universal Apply(fn) + To(v) for the
-// generic case. Same contract across all four reactive kinds.
+// Op(ctx) returns a typed chain entry on every reactive kind. Generic
+// case exposes To(v); shape-specialized types (NumOps here) add their
+// typed verbs. Apply was removed — custom transforms go through Update.
 
 type opGenericPage struct {
 	Signal via.SignalNum[int]
@@ -23,23 +25,23 @@ type opGenericPage struct {
 	AppV   via.StateAppNum[int]
 }
 
-func (p *opGenericPage) ApplySignal(ctx *via.Ctx) error {
-	p.Signal.Op(ctx).Apply(func(n int) int { return n + 5 })
+func (p *opGenericPage) AddSignal(ctx *via.Ctx) error {
+	p.Signal.Op(ctx).Add(5)
 	return nil
 }
 
-func (p *opGenericPage) ApplyTab(ctx *via.Ctx) error {
-	p.Tab.Op(ctx).Apply(func(n int) int { return n + 7 })
+func (p *opGenericPage) AddTab(ctx *via.Ctx) error {
+	p.Tab.Op(ctx).Add(7)
 	return nil
 }
 
-func (p *opGenericPage) ApplySess(ctx *via.Ctx) error {
-	p.Sess.Op(ctx).Apply(func(n int) int { return n + 11 })
+func (p *opGenericPage) AddSess(ctx *via.Ctx) error {
+	p.Sess.Op(ctx).Add(11)
 	return nil
 }
 
-func (p *opGenericPage) ApplyApp(ctx *via.Ctx) error {
-	p.AppV.Op(ctx).Apply(func(n int) int { return n + 13 })
+func (p *opGenericPage) AddApp(ctx *via.Ctx) error {
+	p.AppV.Op(ctx).Add(13)
 	return nil
 }
 
@@ -63,6 +65,17 @@ func (p *opGenericPage) ToApp(ctx *via.Ctx) error {
 	return nil
 }
 
+// UpdateErrorRejectsWrite — fn returning a non-nil error must leave
+// the value unchanged. Bumping Tab by 100 then trying to error out:
+// final value should remain whatever Tab was before the failed call.
+func (p *opGenericPage) BumpThenFail(ctx *via.Ctx) error {
+	p.Tab.Op(ctx).Add(100)
+	_ = p.Tab.Update(ctx, func(n int) (int, error) {
+		return n + 1000, errors.New("rejected")
+	})
+	return nil
+}
+
 func (p *opGenericPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Span(h.ID("sig"), h.Textf("%d", p.Signal.Read(ctx))),
@@ -72,7 +85,7 @@ func (p *opGenericPage) View(ctx *via.CtxR) h.H {
 	)
 }
 
-func TestOp_ApplyOnEveryKind(t *testing.T) {
+func TestOp_TypedAddOnEveryKind(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -85,16 +98,16 @@ func TestOp_ApplyOnEveryKind(t *testing.T) {
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
 
-	require.Equal(t, http.StatusOK, tc.Action("ApplySignal").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("AddSignal").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"signal":5`)
 
-	require.Equal(t, http.StatusOK, tc.Action("ApplyTab").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("AddTab").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tab">7</span>`)
 
-	require.Equal(t, http.StatusOK, tc.Action("ApplySess").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("AddSess").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="sess">11</span>`)
 
-	require.Equal(t, http.StatusOK, tc.Action("ApplyApp").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("AddApp").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="app">13</span>`)
 }
 
@@ -124,19 +137,24 @@ func TestOp_ToOnEveryKind(t *testing.T) {
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="app">77</span>`)
 }
 
-func TestOp_NilFnApplyIsANoOp(t *testing.T) {
+func TestOp_UpdateErrorRejectsTheWrite(t *testing.T) {
 	t.Parallel()
-	// The chain's Apply should mirror Update's nil-fn no-op guarantee.
+	// Update's fn returning a non-nil error must leave the value
+	// unchanged — the new value computed by fn is discarded.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[opGenericPage](app, "/")
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	body := tc.HTML()
-	assert.Contains(t, body, `<span id="tab">0</span>`,
-		"sanity: zero initial value")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
 
-	// Build a custom action that calls Apply(nil) — we can't pass nil through
-	// the action wire, so verify via a server-side composition method.
+	require.Equal(t, http.StatusOK, tc.Action("BumpThenFail").Fire())
+	// Tab went 0 → 100 via Add(100); the failing Update tried to add
+	// another 1000 but errored, so the value must remain 100.
+	body := vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tab">`)
+	assert.Contains(t, body, `<span id="tab">100</span>`,
+		"failing Update must not commit its computed value")
 }

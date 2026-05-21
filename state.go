@@ -19,7 +19,7 @@ import (
 //	}
 //	c.Hits.Read(ctx)       // returns int
 //	c.Hits.Write(ctx, 0)   // direct write
-//	c.Hits.Update(ctx, func(n int) int { return n + 1 }) // numeric delta
+//	c.Hits.Update(ctx, func(n int) (int, error) { return n + 1, nil}) // numeric delta
 //
 // The optional `via:"name,init=value"` tag mirrors Signal[T]: either part
 // is optional, and init=… is decoded into the field at bind time.
@@ -42,32 +42,43 @@ func (s *StateTab[T]) Read(_ readCtx) T {
 // goroutine you started yourself, call ctx.SyncNow() at a coalescing
 // boundary — the dirty bit alone won't reach the browser without a
 // flush.
-func (s *StateTab[T]) Write(ctx *Ctx, v T) {
-	s.val = v
-	if ctx != nil {
-		ctx.markStateDirty()
-	}
-}
-
-// Update applies fn to the current value and stores the result. Saves
-// a Read/Write pair on common increment/transform patterns:
 //
-//	c.Hits.Update(ctx, func(n int) int { return n + 1 })
-func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) T) {
+// Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
+// non-fallible path for "replace with a constant."
+func (s *StateTab[T]) Write(ctx *Ctx, v T) {
+	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
+}
+
+// Update atomically applies fn to the current value. fn receives the
+// current T and returns (new T, error). On non-nil error the value is
+// unchanged and the error is returned. Saves a Read/Write pair on
+// common increment/transform patterns and is the only mutation path
+// that lets a user reject a write (validation, conflict detection):
+//
+//	err := c.Hits.Update(ctx, func(n int) (int, error) {
+//	    if n >= max { return 0, errBudget }
+//	    return n + 1, nil
+//	})
+func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if fn == nil {
-		return
+		return nil
 	}
-	s.val = fn(s.val)
+	next, err := fn(s.val)
+	if err != nil {
+		return err
+	}
+	s.val = next
 	if ctx != nil {
 		ctx.markStateDirty()
 	}
+	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. Apply/To are the
-// universal verbs available on every reactive kind; shape-specialized
-// types (StateTabNum/StateTabBool/…) extend it with type-aware verbs.
+// Op returns a typed chain entry bound to ctx. The generic chain
+// surfaces To(v) only; shape-specialized types (StateTabNum /
+// StateTabBool / …) extend it with type-aware verbs.
 func (s *StateTab[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}
+	return &Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}
 }
 
 // Text returns a static text node carrying the current value. Re-renders

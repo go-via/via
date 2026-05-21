@@ -135,7 +135,7 @@ type userScopedPage struct {
 }
 
 func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
-	p.Theme.Update(ctx, func(string) string { return "red" })
+	p.Theme.Op(ctx).To("red")
 	return nil
 }
 
@@ -165,7 +165,7 @@ type appScopedPage struct {
 }
 
 func (p *appScopedPage) Bump(ctx *via.Ctx) error {
-	p.Visits.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.Visits.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	return nil
 }
 

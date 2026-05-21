@@ -9,7 +9,7 @@
 //	    Step via.Signal[int] `via:"step,init=1"`
 //	}
 //	func (c *Counter) Inc(ctx *via.Ctx) error {
-//	    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
+//	    c.Hits.Update(ctx, func(n int) (int, error) { return n + c.Step.Read(ctx), nil})
 //	    return nil
 //	}
 //	func (c *Counter) View(ctx *via.CtxR) h.H { ... }

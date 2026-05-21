@@ -22,10 +22,10 @@ type Page struct {
 }
 
 func (p *Page) IncLocal(ctx *via.Ctx) {
-	p.Local.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.Local.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 }
 func (p *Page) IncShared(ctx *via.Ctx) {
-	p.Shared.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.Shared.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 }
 
 func (p *Page) View(ctx *via.CtxR) h.H {

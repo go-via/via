@@ -21,7 +21,7 @@ type appCounterPage struct {
 }
 
 func (p *appCounterPage) Bump(ctx *via.Ctx) error {
-	p.Visits.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.Visits.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	return nil
 }
 

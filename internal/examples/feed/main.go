@@ -25,7 +25,7 @@ type Feed struct {
 }
 
 func (p *Feed) Toggle(ctx *via.Ctx) {
-	p.Running.Update(ctx, func(b bool) bool { return !b })
+	_ = p.Running.Update(ctx, func(b bool) (bool, error) { return !b, nil })
 }
 
 func (p *Feed) Clear(ctx *via.Ctx) {
@@ -37,13 +37,13 @@ func (p *Feed) OnConnect(ctx *via.Ctx) error {
 		if !p.Running.Read(ctx) {
 			return
 		}
-		p.Points.Update(ctx, func(s []float64) []float64 {
+		_ = p.Points.Update(ctx, func(s []float64) ([]float64, error) {
 			s = append(s, rand.Float64()*100)
 			if len(s) > windowSize {
 				copy(s, s[len(s)-windowSize:])
 				s = s[:windowSize]
 			}
-			return s
+			return s, nil
 		})
 	})
 	return nil

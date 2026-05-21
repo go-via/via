@@ -11,24 +11,32 @@ type Number interface {
 }
 
 // NumOps is the chain returned by Op(ctx) on every Num* reactive type.
-// Embeds Ops[T] so Apply(fn) and To(v) are available alongside the
-// numeric verbs.
+// Embeds Ops[T] for the universal To(v); numeric verbs route through
+// the handle's Update path.
 type NumOps[T Number] struct {
 	Ops[T]
 }
 
 // Add increments by v.
-func (o *NumOps[T]) Add(v T) { o.Apply(func(cur T) T { return cur + v }) }
+func (o *NumOps[T]) Add(v T) {
+	_ = o.update(func(cur T) (T, error) { return cur + v, nil })
+}
 
 // Sub decrements by v.
-func (o *NumOps[T]) Sub(v T) { o.Apply(func(cur T) T { return cur - v }) }
+func (o *NumOps[T]) Sub(v T) {
+	_ = o.update(func(cur T) (T, error) { return cur - v, nil })
+}
 
 // Mul multiplies by v.
-func (o *NumOps[T]) Mul(v T) { o.Apply(func(cur T) T { return cur * v }) }
+func (o *NumOps[T]) Mul(v T) {
+	_ = o.update(func(cur T) (T, error) { return cur * v, nil })
+}
 
 // Div divides by v. Caller is responsible for non-zero v — division by
 // zero panics for ints, yields NaN/Inf for floats per Go semantics.
-func (o *NumOps[T]) Div(v T) { o.Apply(func(cur T) T { return cur / v }) }
+func (o *NumOps[T]) Div(v T) {
+	_ = o.update(func(cur T) (T, error) { return cur / v, nil })
+}
 
 // Inc adds 1.
 func (o *NumOps[T]) Inc() { o.Add(1) }
@@ -42,22 +50,22 @@ func (o *NumOps[T]) Zero() { var z T; o.To(z) }
 // Min clamps the lower bound: new = max(cur, lo). After this call the
 // value is at least lo.
 func (o *NumOps[T]) Min(lo T) {
-	o.Apply(func(cur T) T {
+	_ = o.update(func(cur T) (T, error) {
 		if cur < lo {
-			return lo
+			return lo, nil
 		}
-		return cur
+		return cur, nil
 	})
 }
 
 // Max clamps the upper bound: new = min(cur, hi). After this call the
 // value is at most hi.
 func (o *NumOps[T]) Max(hi T) {
-	o.Apply(func(cur T) T {
+	_ = o.update(func(cur T) (T, error) {
 		if cur > hi {
-			return hi
+			return hi, nil
 		}
-		return cur
+		return cur, nil
 	})
 }
 
@@ -67,7 +75,7 @@ type SignalNum[T Number] struct{ Signal[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *SignalNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}}
+	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateTabNum is the numeric-specialized StateTab.
@@ -75,7 +83,7 @@ type StateTabNum[T Number] struct{ StateTab[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateTabNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}}
+	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateSessNum is the numeric-specialized StateSess.
@@ -83,7 +91,7 @@ type StateSessNum[T Number] struct{ StateSess[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateSessNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}}
+	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateAppNum is the numeric-specialized StateApp.
@@ -91,5 +99,5 @@ type StateAppNum[T Number] struct{ StateApp[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (a *StateAppNum[T]) Op(ctx *Ctx) *NumOps[T] {
-	return &NumOps[T]{Ops: Ops[T]{apply: func(fn func(T) T) { a.Update(ctx, fn) }}}
+	return &NumOps[T]{Ops: Ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}}
 }

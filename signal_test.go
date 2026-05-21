@@ -165,37 +165,37 @@ type signalHelpersPage struct {
 }
 
 func (p *signalHelpersPage) FlipOpen(ctx *via.Ctx) error {
-	p.Open.Update(ctx, func(b bool) bool { return !b })
+	_ = p.Open.Update(ctx, func(b bool) (bool, error) { return !b, nil })
 	return nil
 }
 
 func (p *signalHelpersPage) ToggleVis(ctx *via.Ctx) error {
-	p.Vis.Update(ctx, func(b bool) bool { return !b })
+	_ = p.Vis.Update(ctx, func(b bool) (bool, error) { return !b, nil })
 	return nil
 }
 
 func (p *signalHelpersPage) AddCount(ctx *via.Ctx) error {
-	p.Count.Update(ctx, func(n int) int { return n + 3 })
-	p.Count.Update(ctx, func(n int) int { return n - 5 })
+	_ = p.Count.Update(ctx, func(n int) (int, error) { return n + 3, nil })
+	_ = p.Count.Update(ctx, func(n int) (int, error) { return n - 5, nil })
 	return nil
 }
 
 func (p *signalHelpersPage) AddBal(ctx *via.Ctx) error {
-	p.Bal.Update(ctx, func(v float64) float64 { return v + 0.5 })
-	p.Bal.Update(ctx, func(v float64) float64 { return v + 0.25 })
+	_ = p.Bal.Update(ctx, func(v float64) (float64, error) { return v + 0.5, nil })
+	_ = p.Bal.Update(ctx, func(v float64) (float64, error) { return v + 0.25, nil })
 	return nil
 }
 
 func (p *signalHelpersPage) AddHits(ctx *via.Ctx) error {
-	p.Hits.Update(ctx, func(n int) int { return n + 7 })
-	p.Hits.Update(ctx, func(n int) int { return n - 2 })
+	_ = p.Hits.Update(ctx, func(n int) (int, error) { return n + 7, nil })
+	_ = p.Hits.Update(ctx, func(n int) (int, error) { return n - 2, nil })
 	return nil
 }
 
 func (p *signalHelpersPage) PushOne(ctx *via.Ctx) error {
-	p.Items.Update(ctx, func(s []int) []int { return append(s, 1) })
-	p.Items.Update(ctx, func(s []int) []int { return append(s, 2) })
-	p.Items.Update(ctx, func(s []int) []int { return append(s, 3) })
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 1), nil })
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 2), nil })
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 3), nil })
 	return nil
 }
 
@@ -203,13 +203,13 @@ func (p *signalHelpersPage) PushFive(ctx *via.Ctx) error {
 	const max = 3
 	for i := 1; i <= 5; i++ {
 		item := i
-		p.Items.Update(ctx, func(s []int) []int {
+		_ = p.Items.Update(ctx, func(s []int) ([]int, error) {
 			s = append(s, item)
 			if len(s) > max {
 				copy(s, s[len(s)-max:])
 				s = s[:max]
 			}
-			return s
+			return s, nil
 		})
 	}
 	return nil
@@ -360,14 +360,14 @@ type setIfChangedPage struct {
 
 func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
 	if p.Status.Read(ctx) != "idle" {
-		p.Status.Update(ctx, func(string) string { return "idle" })
+		p.Status.Op(ctx).To("idle")
 	}
 	return nil
 }
 
 func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
 	if p.Status.Read(ctx) != "busy" {
-		p.Status.Update(ctx, func(string) string { return "busy" })
+		p.Status.Op(ctx).To("busy")
 	}
 	return nil
 }

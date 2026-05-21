@@ -40,30 +40,38 @@ func (s *Signal[T]) Read(_ readCtx) T {
 // via.Stream callback, the flush is automatic. From a raw goroutine
 // you started yourself, call ctx.SyncNow() at a coalescing boundary —
 // the dirty bit alone won't reach the browser without a flush.
+//
+// Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
+// non-fallible path for "replace with a constant."
 func (s *Signal[T]) Write(ctx *Ctx, v T) {
-	s.val = v
-	if ctx != nil {
-		ctx.markSignalDirty(s.slot)
-	}
+	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
 }
 
-// Update applies fn to the current value and stores the result. Saves
-// a Read/Write pair on transform-the-current-value patterns.
-func (s *Signal[T]) Update(ctx *Ctx, fn func(T) T) {
+// Update atomically applies fn to the current value. fn receives the
+// current T and returns (new T, error). On non-nil error the value is
+// unchanged and the error is returned. Saves a Read/Write pair on
+// transform-the-current-value patterns and is the only mutation path
+// that lets a user reject a write (validation, conflict detection).
+func (s *Signal[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if fn == nil {
-		return
+		return nil
 	}
-	s.val = fn(s.val)
+	next, err := fn(s.val)
+	if err != nil {
+		return err
+	}
+	s.val = next
 	if ctx != nil {
 		ctx.markSignalDirty(s.slot)
 	}
+	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. Apply/To are the
-// universal verbs available on every reactive kind; shape-specialized
-// types (SignalNum/SignalBool/…) extend it with type-aware verbs.
+// Op returns a typed chain entry bound to ctx. The generic chain
+// surfaces To(v) only; shape-specialized types (SignalNum/SignalBool/…)
+// extend it with type-aware verbs.
 func (s *Signal[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}
+	return &Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}
 }
 
 // Bind returns a two-way binding attribute. Use on form inputs.

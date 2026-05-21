@@ -48,7 +48,7 @@ type Counter struct {
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    c.Hits.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
+    _ = c.Hits.Update(ctx, func(n int) (int, error) { return n + c.Step.Read(ctx), nil })
 }
 
 func (c *Counter) View(ctx *via.Ctx) h.H {
@@ -156,21 +156,19 @@ Skip the name segment to keep the default key but still seed:
 `via:",init=3"` on a `StateTab[int]` field seeds it to 3 without renaming.
 
 All four reactive shapes (`Signal[T]`, `StateTab[T]`, `StateSess[T]`,
-`StateApp[T]`) speak the same `Update(ctx, fn)` surface, so common
-read-modify-write patterns are one call regardless of scope. `Update`
-holds the per-key mutex on shared-state handles, so the load → fn →
-store sequence is atomic:
+`StateApp[T]`) speak the same `Update(ctx, fn) error` surface — fn
+maps `T → (T, error)` and Update propagates a non-nil error after
+leaving the value unchanged. `Update` holds the per-key mutex on
+shared-state handles, so the load → fn → store sequence is atomic:
 
 ```go
-p.Count.Update(ctx, func(n int) int { return n + 1 })  // numeric delta
-p.Open.Update(ctx, func(b bool) bool { return !b })    // bool flip
+err := p.Count.Update(ctx, func(n int) (int, error) {
+    if n >= max { return 0, errBudget }      // reject the write
+    return n + 1, nil
+})
 
-if p.Status.Read(ctx) != "busy" {                      // skip patch if unchanged
-    p.Status.Update(ctx, func(string) string { return "busy" })
-}
-
-p.Series.Update(ctx, func(s []Point) []Point {         // append-only feed
-    return append(s, point)
+_ = p.Series.Update(ctx, func(s []Point) ([]Point, error) {
+    return append(s, point), nil             // append-only feed, can't fail
 })
 ```
 
@@ -187,8 +185,9 @@ typed wrappers shrink the call site and expose shape-aware verbs:
 | `via.SignalSlice[T]`                | `Append(v) / Prepend(v) / Pop() / Shift() / Take(n) / Drop(n) / Filter(pred) / Empty()` |
 | `via.StateAppMap[K,V]`              | `Put(k,v) / Delete(k) / Empty()`            |
 
-Every Op chain also has the universal `Apply(fn)` and `To(v)` for
-custom transforms and constant replacement:
+Every Op chain has the universal `To(v)` for constant replacement;
+custom transforms with optional error go through the handle's
+`Update(ctx, fn)` directly:
 
 ```go
 p.Count.Op(ctx).Inc()                 // was: Update(ctx, func(n int) int { return n + 1 })
@@ -196,12 +195,13 @@ p.Open.Op(ctx).Toggle()               // was: Update(ctx, func(b bool) bool { re
 p.Status.Op(ctx).To("busy")           // was: Update(ctx, func(string) string { return "busy" })
 p.Series.Op(ctx).Append(point)        // was: Update with append(...)
 p.Settings.Op(ctx).Put("theme", "dark")
-p.Count.Op(ctx).Apply(custom)         // escape hatch
+_ = p.Count.Update(ctx, custom)       // escape hatch for custom transforms
 ```
 
 The generic `Signal[T]` / `StateTab[T]` / `StateSess[T]` / `StateApp[T]`
 remain for custom `T` (structs, interfaces, anything that doesn't fit
-the shape buckets); their `Op(ctx)` exposes just `Apply(fn) / To(v)`.
+the shape buckets); their `Op(ctx)` exposes just `To(v)`, and custom
+transforms go through `Update(ctx, fn)` directly.
 
 `Signal[T]` is mirrored into the browser's reactive graph. The view
 helpers below compile to Datastar `data-*` attributes that subscribe to

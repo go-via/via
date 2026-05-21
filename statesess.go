@@ -42,32 +42,39 @@ func (s *StateSess[T]) Read(rc readCtx) T {
 	return t
 }
 
-// Update atomically applies fn to the current session value, stores
-// the result, re-renders the current tab, and fans out a re-render
-// to every other live tab on the same session subscribed to this key.
-// The load → fn → store sequence runs under a per-key mutex so
-// concurrent Update calls from different tabs on the same session
-// cannot lose updates. Set is intentionally absent on session-scoped
-// handles: a blind write across a user's open tabs is almost always
-// a read-modify-write race in disguise — model the assignment as an
-// Update whose fn ignores the old value if you truly mean it.
-func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) T) {
+// Update atomically applies fn to the current session value. fn
+// receives the current T and returns (new T, error). On non-nil error
+// the store is unchanged, no broadcast fires, and the error is
+// returned. On success the current tab re-renders and every other
+// live tab on the same session subscribed to this key fans out a
+// re-render. The load → fn → store sequence runs under a per-key
+// mutex so concurrent Update calls from different tabs on the same
+// session cannot lose updates. Write is intentionally absent on
+// session-scoped handles: a blind write across a user's open tabs is
+// almost always a read-modify-write race in disguise — model the
+// assignment as an Update whose fn ignores the old value if you truly
+// mean it.
+func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if fn == nil || ctx == nil || ctx.session == nil || ctx.app == nil {
-		return
+		return nil
 	}
-	ctx.session.data.Update(s.wireKey, func(old any) any {
+	_, err := ctx.session.data.Update(s.wireKey, func(old any) (any, error) {
 		t, _ := old.(T)
 		return fn(t)
 	})
+	if err != nil {
+		return err
+	}
 	ctx.markStateDirty()
 	ctx.app.broadcastRender(ctx, ctx.session, s.wireKey)
+	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. Apply/To are the
-// universal verbs available on every reactive kind; shape-specialized
-// types (StateSessNum/StateSessBool/…) extend it with type-aware verbs.
+// Op returns a typed chain entry bound to ctx. The generic chain
+// surfaces To(v) only; shape-specialized types (StateSessNum /
+// StateSessBool / …) extend it with type-aware verbs.
 func (s *StateSess[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{apply: func(fn func(T) T) { s.Update(ctx, fn) }}
+	return &Ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}
 }
 
 // Text returns a static text node carrying the current value. Accepts

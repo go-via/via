@@ -33,8 +33,8 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 	if text == "" {
 		return nil
 	}
-	t.Items.Update(ctx, func(items []Item) []Item {
-		return append(items, Item{Text: text})
+	_ = t.Items.Update(ctx, func(items []Item) ([]Item, error) {
+		return append(items, Item{Text: text}), nil
 	})
 	t.Draft.Write(ctx, "")
 	return nil
@@ -42,26 +42,26 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 
 func (t *Todos) Toggle(ctx *via.Ctx) error {
 	idx := t.Index.Read(ctx)
-	t.Items.Update(ctx, func(items []Item) []Item {
+	_ = t.Items.Update(ctx, func(items []Item) ([]Item, error) {
 		if idx < 0 || idx >= len(items) {
-			return items
+			return items, nil
 		}
 		next := slices.Clone(items)
 		next[idx].Done = !next[idx].Done
-		return next
+		return next, nil
 	})
 	return nil
 }
 
 func (t *Todos) Clear(ctx *via.Ctx) error {
-	t.Items.Update(ctx, func(items []Item) []Item {
+	_ = t.Items.Update(ctx, func(items []Item) ([]Item, error) {
 		live := make([]Item, 0, len(items))
 		for _, it := range items {
 			if !it.Done {
 				live = append(live, it)
 			}
 		}
-		return live
+		return live, nil
 	})
 	return nil
 }
@@ -164,17 +164,17 @@ func filterButton(name, current string, action any) h.H {
 // wasted view rebuild + SSE patch.
 func (t *Todos) FilterAll(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "all" {
-		t.Filter.Update(ctx, func(string) string { return "all" })
+		t.Filter.Op(ctx).To("all")
 	}
 }
 func (t *Todos) FilterActive(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "active" {
-		t.Filter.Update(ctx, func(string) string { return "active" })
+		t.Filter.Op(ctx).To("active")
 	}
 }
 func (t *Todos) FilterDone(ctx *via.Ctx) {
 	if t.Filter.Read(ctx) != "done" {
-		t.Filter.Update(ctx, func(string) string { return "done" })
+		t.Filter.Op(ctx).To("done")
 	}
 }
 

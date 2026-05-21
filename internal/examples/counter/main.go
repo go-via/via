@@ -22,7 +22,7 @@ type Counter struct {
 // fail meaningfully — Update / Set don't surface errors.
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-	c.Hits.Update(ctx, func(n int) int { return n + c.Step.Read(ctx) })
+	_ = c.Hits.Update(ctx, func(n int) (int, error) { return n + c.Step.Read(ctx), nil })
 }
 
 func (c *Counter) Reset(ctx *via.Ctx) {

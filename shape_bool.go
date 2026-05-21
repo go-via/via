@@ -1,13 +1,16 @@
 package via
 
 // BoolOps is the chain returned by Op(ctx) on every Bool* reactive
-// type. Embeds Ops[bool] for Apply/To plus the boolean verbs.
+// type. Embeds Ops[bool] for the universal To(v); boolean verbs route
+// through the handle's Update path.
 type BoolOps struct {
 	Ops[bool]
 }
 
 // Toggle flips the value.
-func (o *BoolOps) Toggle() { o.Apply(func(b bool) bool { return !b }) }
+func (o *BoolOps) Toggle() {
+	_ = o.update(func(b bool) (bool, error) { return !b, nil })
+}
 
 // True sets the value to true.
 func (o *BoolOps) True() { o.To(true) }
@@ -21,7 +24,7 @@ type SignalBool struct{ Signal[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *SignalBool) Op(ctx *Ctx) *BoolOps {
-	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+	return &BoolOps{Ops: Ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateTabBool is the bool-specialized StateTab.
@@ -29,7 +32,7 @@ type StateTabBool struct{ StateTab[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *StateTabBool) Op(ctx *Ctx) *BoolOps {
-	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+	return &BoolOps{Ops: Ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateSessBool is the bool-specialized StateSess.
@@ -37,7 +40,7 @@ type StateSessBool struct{ StateSess[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *StateSessBool) Op(ctx *Ctx) *BoolOps {
-	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { s.Update(ctx, fn) }}}
+	return &BoolOps{Ops: Ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
 // StateAppBool is the bool-specialized StateApp.
@@ -45,5 +48,5 @@ type StateAppBool struct{ StateApp[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (a *StateAppBool) Op(ctx *Ctx) *BoolOps {
-	return &BoolOps{Ops: Ops[bool]{apply: func(fn func(bool) bool) { a.Update(ctx, fn) }}}
+	return &BoolOps{Ops: Ops[bool]{update: func(fn func(bool) (bool, error)) error { return a.Update(ctx, fn) }}}
 }

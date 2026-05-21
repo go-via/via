@@ -23,13 +23,13 @@ type userRoundTripPage struct {
 }
 
 func (p *userRoundTripPage) Set(ctx *via.Ctx) error {
-	p.Theme.Update(ctx, func(string) string { return "midnight" })
-	p.Count.Update(ctx, func(int) int { return 7 })
+	p.Theme.Op(ctx).To("midnight")
+	p.Count.Op(ctx).To(7)
 	return nil
 }
 
 func (p *userRoundTripPage) Bump(ctx *via.Ctx) error {
-	p.Count.Update(ctx, func(n int) int { return n + 3 })
+	_ = p.Count.Update(ctx, func(n int) (int, error) { return n + 3, nil })
 	return nil
 }
 
@@ -181,14 +181,14 @@ type setIfChangedSessPage struct {
 
 func (p *setIfChangedSessPage) Same(ctx *via.Ctx) error {
 	if p.Theme.Read(ctx) != "blue" {
-		p.Theme.Update(ctx, func(string) string { return "blue" })
+		p.Theme.Op(ctx).To("blue")
 	}
 	return nil
 }
 
 func (p *setIfChangedSessPage) Diff(ctx *via.Ctx) error {
 	if p.Theme.Read(ctx) != "red" {
-		p.Theme.Update(ctx, func(string) string { return "red" })
+		p.Theme.Op(ctx).To("red")
 	}
 	return nil
 }

@@ -408,7 +408,7 @@ type syncOffPage struct {
 func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
 	ctx.SyncOff()
 	p.N.Write(ctx, 9)
-	p.Theme.Update(ctx, func(string) string { return "midnight" })
+	p.Theme.Op(ctx).To("midnight")
 	return nil
 }
 
@@ -455,7 +455,7 @@ type syncOffAppPage struct {
 
 func (p *syncOffAppPage) BumpSilently(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	p.Visits.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.Visits.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	return nil
 }
 
@@ -580,7 +580,7 @@ func (p *syncOffStreamPage) OnConnect(ctx *via.Ctx) error {
 		if p.silent.Load() {
 			c.SyncOff()
 		}
-		p.N.Update(c, func(n int) int { return n + 1 })
+		_ = p.N.Update(c, func(n int) (int, error) { return n + 1, nil })
 	})
 	return nil
 }
@@ -645,7 +645,7 @@ func (p *syncOffRacePage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx)) 
 func (p *syncOffRacePage) Spawn(ctx *via.Ctx) error {
 	go func() {
 		for i := 0; i < 100; i++ {
-			p.N.Update(ctx, func(n int) int { return n + 1 })
+			_ = p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 			time.Sleep(time.Microsecond)
 		}
 	}()

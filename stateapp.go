@@ -42,31 +42,38 @@ func (a *StateApp[T]) Read(rc readCtx) T {
 	return t
 }
 
-// Update atomically applies fn to the current app value, stores the
-// result, re-renders the current tab, and fans out a re-render to
-// every other live tab subscribed to this key. The load → fn → store
+// Update atomically applies fn to the current app value. fn receives
+// the current T and returns (new T, error). On non-nil error the
+// store is unchanged, no broadcast fires, and the error is returned.
+// On success the current tab re-renders and every other live tab
+// subscribed to this key fans out a re-render. The load → fn → store
 // sequence runs under a per-key mutex so concurrent Update calls from
-// different ctxs cannot lose increments. Set is intentionally absent
-// on app-scoped handles: a blind write on shared state is almost
-// always a read-modify-write race in disguise — model the assignment
-// as an Update whose fn ignores the old value if you truly mean it.
-func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) T) {
+// different ctxs cannot lose increments. Write is intentionally
+// absent on app-scoped handles: a blind write on shared state is
+// almost always a read-modify-write race in disguise — model the
+// assignment as an Update whose fn ignores the old value if you truly
+// mean it.
+func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if fn == nil || ctx == nil || ctx.app == nil {
-		return
+		return nil
 	}
-	ctx.app.appStore.Update(a.wireKey, func(old any) any {
+	_, err := ctx.app.appStore.Update(a.wireKey, func(old any) (any, error) {
 		t, _ := old.(T)
 		return fn(t)
 	})
+	if err != nil {
+		return err
+	}
 	ctx.markStateDirty()
 	ctx.app.broadcastRender(ctx, nil, a.wireKey)
+	return nil
 }
 
-// Op returns a typed chain entry bound to ctx. Apply/To are the
-// universal verbs available on every reactive kind; shape-specialized
-// types (StateAppNum/StateAppBool/…) extend it with type-aware verbs.
+// Op returns a typed chain entry bound to ctx. The generic chain
+// surfaces To(v) only; shape-specialized types (StateAppNum /
+// StateAppBool / …) extend it with type-aware verbs.
 func (a *StateApp[T]) Op(ctx *Ctx) *Ops[T] {
-	return &Ops[T]{apply: func(fn func(T) T) { a.Update(ctx, fn) }}
+	return &Ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}
 }
 
 // Text returns a static text node carrying the current value. Accepts

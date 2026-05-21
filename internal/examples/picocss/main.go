@@ -32,13 +32,13 @@ type Page struct {
 
 func (p *Page) Inc(ctx *via.Ctx) {
 	if p.Visible.Read(ctx) < len(allFeatures) {
-		p.Visible.Update(ctx, func(n int) int { return n + 1 })
+		_ = p.Visible.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	}
 }
 
 func (p *Page) Dec(ctx *via.Ctx) {
 	if p.Visible.Read(ctx) > 1 {
-		p.Visible.Update(ctx, func(n int) int { return n - 1 })
+		_ = p.Visible.Update(ctx, func(n int) (int, error) { return n - 1, nil })
 	}
 }
 

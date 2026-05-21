@@ -1,33 +1,30 @@
 package via
 
 // Ops[T] is the typed chain entry returned by Op(ctx) on every reactive
-// handle. It exposes the universal mutators (Apply for custom transforms,
-// To for a constant replace) plus shape-specific verbs in Phase C
-// (Add/Toggle/Append/…) that ship on specialized handle types.
+// handle. The generic surface carries To(v) — replace with a constant —
+// and shape-specialized embeddings (NumOps / BoolOps / StrOps / SliceOps
+// / MapOps) add type-aware verbs that all flow through the handle's
+// Update path.
 //
-// Apply and To are pure sugar over Update — the handle's atomicity,
-// dirty-marking, and broadcast semantics flow through unchanged.
+// For custom transforms with optional error, call the handle's
+// Update(ctx, fn) directly — the Op chain is for canned verbs.
 //
-//	p.Count.Op(ctx).Apply(func(n int) int { return n + 1 })
 //	p.Theme.Op(ctx).To("dark")
+//	p.Count.Op(ctx).Inc()
+//	p.Count.Update(ctx, func(n int) (int, error) {
+//	    if n >= max { return 0, errBudget }
+//	    return n + 1, nil
+//	})
 type Ops[T any] struct {
-	apply func(func(T) T)
+	update func(func(T) (T, error)) error
 }
 
-// Apply runs fn under the handle's Update path. Nil fn is a no-op,
-// matching every reactive handle's Update guarantee.
-func (o *Ops[T]) Apply(fn func(T) T) {
-	if o == nil || o.apply == nil || fn == nil {
-		return
-	}
-	o.apply(fn)
-}
-
-// To replaces the current value with v. Equivalent to Apply(func(T) T { return v }),
-// surfaced as the canonical "write a constant" verb.
+// To replaces the current value with v. Equivalent to
+// Update(ctx, func(T) (T, error) { return v, nil }), surfaced as the
+// canonical "write a constant" verb.
 func (o *Ops[T]) To(v T) {
-	if o == nil || o.apply == nil {
+	if o == nil || o.update == nil {
 		return
 	}
-	o.apply(func(T) T { return v })
+	_ = o.update(func(T) (T, error) { return v, nil })
 }

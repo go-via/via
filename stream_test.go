@@ -119,14 +119,14 @@ type streamRacePage struct {
 func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
 	via.Stream(ctx, 1*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
 		p.N.Write(ctx, p.N.Read(ctx)+1)
-		p.M.Update(ctx, func(n int) int { return n + 1 })
+		_ = p.M.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	})
 	return nil
 }
 
 func (p *streamRacePage) Bump(ctx *via.Ctx) error {
 	p.N.Write(ctx, p.N.Read(ctx)+1)
-	p.M.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.M.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 	return nil
 }
 
@@ -171,7 +171,7 @@ type tickerControlPage struct {
 
 func (p *tickerControlPage) OnConnect(ctx *via.Ctx) error {
 	p.ticker = via.Stream(ctx, 20*time.Millisecond, func(c *via.Ctx, _ time.Time) {
-		p.N.Update(c, func(n int) int { return n + 1 })
+		_ = p.N.Update(c, func(n int) (int, error) { return n + 1, nil })
 	})
 	return nil
 }
@@ -271,7 +271,7 @@ type tickerStopPage struct {
 
 func (p *tickerStopPage) OnConnect(ctx *via.Ctx) error {
 	p.ticker = via.Stream(ctx, 20*time.Millisecond, func(c *via.Ctx, _ time.Time) {
-		p.N.Update(c, func(n int) int { return n + 1 })
+		_ = p.N.Update(c, func(n int) (int, error) { return n + 1, nil })
 	})
 	return nil
 }

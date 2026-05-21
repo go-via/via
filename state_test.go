@@ -111,12 +111,12 @@ type updatePage struct {
 
 func (p *updatePage) DoState(ctx *via.Ctx) error {
 	p.N.Write(ctx, 5)
-	p.N.Update(ctx, func(n int) int { return n * 2 })
+	_ = p.N.Update(ctx, func(n int) (int, error) { return n * 2, nil })
 	return nil
 }
 
 func (p *updatePage) DoSignal(ctx *via.Ctx) error {
-	p.Step.Update(ctx, func(n int) int { return n + 4 })
+	_ = p.Step.Update(ctx, func(n int) (int, error) { return n + 4, nil })
 	return nil
 }
 

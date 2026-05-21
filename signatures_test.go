@@ -20,7 +20,7 @@ type voidActionPage struct {
 // Bump returns nothing — actions don't have to surface errors when
 // the body can't fail meaningfully.
 func (p *voidActionPage) Bump(ctx *via.Ctx) {
-	p.N.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 }
 
 func (p *voidActionPage) View(ctx *via.CtxR) h.H {
@@ -50,7 +50,7 @@ type onlyVoidPage struct {
 }
 
 func (p *onlyVoidPage) Bump(ctx *via.Ctx) {
-	p.N.Update(ctx, func(n int) int { return n + 1 })
+	_ = p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 }
 
 func (p *onlyVoidPage) View(ctx *via.CtxR) h.H {
