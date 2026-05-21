@@ -35,8 +35,8 @@ func (p *userRoundTripPage) Bump(ctx *via.Ctx) error {
 
 func (p *userRoundTripPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
-		h.Span(h.ID("theme"), p.Theme.Text(ctx)),
-		h.Span(h.ID("count"), p.Count.Text(ctx)),
+		h.Span(h.ID("theme"), h.Text(p.Theme.Get(ctx))),
+		h.Span(h.ID("count"), h.Textf("%d", p.Count.Get(ctx))),
 	)
 }
 
@@ -194,7 +194,7 @@ func (p *setIfChangedSessPage) Diff(ctx *via.Ctx) error {
 }
 
 func (p *setIfChangedSessPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.Span(h.ID("t"), p.Theme.Text(ctx)))
+	return h.Div(h.Span(h.ID("t"), h.Text(p.Theme.Get(ctx))))
 }
 
 func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"reflect"
 	"strconv"
-
-	"github.com/go-via/via/h"
 )
 
 // StateTab is a typed, server-only reactive value. Mutations trigger a view
@@ -60,12 +58,6 @@ func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) T) {
 	if ctx != nil {
 		ctx.markStateDirty()
 	}
-}
-
-// Text returns a span whose text content is the current value at render time.
-// Re-renders happen as part of the view fragment, not via a client signal.
-func (s *StateTab[T]) Text() h.H {
-	return h.Text(scalarString(reflect.ValueOf(s.val)))
 }
 
 // Key returns the local key. Useful in tests.

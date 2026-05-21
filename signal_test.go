@@ -220,7 +220,7 @@ func (p *signalHelpersPage) View(ctx *via.CtxR) h.H {
 	// only externally observable trace, so views that drive State helper
 	// tests must render the value somewhere assertable.
 	return h.Div(
-		h.Span(h.ID("hits"), p.Hits.Text()),
+		h.Span(h.ID("hits"), h.Textf("%d", p.Hits.Get(ctx))),
 		h.Span(h.ID("vis"), h.Textf("%v", p.Vis.Get(ctx))),
 	)
 }

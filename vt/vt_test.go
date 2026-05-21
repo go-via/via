@@ -25,7 +25,7 @@ func (p *tcPage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *tcPage) View(ctx *via.CtxR) h.H {
-	return h.Div(p.N.Text(), h.Button(h.Text("+"), on.Click(p.Bump)))
+	return h.Div(h.Textf("%d", p.N.Get(ctx)), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
 func TestNewClient_picksUpTabIDFromRender(t *testing.T) {
@@ -166,7 +166,9 @@ func (p *uploadPage) Save(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *uploadPage) View(ctx *via.CtxR) h.H { return h.Div(p.Echo.Text()) }
+func (p *uploadPage) View(ctx *via.CtxR) h.H {
+	return h.Div(h.Text(p.Echo.Get(ctx)))
+}
 
 func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 	t.Parallel()

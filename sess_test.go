@@ -173,7 +173,7 @@ func (p *loginPage) Login(ctx *via.Ctx) error {
 }
 
 func (p *loginPage) View(ctx *via.CtxR) h.H {
-	return h.Div(p.UserID.Text(ctx))
+	return h.Div(h.Text(p.UserID.Get(ctx)))
 }
 
 func TestRotateSession_changesCookieValue(t *testing.T) {

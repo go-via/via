@@ -35,7 +35,7 @@ func (c *Counter) View(ctx *via.CtxR) h.H {
 		h.Article(
 			h.H1(h.Text("Counter")),
 			h.P(h.Text("Step: "), c.Step.Text()),
-			h.P(h.Text("Count: "), c.Hits.Text()),
+			h.P(h.Text("Count: "), h.Textf("%d", c.Hits.Get(ctx))),
 			h.Input(h.Type("number"), h.Min("1"), c.Step.Bind()),
 			h.Div(
 				h.Style("display:flex;gap:0.5rem"),

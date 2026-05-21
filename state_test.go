@@ -26,7 +26,7 @@ func (p *statePage) Inc(ctx *via.Ctx) error {
 func (p *statePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(h.Text("+"), on.Click(p.Inc)),
-		h.P(p.Hits.Text()),
+		h.P(h.Textf("%d", p.Hits.Get(ctx))),
 	)
 }
 
@@ -70,7 +70,9 @@ type stateIntInitPage struct {
 	N via.StateTab[int] `via:",init=3"`
 }
 
-func (p *stateIntInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text()) }
+func (p *stateIntInitPage) View(ctx *via.CtxR) h.H {
+	return h.Div(h.Textf("%d", p.N.Get(ctx)))
+}
 
 func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
 	t.Parallel()
@@ -87,7 +89,9 @@ type stateStringInitPage struct {
 	Label via.StateTab[string] `via:",init=--"`
 }
 
-func (p *stateStringInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.Label.Text()) }
+func (p *stateStringInitPage) View(ctx *via.CtxR) h.H {
+	return h.Div(h.Text(p.Label.Get(ctx)))
+}
 
 func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 	t.Parallel()
@@ -120,7 +124,7 @@ func (p *updatePage) DoSignal(ctx *via.Ctx) error {
 
 func (p *updatePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
-		h.Span(h.ID("n"), p.N.Text()),
+		h.Span(h.ID("n"), h.Textf("%d", p.N.Get(ctx))),
 		h.Span(h.ID("step"), p.Step.Text()),
 	)
 }

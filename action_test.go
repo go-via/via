@@ -31,7 +31,7 @@ func (c *counterPage) Inc(ctx *via.Ctx) error {
 func (c *counterPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(h.Text("+"), on.Click(c.Inc)),
-		c.Hits.Text(),
+		h.Textf("%d", c.Hits.Get(ctx)),
 	)
 }
 
@@ -252,7 +252,7 @@ func (p *serialPage) Bump(ctx *via.Ctx) error {
 }
 
 func (p *serialPage) View(ctx *via.CtxR) h.H {
-	return h.Div(p.N.Text(), h.Button(h.Text("+"), on.Click(p.Bump)))
+	return h.Div(h.Textf("%d", p.N.Get(ctx)), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
 func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {

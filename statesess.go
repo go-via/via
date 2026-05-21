@@ -1,9 +1,5 @@
 package via
 
-import (
-	"github.com/go-via/via/h"
-)
-
 // StateSess is a session-scoped reactive value: shared across every tab
 // opened from the same browser session, expires per via.WithSessionTTL.
 //
@@ -64,7 +60,3 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) T) {
 	ctx.markStateDirty()
 	ctx.app.broadcastRender(ctx, ctx.session, s.wireKey)
 }
-
-// Text renders the current value as a static text node. Accepts either
-// *Ctx or *CtxR.
-func (s *StateSess[T]) Text(rc readCtx) h.H { return h.Textf("%v", s.Get(rc)) }

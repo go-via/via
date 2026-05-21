@@ -32,12 +32,12 @@ func (p *Page) View(ctx *via.CtxR) h.H {
 	return h.Main(h.Class("container"),
 		h.Article(
 			h.H2(h.Text("Local (tab-scoped)")),
-			h.P(h.Text("Count: "), p.Local.Text()),
+			h.P(h.Text("Count: "), h.Textf("%d", p.Local.Get(ctx))),
 			h.Button(h.Text("+"), on.Click(p.IncLocal)),
 		),
 		h.Article(
 			h.H2(h.Text("Shared (app-scoped)")),
-			h.P(h.Text("Count: "), p.Shared.Text(ctx)),
+			h.P(h.Text("Count: "), h.Textf("%d", p.Shared.Get(ctx))),
 			h.Button(h.Text("+"), on.Click(p.IncShared)),
 		),
 	)
