@@ -12,7 +12,7 @@ import (
 )
 
 type Greeter struct {
-	Greeting via.Signal[string] `via:"greeting,init=Hello..."`
+	Greeting via.SignalStr `via:"greeting,init=Hello..."`
 }
 
 func (g *Greeter) GreetBob(ctx *via.Ctx) {

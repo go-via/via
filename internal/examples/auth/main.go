@@ -80,9 +80,9 @@ var store = NewStore()
 // Pages
 
 type LoginPage struct {
-	Email    via.Signal[string]
-	Password via.Signal[string]
-	Err      via.StateTab[string]
+	Email    via.SignalStr
+	Password via.SignalStr
+	Err      via.StateTabStr
 }
 
 func (p *LoginPage) Submit(ctx *via.Ctx) error {
@@ -113,10 +113,10 @@ func (p *LoginPage) View(ctx *via.CtxR) h.H {
 }
 
 type RegisterPage struct {
-	Name     via.Signal[string]
-	Email    via.Signal[string]
-	Password via.Signal[string]
-	Err      via.StateTab[string]
+	Name     via.SignalStr
+	Email    via.SignalStr
+	Password via.SignalStr
+	Err      via.StateTabStr
 }
 
 func (p *RegisterPage) Submit(ctx *via.Ctx) error {

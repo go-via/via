@@ -15,8 +15,8 @@ import (
 )
 
 type tcPage struct {
-	N     via.StateTab[int]
-	Label via.Signal[string] `via:"label,init=hello"`
+	N     via.StateTabNum[int]
+	Label via.SignalStr `via:"label,init=hello"`
 }
 
 func (p *tcPage) Bump(ctx *via.Ctx) error {
@@ -146,10 +146,10 @@ func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 
 type uploadPage struct {
 	Avatar via.File           `via:"avatar"`
-	Note   via.Signal[string] `via:"note"`
-	Tag    via.Signal[int]    `via:"tag"`
-	Live   via.Signal[bool]   `via:"live"`
-	Echo   via.StateTab[string]
+	Note   via.SignalStr      `via:"note"`
+	Tag    via.SignalNum[int] `via:"tag"`
+	Live   via.SignalBool     `via:"live"`
+	Echo   via.StateTabStr
 }
 
 func (p *uploadPage) Save(ctx *via.Ctx) error {

@@ -18,8 +18,8 @@ import (
 )
 
 type uploadPage struct {
-	Avatar via.File           `via:"avatar"`
-	SaveTo via.Signal[string] `via:"saveTo"` // test-supplied destination dir
+	Avatar via.File      `via:"avatar"`
+	SaveTo via.SignalStr `via:"saveTo"` // test-supplied destination dir
 }
 
 func (p *uploadPage) Upload(ctx *via.Ctx) error {
@@ -99,8 +99,8 @@ func TestMultipartReader_streamsRawParts(t *testing.T) {
 }
 
 type bytesEchoPage struct {
-	Blob   via.File          `via:"blob"`
-	Length via.StateTab[int] `via:"length"`
+	Blob   via.File             `via:"blob"`
+	Length via.StateTabNum[int] `via:"length"`
 }
 
 func (p *bytesEchoPage) Read(ctx *via.Ctx) error {

@@ -17,7 +17,7 @@ import (
 // in a fresh client's render.
 
 type appCounterPage struct {
-	Visits via.StateApp[int]
+	Visits via.StateAppNum[int]
 }
 
 func (p *appCounterPage) Bump(ctx *via.Ctx) error {
@@ -51,7 +51,7 @@ func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {
 type silentAppPage struct {
 	// Same wireKey "visits" as appCounterPage, but the View never reads
 	// it — used to prove that broadcasts skip non-displaying tabs.
-	Visits via.StateApp[int]
+	Visits via.StateAppNum[int]
 }
 
 func (p *silentAppPage) View(ctx *via.CtxR) h.H {

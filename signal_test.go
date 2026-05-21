@@ -15,8 +15,8 @@ import (
 )
 
 type signalCounter struct {
-	Step via.Signal[int] `via:"step,init=1"`
-	Name via.Signal[string]
+	Step via.SignalNum[int] `via:"step,init=1"`
+	Name via.SignalStr
 }
 
 func (c *signalCounter) View(ctx *via.CtxR) h.H {
@@ -52,7 +52,7 @@ func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 }
 
 type signalShowPage struct {
-	Open via.Signal[bool] `via:"open"`
+	Open via.SignalBool `via:"open"`
 }
 
 func (p *signalShowPage) View(ctx *via.CtxR) h.H {
@@ -73,7 +73,7 @@ func TestSignal_showRendersDataShowExpression(t *testing.T) {
 }
 
 type fieldNameKey struct {
-	MyField via.Signal[int]
+	MyField via.SignalNum[int]
 }
 
 func (c *fieldNameKey) View(ctx *via.CtxR) h.H { return h.Div() }
@@ -102,8 +102,8 @@ func getBody(t *testing.T, server *httptest.Server, path string) string {
 }
 
 type attrStylePage struct {
-	Disabled via.Signal[bool]   `via:"disabled"`
-	Hue      via.Signal[string] `via:"hue,init=blue"`
+	Disabled via.SignalBool `via:"disabled"`
+	Hue      via.SignalStr  `via:"hue,init=blue"`
 }
 
 func (p *attrStylePage) View(ctx *via.CtxR) h.H {
@@ -136,7 +136,7 @@ func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
 }
 
 type boolInitPage struct {
-	On via.Signal[bool] `via:"on,init=true"`
+	On via.SignalBool `via:"on,init=true"`
 }
 
 func (p *boolInitPage) View(ctx *via.CtxR) h.H { return h.Div() }
@@ -156,12 +156,12 @@ func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 // side effects: bool flip, numeric delta, slice append, bounded ring.
 
 type signalHelpersPage struct {
-	Open  via.Signal[bool]    `via:"open"`
-	Count via.Signal[int]     `via:"count,init=10"`
-	Bal   via.Signal[float64] `via:"bal"`
-	Hits  via.StateTab[int]
-	Vis   via.StateTab[bool]
-	Items via.Signal[[]int] `via:"items"`
+	Open  via.SignalBool         `via:"open"`
+	Count via.SignalNum[int]     `via:"count,init=10"`
+	Bal   via.SignalNum[float64] `via:"bal"`
+	Hits  via.StateTabNum[int]
+	Vis   via.StateTabBool
+	Items via.SignalSlice[int] `via:"items"`
 }
 
 func (p *signalHelpersPage) FlipOpen(ctx *via.Ctx) error {
@@ -355,7 +355,7 @@ func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 // unchanged values do not trigger a second patch.
 
 type setIfChangedPage struct {
-	Status via.Signal[string] `via:"status,init=idle"`
+	Status via.SignalStr `via:"status,init=idle"`
 }
 
 func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {

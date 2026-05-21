@@ -22,10 +22,10 @@ type Item struct {
 }
 
 type Todos struct {
-	Draft  via.Signal[string]   `via:"draft"`
-	Filter via.StateTab[string] `via:"filter,init=all"`
-	Index  via.Signal[int]      `via:"index"`
-	Items  via.StateSess[[]Item]
+	Draft  via.SignalStr      `via:"draft"`
+	Filter via.StateTabStr    `via:"filter,init=all"`
+	Index  via.SignalNum[int] `via:"index"`
+	Items  via.StateSessSlice[Item]
 }
 
 func (t *Todos) Add(ctx *via.Ctx) error {
@@ -123,7 +123,7 @@ func (t *Todos) View(ctx *via.CtxR) h.H {
 						h.Style("list-style:none;padding:0.5rem;display:flex;align-items:center;gap:0.5rem"),
 						h.Input(h.Type("checkbox"),
 							h.If(it.Done, h.Attr("checked")),
-							on.Change(t.Toggle, on.SetSignal(&t.Index, i)),
+							on.Change(t.Toggle, on.SetSignal(&t.Index.Signal, i)),
 						),
 						h.Span(
 							h.Style(strings.Join([]string{

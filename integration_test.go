@@ -19,8 +19,8 @@ import (
 // the typed-via.Log helper.
 type kitchenSinkPage struct {
 	Q     string `query:"q"`
-	N     via.StateTab[int]
-	Theme via.Signal[string] `via:"theme,init=blue"`
+	N     via.StateTabNum[int]
+	Theme via.SignalStr `via:"theme,init=blue"`
 }
 
 func (p *kitchenSinkPage) Bump(ctx *via.Ctx) {

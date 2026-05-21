@@ -18,7 +18,7 @@ import (
 
 type bareEmbedPage struct {
 	via.Page
-	Hits via.StateTab[int]
+	Hits via.StateTabNum[int]
 }
 
 func (p *bareEmbedPage) View(ctx *via.CtxR) h.H {
@@ -131,7 +131,7 @@ func TestPage_embeddedAllowsOverridingOnDispose(t *testing.T) {
 }
 
 type userScopedPage struct {
-	Theme via.StateSess[string]
+	Theme via.StateSessStr
 }
 
 func (p *userScopedPage) UseRed(ctx *via.Ctx) error {
@@ -161,7 +161,7 @@ func TestScopeUser_writeFromActionAppearsInRender(t *testing.T) {
 }
 
 type appScopedPage struct {
-	Visits via.StateApp[int]
+	Visits via.StateAppNum[int]
 }
 
 func (p *appScopedPage) Bump(ctx *via.Ctx) error {

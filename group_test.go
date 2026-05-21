@@ -203,7 +203,7 @@ func TestGroup_handleFuncRegistersExplicitMethod(t *testing.T) {
 // Group middleware applies to action POSTs and SSE handshakes too
 
 type protectedPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (p *protectedPage) Bump(ctx *via.Ctx) error {

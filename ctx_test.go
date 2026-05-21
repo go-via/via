@@ -18,7 +18,7 @@ import (
 )
 
 type cookieEchoPage struct {
-	Flavor via.StateTab[string]
+	Flavor via.StateTabStr
 }
 
 func (p *cookieEchoPage) OnInit(ctx *via.Ctx) error {
@@ -98,7 +98,7 @@ func TestQuery_missingFieldsKeepZeroValue(t *testing.T) {
 // Ctx.Session — accessor on the live Ctx (HTTP-driven)
 
 type sessionProbePage struct {
-	Email via.Signal[string]
+	Email via.SignalStr
 }
 
 func (p *sessionProbePage) Probe(ctx *via.Ctx) error {
@@ -130,7 +130,7 @@ func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
 var disposed atomic.Int32
 
 type disposable struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (d *disposable) OnDispose(ctx *via.Ctx) {
@@ -401,8 +401,8 @@ func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 // SyncOff — action-scoped publish suppression.
 
 type syncOffPage struct {
-	N     via.StateTab[int]
-	Theme via.StateSess[string]
+	N     via.StateTabNum[int]
+	Theme via.StateSessStr
 }
 
 func (p *syncOffPage) SilentWrite(ctx *via.Ctx) error {
@@ -450,7 +450,7 @@ func TestSyncOff_skipsEndOfActionFlush(t *testing.T) {
 }
 
 type syncOffAppPage struct {
-	Visits via.StateApp[int]
+	Visits via.StateAppNum[int]
 }
 
 func (p *syncOffAppPage) BumpSilently(ctx *via.Ctx) error {
@@ -571,7 +571,7 @@ func TestSyncOff_nilCtxIsANoOp(t *testing.T) {
 }
 
 type syncOffStreamPage struct {
-	N      via.StateTab[int]
+	N      via.StateTabNum[int]
 	silent atomic.Bool
 }
 
@@ -637,7 +637,7 @@ func drainFrames(frames <-chan string, d time.Duration) {
 }
 
 type syncOffRacePage struct {
-	N via.StateApp[int]
+	N via.StateAppNum[int]
 }
 
 func (p *syncOffRacePage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx)) }
@@ -683,7 +683,7 @@ func TestSyncOff_doesNotRaceWithRawGoroutineUpdate(t *testing.T) {
 }
 
 type syncOffPanicPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (p *syncOffPanicPage) BoomSilently(ctx *via.Ctx) error {

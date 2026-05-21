@@ -17,10 +17,10 @@ import (
 // generic case. Same contract across all four reactive kinds.
 
 type opGenericPage struct {
-	Signal via.Signal[int]
-	Tab    via.StateTab[int]
-	Sess   via.StateSess[int]
-	AppV   via.StateApp[int]
+	Signal via.SignalNum[int]
+	Tab    via.StateTabNum[int]
+	Sess   via.StateSessNum[int]
+	AppV   via.StateAppNum[int]
 }
 
 func (p *opGenericPage) ApplySignal(ctx *via.Ctx) error {

@@ -15,7 +15,7 @@ import (
 )
 
 type setSignalPage struct {
-	Step via.Signal[int] `via:"step,init=1"`
+	Step via.SignalNum[int] `via:"step,init=1"`
 }
 
 func (p *setSignalPage) Apply(ctx *via.Ctx) error { return nil }
@@ -24,7 +24,7 @@ func (p *setSignalPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(
 			h.Text("Set step to 5"),
-			on.Click(p.Apply, on.SetSignal(&p.Step, 5)),
+			on.Click(p.Apply, on.SetSignal(&p.Step.Signal, 5)),
 		),
 	)
 }
@@ -43,7 +43,7 @@ func TestSetSignal_writesAssignmentBeforePost(t *testing.T) {
 }
 
 type setSignalStringPage struct {
-	Theme via.Signal[string] `via:"theme,init=blue"`
+	Theme via.SignalStr `via:"theme,init=blue"`
 }
 
 func (p *setSignalStringPage) Pick(ctx *via.Ctx) error { return nil }
@@ -52,7 +52,7 @@ func (p *setSignalStringPage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Button(
 			h.Text("Use red"),
-			on.Click(p.Pick, on.SetSignal(&p.Theme, "red")),
+			on.Click(p.Pick, on.SetSignal(&p.Theme.Signal, "red")),
 		),
 	)
 }

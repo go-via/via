@@ -20,8 +20,8 @@ import (
 const windowSize = 50
 
 type Feed struct {
-	Points  via.Signal[[]float64] `via:"points"`
-	Running via.Signal[bool]      `via:"running,init=true"`
+	Points  via.SignalSlice[float64] `via:"points"`
+	Running via.SignalBool           `via:"running,init=true"`
 }
 
 func (p *Feed) Toggle(ctx *via.Ctx) {

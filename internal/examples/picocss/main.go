@@ -27,7 +27,7 @@ var allFeatures = []Feature{
 }
 
 type Page struct {
-	Visible via.StateTab[int] `via:",init=3"`
+	Visible via.StateTabNum[int] `via:",init=3"`
 }
 
 func (p *Page) Inc(ctx *via.Ctx) {

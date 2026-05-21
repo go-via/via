@@ -14,7 +14,7 @@ import (
 )
 
 type voidActionPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 // Bump returns nothing — actions don't have to surface errors when
@@ -46,7 +46,7 @@ func TestAction_voidReturnIsRecognised(t *testing.T) {
 }
 
 type onlyVoidPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (p *onlyVoidPage) Bump(ctx *via.Ctx) {
@@ -71,7 +71,7 @@ func TestAction_voidReturnRendersAtPostURL(t *testing.T) {
 }
 
 type ctxRActionPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (p *ctxRActionPage) View(ctx *via.CtxR) h.H { return h.Div() }

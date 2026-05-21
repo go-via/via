@@ -14,8 +14,8 @@ import (
 )
 
 type CounterCard struct {
-	Count via.StateTab[int]
-	Step  via.Signal[int] `via:"step,init=1"`
+	Count via.StateTabNum[int]
+	Step  via.SignalNum[int] `via:"step,init=1"`
 }
 
 func (c *CounterCard) Inc(ctx *via.Ctx) {

@@ -143,7 +143,7 @@ tick.
 | `via.StateSess[T]`  | per-session    | server only     |
 | `via.StateApp[T]`   | global         | server only     |
 
-Reads go through `Get(ctx)` and writes through `Update(ctx, fn)` —
+Reads go through `Read(ctx)` and writes through `Update(ctx, fn)` —
 explicit context, no hidden globals. `Signal[T]` and `StateTab[T]` also
 expose `Set(ctx, v)` since per-tab writes are already serialized by the
 action mutex; `StateSess[T]` and `StateApp[T]` deliberately don't, since
@@ -172,15 +172,36 @@ if p.Status.Read(ctx) != "busy" {                      // skip patch if unchange
 p.Series.Update(ctx, func(s []Point) []Point {         // append-only feed
     return append(s, point)
 })
-p.Series.Update(ctx, func(s []Point) []Point {         // cap to last 100
-    s = append(s, point)
-    if len(s) > 100 {
-        copy(s, s[len(s)-100:])
-        s = s[:100]
-    }
-    return s
-})
 ```
+
+### Typed ops via `Op(ctx)` (preferred for common shapes)
+
+For the common value shapes — numeric, bool, string, slice, map — the
+typed wrappers shrink the call site and expose shape-aware verbs:
+
+| Field type                          | Common verbs                                |
+|-------------------------------------|---------------------------------------------|
+| `via.StateTabNum[int]`              | `Add(n) / Sub(n) / Inc() / Dec() / Zero() / Min(lo) / Max(hi)` |
+| `via.SignalBool`                    | `Toggle() / True() / False()`               |
+| `via.StateSessStr`                  | `Append(s) / Prepend(s) / Clear()`          |
+| `via.SignalSlice[T]`                | `Append(v) / Prepend(v) / Pop() / Shift() / Take(n) / Drop(n) / Filter(pred) / Empty()` |
+| `via.StateAppMap[K,V]`              | `Put(k,v) / Delete(k) / Empty()`            |
+
+Every Op chain also has the universal `Apply(fn)` and `To(v)` for
+custom transforms and constant replacement:
+
+```go
+p.Count.Op(ctx).Inc()                 // was: Update(ctx, func(n int) int { return n + 1 })
+p.Open.Op(ctx).Toggle()               // was: Update(ctx, func(b bool) bool { return !b })
+p.Status.Op(ctx).To("busy")           // was: Update(ctx, func(string) string { return "busy" })
+p.Series.Op(ctx).Append(point)        // was: Update with append(...)
+p.Settings.Op(ctx).Put("theme", "dark")
+p.Count.Op(ctx).Apply(custom)         // escape hatch
+```
+
+The generic `Signal[T]` / `StateTab[T]` / `StateSess[T]` / `StateApp[T]`
+remain for custom `T` (structs, interfaces, anything that doesn't fit
+the shape buckets); their `Op(ctx)` exposes just `Apply(fn) / To(v)`.
 
 `Signal[T]` is mirrored into the browser's reactive graph. The view
 helpers below compile to Datastar `data-*` attributes that subscribe to

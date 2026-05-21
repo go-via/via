@@ -16,7 +16,7 @@ import (
 )
 
 type streamPanicPage struct {
-	ticks via.Signal[int]
+	ticks via.SignalNum[int]
 }
 
 func (p *streamPanicPage) OnConnect(ctx *via.Ctx) error {
@@ -55,7 +55,7 @@ func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 }
 
 type clockPage struct {
-	Tick via.StateTab[int]
+	Tick via.StateTabNum[int]
 
 	ticks atomic.Int32
 }
@@ -112,8 +112,8 @@ func TestStream_stopsWhenCtxDone(t *testing.T) {
 // streamRacePage exercises Stream-driven writes against action-driven
 // writes on the same composition; both touch the same Signal/State.
 type streamRacePage struct {
-	N via.Signal[int]
-	M via.StateTab[int]
+	N via.SignalNum[int]
+	M via.StateTabNum[int]
 }
 
 func (p *streamRacePage) OnConnect(ctx *via.Ctx) error {
@@ -165,7 +165,7 @@ func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
 // of SSE element-patch frames driven by a Stream callback.
 
 type tickerControlPage struct {
-	N      via.StateTab[int]
+	N      via.StateTabNum[int]
 	ticker *via.Ticker
 }
 
@@ -265,7 +265,7 @@ func TestTicker_setIntervalChangesCadence(t *testing.T) {
 // after Stop, even after Resume.
 
 type tickerStopPage struct {
-	N      via.StateTab[int]
+	N      via.StateTabNum[int]
 	ticker *via.Ticker
 }
 

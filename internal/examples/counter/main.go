@@ -14,8 +14,8 @@ import (
 )
 
 type Counter struct {
-	Hits via.StateTab[int]
-	Step via.Signal[int] `via:"step,init=1"`
+	Hits via.StateTabNum[int]
+	Step via.SignalNum[int] `via:"step,init=1"`
 }
 
 // Action methods drop the error return when nothing in the body can

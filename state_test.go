@@ -15,7 +15,7 @@ import (
 )
 
 type statePage struct {
-	Hits via.StateTab[int]
+	Hits via.StateTabNum[int]
 }
 
 func (p *statePage) Inc(ctx *via.Ctx) error {
@@ -67,7 +67,7 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 }
 
 type stateIntInitPage struct {
-	N via.StateTab[int] `via:",init=3"`
+	N via.StateTabNum[int] `via:",init=3"`
 }
 
 func (p *stateIntInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx)) }
@@ -84,7 +84,7 @@ func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
 }
 
 type stateStringInitPage struct {
-	Label via.StateTab[string] `via:",init=--"`
+	Label via.StateTabStr `via:",init=--"`
 }
 
 func (p *stateStringInitPage) View(ctx *via.CtxR) h.H {
@@ -105,8 +105,8 @@ func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 // Update — read-modify-write on StateTab[T] and Signal[T]
 
 type updatePage struct {
-	N    via.StateTab[int]
-	Step via.Signal[int] `via:"step,init=1"`
+	N    via.StateTabNum[int]
+	Step via.SignalNum[int] `via:"step,init=1"`
 }
 
 func (p *updatePage) DoState(ctx *via.Ctx) error {

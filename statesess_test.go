@@ -18,8 +18,8 @@ import (
 // rendered data-signals payload).
 
 type userRoundTripPage struct {
-	Theme via.StateSess[string]
-	Count via.StateSess[int]
+	Theme via.StateSessStr
+	Count via.StateSessNum[int]
 }
 
 func (p *userRoundTripPage) Set(ctx *via.Ctx) error {
@@ -92,7 +92,7 @@ type silentUserPage struct {
 	// Same wireKey "theme" as userRoundTripPage, but the View never
 	// reads it — used to prove session-scoped broadcasts skip
 	// non-displaying tabs.
-	Theme via.StateSess[string]
+	Theme via.StateSessStr
 }
 
 func (p *silentUserPage) View(ctx *via.CtxR) h.H {
@@ -176,7 +176,7 @@ func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
 // different value reaches the wire as a signal patch.
 
 type setIfChangedSessPage struct {
-	Theme via.StateSess[string]
+	Theme via.StateSessStr
 }
 
 func (p *setIfChangedSessPage) Same(ctx *via.Ctx) error {

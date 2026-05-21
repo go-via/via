@@ -17,8 +17,8 @@ import (
 )
 
 type Page struct {
-	Local  via.StateTab[int]
-	Shared via.StateApp[int]
+	Local  via.StateTabNum[int]
+	Shared via.StateAppNum[int]
 }
 
 func (p *Page) IncLocal(ctx *via.Ctx) {

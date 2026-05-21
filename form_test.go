@@ -25,10 +25,10 @@ import (
 var tabRawRE = regexp.MustCompile(`&#34;via_tab&#34;:&#34;([^"&]+)&#34;`)
 
 type formPage struct {
-	Email    via.Signal[string]
-	Password via.Signal[string]
-	Age      via.Signal[int]
-	Result   via.StateTab[string]
+	Email    via.SignalStr
+	Password via.SignalStr
+	Age      via.SignalNum[int]
+	Result   via.StateTabStr
 }
 
 type loginForm struct {
@@ -69,8 +69,8 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 }
 
 type formNoTag struct {
-	UserName via.Signal[string]
-	Captured via.StateTab[string]
+	UserName via.SignalStr
+	Captured via.StateTabStr
 }
 
 type lazyForm struct {
@@ -107,7 +107,7 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 // Fallback chain — query string and unparseable values.
 
 type formFallbackPage struct {
-	Captured via.StateTab[string]
+	Captured via.StateTabStr
 }
 
 type fallbackForm struct {
@@ -276,7 +276,7 @@ type unexportedFieldForm struct {
 }
 
 type unexportedFieldPage struct {
-	Captured via.StateTab[string]
+	Captured via.StateTabStr
 }
 
 func (p *unexportedFieldPage) Submit(ctx *via.Ctx) error {

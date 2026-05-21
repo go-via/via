@@ -215,20 +215,20 @@ func dualMetricCard(title, l1 string, v1 h.H, l2 string, v2 h.H, chart h.H) h.H 
 // Composition
 
 type Page struct {
-	IntervalMs via.Signal[int]  `via:"intervalMs,init=1000"`
-	Running    via.Signal[bool] `via:"running,init=true"`
+	IntervalMs via.SignalNum[int] `via:"intervalMs,init=1000"`
+	Running    via.SignalBool     `via:"running,init=true"`
 
 	// Metric values are datastar-bound signals: the rendered view
 	// emits `<span data-text="$key">`, then [via.Stream] just queues
 	// signal patches per tick. The View is never re-rendered for a
 	// metric update — bytes are sent as a tiny PatchSignals frame
 	// instead of a full element fragment.
-	CPUVal via.Signal[string] `via:"cpuVal,init=--"`
-	RAMVal via.Signal[string] `via:"ramVal,init=--"`
-	DiskR  via.Signal[string] `via:"diskR,init=--"`
-	DiskW  via.Signal[string] `via:"diskW,init=--"`
-	NetRX  via.Signal[string] `via:"netRX,init=--"`
-	NetTX  via.Signal[string] `via:"netTX,init=--"`
+	CPUVal via.SignalStr `via:"cpuVal,init=--"`
+	RAMVal via.SignalStr `via:"ramVal,init=--"`
+	DiskR  via.SignalStr `via:"diskR,init=--"`
+	DiskW  via.SignalStr `via:"diskW,init=--"`
+	NetRX  via.SignalStr `via:"netRX,init=--"`
+	NetTX  via.SignalStr `via:"netTX,init=--"`
 
 	cpuChart  *echarts.Chart
 	ramChart  *echarts.Chart

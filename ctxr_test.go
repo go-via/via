@@ -16,8 +16,8 @@ import (
 // render, and let the user reach the same Get/Text surface as before.
 
 type ctxRPage struct {
-	Hits  via.StateTab[int]
-	Theme via.StateSess[string]
+	Hits  via.StateTabNum[int]
+	Theme via.StateSessStr
 }
 
 func (p *ctxRPage) View(ctx *via.CtxR) h.H {

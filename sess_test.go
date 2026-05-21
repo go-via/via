@@ -70,7 +70,7 @@ type sessUser struct {
 }
 
 type authPage struct {
-	Email via.Signal[string] `via:"email"`
+	Email via.SignalStr `via:"email"`
 }
 
 func (p *authPage) LogIn(ctx *via.Ctx) error {
@@ -163,7 +163,7 @@ func TestPutSess_andClearSess_roundTrip(t *testing.T) {
 // RotateSession
 
 type loginPage struct {
-	UserID via.StateSess[string]
+	UserID via.StateSessStr
 }
 
 func (p *loginPage) Login(ctx *via.Ctx) error {

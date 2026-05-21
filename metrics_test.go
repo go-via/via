@@ -50,7 +50,7 @@ func joinLabels(labels []string) string {
 }
 
 type metricsPage struct {
-	N via.StateTab[int]
+	N via.StateTabNum[int]
 }
 
 func (p *metricsPage) Bump(ctx *via.Ctx) error {
