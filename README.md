@@ -43,17 +43,17 @@ import (
 )
 
 type Counter struct {
-    Hits via.StateTab[int]
-    Step via.Signal[int] `via:"step,init=1"`
+    Hits via.StateTabNum[int]
+    Step via.SignalNum[int] `via:"step,init=1"`
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
     _ = c.Hits.Update(ctx, func(n int) (int, error) { return n + c.Step.Read(ctx), nil })
 }
 
-func (c *Counter) View(ctx *via.Ctx) h.H {
+func (c *Counter) View(ctx *via.CtxR) h.H {
     return h.Div(
-        h.P(h.Text("Count: "), c.Hits.Text()),
+        h.P(h.Text("Count: "), c.Hits.Text(ctx)),
         h.Input(h.Type("number"), c.Step.Bind()),
         h.Button(h.Text("+"), on.Click(c.Inc)),
     )
@@ -139,15 +139,15 @@ tick.
 | Handle              | Scope          | Lives on        |
 |---------------------|----------------|-----------------|
 | `via.Signal[T]`     | per-tab        | client + server |
-| `via.StateTab[T]`      | per-tab        | server only     |
+| `via.StateTab[T]`   | per-tab        | server only     |
 | `via.StateSess[T]`  | per-session    | server only     |
 | `via.StateApp[T]`   | global         | server only     |
 
 Reads go through `Read(ctx)` and writes through `Update(ctx, fn)` —
 explicit context, no hidden globals. `Signal[T]` and `StateTab[T]` also
-expose `Set(ctx, v)` since per-tab writes are already serialized by the
+expose `Write(ctx, v)` since per-tab writes are already serialized by the
 action mutex; `StateSess[T]` and `StateApp[T]` deliberately don't, since
-a blind `Set` on shared state is almost always a read-modify-write race
+a blind `Write` on shared state is almost always a read-modify-write race
 in disguise — `Update` holds a per-key mutex across the load → fn →
 store sequence so concurrent writers from different ctxs cannot lose
 increments. Wire keys default to lower-cased field names; override with
@@ -230,7 +230,7 @@ StateSess/StateApp because the value lives in a session/app store.)
 
 ### Silent actions (escape hatch)
 
-Loud writes drive UI: `Set` / `Update` on `StateTab[T]` mark the
+Loud writes drive UI: `Write` / `Update` on `StateTab[T]` mark the
 composition dirty so the next flush re-renders the view, and `Update`
 on `StateSess[T] / StateApp[T]` additionally fans out a re-render to
 every other live tab subscribed to the key. When you want neither —
@@ -678,7 +678,7 @@ What via defends against by default:
   ids 404. Action POSTs are also session-pinned (cookie mismatch → 403).
 - **Sessions**: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit.
   `WithSecureCookies()` flips on `Secure` for HTTPS. After auth state
-  changes, call `RotateSession(ctx)` (session-fixation defence).
+  changes, call `sess.Rotate(ctx)` (session-fixation defence).
 - **CSP**: `StrictCSP()` middleware emits a strict header with a
   per-request nonce reachable via `ctx.CSPNonce()`.
 - **Body limits**: `WithMaxRequestBody(n)` (default 1 MiB) caps action
