@@ -5,25 +5,55 @@
 [![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Real-time engine for building reactive web apps in pure Go. A composition
-is a struct. Reactive state is a typed field. Actions are methods. The
-compiler understands your UI.
+Reactive web apps in pure Go. A composition is a struct. Reactive state
+is a typed field. Actions are methods. The compiler understands your UI.
 
-The runtime is split where it matters: **the server owns truth, the
-client owns view reactivity.** Server-side state (`StateTab`, `StateSess`,
-`StateApp`) lives only in Go; `Signal[T]` values are mirrored into a
-fine-grained reactive graph in the browser (Alien Signals, via
-Datastar), so DOM updates driven by a client-set signal never
-round-trip. The two halves talk over one SSE stream per tab with typed
-JSON payloads.
+Via is the only framework — in any language — that expresses the
+client/server reactive split as a Go type. `Signal[T]` is a client
+signal, mirrored to a fine-grained Alien Signals graph in the browser
+via Datastar. `StateTab[T]`, `StateSess[T]`, `StateApp[T]` are
+server-only. Whether a piece of UI state round-trips or doesn't is a
+choice made at the field declaration, checked by the compiler, not by a
+convention you can grep for. Transport is SSE only — one stream per
+tab — so there are no WebSockets to wrestle with a corporate proxy.
 
-- No templates. No hand-written JavaScript. No transpilation. No
-  hydration. No bundler.
-- Single SSE stream per tab; reconnect, heartbeat, and tab-death cleanup
-  are the framework's job.
-- `*App` implements `http.Handler` — drops into any std mux.
+![Two browsers, two scopes — `StateTabNum[int]` is per-tab,
+`StateAppNum[int]` is shared across every session.](docs/counter-scope.gif)
 
-![Local vs app-scoped counters across two browsers — from `internal/examples/counterscope`](docs/counter-scope.gif)
+Best fit: internal tools, admin dashboards, line-of-business apps, and
+hobby projects — anywhere you would otherwise reach for Phoenix
+LiveView, Hotwire, or htmx + hand-written JS, but want to stay in Go.
+Not the right tool for offline-first PWAs, public-facing marketing
+sites, or anything that needs to scale horizontally across processes
+without sticky sessions.
+
+## The thesis: the client/server split is a Go type
+
+Reasoning: every server-rendered framework eventually faces the
+question "is this state client-owned or server-owned?" In every other
+ecosystem the answer is a convention. In Via it is the field's type.
+
+Rule: declare client-owned state as `Signal[T]`. Declare server-owned
+state as `StateTab[T]`, `StateSess[T]`, or `StateApp[T]`. The compiler
+enforces which side owns what. View helpers, actions, and lifecycle
+hooks all see the correct shape.
+
+Example:
+
+```go
+type Page struct {
+    // Client-owned. Lives in the browser's Alien Signals graph.
+    // Bind to <input>; mutate without a round-trip.
+    Theme via.Signal[string] `via:"theme,init=auto"`
+
+    // Server-owned. Lives only in Go. Re-renders re-emit the value.
+    Hits  via.StateTab[int]
+}
+```
+
+`Theme` mutates inside the browser. Flipping it from an `<input>` does
+not POST. `Hits` mutates only through an action handler; the next flush
+diffs the View and ships targeted DOM patches over SSE.
 
 ## Quick start
 
@@ -48,7 +78,9 @@ type Counter struct {
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    _ = c.Hits.Update(ctx, func(n int) (int, error) { return n + c.Step.Read(ctx), nil })
+    _ = c.Hits.Update(ctx, func(n int) (int, error) {
+        return n + c.Step.Read(ctx), nil
+    })
 }
 
 func (c *Counter) View(ctx *via.CtxR) h.H {
@@ -66,6 +98,50 @@ func main() {
 }
 ```
 
+No template files. No build step. No hand-written JavaScript. `on.Click(c.Inc)`
+is a typed method reference — a typo is a compile error.
+
+## What Via is NOT
+
+Read this section before adopting. The non-goals are deliberate.
+
+- Not an SPA framework. Routes are server-rendered pages. The browser
+  receives HTML, not a JSON bundle.
+- Not a cluster runtime. `StateApp[T]` and `Broadcast` are
+  single-process. Horizontal scaling requires sticky sessions; App
+  state is per-pod. There is no built-in fan-out across instances.
+- Not offline-first. Disconnect the SSE stream and the tab freezes
+  until reconnect — Via is for connected sessions, not PWAs.
+- Not a JavaScript replacement. The browser still runs Datastar's
+  Alien Signals graph. Via removes hand-written JS for the reactivity
+  layer, not the runtime.
+- Not a build-step framework. There is no `via generate`. If you want
+  a code-gen template language, look at `templ`.
+- Not pre-1.0 stable. ~12 examples. No third-party component library
+  yet. The Datastar dependency is load-bearing — Via does not vendor
+  its own client runtime.
+
+## Restart and tab survivability
+
+Be specific about what doesn't work. A live tab's state lives in
+memory on the server (the `*via.Ctx` and its `session`). It does not
+survive a process restart:
+
+- After a deploy, every client's `via_tab` is unknown to the new
+  process. The next SSE reconnect 404s and the next action POST 404s.
+- The client (Datastar) retries the SSE connection forever, so a user
+  watching a stale tab sees it freeze rather than recover. Tell users
+  to reload, or pair the deploy with a sticky load balancer that
+  drains long enough for tabs to close naturally.
+- Sessions are also in-memory; logged-in users will need to re-auth
+  unless you back the session store with something durable (not built
+  in).
+
+If you need session survivability across restarts, persist the
+`sess.Put`-stored payload (e.g. a JWT or an opaque token your auth
+layer recognizes) to a database keyed by the `via_session` cookie
+value, and rehydrate inside an `OnInit` hook.
+
 ## Why Via, not X
 
 |                       | Language | Authoring                | Client runtime              | Build step             | Reactive state                |
@@ -73,13 +149,15 @@ func main() {
 | **Via**               | Go       | typed structs + `h` DSL  | Datastar (Alien Signals)    | none                   | typed fields, client + server |
 | HTMX                  | any      | HTML + `hx-*` attributes | tiny attribute interpreter  | none                   | server-only, manual           |
 | Phoenix LiveView      | Elixir   | EEx templates + macros   | morphdom + tiny JS          | none                   | `assigns` (Elixir-typed)      |
+| Hotwire (Turbo)       | Ruby     | ERB + Turbo Streams      | Turbo (WebSocket)           | none                   | server-only, untyped DOM      |
 | templ                 | Go       | `.templ` template files  | none (BYO)                  | yes (`templ generate`) | none built-in                 |
 | Datastar (direct)     | any      | HTML + `data-*` attrs    | Datastar (Alien Signals)    | none                   | client signals, manual        |
 
-Via is the only row that gives you typed end-to-end state (server + client),
-no build step, and a fine-grained reactive client runtime in the same
-package. Pick another row if you want a different language, a template
-file format, or a different state-ownership split.
+Via is the only row that gives you typed end-to-end state (server +
+client) with no build step, SSE-only transport, and a fine-grained
+reactive client runtime in the same import. Pick another row if you
+want a different language, a template file format, or a different
+state-ownership split.
 
 ## How reactivity runs
 
@@ -99,42 +177,28 @@ file format, or a different state-ownership split.
 
 Two reactive runtimes, one typed boundary.
 
-**Server.** Go owns truth. `StateTab[T]`, `StateSess[T]`, and
-`StateApp[T]` live only on the server; `Signal[T]` is mirrored. A
-re-render walks the View, diffs the resulting tree against the previous
-emission, and ships targeted element/attribute patches plus a
-signal-payload delta over SSE. The per-tab action mutex serialises
-writes — concurrent POSTs to one tab can't race.
+Server. Go owns truth. `StateTab[T]`, `StateSess[T]`, and `StateApp[T]`
+live only on the server; `Signal[T]` is mirrored. A re-render walks the
+View, diffs the resulting tree against the previous emission, and ships
+targeted element/attribute patches plus a signal-payload delta over
+SSE. The per-tab action mutex serialises writes — concurrent POSTs to
+one tab cannot race.
 
-**Client.** Datastar runs a fine-grained Alien Signals graph in the
+Client. Datastar runs a fine-grained Alien Signals graph in the
 browser. `Signal[T]` values are nodes in that graph; the `data-*`
 attributes emitted by `s.Bind()`, `s.Text()`, `s.Show()`, `s.Attr()`,
 `s.Style()` are subscriptions. Mutating a signal — from an `<input>`
 edit, from `on.SetSignal`, or from a server-pushed patch — propagates
 through derived bindings without a re-render and without a round-trip.
 
-The split shows up at the field level: a `Signal[int]` IS a client
-signal, a `StateTab[int]` IS server-only. The author decides in the
+The split shows up at the field level. `Signal[int]` IS a client
+signal. `StateTab[int]` IS server-only. The author decides in the
 struct, not in the rendering code. UI state the client owns (modal
 open, current tab, filter string, derived counts) reacts instantly with
-zero SSE traffic; state the server owns (DB rows, cross-tab
-invariants, secrets) flows through actions and re-renders.
+zero SSE traffic; state the server owns (DB rows, cross-tab invariants,
+secrets) flows through actions and re-renders.
 
-## Performance
-
-Bench files: [`bench_test.go`](bench_test.go) (full request → SSE turn)
-and [`h/h_bench_test.go`](h/h_bench_test.go) (DSL only). Run with
-`go test -bench=. -benchmem` against your target hardware — quoting
-numbers from someone else's laptop is rarely useful. `ci-check.sh`
-gates the steady-state allocation floors on `CounterRender`,
-`CounterAction`, and `CounterActionWithLogger` so regressions fail CI.
-
-`h.Static(...)` pre-renders fragments that don't depend on per-request
-state — see `BenchmarkSysmonShape_staticChrome_render` for the
-per-tick allocation delta against rebuilding the same chrome on every
-tick.
-
-## Reactive state
+## The four reactive shapes
 
 | Handle              | Scope          | Lives on        |
 |---------------------|----------------|-----------------|
@@ -143,39 +207,19 @@ tick.
 | `via.StateSess[T]`  | per-session    | server only     |
 | `via.StateApp[T]`   | global         | server only     |
 
-Reads go through `Read(ctx)` and writes through `Update(ctx, fn)` —
-explicit context, no hidden globals. `Signal[T]` and `StateTab[T]` also
-expose `Write(ctx, v)` since per-tab writes are already serialized by the
-action mutex; `StateSess[T]` and `StateApp[T]` deliberately don't, since
-a blind `Write` on shared state is almost always a read-modify-write race
-in disguise — `Update` holds a per-key mutex across the load → fn →
-store sequence so concurrent writers from different ctxs cannot lose
-increments. Wire keys default to lower-cased field names; override with
-the `via:"name"` tag, seed an initial value with `via:"name,init=…"`.
-Skip the name segment to keep the default key but still seed:
-`via:",init=3"` on a `StateTab[int]` field seeds it to 3 without renaming.
+Reads go through `Read(ctx)`; writes through `Update(ctx, fn)`.
+`Signal[T]` and `StateTab[T]` also expose `Write(ctx, v)` for direct
+sets — per-tab writes are already serialized by the action mutex.
+`Update` holds a per-key mutex across the load → fn → store sequence,
+so concurrent writers from different ctxs cannot lose increments. Wire
+keys, initial values, and the tag grammar are documented in godoc.
 
-All four reactive shapes (`Signal[T]`, `StateTab[T]`, `StateSess[T]`,
-`StateApp[T]`) speak the same `Update(ctx, fn) error` surface — fn
-maps `T → (T, error)` and Update propagates a non-nil error after
-leaving the value unchanged. `Update` holds the per-key mutex on
-shared-state handles, so the load → fn → store sequence is atomic:
+### Typed ops via `Op(ctx)`
 
-```go
-err := p.Count.Update(ctx, func(n int) (int, error) {
-    if n >= max { return 0, errBudget }      // reject the write
-    return n + 1, nil
-})
-
-_ = p.Series.Update(ctx, func(s []Point) ([]Point, error) {
-    return append(s, point), nil             // append-only feed, can't fail
-})
-```
-
-### Typed ops via `Op(ctx)` (preferred for common shapes)
-
-For the common value shapes — numeric, bool, string, slice, map — the
-typed wrappers shrink the call site and expose shape-aware verbs:
+For the common shape buckets — numeric, bool, string, slice, map — use
+the `Num` / `Bool` / `Str` / `Slice` / `Map` typed wrappers and call
+`Op(ctx)` for shape-aware verbs. Drop back to `Update(ctx, fn)` for
+custom transforms or non-bucket `T` (structs, interfaces).
 
 | Field type                          | Common verbs                                |
 |-------------------------------------|---------------------------------------------|
@@ -185,135 +229,26 @@ typed wrappers shrink the call site and expose shape-aware verbs:
 | `via.SignalSlice[T]`                | `Append(v) / Prepend(v) / Pop() / Shift() / Take(n) / Drop(n) / Filter(pred) / Empty()` |
 | `via.StateAppMap[K,V]`              | `Put(k,v) / Delete(k) / Empty()`            |
 
-The chain exposes shape-specific verbs only. To replace with a
-constant value, use the per-tab handle's `Write(ctx, v)` (Signal /
-StateTab kinds) or `Update(ctx, fn)` with a value-returning fn
-(StateSess / StateApp kinds, which deliberately have no Write to
-discourage blind cross-tab overwrites):
+### View helpers driven by `Signal[T]`
 
-```go
-p.Count.Op(ctx).Inc()                 // was: Update(ctx, func(n int) int { return n + 1 })
-p.Open.Op(ctx).Toggle()               // was: Update(ctx, func(b bool) bool { return !b })
-p.Status.Write(ctx, "busy")           // SignalStr / StateTabStr: direct Write
-_ = p.Theme.Update(ctx, func(string) (string, error) {
-    return "dark", nil                 // StateSessStr: no Write, go through Update
-})
-p.Series.Op(ctx).Append(point)        // was: Update with append(...)
-p.Settings.Op(ctx).Put("theme", "dark")
-_ = p.Count.Update(ctx, custom)       // escape hatch for custom transforms
-```
-
-The generic `Signal[T]` / `StateTab[T]` / `StateSess[T]` / `StateApp[T]`
-remain for custom `T` (structs, interfaces, anything that doesn't fit
-the shape buckets) have no `Op(ctx)` at all — every interaction goes
-through `Read(ctx)`, `Write(ctx, v)` (per-tab only), or
-`Update(ctx, fn)` directly.
-
-`Signal[T]` is mirrored into the browser's reactive graph. The view
-helpers below compile to Datastar `data-*` attributes that subscribe to
-that graph — when the signal changes (a client edit, an `on.SetSignal`,
-or a server-pushed patch), the DOM updates fine-grained without a
-re-render and without a round-trip:
+`Signal[T]` mirrors into the browser's reactive graph. The view helpers
+compile to Datastar `data-*` attributes that subscribe to it — DOM
+updates are fine-grained, no re-render, no round-trip:
 
 ```go
 s.Bind()              // <input data-bind="key"> two-way binding
-s.Text()              // <span data-text="$key"></span> reactive text node
+s.Text()              // <span data-text="$key"></span>
 s.Show()              // data-show="$key" — toggle display by truthiness
 s.Attr("disabled")    // data-attr-disabled="$key" — drives an HTML attr
 s.Style("color")      // data-style-color="$key" — drives an inline CSS prop
 ```
 
-`StateTab[T]` / `StateSess[T]` / `StateApp[T]` share `Text(ctx)` —
-they're server-side, so the view re-renders the value rather than the
-client reading a signal. (The ctx is unused on StateTab; required on
-StateSess/StateApp because the value lives in a session/app store.)
-
-### Silent actions (escape hatch)
-
-Loud writes drive UI: `Write` / `Update` on `StateTab[T]` mark the
-composition dirty so the next flush re-renders the view, and `Update`
-on `StateSess[T] / StateApp[T]` additionally fans out a re-render to
-every other live tab subscribed to the key. When you want neither —
-try-before-commit flows, bulk reconciliation, composing plugin
-handlers, or any path where partial state must not leak on error —
-opt the whole action out with `ctx.SyncOff()`:
-
-```go
-func (p *Page) Reconcile(ctx *via.Ctx) error {
-    ctx.SyncOff()
-    for _, entry := range entries {
-        p.Cursor.Write(ctx, entry.Cursor)
-        p.Theme.Update(ctx, applyTheme(entry))
-    }
-    return nil // nothing reaches the browser
-}
-```
-
-Writes still land in their stores; they just skip the dirty mark, the
-end-of-action flush, and the in-line broadcast. A subsequent loud
-action re-touching the state surfaces values via the normal `Get`
-path, or call `ctx.SyncNow()` from a goroutine to force a publish.
-Explicit primitives (`Toast`, `Reload`, `Redirect`, `PatchSignal`,
-`SyncElements`) bypass SyncOff so error toasts still reach the user.
-
-## Lifecycle hooks
-
-| Method                    | Fires when                                    |
-|---------------------------|-----------------------------------------------|
-| `OnInit(ctx) error`       | Before View on the page-load request          |
-| `OnConnect(ctx) error`    | First time the SSE stream opens (one-shot)    |
-| `OnDispose(ctx)`          | Tab closed, ctx swept, or app shut down       |
-| `View(ctx) h.H`           | Required; renders the composition             |
-
-Implement any subset of the optional hooks on your composition; `Mount`
-detects whichever are defined and skips the rest. `View` is the only
-method that's required.
-
-```go
-type Profile struct {
-    UserID int `path:"id"`
-}
-
-func (p *Profile) OnInit(ctx *via.Ctx) error { /* ... */ return nil }
-func (p *Profile) View(ctx *via.CtxR) h.H    { /* ... */ return h.Div() }
-```
-
-`OnConnect` is where long-running per-tab work belongs — bots that hit
-GET without ever opening the SSE never trigger it.
-
-`via.Stream(ctx, time.Second, fn)` wires the most common ticker pattern:
-
-```go
-func (p *Page) OnConnect(ctx *via.Ctx) error {
-    via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
-        p.Now.Write(ctx, t.Format("15:04:05"))
-    })
-    return nil
-}
-```
-
-`Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Stop`, and
-`SetInterval(d)` so actions can toggle the stream on/off or change its
-cadence at runtime:
-
-```go
-ticker := via.Stream(ctx, 200*time.Millisecond, p.poll)
-ticker.Pause()
-ticker.SetInterval(time.Second)
-ticker.Resume()
-```
-
-See `internal/examples/sysmon` for a full pause/rate-change UI driven
-by this surface.
-
-Inside actions and `via.Stream` callbacks the flush is automatic. From
-a raw goroutine you started yourself, call `ctx.SyncNow()` to force a
-re-render and push pending Set values to the browser. It serialises
-with in-flight action handlers via the per-tab action mutex.
+`StateTab[T]` / `StateSess[T]` / `StateApp[T]` share `Text(ctx)`, which
+re-renders server-side instead of subscribing to a client signal.
 
 ## Actions
 
-A method on `*Composition` of signature `func(*via.Ctx) error` — or
+A method on the composition with signature `func(*via.Ctx) error` — or
 `func(*via.Ctx)` when nothing in the body can fail meaningfully — is
 an action. Bind it to a DOM event with the `on` sub-package:
 
@@ -322,13 +257,16 @@ h.Button(h.Text("+"), on.Click(c.Inc))
 h.Form(on.Submit(c.Save), ...)
 h.Input(on.Input(c.Filter, on.Debounce("200ms")))
 h.Div(on.Key("Enter", c.Send))
-h.Button(h.Text("Pick blue"), on.Click(c.Apply, on.SetSignal(&c.Theme, "blue")))
+h.Button(h.Text("Pick blue"),
+    on.Click(c.Apply, on.SetSignal(&c.Theme, "blue")))
 ```
 
 `on.SetSignal(&c.Field, value)` bundles a typed signal write with the
-action so the value updates client-side _before_ the POST fires.
+action so the value updates client-side before the POST fires.
+`&c.Theme` is type-checked against the field — wrong type is a compile
+error.
 
-The action method's body can:
+The action body can:
 
 - Write typed state: `c.Hits.Write(ctx, …)` or `c.Hits.Op(ctx).Add(1)`.
 - Push targeted patches: `ctx.Patch.Elements(h.Ul(h.ID("list"), …))`.
@@ -342,8 +280,46 @@ The action method's body can:
   via.DecodeForm(ctx, &f)
   ```
 
-Per-tab actions are serialized — concurrent POSTs to one tab will not
+Per-tab actions are serialized. Concurrent POSTs to one tab cannot
 race on State writes.
+
+For try-before-commit and bulk reconciliation flows, `ctx.SyncOff()`
+opts the whole action out of the dirty-mark/flush cycle — see godoc.
+
+## Lifecycle hooks
+
+| Method                    | Fires when                                    |
+|---------------------------|-----------------------------------------------|
+| `OnInit(ctx) error`       | Before View on the page-load request          |
+| `OnConnect(ctx) error`    | First time the SSE stream opens (one-shot)    |
+| `OnDispose(ctx)`          | Tab closed, ctx swept, or app shut down       |
+| `View(ctx) h.H`           | Required; renders the composition             |
+
+Implement any subset; `Mount` detects whichever are defined.
+
+`OnConnect` is where long-running per-tab work belongs — bots that hit
+GET without ever opening the SSE never trigger it.
+
+`via.Stream(ctx, interval, fn)` wires the most common ticker pattern:
+
+```go
+func (p *Page) OnConnect(ctx *via.Ctx) error {
+    via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
+        p.Now.Write(ctx, t.Format("15:04:05"))
+    })
+    return nil
+}
+```
+
+`Stream` returns a `*via.Ticker` with `Pause`, `Resume`, `Stop`, and
+`SetInterval(d)` so actions can toggle the stream or change cadence at
+runtime. See `internal/examples/sysmon` for a full pause / rate-change
+UI driven by this surface.
+
+Inside actions and `via.Stream` callbacks the flush is automatic. From
+a raw goroutine you started yourself, call `ctx.SyncNow()` to force a
+re-render and push pending writes. It serialises with in-flight action
+handlers via the per-tab action mutex.
 
 ## File uploads
 
@@ -362,27 +338,19 @@ func (p *Page) Upload(ctx *via.Ctx) error {
 }
 ```
 
-The handle exposes `Filename()` (untrusted), `Size()`, `ContentType()`
-(untrusted), `Open()` for streaming, `Bytes()` for in-memory reads,
-and `Save(path)` for the common "stash to disk" case (mode `0o600`,
+The handle exposes `Filename()` (untrusted), `Size()`,
+`ContentType()` (untrusted), `Open()` for streaming, `Bytes()` for
+in-memory reads, and `Save(path)` for the common case (mode `0o600`,
 truncate). Text fields in the same multipart POST populate `Signal[T]`
-fields exactly like a JSON action body.
+fields like a JSON action body.
 
-For raw streaming control over a multipart body (mixed parts, custom
-headers, files larger than the in-memory buffer), call
-`ctx.MultipartReader()` for the std-library reader. Once read, typed
-`via.File` fields on the same action will be empty for any parts you
-advanced past.
+For raw streaming control (mixed parts, custom headers, files larger
+than the in-memory buffer), call `ctx.MultipartReader()`. Once read,
+typed `via.File` fields on the same action will be empty for any parts
+already advanced past.
 
-`WithMaxRequestBody(n)` caps the total body size; oversized requests
-return 413.
-
-A plain HTML `<form enctype=multipart/form-data>` posts to
-`/_action/Method` and the response body shows in the browser, so most
-upload flows finish with `http.Redirect(ctx.Writer(), ctx.Request(),
-"/", 303)` to refresh the page. Any state you want visible after the
-redirect must live in `via.StateSess[T]` (session-scoped) — `via.StateTab[T]`
-is per-tab and the redirected GET allocates a fresh tab.
+`WithMaxRequestBody(n)` caps total body size; oversized requests return
+413.
 
 ## Path parameters
 
@@ -395,7 +363,8 @@ via.Mount[Profile](app, "/u/{id}/posts/{slug}")
 ```
 
 Each `path:"name"` tag must match a `{name}` segment. Reflection runs
-once at Mount; per-request decoding writes directly into the typed field.
+once at Mount; per-request decoding writes directly into the typed
+field.
 
 ## Sessions
 
@@ -405,13 +374,13 @@ import "github.com/go-via/via/sess"
 type User struct{ Email, Name string }
 
 sess.Put(ctx, User{Email: "alice@example.com", Name: "Alice"})
-u, ok := sess.Get[User](ctx)                 // inside a handler/action
-u, ok := sess.Get[User](r)                   // inside a Middleware
+u, ok := sess.Get[User](ctx)                 // handler/action
+u, ok := sess.Get[User](r)                   // middleware
 sess.Clear[User](ctx)
-sess.Rotate(ctx)                             // after login/privilege change
+sess.Rotate(ctx)                             // after login / privilege change
 ```
 
-`requireAuth` is a one-line middleware:
+`requireAuth` is one line of middleware:
 
 ```go
 func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
@@ -436,7 +405,7 @@ app.Use(requireAuth)            // your own
 
 Factories under `via/mw`:
 
-- `mw.Defaults(app)` — install RequestID + AccessLog + Recover.
+- `mw.Defaults(app)` — RequestID + AccessLog + Recover.
 - `mw.RequestID()` — stamp `X-Request-ID` + plant on `r.Context`.
 - `mw.AccessLog(app)` — one info-line per request, with rid + status.
 - `mw.Recover(app)` — panic → 500 + error log; the goroutine survives.
@@ -452,7 +421,7 @@ via.Log(ctx).Log(via.LogInfo, "checkout", "amount", n)
 ctx.CSPNonce()                   // matches header set by mw.CSP
 ```
 
-## Routing & groups
+## Routing and groups
 
 ```go
 via.Mount[Counter](app, "/counter/{id}")
@@ -468,11 +437,117 @@ app.Routes()                                  // []RouteInfo for boot logging
 ```
 
 Group patterns follow `http.ServeMux` shape: `"GET /foo"`, `"POST /foo"`,
-… or just `"/foo"` (defaults to GET). Mounting two routes at the same
-path panics at registration with the offending pattern + the original
-registrar tag. `WithNotFound(h)` installs a custom 404 handler.
+or just `"/foo"` (defaults to GET). Mounting two routes at the same
+path panics at registration with the offending pattern and the
+original registrar tag. `WithNotFound(h)` installs a custom 404
+handler.
 
-### Production wiring
+## Plugins
+
+```go
+app := via.New(via.WithPlugins(
+    picocss.Plugin(picocss.WithThemes(picocss.AllPicoThemes)),
+    echarts.Plugin(),
+))
+```
+
+Plugins implement `Register(*via.App)` and call any of `AppendToHead`,
+`AppendToFoot`, `AppendAttrToHTML`, `HandleFunc`, or
+`RegisterAppSignal` during boot to inject document fragments, asset
+routes, and client-driven signals. Call these only from `Register` —
+the document-mutation slices are not lock-guarded against concurrent
+appends after the server starts.
+
+Plugin packages expose `Plugin(...)` as the canonical constructor
+(never `New(...)`) so `via.WithPlugins(...)` call sites stay uniform.
+
+## Testing
+
+Tests drive the composition through HTTP — same path as a real
+browser, so the full middleware stack, session cookie, and SSE
+machinery run end-to-end. There is no "direct method" seam: assertions
+hit rendered HTML or SSE frames, never internal state.
+
+```go
+import (
+    "github.com/go-via/via"
+    "github.com/go-via/via/vt"
+)
+
+var server *httptest.Server
+app := via.New(via.WithTestServer(&server))
+via.Mount[Counter](app, "/")
+
+tc := vt.NewClient(t, server, "/")
+c := &Counter{}
+require.Equal(t, 200, tc.Action(c.Inc).Fire())   // typed: typo → compile error
+require.Equal(t, 200, tc.Action("Apply").        // string still works
+    WithSignal("step", 5).Fire())
+require.Contains(t, tc.Reload(), ">1<")
+
+frames, cancel := tc.SSE()
+defer cancel()
+vt.AwaitFrame(t, frames, 2*time.Second, ">3<")
+
+tc.Action(p.Upload).
+    WithFile("avatar", "me.png", pngBytes).
+    WithSignal("note", "from CLI").
+    Fire()
+```
+
+`tc.Action` accepts a method value (compile-time typo protection) or
+the action's name as a string. `tc.Reload` re-fetches the mounted page
+so post-action body assertions are one call. `tc.Fork(path)` opens a
+second tab on the same cookie jar — the only way to drive `StateSess`
+behaviour that spans tabs.
+
+## Performance
+
+Bench files: [`bench_test.go`](bench_test.go) (full request → SSE
+turn) and [`h/h_bench_test.go`](h/h_bench_test.go) (DSL only). Run
+`go test -bench=. -benchmem` against your target hardware — quoting
+numbers from someone else's laptop is rarely useful. `ci-check.sh`
+gates the steady-state allocation floors on `CounterRender`,
+`CounterAction`, and `CounterActionWithLogger` so regressions fail CI.
+
+`h.Static(...)` pre-renders fragments that don't depend on per-request
+state — see `BenchmarkSysmonShape_staticChrome_render` for the
+per-tick allocation delta against rebuilding the same chrome on every
+tick.
+
+## h package helpers
+
+`h` is the HTML DSL — elements, attributes, text, iteration,
+conditionals, static pre-render, custom tags. The full reference lives
+in [`docs/h-helpers.md`](docs/h-helpers.md) and in
+[`go doc github.com/go-via/via/h`](https://pkg.go.dev/github.com/go-via/via/h).
+
+```go
+h.Div(h.Class("card"),
+    h.H1(h.T("Title")),
+    h.Each(items, func(it Item) h.H { return h.Li(h.T(it.Name)) }),
+)
+```
+
+`h.Static(n)` pre-renders fragments that don't depend on per-request
+state (layout chrome, headers); every later Render writes the captured
+bytes verbatim. `h.NewTag("svg")` declares constructors for tags
+outside the built-in list (web components, SVG, MathML).
+`h.With(base, more...)` extends an existing element non-destructively.
+
+## Cross-tab broadcast
+
+```go
+app.Broadcast(`alert("Maintenance in 30 seconds.")`)
+app.BroadcastSignals(map[string]any{"_systemNotice": "site read-only"})
+app.LiveTabs()
+```
+
+`Broadcast` queues a JS snippet on every live tab; `BroadcastSignals`
+queues a signal patch. Both return the tab count they reached and
+deliver via the existing patch queue + SSE drain — no extra wiring.
+
+## Production wiring
 
 ```go
 app := via.New(
@@ -496,31 +571,10 @@ via.Mount[Profile](api, "/profile")
 http.ListenAndServe(":8080", app)
 ```
 
-### Restart and tab survivability
-
-A live tab's state lives in memory on the server (the `*via.Ctx` and its
-`session`). It does **not** survive a process restart:
-
-- After a deploy, every client's `via_tab` is unknown to the new
-  process. The next SSE reconnect 404s and the next action POST 404s.
-- The client (Datastar) retries the SSE connection forever, so a user
-  watching a stale tab sees it freeze rather than recover. Tell users
-  to reload, or pair the deploy with a sticky load balancer that
-  drains long enough for tabs to close naturally.
-- Sessions are also in-memory; logged-in users will need to re-auth
-  unless you back the session store with something durable (not built
-  in; users with auth flows generally roll their own
-  `sess.Put` keyed off a real session store).
-
-If you need session survivability across restarts, persist the
-`sess.Put`-stored payload (e.g. a JWT or an opaque token your auth
-layer recognizes) to a database keyed by the `via_session` cookie value,
-and rehydrate inside an `OnInit` hook on the relevant compositions.
-
 ### Operations: metrics
 
-`via.WithMetrics(m)` accepts an implementation of the [`Metrics`] interface
-and emits structured events for ops dashboards:
+`via.WithMetrics(m)` accepts an implementation of the `Metrics`
+interface and emits structured events for ops dashboards:
 
 | Event                  | Kind      | Labels             |
 |------------------------|-----------|--------------------|
@@ -534,100 +588,22 @@ and emits structured events for ops dashboards:
 Adapt to Prometheus, OTel, or expvar by implementing three methods
 (`Counter`, `Gauge`, `Histogram`) that forward to your backend.
 
-## Cross-tab broadcast
+## Security defaults
 
-```go
-app.Broadcast(`alert("Maintenance in 30 seconds.")`)
-app.BroadcastSignals(map[string]any{"_systemNotice": "site read-only"})
-app.LiveTabs()               // current tab count
-```
-
-`Broadcast` queues a JS snippet on every live tab; `BroadcastSignals`
-queues a signal patch. Both return the tab count they reached and
-deliver via the existing patch queue + SSE drain — no extra wiring.
-
-## h package helpers
-
-`h` is the HTML DSL — elements, attributes, text, iteration,
-conditionals, static pre-render, custom tags. The full reference (every
-constructor with its contract) lives in
-[`docs/h-helpers.md`](docs/h-helpers.md) and in
-[`go doc github.com/go-via/via/h`](https://pkg.go.dev/github.com/go-via/via/h).
-
-The shapes you reach for daily:
-
-```go
-h.Div(h.Class("card"),
-    h.H1(h.T("Title")),
-    h.Each(items, func(it Item) h.H { return h.Li(h.T(it.Name)) }),
-)
-```
-
-`h.Static(n)` pre-renders fragments that don't depend on per-request
-state (layout chrome, headers); every later Render writes the captured
-bytes verbatim. `h.NewTag("svg")` declares constructors for tags
-outside the built-in list (web components, SVG, MathML).
-`h.With(base, more...)` extends an existing element non-destructively.
-
-## Plugins
-
-```go
-app := via.New(via.WithPlugins(
-    picocss.Plugin(picocss.WithThemes(picocss.AllPicoThemes)),
-    echarts.Plugin(),
-))
-```
-
-Plugins implement `Register(*via.App)` and call any of `AppendToHead`,
-`AppendToFoot`, `AppendAttrToHTML`, `HandleFunc`, or `RegisterAppSignal`
-during boot to inject document fragments, asset routes, and
-client-driven signals. Call these only from `Register` — the document-
-mutation slices aren't lock-guarded against concurrent appends after
-the server starts.
-
-## Testing
-
-Tests drive the composition through HTTP — same path as a real
-browser, so the full middleware stack, session cookie, and SSE
-machinery run end-to-end. There is no "direct method" seam: assertions
-hit rendered HTML or SSE frames, never internal state (see
-[CONVENTIONS.md](CONVENTIONS.md) — *Test Scope: Outside-In Through
-the Public API*).
-
-```go
-import (
-    "github.com/go-via/via"
-    "github.com/go-via/via/vt"
-)
-
-var server *httptest.Server
-app := via.New(via.WithTestServer(&server))
-via.Mount[Counter](app, "/")
-
-tc := vt.NewClient(t, server, "/")
-c := &Counter{}
-require.Equal(t, 200, tc.Action(c.Inc).Fire())             // typed: typo → compile error
-require.Equal(t, 200, tc.Action("Apply").                  // string still works
-    WithSignal("step", 5).Fire())
-require.Contains(t, tc.Reload(), ">1<")                    // re-fetch + assert on body
-
-frames, cancel := tc.SSE()
-defer cancel()
-vt.AwaitFrame(t, frames, 2*time.Second, ">3<")             // wait for substring
-
-// Multipart action with a file part — switches the request to
-// multipart/form-data automatically when any file is attached.
-tc.Action(p.Upload).
-    WithFile("avatar", "me.png", pngBytes).
-    WithSignal("note", "from CLI").
-    Fire()
-```
-
-`tc.Action` accepts either a method value (compile-time typo protection)
-or the action's name as a string. `tc.Reload` re-fetches the mounted
-page so post-action body assertions are one call instead of a
-hand-rolled GET. `tc.Fork(path)` opens a second tab on the same cookie
-jar — the only way to drive `StateSess` behaviour that spans tabs.
+- CSRF: every page mints a 256-bit `via_tab` id; action POSTs and SSE
+  handshakes carry it as a signal. The id IS the CSRF token — unknown
+  ids 404. Action POSTs are also session-pinned (cookie mismatch → 403).
+- Sessions: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit.
+  `WithSecureCookies()` flips on `Secure` for HTTPS. After auth state
+  changes, call `sess.Rotate(ctx)` (session-fixation defence).
+- CSP: `mw.CSP()` emits a strict header with a per-request nonce
+  reachable via `ctx.CSPNonce()`.
+- Body limits: `WithMaxRequestBody(n)` (default 1 MiB) caps action
+  POST and SSE-close bodies; oversized requests return 413.
+- Panic sanitization: action panics surface as `"Something went wrong"`
+  to the client. User-returned errors flow through unmodified.
+- Random sources: `crypto/rand.Read` failures panic rather than fall
+  back to zero-byte ids.
 
 ## Examples
 
@@ -636,21 +612,21 @@ jar — the only way to drive `StateSess` behaviour that spans tabs.
 - `counter` — `StateTab[int]` + `Signal[int]` + a typed action.
 - `greeter` — `Signal[string]` mutated from two distinct actions.
 - `pathparams` — typed `path:"id"` decoding into composition fields.
-- `countercomp` — two independent counter compositions nested on
-  one page; isolation across instances.
+- `countercomp` — two independent counter compositions nested on one
+  page; isolation across instances.
 - `counterscope` — `StateTab[int]` (tab-local) vs `StateApp[int]`
   (shared across every session) side-by-side.
 - `picocss` — `picocss.Plugin()` driving theme + dark-mode switching
   on the client without a full reload.
-- `auth` — typed sessions, `requireAuth` middleware, and
-  `sess.Rotate` after login.
+- `auth` — typed sessions, `requireAuth` middleware, and `sess.Rotate`
+  after login.
 - `todos` — `StateSess[T]` survives reload, `h.Each`, and
   `on.SetSignal` for client-bundled writes.
-- `sysmon` — OnConnect-driven ticker streaming CPU/RAM/disk/net into
-  ECharts; also drives an interactive pause + interval-slider UI via
+- `sysmon` — OnConnect-driven ticker streaming CPU / RAM / disk / net
+  into ECharts; drives an interactive pause + interval-slider UI via
   `via.Ticker.Pause / SetInterval`.
-- `upload` — `via.File` field bound to a `multipart/form-data`
-  `<form>` POST, persisted to disk, redirect-back-to-/.
+- `upload` — `via.File` field bound to a `multipart/form-data` `<form>`
+  POST, persisted to disk, redirect-back-to-/.
 - `feed` — append-only / bounded-ring slice stream driven by
   `Signal[[]T].Update`, paused/cleared from actions.
 
@@ -662,45 +638,15 @@ go run ./internal/examples/counter
 
 Every `WithX(...)` option is documented in
 [`go doc github.com/go-via/via`](https://pkg.go.dev/github.com/go-via/via)
-with its default and behaviour. The common production knobs:
+with its default and behaviour. Common production knobs:
 
-- `WithSecureCookies()`, `WithMaxContexts(n)`, `WithLogger(SlogLogger(...))`
+- `WithSecureCookies()`, `WithMaxContexts(n)`,
+  `WithLogger(SlogLogger(...))`
 - `WithMaxRequestBody(n)`, `WithSessionTTL(d)`, `WithContextTTL(d)`
-- `WithSSEHeartbeat(d)`, `WithReadHeaderTimeout(d)`, `WithIdleTimeout(d)`
-- `WithActionErrorHandler(fn)`, `WithNotFound(h)`, `WithHTTPServer(hook)`
-
-## Security
-
-What via defends against by default:
-
-- **CSRF**: every page mints a 256-bit `via_tab` id; action POSTs and SSE
-  handshakes carry it as a signal. The id IS the CSRF token — unknown
-  ids 404. Action POSTs are also session-pinned (cookie mismatch → 403).
-- **Sessions**: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit.
-  `WithSecureCookies()` flips on `Secure` for HTTPS. After auth state
-  changes, call `sess.Rotate(ctx)` (session-fixation defence).
-- **CSP**: `StrictCSP()` middleware emits a strict header with a
-  per-request nonce reachable via `ctx.CSPNonce()`.
-- **Body limits**: `WithMaxRequestBody(n)` (default 1 MiB) caps action
-  POST and SSE-close bodies; oversized requests return 413.
-- **Panic sanitization**: action panics surface as `"Something went
-  wrong"` to the client. User-returned errors flow through unmodified.
-- **Random sources**: `crypto/rand.Read` failures panic rather than
-  fall back to zero-byte ids.
-
-### Recommended production stack
-
-```go
-app := via.New(
-    via.WithSecureCookies(),
-    via.WithMaxContexts(10000),
-    via.WithLogger(via.SlogLogger(slog.Default())),
-)
-mw.Defaults(app)               // RequestID + AccessLog + Recover
-app.Use(mw.HSTS())
-app.Use(mw.CSP())
-app.Use(mw.RedirectHTTPS())
-```
+- `WithSSEHeartbeat(d)`, `WithReadHeaderTimeout(d)`,
+  `WithIdleTimeout(d)`
+- `WithActionErrorHandler(fn)`, `WithNotFound(h)`,
+  `WithHTTPServer(hook)`
 
 ## License
 
