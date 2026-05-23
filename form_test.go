@@ -57,9 +57,8 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Submit").
 		WithSignal("email", "alice@example.com").
@@ -95,9 +94,8 @@ func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Submit").
 		WithSignal("userName", "bob").Fire())
@@ -200,6 +198,13 @@ func (c *rawTabClient) OpenSSE() (<-chan string, func()) {
 	return out, func() { cancel(); resp.Body.Close() }
 }
 
+func (c *rawTabClient) OpenSSEReady() (<-chan string, func()) {
+	c.t.Helper()
+	frames, cancel := c.OpenSSE()
+	vt.AwaitFrame(c.t, frames, 2*time.Second, ": ready")
+	return frames, cancel
+}
+
 func TestDecodeForm_fallsBackToURLQueryWhenSignalAbsent(t *testing.T) {
 	t.Parallel()
 
@@ -209,9 +214,8 @@ func TestDecodeForm_fallsBackToURLQueryWhenSignalAbsent(t *testing.T) {
 	defer server.Close()
 
 	c := newRawTabClient(t, server, "/")
-	frames, cancel := c.OpenSSE()
+	frames, cancel := c.OpenSSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, c.FireWithQuery("Submit",
 		"city=Lisbon&age=3&on=true",
@@ -230,9 +234,8 @@ func TestDecodeForm_signalPayloadWinsOverQuery(t *testing.T) {
 	defer server.Close()
 
 	c := newRawTabClient(t, server, "/")
-	frames, cancel := c.OpenSSE()
+	frames, cancel := c.OpenSSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// Same key in both places — the signal payload must take precedence.
 	require.Equal(t, 200, c.FireWithQuery("Submit",
@@ -250,9 +253,8 @@ func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// Age can't parse as int; bool can't parse from "maybe". String
 	// passes through. The handler must not 500, and the int/bool fields
@@ -302,9 +304,8 @@ func TestDecodeForm_skipsUnexportedFieldsAndLeavesMissingKeysZero(t *testing.T) 
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK,
 		tc.Action("Submit").

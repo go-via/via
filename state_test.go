@@ -54,9 +54,8 @@ func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 	tc := vt.NewClient(t, server, "/")
 
 	// Open SSE first so flushed patches land in the stream.
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Inc").Fire())
 	require.Equal(t, 200, tc.Action("Inc").Fire())
@@ -136,9 +135,8 @@ func TestUpdate_appliesFnToState(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// Set(5) then Update(*2) → 10.
 	require.Equal(t, http.StatusOK, tc.Action("DoState").Fire())
@@ -154,9 +152,8 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// init=1, Update(+4) → 5.
 	require.Equal(t, http.StatusOK, tc.Action("DoSignal").Fire())

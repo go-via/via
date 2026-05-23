@@ -24,10 +24,8 @@ func openSSEStreams(t *testing.T, server *httptest.Server, path string, n int) (
 	cancels := make([]func(), n)
 	for i := range n {
 		tc := vt.NewClient(t, server, path)
-		frames[i], cancels[i] = tc.SSE()
+		frames[i], cancels[i] = tc.SSEReady()
 	}
-	// Brief pause so the SSE handshakes complete before broadcast fires.
-	time.Sleep(20 * time.Millisecond)
 	return frames, func() {
 		for _, c := range cancels {
 			c()

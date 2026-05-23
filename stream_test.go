@@ -148,11 +148,8 @@ func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	_, cancel := tc.SSE()
+	_, cancel := tc.SSEReady()
 	defer cancel()
-
-	// Let OnConnect fire and the Stream goroutine spin up.
-	time.Sleep(20 * time.Millisecond)
 
 	deadline := time.Now().Add(200 * time.Millisecond)
 	for time.Now().Before(deadline) {

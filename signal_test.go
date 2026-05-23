@@ -234,9 +234,8 @@ func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"open":true`)
@@ -256,9 +255,8 @@ func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("ToggleVis").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
@@ -273,9 +271,8 @@ func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// init=10, then +3, -5 → 8
 	require.Equal(t, http.StatusOK, tc.Action("AddCount").Fire())
@@ -291,9 +288,8 @@ func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("AddBal").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
@@ -309,9 +305,8 @@ func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("AddHits").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
@@ -326,9 +321,8 @@ func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("PushOne").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
@@ -343,9 +337,8 @@ func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("PushFive").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
@@ -383,9 +376,8 @@ func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SetBusy").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
@@ -402,9 +394,8 @@ func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SetSame").Fire())
 	select {

@@ -94,9 +94,8 @@ func TestOp_TypedAddOnEveryKind(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("AddSignal").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"signal":5`)
@@ -120,9 +119,8 @@ func TestOp_ToOnEveryKind(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("ToSignal").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"signal":42`)
@@ -147,9 +145,8 @@ func TestOp_UpdateErrorRejectsTheWrite(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("BumpThenFail").Fire())
 	// Tab went 0 → 100 via Add(100); the failing Update tried to add

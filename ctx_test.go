@@ -335,9 +335,8 @@ func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoReload").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "location.reload()")
@@ -352,9 +351,8 @@ func TestCtx_Toast_emitsAlertScript(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToast").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
@@ -372,9 +370,8 @@ func TestCtx_Toast_JSONEncodesSpecialChars(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToastSpecial").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second,
@@ -390,9 +387,8 @@ func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("DoRedirect").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "/elsewhere")
@@ -435,9 +431,8 @@ func TestSyncOff_skipsEndOfActionFlush(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SilentWrite").Fire())
 
@@ -477,9 +472,8 @@ func TestSyncOff_skipsStateAppBroadcastAcrossSessions(t *testing.T) {
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/") // different session
 
-	framesB, cancelB := b.SSE()
+	framesB, cancelB := b.SSEReady()
 	defer cancelB()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, a.Action("BumpSilently").Fire())
 
@@ -502,9 +496,8 @@ func TestSyncOff_skipsBroadcastToSiblingTabs(t *testing.T) {
 	a := vt.NewClient(t, server, "/")
 	b := a.Fork("/")
 
-	framesB, cancelB := b.SSE()
+	framesB, cancelB := b.SSEReady()
 	defer cancelB()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, a.Action("SilentWrite").Fire())
 
@@ -525,9 +518,8 @@ func TestSyncOff_writesPersistAndSurfaceOnNextLoudAction(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SilentWrite").Fire())
 	// Loud action re-renders; both N and Theme should reflect prior silent writes.
@@ -545,9 +537,8 @@ func TestSyncOff_dirtyBitsDoNotLeakIntoNextActionFlush(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	// Silent action accumulates dirty bits but skips its own flush.
 	// If discardDirty isn't called, the next handler's deferred flush
@@ -670,9 +661,8 @@ func TestSyncOff_doesNotRaceWithRawGoroutineUpdate(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	_, cancel := tc.SSE()
+	_, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("Spawn").Fire())
 
@@ -709,9 +699,8 @@ func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("BoomSilently").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "Something went wrong")
@@ -763,9 +752,8 @@ func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
 			defer server.Close()
 
 			tc := vt.NewClient(t, server, "/")
-			frames, cancel := tc.SSE()
+			frames, cancel := tc.SSEReady()
 			defer cancel()
-			time.Sleep(20 * time.Millisecond)
 
 			require.Equal(t, http.StatusOK, tc.Action(c.action).Fire())
 			vt.AwaitFrame(t, frames, 2*time.Second, c.expect)

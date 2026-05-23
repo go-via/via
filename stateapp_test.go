@@ -70,11 +70,10 @@ func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	reader := vt.NewClient(t, server, "/reader")
 	silent := vt.NewClient(t, server, "/silent")
 
-	framesR, cancelR := reader.SSE()
+	framesR, cancelR := reader.SSEReady()
 	defer cancelR()
-	framesS, cancelS := silent.SSE()
+	framesS, cancelS := silent.SSEReady()
 	defer cancelS()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, reader.Action("Bump").Fire())
 
@@ -102,9 +101,8 @@ func TestApp_writePropagatesLiveToEveryOtherTab(t *testing.T) {
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/")
 
-	framesB, cancelB := b.SSE()
+	framesB, cancelB := b.SSEReady()
 	defer cancelB()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, a.Action("Bump").Fire())
 	vt.AwaitFrame(t, framesB, 2*time.Second, `<span id="visits">1</span>`)

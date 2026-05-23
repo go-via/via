@@ -269,6 +269,22 @@ func AwaitFrame(t testing.TB, frames <-chan string, timeout time.Duration, needl
 	}
 }
 
+// SSEReady opens an SSE stream and blocks until the server's handshake
+// comment (`: ready`) arrives, signalling that the server-side SSE
+// goroutine has entered its select loop and is registered to receive
+// patch-queue wakeups. Use it in place of the
+// `tc.SSE(); time.Sleep(20*time.Millisecond)` idiom — it replaces a
+// timing guess with a deterministic wait so the suite doesn't flake on
+// busy CI runners. The comment bytes are consumed off the channel so
+// downstream `AwaitFrame` calls see only post-handshake traffic. Times
+// out after 2s.
+func (c *Client) SSEReady() (frames <-chan string, cancel func()) {
+	c.t.Helper()
+	frames, cancel = c.SSE()
+	AwaitFrame(c.t, frames, 2*time.Second, ": ready")
+	return frames, cancel
+}
+
 // SSE opens an SSE stream and returns a cancel func and a channel of frames.
 // Use only when you must observe live patch frames.
 //

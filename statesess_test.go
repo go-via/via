@@ -111,9 +111,8 @@ func TestUser_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	reader := vt.NewClient(t, server, "/reader")
 	silent := reader.Fork("/silent")
 
-	framesS, cancelS := silent.SSE()
+	framesS, cancelS := silent.SSEReady()
 	defer cancelS()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, reader.Action("Set").Fire())
 
@@ -136,9 +135,8 @@ func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
 	a := vt.NewClient(t, server, "/")
 	b := a.Fork("/")
 
-	framesB, cancelB := b.SSE()
+	framesB, cancelB := b.SSEReady()
 	defer cancelB()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, a.Action("Set").Fire())
 	vt.AwaitFrame(t, framesB, 2*time.Second, `<span id="theme">midnight</span>`)
@@ -155,9 +153,8 @@ func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/")
 
-	framesB, cancelB := b.SSE()
+	framesB, cancelB := b.SSEReady()
 	defer cancelB()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, a.Action("Set").Fire())
 
@@ -206,9 +203,8 @@ func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Same").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "blue")

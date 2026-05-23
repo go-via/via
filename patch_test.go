@@ -65,9 +65,8 @@ func TestPatch_SignalEmitsWirePatchSignals(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PushSignal").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"purple"`)
@@ -81,9 +80,8 @@ func TestPatch_SignalsEmitsBatchedWirePatch(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PushSignalsBatch").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"_picoTheme":"amber"`, `"_density":3`)
@@ -97,9 +95,8 @@ func TestPatch_ElementEmitsSingleElementMorph(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PushElement").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<div id="solo">only</div>`)
@@ -116,9 +113,8 @@ func TestPatch_EmptyInputsAreNoOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("EmptyGuards").Fire())
 
@@ -137,9 +133,8 @@ func TestPatch_ElementsEmitsVariadicElementMorphs(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("PushElements").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second,

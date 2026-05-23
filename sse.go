@@ -81,6 +81,20 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Emit an SSE comment line so the client (and tests) can observe
+	// that the SSE goroutine has entered its select loop and is
+	// registered to receive patch-queue wakeups. Comments start with
+	// `:` per the SSE spec — Datastar (and any conformant client)
+	// silently ignores them, so this adds no event surface. Tests use
+	// it to replace the timing-based 20ms-sleep idiom.
+	setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
+	if _, err := io.WriteString(w, ": ready\n\n"); err != nil {
+		return
+	}
+	if fl, ok := w.(http.Flusher); ok {
+		fl.Flush()
+	}
+
 	var heartbeat <-chan time.Time
 	if a.cfg.sseHeartbeat > 0 {
 		t := time.NewTicker(a.cfg.sseHeartbeat)

@@ -121,9 +121,8 @@ func TestChartAPI_SetOption_emitsSetOptionScript(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("SetOpt").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "setOption", "backgroundColor")
@@ -138,9 +137,8 @@ func TestChartAPI_SetSeries_emitsSeriesUpdate(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("SetSer").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `"series"`, `"line"`)
@@ -155,9 +153,8 @@ func TestChartAPI_AppendData_emitsAppendDataCall(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("AppendPoints").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "appendData", "seriesIndex:0")

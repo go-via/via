@@ -36,9 +36,8 @@ func TestAction_voidReturnIsRecognised(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, 200, tc.Action("Bump").Fire())
 	require.Equal(t, 200, tc.Action("Bump").Fire())
