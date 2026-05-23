@@ -78,6 +78,18 @@ func (p *shapePage) NumZero(ctx *via.Ctx) error {
 	p.TabN.Op(ctx).Zero()
 	return nil
 }
+func (p *shapePage) NumSub(ctx *via.Ctx) error {
+	p.TabN.Op(ctx).Sub(3)
+	return nil
+}
+func (p *shapePage) NumDiv(ctx *via.Ctx) error {
+	p.TabN.Op(ctx).Div(2)
+	return nil
+}
+func (p *shapePage) NumDec(ctx *via.Ctx) error {
+	p.TabN.Op(ctx).Dec()
+	return nil
+}
 
 func (p *shapePage) BoolToggle(ctx *via.Ctx) error {
 	p.TabB.Op(ctx).Toggle()
@@ -125,6 +137,18 @@ func (p *shapePage) SliceEmpty(ctx *via.Ctx) error {
 	p.TabSl.Op(ctx).Empty()
 	return nil
 }
+func (p *shapePage) SliceShift(ctx *via.Ctx) error {
+	p.TabSl.Op(ctx).Shift()
+	return nil
+}
+func (p *shapePage) SliceTake(ctx *via.Ctx) error {
+	p.TabSl.Op(ctx).Take(2)
+	return nil
+}
+func (p *shapePage) SliceDrop(ctx *via.Ctx) error {
+	p.TabSl.Op(ctx).Drop(1)
+	return nil
+}
 
 func (p *shapePage) MapPut(ctx *via.Ctx) error {
 	p.TabM.Op(ctx).Put("a", 1)
@@ -151,9 +175,8 @@ func TestShape_NumOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("NumAdd").Fire()) // 0+5=5
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">5</span>`)
@@ -170,6 +193,15 @@ func TestShape_NumOps(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, tc.Action("NumMin").Fire()) // max(0, 10)=10
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">10</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("NumSub").Fire()) // 10-3=7
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">7</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("NumDec").Fire()) // 7-1=6
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">6</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("NumDiv").Fire()) // 6/2=3
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">3</span>`)
 }
 
 // ---- Bool verbs ----
@@ -183,9 +215,8 @@ func TestShape_BoolOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("BoolTrue").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabb">true</span>`)
@@ -211,9 +242,8 @@ func TestShape_StrOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("StrAppend").Fire()) // "" + "hello" = "hello"
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabs">hello</span>`)
@@ -236,9 +266,8 @@ func TestShape_SliceOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("SliceAppend").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[7]</span>`)
@@ -257,6 +286,22 @@ func TestShape_SliceOps(t *testing.T) {
 	// assert "different identity" via SSE so just ensure content stays.
 	require.Equal(t, http.StatusOK, tc.Action("SliceEmpty").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[]</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("SliceAppend").Fire())  // [7]
+	require.Equal(t, http.StatusOK, tc.Action("SliceAppend").Fire())  // [7 7]
+	require.Equal(t, http.StatusOK, tc.Action("SlicePrepend").Fire()) // [1 7 7]
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[1 7 7]</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("SliceShift").Fire()) // [7 7]
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[7 7]</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("SliceDrop").Fire()) // drop 1 → [7]
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[7]</span>`)
+
+	require.Equal(t, http.StatusOK, tc.Action("SliceAppend").Fire()) // [7 7]
+	require.Equal(t, http.StatusOK, tc.Action("SliceAppend").Fire()) // [7 7 7]
+	require.Equal(t, http.StatusOK, tc.Action("SliceTake").Fire())   // take 2 → [7 7]
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabsl">[7 7]</span>`)
 }
 
 // ---- Map verbs ----
@@ -270,9 +315,8 @@ func TestShape_MapOps(t *testing.T) {
 	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
 	require.Equal(t, http.StatusOK, tc.Action("MapPut").Fire())
 	// Map iteration order is undefined; assert both entries are present.
