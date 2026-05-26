@@ -90,7 +90,7 @@ func (f *File) Bytes() ([]byte, error) {
 // Save streams the file body to path with mode 0o600 (owner read/write
 // only). Truncates any existing file at path. Use a path you generated
 // — never the client-supplied Filename — to avoid path-traversal.
-func (f *File) Save(path string) error {
+func (f *File) Save(path string) (err error) {
 	rc, err := f.Open()
 	if err != nil {
 		return err
@@ -100,7 +100,11 @@ func (f *File) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	defer func() {
+		if cerr := out.Close(); err == nil {
+			err = cerr
+		}
+	}()
 	_, err = io.Copy(out, rc)
 	return err
 }

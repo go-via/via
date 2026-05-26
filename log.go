@@ -127,7 +127,7 @@ type defaultLogger struct{}
 
 func (defaultLogger) Log(level LogLevel, msg string, kv ...any) {
 	if len(kv) == 0 {
-		log.Printf("[%s] %s", levelTag(level), msg)
+		log.Printf("[%s] %s", levelTag(level), stripCRLF(msg))
 		return
 	}
 	var sb strings.Builder
@@ -142,7 +142,16 @@ func (defaultLogger) Log(level LogLevel, msg string, kv ...any) {
 		sb.WriteByte('=')
 		fmt.Fprintf(&sb, "%v", kv[i+1])
 	}
-	log.Print(sb.String())
+	log.Print(stripCRLF(sb.String()))
+}
+
+// stripCRLF removes CR/LF from a log line so user-controlled values
+// can't forge new log entries (CWE-117).
+func stripCRLF(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }
 
 func levelTag(l LogLevel) string {

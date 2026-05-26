@@ -17,6 +17,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-via/via"
@@ -77,13 +78,14 @@ func AccessLog(a *via.App) via.Middleware {
 		sw := &statusWriter{ResponseWriter: w, status: 200}
 		next.ServeHTTP(sw, r)
 		dur := time.Since(start)
+		method, path := sanitizeLog(r.Method), sanitizeLog(r.URL.Path)
 		if rid := via.RequestIDFrom(r); rid != "" {
 			logger.Log(via.LogInfo,
-				r.Method+" "+r.URL.Path+" status="+strconv.Itoa(sw.status)+
-					" duration="+dur.String()+" rid="+rid)
+				method+" "+path+" status="+strconv.Itoa(sw.status)+
+					" duration="+dur.String()+" rid="+sanitizeLog(rid))
 		} else {
 			logger.Log(via.LogInfo,
-				r.Method+" "+r.URL.Path+" status="+strconv.Itoa(sw.status)+
+				method+" "+path+" status="+strconv.Itoa(sw.status)+
 					" duration="+dur.String())
 		}
 	}
@@ -107,7 +109,7 @@ func Recover(a *via.App) via.Middleware {
 		defer func() {
 			if rec := recover(); rec != nil {
 				logger.Log(via.LogError,
-					"panic in handler "+r.Method+" "+r.URL.Path,
+					"panic in handler "+sanitizeLog(r.Method)+" "+sanitizeLog(r.URL.Path),
 					"panic", rec)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
@@ -297,4 +299,13 @@ func (s *statusWriter) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// sanitizeLog strips CR/LF from values that flow from request data into
+// log lines, preventing forged log entries (CWE-117).
+func sanitizeLog(s string) string {
+	if !strings.ContainsAny(s, "\r\n") {
+		return s
+	}
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
 }

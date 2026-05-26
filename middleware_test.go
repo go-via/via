@@ -410,3 +410,89 @@ func TestRedirectHTTPSStrict_ignoresXForwardedProto(t *testing.T) {
 	assert.Equal(t, http.StatusMovedPermanently, resp.StatusCode,
 		"Strict variant must ignore X-Forwarded-Proto and still redirect")
 }
+
+// TestAccessLog_stripsCRLFFromUserPath guards CWE-117: a request whose
+// URL.Path contains \r\n must not be able to forge a new log line. The
+// captured log record's message must be CRLF-free even though the raw
+// path was not.
+func TestAccessLog_stripsCRLFFromUserPath(t *testing.T) {
+	t.Parallel()
+
+	app, _, logger := newLoggedApp(t, via.LogInfo)
+	access := mw.AccessLog(app)
+
+	req := httptest.NewRequest("GET", "/legit", nil)
+	req.URL.Path = "/legit\nFAKE [info] forged-entry"
+	rec := httptest.NewRecorder()
+	access(rec, req, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+
+	recs := logger.snapshot()
+	require.Len(t, recs, 1)
+	assert.NotContains(t, recs[0].msg, "\n",
+		"AccessLog must scrub LF from r.URL.Path (log injection)")
+	assert.NotContains(t, recs[0].msg, "\r",
+		"AccessLog must scrub CR from r.URL.Path (log injection)")
+	assert.Contains(t, recs[0].msg, "/legitFAKE",
+		"scrubbed path keeps the surrounding bytes, just without the line break")
+}
+
+// TestAccessLog_stripsCRLFFromRequestID guards CWE-117 on the rid
+// suffix: an inbound X-Request-ID containing CR/LF must not break out
+// into a new log line.
+func TestAccessLog_stripsCRLFFromRequestID(t *testing.T) {
+	t.Parallel()
+
+	// net/http rejects CR/LF in inbound request headers at parse time, so we
+	// can't drive the forged rid through an httptest.Server. Inject it via a
+	// hand-built middleware that plants the id directly on ctx — same shape
+	// RequestIDFrom would observe in production if any upstream middleware
+	// (a custom rid extractor, a trace propagator) handed in an unscrubbed
+	// value. Defense in depth: even though RequestID() itself is safe today,
+	// the log sink must not trust whatever sits in ctx.
+	app, _, logger := newLoggedApp(t, via.LogInfo)
+	access := mw.AccessLog(app)
+
+	req := via.RequestWithID(httptest.NewRequest("GET", "/", nil),
+		"trace\nFAKE [info] forged")
+	rec := httptest.NewRecorder()
+	access(rec, req, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+	}))
+
+	recs := logger.snapshot()
+	require.Len(t, recs, 1)
+	assert.NotContains(t, recs[0].msg, "\n",
+		"AccessLog must scrub LF from rid (log injection)")
+	assert.NotContains(t, recs[0].msg, "\r",
+		"AccessLog must scrub CR from rid (log injection)")
+	assert.Contains(t, recs[0].msg, "rid=traceFAKE",
+		"scrubbed rid keeps surrounding bytes minus the line break")
+}
+
+// TestRecover_stripsCRLFFromUserPath guards CWE-117 on the panic-log
+// path: a forged method/path must not break out into a new log line.
+func TestRecover_stripsCRLFFromUserPath(t *testing.T) {
+	t.Parallel()
+
+	app, _, logger := newLoggedApp(t, via.LogError)
+	rec := mw.Recover(app)
+
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Method = "GET\nINJECTED"
+	req.URL.Path = "/x\nMORE"
+	w := httptest.NewRecorder()
+	rec(w, req, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("boom")
+	}))
+
+	recs := logger.snapshot()
+	require.NotEmpty(t, recs)
+	for _, r := range recs {
+		assert.NotContains(t, r.msg, "\n",
+			"Recover must scrub LF from method/path before logging")
+		assert.NotContains(t, r.msg, "\r",
+			"Recover must scrub CR from method/path before logging")
+	}
+}
