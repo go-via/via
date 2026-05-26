@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.svg" alt="Via" width="80" height="180">
+</p>
+
 # Via
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-via/via.svg)](https://pkg.go.dev/github.com/go-via/via)
@@ -117,9 +121,10 @@ Read this section before adopting. The non-goals are deliberate.
   layer, not the runtime.
 - Not a build-step framework. There is no `via generate`. If you want
   a code-gen template language, look at `templ`.
-- Not pre-1.0 stable. ~12 examples. No third-party component library
-  yet. The Datastar dependency is load-bearing — Via does not vendor
-  its own client runtime.
+- Not stable yet — pre-1.0, APIs can shift between minor versions.
+  ~12 examples. No third-party component library yet. The Datastar
+  dependency is load-bearing — Via does not vendor its own client
+  runtime.
 
 ## Restart and tab survivability
 
@@ -407,11 +412,17 @@ Factories under `via/mw`:
 
 - `mw.Defaults(app)` — RequestID + AccessLog + Recover.
 - `mw.RequestID()` — stamp `X-Request-ID` + plant on `r.Context`.
-- `mw.AccessLog(app)` — one info-line per request, with rid + status.
-- `mw.Recover(app)` — panic → 500 + error log; the goroutine survives.
+- `mw.AccessLog(app)` — one info-line per request, with rid + status;
+  CR/LF stripped from method/path/rid so user input can't forge log
+  entries (CWE-117).
+- `mw.Recover(app)` — panic → 500 + error log (same CR/LF scrub); the
+  goroutine survives.
 - `mw.CSP(extra…)` — strict CSP header + nonce on `r.Context`.
 - `mw.HSTS(opts…)` — Strict-Transport-Security for HTTPS deploys.
-- `mw.RedirectHTTPS()` — 301 plain HTTP → https; respects XFP header.
+- `mw.RedirectHTTPS()` — 301 plain HTTP → https; trusts
+  `X-Forwarded-Proto` (use behind a TLS-terminating proxy).
+- `mw.RedirectHTTPSStrict()` — same redirect but ignores XFP; only
+  `r.TLS != nil` counts as secure (use for direct-bind TLS).
 
 Read it back inside actions / handlers:
 
