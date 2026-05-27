@@ -333,4 +333,3 @@ func TestChartAPI_SetTheme_preservesGroupAcrossSwap(t *testing.T) {
 	fireChartAction(t, "Darken",
 		"dispose", "echarts.init", "_g=_e.c.group", "echarts.connect(_g)")
 }
-
