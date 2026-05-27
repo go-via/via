@@ -166,3 +166,21 @@ func TestUpdate_appliesFnToSignal(t *testing.T) {
 // Tag-driven key resolution for State is exercised end-to-end by the
 // init-tag tests above, where mis-resolving the key would render the
 // wrong seeded value.
+
+func TestStateTab_panicsOnNilCtxUpdate(t *testing.T) {
+	t.Parallel()
+	var s via.StateTabNum[int]
+	assert.PanicsWithValue(t,
+		"via: StateTab.Update called with nil *Ctx",
+		func() { _ = s.Update(nil, func(int) (int, error) { return 1, nil }) },
+	)
+}
+
+func TestStateTab_panicsOnNilCtxWrite(t *testing.T) {
+	t.Parallel()
+	var s via.StateTabNum[int]
+	assert.PanicsWithValue(t,
+		"via: StateTab.Write called with nil *Ctx",
+		func() { s.Write(nil, 1) },
+	)
+}

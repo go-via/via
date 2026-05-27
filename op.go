@@ -8,3 +8,12 @@ package via
 type ops[T any] struct {
 	update func(func(T) (T, error)) error
 }
+
+// mustOpCtx panics if ctx is nil so the failure points at the user's
+// Op(nil) call site rather than firing later inside a verb closure
+// with a stack rooted at Signal.Update.
+func mustOpCtx(ctx *Ctx) {
+	if ctx == nil {
+		panic("via: Op called with nil *Ctx")
+	}
+}

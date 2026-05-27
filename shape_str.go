@@ -25,6 +25,7 @@ type SignalStr struct{ Signal[string] }
 
 // Op returns a string chain bound to ctx.
 func (s *SignalStr) Op(ctx *Ctx) *StrOps {
+	mustOpCtx(ctx)
 	return &StrOps{ops: ops[string]{update: func(fn func(string) (string, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -33,6 +34,7 @@ type StateTabStr struct{ StateTab[string] }
 
 // Op returns a string chain bound to ctx.
 func (s *StateTabStr) Op(ctx *Ctx) *StrOps {
+	mustOpCtx(ctx)
 	return &StrOps{ops: ops[string]{update: func(fn func(string) (string, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -41,6 +43,7 @@ type StateSessStr struct{ StateSess[string] }
 
 // Op returns a string chain bound to ctx.
 func (s *StateSessStr) Op(ctx *Ctx) *StrOps {
+	mustOpCtx(ctx)
 	return &StrOps{ops: ops[string]{update: func(fn func(string) (string, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -49,5 +52,6 @@ type StateAppStr struct{ StateApp[string] }
 
 // Op returns a string chain bound to ctx.
 func (a *StateAppStr) Op(ctx *Ctx) *StrOps {
+	mustOpCtx(ctx)
 	return &StrOps{ops: ops[string]{update: func(fn func(string) (string, error)) error { return a.Update(ctx, fn) }}}
 }

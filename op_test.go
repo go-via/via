@@ -155,3 +155,28 @@ func TestOp_UpdateErrorRejectsTheWrite(t *testing.T) {
 	assert.Contains(t, body, `<span id="tab">100</span>`,
 		"failing Update must not commit its computed value")
 }
+
+func TestOp_panicsOnNilCtx(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		call func()
+	}{
+		{"SignalNum", func() { var s via.SignalNum[int]; _ = s.Op(nil) }},
+		{"SignalBool", func() { var s via.SignalBool; _ = s.Op(nil) }},
+		{"SignalStr", func() { var s via.SignalStr; _ = s.Op(nil) }},
+		{"SignalSlice", func() { var s via.SignalSlice[int]; _ = s.Op(nil) }},
+		{"SignalMap", func() { var s via.SignalMap[string, int]; _ = s.Op(nil) }},
+		{"StateTabNum", func() { var s via.StateTabNum[int]; _ = s.Op(nil) }},
+		{"StateSessNum", func() { var s via.StateSessNum[int]; _ = s.Op(nil) }},
+		{"StateAppNum", func() { var s via.StateAppNum[int]; _ = s.Op(nil) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.PanicsWithValue(t,
+				"via: Op called with nil *Ctx", c.call,
+				"Op must panic eagerly so the stack points at the user's Op(nil) call site")
+		})
+	}
+}

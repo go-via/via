@@ -53,8 +53,14 @@ func (a *StateApp[T]) Read(rc readCtx) T {
 // almost always a read-modify-write race in disguise — model the
 // assignment as an Update whose fn ignores the old value if you truly
 // mean it.
+//
+// Panics on nil ctx: without one no broadcast can fan out, so silently
+// succeeding would desync server state from every live tab.
 func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
-	if fn == nil || ctx == nil || ctx.app == nil {
+	if ctx == nil {
+		panic("via: StateApp.Update called with nil *Ctx")
+	}
+	if fn == nil || ctx.app == nil {
 		return nil
 	}
 	_, err := ctx.app.appStore.Update(a.wireKey, func(old any) (any, error) {
