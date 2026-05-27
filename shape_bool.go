@@ -28,6 +28,7 @@ type SignalBool struct{ Signal[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *SignalBool) Op(ctx *Ctx) *BoolOps {
+	mustOpCtx(ctx)
 	return &BoolOps{ops: ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -36,6 +37,7 @@ type StateTabBool struct{ StateTab[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *StateTabBool) Op(ctx *Ctx) *BoolOps {
+	mustOpCtx(ctx)
 	return &BoolOps{ops: ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -44,6 +46,7 @@ type StateSessBool struct{ StateSess[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (s *StateSessBool) Op(ctx *Ctx) *BoolOps {
+	mustOpCtx(ctx)
 	return &BoolOps{ops: ops[bool]{update: func(fn func(bool) (bool, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -52,5 +55,6 @@ type StateAppBool struct{ StateApp[bool] }
 
 // Op returns a bool chain bound to ctx.
 func (a *StateAppBool) Op(ctx *Ctx) *BoolOps {
+	mustOpCtx(ctx)
 	return &BoolOps{ops: ops[bool]{update: func(fn func(bool) (bool, error)) error { return a.Update(ctx, fn) }}}
 }

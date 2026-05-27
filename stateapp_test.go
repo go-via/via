@@ -140,3 +140,12 @@ func TestApp_concurrentUpdatesDoNotLoseIncrements(t *testing.T) {
 	assert.Contains(t, final.HTML(), `<span id="visits">200</span>`,
 		"concurrent Update calls across sessions must converge to the exact final count")
 }
+
+func TestStateApp_panicsOnNilCtxUpdate(t *testing.T) {
+	t.Parallel()
+	var a via.StateAppNum[int]
+	assert.PanicsWithValue(t,
+		"via: StateApp.Update called with nil *Ctx",
+		func() { _ = a.Update(nil, func(int) (int, error) { return 1, nil }) },
+	)
+}

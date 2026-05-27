@@ -42,8 +42,12 @@ func (s *Signal[T]) Read(_ readCtx) T {
 // the dirty bit alone won't reach the browser without a flush.
 //
 // Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
-// non-fallible path for "replace with a constant."
+// non-fallible path for "replace with a constant." Panics on nil ctx
+// for the same reason as Update.
 func (s *Signal[T]) Write(ctx *Ctx, v T) {
+	if ctx == nil {
+		panic("via: Signal.Write called with nil *Ctx")
+	}
 	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
 }
 
@@ -52,7 +56,15 @@ func (s *Signal[T]) Write(ctx *Ctx, v T) {
 // unchanged and the error is returned. Saves a Read/Write pair on
 // transform-the-current-value patterns and is the only mutation path
 // that lets a user reject a write (validation, conflict detection).
+//
+// Panics on nil ctx: without one, the write cannot reach the browser, so
+// silently succeeding would desync server state from the client. From a
+// raw goroutine, pass the bound *Ctx and call ctx.SyncNow() at a flush
+// boundary.
 func (s *Signal[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
+	if ctx == nil {
+		panic("via: Signal.Update called with nil *Ctx")
+	}
 	if fn == nil {
 		return nil
 	}
@@ -61,9 +73,7 @@ func (s *Signal[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		return err
 	}
 	s.val = next
-	if ctx != nil {
-		ctx.markSignalDirty(s.slot)
-	}
+	ctx.markSignalDirty(s.slot)
 	return nil
 }
 

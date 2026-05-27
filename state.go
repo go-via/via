@@ -44,8 +44,12 @@ func (s *StateTab[T]) Read(_ readCtx) T {
 // flush.
 //
 // Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
-// non-fallible path for "replace with a constant."
+// non-fallible path for "replace with a constant." Panics on nil ctx
+// for the same reason as Update.
 func (s *StateTab[T]) Write(ctx *Ctx, v T) {
+	if ctx == nil {
+		panic("via: StateTab.Write called with nil *Ctx")
+	}
 	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
 }
 
@@ -59,7 +63,13 @@ func (s *StateTab[T]) Write(ctx *Ctx, v T) {
 //	    if n >= max { return 0, errBudget }
 //	    return n + 1, nil
 //	})
+//
+// Panics on nil ctx: without one the next flush cannot re-render, so
+// silently succeeding would desync server state from the client.
 func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
+	if ctx == nil {
+		panic("via: StateTab.Update called with nil *Ctx")
+	}
 	if fn == nil {
 		return nil
 	}
@@ -68,9 +78,7 @@ func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		return err
 	}
 	s.val = next
-	if ctx != nil {
-		ctx.markStateDirty()
-	}
+	ctx.markStateDirty()
 	return nil
 }
 

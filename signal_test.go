@@ -406,3 +406,21 @@ func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 		// No frame at all is the success path.
 	}
 }
+
+func TestSignal_panicsOnNilCtxUpdate(t *testing.T) {
+	t.Parallel()
+	var s via.SignalNum[int]
+	assert.PanicsWithValue(t,
+		"via: Signal.Update called with nil *Ctx",
+		func() { _ = s.Update(nil, func(int) (int, error) { return 1, nil }) },
+	)
+}
+
+func TestSignal_panicsOnNilCtxWrite(t *testing.T) {
+	t.Parallel()
+	var s via.SignalNum[int]
+	assert.PanicsWithValue(t,
+		"via: Signal.Write called with nil *Ctx",
+		func() { s.Write(nil, 1) },
+	)
+}

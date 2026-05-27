@@ -77,6 +77,7 @@ type SignalNum[T Number] struct{ Signal[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *SignalNum[T]) Op(ctx *Ctx) *NumOps[T] {
+	mustOpCtx(ctx)
 	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -85,6 +86,7 @@ type StateTabNum[T Number] struct{ StateTab[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateTabNum[T]) Op(ctx *Ctx) *NumOps[T] {
+	mustOpCtx(ctx)
 	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -93,6 +95,7 @@ type StateSessNum[T Number] struct{ StateSess[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (s *StateSessNum[T]) Op(ctx *Ctx) *NumOps[T] {
+	mustOpCtx(ctx)
 	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -101,5 +104,6 @@ type StateAppNum[T Number] struct{ StateApp[T] }
 
 // Op returns a numeric chain bound to ctx.
 func (a *StateAppNum[T]) Op(ctx *Ctx) *NumOps[T] {
+	mustOpCtx(ctx)
 	return &NumOps[T]{ops: ops[T]{update: func(fn func(T) (T, error)) error { return a.Update(ctx, fn) }}}
 }

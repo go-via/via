@@ -97,6 +97,7 @@ type SignalSlice[T any] struct{ Signal[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *SignalSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
+	mustOpCtx(ctx)
 	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -105,6 +106,7 @@ type StateTabSlice[T any] struct{ StateTab[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *StateTabSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
+	mustOpCtx(ctx)
 	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -113,6 +115,7 @@ type StateSessSlice[T any] struct{ StateSess[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (s *StateSessSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
+	mustOpCtx(ctx)
 	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -121,5 +124,6 @@ type StateAppSlice[T any] struct{ StateApp[[]T] }
 
 // Op returns a slice chain bound to ctx.
 func (a *StateAppSlice[T]) Op(ctx *Ctx) *SliceOps[T] {
+	mustOpCtx(ctx)
 	return &SliceOps[T]{ops: ops[[]T]{update: func(fn func([]T) ([]T, error)) error { return a.Update(ctx, fn) }}}
 }

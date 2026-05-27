@@ -36,6 +36,7 @@ type SignalMap[K comparable, V any] struct{ Signal[map[K]V] }
 
 // Op returns a map chain bound to ctx.
 func (s *SignalMap[K, V]) Op(ctx *Ctx) *MapOps[K, V] {
+	mustOpCtx(ctx)
 	return &MapOps[K, V]{ops: ops[map[K]V]{update: func(fn func(map[K]V) (map[K]V, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -44,6 +45,7 @@ type StateTabMap[K comparable, V any] struct{ StateTab[map[K]V] }
 
 // Op returns a map chain bound to ctx.
 func (s *StateTabMap[K, V]) Op(ctx *Ctx) *MapOps[K, V] {
+	mustOpCtx(ctx)
 	return &MapOps[K, V]{ops: ops[map[K]V]{update: func(fn func(map[K]V) (map[K]V, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -52,6 +54,7 @@ type StateSessMap[K comparable, V any] struct{ StateSess[map[K]V] }
 
 // Op returns a map chain bound to ctx.
 func (s *StateSessMap[K, V]) Op(ctx *Ctx) *MapOps[K, V] {
+	mustOpCtx(ctx)
 	return &MapOps[K, V]{ops: ops[map[K]V]{update: func(fn func(map[K]V) (map[K]V, error)) error { return s.Update(ctx, fn) }}}
 }
 
@@ -60,5 +63,6 @@ type StateAppMap[K comparable, V any] struct{ StateApp[map[K]V] }
 
 // Op returns a map chain bound to ctx.
 func (a *StateAppMap[K, V]) Op(ctx *Ctx) *MapOps[K, V] {
+	mustOpCtx(ctx)
 	return &MapOps[K, V]{ops: ops[map[K]V]{update: func(fn func(map[K]V) (map[K]V, error)) error { return a.Update(ctx, fn) }}}
 }

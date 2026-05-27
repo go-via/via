@@ -212,3 +212,12 @@ func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	require.Equal(t, 200, tc.Action("Diff").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "red")
 }
+
+func TestStateSess_panicsOnNilCtxUpdate(t *testing.T) {
+	t.Parallel()
+	var s via.StateSessNum[int]
+	assert.PanicsWithValue(t,
+		"via: StateSess.Update called with nil *Ctx",
+		func() { _ = s.Update(nil, func(int) (int, error) { return 1, nil }) },
+	)
+}
