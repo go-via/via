@@ -4,13 +4,11 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"log"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-via/via/h"
@@ -19,262 +17,280 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
-// App is the root application.
+// App is the root of a via web app. It implements http.Handler so it can be
+// passed straight to http.ListenAndServe or composed inside any std mux:
+//
+//	app := via.New()
+//	via.Mount[Counter](app, "/counter")
+//	http.ListenAndServe(":3000", app)
+//
+//	// or, embed under a parent mux:
+//	parent := http.NewServeMux()
+//	parent.Handle("/", app)
 type App struct {
-	cfg                  config
-	mux                  *http.ServeMux
-	handler              http.Handler
-	server               *http.Server
-	contextRegistry      map[string]*Ctx
-	contextRegistryMutex sync.RWMutex
-	sessions             map[string]*session
-	sessionsMu           sync.RWMutex
-	stopSweep            chan struct{}
-	stopSweepOnce        sync.Once
-	middleware           []Middleware
-	layoutFn func(cmp *Cmp)
+	cfg                 config
+	mux                 *http.ServeMux
+	handler             http.Handler
+	server              *http.Server
+	cachedChain         atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.mux), rebuilt on Use
+	cachedNotFoundChain atomic.Pointer[http.HandlerFunc] // applyMiddleware(a.middleware, a.cfg.notFoundHandler), nil if no custom 404
+
+	descs    []*cmpDescriptor
+	descsMu  sync.RWMutex
+	routes   map[string]string // method-and-pattern → registrar tag
+	routesMu sync.Mutex
+	serverMu sync.Mutex // guards a.server while Start binds and Shutdown reads
+
+	// appSignals holds plugin-registered, app-wide initial signal values.
+	// They are injected into <meta data-signals> on every page render but
+	// don't have a server-side reactive handle — clients drive them.
+	appSignals   map[string]any
+	appSignalsMu sync.RWMutex
+
+	// appStore backs StateApp[T] with shared storage across every
+	// session and tab. Keyed by the handle's wire key.
+	appStore kvStore
+
+	contextRegistry   map[string]*Ctx
+	contextRegistryMu sync.RWMutex
+
+	sessions   map[string]*session
+	sessionsMu sync.RWMutex
+
+	stopSweep     chan struct{}
+	stopSweepOnce sync.Once
+
+	middlewareMu sync.Mutex
+	middleware   []Middleware
+
 	documentHeadIncludes []h.H
 	documentFootIncludes []h.H
 	documentHTMLAttrs    []h.H
-	signals              map[string]any
 }
 
-func (a *App) logPanic(format string, args ...any) {
-	log.Printf("[fatal] msg=%q", fmt.Sprintf(format, args...))
+// ServeHTTP makes *App an http.Handler.
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.handler.ServeHTTP(w, r)
 }
 
-func (a *App) logErr(ctx *Ctx, format string, args ...any) {
-	cRef := ""
-	if ctx != nil && ctx.cmp != nil {
-		cRef = fmt.Sprintf("via_tab=%q ", ctx.cmp.route)
+// Use installs middleware that wraps every via-served request.
+//
+// Boot-only: panics if called after Start has bound the server.
+// Concurrent Use calls are safe — the middleware slice and the chain
+// rebuild are serialized under one mutex.
+func (a *App) Use(mw ...Middleware) {
+	a.serverMu.Lock()
+	started := a.server != nil
+	a.serverMu.Unlock()
+	if started {
+		panic("via: App.Use called after Start; install middleware during boot")
 	}
-	log.Printf("[error] %smsg=%q", cRef, fmt.Sprintf(format, args...))
+	a.middlewareMu.Lock()
+	a.middleware = append(a.middleware, mw...)
+	chain := applyMiddleware(a.middleware, a.mux)
+	a.middlewareMu.Unlock()
+	hf := http.HandlerFunc(chain.ServeHTTP)
+	a.cachedChain.Store(&hf)
 }
 
-func (a *App) logWarn(ctx *Ctx, format string, args ...any) {
-	if a.cfg.logLevel <= LogWarn {
-		cRef := ""
-		if ctx != nil && ctx.cmp != nil {
-			cRef = fmt.Sprintf("via_tab=%q ", ctx.cmp.route)
-		}
-		log.Printf("[warn] %smsg=%q", cRef, fmt.Sprintf(format, args...))
-	}
-}
-
-func (a *App) logInfo(ctx *Ctx, format string, args ...any) {
-	if a.cfg.logLevel <= LogInfo {
-		cRef := ""
-		if ctx != nil && ctx.cmp != nil {
-			cRef = fmt.Sprintf("via_tab=%q ", ctx.cmp.route)
-		}
-		log.Printf("[info] %smsg=%q", cRef, fmt.Sprintf(format, args...))
-	}
-}
-
-func (a *App) logDebug(ctx *Ctx, format string, args ...any) {
-	if a.cfg.logLevel <= LogDebug {
-		cRef := ""
-		if ctx != nil && ctx.cmp != nil {
-			cRef = fmt.Sprintf("via_tab=%q ", ctx.cmp.route)
-		}
-		log.Printf("[debug] %smsg=%q", cRef, fmt.Sprintf(format, args...))
-	}
-}
-
-// AppendToHead appends the given h.H nodes to the head of the base HTML document.
-func (a *App) AppendToHead(elements ...h.H) {
-	for _, el := range elements {
-		if el != nil {
-			a.documentHeadIncludes = append(a.documentHeadIncludes, el)
-		}
+// rebuildChain caches the post-middleware http.Handler used by every
+// request. Without this cache we'd rebuild the closure chain in
+// withSession on every request — N+1 allocations per hit, where N is
+// the number of installed middlewares.
+//
+// We wrap the result as *http.HandlerFunc so the atomic.Pointer stays
+// statically typed and the load site can deref-and-call without a
+// runtime type assertion.
+func (a *App) rebuildChain() {
+	chain := applyMiddleware(a.middleware, a.mux)
+	hf := http.HandlerFunc(chain.ServeHTTP)
+	a.cachedChain.Store(&hf)
+	if a.cfg.notFoundHandler != nil {
+		// Wrap the custom 404 handler with the same middleware chain
+		// as matched routes so CSP / RequestID / Recover / AccessLog
+		// still apply on the not-found path. Without this the user's
+		// 404 page renders without any of the cross-cutting behavior
+		// they configured for the rest of the app.
+		nf := applyMiddleware(a.middleware, a.cfg.notFoundHandler)
+		nfHf := http.HandlerFunc(nf.ServeHTTP)
+		a.cachedNotFoundChain.Store(&nfHf)
 	}
 }
 
-// AppendAttrToHTML appends attributes to the <html> element of every page.
-func (a *App) AppendAttrToHTML(attrs ...h.H) {
-	for _, attr := range attrs {
-		if attr != nil {
-			a.documentHTMLAttrs = append(a.documentHTMLAttrs, attr)
-		}
-	}
+// RegisterAppSignal sets the initial value of a named, app-wide signal.
+// Used by plugins to seed data-signals entries that the client owns
+// (e.g. picocss's "_picoTheme"). The value is JSON-encoded into every
+// page's <meta data-signals> on render.
+func (a *App) RegisterAppSignal(key string, value any) {
+	a.appSignalsMu.Lock()
+	a.appSignals[key] = value
+	a.appSignalsMu.Unlock()
 }
 
-// AppendToFoot appends the given h.H nodes to the end of the base HTML document body.
-func (a *App) AppendToFoot(elements ...h.H) {
-	for _, el := range elements {
-		if el != nil {
-			a.documentFootIncludes = append(a.documentFootIncludes, el)
-		}
-	}
-}
-
-func (a *App) registerCtx(id string, ctx *Ctx) {
-	a.contextRegistryMutex.Lock()
-	defer a.contextRegistryMutex.Unlock()
-	if ctx == nil {
-		a.logErr(nil, "failed to add nil context to registry")
-		return
-	}
-	a.contextRegistry[id] = ctx
-	a.logDebug(ctx, "new context added to registry")
-}
-
-func (a *App) unregisterCtx(id string) {
-	a.contextRegistryMutex.Lock()
-	defer a.contextRegistryMutex.Unlock()
-	delete(a.contextRegistry, id)
-}
-
-func (a *App) getCtx(id string) (*Ctx, error) {
-	a.contextRegistryMutex.RLock()
-	defer a.contextRegistryMutex.RUnlock()
-	if ctx, ok := a.contextRegistry[id]; ok {
-		return ctx, nil
-	}
-	return nil, fmt.Errorf("ctx '%s' not found", id)
-}
-
-func (a *App) sweepExpiredContexts() {
-	interval := a.cfg.contextTTL / 2
-	if interval <= 0 {
-		interval = time.Millisecond
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-a.stopSweep:
-			return
-		case <-ticker.C:
-			a.removeExpiredContexts()
-		}
-	}
-}
-
-func (a *App) removeExpiredContexts() {
-	cutoff := time.Now().Add(-a.cfg.contextTTL).UnixNano()
-	a.contextRegistryMutex.Lock()
-	expired := make([]*Ctx, 0)
-	for id, ctx := range a.contextRegistry {
-		if ctx.lastAccess.Load() < cutoff {
-			expired = append(expired, ctx)
-			delete(a.contextRegistry, id)
-		}
-	}
-	a.contextRegistryMutex.Unlock()
-	for _, ctx := range expired {
-		a.disposeCtx(ctx)
-	}
-}
-
-func (a *App) disposeCtx(ctx *Ctx) {
-	if ctx == nil {
-		return
-	}
-	ctx.mux.Lock()
-	if ctx.disposed {
-		ctx.mux.Unlock()
-		return
-	}
-	ctx.disposed = true
-	close(ctx.doneChan)
-	if ctx.queue != nil {
-		ctx.queue.mu.Lock()
-		ctx.queue.disposed = true
-		ctx.queue.mu.Unlock()
-	}
-	ctx.mux.Unlock()
-	if ctx.cmp != nil {
-		a.safeDispose(ctx, ctx.cmp.disposeFn)
-		for _, comp := range ctx.cmp.components {
-			a.safeDispose(ctx, comp.disposeFn)
-		}
-	}
-}
-
-func (a *App) safeDispose(ctx *Ctx, fn func()) {
-	if fn == nil {
-		return
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			a.logErr(ctx, "dispose callback panicked: %v", r)
-		}
-	}()
-	fn()
-}
-
-// Shutdown gracefully shuts down the application.
-func (a *App) Shutdown(ctx context.Context) error {
-	a.contextRegistryMutex.Lock()
-	contexts := make([]*Ctx, 0, len(a.contextRegistry))
-	for _, c := range a.contextRegistry {
-		contexts = append(contexts, c)
-	}
-	a.contextRegistry = make(map[string]*Ctx)
-	a.contextRegistryMutex.Unlock()
-
-	for _, c := range contexts {
-		a.disposeCtx(c)
-	}
-
-	a.stopSweepOnce.Do(func() {
-		if a.stopSweep != nil {
-			close(a.stopSweep)
-		}
-	})
-
-	a.sessionsMu.Lock()
-	a.sessions = make(map[string]*session)
-	a.sessionsMu.Unlock()
-
-	if a.server != nil {
-		return a.server.Shutdown(ctx)
-	}
-	return nil
-}
-
-// Start starts the Via HTTP server on the configured address.
-// Panics if the server cannot bind to the address.
-func (a *App) Start() {
-	a.server = &http.Server{Addr: a.cfg.addr, Handler: a.handler}
-	a.logInfo(nil, "via started at [%s]", a.cfg.addr)
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stop
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.shutdownTimeout)
-		defer cancel()
-		if err := a.Shutdown(ctx); err != nil {
-			a.logErr(nil, "shutdown error: %v", err)
-		}
-	}()
-
-	if err := a.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		panic(fmt.Sprintf("via: %v", err))
-	}
-}
-
-// Layout sets the default layout for all pages.
-func (a *App) Layout(layoutFn func(cmp *Cmp)) {
-	a.layoutFn = layoutFn
-}
-
-// HandleFunc registers an HTTP handler on the app's request multiplexer.
+// HandleFunc registers a non-via handler on the app's mux.
 func (a *App) HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request)) {
+	a.claimRoute(pattern, "HandleFunc")
 	a.mux.HandleFunc(pattern, handler)
 }
 
-// New creates a new *App with default configuration.
-func New(opts ...Option) *App {
-	mux := http.NewServeMux()
+// Handle registers a non-via http.Handler on the app's mux.
+func (a *App) Handle(pattern string, handler http.Handler) {
+	a.claimRoute(pattern, "Handle")
+	a.mux.Handle(pattern, handler)
+}
 
+// HandleStatic serves files under prefix from fsys. Common pattern for
+// shipping a single binary with embedded assets:
+//
+//	//go:embed static
+//	var assets embed.FS
+//	sub, _ := fs.Sub(assets, "static")
+//	app.HandleStatic("/assets/", sub)
+//
+// The pattern ends with a trailing slash; the prefix is stripped before
+// the file lookup. The handler claims `GET <prefix>` so the route table
+// reflects the registration.
+func (a *App) HandleStatic(prefix string, fsys fs.FS) {
+	pattern := "GET " + prefix
+	a.claimRoute(pattern, "HandleStatic")
+	a.mux.Handle(prefix,
+		http.StripPrefix(prefix, http.FileServer(http.FS(fsys))))
+}
+
+// claimRoute records that pattern has been claimed by tag and panics if the
+// same pattern is registered twice. Catching the conflict early surfaces
+// silent footguns ("why does only the second Mount win?") at boot rather
+// than at the next request.
+func (a *App) claimRoute(pattern, tag string) {
+	a.routesMu.Lock()
+	defer a.routesMu.Unlock()
+	if prev, ok := a.routes[pattern]; ok {
+		panic(fmt.Sprintf(
+			"via: route %q already registered (by %s); now %s would overwrite it",
+			pattern, prev, tag))
+	}
+	a.routes[pattern] = tag
+}
+
+// mountDescriptor implements Mountable for *App: route is taken as-is.
+func (a *App) mountDescriptor(d *cmpDescriptor, route string) {
+	d.route = route
+	checkPathParams(d, route)
+	a.registerDescriptor(d)
+}
+
+func (a *App) registerDescriptor(d *cmpDescriptor) {
+	a.descsMu.Lock()
+	a.descs = append(a.descs, d)
+	a.descsMu.Unlock()
+	pattern := "GET " + d.route
+	a.claimRoute(pattern, "Mount["+d.typ.Name()+"]")
+	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.renderPage(d, w, r)
+	})
+	a.mux.Handle(pattern, applyMiddleware(d.groupMW, final))
+}
+
+// tryRegisterCtx enforces the maxContexts cap atomically with the
+// registry write. Returns false if the cap is set and already met —
+// the caller must respond with 503 instead of registering. Separate
+// "live count" check + register opens a TOCTOU race under heavy
+// concurrent page loads; this fuses both steps under a single Lock.
+func (a *App) tryRegisterCtx(ctx *Ctx, limit int) bool {
+	a.contextRegistryMu.Lock()
+	if limit > 0 && len(a.contextRegistry) >= limit {
+		a.contextRegistryMu.Unlock()
+		return false
+	}
+	a.contextRegistry[ctx.id] = ctx
+	live := len(a.contextRegistry)
+	a.contextRegistryMu.Unlock()
+	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
+	return true
+}
+
+func (a *App) unregisterCtx(id string) {
+	a.contextRegistryMu.Lock()
+	delete(a.contextRegistry, id)
+	live := len(a.contextRegistry)
+	a.contextRegistryMu.Unlock()
+	a.metricsOrNoop().Gauge("via.ctx.live", float64(live))
+}
+
+// getCtx returns the live Ctx for id and ok=true; ok=false if the id is
+// unknown (a cleaned-up tab, a forged via_tab, or a stale reconnect after
+// disposal). Comma-ok shape so callers don't allocate an error wrapper
+// just to throw it away — every caller maps a miss to a 404 directly.
+func (a *App) getCtx(id string) (*Ctx, bool) {
+	a.contextRegistryMu.RLock()
+	defer a.contextRegistryMu.RUnlock()
+	ctx, ok := a.contextRegistry[id]
+	return ctx, ok
+}
+
+func (a *App) emit(level LogLevel, ctx *Ctx, format string, args ...any) {
+	if level < a.cfg.logLevel {
+		return
+	}
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	logger := a.cfg.logger
+	if logger == nil {
+		logger = defaultLogger{}
+	}
+	if ctx != nil {
+		logger.Log(level, msg, tabSignalKey, ctx.id)
+	} else {
+		logger.Log(level, msg)
+	}
+}
+
+func (a *App) logErr(ctx *Ctx, format string, args ...any)  { a.emit(LogError, ctx, format, args...) }
+func (a *App) logWarn(ctx *Ctx, format string, args ...any) { a.emit(LogWarn, ctx, format, args...) }
+func (a *App) logInfo(ctx *Ctx, format string, args ...any) { a.emit(LogInfo, ctx, format, args...) }
+
+// Logger returns the [Logger] configured on a — either the user's
+// WithLogger, or the default log.Printf-backed implementation when
+// none was set. Records emitted below the App's configured log level
+// (see [WithLogLevel]) are dropped, matching the behaviour the via
+// runtime applies to its own warnings.
+//
+// Used by middleware in via/mw to emit access logs and panic reports
+// through the same pipe as the runtime's own warnings.
+func (a *App) Logger() Logger {
+	if a == nil {
+		return defaultLogger{}
+	}
+	base := a.cfg.logger
+	if base == nil {
+		base = defaultLogger{}
+	}
+	minLevel := a.cfg.logLevel
+	return LoggerFunc(func(level LogLevel, msg string, kv ...any) {
+		if level < minLevel {
+			return
+		}
+		base.Log(level, msg, kv...)
+	})
+}
+
+// New constructs an *App with the given options.
+func New(opts ...Option) *App {
+	// MethodName parses the Go runtime's "-fm" trampoline naming —
+	// undocumented internal. Verify it still produces the expected
+	// shape so a Go toolchain upgrade that changes the format trips
+	// at startup, not at the first action POST six hours later.
+	verifyMethodNameTrampoline()
+
+	mux := http.NewServeMux()
 	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
 		sessions:        make(map[string]*session),
-		signals:         make(map[string]any),
+		appSignals:      make(map[string]any),
+		routes:          make(map[string]string),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
@@ -283,13 +299,14 @@ func New(opts ...Option) *App {
 			sessionTTL:      30 * time.Minute,
 			contextTTL:      15 * time.Minute,
 			sseHeartbeat:    25 * time.Second,
+			sseWriteTimeout: 10 * time.Second,
+			maxRequestBody:  1 << 20,
+			maxUploadSize:   32 << 20,
 		},
 	}
-
 	for _, opt := range opts {
 		opt(&a.cfg)
 	}
-
 	for _, plugin := range a.cfg.plugins {
 		if plugin != nil {
 			plugin.Register(a)
@@ -300,26 +317,52 @@ func New(opts ...Option) *App {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(datastarJS)
 	})
-
 	a.mux.HandleFunc("GET /_sse", a.handleSSE)
 	a.mux.HandleFunc("POST /_action/{id}", a.handleAction)
 	a.mux.HandleFunc("POST /_sse/close", a.handleSSEClose)
 
-	a.handler = a.withSession(a.mux)
+	a.rebuildChain()
+	a.handler = a.withSession()
 
 	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
 		a.stopSweep = make(chan struct{})
 		if a.cfg.sessionTTL > 0 {
-			go a.sweepExpiredSessions()
+			go a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 		}
 		if a.cfg.contextTTL > 0 {
-			go a.sweepExpiredContexts()
+			go a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
 		}
 	}
 
 	if a.cfg.testServer != nil {
 		*a.cfg.testServer = httptest.NewServer(a.handler)
 	}
-
 	return a
+}
+
+func (a *App) withSession() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// mux.Handler resolves the route without serving — used both
+		// to gate session creation (unmatched paths get no session,
+		// bounding memory under crawler / 404 floods) and to pick the
+		// right chain (custom 404 if configured).
+		_, pattern := a.mux.Handler(r)
+		matched := pattern != ""
+
+		if matched {
+			_ = a.getOrCreateSession(w, r)
+		}
+		// Stamp the app pointer into r so middleware can resolve the
+		// session via via.RequestSession(r) (used by via/sess.Get on
+		// the *http.Request branch) without holding a *Ctx yet.
+		r = r.WithContext(context.WithValue(r.Context(), appKey{}, a))
+
+		if !matched {
+			if nf := a.cachedNotFoundChain.Load(); nf != nil {
+				(*nf).ServeHTTP(w, r)
+				return
+			}
+		}
+		(*a.cachedChain.Load()).ServeHTTP(w, r)
+	})
 }

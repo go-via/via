@@ -1,30 +1,51 @@
 package via
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
-// Middleware processes a request before the page handler runs.
-// Call next.ServeHTTP(w, r) to continue the chain; omit it to short-circuit.
+// Middleware is the request-wrapping function shape used by [App.Use].
+// Each middleware receives the next handler in the chain and decides
+// whether to invoke it, short-circuit (e.g. with a 401), or wrap the
+// response writer before passing through. Registration order is
+// outer-first: the first middleware passed to Use runs first per
+// request.
+//
+// Pre-built middleware lives in via/mw — RequestID, AccessLog,
+// Recover, CSP, HSTS, RedirectHTTPS.
 type Middleware func(w http.ResponseWriter, r *http.Request, next http.Handler)
 
-// Use registers global middleware that runs on page routes.
-func (a *App) Use(mw ...Middleware) {
-	a.middleware = append(a.middleware, mw...)
-}
-
-func runMiddleware(chain []Middleware, w http.ResponseWriter, r *http.Request, final http.Handler) {
-	if len(chain) == 0 {
-		final.ServeHTTP(w, r)
-		return
-	}
-	var build func(i int) http.Handler
-	build = func(i int) http.Handler {
-		if i >= len(chain) {
-			return final
-		}
-		next := build(i + 1)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			chain[i](w, r, next)
+func applyMiddleware(chain []Middleware, final http.Handler) http.Handler {
+	// Wrap from the inside out so chain[0] ends up as the outermost
+	// middleware and runs first per request — the canonical Go pattern.
+	for i := len(chain) - 1; i >= 0; i-- {
+		mw, next := chain[i], final
+		final = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mw(w, r, next)
 		})
 	}
-	build(0).ServeHTTP(w, r)
+	return final
+}
+
+type requestIDKey struct{}
+
+// RequestIDFrom pulls the request id out of r.Context. Returns "" if
+// no RequestID middleware (mw.RequestID) has run for this request.
+// [Log] uses this to stamp the rid on every record emitted from an
+// action / handler whose request is tagged.
+func RequestIDFrom(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	v, _ := r.Context().Value(requestIDKey{}).(string)
+	return v
+}
+
+// RequestWithID returns r with id planted on its context so downstream
+// handlers can read it via [RequestIDFrom]. Used by mw.RequestID
+// (and by custom RequestID-shaped middleware) to keep the rid lookup
+// path consistent across packages.
+func RequestWithID(r *http.Request, id string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
 }

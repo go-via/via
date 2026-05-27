@@ -1,101 +1,248 @@
 package via
 
 import (
+	"cmp"
+	"errors"
 	"fmt"
+	"mime/multipart"
+	"net/http"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/spec"
+	"github.com/starfederation/datastar-go/datastar"
 )
 
-// actionTrigger represents a trigger to an event handler fn
-type actionTrigger struct {
-	id string
-}
+// methodNameCanary is the well-known target for verifyMethodNameTrampoline.
+// Defined as a method (not a free function) so the boot-time canary can
+// pass a bound method value through spec.MethodName and check the result.
+type methodNameCanary struct{}
 
-// ActionTriggerOption configures behavior of action triggers
-type ActionTriggerOption interface {
-	apply(*triggerOpts)
-}
+func (methodNameCanary) Probe() {}
 
-type triggerOpts struct {
-	hasSignal bool
-	signalID  string
-	value     string
-}
-
-type withSignalOpt struct {
-	signalID string
-	value    string
-}
-
-func (o withSignalOpt) apply(opts *triggerOpts) {
-	opts.hasSignal = true
-	opts.signalID = o.signalID
-	opts.value = o.value
-}
-
-// signalIDer is satisfied by any signal type that exposes a display ID.
-type signalIDer interface {
-	displayID() string
-}
-
-// ActionWithSetSignal sets a signal value before triggering the action.
-// Type-safe: value T must match the signal's type.
-func ActionWithSetSignal[T any](sig signalIDer, value T) ActionTriggerOption {
-	var strVal string
-	switch v := any(value).(type) {
-	case string:
-		strVal = fmt.Sprintf("'%s'", strings.ReplaceAll(v, "'", "\\'"))
-	default:
-		strVal = fmt.Sprintf("%v", v)
-	}
-	return withSignalOpt{
-		signalID: sig.displayID(),
-		value:    strVal,
+// verifyMethodNameTrampoline fails fast at App construction if a Go
+// runtime change has broken spec.MethodName's trampoline-name parsing.
+// The expected result for a bound method value is the method name minus
+// receiver and "-fm" suffix; a regression that returns "" or anything
+// else means every on.Click-style binding would silently fail to
+// resolve at request time.
+func verifyMethodNameTrampoline() {
+	got := spec.MethodName(methodNameCanary{}.Probe)
+	if got != "Probe" {
+		panic("via: MethodName canary failed; got " + strconv.Quote(got) +
+			", want \"Probe\". The Go runtime trampoline format may have " +
+			"changed — file a bug.")
 	}
 }
 
-func buildOnExpr(base string, opts *triggerOpts) string {
-	if !opts.hasSignal {
-		return base
+// sigsPool reuses the per-action signals map across requests. json.Unmarshal
+// into a non-nil map merges keys, so acquireSigs returns an already-cleared
+// map ready to be passed by pointer.
+var sigsPool = sync.Pool{
+	New: func() any { return make(map[string]any, 8) },
+}
+
+func acquireSigs() map[string]any {
+	m := sigsPool.Get().(map[string]any)
+	clear(m)
+	return m
+}
+
+func releaseSigs(m map[string]any) {
+	if m == nil || len(m) > 256 {
+		return // drop outliers so a one-off broadcast doesn't pin a giant map
 	}
-	return fmt.Sprintf("$%s=%s;%s", opts.signalID, opts.value, base)
+	sigsPool.Put(m)
 }
 
-func applyOptions(options ...ActionTriggerOption) triggerOpts {
-	var opts triggerOpts
-	for _, opt := range options {
-		opt.apply(&opts)
+// handleAction dispatches POST /_action/{cmpID}.{methodName} (or just
+// /_action/{methodName} for root). The {id} URL segment encodes both.
+func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.NotFound(w, r)
+		return
 	}
-	return opts
-}
 
-func actionURL(id string) string {
-	return fmt.Sprintf("@post('/_action/%s')", id)
-}
-
-// OnClick returns a via.h DOM attribute that triggers on click. It can be added
-// to element nodes in a view.
-func (a *actionTrigger) OnClick(options ...ActionTriggerOption) h.H {
-	opts := applyOptions(options...)
-	return h.Data("on:click", buildOnExpr(actionURL(a.id), &opts))
-}
-
-// OnChange returns a via.h DOM attribute that triggers on input change. It can be added
-// to element nodes in a view.
-func (a *actionTrigger) OnChange(options ...ActionTriggerOption) h.H {
-	opts := applyOptions(options...)
-	return h.Data("on:change__debounce.200ms", buildOnExpr(actionURL(a.id), &opts))
-}
-
-// OnKeyDown returns a via.h DOM attribute that triggers when a key is pressed.
-// key: optional, see https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key
-// Example: OnKeyDown("Enter")
-func (a *actionTrigger) OnKeyDown(key string, options ...ActionTriggerOption) h.H {
-	opts := applyOptions(options...)
-	var condition string
-	if key != "" {
-		condition = fmt.Sprintf("evt.key==='%s' &&", strings.ReplaceAll(key, "'", "\\'"))
+	// JSON action bodies and multipart upload bodies have very different
+	// size profiles; pick the right cap per content-type so file uploads
+	// don't trip the JSON-tuned ceiling.
+	var maxBody int64
+	if isMultipart(r) {
+		maxBody = cmp.Or(a.cfg.maxUploadSize, int64(32<<20))
+	} else {
+		maxBody = cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
 	}
-	return h.Data("on:keydown", fmt.Sprintf("%s%s", condition, buildOnExpr(actionURL(a.id), &opts)))
+	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
+	sigs := acquireSigs()
+	released := false
+	defer func() {
+		if !released {
+			releaseSigs(sigs)
+		}
+	}()
+
+	var (
+		form *multipart.Form
+		err  error
+	)
+	if isMultipart(r) {
+		// Memory cap for buffered text fields — file parts spill to disk.
+		form, err = readMultipartSignals(r, maxBody, sigs)
+	} else {
+		err = datastar.ReadSignals(r, &sigs)
+	}
+	if err != nil {
+		var mb *http.MaxBytesError
+		if errors.As(err, &mb) {
+			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		// Malformed body / wrong content type — fall through to the
+		// tabID="" 404 path below; existing tests rely on that posture.
+	}
+	tabID, _ := sigs[tabSignalKey].(string)
+
+	ctx, ok := a.getCtx(tabID)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+		http.Error(w, "session mismatch", http.StatusForbidden)
+		return
+	}
+
+	d := ctx.desc
+	slotIdx, ok := d.actionByName[id]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	slot := &d.actionSlots[slotIdx]
+
+	// Wrap the dispatch in the descriptor's group middleware so a
+	// requireAuth (or any group-level guard) checks the request before
+	// the action runs — same auth posture as the rendered route.
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		runAction(a, ctx, slotIdx, slot, w, r, sigs, form)
+	})
+	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
+	// runAction has finished by the time ServeHTTP returns. Release the
+	// sigs map back to the pool. We deliberately don't null out
+	// ctx.lastSignals here — a concurrent action POST on the same tab
+	// (serialized via actionMu inside runAction) will have already
+	// reassigned it, and writing nil from this goroutine would race the
+	// reassignment. The stale pointer between actions is benign:
+	// lastSignals is only read inside an action body, which holds
+	// actionMu, so the pre-read assignment is always under the lock.
+	released = true
+	releaseSigs(sigs)
+}
+
+// isMultipart reports whether r carries a multipart/form-data body.
+func isMultipart(r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	return strings.HasPrefix(ct, "multipart/form-data")
+}
+
+func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
+	w http.ResponseWriter, r *http.Request, sigs map[string]any, form *multipart.Form) {
+	// Action latency timing covers the per-tab serialization wait *and*
+	// the handler body — the metric reflects the user-perceived time
+	// from POST receipt to handler return, which is what an SLO cares
+	// about. Recorded in seconds for prom/otel convention.
+	started := time.Now()
+	m := a.metricsOrNoop()
+	defer func() {
+		m.Histogram("via.action.latency", time.Since(started).Seconds(), "method", slot.name)
+		m.Counter("via.action.total", "method", slot.name)
+	}()
+	// Serialize per-tab so parallel POSTs to the same ctx don't race
+	// on State writes, dirty bits, or Writer/Request assignment.
+	ctx.actionMu.Lock()
+	defer ctx.actionMu.Unlock()
+
+	ctx.mu.Lock()
+	ctx.w = w
+	ctx.r = r
+	ctx.mu.Unlock()
+	defer func() {
+		ctx.mu.Lock()
+		ctx.w = nil
+		ctx.r = nil
+		ctx.mu.Unlock()
+	}()
+	// Every handler entry starts loud — Silent doesn't leak between
+	// actions. Atomic store so concurrent reads from user-launched
+	// goroutines driving Update → broadcastRender aren't racy.
+	ctx.silent.Store(false)
+	// flushDirty runs even on panic so state mutated before the panic
+	// still reaches the browser alongside the error toast. Placed
+	// *before* the recover defer so the recover runs first (defers are
+	// LIFO) and turns the panic back into a normal return. If the
+	// handler ended in silent mode, drop any accumulated dirty bits so
+	// they don't leak into a subsequent loud action's flush.
+	defer func() {
+		if ctx.silent.Load() {
+			ctx.discardDirty()
+			return
+		}
+		flushDirty(ctx)
+	}()
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			return
+		}
+		a.logErr(ctx, "action %q panicked: %v", slot.name, rec)
+		// Preserve a typed error from panic(err) so a custom
+		// WithActionErrorHandler can errors.As / errors.Is it.
+		err, ok := rec.(error)
+		if !ok {
+			err = fmt.Errorf("panic: %v", rec)
+		}
+		a.dispatchActionError(ctx, err, true)
+	}()
+
+	ctx.lastSignals = sigs
+	injectSignals(ctx, sigs)
+	if form != nil {
+		bindFiles(ctx, form)
+		defer clearFiles(ctx)
+		defer form.RemoveAll()
+	}
+
+	if err := ctx.actionFns[slotIdx](ctx); err != nil {
+		a.dispatchActionError(ctx, err, false)
+	}
+}
+
+func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
+	if a.cfg.actionErrorHandler != nil {
+		a.cfg.actionErrorHandler(ctx, err)
+		return
+	}
+	msg := err.Error()
+	if fromPanic {
+		msg = "Something went wrong"
+	}
+	ctx.Toast(msg)
+}
+
+// injectSignals applies signals from a request body into the bound *C's
+// Signal[T] fields by wire key.
+func injectSignals(ctx *Ctx, sigs map[string]any) {
+	for slot, ref := range ctx.signalRefs {
+		s := ctx.desc.signalSlots[slot]
+		if s.kind != kindSignal {
+			continue
+		}
+		if v, ok := sigs[s.wireKey]; ok {
+			ref.decodeRaw(v)
+		}
+	}
 }

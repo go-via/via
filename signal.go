@@ -1,213 +1,138 @@
 package via
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
 
 	"github.com/go-via/via/h"
 )
 
-// signalMeta is the runtime interface for signal metadata on Cmp.
-type signalMeta interface {
-	displayID() string
-	initialTypedValue() any
-	initialRawValue() any
-	rawValueOf(v any) any
-	coerce(v any) any
-	hasError() bool
+// Signal is a typed reactive value mirrored to the browser. The value lives
+// inside the composition struct; Read/Write go through the bound *Ctx so
+// changes are tracked and propagated over SSE.
+//
+//	type Counter struct {
+//	    Step via.Signal[int] `via:"step,init=1"`
+//	}
+//	c.Step.Read(ctx)       // returns int
+//	c.Step.Write(ctx, 5)   // marks dirty, browser updates next flush
+//	c.Step.Bind()          // <input> two-way bind: data-bind="step"
+//	c.Step.Text()          // <span data-text="$step"></span>
+//
+// Untyped, untagged Signal[T] fields use the lower-cased field name as the
+// wire key. Tag form: `via:"name,init=value"`; either part is optional.
+type Signal[T any] struct {
+	val    T
+	slot   uint16
+	key    string
+	dollar string // "$" + key, precomputed for Text/Show — saves a concat per render
 }
 
-// signalValue holds the per-tab runtime state for one signal.
-type signalValue struct {
-	raw     any
-	changed bool
+// Read returns the current value. The ctx is unused today but kept so
+// every reactive-handle Read has the same shape (and so future tab-
+// scoped reads can move into the runtime without an API break). Accepts
+// either *Ctx (action handlers) or *CtxR (View).
+func (s *Signal[T]) Read(_ readCtx) T {
+	return s.val
 }
 
-// signalOf is a typed handle created at definition time, shared across all tabs.
-type signalOf[T any] struct {
-	id      string
-	tag     string
-	display string
-	initial T
-	err     error
+// Write stores a new value and marks the signal dirty so the next
+// flush patches it to the browser. From inside an action method or a
+// via.Stream callback, the flush is automatic. From a raw goroutine
+// you started yourself, call ctx.SyncNow() at a coalescing boundary —
+// the dirty bit alone won't reach the browser without a flush.
+//
+// Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
+// non-fallible path for "replace with a constant."
+func (s *Signal[T]) Write(ctx *Ctx, v T) {
+	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
 }
 
-// --- signalMeta implementation (consumed by runtime) ---
-
-func (s *signalOf[T]) displayID() string {
-	if s.display != "" {
-		return s.display
+// Update atomically applies fn to the current value. fn receives the
+// current T and returns (new T, error). On non-nil error the value is
+// unchanged and the error is returned. Saves a Read/Write pair on
+// transform-the-current-value patterns and is the only mutation path
+// that lets a user reject a write (validation, conflict detection).
+func (s *Signal[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
+	if fn == nil {
+		return nil
 	}
-	if s.tag != "" {
-		return s.tag + "_" + s.id
+	next, err := fn(s.val)
+	if err != nil {
+		return err
 	}
-	return s.id
-}
-
-func (s *signalOf[T]) initialTypedValue() any { return s.initial }
-
-func (s *signalOf[T]) initialRawValue() any {
-	return s.rawValueOf(any(s.initial))
-}
-
-func (s *signalOf[T]) rawValueOf(v any) any {
-	rv := reflect.ValueOf(v)
-	if rv.IsValid() {
-		switch rv.Kind() {
-		case reflect.Slice, reflect.Map, reflect.Struct, reflect.Pointer:
-			if j, err := json.Marshal(v); err == nil {
-				return string(j)
-			}
-		}
-	}
-	return v
-}
-
-func (s *signalOf[T]) coerce(v any) any {
-	if _, ok := v.(T); ok {
-		return v
-	}
-	// JSON numbers arrive as float64; coerce to the signal's concrete type.
-	if f64, ok := v.(float64); ok {
-		var zero T
-		switch any(zero).(type) {
-		case int:
-			return int(f64)
-		case int8:
-			return int8(f64)
-		case int16:
-			return int16(f64)
-		case int32:
-			return int32(f64)
-		case int64:
-			return int64(f64)
-		case uint:
-			return uint(f64)
-		case uint8:
-			return uint8(f64)
-		case uint16:
-			return uint16(f64)
-		case uint32:
-			return uint32(f64)
-		case uint64:
-			return uint64(f64)
-		case float32:
-			return float32(f64)
-		case float64:
-			return f64
-		}
-	}
-	return v
-}
-
-func (s *signalOf[T]) hasError() bool { return s.err != nil }
-
-// --- public API (consumed by user code) ---
-
-// ID returns the unique identifier for this signal.
-func (s *signalOf[T]) ID() string { return s.id }
-
-// Tag prepends a label to the signal's display ID.
-func (s *signalOf[T]) Tag(name string) { s.tag = name }
-
-// resolveID returns the internal signal ID to use for ctx.signalValues.
-// For app-level signals (display set), the handle may belong to a different
-// app registration, so we look up the actual ID by display name.
-func (s *signalOf[T]) resolveID(ctx *Ctx) string {
-	if s.display == "" || ctx == nil || ctx.cmp == nil {
-		return s.id
-	}
-	for sigID, sig := range ctx.cmp.app.signals {
-		if sm, ok := sig.(signalMeta); ok && sm.displayID() == s.display {
-			return sigID
-		}
-	}
-	return s.id
-}
-
-// Get returns the current typed value of the signal for this tab.
-func (s *signalOf[T]) Get(ctx *Ctx) T {
+	s.val = next
 	if ctx != nil {
-		if sv, ok := ctx.signalValues[s.resolveID(ctx)]; ok {
-			if typed, ok := sv.raw.(T); ok {
-				return typed
-			}
-		}
+		ctx.markSignalDirty(s.slot)
 	}
-	return s.initial
+	return nil
 }
 
-// SetValue updates the signal value for this tab and marks it dirty for sync.
-func (s *signalOf[T]) SetValue(ctx *Ctx, v T) {
-	id := s.resolveID(ctx)
-	sv := ctx.signalValues[id]
-	if sv == nil {
-		ctx.signalValues[id] = &signalValue{raw: v, changed: true}
-		return
-	}
-	sv.raw = v
-	sv.changed = true
+// Bind returns a two-way binding attribute. Use on form inputs.
+func (s *Signal[T]) Bind() h.H {
+	return h.Data("bind", s.key)
 }
 
-// Err returns any error associated with this signal.
-func (s *signalOf[T]) Err() error { return s.err }
-
-// Bind returns an h.H attribute that binds this signal to an input element.
-func (s *signalOf[T]) Bind() h.H {
-	return h.Data("bind", s.displayID())
+// Text returns a reactive text span: <span data-text="$key"></span>.
+func (s *Signal[T]) Text() h.H {
+	return h.Span(h.Data("text", s.dollar))
 }
 
-// Text returns an h.H element that displays the signal value reactively.
-func (s *signalOf[T]) Text() h.H {
-	return h.Span(h.Data("text", "$"+s.displayID()))
+// Show returns a data-show attribute that toggles display by truthiness.
+func (s *Signal[T]) Show() h.H {
+	return h.Data("show", s.dollar)
 }
 
-// Show returns an h.H attribute that toggles visibility based on the signal value.
-func (s *signalOf[T]) Show() h.H {
-	return h.Data("show", "$"+s.displayID())
+// Attr returns a data-attr-<name> attribute that mirrors this signal's
+// truthiness onto the host element's HTML attribute. Truthy → attribute
+// present (boolean form, e.g. `disabled`); falsy → attribute absent.
+// For string-valued attributes, the attribute value tracks the signal.
+//
+//	h.Button(c.Saving.Attr("disabled"), h.Text("Save"))
+//	h.A(c.Target.Attr("href"), h.Text("Open"))
+func (s *Signal[T]) Attr(name string) h.H {
+	return h.Data("attr-"+name, s.dollar)
 }
 
-// Ref returns the signal reference string for use in datastar expressions.
-func (s *signalOf[T]) Ref() string {
-	return "$" + s.displayID()
+// Style returns a data-style-<prop> attribute that drives an inline CSS
+// property from this signal's stringified value. Pairs naturally with
+// `Signal[string]` carrying a colour, length, etc.
+//
+//	h.Div(c.Hue.Style("background-color"))
+func (s *Signal[T]) Style(prop string) h.H {
+	return h.Data("style-"+prop, s.dollar)
 }
 
-// AppSignalHandle is the exported type for app-level signal handles.
-type AppSignalHandle[T any] = signalOf[T]
+// Key returns the wire key (qualified field path). Useful in tests.
+func (s *Signal[T]) Key() string { return s.key }
 
-// AppSignal creates a typed reactive signal scoped to the app.
-// The displayID is the exact key that appears in the browser's signal store.
-func AppSignal[T any](app *App, displayID string, initial T) *AppSignalHandle[T] {
-	sigID := "via_" + genRandID()
-	sig := &signalOf[T]{
-		id:      sigID,
-		display: displayID,
-		initial: initial,
-	}
-	app.signals[sigID] = sig
-	return sig
+// signalRef is the internal interface implemented by every Signal[T] /
+// StateTab[T] handle. It lets the runtime perform reflection-free per-request
+// initialization across mixed-type fields.
+type signalRef interface {
+	bindSlot(slot uint16, key string)
+	encode() ([]byte, error)
+	decodeRaw(raw any)
 }
 
+// signalMarker tags Signal[T] (and types that embed it). Used by the
+// walker to classify a field as a Signal regardless of whether the
+// concrete type is Signal[T] or a specialized wrapper (SignalNum[T],
+// SignalBool, ...). The marker method is promoted via embedding, so
+// every wrapper inherits it for free.
+type signalMarker interface{ isSignal() }
 
-// Signal creates a typed reactive signal with the given initial value.
-func Signal[T any](cmp *Cmp, initial T) *signalOf[T] {
-	sigID := "via_" + genRandID()
+func (*Signal[T]) isSignal() {}
 
-	if rv := reflect.ValueOf(any(initial)); !rv.IsValid() {
-		var zero T
-		return &signalOf[T]{
-			id:      sigID,
-			initial: zero,
-			err:     fmt.Errorf("failed to bind signal '%s': nil signal value", sigID),
-		}
-	}
+func (s *Signal[T]) bindSlot(slot uint16, key string) {
+	s.slot = slot
+	s.key = key
+	s.dollar = "$" + key
+}
 
-	sig := &signalOf[T]{
-		id:      sigID,
-		initial: initial,
-	}
+func (s *Signal[T]) encode() ([]byte, error) {
+	return encodeScalar(reflect.ValueOf(s.val))
+}
 
-	cmp.signals[sigID] = sig
-	return sig
+func (s *Signal[T]) decodeRaw(raw any) {
+	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
 }

@@ -1,646 +1,408 @@
 package via_test
 
 import (
-	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestSignal_createsWithInitialValue(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var got string
-	v.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "hello")
-		cmp.View(func(ctx *via.Ctx) h.H {
-			got = sig.Get(ctx)
-			return h.Div()
-		})
-	})
-	assert.Equal(t, "hello", got)
+type signalCounter struct {
+	Step via.SignalNum[int] `via:"step,init=1"`
+	Name via.SignalStr
 }
 
-func TestSignal_getReturnsTypedValue(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var got int
-	v.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, 42)
-		cmp.View(func(ctx *via.Ctx) h.H {
-			got = sig.Get(ctx)
-			return h.Div()
-		})
-	})
-	assert.Equal(t, 42, got)
+func (c *signalCounter) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Input(h.Type("number"), c.Step.Bind()),
+		h.P(c.Step.Text()),
+		h.Span(c.Name.Text()),
+	)
 }
 
-func TestSignal_idReturnsNonEmpty(t *testing.T) {
+func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 	t.Parallel()
-
-	v := via.New()
-	var idA, idB string
-	v.Page("/", func(cmp *via.Cmp) {
-		a := via.Signal(cmp, "a")
-		b := via.Signal(cmp, "b")
-		idA = a.ID()
-		idB = b.ID()
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	require.NotEmpty(t, idA)
-	require.NotEmpty(t, idB)
-	assert.NotEqual(t, idA, idB)
-}
-
-func TestSignal_idHas64BitsOfEntropy(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var id string
-	v.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "x")
-		id = sig.ID()
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	// "via_" prefix (4 chars) + 16 hex chars (64 bits)
-	assert.Len(t, id, 20, "signal ID should be via_ prefix + 16 hex chars (64 bits)")
-}
-
-func TestSignal_sliceSerializesForTransport(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var got []string
-	v.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, []string{"a", "b"})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			got = sig.Get(ctx)
-			return h.Div()
-		})
-	})
-	assert.Equal(t, []string{"a", "b"}, got)
-}
-
-func TestSignal_bindRendersDataBindAttr(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
-	out := renderH(t, h.Input(sig.Bind()))
-	assert.Contains(t, out, "data-bind")
-	assert.Contains(t, out, sig.ID())
-}
-
-func TestSignal_textUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "world") })
-	out := renderH(t, h.Div(sig.Text()))
-	assert.Contains(t, out, "<span")
-	assert.Contains(t, out, "data-text")
-	assert.Contains(t, out, "$"+sig.ID(), "data-text must use $ prefix so Datastar resolves the signal")
-}
-
-func TestSignal_showUsesSignalRefSoDatastarCanResolveIt(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, true) })
-	out := renderH(t, h.Div(sig.Show()))
-	assert.Contains(t, out, "data-show")
-	assert.Contains(t, out, "$"+sig.ID(), "data-show must use $ prefix so Datastar resolves the signal")
-}
-
-func TestSignal_tagPrependsLabel(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT {
-		s := via.Signal(cmp, "")
-		s.Tag("search")
-		return s
-	})
-	assert.Contains(t, sig.Ref(), "search")
-}
-
-func TestSignal_refReturnsDollarID(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
-	assert.Equal(t, "$"+sig.ID(), sig.Ref())
-}
-
-func TestSignal_tagAffectsBindID(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT {
-		s := via.Signal(cmp, "")
-		s.Tag("myfield")
-		return s
-	})
-	out := renderH(t, h.Input(sig.Bind()))
-	assert.Contains(t, out, "myfield")
-}
-
-func TestSignal_intGetAfterNumericJSONInjection(t *testing.T) {
-	t.Parallel()
-
-	gotCh := make(chan int, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, 1000)
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
-	defer cancel()
-	time.Sleep(20 * time.Millisecond)
-
-	sigsJSON := fmt.Sprintf(`{"via_tab":%q,%q:500}`, ctxID, sigID)
-	resp, err := clientFor(server.URL).Post(server.URL+"/_action/"+actionID, "application/json", strings.NewReader(sigsJSON))
-	require.NoError(t, err)
-	resp.Body.Close()
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, 500, got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
-}
-
-func TestSignal_intInitialValueSerializesAsJSONNumber(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, 1000)
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
-	})
-	body := getPageBody(t, server, "/")
-	sigID := extractSignalID(t, body)
-	numericEntry := `"` + sigID + `":1000`
-	assert.Contains(t, body, numericEntry, "int signal should be encoded as a JSON number, not a string")
-}
-
-func TestSignal_idHasViaPrefix(t *testing.T) {
-	t.Parallel()
-
-	sig := captureSignal(func(cmp *via.Cmp) signalT { return via.Signal(cmp, "x") })
-	assert.True(t, strings.HasPrefix(sig.ID(), "via_"), "signal ID %q must start with via_", sig.ID())
-}
-
-func TestSignal_displayIDHasViaPrefixWhenUntagged(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "hello")
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
-	})
-	body := getPageBody(t, server, "/")
-	sigID := extractSignalID(t, body)
-	assert.True(t, strings.HasPrefix(sigID, "via_"), "display ID %q in HTML must start with via_", sigID)
-}
-
-func TestSignal_displayIDHasViaPrefixWhenTagged(t *testing.T) {
-	t.Parallel()
-
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "hello")
-		sig.Tag("search")
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
-	})
-	body := getPageBody(t, server, "/")
-	sigID := extractSignalID(t, body)
-	assert.True(t, strings.HasPrefix(sigID, "search_via_"), "tagged display ID %q must start with search_via_", sigID)
-}
-
-func TestSignal_valuesArePerTab(t *testing.T) {
-	t.Parallel()
-
-	gotCh1 := make(chan int, 1)
-	gotCh2 := make(chan int, 1)
 
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
-	app.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, 0)
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh1 <- sig.Get(ctx)
-			return nil
-		})
-		readAct := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh2 <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnClick(), readAct.OnClick())
-		})
-	})
+	via.Mount[signalCounter](app, "/")
 	defer server.Close()
 
-	// Tab 1: inject signal = 100
-	body1 := getPageBody(t, server, "/")
-	ctxID1 := extractCtxID(t, body1)
-	actionIDs1 := extractActionIDs(t, body1)
-	sigID := extractSignalID(t, body1)
-
-	_, cancel1 := connectSSE(t, server, ctxID1)
-	defer cancel1()
-	time.Sleep(20 * time.Millisecond)
-
-	postSignal(t, server.URL, ctxID1, actionIDs1[0], sigID, 100)
-
-	select {
-	case got := <-gotCh1:
-		assert.Equal(t, 100, got, "tab 1 should see its own injected value")
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for tab 1 action")
+	body := getBody(t, server, "/")
+	cases := []struct {
+		name, needle, why string
+	}{
+		{"init from tag", `&#34;step&#34;:1`, "init=1 must appear in data-signals meta"},
+		{"Bind() renders data-bind", `data-bind="step"`, "Bind() must render data-bind with wire key"},
+		{"Text() renders data-text span", `data-text="$step"`, "Text() must render data-text=$<key>"},
 	}
-
-	// Tab 2: inject signal = 200
-	body2 := getPageBody(t, server, "/")
-	ctxID2 := extractCtxID(t, body2)
-	actionIDs2 := extractActionIDs(t, body2)
-
-	_, cancel2 := connectSSE(t, server, ctxID2)
-	defer cancel2()
-	time.Sleep(20 * time.Millisecond)
-
-	postSignal(t, server.URL, ctxID2, actionIDs2[1], sigID, 200)
-
-	select {
-	case got := <-gotCh2:
-		assert.Equal(t, 200, got, "tab 2 should see its own injected value")
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for tab 2 action")
-	}
-
-	// Tab 1 again: should still see 100, NOT 200
-	postSignal(t, server.URL, ctxID1, actionIDs1[0], sigID, 100)
-
-	select {
-	case got := <-gotCh1:
-		assert.Equal(t, 100, got, "tab 1 must not see tab 2's signal value")
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for tab 1 re-read")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, body, c.needle, c.why)
+		})
 	}
 }
 
-func TestSignal_setValueWritesToCtx(t *testing.T) {
+type signalShowPage struct {
+	Open via.SignalBool `via:"open"`
+}
+
+func (p *signalShowPage) View(ctx *via.CtxR) h.H {
+	return h.Div(p.Open.Show(), h.Text("hello"))
+}
+
+func TestSignal_showRendersDataShowExpression(t *testing.T) {
 	t.Parallel()
 
-	gotCh := make(chan string, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "initial")
-		setAct := cmp.Action(func(ctx *via.Ctx) error {
-			sig.SetValue(ctx, "from-server")
-			return nil
-		})
-		readAct := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(setAct.OnClick(), readAct.OnClick())
-		})
-	})
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalShowPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionIDs := extractActionIDs(t, body)
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-show="$open"`,
+		"Show should produce data-show=$<key>")
+}
 
-	stream, cancel := connectSSE(t, server, ctxID)
+type fieldNameKey struct {
+	MyField via.SignalNum[int]
+}
+
+func (c *fieldNameKey) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestSignal_keyDefaultsToLowercasedFieldName(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[fieldNameKey](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `&#34;myField&#34;:0`)
+}
+
+// helpers
+
+func getBody(t *testing.T, server *httptest.Server, path string) string {
+	t.Helper()
+	resp, err := http.Get(server.URL + path)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	buf, _ := io.ReadAll(resp.Body)
+	return string(buf)
+}
+
+type attrStylePage struct {
+	Disabled via.SignalBool `via:"disabled"`
+	Hue      via.SignalStr  `via:"hue,init=blue"`
+}
+
+func (p *attrStylePage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Button(p.Disabled.Attr("disabled"), h.Text("Save")),
+		h.Span(p.Hue.Style("color"), h.Text("hi")),
+	)
+}
+
+func TestSignal_Attr_rendersDataAttrSyntax(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[attrStylePage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-attr-disabled="$disabled"`,
+		"Signal.Attr(name) should emit Datastar's data-attr-<name>=\"$key\"")
+}
+
+func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[attrStylePage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-style-color="$hue"`,
+		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
+}
+
+type boolInitPage struct {
+	On via.SignalBool `via:"on,init=true"`
+}
+
+func (p *boolInitPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[boolInitPage](app, "/")
+	defer server.Close()
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `&#34;on&#34;:true`,
+		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
+}
+
+// Update-driven read-modify-write patterns observed through SSE-frame
+// side effects: bool flip, numeric delta, slice append, bounded ring.
+
+type signalHelpersPage struct {
+	Open  via.SignalBool         `via:"open"`
+	Count via.SignalNum[int]     `via:"count,init=10"`
+	Bal   via.SignalNum[float64] `via:"bal"`
+	Hits  via.StateTabNum[int]
+	Vis   via.StateTabBool
+	Items via.SignalSlice[int] `via:"items"`
+}
+
+func (p *signalHelpersPage) FlipOpen(ctx *via.Ctx) error {
+	_ = p.Open.Update(ctx, func(b bool) (bool, error) { return !b, nil })
+	return nil
+}
+
+func (p *signalHelpersPage) ToggleVis(ctx *via.Ctx) error {
+	_ = p.Vis.Update(ctx, func(b bool) (bool, error) { return !b, nil })
+	return nil
+}
+
+func (p *signalHelpersPage) AddCount(ctx *via.Ctx) error {
+	_ = p.Count.Update(ctx, func(n int) (int, error) { return n + 3, nil })
+	_ = p.Count.Update(ctx, func(n int) (int, error) { return n - 5, nil })
+	return nil
+}
+
+func (p *signalHelpersPage) AddBal(ctx *via.Ctx) error {
+	_ = p.Bal.Update(ctx, func(v float64) (float64, error) { return v + 0.5, nil })
+	_ = p.Bal.Update(ctx, func(v float64) (float64, error) { return v + 0.25, nil })
+	return nil
+}
+
+func (p *signalHelpersPage) AddHits(ctx *via.Ctx) error {
+	_ = p.Hits.Update(ctx, func(n int) (int, error) { return n + 7, nil })
+	_ = p.Hits.Update(ctx, func(n int) (int, error) { return n - 2, nil })
+	return nil
+}
+
+func (p *signalHelpersPage) PushOne(ctx *via.Ctx) error {
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 1), nil })
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 2), nil })
+	_ = p.Items.Update(ctx, func(s []int) ([]int, error) { return append(s, 3), nil })
+	return nil
+}
+
+func (p *signalHelpersPage) PushFive(ctx *via.Ctx) error {
+	const max = 3
+	for i := 1; i <= 5; i++ {
+		item := i
+		_ = p.Items.Update(ctx, func(s []int) ([]int, error) {
+			s = append(s, item)
+			if len(s) > max {
+				copy(s, s[len(s)-max:])
+				s = s[:max]
+			}
+			return s, nil
+		})
+	}
+	return nil
+}
+
+func (p *signalHelpersPage) View(ctx *via.CtxR) h.H {
+	// StateTab[T] doesn't surface in signals JSON; rendered text is its
+	// only externally observable trace, so views that drive State helper
+	// tests must render the value somewhere assertable.
+	return h.Div(
+		h.Span(h.ID("hits"), p.Hits.Text(ctx)),
+		h.Span(h.ID("vis"), h.Textf("%v", p.Vis.Read(ctx))),
+	)
+}
+
+func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	triggerAction(t, server.URL, ctxID, actionIDs[0])
-	// drain signal patch
-	readSSEEvent(t, stream, sseTimeout)
+	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"open":true`)
 
-	time.Sleep(20 * time.Millisecond)
-
-	triggerAction(t, server.URL, ctxID, actionIDs[1])
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, "from-server", got, "SetValue must persist in ctx for subsequent actions")
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("FlipOpen").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"open":false`)
 }
 
-func TestSignal_coercesJSONFloatToInt64(t *testing.T) {
+func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	t.Parallel()
+	// Pins that StateTab[bool].Update works the same as Signal[bool].Update —
+	// via.StateTab stays a drop-in substitute for via.Signal in reactive
+	// read-modify-write code.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-	gotCh := make(chan int64, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, int64(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, 999)
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, int64(999), got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("ToggleVis").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="vis">true</span>`)
 }
 
-func TestSignal_coercesJSONFloatToFloat32(t *testing.T) {
+func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	t.Parallel()
 
-	gotCh := make(chan float32, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, float32(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, 3.14)
-
-	select {
-	case got := <-gotCh:
-		assert.InDelta(t, float32(3.14), got, 0.01)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	// init=10, then +3, -5 → 8
+	require.Equal(t, http.StatusOK, tc.Action("AddCount").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"count":8`)
 }
 
-func TestSignal_coercesJSONFloatToUint(t *testing.T) {
+func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	t.Parallel()
 
-	gotCh := make(chan uint, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, uint(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, 42)
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, uint(42), got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("AddBal").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
 }
 
-func TestSignal_coerceFallsBackWhenTypeDoesNotMatch(t *testing.T) {
+func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	t.Parallel()
+	// Mirror of TestUpdate_flipsBoolStateTabSurfacingInView for numeric
+	// state: StateTab[int].Update + Text() must produce the running total.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-	gotCh := make(chan string, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, "default")
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	triggerActionWithSignal(t, server.URL, ctxID, actionID, sigID, "updated")
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, "updated", got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("AddHits").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="hits">5</span>`)
 }
 
-func TestSignal_structInitialSerializesAsJSON(t *testing.T) {
+func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 	t.Parallel()
 
-	type point struct {
-		X int `json:"x"`
-		Y int `json:"y"`
-	}
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, point{X: 1, Y: 2})
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Input(sig.Bind()) })
-	})
-	body := getPageBody(t, server, "/")
-	assert.Contains(t, body, `{\"x\":1,\"y\":2}`, "struct signal should be JSON-serialized in page HTML")
-}
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-func TestSignal_coercesJSONFloatToInt32(t *testing.T) {
-	t.Parallel()
-
-	gotCh := make(chan int32, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, int32(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, -77)
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, int32(-77), got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("PushOne").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[1,2,3]`)
 }
 
-func TestSignal_coercesJSONFloatToUint64(t *testing.T) {
+func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 	t.Parallel()
+	// Push five into a max=3 buffer: oldest two roll off, leaving [3,4,5].
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalHelpersPage](app, "/")
+	defer server.Close()
 
-	gotCh := make(chan uint64, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, uint64(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, 12345)
-
-	select {
-	case got := <-gotCh:
-		assert.Equal(t, uint64(12345), got)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("PushFive").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"items":[3,4,5]`)
 }
 
-func TestSignal_coercesJSONFloatToFloat64(t *testing.T) {
+// Inline "set if changed" guard: changed values reach the wire;
+// unchanged values do not trigger a second patch.
+
+type setIfChangedPage struct {
+	Status via.SignalStr `via:"status,init=idle"`
+}
+
+func (p *setIfChangedPage) SetSame(ctx *via.Ctx) error {
+	if p.Status.Read(ctx) != "idle" {
+		p.Status.Write(ctx, "idle")
+	}
+	return nil
+}
+
+func (p *setIfChangedPage) SetBusy(ctx *via.Ctx) error {
+	if p.Status.Read(ctx) != "busy" {
+		p.Status.Write(ctx, "busy")
+	}
+	return nil
+}
+
+func (p *setIfChangedPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	t.Parallel()
 
-	gotCh := make(chan float64, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, float64(0))
-		act := cmp.Action(func(ctx *via.Ctx) error {
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(sig.Bind(), act.OnChange())
-		})
-	})
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[setIfChangedPage](app, "/")
+	defer server.Close()
 
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-	sigID := extractSignalID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	postSignal(t, server.URL, ctxID, actionID, sigID, 2.718)
-
-	select {
-	case got := <-gotCh:
-		assert.InDelta(t, 2.718, got, 0.001)
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
-	}
+	require.Equal(t, http.StatusOK, tc.Action("SetBusy").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"status":"busy"`)
 }
 
-func TestSignal_setValueOverwritesExistingValue(t *testing.T) {
+func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 	t.Parallel()
+	// The inline Get != v guard must short-circuit before the Update
+	// call, so no datastar-patch-signals frame should appear for this
+	// action. Wait briefly; absence is the assertion.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[setIfChangedPage](app, "/")
+	defer server.Close()
 
-	gotCh := make(chan int, 1)
-	server := newTestApp(t, "/", func(cmp *via.Cmp) {
-		sig := via.Signal(cmp, 0)
-		setAct := cmp.Action(func(ctx *via.Ctx) error {
-			sig.SetValue(ctx, 10)
-			sig.SetValue(ctx, 20)
-			gotCh <- sig.Get(ctx)
-			return nil
-		})
-		cmp.View(func(ctx *via.Ctx) h.H {
-			return h.Div(setAct.OnClick())
-		})
-	})
-
-	body := getPageBody(t, server, "/")
-	ctxID := extractCtxID(t, body)
-	actionID := extractActionID(t, body)
-
-	_, cancel := connectSSE(t, server, ctxID)
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
 	defer cancel()
-	time.Sleep(20 * time.Millisecond)
 
-	triggerAction(t, server.URL, ctxID, actionID)
-
+	require.Equal(t, http.StatusOK, tc.Action("SetSame").Fire())
 	select {
-	case got := <-gotCh:
-		assert.Equal(t, 20, got, "second SetValue must overwrite the first")
-	case <-time.After(sseTimeout):
-		t.Fatal("timed out waiting for action")
+	case f := <-frames:
+		assert.NotContains(t, f, `"status"`,
+			"identical-value guard must not enqueue a status patch")
+	case <-time.After(200 * time.Millisecond):
+		// No frame at all is the success path.
 	}
-}
-
-func TestSignal_nilInitialCreatesError(t *testing.T) {
-	t.Parallel()
-
-	v := via.New()
-	var errVal error
-	v.Page("/", func(cmp *via.Cmp) {
-		sig := via.Signal[any](cmp, nil)
-		errVal = sig.Err()
-		cmp.View(func(ctx *via.Ctx) h.H { return h.Div() })
-	})
-	require.Error(t, errVal)
 }
