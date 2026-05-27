@@ -139,36 +139,17 @@ func (b *histBuf) snapshot() [][]any {
 	return slices.Clone(b.pts)
 }
 
-// Chart-option builders
-
-func timeAxisOpt(yName string, series ...map[string]any) map[string]any {
-	s := make([]any, len(series))
-	for i, m := range series {
-		s[i] = m
-	}
-	return map[string]any{
-		"tooltip": map[string]any{"trigger": "axis"},
-		"xAxis": map[string]any{
-			"type":        "time",
-			"minInterval": 2000,
-			"axisLabel":   map[string]any{"hideOverlap": true, "formatter": "{HH}:{mm}:{ss}"},
-		},
-		"yAxis":  map[string]any{"name": yName},
-		"series": s,
-	}
-}
-
-func lineSeries(name string, data [][]any) map[string]any {
-	return map[string]any{
-		"type":     "line",
-		"name":     name,
-		"symbol":   "none",
-		"smooth":   false,
-		"sampling": "lttb",
-		"large":    true,
-		"data":     data,
-	}
-}
+// xAxis fine-tuning that doesn't have a typed helper: tighter
+// minInterval so the time axis doesn't crowd at the current zoom and
+// a HH:MM:SS formatter so labels stay compact in the 220px-tall
+// charts. WithTimeAxis sets type=time + tooltip; WithCompactGrid
+// trims the plot inset.
+var xAxisTuning = echarts.WithInitialOption(map[string]any{
+	"xAxis": map[string]any{
+		"minInterval": 2000,
+		"axisLabel":   map[string]any{"hideOverlap": true, "formatter": "{HH}:{mm}:{ss}"},
+	},
+})
 
 // View helpers
 //
@@ -241,12 +222,30 @@ type Page struct {
 }
 
 func (p *Page) OnInit(ctx *via.Ctx) error {
-	dims := echarts.WithDimensions("100%", "220px")
-	dark := echarts.WithThemeOverride(echarts.ThemeDark)
-	p.cpuChart = echarts.NewChart(echarts.WithElementID("chart-cpu"), dims, dark)
-	p.ramChart = echarts.NewChart(echarts.WithElementID("chart-ram"), dims, dark)
-	p.diskChart = echarts.NewChart(echarts.WithElementID("chart-disk"), dims, dark)
-	p.netChart = echarts.NewChart(echarts.WithElementID("chart-net"), dims, dark)
+	common := []echarts.ChartOption{
+		echarts.WithDimensions("100%", "220px"),
+		echarts.WithThemeOverride(echarts.ThemeDark),
+		echarts.WithTimeAxis(),
+		echarts.WithCompactGrid(),
+		xAxisTuning,
+	}
+	pct := func(id string) *echarts.Chart {
+		return echarts.NewChart(append(common,
+			echarts.WithElementID(id),
+			echarts.WithYAxisRange(0, 100),
+			echarts.WithYAxisFormat("{value} %"),
+		)...)
+	}
+	rate := func(id string) *echarts.Chart {
+		return echarts.NewChart(append(common,
+			echarts.WithElementID(id),
+			echarts.WithYAxisFormat("{value} KB/s"),
+		)...)
+	}
+	p.cpuChart = pct("chart-cpu")
+	p.ramChart = pct("chart-ram")
+	p.diskChart = rate("chart-disk")
+	p.netChart = rate("chart-net")
 
 	p.cpuBuf = newHistBuf()
 	p.ramBuf = newHistBuf()
@@ -277,17 +276,6 @@ func (p *Page) ToggleRunning(ctx *via.Ctx) {
 }
 
 func (p *Page) OnConnect(ctx *via.Ctx) error {
-	p.cpuChart.SetOption(ctx, timeAxisOpt("%", lineSeries("CPU", nil)))
-	p.ramChart.SetOption(ctx, timeAxisOpt("%", lineSeries("RAM", nil)))
-	p.diskChart.SetOption(ctx, timeAxisOpt("KB/s",
-		lineSeries("Read", nil),
-		lineSeries("Write", nil),
-	))
-	p.netChart.SetOption(ctx, timeAxisOpt("KB/s",
-		lineSeries("RX", nil),
-		lineSeries("TX", nil),
-	))
-
 	prevDisk := readDiskCounters()
 	prevNet := readNetCounters()
 
@@ -316,15 +304,15 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 		p.NetRX.Write(ctx, fmtBytes(rx))
 		p.NetTX.Write(ctx, fmtBytes(tx))
 
-		p.cpuChart.SetSeries(ctx, lineSeries("CPU", p.cpuBuf.snapshot()))
-		p.ramChart.SetSeries(ctx, lineSeries("RAM", p.ramBuf.snapshot()))
+		p.cpuChart.SetSeries(ctx, echarts.LineDense("CPU", p.cpuBuf.snapshot()))
+		p.ramChart.SetSeries(ctx, echarts.LineDense("RAM", p.ramBuf.snapshot()))
 		p.diskChart.SetSeries(ctx,
-			lineSeries("Read", p.diskRBuf.snapshot()),
-			lineSeries("Write", p.diskWBuf.snapshot()),
+			echarts.LineDense("Read", p.diskRBuf.snapshot()),
+			echarts.LineDense("Write", p.diskWBuf.snapshot()),
 		)
 		p.netChart.SetSeries(ctx,
-			lineSeries("RX", p.netRXBuf.snapshot()),
-			lineSeries("TX", p.netTXBuf.snapshot()),
+			echarts.LineDense("RX", p.netRXBuf.snapshot()),
+			echarts.LineDense("TX", p.netTXBuf.snapshot()),
 		)
 	})
 	return nil
