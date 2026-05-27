@@ -1,0 +1,32 @@
+name: via CodeQL config
+
+# We run the full `security-and-quality` suite (set on the workflow) and
+# exclude only the specific queries whose findings on this repo are
+# false positives. Rationale per rule is given inline so future
+# additions are deliberate, not cargo-culted.
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  # CWE-117. We sanitize every user-derived value before it reaches a
+  # log sink via stripCRLF (log.go) / sanitizeLog (mw/mw.go). CodeQL's
+  # taint model doesn't recognize the custom sanitizer.
+  - exclude:
+      id: go/log-injection
+
+  # ctx.SetCookie is a pass-through over http.SetCookie; the Secure
+  # decision belongs to the caller. App-level enforcement on the
+  # session cookie is configured via via.WithSecureCookies.
+  - exclude:
+      id: go/cookie-secure-not-set
+
+  # file.go:Save already captures the writable handle's close error
+  # via a named-return + deferred assignment — the canonical Go
+  # pattern. CodeQL's pattern matcher doesn't recognize it.
+  - exclude:
+      id: go/unhandled-writable-file-close
+
+  # `len(s) + 8` flagged as potential int overflow. On 64-bit Go,
+  # len(s) is bounded by addressable memory; +8 cannot overflow.
+  - exclude:
+      id: go/allocation-size-overflow
