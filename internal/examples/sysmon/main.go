@@ -304,13 +304,13 @@ func (p *Page) OnConnect(ctx *via.Ctx) error {
 		p.NetRX.Write(ctx, fmtBytes(rx))
 		p.NetTX.Write(ctx, fmtBytes(tx))
 
-		p.cpuChart.SetSeries(ctx, echarts.LineDense("CPU", p.cpuBuf.snapshot()))
-		p.ramChart.SetSeries(ctx, echarts.LineDense("RAM", p.ramBuf.snapshot()))
-		p.diskChart.SetSeries(ctx,
+		_ = p.cpuChart.SetSeries(ctx, echarts.LineDense("CPU", p.cpuBuf.snapshot()))
+		_ = p.ramChart.SetSeries(ctx, echarts.LineDense("RAM", p.ramBuf.snapshot()))
+		_ = p.diskChart.SetSeries(ctx,
 			echarts.LineDense("Read", p.diskRBuf.snapshot()),
 			echarts.LineDense("Write", p.diskWBuf.snapshot()),
 		)
-		p.netChart.SetSeries(ctx,
+		_ = p.netChart.SetSeries(ctx,
 			echarts.LineDense("RX", p.netRXBuf.snapshot()),
 			echarts.LineDense("TX", p.netTXBuf.snapshot()),
 		)
