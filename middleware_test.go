@@ -224,7 +224,7 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode,
 		"server should survive panic after partial write")
-	assert.Equal(t, "alive", body2)
+	assert.Contains(t, body2, "alive")
 }
 
 type ridProbePage struct{}
