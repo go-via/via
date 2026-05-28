@@ -274,6 +274,97 @@ func TestClick_panicsOnAnonymousFunction(t *testing.T) {
 	on.Click(func(ctx *via.Ctx) error { return nil })
 }
 
+func TestClick_panicMessageNamesNil(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "on.Click(nil) must panic")
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "got nil",
+			"panic should specifically call out nil rather than a generic 'closure/top-level/nil' clause")
+	}()
+	on.Click(nil)
+}
+
+func topLevelClickHandler(ctx *via.Ctx) error { return nil }
+
+func TestClick_panicMessageNamesTopLevelFunction(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "on.Click(topLevelFn) must panic")
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "top-level function",
+			"panic should specifically identify the top-level function case")
+	}()
+	on.Click(topLevelClickHandler)
+}
+
+func TestClick_panicMessageNamesClosure(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "on.Click(closure) must panic")
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "closure",
+			"panic should specifically identify the closure case")
+	}()
+	on.Click(func(ctx *via.Ctx) error { return nil })
+}
+
+func functionalTopLevelHandler(ctx *via.Ctx) error { return nil }
+
+func TestClick_panicMessageNamesTopLevelFunctionWhoseNameStartsWithFunc(t *testing.T) {
+	t.Parallel()
+	// Guards against a too-loose `.func` substring heuristic: a top-level
+	// function named e.g. `functionalTopLevelHandler` has runtime name
+	// `pkg.functionalTopLevelHandler`, which contains the substring
+	// `.func` — but the Go runtime only assigns `.funcN` (digit-suffixed)
+	// to anonymous closures.
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec)
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "top-level function",
+			"top-level fn whose identifier starts with 'func' must not be misclassified as a closure")
+		assert.NotContains(t, msg, "got a closure")
+	}()
+	on.Click(functionalTopLevelHandler)
+}
+
+func TestClick_panicMessageNamesNonFunctionValue(t *testing.T) {
+	t.Parallel()
+	// `on.Click(42)` is a programming error distinct from nil — the
+	// panic must not lie about what was passed.
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec)
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.NotContains(t, msg, "got nil",
+			"a non-function value must not be reported as nil")
+	}()
+	on.Click(42)
+}
+
+func TestKey_panicMessageNamesClosure(t *testing.T) {
+	t.Parallel()
+	// on.Key drives the optioned render() path; the classification must
+	// also reach that branch, not only the event() fast path.
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec)
+		msg, ok := rec.(string)
+		require.True(t, ok)
+		assert.Contains(t, msg, "closure")
+	}()
+	on.Key("Enter", func(ctx *via.Ctx) error { return nil })
+}
+
 func TestKey_panicsOnAnonymousFunction(t *testing.T) {
 	t.Parallel()
 	// on.Key drives the optioned render() path; cover that branch too.

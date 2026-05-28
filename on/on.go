@@ -15,6 +15,8 @@ package on
 import (
 	"encoding/json"
 	"html/template"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -150,6 +152,54 @@ func SetSignal[T any](sig *via.Signal[T], value T) spec.Option {
 	return func(s *spec.Trigger) { s.AppendPre(stmt) }
 }
 
+// notMethodPanic builds the panic text for an on.* helper that received
+// something other than a bound method value. Splitting nil / top-level
+// function / closure makes the most common authoring mistake debuggable
+// at a glance — the previous lumped message left the dev to guess which
+// of the three they did.
+func notMethodPanic(eventName string, fn any) string {
+	prefix := "on: " + eventName + " requires a bound method value (e.g. on.Click(c.Inc)); got "
+	if fn == nil {
+		return prefix + "nil"
+	}
+	v := reflect.ValueOf(fn)
+	if !v.IsValid() {
+		return prefix + "nil"
+	}
+	if v.Kind() != reflect.Func {
+		return prefix + "a non-function value of type " + v.Type().String()
+	}
+	if v.IsNil() {
+		return prefix + "nil"
+	}
+	fnPC := runtime.FuncForPC(v.Pointer())
+	if fnPC == nil {
+		return prefix + "a closure"
+	}
+	if isClosureName(fnPC.Name()) {
+		return prefix + "a closure"
+	}
+	return prefix + "a top-level function"
+}
+
+// isClosureName reports whether name is a Go runtime closure trampoline.
+// The runtime names anonymous functions `outerName.funcN[.M…]` with a
+// digit immediately after `.func`; a substring match on `.func` alone
+// would catch top-level functions whose identifier begins with "func"
+// (e.g. `pkg.function`).
+func isClosureName(name string) bool {
+	for i := 0; i+5 < len(name); i++ {
+		if name[i:i+5] != ".func" {
+			continue
+		}
+		c := name[i+5]
+		if c >= '0' && c <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
 func event(name string, fn any, opts ...spec.Option) h.H {
 	// Fast path for the bare `on.Click(c.Inc)` shape — no opts means no
 	// modifiers, no debounce/throttle, no pre-statements. Skipping the
@@ -158,7 +208,7 @@ func event(name string, fn any, opts ...spec.Option) h.H {
 	if len(opts) == 0 {
 		method := spec.MethodName(fn)
 		if method == "" {
-			panic("on: " + name + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
+			panic(notMethodPanic(name, fn))
 		}
 		return bareAttr(name, method)
 	}
@@ -229,7 +279,7 @@ func bareAttr(eventName, method string) h.H {
 func render(s *spec.Trigger) h.H {
 	method := spec.MethodName(s.Method)
 	if method == "" {
-		panic("on: " + s.Event + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
+		panic(notMethodPanic(s.Event, s.Method))
 	}
 
 	// Fast path for the bare `on.Click(c.Inc)` shape — no modifiers, no
