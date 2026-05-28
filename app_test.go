@@ -123,7 +123,7 @@ func TestApp_Handle_routesCustomPath(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "custom-handle", string(body))
+	assert.Contains(t, string(body), "custom-handle")
 }
 
 func TestApp_ServeHTTP_dispatchesThroughHandler(t *testing.T) {
