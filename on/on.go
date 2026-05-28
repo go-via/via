@@ -15,6 +15,8 @@ package on
 import (
 	"encoding/json"
 	"html/template"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -150,6 +152,33 @@ func SetSignal[T any](sig *via.Signal[T], value T) spec.Option {
 	return func(s *spec.Trigger) { s.AppendPre(stmt) }
 }
 
+// notMethodPanic builds the panic text for an on.* helper that received
+// something other than a bound method value. Splitting nil / top-level
+// function / closure makes the most common authoring mistake debuggable
+// at a glance — the previous lumped message left the dev to guess which
+// of the three they did.
+func notMethodPanic(eventName string, fn any) string {
+	prefix := "on: " + eventName + " requires a bound method value (e.g. on.Click(c.Inc)); got "
+	if fn == nil {
+		return prefix + "nil"
+	}
+	v := reflect.ValueOf(fn)
+	if !v.IsValid() || v.Kind() != reflect.Func || v.IsNil() {
+		return prefix + "nil"
+	}
+	fnPC := runtime.FuncForPC(v.Pointer())
+	if fnPC == nil {
+		return prefix + "a closure"
+	}
+	// Go's runtime names closures with a ".funcN" segment (e.g.
+	// "pkg.Outer.func1"); top-level functions have no such segment and no
+	// "-fm" suffix (the latter marks bound methods, already handled).
+	if strings.Contains(fnPC.Name(), ".func") {
+		return prefix + "a closure"
+	}
+	return prefix + "a top-level function"
+}
+
 func event(name string, fn any, opts ...spec.Option) h.H {
 	// Fast path for the bare `on.Click(c.Inc)` shape — no opts means no
 	// modifiers, no debounce/throttle, no pre-statements. Skipping the
@@ -158,7 +187,7 @@ func event(name string, fn any, opts ...spec.Option) h.H {
 	if len(opts) == 0 {
 		method := spec.MethodName(fn)
 		if method == "" {
-			panic("on: " + name + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
+			panic(notMethodPanic(name, fn))
 		}
 		return bareAttr(name, method)
 	}
@@ -229,7 +258,7 @@ func bareAttr(eventName, method string) h.H {
 func render(s *spec.Trigger) h.H {
 	method := spec.MethodName(s.Method)
 	if method == "" {
-		panic("on: " + s.Event + " requires a bound method value (e.g. on.Click(c.Inc)); got a closure, top-level function, or nil")
+		panic(notMethodPanic(s.Event, s.Method))
 	}
 
 	// Fast path for the bare `on.Click(c.Inc)` shape — no modifiers, no
