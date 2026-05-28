@@ -59,11 +59,31 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ctx.beginRender()
-	body := ctx.viewFn(ctx.readView())
-	ctx.endRender()
+	body, ok := a.renderView(ctx, w)
+	if !ok {
+		return
+	}
 	a.writePageDocument(w, ctx, body)
 	a.metricsOrNoop().Counter("via.render.total", "route", d.route)
+}
+
+// renderView runs the page's view inside the render window, recovering a
+// panicking viewFn so it surfaces as a structured via log line plus a
+// controlled 500 rather than escaping to the embedding http.Server (naked
+// stderr stack, dropped connection). Symmetric with the OnInit / OnConnect
+// / OnDispose guards and action recovery. ok is false when the view
+// panicked, in which case the 500 has already been written and the caller
+// must not write a page document.
+func (a *App) renderView(ctx *Ctx, w http.ResponseWriter) (body h.H, ok bool) {
+	ctx.beginRender()
+	defer ctx.endRender()
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.logErr(ctx, "View panicked: %v", rec)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}
+	}()
+	return ctx.viewFn(ctx.readView()), true
 }
 
 func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
@@ -161,23 +181,22 @@ func flushDirty(ctx *Ctx) {
 	ctx.queue.mu.Unlock()
 
 	if needRender {
-		buf := getRenderBuf()
-		// View runs without queue.mu held — user code is allowed to
-		// call ctx.Patch.Signal / ctx.Patch.Elements, which would deadlock
-		// on a re-entrant queue.mu acquisition.
-		ctx.beginRender()
-		body := ctx.viewFn(ctx.readView())
-		ctx.endRender()
-		_ = h.Div(h.ID(ctx.id), body).Render(buf)
+		// A panicking viewFn must not escape: this runs on the action
+		// autoflush defer (would drop the action connection) and on the
+		// broadcast SyncNow goroutine (would crash the process — no defer
+		// stack to fall back on). renderFragment recovers and logs; a
+		// panic yields "", which prepends as a no-op and is dropped by the
+		// drain's elems != "" guard, so the broken fragment never ships
+		// while the signal flush below still proceeds.
+		frag := ctx.app.renderFragment(ctx)
 		ctx.queue.mu.Lock()
 		// Prepend the auto re-render so any user-explicit Patch.Elements
 		// patches already queued (e.g. from inside the action body) end
 		// up later in the wire frame. Datastar's morph applies patches
 		// in document order with last-write-wins per id, so this keeps
 		// the user's targeted override the authoritative one.
-		ctx.queue.elements = buf.String() + ctx.queue.elements
+		ctx.queue.elements = frag + ctx.queue.elements
 		ctx.queue.mu.Unlock()
-		putRenderBuf(buf)
 	}
 
 	if hasSignals {
@@ -203,4 +222,29 @@ func flushDirty(ctx *Ctx) {
 		ctx.queue.mu.Unlock()
 	}
 	ctx.queue.notify()
+}
+
+// renderFragment re-renders the view fragment inside the render window,
+// recovering a panicking viewFn so an async re-render (action autoflush,
+// broadcast SyncNow) surfaces as a structured via log line instead of
+// escaping its goroutine — which, on the broadcast path, would crash the
+// process. There is no response writer on this path, so unlike renderView
+// the only recovery action is to log; the recovered call returns "", which
+// the caller treats as a no-op fragment.
+func (a *App) renderFragment(ctx *Ctx) string {
+	buf := getRenderBuf()
+	defer putRenderBuf(buf)
+	// View runs without queue.mu held — user code is allowed to call
+	// ctx.Patch.Signal / ctx.Patch.Elements, which would deadlock on a
+	// re-entrant queue.mu acquisition.
+	ctx.beginRender()
+	defer ctx.endRender()
+	defer func() {
+		if rec := recover(); rec != nil {
+			a.logErr(ctx, "View panicked: %v", rec)
+		}
+	}()
+	body := ctx.viewFn(ctx.readView())
+	_ = h.Div(h.ID(ctx.id), body).Render(buf)
+	return buf.String()
 }
