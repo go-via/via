@@ -205,3 +205,27 @@ func TestMount_panicsWithTypeNameWhenCisAnInterface(t *testing.T) {
 	}()
 	via.Mount[via.Composition](app, "/")
 }
+
+type typoOptionPage struct {
+	Step via.SignalNum[int] `via:"step,initi=5"`
+}
+
+func (p *typoOptionPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestMount_panicsOnUnknownViaTagOption(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount with typo'd via-tag option must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "initi=5",
+			"panic must echo the offending segment so the user can find the typo")
+		assert.Contains(t, msg, "Step",
+			"panic must name the offending field")
+		assert.Contains(t, msg, "typoOptionPage",
+			"panic must name the composition type")
+	}()
+	via.Mount[typoOptionPage](app, "/typo")
+}

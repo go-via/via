@@ -1,6 +1,7 @@
 package via
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -36,7 +37,11 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 		fieldPath := make([]int, len(indexPath)+1)
 		copy(fieldPath, indexPath)
 		fieldPath[len(indexPath)] = i
-		switch role := classifyField(f); role {
+		role := classifyField(f)
+		if role != roleNone {
+			validateViaTagOptions(typ, f)
+		}
+		switch role {
 		case roleSignal, roleState:
 			kind := kindSignal
 			if role == roleState {
@@ -190,6 +195,30 @@ func parseLocalID(f reflect.StructField) string {
 		}
 	}
 	return lowerFirst(f.Name)
+}
+
+func validateViaTagOptions(owner reflect.Type, f reflect.StructField) {
+	tag := f.Tag.Get("via")
+	if tag == "" {
+		return
+	}
+	first := true
+	for part := range strings.SplitSeq(tag, ",") {
+		if first {
+			first = false
+			continue
+		}
+		if part == "" {
+			continue
+		}
+		if strings.HasPrefix(part, "init=") {
+			continue
+		}
+		panic(fmt.Sprintf(
+			"via: %s.%s has unknown via-tag option %q (only `init=…` is recognised)",
+			owner.Name(), f.Name, part,
+		))
+	}
 }
 
 func parseInitTag(f reflect.StructField) string {
