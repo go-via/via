@@ -163,20 +163,41 @@ func notMethodPanic(eventName string, fn any) string {
 		return prefix + "nil"
 	}
 	v := reflect.ValueOf(fn)
-	if !v.IsValid() || v.Kind() != reflect.Func || v.IsNil() {
+	if !v.IsValid() {
+		return prefix + "nil"
+	}
+	if v.Kind() != reflect.Func {
+		return prefix + "a non-function value of type " + v.Type().String()
+	}
+	if v.IsNil() {
 		return prefix + "nil"
 	}
 	fnPC := runtime.FuncForPC(v.Pointer())
 	if fnPC == nil {
 		return prefix + "a closure"
 	}
-	// Go's runtime names closures with a ".funcN" segment (e.g.
-	// "pkg.Outer.func1"); top-level functions have no such segment and no
-	// "-fm" suffix (the latter marks bound methods, already handled).
-	if strings.Contains(fnPC.Name(), ".func") {
+	if isClosureName(fnPC.Name()) {
 		return prefix + "a closure"
 	}
 	return prefix + "a top-level function"
+}
+
+// isClosureName reports whether name is a Go runtime closure trampoline.
+// The runtime names anonymous functions `outerName.funcN[.M…]` with a
+// digit immediately after `.func`; a substring match on `.func` alone
+// would catch top-level functions whose identifier begins with "func"
+// (e.g. `pkg.function`).
+func isClosureName(name string) bool {
+	for i := 0; i+5 < len(name); i++ {
+		if name[i:i+5] != ".func" {
+			continue
+		}
+		c := name[i+5]
+		if c >= '0' && c <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func event(name string, fn any, opts ...spec.Option) h.H {
