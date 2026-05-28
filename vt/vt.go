@@ -47,7 +47,7 @@ type Client struct {
 func NewClient(t testing.TB, server *httptest.Server, path string) *Client {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
-	httpc := &http.Client{Jar: jar, Timeout: 5 * time.Second}
+	httpc := &http.Client{Jar: jar, Timeout: 5 * time.Second, Transport: &http.Transport{}}
 	resp, err := httpc.Get(server.URL + path)
 	if err != nil {
 		t.Fatalf("vt.NewClient: GET %s: %v", path, err)
@@ -69,7 +69,7 @@ func (c *Client) TabID() string { return c.tabID }
 // StateSess behavior that spans tabs.
 func (c *Client) Fork(path string) *Client {
 	c.t.Helper()
-	httpc := &http.Client{Jar: c.jar, Timeout: 5 * time.Second}
+	httpc := &http.Client{Jar: c.jar, Timeout: 5 * time.Second, Transport: &http.Transport{}}
 	resp, err := httpc.Get(c.server.URL + path)
 	if err != nil {
 		c.t.Fatalf("vt.Client.Fork: GET %s: %v", path, err)
@@ -297,7 +297,7 @@ func (c *Client) SSE() (frames <-chan string, cancel func()) {
 	ctx, cancelF := context.WithCancel(context.Background())
 	url := c.server.URL + "/_sse?datastar=" + sseQueryParam(c.tabID)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	sseClient := &http.Client{Jar: c.jar} // no timeout — SSE is long-lived
+	sseClient := &http.Client{Jar: c.jar, Transport: &http.Transport{}} // no timeout — SSE is long-lived
 	resp, err := sseClient.Do(req)
 	if err != nil {
 		cancelF()
