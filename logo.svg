@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="30 -8 144 336" width="144" height="336" aria-label="via">
   <path d="M 142,0 L 92,130 L 168,130 L 58,320 L 116,190 L 38,190 Z"
-        fill="none" stroke="currentColor" stroke-width="10"
+        fill="none" stroke="#ffbf00" stroke-width="10"
         stroke-linecap="square" stroke-linejoin="miter" stroke-miterlimit="10"/>
 </svg>
