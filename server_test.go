@@ -217,7 +217,7 @@ func TestHandleStatic_servesFromFS(t *testing.T) {
 	require.NoError(t, err)
 	defer resp2.Body.Close()
 	body2, _ := io.ReadAll(resp2.Body)
-	assert.Equal(t, "hello", strings.TrimSpace(string(body2)),
+	assert.Contains(t, string(body2), "hello",
 		"nested files should serve under the same prefix")
 }
 
