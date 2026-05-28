@@ -324,6 +324,22 @@ func (p *ctxScriptPage) DoRedirect(ctx *via.Ctx) error {
 	return nil
 }
 
+type redirectPage struct {
+	URL via.SignalStr `via:"url"`
+}
+
+func (p *redirectPage) Go(ctx *via.Ctx) error {
+	ctx.Redirect(p.URL.Read(ctx))
+	return nil
+}
+
+func (p *redirectPage) Ack(ctx *via.Ctx) error {
+	ctx.Toast("ack")
+	return nil
+}
+
+func (p *redirectPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
 func (p *ctxScriptPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
@@ -392,6 +408,80 @@ func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, tc.Action("DoRedirect").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "/elsewhere")
+}
+
+func TestCtx_Redirect_allowsSafeURLs(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"absolute path", "/elsewhere"},
+		{"relative path", "relative/path"},
+		{"http", "http://example.com/x"},
+		{"https", "https://example.com/x"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var server *httptest.Server
+			app := via.New(via.WithTestServer(&server))
+			via.Mount[redirectPage](app, "/")
+			defer server.Close()
+
+			tc := vt.NewClient(t, server, "/")
+			frames, cancel := tc.SSEReady()
+			defer cancel()
+
+			require.Equal(t, http.StatusOK,
+				tc.Action("Go").WithSignal("url", tt.url).Fire())
+			vt.AwaitFrame(t, frames, 2*time.Second,
+				"window.location.href", tt.url)
+		})
+	}
+}
+
+func TestCtx_Redirect_dropsDangerousURLs(t *testing.T) {
+	t.Parallel()
+	// Open-redirect / XSS vectors must not reach the client. The Redirect
+	// patch is dropped; a subsequent observable patch (Toast) confirms the
+	// SSE stream is still alive and that the dangerous URL never appears
+	// in any frame that did arrive.
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"javascript scheme", "javascript:alert(1)"},
+		{"protocol relative", "//evil.example/path"},
+		{"data scheme", "data:text/html,<script>alert(1)</script>"},
+		{"vbscript scheme", "vbscript:msgbox"},
+		{"uppercase javascript", "JavaScript:alert(1)"},
+		{"whitespace javascript", " javascript:alert(1)"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var server *httptest.Server
+			app := via.New(via.WithTestServer(&server))
+			via.Mount[redirectPage](app, "/")
+			defer server.Close()
+
+			tc := vt.NewClient(t, server, "/")
+			frames, cancel := tc.SSEReady()
+			defer cancel()
+
+			require.Equal(t, http.StatusOK,
+				tc.Action("Go").WithSignal("url", tt.url).Fire())
+			require.Equal(t, http.StatusOK, tc.Action("Ack").Fire())
+			body := vt.AwaitFrame(t, frames, 2*time.Second, `alert("ack")`)
+			assert.NotContains(t, body, "window.location.href",
+				"dangerous URL must not produce a redirect frame")
+			assert.NotContains(t, body, tt.url,
+				"dangerous URL must not appear in any SSE frame")
+		})
+	}
 }
 
 // SyncOff — action-scoped publish suppression.

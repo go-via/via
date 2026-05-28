@@ -3,6 +3,7 @@ package via
 import (
 	"encoding/json"
 	"maps"
+	"strings"
 
 	"github.com/go-via/via/h"
 )
@@ -141,8 +142,20 @@ func (ctx *Ctx) Toast(message string) {
 }
 
 // Redirect sends a client-side navigation to url at the next flush.
+//
+// Only http, https, and same-origin relative paths are honoured. URLs
+// carrying any other scheme (javascript:, data:, vbscript:, …) or a
+// protocol-relative // prefix are dropped and logged — this closes the
+// open-redirect / XSS vector when callers interpolate user input into
+// the URL (typical ?next= flows).
 func (ctx *Ctx) Redirect(url string) {
 	if ctx == nil || url == "" || ctx.queue == nil {
+		return
+	}
+	if !safeRedirectURL(url) {
+		if ctx.app != nil {
+			ctx.app.logErr(ctx, "Redirect: rejected unsafe URL %q", url)
+		}
 		return
 	}
 	q := ctx.queue
@@ -150,4 +163,24 @@ func (ctx *Ctx) Redirect(url string) {
 	q.redirect = url
 	q.mu.Unlock()
 	q.notify()
+}
+
+// safeRedirectURL reports whether url is safe for client-side navigation:
+// an http/https absolute URL or a same-origin relative path. Browsers
+// strip leading whitespace and control characters before resolving the
+// scheme, so " javascript:..." must be treated identically to the
+// untrimmed form.
+func safeRedirectURL(url string) bool {
+	trimmed := strings.TrimLeftFunc(url, func(r rune) bool { return r <= ' ' })
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, `\\`) {
+		return false
+	}
+	if i := strings.IndexAny(trimmed, ":/?#"); i >= 0 && trimmed[i] == ':' {
+		scheme := strings.ToLower(trimmed[:i])
+		return scheme == "http" || scheme == "https"
+	}
+	return true
 }
