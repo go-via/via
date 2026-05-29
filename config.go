@@ -29,6 +29,7 @@ type config struct {
 	sseHeartbeat       time.Duration
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
+	cookieSecuritySet  bool
 	testServer         **httptest.Server
 	httpServerHook     func(*http.Server)
 	readHeaderTimeout  time.Duration
@@ -85,8 +86,33 @@ func WithSSEWriteTimeout(d time.Duration) Option {
 	return func(c *config) { c.sseWriteTimeout = d }
 }
 
-// WithSecureCookies marks the session cookie Secure for HTTPS deployments.
-func WithSecureCookies() Option { return func(c *config) { c.secureCookies = true } }
+// WithSecureCookies marks the session cookie Secure. This is the default;
+// the option remains for explicit intent and conflicts with
+// [WithInsecureCookies].
+func WithSecureCookies() Option {
+	return func(c *config) {
+		if c.cookieSecuritySet && !c.secureCookies {
+			panic("via: conflicting cookie security options")
+		}
+		c.secureCookies = true
+		c.cookieSecuritySet = true
+	}
+}
+
+// WithInsecureCookies clears the Secure flag so the session cookie rides
+// a plain-http origin. The Secure default is the safe production posture
+// (a framework aimed at internal tools should not ship a cookie that leaks
+// on an http downgrade); reach for this only on a local http:// dev loop.
+// Conflicts with [WithSecureCookies].
+func WithInsecureCookies() Option {
+	return func(c *config) {
+		if c.cookieSecuritySet && c.secureCookies {
+			panic("via: conflicting cookie security options")
+		}
+		c.secureCookies = false
+		c.cookieSecuritySet = true
+	}
+}
 
 // WithPlugins registers plugins. They run Register at New time.
 func WithPlugins(plugins ...Plugin) Option {

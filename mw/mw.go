@@ -150,8 +150,8 @@ func CSP(extra ...string) via.Middleware {
 }
 
 // HSTS returns a [via.Middleware] that sets the
-// Strict-Transport-Security response header. Pairs with
-// [via.WithSecureCookies] for HTTPS deployments. Use this only when
+// Strict-Transport-Security response header. Complements the
+// Secure-by-default session cookie for HTTPS deployments. Use this only when
 // the app is actually served over HTTPS — sending HSTS over plain
 // HTTP gets ignored, but enabling it behind a misconfigured TLS
 // terminator can lock users out for the max-age duration.
@@ -212,9 +212,9 @@ func HSTSPreload(on bool) HSTSOption {
 //
 //	app.Use(mw.RedirectHTTPS())
 //
-// The redirect is applied to every request; pair with
-// [via.WithSecureCookies] and [HSTS] for a complete TLS-only
-// deployment posture.
+// The redirect is applied to every request; pair with [HSTS] for a
+// complete TLS-only deployment posture (the session cookie is Secure
+// by default).
 //
 // Security caveat: X-Forwarded-Proto is trusted unconditionally.
 // Deploy this middleware ONLY behind a trusted reverse proxy / load

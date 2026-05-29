@@ -302,6 +302,10 @@ func New(opts ...Option) *App {
 			sseWriteTimeout: 10 * time.Second,
 			maxRequestBody:  1 << 20,
 			maxUploadSize:   32 << 20,
+			// Secure-by-default: the deployment surface (internal tools,
+			// admin dashboards) is exactly where a non-Secure cookie leaks
+			// on an http downgrade. WithInsecureCookies opts out for dev.
+			secureCookies: true,
 		},
 	}
 	for _, opt := range opts {

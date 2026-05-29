@@ -563,7 +563,6 @@ deliver via the existing patch queue + SSE drain — no extra wiring.
 ```go
 app := via.New(
     via.WithLang("en"),
-    via.WithSecureCookies(),
     via.WithLogger(via.SlogLogger(slog.Default())),
     via.WithMaxRequestBody(1<<20),
     via.WithMaxContexts(10000),
@@ -604,9 +603,10 @@ Adapt to Prometheus, OTel, or expvar by implementing three methods
 - CSRF: every page mints a 256-bit `via_tab` id; action POSTs and SSE
   handshakes carry it as a signal. The id IS the CSRF token — unknown
   ids 404. Action POSTs are also session-pinned (cookie mismatch → 403).
-- Sessions: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit.
-  `WithSecureCookies()` flips on `Secure` for HTTPS. After auth state
-  changes, call `sess.Rotate(ctx)` (session-fixation defence).
+- Sessions: `via_session` cookie is `HttpOnly`, `SameSite=Lax`, 256-bit,
+  and `Secure` by default; `WithInsecureCookies()` drops `Secure` for a
+  local http:// dev loop. After auth state changes, call
+  `sess.Rotate(ctx)` (session-fixation defence).
 - CSP: `mw.CSP()` emits a strict header with a per-request nonce
   reachable via `ctx.CSPNonce()`.
 - Body limits: `WithMaxRequestBody(n)` (default 1 MiB) caps action
@@ -651,8 +651,8 @@ Every `WithX(...)` option is documented in
 [`go doc github.com/go-via/via`](https://pkg.go.dev/github.com/go-via/via)
 with its default and behaviour. Common production knobs:
 
-- `WithSecureCookies()`, `WithMaxContexts(n)`,
-  `WithLogger(SlogLogger(...))`
+- `WithMaxContexts(n)`, `WithLogger(SlogLogger(...))`,
+  `WithInsecureCookies()` (dev opt-out — `Secure` is on by default)
 - `WithMaxRequestBody(n)`, `WithSessionTTL(d)`, `WithContextTTL(d)`
 - `WithSSEHeartbeat(d)`, `WithReadHeaderTimeout(d)`,
   `WithIdleTimeout(d)`
