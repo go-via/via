@@ -107,8 +107,8 @@ rows, cross-tab invariants, secrets) flows through actions and re-renders.
 
 ## Where to go next
 
-- **New here?** [Getting started](getting-started), then the
-  [todo-app tutorial](tutorial).
+- **New here?** [Getting started](getting-started), then build a
+  [live chatroom](tutorial) in ~60 lines.
 - **Evaluating Via?** [Why Via](why-via) — the comparison matrix and the
   deliberate non-goals.
 - **Want working code?** Browse the [examples](examples).

@@ -1,125 +1,137 @@
 ---
-title: "Tutorial: build a todo app"
+title: "Tutorial: live chatroom"
 parent: Learn
 nav_order: 2
 ---
 
-# Tutorial: build a todo app
+# Tutorial: a live chatroom in ~60 lines
 {: .no_toc }
 
-The [counter](getting-started) showed the shape of a composition. This builds
-something with real moving parts: a **session-backed** todo list that
-survives a reload, an input bound to a client signal, list rendering with
-`h.Each`, and two actions. About 20 minutes.
+The [counter](getting-started) showed the shape of a composition. Now build
+the thing that usually means WebSockets, a message bus, and a pile of client
+JS — a **live multi-user chatroom**. In Via it falls out of one app-scoped
+field: a line typed in any browser appears instantly in every other connected
+browser. No WebSocket, no `Broadcast` call, no hand-written JavaScript.
 
-The finished app mirrors
-[`internal/examples/todos`](https://github.com/go-via/via/tree/main/internal/examples/todos).
+The finished app is
+[`internal/examples/chat`](https://github.com/go-via/via/tree/main/internal/examples/chat)
+— about 60 lines.
 
 1. TOC
 {:toc}
 
-## 1. The composition
-
-Two fields capture the whole client/server split:
+## 1. The room is one shared field
 
 ```go
-type Todos struct {
-    // Server-owned, per session: survives a reload, scoped to the browser.
-    Items via.StateSess[[]string]
+type Message struct{ From, Body string }
 
-    // Client-owned: the text being typed, bound to the <input>.
+type Room struct {
+    // App-scoped: ONE log shared by every session and every tab.
+    Log via.StateAppSlice[Message]
+
+    // Tab-local client signals, two-way bound to inputs. Name rides along
+    // on each message this tab sends.
+    Name  via.SignalStr `via:"name,init=Anon"`
     Draft via.SignalStr `via:"draft"`
 }
 ```
 
-`Items` is `StateSess` because the list is server truth that should outlive a
-page reload but stay private to one user's session. `Draft` is a `Signal`
-because the in-progress text is pure client state — typing it should not POST.
+`Log` is `StateAppSlice` — **global** server state. That single choice is the
+whole trick: when any action appends to an app-scoped value, Via re-renders
+*every tab that read it*, across every session. `Name` and `Draft` are client
+signals bound to text inputs, so typing them costs no round-trip.
 
 ## 2. The view
 
 ```go
-func (t *Todos) View(ctx *via.CtxR) h.H {
-    return h.Div(
-        h.Input(t.Draft.Bind(), h.Placeholder("What needs doing?")),
-        h.Button(h.Text("Add"), on.Click(t.Add)),
-        h.Button(h.Text("Clear"), on.Click(t.Clear)),
-        h.Ul(h.Each(t.Items.Read(ctx), func(item string) h.H {
-            return h.Li(h.Text(item))
-        })),
+func (r *Room) View(ctx *via.CtxR) h.H {
+    return h.Main(h.Class("container"),
+        h.H1(h.Text("Via Chat")),
+        h.Article(h.Style("max-height:60vh;overflow-y:auto"),
+            h.Each(r.Log.Read(ctx), func(m Message) h.H {
+                return h.P(h.Strong(h.Text(m.From+": ")), h.Text(m.Body))
+            }),
+        ),
+        h.Form(
+            h.Input(h.Type("text"), r.Name.Bind(), h.Placeholder("name")),
+            h.Input(h.Type("text"), r.Draft.Bind(),
+                h.Placeholder("message…"), on.Key("Enter", r.Send)),
+            h.Button(h.Type("button"), h.Text("Send"), on.Click(r.Send)),
+        ),
     )
 }
 ```
 
-`t.Draft.Bind()` is two-way: keystrokes update the client signal with no
-round-trip. `h.Each` renders one `<li>` per item; because `Items` is
-server-owned, the list re-renders server-side and ships a DOM patch over SSE
-whenever it changes.
+Reading `r.Log.Read(ctx)` here is what **subscribes** this tab to the log —
+that's why a `Send` from anyone re-renders it. `on.Key("Enter", r.Send)` sends
+on Enter; the button sends on click.
 
-{: .note }
-`View` takes `*via.CtxR` — a read-only render context. You can `Read` state
-here but not mutate it. Mutations live in actions (next), which take the
-full `*via.Ctx`.
-
-## 3. The actions
+## 3. The send action
 
 ```go
-func (t *Todos) Add(ctx *via.Ctx) error {
-    text := strings.TrimSpace(t.Draft.Read(ctx))
-    if text == "" {
-        return nil
+func (r *Room) Send(ctx *via.Ctx) {
+    body := strings.TrimSpace(r.Draft.Read(ctx))
+    if body == "" {
+        return
     }
-    if err := t.Items.Update(ctx, func(cur []string) ([]string, error) {
-        return append(cur, text), nil
-    }); err != nil {
-        return err
+    name := strings.TrimSpace(r.Name.Read(ctx))
+    if name == "" {
+        name = "Anon"
     }
-    t.Draft.Write(ctx, "") // clear the input client-side after a successful add
-    return nil
-}
-
-func (t *Todos) Clear(ctx *via.Ctx) error {
-    return t.Items.Update(ctx, func([]string) ([]string, error) {
-        return nil, nil
+    _ = r.Log.Update(ctx, func(log []Message) ([]Message, error) {
+        log = append(log, Message{From: name, Body: body})
+        if len(log) > 50 { // keep a recent window so the room can't grow forever
+            log = log[len(log)-50:]
+        }
+        return log, nil
     })
+    r.Draft.Write(ctx, "") // clear the input
 }
 ```
 
-`Add` reads the current client `Draft`, appends to the server list under
-`Update`'s per-key mutex, then writes `Draft` back to `""` — that empty value
-flushes to the browser and clears the input. `Clear` replaces the list with
-`nil`. Both are ordinary methods; `on.Click` binds them with compile-time
-typo protection.
+`Update` appends under a per-key mutex — concurrent senders can't lose
+messages — then Via diffs the View and ships the new `<p>` to every subscribed
+tab over SSE. Writing `Draft` back to `""` clears the sender's input.
 
-## 4. Wire it up
+## 4. Run it
 
 ```go
 func main() {
-    app := via.New()
-    via.Mount[Todos](app, "/")
+    app := via.New(via.WithPlugins(picocss.Plugin()))
+    via.Mount[Room](app, "/")
     _ = http.ListenAndServe(":3000", app)
 }
 ```
 
 ```bash
-go run .
-# open http://localhost:3000
+go run ./internal/examples/chat
+# open http://localhost:3000 in TWO browser windows
 ```
 
-Add a few items, then **reload the page**. The list is still there — that's
-`StateSess` surviving the reload via the `via_session` cookie. Open a private
-window and you get an empty list: the session scope is per-browser.
+Type in one window; the message appears in both — live. That is the entire
+chatroom.
 
-## 5. Where to go next
+## 5. Why it's live — and what it cost
 
-- **Bundle a client write with the action.** `on.SetSignal(&t.Draft, "")`
-  sets a signal *before* the POST fires — handy when the value should change
-  client-side regardless of the server result. (Here we cleared *after* a
-  successful add instead, so an empty draft isn't lost on error.)
-- **Typed ops.** Swap `StateSess[[]string]` for `via.StateSessSlice[string]`
-  and call `t.Items.Op(ctx).Append(text)` / `.Empty()` instead of `Update`.
-  See [Reactive state](reactive-state#typed-ops-via-opctx).
-- **Remove a single item.** Add a per-row button that bundles the row's index
-  with `on.SetSignal`, then read it in a `Remove` action.
-- **Style it.** Add `picocss.Plugin()` ([Plugins](plugins)) for instant CSS.
-- **Test it.** Drive the actions over HTTP with `vt` ([Testing](testing)).
+The realtime sync is not in your code; it's the framework. `StateApp*` is
+server-owned **global** state, and an `Update` to it fans a re-render out to
+every connected tab ([Reactive state](reactive-state)). You wrote a struct, a
+view, and one action — no WebSocket, no subscription bookkeeping, no client
+JS. (`StateApp` is single-process and has no tenant isolation, so this is one
+global room — see the [non-goals](why-via).)
+
+That cross-session fan-out is exactly what the example's test
+`TestChat_messageFansOutAcrossSessions` asserts end-to-end: two separate
+sessions, a `Send` from one, the message live on the other's stream. See
+[Testing](testing).
+
+## 6. Where to go next
+
+- **Per-room channels.** Swap the one `StateAppSlice` for a
+  `StateAppMap[string, []Message]` keyed by room name.
+- **Persistence.** App state is in-memory; back the log with a DB and
+  rehydrate in `OnInit`
+  ([Production & ops](production#restart-and-tab-survivability)).
+- **Presence / typing indicators.** Another app-scoped value, same pattern.
+- **Style it** further with [picocss](plugins), or **test it** with
+  [`vt`](testing).
