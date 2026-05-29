@@ -24,10 +24,10 @@ type Ctx struct {
 	// so a user-launched goroutine that drives a broadcast (Update →
 	// broadcastRender) doesn't race with a concurrent action handler
 	// resetting the flag on entry.
-	silent     atomic.Bool
-	queue      *patchQueue
-	doneChan   chan struct{}
-	disposed   bool
+	silent   atomic.Bool
+	queue    *patchQueue
+	doneChan chan struct{}
+	disposed bool
 	// disposeReason records why the ctx was torn down — "shutdown" for
 	// app shutdown, "ttl" for the idle-TTL sweep, "client" for an
 	// explicit tab close. Set once by signalDispose alongside the
