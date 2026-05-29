@@ -123,13 +123,17 @@ func (ctx *Ctx) Reload() {
 	ctx.ExecScript("location.reload()")
 }
 
-// Toast queues a browser alert(message). Sugar for the common
-// "show a quick notice and move on" pattern; for richer toasts use
-// ctx.Patch.Signal to drive a client-side notice signal instead.
+// Toast shows message as a small, styled, non-blocking notice that slides
+// into a fixed overlay and auto-dismisses after a few seconds. It is the
+// default surface for recovered action-handler panics, and the "show a
+// quick notice and move on" sugar for app code. Zero setup: the first
+// toast on a page injects its own <style> and #via-toast-root container,
+// later toasts reuse them and stack.
 //
-// The message is JSON-encoded into the alert call so any user-supplied
-// content survives untouched — Go's %q escape rules diverge from
-// JavaScript's in a handful of edge cases (e.g. \a), JSON does not.
+// The message is rendered via textContent (never as HTML), and JSON-
+// encoded into the snippet so it can neither break out of the JS string
+// nor inject markup — Go's json HTML-escaping also neutralises a
+// </script> breakout of the surrounding datastar script element.
 func (ctx *Ctx) Toast(message string) {
 	if ctx == nil || message == "" {
 		return
@@ -138,8 +142,41 @@ func (ctx *Ctx) Toast(message string) {
 	if err != nil {
 		return
 	}
-	ctx.ExecScript("alert(" + string(b) + ")")
+	ctx.ExecScript(toastScriptHead + string(b) + toastScriptTail)
 }
+
+// toastScriptHead / toastScriptTail wrap a JSON-encoded message into the
+// self-contained toast snippet ctx.Toast emits. It rides ExecScript — the
+// same script-frame path the previous alert() used — so there is no
+// document change, no new public API, and no CSP posture shift versus the
+// alert it replaces. The <style> and container are keyed by element id so
+// they are created once per page and reused; the styling is deliberately
+// neutral so it reads acceptably on a bare page and under the picocss
+// plugin. The message arrives as the trailing call argument.
+const (
+	toastScriptHead = `(function(m){` +
+		`if(!document.getElementById("via-toast-css")){` +
+		`var s=document.createElement("style");s.id="via-toast-css";` +
+		`s.textContent="#via-toast-root{position:fixed;inset:auto 1rem 1rem auto;` +
+		`z-index:2147483647;display:flex;flex-direction:column;gap:.5rem;` +
+		`max-width:min(92vw,22rem);pointer-events:none}` +
+		`.via-toast{pointer-events:auto;background:#1f2937;color:#fff;` +
+		`font:500 .9rem/1.4 system-ui,-apple-system,sans-serif;padding:.7rem .9rem;` +
+		`border-radius:.5rem;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;` +
+		`transform:translateY(.6rem);transition:opacity .22s ease,transform .22s ease;` +
+		`word-break:break-word}.via-toast[data-show]{opacity:1;transform:none}";` +
+		`document.head.appendChild(s)}` +
+		`var root=document.getElementById("via-toast-root");` +
+		`if(!root){root=document.createElement("div");root.id="via-toast-root";` +
+		`document.body.appendChild(root)}` +
+		`var el=document.createElement("div");el.className="via-toast";` +
+		`el.setAttribute("role","status");el.setAttribute("aria-live","polite");` +
+		`el.textContent=m;root.appendChild(el);` +
+		`requestAnimationFrame(function(){el.setAttribute("data-show","")});` +
+		`setTimeout(function(){el.removeAttribute("data-show");` +
+		`setTimeout(function(){el.remove()},250)},4000)})(`
+	toastScriptTail = `)`
+)
 
 // Redirect sends a client-side navigation to url at the next flush.
 //
