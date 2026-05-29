@@ -208,7 +208,7 @@ func TestClick_bareBindingRendersIdentically(t *testing.T) {
 	assert.Contains(t, bufA.String(), `/_action/Inc`)
 }
 
-func TestClick_bareBindingRenderIsAllocFree(t *testing.T) {
+func TestClick_bareBindingRenderIsAllocFree(t *testing.T) { //nolint:paralleltest // AllocsPerRun must run serially
 	// AllocsPerRun forbids t.Parallel.
 	p := &internPage{}
 	node := on.Click(p.Inc)
@@ -222,7 +222,7 @@ func TestClick_bareBindingRenderIsAllocFree(t *testing.T) {
 		"rendering a cached bare binding should write pre-escaped bytes without allocating")
 }
 
-func TestClick_optionedBindingRenderIsAllocFree(t *testing.T) {
+func TestClick_optionedBindingRenderIsAllocFree(t *testing.T) { //nolint:paralleltest // AllocsPerRun must run serially
 	// AllocsPerRun forbids t.Parallel.
 	p := &internPage{}
 	node := on.Click(p.Inc, on.Debounce("200ms"))
@@ -236,7 +236,7 @@ func TestClick_optionedBindingRenderIsAllocFree(t *testing.T) {
 		"rendering an optioned binding should write pre-escaped bytes without allocating")
 }
 
-func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) {
+func TestClick_bareBindingAllocatesAtMostOnceAfterFirstCall(t *testing.T) { //nolint:paralleltest // AllocsPerRun must run serially
 	// AllocsPerRun forbids t.Parallel; the runtime asserts on it.
 	// Passing the bound method through `fn any` boxes the 2-word method
 	// value — that's an unavoidable 1 alloc at the call boundary. The
