@@ -1,6 +1,7 @@
 ---
 title: Plugins
-nav_order: 8
+parent: Guides
+nav_order: 5
 ---
 
 # Plugins

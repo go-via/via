@@ -1,6 +1,7 @@
 ---
 title: Actions & lifecycle
-nav_order: 4
+parent: Guides
+nav_order: 1
 ---
 
 # Actions & lifecycle
@@ -64,7 +65,12 @@ the whole action out of the dirty-mark/flush cycle — see godoc.
 | `OnInit(ctx) error` | Before View on the page-load request |
 | `OnConnect(ctx) error` | First time the SSE stream opens (one-shot) |
 | `OnDispose(ctx)` | Tab closed, ctx swept, or app shut down |
-| `View(ctx) h.H` | Required; renders the composition |
+| `View(ctx *via.CtxR) h.H` | Required; renders the composition |
+
+`View` receives `*via.CtxR` — a **read-only** render context. You can read
+state during a render but cannot mutate it; mutations happen in actions and
+lifecycle hooks, which receive the full `*via.Ctx`. That split is enforced by
+the type, not by convention.
 
 Implement any subset; `Mount` detects whichever are defined. `OnConnect` is
 where long-running per-tab work belongs — bots that hit GET without ever

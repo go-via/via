@@ -1,6 +1,7 @@
 ---
 title: Production & ops
-nav_order: 10
+parent: Reference & ops
+nav_order: 2
 ---
 
 # Production & ops

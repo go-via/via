@@ -1,6 +1,7 @@
 ---
 title: Testing
-nav_order: 9
+parent: Reference & ops
+nav_order: 1
 ---
 
 # Testing

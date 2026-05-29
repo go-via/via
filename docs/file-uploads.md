@@ -1,6 +1,7 @@
 ---
 title: File uploads
-nav_order: 7
+parent: Guides
+nav_order: 4
 ---
 
 # File uploads
@@ -18,7 +19,11 @@ func (p *Page) Upload(ctx *via.Ctx) error {
     if !p.Avatar.Present() {
         return nil
     }
-    return p.Avatar.Save("/var/uploads/" + sanitized)
+    // Never build a path from the client-supplied Filename(). Generate your
+    // own collision-resistant name and keep only the (validated) extension.
+    // newID() is yours — e.g. a DB key or crypto/rand token.
+    dst := filepath.Join("/var/uploads", newID()+filepath.Ext(p.Avatar.Filename()))
+    return p.Avatar.Save(dst)
 }
 ```
 

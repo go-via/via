@@ -1,6 +1,7 @@
 ---
 title: Rendering (h)
-nav_order: 5
+parent: Guides
+nav_order: 2
 ---
 
 # Rendering with the `h` DSL

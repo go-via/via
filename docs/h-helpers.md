@@ -1,6 +1,7 @@
 ---
 title: h helpers reference
-nav_order: 11
+parent: Reference & ops
+nav_order: 3
 ---
 
 # `h` package helpers
@@ -87,7 +88,7 @@ chrome := h.Static(h.Fragment(
         h.Ul(h.Li(h.Strong(h.T("System Monitor"))))),
 ))
 
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
     return h.Div(chrome, p.body(ctx))
 }
 ```

@@ -15,11 +15,27 @@ baseurl: /via
 color_scheme: dark
 search_enabled: true
 heading_anchors: true
+back_to_top: true
+back_to_top_text: "Back to top"
+
+# "Edit this page on GitHub" link in every page footer. Pages live in docs/.
+gh_edit_link: true
+gh_edit_link_text: "Edit this page on GitHub"
+gh_edit_repository: "https://github.com/go-via/via"
+gh_edit_branch: "main"
+gh_edit_source: docs
+gh_edit_view_mode: "tree"
 
 aux_links:
   GitHub: https://github.com/go-via/via
   pkg.go.dev: https://pkg.go.dev/github.com/go-via/via
 aux_links_new_tab: true
+
+nav_external_links:
+  - title: Changelog (GitHub Releases)
+    url: https://github.com/go-via/via/releases
+  - title: API reference (pkg.go.dev)
+    url: https://pkg.go.dev/github.com/go-via/via
 
 callouts:
   note:

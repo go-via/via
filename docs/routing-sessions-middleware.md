@@ -1,6 +1,7 @@
 ---
 title: Routing, sessions & middleware
-nav_order: 6
+parent: Guides
+nav_order: 3
 ---
 
 # Routing, sessions & middleware

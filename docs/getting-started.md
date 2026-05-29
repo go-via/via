@@ -1,6 +1,7 @@
 ---
 title: Getting started
-nav_order: 2
+parent: Learn
+nav_order: 1
 ---
 
 # Getting started

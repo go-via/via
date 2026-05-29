@@ -1,0 +1,11 @@
+<!-- Social / Open Graph cards. just-the-docs includes this in <head>. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{ site.title }}">
+<meta property="og:title" content="{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}">
+<meta property="og:description" content="{{ page.description | default: site.description | strip_newlines }}">
+<meta property="og:url" content="{{ page.url | absolute_url }}">
+<meta property="og:image" content="{{ '/counter-scope.gif' | absolute_url }}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{% if page.title %}{{ page.title }} · {% endif %}{{ site.title }}">
+<meta name="twitter:description" content="{{ page.description | default: site.description | strip_newlines }}">
+<meta name="twitter:image" content="{{ '/counter-scope.gif' | absolute_url }}">

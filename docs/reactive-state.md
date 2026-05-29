@@ -1,5 +1,6 @@
 ---
 title: Reactive state
+parent: Learn
 nav_order: 3
 ---
 
@@ -25,6 +26,22 @@ field's type — not a convention.
   to inputs and view helpers; it reacts client-side with no round-trip.
 - `StateTab[T]` / `StateSess[T]` / `StateApp[T]` live only in Go. They
   change through actions, and a re-render re-emits the value over SSE.
+
+Scope at a glance — one process, many sessions, many tabs:
+
+```
+   App (one process) ── StateApp[T] ............... shared by everyone
+    │
+    ├─ Session A (one browser) ── StateSess[T] ..... shared by that user's tabs
+    │   ├─ Tab 1 ── Signal[T] (client) + StateTab[T] (server)
+    │   └─ Tab 2 ── Signal[T] + StateTab[T]   ← its own copy
+    │
+    └─ Session B (another browser) ── StateSess[T]
+        └─ Tab 1 ── Signal[T] + StateTab[T]
+```
+
+`Signal[T]` also lives in the browser; the three `State*` shapes never leave
+the server.
 
 ## Reads, writes, and updates
 
@@ -96,8 +113,8 @@ re-renders server-side instead of subscribing to a client signal.
 The `via:"name,init=..."` tag sets the wire key and an initial value.
 A tagless field uses the lower-cased field name as its key. `init=` values
 are decoded into the field's type (int, uint, float, bool, string). Wire
-keys, initial values, and the full tag grammar are documented in
-[godoc](https://pkg.go.dev/github.com/go-via/via).
+keys, initial values, and the full tag grammar are documented on the
+[`Signal` type in godoc](https://pkg.go.dev/github.com/go-via/via#Signal).
 
 ```go
 type Page struct {
