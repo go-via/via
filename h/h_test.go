@@ -280,6 +280,28 @@ func TestDataShow_formatArgsStillWork(t *testing.T) {
 	assert.Contains(t, got, "$count &gt; 0")
 }
 
+func TestDataIgnoreMorph_emitsBooleanAttribute(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.DataIgnoreMorph()))
+	assert.Equal(t, `<div data-ignore-morph></div>`, got,
+		"DataIgnoreMorph is a name-only datastar attribute, not name=value")
+}
+
+func TestDataOnClick_emitsEscapedClickHandler(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.DataOnClick("@post('/inc')")))
+	assert.Equal(t, `<div data-on:click="@post(&#39;/inc&#39;)"></div>`, got,
+		"DataOnClick maps to the data-on:click attribute with an escaped value")
+}
+
+func TestDataClass_embedsClassNameAndFormatsExpression(t *testing.T) {
+	t.Parallel()
+	got := render(t, h.Div(h.DataClass("active", "$count > %d", 3)))
+	assert.Equal(t, `<div data-class:active="$count &gt; 3"></div>`, got,
+		"DataClass embeds the class in the suffix (data-class:active) and "+
+			"forwards format args, escaping the result")
+}
+
 func TestIf_rendersNodeOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
 	on := render(t, h.Div(h.If(true, h.P(h.Text("yes")))))
