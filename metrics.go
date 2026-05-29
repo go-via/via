@@ -25,6 +25,19 @@ type Metrics interface {
 	Histogram(name string, value float64, labels ...string)
 }
 
+// Disconnect reasons reported on the "reason" label of the
+// "via.sse.disconnect" counter (see the event catalogue above).
+const (
+	// disconnectClient covers the client going away on its own — the
+	// request context cancelling, a failed heartbeat/patch write, or an
+	// explicit tab-close beacon.
+	disconnectClient = "client"
+	// disconnectShutdown covers App.Shutdown disposing the ctx.
+	disconnectShutdown = "shutdown"
+	// disconnectTTL covers the idle-TTL sweep evicting the ctx.
+	disconnectTTL = "ttl"
+)
+
 // noopMetrics is the default backend. Every method is a no-op so apps
 // that haven't configured Metrics pay nothing on the hot path.
 type noopMetrics struct{}
