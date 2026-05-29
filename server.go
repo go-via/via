@@ -89,7 +89,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// Stream goroutines, user code watching Done) so they exit before
 	// we wait for action drain.
 	for _, c := range ctxs {
-		a.signalDispose(c)
+		a.signalDispose(c, disconnectShutdown)
 	}
 
 	// Step 2: drain in-flight non-SSE handlers via the http.Server.
@@ -105,7 +105,7 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// handlers that were mid-action have finished their work and OnDispose
 	// sees a quiescent composition.
 	for _, c := range ctxs {
-		a.disposeCtx(c)
+		a.disposeCtx(c, disconnectShutdown)
 	}
 
 	a.stopSweepOnce.Do(func() {

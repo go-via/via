@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -118,9 +119,85 @@ func TestMetrics_emitsSSEConnectAndDisconnect(t *testing.T) {
 		2*time.Second, 10*time.Millisecond,
 		"via.sse.connect must fire when the SSE stream opens")
 
-	// Closing the stream runs runSSEStream's deferred disconnect counter.
+	// Closing the stream client-side runs runSSEStream's deferred
+	// disconnect counter. The request context cancels, so the loop exits
+	// via sse.Context().Done() and the documented "client" reason label
+	// is emitted (see the catalogue in metrics.go).
 	cancel()
-	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:") },
+	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:reason,client") },
 		2*time.Second, 10*time.Millisecond,
-		"via.sse.disconnect must fire when the SSE stream closes")
+		"via.sse.disconnect must fire with reason=client when the client closes the stream")
+}
+
+func TestMetrics_SSEDisconnectReason_shutdown(t *testing.T) {
+	t.Parallel()
+	// App.Shutdown disposes every live Ctx, which wakes the SSE drain
+	// loop on <-ctx.doneChan. The documented contract labels that exit
+	// "shutdown" so an ops dashboard can separate graceful shutdowns
+	// from client navigations. Without the fix the counter is emitted
+	// label-less and this assertion fails.
+	m := &captureMetrics{}
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	via.Mount[metricsPage](app, "/")
+	defer server.Close()
+
+	hasCounter := func(name string) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return slices.Contains(m.counters, name)
+	}
+
+	tc := vt.NewClient(t, server, "/")
+	_, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Eventually(t, func() bool { return hasCounter("via.sse.connect:") },
+		2*time.Second, 10*time.Millisecond,
+		"via.sse.connect must fire when the SSE stream opens")
+
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer shutCancel()
+	require.NoError(t, app.Shutdown(shutCtx))
+
+	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:reason,shutdown") },
+		2*time.Second, 10*time.Millisecond,
+		"via.sse.disconnect must fire with reason=shutdown when the app shuts down")
+}
+
+func TestMetrics_SSEDisconnectReason_ttl(t *testing.T) {
+	t.Parallel()
+	// The idle-TTL sweep evicts a Ctx that has gone quiet and disposes
+	// it, waking the SSE drain loop on <-ctx.doneChan. The documented
+	// contract labels that exit "ttl". A short TTL keeps the test quick;
+	// the default 25s heartbeat never fires within the window, so the
+	// stream stays idle long enough to be swept.
+	m := &captureMetrics{}
+	var server *httptest.Server
+	app := via.New(
+		via.WithTestServer(&server),
+		via.WithMetrics(m),
+		via.WithContextTTL(40*time.Millisecond),
+	)
+	via.Mount[metricsPage](app, "/")
+	defer server.Close()
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer shutCancel()
+		_ = app.Shutdown(shutCtx)
+	}()
+
+	hasCounter := func(name string) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return slices.Contains(m.counters, name)
+	}
+
+	tc := vt.NewClient(t, server, "/")
+	_, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:reason,ttl") },
+		2*time.Second, 10*time.Millisecond,
+		"via.sse.disconnect must fire with reason=ttl when the idle-TTL sweep evicts the Ctx")
 }
