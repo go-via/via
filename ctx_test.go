@@ -324,6 +324,11 @@ func (p *ctxScriptPage) DoToastHTML(ctx *via.Ctx) error {
 	return nil
 }
 
+func (p *ctxScriptPage) DoToastScriptBreakout(ctx *via.Ctx) error {
+	ctx.Toast(`</script><img src=x onerror=boom()>`)
+	return nil
+}
+
 func (p *ctxScriptPage) DoRedirect(ctx *via.Ctx) error {
 	ctx.Redirect("/elsewhere")
 	return nil
@@ -405,10 +410,11 @@ func TestCtx_Toast_injectsMessageAsJSStringLiteral(t *testing.T) {
 
 func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
 	t.Parallel()
-	// A message containing HTML must never reach the wire as live markup —
-	// the toast renders it as text. json.Marshal HTML-escapes the angle
-	// brackets to the < / > unicode forms, so the injected
-	// onerror handler arrives as inert text and can't execute.
+	// json.Marshal HTML-escapes the angle brackets and ampersand to their
+	// unicode-escaped forms, so an HTML payload reaches the wire as an
+	// inert JSON string literal, never as live markup. The test inspects
+	// the emitted frame (not the DOM): a SetEscapeHTML(false) regression
+	// would surface a literal "<img" here and fail the assertion.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[ctxScriptPage](app, "/")
@@ -422,6 +428,28 @@ func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
 	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "boom()")
 	assert.NotContains(t, frame, "<img",
 		"user HTML must be escaped, never emitted as live markup")
+}
+
+func TestCtx_Toast_cannotBreakOutOfTheScriptElement(t *testing.T) {
+	t.Parallel()
+	// datastar delivers the toast snippet inside a <script>…</script>
+	// element, so a message carrying a literal </script> is the
+	// element-breakout vector. json.Marshal escapes < and >, so the
+	// sequence can't appear verbatim and the message stays inside the
+	// script.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[ctxScriptPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK, tc.Action("DoToastScriptBreakout").Fire())
+	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "boom()")
+	assert.NotContains(t, frame, "</script><img",
+		"a </script> in the message must not break out of the datastar script element")
 }
 
 func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {

@@ -164,13 +164,13 @@ const (
 		`font:500 .9rem/1.4 system-ui,-apple-system,sans-serif;padding:.7rem .9rem;` +
 		`border-radius:.5rem;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;` +
 		`transform:translateY(.6rem);transition:opacity .22s ease,transform .22s ease;` +
-		`word-break:break-word}.via-toast[data-show]{opacity:1;transform:none}";` +
+		`overflow-wrap:anywhere}.via-toast[data-show]{opacity:1;transform:none}";` +
 		`document.head.appendChild(s)}` +
 		`var root=document.getElementById("via-toast-root");` +
 		`if(!root){root=document.createElement("div");root.id="via-toast-root";` +
+		`root.setAttribute("role","status");root.setAttribute("aria-live","polite");` +
 		`document.body.appendChild(root)}` +
 		`var el=document.createElement("div");el.className="via-toast";` +
-		`el.setAttribute("role","status");el.setAttribute("aria-live","polite");` +
 		`el.textContent=m;root.appendChild(el);` +
 		`requestAnimationFrame(function(){el.setAttribute("data-show","")});` +
 		`setTimeout(function(){el.removeAttribute("data-show");` +
