@@ -8,6 +8,9 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/go-via/via)](https://goreportcard.com/report/github.com/go-via/via)
 [![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-go--via.github.io%2Fvia-blue)](https://go-via.github.io/via)
+
+📖 **[Documentation site](https://go-via.github.io/via)** · [API reference](https://pkg.go.dev/github.com/go-via/via)
 
 Reactive web apps in pure Go. A composition is a struct. Reactive state
 is a typed field. Actions are methods. The compiler understands your UI.

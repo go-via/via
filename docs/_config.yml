@@ -1,0 +1,38 @@
+title: Via
+description: >-
+  Reactive web apps in pure Go. Typed client/server state, no build step,
+  SSE-only transport.
+
+# Built and deployed by .github/workflows/pages.yml with a pinned
+# just-the-docs gem (see docs/Gemfile), so the theme version is locked
+# rather than tracking a remote default.
+theme: just-the-docs
+
+# Project page lives at https://go-via.github.io/via
+url: https://go-via.github.io
+baseurl: /via
+
+color_scheme: dark
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  GitHub: https://github.com/go-via/via
+  pkg.go.dev: https://pkg.go.dev/github.com/go-via/via
+aux_links_new_tab: true
+
+callouts:
+  note:
+    title: Note
+    color: blue
+  warning:
+    title: Heads up
+    color: red
+
+footer_content: >-
+  Via is MIT licensed. Pre-1.0 — APIs may shift between minor versions.
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor

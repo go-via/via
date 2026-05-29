@@ -1,3 +1,8 @@
+---
+title: h helpers reference
+nav_order: 11
+---
+
 # `h` package helpers
 
 Full reference for [`github.com/go-via/via/h`](https://pkg.go.dev/github.com/go-via/via/h).
