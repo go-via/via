@@ -28,7 +28,7 @@ type Ctx struct {
 	queue      *patchQueue
 	doneChan   chan struct{}
 	disposed   bool
-	session    *session
+	session    atomic.Pointer[session]
 	lastAccess atomic.Int64
 
 	// lastSignals holds the most recent signals payload from an action
@@ -207,7 +207,7 @@ func (ctx *Ctx) Session() *Session {
 	if ctx == nil {
 		return &Session{}
 	}
-	return &Session{data: ctx.session, ctx: ctx, app: ctx.app}
+	return &Session{data: ctx.session.Load(), ctx: ctx, app: ctx.app}
 }
 
 // Cookie returns the value of the named cookie on the in-flight request,

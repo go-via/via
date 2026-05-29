@@ -103,7 +103,7 @@ func (s *Session) Rotate() string {
 	}
 	app.sessionsMu.Unlock()
 
-	s.ctx.session = fresh
+	s.ctx.session.Store(fresh)
 	s.data = fresh
 
 	if w := s.ctx.Writer(); w != nil {

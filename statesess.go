@@ -30,11 +30,15 @@ func (s *StateSess[T]) Read(rc readCtx) T {
 		return zero
 	}
 	ctx := rc.rctx()
-	if ctx == nil || ctx.session == nil {
+	if ctx == nil {
+		return zero
+	}
+	sess := ctx.session.Load()
+	if sess == nil {
 		return zero
 	}
 	ctx.trackRead(s.wireKey)
-	v, ok := ctx.session.data.Load(s.wireKey)
+	v, ok := sess.data.Load(s.wireKey)
 	if !ok {
 		return zero
 	}
@@ -61,10 +65,11 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if ctx == nil {
 		panic("via: StateSess.Update called with nil *Ctx")
 	}
-	if fn == nil || ctx.session == nil || ctx.app == nil {
+	sess := ctx.session.Load()
+	if fn == nil || sess == nil || ctx.app == nil {
 		return nil
 	}
-	_, err := ctx.session.data.Update(s.wireKey, func(old any) (any, error) {
+	_, err := sess.data.Update(s.wireKey, func(old any) (any, error) {
 		t, _ := old.(T)
 		return fn(t)
 	})
@@ -72,7 +77,7 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		return err
 	}
 	ctx.markStateDirty()
-	ctx.app.broadcastRender(ctx, ctx.session, s.wireKey)
+	ctx.app.broadcastRender(ctx, sess, s.wireKey)
 	return nil
 }
 

@@ -34,7 +34,7 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -229,7 +229,7 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 	}
 	tabID := strings.TrimSpace(string(body))
 	if ctx, ok := a.getCtx(tabID); ok {
-		if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+		if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
 			return
 		}
 		// Unregister first so concurrent action handlers see "not
