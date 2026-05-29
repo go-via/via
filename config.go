@@ -91,7 +91,7 @@ func WithSSEWriteTimeout(d time.Duration) Option {
 // [WithInsecureCookies].
 func WithSecureCookies() Option {
 	return func(c *config) {
-		if c.cookieSecuritySet {
+		if c.cookieSecuritySet && !c.secureCookies {
 			panic("via: conflicting cookie security options")
 		}
 		c.secureCookies = true
@@ -106,7 +106,7 @@ func WithSecureCookies() Option {
 // Conflicts with [WithSecureCookies].
 func WithInsecureCookies() Option {
 	return func(c *config) {
-		if c.cookieSecuritySet {
+		if c.cookieSecuritySet && c.secureCookies {
 			panic("via: conflicting cookie security options")
 		}
 		c.secureCookies = false

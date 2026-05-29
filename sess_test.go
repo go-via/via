@@ -76,6 +76,19 @@ func TestSession_rejectsConflictingCookieOptions(t *testing.T) {
 	}, "the conflict must be detected regardless of option order")
 }
 
+func TestSession_repeatedCookieOptionIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	// Conditionally appended options can repeat the same choice; only a
+	// genuine secure-vs-insecure conflict should fail, not a redundant set.
+	assert.NotPanics(t, func() {
+		via.New(via.WithSecureCookies(), via.WithSecureCookies())
+	}, "the same option twice is redundant, not a conflict")
+	assert.NotPanics(t, func() {
+		via.New(via.WithInsecureCookies(), via.WithInsecureCookies())
+	}, "the same option twice is redundant, not a conflict")
+}
+
 func TestSession_secureFlagWhenWithSecureCookiesEnabled(t *testing.T) {
 	t.Parallel()
 
