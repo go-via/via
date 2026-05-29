@@ -35,7 +35,7 @@ func swapDefaultTransport(t *testing.T) *atomic.Int32 {
 	return &hits
 }
 
-func TestNewClient_usesIsolatedHTTPTransport(t *testing.T) {
+func TestNewClient_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
 	hits := swapDefaultTransport(t)
 
 	var server *httptest.Server
@@ -51,7 +51,7 @@ func TestNewClient_usesIsolatedHTTPTransport(t *testing.T) {
 			"tests' server.Close() can't disturb each other's idle pools")
 }
 
-func TestClient_Fork_usesIsolatedHTTPTransport(t *testing.T) {
+func TestClient_Fork_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[tcPage](app, "/")
@@ -67,7 +67,7 @@ func TestClient_Fork_usesIsolatedHTTPTransport(t *testing.T) {
 		"Fork's http.Client must use its own Transport, not http.DefaultTransport")
 }
 
-func TestClient_SSE_usesIsolatedHTTPTransport(t *testing.T) {
+func TestClient_SSE_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[tcPage](app, "/")
