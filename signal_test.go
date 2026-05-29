@@ -295,6 +295,67 @@ func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	vt.AwaitFrame(t, frames, 2*time.Second, `"bal":0.75`)
 }
 
+type scalarDecodePage struct {
+	U via.SignalNum[uint]    `via:"u,init=5"`
+	F via.SignalNum[float64] `via:"f,init=2.5"`
+	B via.SignalBool         `via:"b,init=true"`
+}
+
+func (p *scalarDecodePage) Bump(ctx *via.Ctx) error {
+	p.U.Op(ctx).Add(10)
+	p.F.Op(ctx).Add(0.5)
+	_ = p.B.Update(ctx, func(b bool) (bool, error) { return !b, nil })
+	return nil
+}
+
+func (p *scalarDecodePage) View(ctx *via.CtxR) h.H {
+	return h.Div(p.U.Text(), p.F.Text(), p.B.Text())
+}
+
+func TestSignalInit_decodesUintAndFloatFromTagStrings(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[scalarDecodePage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+
+	// init= values arrive as raw strings and must ParseUint / ParseFloat
+	// into the typed signal. The data-signals payload is HTML-escaped in
+	// the <meta> attribute, so the decoded values read as &#34;u&#34;:5.
+	html := tc.HTML()
+	assert.Contains(t, html, `&#34;u&#34;:5`, "uint init= string must decode")
+	assert.Contains(t, html, `&#34;f&#34;:2.5`, "float init= string must decode")
+}
+
+func TestSignalAction_coercesUintFloatBoolFromJSONPayload(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[scalarDecodePage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	// Signals in an action payload arrive as JSON: numbers as float64,
+	// booleans as bool. The handler's Op/Update results prove each value
+	// was coerced into its destination kind before the handler ran —
+	// u: 5+10=15, f: 2.5+0.5=3, b: true→false.
+	status := tc.Action("Bump").
+		WithSignal("u", 5).
+		WithSignal("f", 2.5).
+		WithSignal("b", true).
+		Fire()
+	require.Equal(t, http.StatusOK, status)
+
+	vt.AwaitFrame(t, frames, 2*time.Second, `"u":15`, `"f":3`, `"b":false`)
+}
+
 func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	t.Parallel()
 	// Mirror of TestUpdate_flipsBoolStateTabSurfacingInView for numeric

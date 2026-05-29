@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"errors"
 	"net/http/httptest"
 	"sync"
 	"testing"
@@ -148,4 +149,45 @@ func TestStateApp_panicsOnNilCtxUpdate(t *testing.T) {
 		"via: StateApp.Update called with nil *Ctx",
 		func() { _ = a.Update(nil, func(int) (int, error) { return 1, nil }) },
 	)
+}
+
+var errAppUpdateRejected = errors.New("app update rejected")
+
+type appUpdateErrPage struct {
+	Visits  via.StateApp[int]
+	LastErr via.StateTabStr
+}
+
+func (p *appUpdateErrPage) Try(ctx *via.Ctx) error {
+	if err := p.Visits.Update(ctx, func(n int) (int, error) {
+		return n + 100, errAppUpdateRejected
+	}); err != nil {
+		p.LastErr.Write(ctx, err.Error())
+	}
+	return nil
+}
+
+func (p *appUpdateErrPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Span(h.ID("err"), p.LastErr.Text(ctx)),
+		h.Span(h.ID("val"), p.Visits.Text(ctx)),
+	)
+}
+
+func TestStateApp_updateErrorIsReturnedAndLeavesStoreUnchanged(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[appUpdateErrPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	// fn returns an error, so the +100 must NOT be stored and the error
+	// must propagate back to the caller.
+	require.Equal(t, 200, tc.Action("Try").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second,
+		`id="err">app update rejected`, `id="val">0`)
 }

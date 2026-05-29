@@ -326,3 +326,44 @@ drain2:
 		// silence is the success path
 	}
 }
+
+func TestTicker_controlsAreNilSafeAndStreamRejectsBadArgs(t *testing.T) {
+	t.Parallel()
+
+	// Stream returns nil for invalid args; the documented contract is that
+	// the returned controls are then safe to call (and safe to ignore).
+	assert.Nil(t, via.Stream(nil, time.Second, func(*via.Ctx, time.Time) {}),
+		"Stream(nil ctx) must return a nil Ticker")
+
+	var tk *via.Ticker
+	require.NotPanics(t, func() {
+		tk.Pause()
+		tk.Resume()
+		tk.SetInterval(time.Second)
+		tk.SetInterval(0) // non-positive interval is also a no-op
+		tk.Stop()
+	}, "every Ticker control must be a no-op on a nil handle")
+}
+
+func TestTicker_stopIsIdempotent(t *testing.T) {
+	t.Parallel()
+	// Stop swaps a stopped flag before close(t.stop); a second Stop must
+	// take the early return rather than double-closing the channel (which
+	// would panic the action handler).
+	app, server, logger := newLoggedApp(t, via.LogError)
+	via.Mount[tickerStopPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSE()
+	defer cancel()
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="n"`)
+
+	require.Equal(t, http.StatusOK, tc.Action("Halt").Fire())
+	require.Equal(t, http.StatusOK, tc.Action("Halt").Fire(),
+		"a second Stop must be a safe no-op")
+
+	for _, r := range logger.snapshot() {
+		assert.NotContains(t, r.msg, "panic",
+			"a second Stop must not double-close the channel")
+	}
+}

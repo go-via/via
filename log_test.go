@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"bytes"
+	"log"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -258,4 +259,89 @@ func TestSlogLogger_routesRecordsToProvidedSlog(t *testing.T) {
 	require.Contains(t, out, `"level":"ERROR"`)
 	require.Contains(t, out, `"msg":"action \"Boom\" panicked: boom"`)
 	require.Contains(t, out, `"via_tab":`)
+}
+
+func TestSlogLogger_mapsViaLevelsToSlogLevels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		level via.LogLevel
+		want  string
+	}{
+		{"debug", via.LogDebug, "level=DEBUG"},
+		{"info", via.LogInfo, "level=INFO"},
+		{"warn", via.LogWarn, "level=WARN"},
+		{"error", via.LogError, "level=ERROR"},
+		{"unknown defaults to info", via.LogLevel(99), "level=INFO"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf bytes.Buffer
+			h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+			via.SlogLogger(slog.New(h)).Log(tt.level, "hello", "k", "v")
+			out := buf.String()
+			assert.Contains(t, out, tt.want, "via level must map to the slog level")
+			assert.Contains(t, out, "msg=hello")
+			assert.Contains(t, out, "k=v", "field pairs must pass through as slog attrs")
+		})
+	}
+}
+
+func TestSlogLogger_nilLoggerFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+	require.NotNil(t, via.SlogLogger(nil),
+		"SlogLogger(nil) must fall back to slog.Default(), not return nil")
+}
+
+func TestSlogLogger_logsRecordWithoutFieldPairs(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	via.SlogLogger(slog.New(h)).Log(via.LogInfo, "no fields here")
+	assert.Contains(t, buf.String(), `msg="no fields here"`,
+		"a record with no kv pairs must still log its message")
+}
+
+func TestDefaultLogger_tagsLevelsAndStripsCRLF(t *testing.T) { //nolint:paralleltest // redirects the process-global standard logger via log.SetOutput
+	var buf bytes.Buffer
+	oldOut, oldFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(oldOut); log.SetFlags(oldFlags) })
+
+	logger := via.Log(nil) // ctx == nil → the bare default logger
+
+	levels := []struct {
+		name  string
+		level via.LogLevel
+		tag   string
+	}{
+		{"debug", via.LogDebug, "[debug]"},
+		{"info", via.LogInfo, "[info]"},
+		{"warn", via.LogWarn, "[warn]"},
+		{"error", via.LogError, "[error]"},
+		{"unknown defaults to info", via.LogLevel(99), "[info]"},
+	}
+	for _, l := range levels {
+		buf.Reset()
+		logger.Log(l.level, "hello")
+		assert.Contains(t, buf.String(), l.tag+" hello",
+			"default logger must prefix the level tag")
+	}
+
+	// CWE-117: CR/LF in the message must be stripped so user-controlled
+	// content can't forge a new log line.
+	buf.Reset()
+	logger.Log(via.LogError, "line1\nline2")
+	assert.Contains(t, buf.String(), "[error] line1line2",
+		"default logger must strip CR/LF from the message")
+
+	// And from field values on the kv path.
+	buf.Reset()
+	logger.Log(via.LogInfo, "evt", "field", "a\r\nb")
+	assert.Contains(t, buf.String(), "[info] evt field=ab",
+		"default logger must strip CR/LF from field values")
 }

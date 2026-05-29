@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -65,6 +66,72 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 		WithSignal("password", "secret").
 		WithSignal("age", 3).Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, "alice@example.com|secret|***")
+}
+
+func TestDecodeForm_decodesBoolSignalIntoTypedField(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[formFallbackPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	// A bool signal arrives as a JSON bool; formatScalar must stringify it
+	// so decodeScalarString can ParseBool it into the typed bool field.
+	// City/Age are absent, so the captured result is "" | "" | true.
+	require.Equal(t, 200, tc.Action("Submit").WithSignal("on", true).Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, "||true")
+}
+
+func TestDecodeForm_nilContextIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	var f loginForm
+	require.NotPanics(t, func() { via.DecodeForm(nil, &f) })
+	require.Equal(t, loginForm{}, f, "nil ctx must leave the struct at its zero value")
+}
+
+type numericForm struct {
+	Count uint    `form:"count"`
+	Ratio float64 `form:"ratio"`
+}
+
+type numericFormPage struct {
+	Captured via.StateTabStr
+}
+
+func (p *numericFormPage) Submit(ctx *via.Ctx) error {
+	var f numericForm
+	via.DecodeForm(ctx, &f)
+	p.Captured.Write(ctx, fmt.Sprintf("%d|%g", f.Count, f.Ratio))
+	return nil
+}
+
+func (p *numericFormPage) View(ctx *via.CtxR) h.H { return h.Div(p.Captured.Text(ctx)) }
+
+func TestDecodeForm_decodesUintAndFloatSignals(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[numericFormPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	// JSON numbers reach DecodeForm as float64; formatScalar stringifies
+	// them so decodeScalarString can ParseUint / ParseFloat into the
+	// uint and float64 fields.
+	require.Equal(t, 200, tc.Action("Submit").
+		WithSignal("count", 7).
+		WithSignal("ratio", 2.5).Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, "7|2.5")
 }
 
 type formNoTag struct {
