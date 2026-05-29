@@ -276,7 +276,8 @@ The action body can:
 - Write typed state: `c.Hits.Write(ctx, …)` or `c.Hits.Op(ctx).Add(1)`.
 - Push targeted patches: `ctx.Patch.Elements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.Patch.Signal("_picoTheme", "purple")`.
-- Show a quick alert: `ctx.Toast("saved!")` (JSON-safe).
+- Show a quick toast: `ctx.Toast("saved!")` — a styled, non-blocking
+  notice that auto-dismisses (JSON-safe, zero setup).
 - Redirect: `ctx.Redirect("/profile")`.
 - Decode the request payload into a typed struct:
 

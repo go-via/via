@@ -124,7 +124,7 @@ type assertSaveErr string
 
 func (e assertSaveErr) Error() string { return string(e) }
 
-func TestAction_defaultErrorPathAlertsTheBrowser(t *testing.T) {
+func TestAction_defaultErrorPathToastsTheBrowser(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -137,9 +137,12 @@ func TestAction_defaultErrorPathAlertsTheBrowser(t *testing.T) {
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Save").Fire())
 
-	// The default action-error handler queues alert("…"). The script
-	// arrives in the SSE stream as a datastar-execute-script event.
-	vt.AwaitFrame(t, frames, 2*time.Second, `alert("validation: email required")`)
+	// A returned error surfaces its message through the default toast,
+	// which arrives in the SSE stream as a script-patch event.
+	got := vt.AwaitFrame(t, frames, 2*time.Second,
+		"via-toast-root", "validation: email required")
+	assert.NotContains(t, got, "alert(",
+		"default error surface must be a styled toast, not a blocking alert")
 }
 
 type customErrPage struct{}
@@ -158,7 +161,7 @@ func (p *panicStringPage) Crash(ctx *via.Ctx) error {
 
 func (p *panicStringPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
-func TestAction_defaultPanicAlertHidesInternalMessage(t *testing.T) {
+func TestAction_defaultPanicToastHidesInternalMessage(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -171,9 +174,10 @@ func TestAction_defaultPanicAlertHidesInternalMessage(t *testing.T) {
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Crash").Fire())
 
-	got := vt.AwaitFrame(t, frames, 2*time.Second, `alert("Something went wrong")`)
+	got := vt.AwaitFrame(t, frames, 2*time.Second,
+		"via-toast-root", "Something went wrong")
 	assert.NotContains(t, got, "secret-leaks-here",
-		"default panic alert must not leak the internal panic message")
+		"default panic toast must not leak the internal panic message")
 }
 
 type panicTypedErr struct {

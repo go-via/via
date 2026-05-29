@@ -319,6 +319,16 @@ func (p *ctxScriptPage) DoToastSpecial(ctx *via.Ctx) error {
 	return nil
 }
 
+func (p *ctxScriptPage) DoToastHTML(ctx *via.Ctx) error {
+	ctx.Toast(`<img src=x onerror="boom()">`)
+	return nil
+}
+
+func (p *ctxScriptPage) DoToastScriptBreakout(ctx *via.Ctx) error {
+	ctx.Toast(`</script><img src=x onerror=boom()>`)
+	return nil
+}
+
 func (p *ctxScriptPage) DoRedirect(ctx *via.Ctx) error {
 	ctx.Redirect("/elsewhere")
 	return nil
@@ -358,7 +368,7 @@ func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	vt.AwaitFrame(t, frames, 2*time.Second, "location.reload()")
 }
 
-func TestCtx_Toast_emitsAlertScript(t *testing.T) {
+func TestCtx_Toast_rendersStyledToastNotAlert(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -371,15 +381,18 @@ func TestCtx_Toast_emitsAlertScript(t *testing.T) {
 	defer cancel()
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToast").Fire())
-	vt.AwaitFrame(t, frames, 2*time.Second, `alert("saved!")`)
+	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "saved!")
+	assert.NotContains(t, frame, "alert(",
+		"default toast must not fall back to a blocking window.alert")
 }
 
-func TestCtx_Toast_JSONEncodesSpecialChars(t *testing.T) {
+func TestCtx_Toast_injectsMessageAsJSStringLiteral(t *testing.T) {
 	t.Parallel()
-	// JSON encodes the inner quote as \" and the newline as \n — both
-	// match exactly how a JS engine parses a string literal. Catches a
-	// regression where Toast started using fmt.Sprintf("alert(%q)") which
-	// would produce Go-quote escaping incompatible with JS.
+	// The message rides into the toast script as a JSON-encoded literal:
+	// the inner quote becomes \" and the newline \n, matching how a JS
+	// engine parses a string literal. Catches a regression where Toast
+	// interpolated the raw message into the script and let it break out
+	// of the string context.
 	var server *httptest.Server
 	app := via.New(via.WithTestServer(&server))
 	via.Mount[ctxScriptPage](app, "/")
@@ -390,8 +403,53 @@ func TestCtx_Toast_JSONEncodesSpecialChars(t *testing.T) {
 	defer cancel()
 
 	require.Equal(t, http.StatusOK, tc.Action("DoToastSpecial").Fire())
-	vt.AwaitFrame(t, frames, 2*time.Second,
-		`alert("he said \"ok\\n done\"")`)
+	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root",
+		`"he said \"ok\\n done\""`)
+	assert.NotContains(t, frame, "alert(")
+}
+
+func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
+	t.Parallel()
+	// json.Marshal HTML-escapes the angle brackets and ampersand to their
+	// unicode-escaped forms, so an HTML payload reaches the wire as an
+	// inert JSON string literal, never as live markup. The test inspects
+	// the emitted frame (not the DOM): a SetEscapeHTML(false) regression
+	// would surface a literal "<img" here and fail the assertion.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[ctxScriptPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK, tc.Action("DoToastHTML").Fire())
+	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "boom()")
+	assert.NotContains(t, frame, "<img",
+		"user HTML must be escaped, never emitted as live markup")
+}
+
+func TestCtx_Toast_cannotBreakOutOfTheScriptElement(t *testing.T) {
+	t.Parallel()
+	// datastar delivers the toast snippet inside a <script>…</script>
+	// element, so a message carrying a literal </script> is the
+	// element-breakout vector. json.Marshal escapes < and >, so the
+	// sequence can't appear verbatim and the message stays inside the
+	// script.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[ctxScriptPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK, tc.Action("DoToastScriptBreakout").Fire())
+	frame := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "boom()")
+	assert.NotContains(t, frame, "</script><img",
+		"a </script> in the message must not break out of the datastar script element")
 }
 
 func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
@@ -475,7 +533,7 @@ func TestCtx_Redirect_dropsDangerousURLs(t *testing.T) {
 			require.Equal(t, http.StatusOK,
 				tc.Action("Go").WithSignal("url", tt.url).Fire())
 			require.Equal(t, http.StatusOK, tc.Action("Ack").Fire())
-			body := vt.AwaitFrame(t, frames, 2*time.Second, `alert("ack")`)
+			body := vt.AwaitFrame(t, frames, 2*time.Second, "via-toast-root", "ack")
 			assert.NotContains(t, body, "window.location.href",
 				"dangerous URL must not produce a redirect frame")
 			assert.NotContains(t, body, tt.url,
@@ -776,7 +834,7 @@ func (p *syncOffPanicPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx))
 
 func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
 	t.Parallel()
-	// dispatchActionError enqueues a script (alert) directly onto the
+	// dispatchActionError enqueues a toast script directly onto the
 	// patch queue. SyncOff suppresses dirty-bit flushes but must not
 	// swallow explicit publish primitives — otherwise a panicking
 	// silent action would fail without any user-visible signal.
@@ -829,7 +887,7 @@ func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
 		action string
 		expect string
 	}{
-		{"Toast", "SilentToast", `alert("ping")`},
+		{"Toast", "SilentToast", "ping"},
 		{"PatchSignal", "SilentPatchSignal", "hello"},
 		{"SyncElements", "SilentSyncElements", `id="marker"`},
 	}
