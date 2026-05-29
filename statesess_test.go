@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -220,4 +221,43 @@ func TestStateSess_panicsOnNilCtxUpdate(t *testing.T) {
 		"via: StateSess.Update called with nil *Ctx",
 		func() { _ = s.Update(nil, func(int) (int, error) { return 1, nil }) },
 	)
+}
+
+var errSessUpdateRejected = errors.New("sess update rejected")
+
+type sessUpdateErrPage struct {
+	Count   via.StateSess[int]
+	LastErr via.StateTabStr
+}
+
+func (p *sessUpdateErrPage) Try(ctx *via.Ctx) error {
+	if err := p.Count.Update(ctx, func(n int) (int, error) {
+		return n + 100, errSessUpdateRejected
+	}); err != nil {
+		p.LastErr.Write(ctx, err.Error())
+	}
+	return nil
+}
+
+func (p *sessUpdateErrPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Span(h.ID("err"), p.LastErr.Text(ctx)),
+		h.Span(h.ID("val"), p.Count.Text(ctx)),
+	)
+}
+
+func TestStateSess_updateErrorIsReturnedAndLeavesStoreUnchanged(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[sessUpdateErrPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, 200, tc.Action("Try").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second,
+		`id="err">sess update rejected`, `id="val">0`)
 }

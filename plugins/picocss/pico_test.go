@@ -2,6 +2,7 @@ package picocss_test
 
 import (
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -63,4 +64,68 @@ func TestPicocss_servesThemeCSS(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, 200, resp.StatusCode)
 	assert.Equal(t, "text/css", resp.Header.Get("Content-Type"))
+}
+
+func picoBlueServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
+	}
+	var server *httptest.Server
+	_ = via.New(
+		via.WithPlugins(picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue}))),
+		via.WithTestServer(&server),
+	)
+	t.Cleanup(func() { server.Close() })
+	return server
+}
+
+func TestPicocss_servesUncompressedCSSWhenGzipNotAccepted(t *testing.T) {
+	t.Parallel()
+	server := picoBlueServer(t)
+
+	// Go's transport auto-adds Accept-Encoding: gzip; "identity" opts out
+	// so the uncompressed branch runs.
+	req, _ := http.NewRequest("GET", server.URL+"/_plugins/picocss/theme/blue", nil)
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Content-Encoding"),
+		"without gzip in Accept-Encoding the CSS must be served uncompressed")
+	body, _ := io.ReadAll(resp.Body)
+	assert.NotEmpty(t, body, "uncompressed branch must still return the CSS body")
+}
+
+func TestPicocss_returns404ForUnknownTheme(t *testing.T) {
+	t.Parallel()
+	server := picoBlueServer(t)
+
+	resp, err := server.Client().Get(server.URL + "/_plugins/picocss/theme/no-such-theme")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"a theme that was never fetched must 404, not serve empty CSS")
+}
+
+func TestPicocss_revalidatesThemeCSSWithETag(t *testing.T) {
+	t.Parallel()
+	server := picoBlueServer(t)
+	url := server.URL + "/_plugins/picocss/theme/blue"
+
+	first, err := server.Client().Get(url)
+	require.NoError(t, err)
+	first.Body.Close()
+	etag := first.Header.Get("ETag")
+	require.NotEmpty(t, etag, "theme CSS must carry an ETag for revalidation")
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("If-None-Match", etag)
+	second, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer second.Body.Close()
+	assert.Equal(t, http.StatusNotModified, second.StatusCode,
+		"a matching If-None-Match must yield 304, not re-send the body")
 }

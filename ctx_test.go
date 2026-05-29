@@ -49,6 +49,67 @@ func TestCookie_readsValueFromRequest(t *testing.T) {
 		"ctx.Cookie should read the named cookie off the in-flight request")
 }
 
+type cookieWritePage struct {
+	Seen via.StateTabStr
+}
+
+func (p *cookieWritePage) SetPref(ctx *via.Ctx) error {
+	ctx.SetCookie(&http.Cookie{Name: "pref", Value: "dark", Path: "/"})
+	return nil
+}
+
+func (p *cookieWritePage) Forget(ctx *via.Ctx) error {
+	ctx.DelCookie("pref")
+	return nil
+}
+
+func (p *cookieWritePage) Show(ctx *via.Ctx) error {
+	p.Seen.Write(ctx, "pref=["+ctx.Cookie("pref")+"]")
+	return nil
+}
+
+func (p *cookieWritePage) View(ctx *via.CtxR) h.H {
+	return h.Div(p.Seen.Text(ctx))
+}
+
+func TestSetCookie_writesCookieReadableOnNextAction(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[cookieWritePage](app, "/")
+	defer server.Close()
+
+	// vt's client shares a cookie jar: a cookie SetCookie writes on one
+	// action's response is sent back on the next request, where ctx.Cookie
+	// reads it.
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, 200, tc.Action("SetPref").Fire())
+	require.Equal(t, 200, tc.Action("Show").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, "pref=[dark]")
+}
+
+func TestDelCookie_clearsCookieForNextAction(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[cookieWritePage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, 200, tc.Action("SetPref").Fire())
+	require.Equal(t, 200, tc.Action("Forget").Fire())
+	require.Equal(t, 200, tc.Action("Show").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, "pref=[]")
+}
+
 type searchPage struct {
 	Q     string `query:"q"`
 	Page  int    `query:"page"`
@@ -138,6 +199,32 @@ func (d *disposable) OnDispose(ctx *via.Ctx) {
 }
 
 func (d *disposable) View(ctx *via.CtxR) h.H { return h.Div() }
+
+var sweepDisposed atomic.Bool
+
+type sweepDisposePage struct{}
+
+func (p *sweepDisposePage) OnDispose(ctx *via.Ctx) { sweepDisposed.Store(true) }
+
+func (p *sweepDisposePage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestContextSweep_disposesIdleTabAfterTTL(t *testing.T) {
+	t.Parallel()
+	sweepDisposed.Store(false)
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server), via.WithContextTTL(40*time.Millisecond))
+	via.Mount[sweepDisposePage](app, "/")
+	defer server.Close()
+
+	// A plain GET registers an idle Ctx; with no SSE or action to touch it,
+	// the background TTL sweep (every contextTTL/2) must remove and dispose
+	// it once it passes the idle cutoff.
+	_ = vt.NewClient(t, server, "/")
+
+	require.Eventually(t, sweepDisposed.Load, 3*time.Second, 10*time.Millisecond,
+		"an idle tab's Ctx must be swept (OnDispose run) after the context TTL")
+}
 
 var (
 	disposedFalseInsideOnConnect atomic.Bool
@@ -516,6 +603,8 @@ func TestCtx_Redirect_dropsDangerousURLs(t *testing.T) {
 		{"vbscript scheme", "vbscript:msgbox"},
 		{"uppercase javascript", "JavaScript:alert(1)"},
 		{"whitespace javascript", " javascript:alert(1)"},
+		{"backslash protocol relative", `\\evil.example/path`},
+		{"whitespace and control chars only", "   \t  "},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {

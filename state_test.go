@@ -101,6 +101,42 @@ func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 		"StateTab[string] with init=-- must render the seeded value on first load")
 }
 
+type stateScalarTextPage struct {
+	On    via.StateTabBool         `via:"on,init=true"`
+	Off   via.StateTabBool         `via:"off"`
+	Count via.StateTabNum[uint]    `via:"count,init=42"`
+	Ratio via.StateTabNum[float64] `via:"ratio,init=2.5"`
+	Tags  via.StateTab[[]string]   `via:"tags"`
+}
+
+func (p *stateScalarTextPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Span(h.ID("on"), p.On.Text(ctx)),
+		h.Span(h.ID("off"), p.Off.Text(ctx)),
+		h.Span(h.ID("count"), p.Count.Text(ctx)),
+		h.Span(h.ID("ratio"), p.Ratio.Text(ctx)),
+		h.Span(h.ID("tags"), p.Tags.Text(ctx)),
+	)
+}
+
+func TestStateTabText_rendersBoolUintFloatAndCompositeKinds(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateScalarTextPage](app, "/")
+	defer server.Close()
+
+	// StateTab[T].Text routes every value kind through scalarString; the
+	// existing tests only exercised string + int.
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `<span id="on">true</span>`, "bool true")
+	assert.Contains(t, body, `<span id="off">false</span>`, "bool false")
+	assert.Contains(t, body, `<span id="count">42</span>`, "uint")
+	assert.Contains(t, body, `<span id="ratio">2.5</span>`, "float64")
+	assert.Contains(t, body, `<span id="tags">null</span>`,
+		"a composite StateTab value falls back to JSON (nil slice → null)")
+}
+
 // Update — read-modify-write on StateTab[T] and Signal[T]
 
 type updatePage struct {

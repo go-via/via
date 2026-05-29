@@ -3,8 +3,10 @@ package via_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -91,4 +93,34 @@ func TestMetrics_emitsActionAndRenderEvents(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "via.ctx.live gauge must fire on tab register")
+}
+
+func TestMetrics_emitsSSEConnectAndDisconnect(t *testing.T) {
+	t.Parallel()
+	// The action/render test never opens an SSE stream, so the documented
+	// sse.connect / sse.disconnect lifecycle counters need their own pass.
+	m := &captureMetrics{}
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	via.Mount[metricsPage](app, "/")
+	defer server.Close()
+
+	hasCounter := func(name string) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return slices.Contains(m.counters, name)
+	}
+
+	tc := vt.NewClient(t, server, "/")
+	_, cancel := tc.SSEReady()
+
+	require.Eventually(t, func() bool { return hasCounter("via.sse.connect:") },
+		2*time.Second, 10*time.Millisecond,
+		"via.sse.connect must fire when the SSE stream opens")
+
+	// Closing the stream runs runSSEStream's deferred disconnect counter.
+	cancel()
+	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:") },
+		2*time.Second, 10*time.Millisecond,
+		"via.sse.disconnect must fire when the SSE stream closes")
 }
