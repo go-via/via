@@ -40,7 +40,40 @@ func TestSession_cookieIsSetWithSecureDefaults(t *testing.T) {
 	assert.Len(t, c.Value, 64, "32 bytes hex-encoded = 64 chars")
 	assert.True(t, c.HttpOnly)
 	assert.Equal(t, "/", c.Path)
-	assert.False(t, c.Secure, "without WithSecureCookies the Secure flag is off")
+	assert.True(t, c.Secure,
+		"safe-by-default: the session cookie is Secure unless WithInsecureCookies opts out")
+}
+
+func TestSession_insecureCookiesDisablesSecureFlag(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server), via.WithInsecureCookies())
+	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	})
+	defer server.Close()
+
+	resp, err := http.Get(server.URL + "/test")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	cookies := resp.Cookies()
+	require.NotEmpty(t, cookies)
+	assert.False(t, cookies[0].Secure,
+		"WithInsecureCookies must drop the Secure flag for local http development")
+}
+
+func TestSession_rejectsConflictingCookieOptions(t *testing.T) {
+	t.Parallel()
+
+	const want = "via: conflicting cookie security options"
+	assert.PanicsWithValue(t, want, func() {
+		via.New(via.WithSecureCookies(), via.WithInsecureCookies())
+	}, "secure-then-insecure must fail at registration, not silently override")
+	assert.PanicsWithValue(t, want, func() {
+		via.New(via.WithInsecureCookies(), via.WithSecureCookies())
+	}, "the conflict must be detected regardless of option order")
 }
 
 func TestSession_secureFlagWhenWithSecureCookiesEnabled(t *testing.T) {
