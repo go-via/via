@@ -111,7 +111,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if ctx.session != nil && a.sessionFromRequest(r) != ctx.session {
+	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
 		http.Error(w, "session mismatch", http.StatusForbidden)
 		return
 	}

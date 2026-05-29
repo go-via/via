@@ -3,6 +3,7 @@ package via_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -202,4 +203,59 @@ func TestRotateSession_changesCookieValue(t *testing.T) {
 	defer cancel()
 	require.Equal(t, 200, tc.Action("Login").Fire())
 	vt.AwaitFrame(t, frames, 2*time.Second, ">alice<")
+}
+
+// RotateSession data race (#31)
+
+type rotateRacePage struct {
+	User via.StateSessStr
+}
+
+func (p *rotateRacePage) View(ctx *via.CtxR) h.H { return h.Div(p.User.Text(ctx)) }
+
+func (p *rotateRacePage) Rotate(ctx *via.Ctx) error {
+	for i := 0; i < 100; i++ {
+		ctx.Session().Rotate()
+	}
+	return nil
+}
+
+func (p *rotateRacePage) WriteSess(ctx *via.Ctx) error {
+	for i := 0; i < 100; i++ {
+		_ = p.User.Update(ctx, func(string) (string, error) { return "v", nil })
+	}
+	return nil
+}
+
+func TestRotateSession_doesNotRaceWithSiblingSessionBroadcast(t *testing.T) {
+	t.Parallel()
+	// One tab rotates — writing its ctx's session pointer — while another
+	// tab's session write fans out through broadcastRender, which reads
+	// every live ctx's session pointer (before any session-equality
+	// filter), including the rotating one. The two tabs sit on distinct
+	// sessions so neither invalidates the other, isolating the pointer
+	// race: a plain *session field trips -race; the contract is that
+	// concurrent rotate + fan-out stays goroutine-safe.
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[rotateRacePage](app, "/")
+	defer server.Close()
+
+	tabA := vt.NewClient(t, server, "/")
+	_, cancelA := tabA.SSEReady()
+	defer cancelA()
+
+	tabB := vt.NewClient(t, server, "/")
+	_, cancelB := tabB.SSEReady()
+	defer cancelB()
+
+	var wg sync.WaitGroup
+	var statusA, statusB int
+	wg.Add(2)
+	go func() { defer wg.Done(); statusA = tabA.Action("Rotate").Fire() }()
+	go func() { defer wg.Done(); statusB = tabB.Action("WriteSess").Fire() }()
+	wg.Wait()
+
+	assert.Equal(t, http.StatusOK, statusA)
+	assert.Equal(t, http.StatusOK, statusB)
 }

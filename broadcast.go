@@ -51,7 +51,7 @@ func (a *App) broadcastRender(skip *Ctx, sess *session, key string) {
 		if c == skip {
 			continue
 		}
-		if sess != nil && c.session != sess {
+		if sess != nil && c.session.Load() != sess {
 			continue
 		}
 		if !c.subscribed(key) {

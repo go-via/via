@@ -17,7 +17,7 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	cmpVal := reflect.New(d.typ)
 	ctx := newCtx(d, cmpVal, genTabID(d.route))
 	ctx.app = a
-	ctx.session = a.sessionFromRequest(r)
+	ctx.session.Store(a.sessionFromRequest(r))
 	ctx.mu.Lock()
 	ctx.w = w
 	ctx.r = r
