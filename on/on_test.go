@@ -160,6 +160,7 @@ func (p *eventCoveragePage) View(ctx *via.CtxR) h.H {
 	return h.Div(
 		h.Input(on.Focus(p.Hit)),
 		h.Input(on.Blur(p.Hit)),
+		h.Input(on.Change(p.Hit)),
 		h.Div(on.DblClick(p.Hit)),
 		h.Div(on.MouseEnter(p.Hit)),
 		h.Div(on.MouseLeave(p.Hit)),
@@ -180,6 +181,7 @@ func TestOn_NamedEventHelpersRenderExpectedTriggers(t *testing.T) {
 
 	for _, want := range []string{
 		"on:focus", "on:blur",
+		"on:change",
 		"on:dblclick",
 		"on:mouseenter", "on:mouseleave",
 		"on:load",
