@@ -2,6 +2,7 @@ package picocss_test
 
 import (
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -75,6 +76,57 @@ func TestPicocss_WithColorClasses_servesUtilityCSS(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode,
 		"WithColorClasses must register the color-classes route")
 	assert.Equal(t, "text/css", resp.Header.Get("Content-Type"))
+}
+
+func colorClassesServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
+	}
+	var server *httptest.Server
+	_ = via.New(
+		via.WithPlugins(picocss.Plugin(picocss.WithColorClasses())),
+		via.WithTestServer(&server),
+	)
+	t.Cleanup(func() { server.Close() })
+	return server
+}
+
+func TestPicocss_colorClassesServedUncompressedWhenGzipNotAccepted(t *testing.T) {
+	t.Parallel()
+	server := colorClassesServer(t)
+
+	req, _ := http.NewRequest("GET", server.URL+"/_plugins/picocss/color-classes", nil)
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Content-Encoding"),
+		"without gzip in Accept-Encoding the utility CSS must be served uncompressed")
+	body, _ := io.ReadAll(resp.Body)
+	assert.NotEmpty(t, body, "uncompressed branch must still return the CSS body")
+}
+
+func TestPicocss_colorClassesRevalidatesWithETag(t *testing.T) {
+	t.Parallel()
+	server := colorClassesServer(t)
+	url := server.URL + "/_plugins/picocss/color-classes"
+
+	first, err := server.Client().Get(url)
+	require.NoError(t, err)
+	first.Body.Close()
+	etag := first.Header.Get("ETag")
+	require.NotEmpty(t, etag, "color-classes CSS must carry an ETag for revalidation")
+
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("If-None-Match", etag)
+	second, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer second.Body.Close()
+	assert.Equal(t, http.StatusNotModified, second.StatusCode,
+		"a matching If-None-Match must yield 304 for the color-classes asset")
 }
 
 func TestPicocss_WithDarkMode_andWithLightMode_setInitialDarkModeSignal(t *testing.T) {
