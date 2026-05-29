@@ -1,0 +1,10 @@
+source "https://rubygems.org"
+
+# Pinned so CI and local previews build the same site. just-the-docs 0.10.x
+# targets Jekyll 4; the Pages workflow uses this Gemfile rather than the
+# classic GitHub Pages gem set.
+gem "jekyll", "~> 4.4"
+gem "just-the-docs", "0.10.1"
+
+# webrick is no longer bundled with Ruby 3.x; needed for `jekyll serve`.
+gem "webrick", "~> 1.9"

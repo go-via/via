@@ -1,3 +1,9 @@
+---
+title: h helpers reference
+parent: Reference & ops
+nav_order: 3
+---
+
 # `h` package helpers
 
 Full reference for [`github.com/go-via/via/h`](https://pkg.go.dev/github.com/go-via/via/h).
@@ -82,7 +88,7 @@ chrome := h.Static(h.Fragment(
         h.Ul(h.Li(h.Strong(h.T("System Monitor"))))),
 ))
 
-func (p *Page) View(ctx *via.Ctx) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
     return h.Div(chrome, p.body(ctx))
 }
 ```
