@@ -28,8 +28,14 @@ type Ctx struct {
 	queue      *patchQueue
 	doneChan   chan struct{}
 	disposed   bool
-	session    atomic.Pointer[session]
-	lastAccess atomic.Int64
+	// disposeReason records why the ctx was torn down — "shutdown" for
+	// app shutdown, "ttl" for the idle-TTL sweep, "client" for an
+	// explicit tab close. Set once by signalDispose alongside the
+	// doneChan close (both under mu), so the SSE drain loop can read it
+	// when it wakes on <-doneChan to label via.sse.disconnect.
+	disposeReason string
+	session       atomic.Pointer[session]
+	lastAccess    atomic.Int64
 
 	// lastSignals holds the most recent signals payload from an action
 	// POST so via.DecodeForm can read keys that aren't tracked by typed
@@ -171,6 +177,19 @@ func (ctx *Ctx) Disposed() bool {
 	default:
 		return false
 	}
+}
+
+// disposeReasonOrDefault returns the reason recorded by signalDispose,
+// or fallback if the ctx was disposed without one (e.g. a direct
+// doneChan close in a future path). Read under mu since disposeReason
+// is written under the same lock that closes doneChan.
+func (ctx *Ctx) disposeReasonOrDefault(fallback string) string {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	if ctx.disposeReason == "" {
+		return fallback
+	}
+	return ctx.disposeReason
 }
 
 // ID returns the tab id (the wire key for via_tab).

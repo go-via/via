@@ -52,7 +52,12 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	m := a.metricsOrNoop()
 	m.Counter("via.sse.connect")
-	defer m.Counter("via.sse.disconnect")
+	// Default to "client": every exit path other than a server-side
+	// disposal (shutdown / TTL sweep) is the client going away — its
+	// request context cancelling or a heartbeat/patch write failing. The
+	// doneChan path overrides this with the reason recorded on disposal.
+	reason := disconnectClient
+	defer func() { m.Counter("via.sse.disconnect", "reason", reason) }()
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
 	// that hit GET without ever opening the SSE never see this fire, so
 	// expensive background work (tickers, fan-out goroutines) lives here
@@ -107,6 +112,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		case <-sse.Context().Done():
 			return
 		case <-ctx.doneChan:
+			reason = ctx.disposeReasonOrDefault(disconnectClient)
 			return
 		case <-heartbeat:
 			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
@@ -237,6 +243,6 @@ func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {
 		// they then try to operate on. disposeCtx is idempotent so
 		// the dispose-after-unregister order is safe.
 		a.unregisterCtx(tabID)
-		a.disposeCtx(ctx)
+		a.disposeCtx(ctx, disconnectClient)
 	}
 }

@@ -593,7 +593,7 @@ interface and emits structured events for ops dashboards:
 | `via.action.latency`   | histogram | `method`           |
 | `via.render.total`     | counter   | `route`            |
 | `via.sse.connect`      | counter   |                    |
-| `via.sse.disconnect`   | counter   |                    |
+| `via.sse.disconnect`   | counter   | `reason`           |
 | `via.ctx.live`         | gauge     |                    |
 
 Adapt to Prometheus, OTel, or expvar by implementing three methods

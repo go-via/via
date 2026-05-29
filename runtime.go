@@ -210,30 +210,34 @@ func (a *App) removeExpiredContexts() {
 	}
 	a.contextRegistryMu.Unlock()
 	for _, c := range expired {
-		a.disposeCtx(c)
+		a.disposeCtx(c, disconnectTTL)
 	}
 }
 
 // signalDispose marks the ctx disposed and closes its Done channel so
 // any SSE drain loop or Stream goroutine wakes and exits. Does not run
 // OnDispose; idempotent. Used to break long-lived selects early during
-// Shutdown, before waiting for in-flight actions to drain.
-func (a *App) signalDispose(ctx *Ctx) {
+// Shutdown, before waiting for in-flight actions to drain. reason is
+// recorded so the woken SSE loop can label via.sse.disconnect; the
+// first caller wins (matching the idempotent doneChan close).
+func (a *App) signalDispose(ctx *Ctx, reason string) {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	if ctx.disposed {
 		return
 	}
 	ctx.disposed = true
+	ctx.disposeReason = reason
 	close(ctx.doneChan)
 }
 
 // disposeCtx closes the ctx (idempotent with signalDispose) and runs
 // OnDispose if defined. Serialized against in-flight actions via
 // actionMu so OnDispose sees a composition that isn't being mutated by
-// a concurrent handler.
-func (a *App) disposeCtx(ctx *Ctx) {
-	a.signalDispose(ctx)
+// a concurrent handler. reason is threaded to signalDispose to label
+// the via.sse.disconnect counter on the woken SSE loop.
+func (a *App) disposeCtx(ctx *Ctx, reason string) {
+	a.signalDispose(ctx, reason)
 
 	ctx.actionMu.Lock()
 	defer ctx.actionMu.Unlock()
