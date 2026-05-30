@@ -1,6 +1,6 @@
 ---
 title: Home
-layout: just-the-docs
+layout: default
 nav_order: 1
 ---
 

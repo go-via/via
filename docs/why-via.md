@@ -1,6 +1,6 @@
 ---
 title: Why Via
-layout: just-the-docs
+layout: default
 nav_order: 2
 ---
 
