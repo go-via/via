@@ -1,0 +1,21 @@
+// Appended after the theme, so these win regardless of how the font
+// variables cascade — a guaranteed apply for the amber scheme's typography,
+// plus a couple of brand accents the color variables don't reach.
+
+body {
+  font-family: $body-font-family;
+}
+
+h1, h2, h3, h4, h5, h6, .site-title {
+  font-family: $body-font-family;
+}
+
+code, kbd, pre, samp, .highlight {
+  font-family: $mono-font-family;
+}
+
+// Brand amber on the current nav item.
+.nav-list .nav-list-item .nav-list-link.active {
+  color: $link-color;
+  font-weight: 600;
+}

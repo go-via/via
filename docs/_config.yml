@@ -12,7 +12,7 @@ theme: just-the-docs
 url: https://go-via.github.io
 baseurl: /via
 
-color_scheme: dark
+color_scheme: amber
 search_enabled: true
 heading_anchors: true
 back_to_top: true
