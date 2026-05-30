@@ -76,8 +76,15 @@ echo "== CI: Allocation gates =="
 #   BenchmarkCounterRender-20    1000   95012 ns/op   29200 B/op   206 allocs/op
 # Pull the allocs column for the named benchmarks and fail if it
 # exceeds the threshold for that bench.
-bench_out=$(go test ./. -run='^$' -bench='^BenchmarkCounter' -benchtime=200x -benchmem 2>&1 || true)
+# Capture the bench exit status explicitly: a compile error, panic, or
+# missing benchmark must fail the gate, not skip it (fail closed).
+bench_status=0
+bench_out=$(go test ./. -run='^$' -bench='^BenchmarkCounter' -benchtime=200x -benchmem 2>&1) || bench_status=$?
 echo "$bench_out"
+if [ "$bench_status" -ne 0 ]; then
+  echo "ERROR: allocation benchmarks failed to run (exit $bench_status); perf gate cannot be evaluated"
+  exit 1
+fi
 
 check_alloc() {
   local name=$1
@@ -85,14 +92,14 @@ check_alloc() {
   local line
   line=$(echo "$bench_out" | grep -E "^${name}-" || true)
   if [ -z "$line" ]; then
-    echo "WARN: bench $name not found in output, skipping gate"
-    return 0
+    echo "ERROR: bench $name not found in output; perf gate cannot be evaluated"
+    return 1
   fi
   local got
   got=$(echo "$line" | awk '{for(i=1;i<=NF;i++) if($i=="allocs/op") print $(i-1)}')
   if [ -z "$got" ]; then
-    echo "WARN: could not parse allocs/op from $line"
-    return 0
+    echo "ERROR: could not parse allocs/op from: $line"
+    return 1
   fi
   if [ "$got" -gt "$threshold" ]; then
     echo "ERROR: $name regressed to $got allocs/op (threshold: $threshold)"
