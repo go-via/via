@@ -1,0 +1,29 @@
+// "amber" — Via's brand scheme: the logo's amber (#ffbf00) as the accent on
+// a deep neutral-dark base. Built on just-the-docs' `dark` scheme (which also
+// pulls in the one-dark code-highlight theme), then overriding the accent,
+// neutrals, and fonts. See docs/customization for the variable list.
+@import "./color_schemes/dark";
+
+// --- brand accent (was the default blue) ---
+$link-color: #ffbf00;
+$btn-primary-color: #ffbf00;
+
+// --- neutral-dark surfaces ---
+$body-background-color: #16181d;
+$sidebar-color: #1b1e24;
+$body-heading-color: #f2f4f8;
+$body-text-color: #c9ced8;
+$nav-child-link-color: #c9ced8;
+$base-button-color: #23272f;
+$code-background-color: #1b1e24;
+$table-background-color: #1b1e24;
+$search-background-color: #1b1e24;
+$search-result-preview-color: #8a91a0;
+$border-color: #2a2e37;
+$feedback-color: #14161a;
+
+// --- typography (loaded via docs/_includes/head_custom.html) ---
+$body-font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+  Roboto, Helvetica, Arial, sans-serif;
+$mono-font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas,
+  "Liberation Mono", monospace;
