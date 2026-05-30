@@ -1,8 +1,7 @@
 package via
 
-// MapOps is the chain returned by Op(ctx) on every Map* reactive type.
-// Embeds Ops[map[K]V] for the universal To(v); map verbs route through
-// the handle's Update path.
+// MapOps is the chain returned by Op(ctx) on every Map* reactive type;
+// its map verbs route through the handle's Update path.
 type MapOps[K comparable, V any] struct {
 	ops[map[K]V]
 }

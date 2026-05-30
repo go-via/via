@@ -14,9 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Op(ctx) returns a typed chain entry on every reactive kind. Generic
-// case exposes To(v); shape-specialized types (NumOps here) add their
-// typed verbs. Apply was removed — custom transforms go through Update.
+// Op(ctx) returns a typed chain entry on every reactive kind: each
+// shape-specialized type (NumOps here) adds its typed verbs, which route
+// through the handle's Update path. Apply was removed — custom transforms
+// go through Update.
 
 type opGenericPage struct {
 	Signal via.SignalNum[int]
