@@ -1,8 +1,7 @@
 package via
 
 // SliceOps is the chain returned by Op(ctx) on every Slice* reactive
-// type. Embeds Ops[[]T] for the universal To(v); slice verbs route
-// through the handle's Update path.
+// type; its slice verbs route through the handle's Update path.
 type SliceOps[T any] struct {
 	ops[[]T]
 }

@@ -10,9 +10,8 @@ type Number interface {
 		~float32 | ~float64
 }
 
-// NumOps is the chain returned by Op(ctx) on every Num* reactive type.
-// Embeds Ops[T] for the universal To(v); numeric verbs route through
-// the handle's Update path.
+// NumOps is the chain returned by Op(ctx) on every Num* reactive type;
+// its numeric verbs route through the handle's Update path.
 type NumOps[T Number] struct {
 	ops[T]
 }

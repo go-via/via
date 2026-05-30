@@ -1,8 +1,7 @@
 package via
 
 // BoolOps is the chain returned by Op(ctx) on every Bool* reactive
-// type. Embeds Ops[bool] for the universal To(v); boolean verbs route
-// through the handle's Update path.
+// type; its boolean verbs route through the handle's Update path.
 type BoolOps struct {
 	ops[bool]
 }
