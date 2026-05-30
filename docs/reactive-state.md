@@ -1,6 +1,6 @@
 ---
 title: Reactive state
-layout: just-the-docs
+layout: default
 parent: Learn
 nav_order: 3
 ---

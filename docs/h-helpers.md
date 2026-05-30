@@ -1,6 +1,6 @@
 ---
 title: h helpers reference
-layout: just-the-docs
+layout: default
 parent: Reference & ops
 nav_order: 3
 ---

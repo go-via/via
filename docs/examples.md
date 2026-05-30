@@ -1,6 +1,6 @@
 ---
 title: Examples
-layout: just-the-docs
+layout: default
 nav_order: 3
 ---
 
