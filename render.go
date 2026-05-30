@@ -22,6 +22,10 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	ctx.w = w
 	ctx.r = r
 	ctx.mu.Unlock()
+	// Capture the document's CSP nonce now, while the page request is in
+	// hand, so server-pushed scripts drained over the (later, separate) SSE
+	// request can carry the nonce the browser will actually honor.
+	ctx.captureCSPNonce(r)
 	// Writer / Request are scoped to the synchronous render only — any
 	// goroutine the user launches from OnInit must not see a dangling
 	// reference to a writer that's already been released back to the

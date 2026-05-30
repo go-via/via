@@ -3,6 +3,7 @@ package via
 import (
 	"encoding/json"
 	"errors"
+	"html"
 	"io"
 	"net/http"
 	"strings"
@@ -169,8 +170,9 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 	q.redirect = ""
 	q.mu.Unlock()
 
+	nonceOpts := ctx.scriptNonceOpts()
 	if redirect != "" {
-		return sse.Redirect(redirect)
+		return sse.Redirect(redirect, nonceOpts...)
 	}
 	if elems != "" {
 		if err := sse.PatchElements(elems); err != nil {
@@ -193,11 +195,28 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 		recycleSignalsMap(q, signals)
 	}
 	if scripts != "" {
-		if err := sse.ExecuteScript(scripts); err != nil {
+		if err := sse.ExecuteScript(scripts, nonceOpts...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// scriptNonceOpts threads the page document's captured CSP nonce onto the
+// <script> elements datastar injects for ExecuteScript / Redirect, so they
+// survive a strict `script-src 'nonce-…'` policy. Returns nil when no nonce
+// was captured (no CSP middleware), keeping the push attribute-free. The
+// value is HTML-escaped at this sink — mirroring the document render path
+// (the h builder escapes attributes) — so a non-base64 nonce threaded via
+// the exported RequestWithCSPNonce can't break out of the attribute.
+func (ctx *Ctx) scriptNonceOpts() []datastar.ExecuteScriptOption {
+	n := ctx.documentCSPNonce()
+	if n == "" {
+		return nil
+	}
+	return []datastar.ExecuteScriptOption{
+		datastar.WithExecuteScriptAttributes(`nonce="` + html.EscapeString(n) + `"`),
+	}
 }
 
 // recycleSignalsMap returns m to the queue for reuse if no producer
