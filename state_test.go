@@ -137,6 +137,28 @@ func TestStateTabText_rendersBoolUintFloatAndCompositeKinds(t *testing.T) {
 		"a composite StateTab value falls back to JSON (nil slice → null)")
 }
 
+type stateFloat32TextPage struct {
+	Rate via.StateTabNum[float32] `via:"rate,init=0.1"`
+}
+
+func (p *stateFloat32TextPage) View(ctx *via.CtxR) h.H {
+	return h.Div(h.Span(h.ID("rate"), p.Rate.Text(ctx)))
+}
+
+func TestStateTabText_rendersFloat32WithoutFloat64Noise(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[stateFloat32TextPage](app, "/")
+	defer server.Close()
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `<span id="rate">0.1</span>`,
+		"float32 must format at its own precision, not widen to float64")
+	assert.NotContains(t, body, "0.10000000149011612",
+		"reflect.Value.Float widens float32; bitSize 64 leaks the expansion")
+}
+
 // Update — read-modify-write on StateTab[T] and Signal[T]
 
 type updatePage struct {

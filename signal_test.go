@@ -330,6 +330,34 @@ func TestSignalInit_decodesUintAndFloatFromTagStrings(t *testing.T) {
 	assert.Contains(t, html, `&#34;f&#34;:2.5`, "float init= string must decode")
 }
 
+type signalFloat32Page struct {
+	Rate via.SignalNum[float32] `via:"rate,init=0.1"`
+}
+
+func (p *signalFloat32Page) View(ctx *via.CtxR) h.H {
+	return h.Div(p.Rate.Text())
+}
+
+func TestSignalEncode_float32WireValueHasNoFloat64Noise(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[signalFloat32Page](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+
+	// The data-signals payload is HTML-escaped in the <meta> attribute, so a
+	// clean float32 reads as &#34;rate&#34;:0.1; bitSize 64 would surface the
+	// float64 widening of float32(0.1).
+	html := tc.HTML()
+	assert.Contains(t, html, `&#34;rate&#34;:0.1`,
+		"float32 signal must wire-encode at its own precision")
+	assert.NotContains(t, html, "0.10000000149011612",
+		"reflect.Value.Float widens float32; bitSize 64 leaks the expansion")
+}
+
 func TestSignalAction_coercesUintFloatBoolFromJSONPayload(t *testing.T) {
 	t.Parallel()
 
