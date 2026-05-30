@@ -213,7 +213,10 @@ func TestContextSweep_disposesIdleTabAfterTTL(t *testing.T) {
 	sweepDisposed.Store(false)
 
 	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithContextTTL(40*time.Millisecond))
+	// Heartbeat off so the short TTL takes effect — a contextTTL <= the
+	// heartbeat disables the sweep (see WithContextTTL).
+	app := via.New(via.WithTestServer(&server),
+		via.WithContextTTL(40*time.Millisecond), via.WithSSEHeartbeat(0))
 	via.Mount[sweepDisposePage](app, "/")
 	defer server.Close()
 

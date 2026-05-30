@@ -71,10 +71,25 @@ func WithShutdownTimeout(d time.Duration) Option { return func(c *config) { c.sh
 // WithSessionTTL sets the per-session expiry. Default 30 minutes.
 func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.sessionTTL = d } }
 
-// WithContextTTL sets the per-tab Ctx idle expiry. Default 15 minutes.
+// WithContextTTL sets the per-tab Ctx idle expiry. Default 15 minutes; a
+// value <= 0 disables the sweep (contexts never expire).
+//
+// A Ctx is "idle" by last activity, and the SSE heartbeat counts as
+// activity — so a connected stream is kept alive by heartbeat ticks and is
+// never swept as long as the TTL exceeds the heartbeat interval. Because a
+// TTL no larger than the heartbeat can't be kept alive that way, configuring
+// 0 < contextTTL <= [WithSSEHeartbeat] disables the context sweep entirely
+// (logged at startup) rather than risk reaping live streams between beats.
+// A short TTL therefore only takes effect with the heartbeat off.
 func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
 
-// WithSSEHeartbeat sets the SSE keep-alive interval.
+// WithSSEHeartbeat sets the SSE keep-alive interval. Default 25s; a value
+// <= 0 disables the heartbeat.
+//
+// The heartbeat doubles as the liveness signal for the context-TTL sweep:
+// each tick refreshes the Ctx's last-activity time, so a connected tab is
+// never expired while the heartbeat is running and the TTL exceeds it. See
+// [WithContextTTL] for what happens when the TTL is not larger than this.
 func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
 
 // WithSSEWriteTimeout caps how long a single SSE drain may block on the
