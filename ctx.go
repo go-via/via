@@ -43,6 +43,7 @@ type Ctx struct {
 	lastSignals map[string]any
 
 	cspNonce string // lazily generated per-request CSP nonce
+	docNonce string // page document's CSP nonce, captured at render for the push path
 
 	connectOnce sync.Once // guards OnConnect dispatch
 

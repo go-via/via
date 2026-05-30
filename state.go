@@ -132,7 +132,13 @@ func scalarString(v reflect.Value) string {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return strconv.FormatUint(v.Uint(), 10)
 	case reflect.Float32, reflect.Float64:
-		return strconv.FormatFloat(v.Float(), 'g', -1, 64)
+		// reflect.Value.Float widens a float32 to float64; formatting at
+		// bitSize 64 would surface the widening (float32(0.1) → 0.10000000149011612).
+		bits := 64
+		if v.Kind() == reflect.Float32 {
+			bits = 32
+		}
+		return strconv.FormatFloat(v.Float(), 'g', -1, bits)
 	}
 	b, _ := json.Marshal(v.Interface())
 	return string(b)

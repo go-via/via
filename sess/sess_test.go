@@ -111,6 +111,38 @@ func TestPutSess_andClearSess_roundTrip(t *testing.T) {
 		"a fresh session should not see the previous user's data")
 }
 
+type clearViaRenderPage struct{}
+
+func (p *clearViaRenderPage) Store(ctx *via.Ctx) error {
+	sess.Put(ctx, sessUser{Name: "alice"})
+	return nil
+}
+
+func (p *clearViaRenderPage) View(ctx *via.CtxR) h.H {
+	// Clear accepts the same context kinds as Get; a render holds a *CtxR,
+	// so clearing here must actually remove the value, not silently no-op.
+	sess.Clear[sessUser](ctx)
+	if _, ok := sess.Get[sessUser](ctx); ok {
+		return h.Div(h.ID("s"), h.Text("present"))
+	}
+	return h.Div(h.ID("s"), h.Text("absent"))
+}
+
+func TestClearSess_viaCtxRRemovesValue(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[clearViaRenderPage](app, "/")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/")
+	require.Equal(t, 200, tc.Action("Store").Fire())
+	body := tc.Reload()
+	assert.Contains(t, body, `<div id="s">absent</div>`,
+		"sess.Clear must remove the value when called with a *via.CtxR, mirroring Get")
+}
+
 type loginPage struct {
 	UserID via.StateSessStr
 }
