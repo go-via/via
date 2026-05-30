@@ -1,7 +1,20 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# Compiled example programs land at the repo root with no extension (e.g.
+# `chat` from `go build ./internal/examples/chat`). gitignore has no
+# "no-extension" glob, so: ignore every root-level entry, then re-include
+# directories, any file that HAS an extension, and LICENSE (the only
+# extensionless tracked file). Net effect — extensionless root files (build
+# artifacts) are ignored, everything else is tracked as normal.
 #
-# Binaries for programs and plugins
+# NB: this also ignores a new extensionless root file you DO want tracked
+# (e.g. Makefile, Dockerfile); add an explicit `!/Makefile` line for those.
+/*
+!/*/
+!/*.*
+!/LICENSE
+
+# Cross-platform binaries / plugins. Listed after the block above so they
+# re-assert the ignore for root files the blanket `!/*.*` would otherwise
+# un-ignore, and so they apply inside subdirectories too.
 *.exe
 *.exe~
 *.dll
@@ -17,9 +30,6 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
 # Go workspace file
 go.work
 go.work.sum
@@ -27,26 +37,12 @@ go.work.sum
 # env file
 .env
 
-# Editor/IDE
-# .idea/
-# .vscode/
-
 # Via related
 .via
 
-#Agents
+# Agents
 .opencode
 .claude
 
 # Air artifacts
 *tmp/
-
-# Stray go-build outputs from example dirs
-/counter
-/countercomp
-/greeter
-/pathparams
-/picocss
-/sysmon
-/auth
-/todos
