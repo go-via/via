@@ -1,5 +1,6 @@
 ---
 title: Routing, sessions & middleware
+layout: just-the-docs
 parent: Guides
 nav_order: 3
 ---

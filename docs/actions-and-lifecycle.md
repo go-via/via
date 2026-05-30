@@ -1,5 +1,6 @@
 ---
 title: Actions & lifecycle
+layout: just-the-docs
 parent: Guides
 nav_order: 1
 ---

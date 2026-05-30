@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting
+layout: just-the-docs
 parent: Reference & ops
 nav_order: 4
 ---

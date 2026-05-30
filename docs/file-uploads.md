@@ -1,5 +1,6 @@
 ---
 title: File uploads
+layout: just-the-docs
 parent: Guides
 nav_order: 4
 ---
