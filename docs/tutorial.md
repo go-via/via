@@ -1,5 +1,6 @@
 ---
 title: "Tutorial: live chatroom"
+layout: just-the-docs
 parent: Learn
 nav_order: 2
 ---

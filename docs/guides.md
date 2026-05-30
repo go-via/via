@@ -1,5 +1,6 @@
 ---
 title: Guides
+layout: just-the-docs
 nav_order: 5
 has_children: true
 ---

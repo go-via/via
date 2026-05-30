@@ -1,5 +1,6 @@
 ---
 title: Reference & ops
+layout: just-the-docs
 nav_order: 6
 has_children: true
 ---

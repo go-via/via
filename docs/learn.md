@@ -1,5 +1,6 @@
 ---
 title: Learn
+layout: just-the-docs
 nav_order: 4
 has_children: true
 ---

@@ -1,5 +1,6 @@
 ---
 title: Plugins
+layout: just-the-docs
 parent: Guides
 nav_order: 5
 ---

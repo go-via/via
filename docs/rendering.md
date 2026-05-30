@@ -1,5 +1,6 @@
 ---
 title: Rendering (h)
+layout: just-the-docs
 parent: Guides
 nav_order: 2
 ---

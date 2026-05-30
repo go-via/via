@@ -1,5 +1,6 @@
 ---
 title: Getting started
+layout: just-the-docs
 parent: Learn
 nav_order: 1
 ---
