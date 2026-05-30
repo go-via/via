@@ -13,8 +13,9 @@
 //	sess.Clear[User](ctx)
 //	sess.Rotate(ctx)
 //
-// Get and Clear also accept *http.Request, so middleware can check
-// the session before any composition is rendered:
+// Get and Clear also accept *via.CtxR (inside a render) and
+// *http.Request, so middleware can check the session before any
+// composition is rendered:
 //
 //	func requireAuth(w http.ResponseWriter, r *http.Request, next http.Handler) {
 //	    if u, ok := sess.Get[User](r); !ok || u.Email == "" {
@@ -47,9 +48,10 @@ func Put[T any](ctx *via.Ctx, v T) {
 }
 
 // Get reads the typed value stored with [Put], returning the zero
-// value of T and false if nothing matches. src may be a *via.Ctx or
-// an *http.Request — the latter form lets middleware check the
-// session before any composition is rendered.
+// value of T and false if nothing matches. src may be a *via.Ctx, a
+// *via.CtxR (for reads during a render), or an *http.Request — the last
+// form lets middleware check the session before any composition is
+// rendered.
 func Get[T any](src any) (T, bool) {
 	var zero T
 	var s *via.Session
@@ -71,11 +73,15 @@ func Get[T any](src any) (T, bool) {
 	return t, ok
 }
 
-// Clear removes the value stored under T's key from the session.
-// src may be a *via.Ctx or an *http.Request.
+// Clear removes the value stored under T's key from the session. src may
+// be a *via.Ctx, a *via.CtxR, or an *http.Request — the same kinds [Get]
+// accepts, so a value read during a render can be cleared from the same
+// render.
 func Clear[T any](src any) {
 	switch v := src.(type) {
 	case *via.Ctx:
+		v.Session().Delete(typeKey[T]())
+	case *via.CtxR:
 		v.Session().Delete(typeKey[T]())
 	case *http.Request:
 		via.RequestSession(v).Delete(typeKey[T]())
