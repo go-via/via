@@ -169,15 +169,17 @@ func TestMetrics_SSEDisconnectReason_ttl(t *testing.T) {
 	t.Parallel()
 	// The idle-TTL sweep evicts a Ctx that has gone quiet and disposes
 	// it, waking the SSE drain loop on <-ctx.doneChan. The documented
-	// contract labels that exit "ttl". A short TTL keeps the test quick;
-	// the default 25s heartbeat never fires within the window, so the
-	// stream stays idle long enough to be swept.
+	// contract labels that exit "ttl". The heartbeat is disabled so the
+	// stream stays idle long enough to be swept; with the heartbeat on,
+	// contextTTL must exceed it (otherwise the sweep is disabled, see
+	// WithContextTTL) and a connected stream is never reaped.
 	m := &captureMetrics{}
 	var server *httptest.Server
 	app := via.New(
 		via.WithTestServer(&server),
 		via.WithMetrics(m),
 		via.WithContextTTL(40*time.Millisecond),
+		via.WithSSEHeartbeat(0),
 	)
 	via.Mount[metricsPage](app, "/")
 	defer server.Close()

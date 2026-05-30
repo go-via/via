@@ -328,12 +328,24 @@ func New(opts ...Option) *App {
 	a.rebuildChain()
 	a.handler = a.withSession()
 
-	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
+	// A contextTTL no larger than the SSE heartbeat is unworkable: the
+	// sweep would reap a connected stream before the next heartbeat could
+	// refresh its lastAccess. Rather than let that kill live tabs, disable
+	// the context sweep entirely (no TTL) and warn. A short TTL only takes
+	// effect when the heartbeat is off (WithSSEHeartbeat(0)).
+	sweepContexts := a.cfg.contextTTL > 0
+	if sweepContexts && a.cfg.sseHeartbeat > 0 && a.cfg.contextTTL <= a.cfg.sseHeartbeat {
+		a.logWarn(nil, "via: contextTTL (%s) <= sseHeartbeat (%s); disabling the "+
+			"context-TTL sweep (no expiry) so live streams aren't reaped between heartbeats",
+			a.cfg.contextTTL, a.cfg.sseHeartbeat)
+		sweepContexts = false
+	}
+	if a.cfg.sessionTTL > 0 || sweepContexts {
 		a.stopSweep = make(chan struct{})
 		if a.cfg.sessionTTL > 0 {
 			go a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 		}
-		if a.cfg.contextTTL > 0 {
+		if sweepContexts {
 			go a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
 		}
 	}
