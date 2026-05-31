@@ -36,7 +36,7 @@ into the top-level `README.md`.
 ```html
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="branding/punch-dark.png">
-  <img alt="VIA" src="branding/punch-light.png" width="280">
+  <img alt="VIA" src="branding/punch-light.png" width="220">
 </picture>
 ```
 
