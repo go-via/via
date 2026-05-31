@@ -13,6 +13,11 @@ url: https://go-via.github.io
 baseurl: /via
 
 color_scheme: amber
+
+# Sidebar wordmark (cream letters, amber slash) — reads on the dark sidebar.
+# just-the-docs runs this through `relative_url`, so it resolves under baseurl.
+logo: "/assets/branding/wordmark-amber-dark.svg"
+
 search_enabled: true
 heading_anchors: true
 back_to_top: true
