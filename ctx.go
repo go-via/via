@@ -36,6 +36,11 @@ type Ctx struct {
 	disposeReason string
 	session       atomic.Pointer[session]
 	lastAccess    atomic.Int64
+	// connected counts live SSE streams for this tab (normally 0 or 1; a
+	// reconnect can briefly overlap at 2). >0 means an open connection,
+	// which is itself proof the tab is alive — the TTL sweep skips such a
+	// Ctx, so lastAccess governs only stream-less ctxs.
+	connected atomic.Int32
 
 	// lastSignals holds the most recent signals payload from an action
 	// POST so via.DecodeForm can read keys that aren't tracked by typed

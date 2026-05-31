@@ -14,7 +14,8 @@ package via
 //   - "via.action.latency"    histogram (seconds), labels: method
 //   - "via.render.total"      counter, labels: route, status
 //   - "via.sse.connect"       counter — incremented on each successful handshake
-//   - "via.sse.disconnect"    counter, labels: reason ("client", "shutdown", "ttl")
+//   - "via.sse.disconnect"    counter, labels: reason ("client", "shutdown")
+//   - "via.ctx.reap"          counter, labels: reason ("ttl", "shutdown")
 //   - "via.ctx.live"          gauge — current registered tab count
 //
 // Labels are passed as flat key,value pairs to keep the call site
@@ -25,16 +26,19 @@ type Metrics interface {
 	Histogram(name string, value float64, labels ...string)
 }
 
-// Disconnect reasons reported on the "reason" label of the
-// "via.sse.disconnect" counter (see the event catalogue above).
+// Teardown reasons. They label the "reason" of via.sse.disconnect (how a
+// live SSE loop exits) and/or via.ctx.reap (server-side Ctx reclamation).
 const (
-	// disconnectClient covers the client going away on its own — the
-	// request context cancelling, a failed heartbeat/patch write, or an
-	// explicit tab-close beacon.
+	// disconnectClient: the client went away on its own — request-context
+	// cancel, a failed keepalive/patch write, or the tab-close beacon.
+	// Labels via.sse.disconnect only (a client close is not a reap).
 	disconnectClient = "client"
-	// disconnectShutdown covers App.Shutdown disposing the ctx.
+	// disconnectShutdown: App.Shutdown tore the Ctx down. Labels BOTH
+	// via.sse.disconnect (the woken loop) and via.ctx.reap (the teardown).
 	disconnectShutdown = "shutdown"
-	// disconnectTTL covers the idle-TTL sweep evicting the ctx.
+	// disconnectTTL: the idle-TTL sweep reclaimed a stream-less Ctx. Labels
+	// via.ctx.reap — a connected stream is never TTL-swept, so this reason
+	// never reaches via.sse.disconnect.
 	disconnectTTL = "ttl"
 )
 
