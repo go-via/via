@@ -21,12 +21,8 @@ type Page struct {
 	Shared via.StateAppNum[int]
 }
 
-func (p *Page) IncLocal(ctx *via.Ctx) {
-	_ = p.Local.Update(ctx, func(n int) (int, error) { return n + 1, nil })
-}
-func (p *Page) IncShared(ctx *via.Ctx) {
-	_ = p.Shared.Update(ctx, func(n int) (int, error) { return n + 1, nil })
-}
+func (p *Page) IncLocal(ctx *via.Ctx)  { p.Local.Op(ctx).Inc() }
+func (p *Page) IncShared(ctx *via.Ctx) { p.Shared.Op(ctx).Inc() }
 
 const bigNum = "font-size:6rem;font-weight:700;text-align:center;margin:0;line-height:1;font-variant-numeric:tabular-nums"
 
