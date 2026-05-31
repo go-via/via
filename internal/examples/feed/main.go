@@ -25,7 +25,7 @@ type Feed struct {
 }
 
 func (p *Feed) Toggle(ctx *via.Ctx) {
-	_ = p.Running.Update(ctx, func(b bool) (bool, error) { return !b, nil })
+	p.Running.Op(ctx).Toggle()
 }
 
 func (p *Feed) Clear(ctx *via.Ctx) {

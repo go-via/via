@@ -46,8 +46,8 @@ func (r *Room) Send(ctx *via.Ctx) {
 	if name == "" {
 		name = "Anon"
 	}
+	r.Log.Op(ctx).Append(Message{From: name, Body: body})
 	_ = r.Log.Update(ctx, func(log []Message) ([]Message, error) {
-		log = append(log, Message{From: name, Body: body})
 		if len(log) > recentWindow {
 			log = log[len(log)-recentWindow:]
 		}
