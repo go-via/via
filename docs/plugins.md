@@ -40,7 +40,7 @@ signal references for inline expressions.
 
 ```go
 h.Button(h.Text("Blue"),
-    h.DataOnClick(picocss.ThemeRef()+" = 'blue'"))
+    h.DataOnClick("%s = %q", picocss.ThemeRef(), picocss.PicoThemeBlue))
 ```
 
 See `internal/examples/picocss` for client-side theme switching.
