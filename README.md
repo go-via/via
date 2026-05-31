@@ -26,56 +26,6 @@ hand-written JS.
 [API reference](https://pkg.go.dev/github.com/go-via/via) ·
 [Examples](https://go-via.github.io/via/examples)
 
-## Quickstart: a live chatroom in ~60 lines
-
-`Log` is one app-scoped slice. Appending to it fans a re-render out to
-**every connected tab across every session** — open two browsers and watch
-them sync. No `Broadcast`, no WebSocket, no client JS.
-
-```go
-type Message struct{ From, Body string }
-
-type Room struct {
-    Log   via.StateAppSlice[Message] // shared across every session + tab
-    Name  via.SignalStr              `via:"name,init=Anon"`
-    Draft via.SignalStr              `via:"draft"`
-}
-
-func (r *Room) Send(ctx *via.Ctx) {
-    body := strings.TrimSpace(r.Draft.Read(ctx))
-    if body == "" {
-        return
-    }
-    _ = r.Log.Update(ctx, func(log []Message) ([]Message, error) {
-        return append(log, Message{From: r.Name.Read(ctx), Body: body}), nil
-    })
-    r.Draft.Write(ctx, "")
-}
-
-func (r *Room) View(ctx *via.CtxR) h.H {
-    // Reading Log here subscribes this tab; any Send anywhere re-renders it.
-    return h.Main(h.Class("container"),
-        h.H1(h.Text("Via Chat")),
-        h.Each(r.Log.Read(ctx), func(m Message) h.H {
-            return h.P(h.Strong(h.Text(m.From+": ")), h.Text(m.Body))
-        }),
-        h.Form(
-            h.Input(h.Type("text"), r.Name.Bind(), h.Placeholder("name")),
-            h.Input(h.Type("text"), r.Draft.Bind(), on.Key("Enter", r.Send)),
-            h.Button(h.Type("button"), h.Text("Send"), on.Click(r.Send)),
-        ),
-    )
-}
-```
-
-```bash
-go run ./internal/examples/chat   # then open http://localhost:3000 in two windows
-```
-
-Full source + walkthrough:
-[`internal/examples/chat`](internal/examples/chat/main.go) ·
-[tutorial](https://go-via.github.io/via/tutorial).
-
 ## Install
 
 ```bash
@@ -129,6 +79,11 @@ go run ./internal/examples/counter
 ```
 
 ![Two browsers, two scopes — StateTab is per-tab, StateApp is shared across every session.](docs/counter-scope.gif)
+
+For state shared across users, see the live chatroom — one app-scoped slice
+that fans every message out to every connected tab:
+[`internal/examples/chat`](internal/examples/chat/main.go) ·
+[tutorial](https://go-via.github.io/via/tutorial).
 
 ## The four reactive shapes
 
