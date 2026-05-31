@@ -4,11 +4,12 @@ layout: default
 nav_order: 1
 ---
 
+<!-- The docs theme is always dark, so serve the dark-background (cream) variant
+     directly rather than a prefers-color-scheme <picture> — otherwise an
+     OS-light visitor gets the ink-letter variant and only the amber slash
+     shows against the dark page. -->
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="{{ '/assets/branding/punch-dark.png' | relative_url }}">
-    <img src="{{ '/assets/branding/punch-light.png' | relative_url }}" alt="Via" width="220">
-  </picture>
+  <img src="{{ '/assets/branding/punch-dark.png' | relative_url }}" alt="Via" width="220">
 </p>
 
 # Reactive web apps in pure Go
