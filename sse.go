@@ -17,8 +17,14 @@ import (
 // repetitive HTML element patches via emits.
 const sseLevel = 5
 
+// keepaliveFloor is the minimum SSE keepalive cadence. WithSSEHeartbeat(0)
+// floors to this rather than disabling, because under the connection-presence
+// liveness model a failed keepalive write is the only in-band detector of a
+// vanished (half-open) client — the TTL sweep can't reap a connected ctx.
+const keepaliveFloor = 25 * time.Second
+
 // heartbeatPayload is the empty-signals JSON object sent on every SSE
-// heartbeat tick. Cached so we don't allocate two bytes per tick per
+// keepalive tick. Cached so we don't allocate two bytes per tick per
 // live tab (datastar treats the slice as immutable once handed off).
 var heartbeatPayload = []byte("{}")
 
@@ -59,6 +65,12 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// doneChan path overrides this with the reason recorded on disposal.
 	reason := disconnectClient
 	defer func() { m.Counter("via.sse.disconnect", "reason", reason) }()
+	// An open stream is itself proof the tab is alive: keep this ctx out of
+	// the TTL sweep for the connection's lifetime (removeExpiredContexts
+	// skips connected>0). On exit the counter drops back to zero and a
+	// stream-less ctx is reaped by the next sweep once it ages past the TTL.
+	ctx.connected.Add(1)
+	defer ctx.connected.Add(-1)
 	// OnConnect runs once, the first time the SSE stream is opened. Bots
 	// that hit GET without ever opening the SSE never see this fire, so
 	// expensive background work (tickers, fan-out goroutines) lives here
@@ -110,12 +122,16 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var heartbeat <-chan time.Time
-	if a.cfg.sseHeartbeat > 0 {
-		t := time.NewTicker(a.cfg.sseHeartbeat)
-		defer t.Stop()
-		heartbeat = t.C
+	// The keepalive is always on. Under the connection-presence liveness
+	// model the sweep can't reap a connected ctx, so a failed keepalive
+	// write is the only in-band way to detect a vanished (half-open) peer;
+	// WithSSEHeartbeat(0) floors the cadence rather than disabling it.
+	keepalive := a.cfg.sseHeartbeat
+	if keepalive <= 0 {
+		keepalive = keepaliveFloor
 	}
+	t := time.NewTicker(keepalive)
+	defer t.Stop()
 
 	for {
 		select {
@@ -124,12 +140,13 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 		case <-ctx.doneChan:
 			reason = ctx.disposeReasonOrDefault(disconnectClient)
 			return
-		case <-heartbeat:
+		case <-t.C:
+			// Keepalive: a real write that fails on a dead peer (no
+			// touch — connected, not lastAccess, owns liveness now).
 			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 			if err := sse.PatchSignals(heartbeatPayload); err != nil {
 				return
 			}
-			ctx.touch()
 		case <-ctx.queue.wake:
 			if err := drainQueue(sse, ctx, w, a.cfg.sseWriteTimeout); err != nil {
 				return

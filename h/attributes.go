@@ -104,6 +104,10 @@ func Data(name, value string) H {
 	return &dataAttrNode{suffix: name, value: htmlEscape(value)}
 }
 
+// One shorthand per common HTML attribute — each emits `name="value"`
+// (HTML-escaped) via [buildAttr]. For an attribute without a shorthand use
+// [Attr]; for data-* use [Data]; for boolean attributes see [Selected],
+// [Checked], [Required], [Disabled].
 func Href(v string) H        { return buildAttr("href", v) }
 func Type(v string) H        { return buildAttr("type", v) }
 func Src(v string) H         { return buildAttr("src", v) }

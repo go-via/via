@@ -203,6 +203,9 @@ func (a *App) removeExpiredContexts() {
 	a.contextRegistryMu.Lock()
 	var expired []*Ctx
 	for id, c := range a.contextRegistry {
+		if c.connected.Load() > 0 {
+			continue // a live SSE stream keeps the tab alive regardless of lastAccess
+		}
 		if c.lastAccess.Load() < cutoff {
 			expired = append(expired, c)
 			delete(a.contextRegistry, id)
@@ -216,19 +219,26 @@ func (a *App) removeExpiredContexts() {
 
 // signalDispose marks the ctx disposed and closes its Done channel so
 // any SSE drain loop or Stream goroutine wakes and exits. Does not run
-// OnDispose; idempotent. Used to break long-lived selects early during
-// Shutdown, before waiting for in-flight actions to drain. reason is
-// recorded so the woken SSE loop can label via.sse.disconnect; the
-// first caller wins (matching the idempotent doneChan close).
-func (a *App) signalDispose(ctx *Ctx, reason string) {
+// OnDispose; idempotent — reports whether THIS call performed the
+// disposal (false if an earlier caller already did). Used to break
+// long-lived selects early during Shutdown. reason is recorded so the
+// woken SSE loop can label via.sse.disconnect, and — for server-side
+// reclamation (ttl / shutdown, not a client close) — counts via.ctx.reap
+// once, at this idempotent chokepoint.
+func (a *App) signalDispose(ctx *Ctx, reason string) bool {
 	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
 	if ctx.disposed {
-		return
+		ctx.mu.Unlock()
+		return false
 	}
 	ctx.disposed = true
 	ctx.disposeReason = reason
 	close(ctx.doneChan)
+	ctx.mu.Unlock()
+	if reason != disconnectClient {
+		a.metricsOrNoop().Counter("via.ctx.reap", "reason", reason)
+	}
+	return true
 }
 
 // disposeCtx closes the ctx (idempotent with signalDispose) and runs

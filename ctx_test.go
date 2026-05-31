@@ -213,10 +213,10 @@ func TestContextSweep_disposesIdleTabAfterTTL(t *testing.T) {
 	sweepDisposed.Store(false)
 
 	var server *httptest.Server
-	// Heartbeat off so the short TTL takes effect — a contextTTL <= the
-	// heartbeat disables the sweep (see WithContextTTL).
+	// A plain GET registers a Ctx but never opens an SSE stream, so
+	// connected stays 0 and the idle sweep reclaims it after the TTL.
 	app := via.New(via.WithTestServer(&server),
-		via.WithContextTTL(40*time.Millisecond), via.WithSSEHeartbeat(0))
+		via.WithContextTTL(40*time.Millisecond))
 	via.Mount[sweepDisposePage](app, "/")
 	defer server.Close()
 

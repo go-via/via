@@ -32,6 +32,20 @@ if [ -n "$unformatted" ]; then
 fi
 echo "OK: gofmt clean"
 
+echo "== CI: No committed binaries =="
+# Compiled executables (e.g. a stray `go build` output) must never be
+# committed — they bloat history permanently and .gitignore only guards
+# against accident. Match machine-binary mime types, so shell scripts
+# (text/x-shellscript) and images (image/*) are not flagged.
+binaries=$(git ls-files -z | xargs -0 file --mime-type 2>/dev/null |
+  grep -E ': application/(x-executable|x-pie-executable|x-sharedlib|x-mach-binary|x-dosexec|x-elf)$' || true)
+if [ -n "$binaries" ]; then
+  echo "ERROR: committed compiled binaries detected:"
+  echo "$binaries"
+  exit 1
+fi
+echo "OK: no committed binaries"
+
 echo "== CI: Run go vet =="
 go vet ./...
 echo "OK: go vet passed"

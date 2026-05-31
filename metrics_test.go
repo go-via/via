@@ -165,21 +165,18 @@ func TestMetrics_SSEDisconnectReason_shutdown(t *testing.T) {
 		"via.sse.disconnect must fire with reason=shutdown when the app shuts down")
 }
 
-func TestMetrics_SSEDisconnectReason_ttl(t *testing.T) {
+func TestMetrics_CtxReapReason_ttl(t *testing.T) {
 	t.Parallel()
-	// The idle-TTL sweep evicts a Ctx that has gone quiet and disposes
-	// it, waking the SSE drain loop on <-ctx.doneChan. The documented
-	// contract labels that exit "ttl". The heartbeat is disabled so the
-	// stream stays idle long enough to be swept; with the heartbeat on,
-	// contextTTL must exceed it (otherwise the sweep is disabled, see
-	// WithContextTTL) and a connected stream is never reaped.
+	// A page GET registers a Ctx; with the SSE stream never opened it is
+	// stream-less, so the idle sweep reclaims it — counted as
+	// via.ctx.reap{reason=ttl}. (A connected stream is never TTL-swept, so
+	// ttl no longer reaches via.sse.disconnect.)
 	m := &captureMetrics{}
 	var server *httptest.Server
 	app := via.New(
 		via.WithTestServer(&server),
 		via.WithMetrics(m),
 		via.WithContextTTL(40*time.Millisecond),
-		via.WithSSEHeartbeat(0),
 	)
 	via.Mount[metricsPage](app, "/")
 	defer server.Close()
@@ -195,11 +192,42 @@ func TestMetrics_SSEDisconnectReason_ttl(t *testing.T) {
 		return slices.Contains(m.counters, name)
 	}
 
+	// GET the page (registers a Ctx) but never open the SSE stream.
+	_ = vt.NewClient(t, server, "/")
+
+	require.Eventually(t, func() bool { return hasCounter("via.ctx.reap:reason,ttl") },
+		2*time.Second, 10*time.Millisecond,
+		"via.ctx.reap must fire with reason=ttl when the idle sweep reclaims a stream-less Ctx")
+}
+
+func TestMetrics_CtxReapReason_shutdown(t *testing.T) {
+	t.Parallel()
+	// Shutdown reclaims every Ctx — counted as via.ctx.reap{reason=shutdown}
+	// at the dispose chokepoint, distinct from the via.sse.disconnect
+	// {reason=shutdown} the woken SSE loop emits.
+	m := &captureMetrics{}
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	via.Mount[metricsPage](app, "/")
+	defer server.Close()
+
+	hasCounter := func(name string) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return slices.Contains(m.counters, name)
+	}
+
 	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSEReady()
 	defer cancel()
+	require.Eventually(t, func() bool { return hasCounter("via.sse.connect:") },
+		2*time.Second, 10*time.Millisecond, "stream opened")
 
-	require.Eventually(t, func() bool { return hasCounter("via.sse.disconnect:reason,ttl") },
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer shutCancel()
+	require.NoError(t, app.Shutdown(shutCtx))
+
+	require.Eventually(t, func() bool { return hasCounter("via.ctx.reap:reason,shutdown") },
 		2*time.Second, 10*time.Millisecond,
-		"via.sse.disconnect must fire with reason=ttl when the idle-TTL sweep evicts the Ctx")
+		"via.ctx.reap must fire with reason=shutdown when Shutdown reclaims the Ctx")
 }

@@ -71,32 +71,36 @@ func WithShutdownTimeout(d time.Duration) Option { return func(c *config) { c.sh
 // WithSessionTTL sets the per-session expiry. Default 30 minutes.
 func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.sessionTTL = d } }
 
-// WithContextTTL sets the per-tab Ctx idle expiry. Default 15 minutes; a
-// value <= 0 disables the sweep (contexts never expire).
+// WithContextTTL sets how long a *stream-less* tab Ctx lingers before the
+// idle sweep reclaims it. Default 15 minutes; a value <= 0 disables the
+// sweep (contexts never expire).
 //
-// A Ctx is "idle" by last activity, and the SSE heartbeat counts as
-// activity — so a connected stream is kept alive by heartbeat ticks and is
-// never swept as long as the TTL exceeds the heartbeat interval. Because a
-// TTL no larger than the heartbeat can't be kept alive that way, configuring
-// 0 < contextTTL <= [WithSSEHeartbeat] disables the context sweep entirely
-// (logged at startup) rather than risk reaping live streams between beats.
-// A short TTL therefore only takes effect with the heartbeat off.
+// It governs only ctxs with no open SSE stream — a page GET that never
+// opened the stream, or the gap after a stream drops. A connected tab is
+// kept alive for its stream's lifetime regardless of this value, so a short
+// TTL can never reap a live tab.
 func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
 
-// WithSSEHeartbeat sets the SSE keep-alive interval. Default 25s; a value
-// <= 0 disables the heartbeat.
+// WithSSEHeartbeat sets the SSE keepalive cadence. Default 25s.
 //
-// The heartbeat doubles as the liveness signal for the context-TTL sweep:
-// each tick refreshes the Ctx's last-activity time, so a connected tab is
-// never expired while the heartbeat is running and the TTL exceeds it. See
-// [WithContextTTL] for what happens when the TTL is not larger than this.
+// A connected tab is kept alive for its stream's lifetime regardless of this
+// value — the keepalive's only job is to detect a silently-dropped (half-
+// open) client via a failed write, which then reaps the Ctx. Because that
+// failed write is the sole in-band detector of a vanished client, a value
+// <= 0 does NOT disable the keepalive; it floors to a safe default (25s).
+// Slow it down if you must, but it can't be silenced.
 func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
 
 // WithSSEWriteTimeout caps how long a single SSE drain may block on the
 // underlying connection before the stream is torn down. Bounds the
 // blast radius of slow / stalled clients (without this, a wedged TCP
 // peer pins the server goroutine for the lifetime of the tab). Default
-// 10 seconds; set 0 to disable the deadline.
+// 10 seconds.
+//
+// Keep it nonzero in production: a failed keepalive write is the only
+// in-band detector of a vanished (half-open) client, and a connected Ctx
+// is never TTL-swept — so setting 0 lets a half-open peer pin its Ctx and
+// goroutine until the OS TCP keepalive fires (or the process exits).
 func WithSSEWriteTimeout(d time.Duration) Option {
 	return func(c *config) { c.sseWriteTimeout = d }
 }
