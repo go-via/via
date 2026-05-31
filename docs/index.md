@@ -4,11 +4,11 @@ layout: default
 nav_order: 1
 ---
 
-# Via
+# Reactive web apps in pure Go
 {: .fs-9 }
 
-Reactive web apps in pure Go. A composition is a struct. Reactive state is
-a typed field. Actions are methods. The compiler understands your UI.
+A composition is a struct. Reactive state is a typed field. Actions are
+methods. The compiler understands your UI.
 {: .fs-6 .fw-300 }
 
 [Get started](getting-started){: .btn .btn-primary .mr-2 }
