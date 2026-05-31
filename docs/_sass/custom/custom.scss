@@ -27,3 +27,15 @@ code, kbd, pre, samp, .highlight {
 .btn-primary:hover {
   color: #0b0b0f;
 }
+
+// Keep the nav tree statically expanded. By default just-the-docs only
+// reveals a section's children when that section is the active page, so
+// nested pages (e.g. Guides → Plugins) are invisible from anywhere else.
+// Show every child list, and drop the now-redundant collapse chevron.
+.nav-list .nav-list-item > .nav-list {
+  display: block;
+}
+
+.nav-list-expander {
+  display: none;
+}
