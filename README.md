@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="branding/punch-dark.png">
-    <img src="branding/punch-light.png" alt="Via — reactive web apps in pure Go" width="220">
+    <img src="branding/punch-light.png" alt="Via — reactive web apps in pure Go" width="280">
   </picture>
 </p>
 
