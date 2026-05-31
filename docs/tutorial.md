@@ -79,8 +79,8 @@ func (r *Room) Send(ctx *via.Ctx) {
     if name == "" {
         name = "Anon"
     }
+    r.Log.Op(ctx).Append(Message{From: name, Body: body})
     _ = r.Log.Update(ctx, func(log []Message) ([]Message, error) {
-        log = append(log, Message{From: name, Body: body})
         if len(log) > 50 { // keep a recent window so the room can't grow forever
             log = log[len(log)-50:]
         }
@@ -90,9 +90,10 @@ func (r *Room) Send(ctx *via.Ctx) {
 }
 ```
 
-`Update` appends under a per-key mutex — concurrent senders can't lose
+`Op(ctx).Append` appends under a per-key mutex — concurrent senders can't lose
 messages — then Via diffs the View and ships the new `<p>` to every subscribed
-tab over SSE. Writing `Draft` back to `""` clears the sender's input.
+tab over SSE. The trailing `Update` trims the log to a recent window. Writing
+`Draft` back to `""` clears the sender's input.
 
 ## 4. Run it
 

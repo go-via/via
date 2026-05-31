@@ -42,9 +42,7 @@ type Counter struct {
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) {
-    _ = c.Hits.Update(ctx, func(n int) (int, error) {
-        return n + c.Step.Read(ctx), nil
-    })
+    c.Hits.Op(ctx).Add(c.Step.Read(ctx))
 }
 
 func (c *Counter) View(ctx *via.CtxR) h.H {

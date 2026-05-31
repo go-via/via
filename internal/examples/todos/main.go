@@ -33,9 +33,7 @@ func (t *Todos) Add(ctx *via.Ctx) error {
 	if text == "" {
 		return nil
 	}
-	_ = t.Items.Update(ctx, func(items []Item) ([]Item, error) {
-		return append(items, Item{Text: text}), nil
-	})
+	t.Items.Op(ctx).Append(Item{Text: text})
 	t.Draft.Write(ctx, "")
 	return nil
 }
@@ -54,15 +52,7 @@ func (t *Todos) Toggle(ctx *via.Ctx) error {
 }
 
 func (t *Todos) Clear(ctx *via.Ctx) error {
-	_ = t.Items.Update(ctx, func(items []Item) ([]Item, error) {
-		live := make([]Item, 0, len(items))
-		for _, it := range items {
-			if !it.Done {
-				live = append(live, it)
-			}
-		}
-		return live, nil
-	})
+	t.Items.Op(ctx).Filter(func(it Item) bool { return !it.Done })
 	return nil
 }
 
