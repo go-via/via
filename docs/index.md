@@ -17,27 +17,25 @@ methods. The compiler understands your UI.
 
 ---
 
-A complete Via app — a counter whose **step** is client-owned and whose
-**count** is server-owned. No template files, no build step, no hand-written
-JavaScript:
+A complete Via app — a **Local** counter that's independent in every tab and a
+**Shared** counter that syncs across every session. No template files, no build
+step, no hand-written JavaScript:
 
 ```go
-type Counter struct {
-    Hits via.StateTabNum[int]                     // server-owned, per tab
-    Step via.SignalNum[int] `via:"step,init=1"`   // client-owned, in the browser
+type Page struct {
+    Local  via.StateTabNum[int] // per-tab — independent in every tab
+    Shared via.StateAppNum[int] // shared across every session
 }
 
-func (c *Counter) Inc(ctx *via.Ctx) {
-    _ = c.Hits.Update(ctx, func(n int) (int, error) {
-        return n + c.Step.Read(ctx), nil
-    })
-}
+func (p *Page) IncLocal(ctx *via.Ctx)  { p.Local.Op(ctx).Inc() }
+func (p *Page) IncShared(ctx *via.Ctx) { p.Shared.Op(ctx).Inc() }
 
-func (c *Counter) View(ctx *via.CtxR) h.H {
+func (p *Page) View(ctx *via.CtxR) h.H {
     return h.Div(
-        h.P(h.Text("Count: "), c.Hits.Text(ctx)),
-        h.Input(h.Type("number"), c.Step.Bind()),
-        h.Button(h.Text("+"), on.Click(c.Inc)),
+        h.P(h.Text("Local: "), p.Local.Text(ctx)),
+        h.Button(h.Text("+1"), on.Click(p.IncLocal)),
+        h.P(h.Text("Shared: "), p.Shared.Text(ctx)),
+        h.Button(h.Text("+1"), on.Click(p.IncShared)),
     )
 }
 ```
