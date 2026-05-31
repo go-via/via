@@ -34,8 +34,11 @@ go get github.com/go-via/via
 
 ## Quickstart: the counter
 
-`Hits` is server-owned; `Step` rides in the browser. `on.Click(c.Inc)` is a
-typed method reference — a typo is a compile error.
+Two counters, two scopes. `Local` is per-tab server state; `Shared` is one
+value across every session — clicking `+1` bumps `Local` only in that tab, but
+`Shared` everywhere at once. No `Broadcast`, no WebSocket, no client JS.
+`on.Click(p.IncShared)` is a typed method reference — a typo is a compile
+error.
 
 ```go
 package main
@@ -48,34 +51,37 @@ import (
     "github.com/go-via/via/on"
 )
 
-type Counter struct {
-    Hits via.StateTabNum[int]
-    Step via.SignalNum[int] `via:"step,init=1"`
+type Page struct {
+    Local  via.StateTabNum[int] // per-tab — independent in every tab
+    Shared via.StateAppNum[int] // global — synced across every session
 }
 
-func (c *Counter) Inc(ctx *via.Ctx) {
-    _ = c.Hits.Update(ctx, func(n int) (int, error) {
-        return n + c.Step.Read(ctx), nil
-    })
+func (p *Page) IncLocal(ctx *via.Ctx) {
+    _ = p.Local.Update(ctx, func(n int) (int, error) { return n + 1, nil })
 }
 
-func (c *Counter) View(ctx *via.CtxR) h.H {
+func (p *Page) IncShared(ctx *via.Ctx) {
+    _ = p.Shared.Update(ctx, func(n int) (int, error) { return n + 1, nil })
+}
+
+func (p *Page) View(ctx *via.CtxR) h.H {
     return h.Div(
-        h.P(h.Text("Count: "), c.Hits.Text(ctx)),
-        h.Input(h.Type("number"), c.Step.Bind()),
-        h.Button(h.Text("+"), on.Click(c.Inc)),
+        h.P(h.Text("Local: "), p.Local.Text(ctx)),
+        h.Button(h.Text("+1"), on.Click(p.IncLocal)),
+        h.P(h.Text("Shared: "), p.Shared.Text(ctx)),
+        h.Button(h.Text("+1"), on.Click(p.IncShared)),
     )
 }
 
 func main() {
     app := via.New()
-    via.Mount[Counter](app, "/")
+    via.Mount[Page](app, "/")
     _ = http.ListenAndServe(":3000", app)
 }
 ```
 
 ```bash
-go run ./internal/examples/counter
+go run ./internal/examples/counterscope   # open in two browsers
 ```
 
 ![Two browsers, two scopes — StateTab is per-tab, StateApp is shared across every session.](docs/counter-scope.gif)
