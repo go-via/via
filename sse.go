@@ -93,12 +93,21 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 	// `:` per the SSE spec — Datastar (and any conformant client)
 	// silently ignores them, so this adds no event surface. Tests use
 	// it to replace the timing-based 20ms-sleep idiom.
-	setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
-	if _, err := io.WriteString(w, ": ready\n\n"); err != nil {
-		return
-	}
-	if fl, ok := w.(http.Flusher); ok {
-		fl.Flush()
+	//
+	// Only safe when the stream is NOT content-encoded: datastar routes
+	// its own writes through a compressing writer, but this raw write
+	// goes to the underlying ResponseWriter — uncompressed bytes in a
+	// Content-Encoding: br stream corrupt it for a real browser. The
+	// marker is an observability/test aid clients ignore, and the test
+	// client negotiates no encoding, so it still observes it.
+	if w.Header().Get("Content-Encoding") == "" {
+		setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
+		if _, err := io.WriteString(w, ": ready\n\n"); err != nil {
+			return
+		}
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
 	}
 
 	var heartbeat <-chan time.Time
