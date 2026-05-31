@@ -4,6 +4,13 @@ layout: default
 nav_order: 1
 ---
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="{{ '/assets/branding/punch-dark.png' | relative_url }}">
+    <img src="{{ '/assets/branding/punch-light.png' | relative_url }}" alt="Via" width="220">
+  </picture>
+</p>
+
 # Reactive web apps in pure Go
 {: .fs-9 }
 
