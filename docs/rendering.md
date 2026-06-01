@@ -2,7 +2,7 @@
 title: Rendering (h)
 layout: default
 parent: Guides
-nav_order: 2
+nav_order: 3
 ---
 
 # Rendering with the `h` DSL
