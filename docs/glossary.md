@@ -11,7 +11,8 @@ Short definitions for the vocabulary used across these docs.
 
 **Composition** — a Go struct that defines a piece of UI: reactive state as
 typed fields, actions as methods, and a `View`. Mounted at a route with
-`via.Mount[T]`.
+`via.Mount[T]`, and nested as a field in another composition — see
+[Compositions](compositions).
 
 **Signal (`Signal[T]`)** — client-owned reactive state, mirrored into the
 browser's Alien Signals graph. Bind it to inputs and view helpers; it reacts
