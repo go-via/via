@@ -286,7 +286,9 @@ func TestClick_panicMessageNamesNil(t *testing.T) {
 		assert.Contains(t, msg, "got nil",
 			"panic should specifically call out nil rather than a generic 'closure/top-level/nil' clause")
 	}()
-	on.Click(nil)
+	// Bare on.Click(nil) no longer compiles (F can't be inferred); a
+	// typed nil func value is the remaining way to smuggle nil in.
+	on.Click[func(*via.Ctx)](nil)
 }
 
 func topLevelClickHandler(ctx *via.Ctx) error { return nil }
@@ -336,21 +338,6 @@ func TestClick_panicMessageNamesTopLevelFunctionWhoseNameStartsWithFunc(t *testi
 		assert.NotContains(t, msg, "got a closure")
 	}()
 	on.Click(functionalTopLevelHandler)
-}
-
-func TestClick_panicMessageNamesNonFunctionValue(t *testing.T) {
-	t.Parallel()
-	// `on.Click(42)` is a programming error distinct from nil — the
-	// panic must not lie about what was passed.
-	defer func() {
-		rec := recover()
-		require.NotNil(t, rec)
-		msg, ok := rec.(string)
-		require.True(t, ok)
-		assert.NotContains(t, msg, "got nil",
-			"a non-function value must not be reported as nil")
-	}()
-	on.Click(42)
 }
 
 func TestKey_panicMessageNamesClosure(t *testing.T) {

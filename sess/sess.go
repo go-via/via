@@ -32,7 +32,30 @@ import (
 	"sync"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/internal/sessbridge"
 )
+
+// Source constrains where a session can be resolved from: a *via.Ctx
+// (actions / handlers), a *via.CtxR (reads during a render), or an
+// *http.Request (middleware, before any composition is rendered).
+type Source interface {
+	*via.Ctx | *via.CtxR | *http.Request
+}
+
+// session resolves src to its *via.Session. The type switch is
+// exhaustive over [Source]; the constraint guarantees no other type can
+// reach the default branch.
+func session[S Source](src S) *via.Session {
+	switch v := any(src).(type) {
+	case *via.Ctx:
+		return v.Session()
+	case *via.CtxR:
+		return v.Session()
+	case *http.Request:
+		return via.RequestSession(v)
+	}
+	return nil
+}
 
 // Put stores a typed value in the session bound to ctx, keyed by the
 // type name. Use it to attach "the logged-in user" or any struct that
@@ -44,28 +67,17 @@ func Put[T any](ctx *via.Ctx, v T) {
 	if ctx == nil {
 		return
 	}
-	ctx.Session().Store(typeKey[T](), v)
+	sessbridge.Store(ctx.Session(), typeKey[T](), v)
 }
 
 // Get reads the typed value stored with [Put], returning the zero
-// value of T and false if nothing matches. src may be a *via.Ctx, a
-// *via.CtxR (for reads during a render), or an *http.Request — the last
-// form lets middleware check the session before any composition is
-// rendered.
-func Get[T any](src any) (T, bool) {
+// value of T and false if nothing matches. src may be any [Source]: a
+// *via.Ctx, a *via.CtxR (for reads during a render), or an
+// *http.Request — the last form lets middleware check the session
+// before any composition is rendered.
+func Get[T any, S Source](src S) (T, bool) {
 	var zero T
-	var s *via.Session
-	switch v := src.(type) {
-	case *via.Ctx:
-		s = v.Session()
-	case *via.CtxR:
-		s = v.Session()
-	case *http.Request:
-		s = via.RequestSession(v)
-	default:
-		return zero, false
-	}
-	raw, ok := s.Load(typeKey[T]())
+	raw, ok := sessbridge.Load(session(src), typeKey[T]())
 	if !ok {
 		return zero, false
 	}
@@ -73,19 +85,11 @@ func Get[T any](src any) (T, bool) {
 	return t, ok
 }
 
-// Clear removes the value stored under T's key from the session. src may
-// be a *via.Ctx, a *via.CtxR, or an *http.Request — the same kinds [Get]
-// accepts, so a value read during a render can be cleared from the same
-// render.
-func Clear[T any](src any) {
-	switch v := src.(type) {
-	case *via.Ctx:
-		v.Session().Delete(typeKey[T]())
-	case *via.CtxR:
-		v.Session().Delete(typeKey[T]())
-	case *http.Request:
-		via.RequestSession(v).Delete(typeKey[T]())
-	}
+// Clear removes the value stored under T's key from the session. src
+// may be any [Source] — the same kinds [Get] accepts, so a value read
+// during a render can be cleared from the same render.
+func Clear[T any, S Source](src S) {
+	sessbridge.Delete(session(src), typeKey[T]())
 }
 
 // Rotate issues a fresh session id, copies the current session's data

@@ -141,7 +141,7 @@ func (t *Todos) View(ctx *via.CtxR) h.H {
 
 // filterButton renders one of the three filter pills. Active pill is
 // styled with the standard button look; others get the outline class.
-func filterButton(name, current string, action any) h.H {
+func filterButton(name, current string, action func(*via.Ctx)) h.H {
 	return h.Button(
 		h.Class(h.IfStr(name != current, "outline secondary")),
 		h.Text(strings.ToUpper(name[:1])+name[1:]),

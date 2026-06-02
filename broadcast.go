@@ -22,10 +22,24 @@ func (a *App) Broadcast(script string) int {
 	return len(ctxs)
 }
 
+// BroadcastSignal pushes one typed signal value to every currently-live
+// tab via its Signal[T] handle — the typed counterpart of
+// [App.BroadcastSignals] for signals bound at Mount. Returns the tab
+// count; nil sig is a no-op.
+func BroadcastSignal[T any](a *App, sig *Signal[T], value T) int {
+	if a == nil || sig == nil {
+		return 0
+	}
+	return a.BroadcastSignals(map[string]any{sig.Key(): value})
+}
+
 // BroadcastSignals pushes a signal patch to every currently-live tab.
 // Useful for site-wide announcements that drive a banner via a
 // client-only signal (e.g. "$_systemNotice = 'planned maintenance'")
 // without rendering each composition. Returns the tab count.
+//
+// This is the untyped escape hatch for dynamic / client-only signal
+// keys; when a *Signal[T] handle exists, prefer [BroadcastSignal].
 func (a *App) BroadcastSignals(values map[string]any) int {
 	if len(values) == 0 {
 		return 0

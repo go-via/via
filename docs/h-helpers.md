@@ -27,7 +27,9 @@ symbol's contract.
   the winning branch is constructed.
 - `h.Maybe(v, fn)` — render `fn(v)` only when v ≠ zero(T) (T must be
   `comparable`).
-- `h.Switch(value, h.Case(...), h.Default(...))` — tab-style equality.
+- `h.Switch(value, h.Case(...), h.Default[K](...))` — tab-style
+  equality; `value` and every `Case` key share one comparable type `K`.
+  `Default` needs the type spelled out (nothing to infer it from).
 - `h.IfStr(cond, s)` — `s` if cond, `""` otherwise; pairs with
   `h.Class` and `h.Styles`.
 

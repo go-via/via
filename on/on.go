@@ -42,33 +42,33 @@ var eventAttrCache = map[string]string{
 }
 
 // Click binds a click handler.
-func Click(fn any, opts ...spec.Option) h.H { return event("click", fn, opts...) }
+func Click[F via.Action](fn F, opts ...spec.Option) h.H { return event("click", fn, opts...) }
 
 // Change binds a change handler (e.g. <select>, <input type=checkbox>).
-func Change(fn any, opts ...spec.Option) h.H { return event("change", fn, opts...) }
+func Change[F via.Action](fn F, opts ...spec.Option) h.H { return event("change", fn, opts...) }
 
 // Input binds an input handler.
-func Input(fn any, opts ...spec.Option) h.H { return event("input", fn, opts...) }
+func Input[F via.Action](fn F, opts ...spec.Option) h.H { return event("input", fn, opts...) }
 
 // Submit binds a form submit handler.
-func Submit(fn any, opts ...spec.Option) h.H { return event("submit", fn, opts...) }
+func Submit[F via.Action](fn F, opts ...spec.Option) h.H { return event("submit", fn, opts...) }
 
 // Focus binds a focus handler.
-func Focus(fn any, opts ...spec.Option) h.H { return event("focus", fn, opts...) }
+func Focus[F via.Action](fn F, opts ...spec.Option) h.H { return event("focus", fn, opts...) }
 
 // Blur binds a blur handler.
-func Blur(fn any, opts ...spec.Option) h.H { return event("blur", fn, opts...) }
+func Blur[F via.Action](fn F, opts ...spec.Option) h.H { return event("blur", fn, opts...) }
 
 // DblClick binds a double-click handler.
-func DblClick(fn any, opts ...spec.Option) h.H { return event("dblclick", fn, opts...) }
+func DblClick[F via.Action](fn F, opts ...spec.Option) h.H { return event("dblclick", fn, opts...) }
 
 // MouseEnter binds a mouseenter handler (does not bubble).
-func MouseEnter(fn any, opts ...spec.Option) h.H {
+func MouseEnter[F via.Action](fn F, opts ...spec.Option) h.H {
 	return event("mouseenter", fn, opts...)
 }
 
 // MouseLeave binds a mouseleave handler (does not bubble).
-func MouseLeave(fn any, opts ...spec.Option) h.H {
+func MouseLeave[F via.Action](fn F, opts ...spec.Option) h.H {
 	return event("mouseleave", fn, opts...)
 }
 
@@ -77,7 +77,7 @@ func MouseLeave(fn any, opts ...spec.Option) h.H {
 // appears in the DOM:
 //
 //	h.Div(on.Load(p.RefreshChart))
-func Load(fn any, opts ...spec.Option) h.H { return event("load", fn, opts...) }
+func Load[F via.Action](fn F, opts ...spec.Option) h.H { return event("load", fn, opts...) }
 
 // Event is the escape hatch for any DOM event not covered by a named
 // helper above. Pass the event name as it would appear after `on:`
@@ -90,13 +90,13 @@ func Load(fn any, opts ...spec.Option) h.H { return event("load", fn, opts...) }
 // user input or per-request data would grow the cache unboundedly. The
 // cache is sized correctly when call sites are static — tens to
 // hundreds of bindings for any real app.
-func Event(name string, fn any, opts ...spec.Option) h.H {
+func Event[F via.Action](name string, fn F, opts ...spec.Option) h.H {
 	return event(name, fn, opts...)
 }
 
 // Key binds a keydown handler that fires only when the named key matches.
 // "Enter", "Escape", "ArrowUp", … (W3C key codes).
-func Key(key string, fn any, opts ...spec.Option) h.H {
+func Key[F via.Action](key string, fn F, opts ...spec.Option) h.H {
 	spec := &spec.Trigger{
 		Event:     "keydown",
 		Method:    fn,
