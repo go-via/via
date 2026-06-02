@@ -2,7 +2,7 @@ module github.com/go-via/via
 
 go 1.24.0
 
-toolchain go1.26.3
+toolchain go1.26.4
 
 require (
 	github.com/shirou/gopsutil/v4 v4.26.3
