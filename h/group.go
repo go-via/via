@@ -177,30 +177,36 @@ func EachSeq2[K, V any](seq iter.Seq2[K, V], fn func(K, V) H) H {
 
 // SwitchCase pairs a key with the node to render when [Switch]'s value
 // matches the key. Build with [Case] / [Default].
-type SwitchCase struct {
-	key       any
+type SwitchCase[K comparable] struct {
+	key       K
 	node      H
 	isDefault bool
 }
 
 // Case returns a [SwitchCase] that fires when [Switch]'s value equals
 // key.
-func Case(key any, node H) SwitchCase { return SwitchCase{key: key, node: node} }
+func Case[K comparable](key K, node H) SwitchCase[K] {
+	return SwitchCase[K]{key: key, node: node}
+}
 
 // Default returns a [SwitchCase] that fires when no other case matches.
 // At most one Default per Switch is honoured (the first one wins).
-func Default(node H) SwitchCase { return SwitchCase{node: node, isDefault: true} }
+//
+// K cannot be inferred from the argument, so it is spelled explicitly
+// at the call site: h.Default[Status](unknownView).
+func Default[K comparable](node H) SwitchCase[K] {
+	return SwitchCase[K]{node: node, isDefault: true}
+}
 
 // Switch renders the first matching [SwitchCase] and nothing else.
 //
-// Comparison is `==`, so both value and every [Case] key must be of a
-// comparable type. Passing a slice, map, or function (or a key that
-// contains one) will panic at render time with the standard "comparing
-// uncomparable type" runtime error — Go's interface-equality semantics,
-// not something h can soften. For tab-style branching on a non-
-// comparable value, project it to a comparable key first (e.g. a tag
-// string or enum) and Switch on that.
-func Switch(value any, cases ...SwitchCase) H {
+// value and every [Case] key share the comparable type K, so a
+// mismatched case is a compile error. Note Go's comparable admits
+// interface and comparable-struct types whose comparison can still
+// panic at runtime if a value carries a non-comparable dynamic type —
+// for tab-style branching on such a value, project it to a simple key
+// first (e.g. a tag string or enum) and Switch on that.
+func Switch[K comparable](value K, cases ...SwitchCase[K]) H {
 	var fallback H
 	for _, c := range cases {
 		if c.isDefault {

@@ -4,7 +4,17 @@ import (
 	"net/http"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-via/via/internal/sessbridge"
 )
+
+// Wire the sess package's access path to the unexported KV methods.
+// See internal/sessbridge for why this is a function-var bridge.
+func init() {
+	sessbridge.Load = func(s any, key string) (any, bool) { return s.(*Session).load(key) }
+	sessbridge.Store = func(s any, key string, value any) { s.(*Session).store(key, value) }
+	sessbridge.Delete = func(s any, key string) { s.(*Session).delete(key) }
+}
 
 // sessionCookieName is the name of the HTTP cookie via uses to identify
 // a browser session across requests. Centralized here so set/read/delete
@@ -21,32 +31,34 @@ type session struct {
 // expires per [WithSessionTTL].
 //
 // A Session obtained via [Ctx.Session] marks the page dirty + fans out
-// to subscribed tabs on Store; one obtained via [RequestSession] (in a
+// to subscribed tabs on writes; one obtained via [RequestSession] (in a
 // middleware, before a Ctx exists) is cookie-only and does not trigger
 // re-render.
 //
-// Typed access lives in the via/sess subpackage — most code reaches
-// for sess.Get[T] / sess.Put[T] / sess.Clear[T] rather than this type
-// directly.
+// All value access is typed and lives in the via/sess subpackage —
+// sess.Get[T] / sess.Put[T] / sess.Clear[T]. Session itself only
+// exposes [Session.Rotate].
 type Session struct {
 	data *session
 	ctx  *Ctx
 	app  *App
 }
 
-// Load reads the value stored under key, or nil/false if absent or if
-// the Session is detached (no underlying session record).
-func (s *Session) Load(key string) (any, bool) {
+// load reads the value stored under key, or nil/false if absent or if
+// the Session is detached (no underlying session record). Unexported:
+// the only sanctioned access path is the typed via/sess package, which
+// reaches these through internal/sessbridge.
+func (s *Session) load(key string) (any, bool) {
 	if s == nil || s.data == nil {
 		return nil, false
 	}
 	return s.data.data.Load(key)
 }
 
-// Store writes value under key. When the Session is bound to a Ctx,
+// store writes value under key. When the Session is bound to a Ctx,
 // also marks the page dirty so the view re-renders and fans the write
 // out to every other live tab on the same session subscribed to key.
-func (s *Session) Store(key string, value any) {
+func (s *Session) store(key string, value any) {
 	if s == nil || s.data == nil {
 		return
 	}
@@ -59,9 +71,9 @@ func (s *Session) Store(key string, value any) {
 	}
 }
 
-// Delete removes the value stored under key. When the Session is bound
+// delete removes the value stored under key. When the Session is bound
 // to a Ctx, also marks the page dirty so the view re-renders.
-func (s *Session) Delete(key string) {
+func (s *Session) delete(key string) {
 	if s == nil || s.data == nil {
 		return
 	}
@@ -113,7 +125,7 @@ func (s *Session) Rotate() string {
 }
 
 // RequestSession returns the [Session] cookie-resolved off r, or a
-// detached Session (Load/Store no-op) if the request carries no via
+// detached Session (reads/writes no-op) if the request carries no via
 // session yet. Use this from middleware that needs to read or write
 // session state before any composition is rendered.
 //
