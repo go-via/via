@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"log"
 	"log/slog"
-	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -103,7 +102,7 @@ func TestLogLevel_warnDefault_noNoiseOnHealthyRequest(t *testing.T) {
 	via.Mount[accessLogPage](app, "/")
 
 	for range 5 {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 	}

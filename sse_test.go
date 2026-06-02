@@ -30,7 +30,7 @@ func TestHandleSSEClose_oversizedBodyReturns413(t *testing.T) {
 	via.Mount[sseEmptyPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Post(
+	resp, err := server.Client().Post(
 		server.URL+"/_sse/close",
 		"text/plain",
 		bytes.NewReader(bytes.Repeat([]byte("x"), 1024)),
@@ -48,7 +48,7 @@ func TestHandleSSEClose_unknownTabIsNoOp200(t *testing.T) {
 	via.Mount[sseEmptyPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Post(
+	resp, err := server.Client().Post(
 		server.URL+"/_sse/close",
 		"text/plain",
 		strings.NewReader("does-not-exist"),

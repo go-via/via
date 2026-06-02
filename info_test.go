@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -26,7 +25,7 @@ func TestLiveTabs_reflectsRegisteredCount(t *testing.T) {
 	assert.Equal(t, 0, app.LiveTabs(), "starts at zero")
 
 	for i := 1; i <= 3; i++ {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 		assert.Equal(t, i, app.LiveTabs(),

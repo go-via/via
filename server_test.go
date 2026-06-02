@@ -93,7 +93,7 @@ func TestWithNotFound_servesCustomHandlerOnUnknownRoute(t *testing.T) {
 	via.Mount[introspectPage](app, "/known")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/no-such-thing")
+	resp, err := server.Client().Get(server.URL + "/no-such-thing")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -115,7 +115,7 @@ func TestWithNotFound_doesNotInterceptKnownRoutes(t *testing.T) {
 	via.Mount[introspectPage](app, "/known")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/known")
+	resp, err := server.Client().Get(server.URL + "/known")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -206,14 +206,14 @@ func TestHandleStatic_servesFromFS(t *testing.T) {
 	app.HandleStatic("/static/", fsys)
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/static/app.css")
+	resp, err := server.Client().Get(server.URL + "/static/app.css")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, string(body), "amber")
 
-	resp2, err := http.Get(server.URL + "/static/sub/inner.txt")
+	resp2, err := server.Client().Get(server.URL + "/static/sub/inner.txt")
 	require.NoError(t, err)
 	defer resp2.Body.Close()
 	body2, _ := io.ReadAll(resp2.Body)
@@ -233,7 +233,7 @@ func TestHandleStatic_notFoundFallsThrough(t *testing.T) {
 	app.HandleStatic("/assets/", fsys)
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/assets/missing.txt")
+	resp, err := server.Client().Get(server.URL + "/assets/missing.txt")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
