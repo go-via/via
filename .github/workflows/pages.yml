@@ -9,6 +9,7 @@ on:
   # Build (but don't deploy) on PRs that touch the docs, so a broken site
   # fails the PR rather than the post-merge deploy.
   pull_request:
+    branches: [main]
     paths:
       - "docs/**"
       - ".github/workflows/pages.yml"
