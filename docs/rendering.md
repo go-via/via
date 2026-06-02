@@ -44,7 +44,7 @@ h.Each(items, func(it Item) h.H { return h.Li(h.T(it.Name)) })
 h.EachIndexed(items, func(i int, it Item) h.H { ... })
 h.If(loggedIn, h.Span(h.T("Welcome")))
 h.IfElse(ok, yesNode, noNode)
-h.Switch(key, cases, defaultNode)
+h.Switch(key, h.Case(k1, n1), h.Default[K](fallback))
 h.Fragment(nodeA, nodeB)   // group nodes without a wrapper element
 ```
 
