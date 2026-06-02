@@ -41,6 +41,11 @@ type Ctx struct {
 	// which is itself proof the tab is alive — the TTL sweep skips such a
 	// Ctx, so lastAccess governs only stream-less ctxs.
 	connected atomic.Int32
+	// everConnected latches once the first SSE stream opens. Unlike
+	// connected it never resets, so runSSEStream can tell a reconnect
+	// (resync the view — the client may have drifted during the gap)
+	// from the first connect (the page document already carries the view).
+	everConnected atomic.Bool
 
 	// lastSignals holds the most recent signals payload from an action
 	// POST so via.DecodeForm can read keys that aren't tracked by typed

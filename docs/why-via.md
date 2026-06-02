@@ -46,8 +46,9 @@ Read this before adopting. The non-goals are deliberate.
 - **Not a cluster runtime.** `StateApp[T]` and `Broadcast` are
   single-process. Horizontal scaling requires sticky sessions; App state is
   per-pod. There is no built-in fan-out across instances.
-- **Not offline-first.** Disconnect the SSE stream and the tab freezes until
-  reconnect — Via is for connected sessions, not PWAs.
+- **Not offline-first.** Disconnect the SSE stream and the tab is inert until
+  reconnect (the view resyncs automatically once the stream is back) — Via is
+  for connected sessions, not PWAs.
 - **Not a JavaScript replacement.** The browser still runs Datastar's Alien
   Signals graph. Via removes hand-written JS for the reactivity layer, not
   the runtime.

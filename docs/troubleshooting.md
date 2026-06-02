@@ -27,17 +27,21 @@ app := via.New(via.WithInsecureCookies())
 
 Never ship `WithInsecureCookies()` to production — it drops the `Secure` flag.
 
-## The tab freezes / actions 404 after a redeploy
+## The tab shows stale state / resets after a redeploy
 
-**Cause:** a tab's state lives in memory on the server. After a restart, the
-client's `via_tab` is unknown to the new process: the next SSE reconnect 404s
-and the next action POST 404s. Datastar retries the SSE forever, so the tab
-appears frozen rather than erroring.
+**Cause:** a tab's state lives in memory on the server and does not survive a
+restart. When the SSE stream reconnects with a `via_tab` the new process
+doesn't know, via re-bootstraps the tab in place: a fresh `*via.Ctx` is built
+from the route and the `Referer`'s path/query params, `OnInit` runs again, and
+the full view plus a new signal seed replace the stale UI. When the page
+request can't be reconstructed (a path-param route with no usable `Referer`),
+via pushes an explicit `window.location.reload()` instead. Either way the tab
+recovers without user action — but in-memory tab state starts over.
 
-**Fix:** tell users to reload after a deploy, or drain behind a sticky load
-balancer long enough for tabs to close. For session survival across restarts,
-persist the `sess.Put` payload to a durable store keyed by the `via_session`
-cookie and rehydrate in `OnInit`. See
+**Fix:** for state that must survive a deploy, persist the `sess.Put` payload
+to a durable store keyed by the `via_session` cookie and rehydrate in `OnInit`
+(which also runs on every re-bootstrap). Watch `via.sse.recover` to see how
+often clients hit this path. See
 [Production & ops](production#restart-and-tab-survivability).
 
 ## `on.Click(c.DoThing)` won't compile
