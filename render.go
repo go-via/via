@@ -90,14 +90,18 @@ func (a *App) renderView(ctx *Ctx, w http.ResponseWriter) (body h.H, ok bool) {
 	return ctx.viewFn(ctx.readView()), true
 }
 
-func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
+// initialSignals assembles the signal seed for a fresh ctx: via_tab,
+// every plugin-registered app signal, and every typed Signal[T] slot's
+// current value. Shared by the page document render and the SSE
+// re-bootstrap path (recoverSSE), which must seed the same set.
+func (a *App) initialSignals(ctx *Ctx) map[string]any {
 	a.appSignalsMu.RLock()
 	// Size hint: via_tab + every app signal + every typed signal slot.
 	// Map auto-grows beyond this if scope handles add more, but a
 	// correct hint avoids the rehash chain on the common path.
-	initialSigs := make(map[string]any, 1+len(a.appSignals)+len(ctx.desc.signalSlots))
-	initialSigs[tabSignalKey] = ctx.id
-	maps.Copy(initialSigs, a.appSignals)
+	sigs := make(map[string]any, 1+len(a.appSignals)+len(ctx.desc.signalSlots))
+	sigs[tabSignalKey] = ctx.id
+	maps.Copy(sigs, a.appSignals)
 	a.appSignalsMu.RUnlock()
 	for i, s := range ctx.desc.signalSlots {
 		if s.kind != kindSignal {
@@ -107,10 +111,13 @@ func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 		if err != nil {
 			continue
 		}
-		initialSigs[s.wireKey] = json.RawMessage(v)
+		sigs[s.wireKey] = json.RawMessage(v)
 	}
+	return sigs
+}
 
-	sigsJSON, err := json.Marshal(initialSigs)
+func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
+	sigsJSON, err := json.Marshal(a.initialSignals(ctx))
 	if err != nil {
 		// A plugin pushed an unmarshalable value via RegisterAppSignal,
 		// or a typed Signal[T]'s init value can't round-trip. Log so
@@ -189,18 +196,27 @@ func flushDirty(ctx *Ctx) {
 		// autoflush defer (would drop the action connection) and on the
 		// broadcast SyncNow goroutine (would crash the process — no defer
 		// stack to fall back on). renderFragment recovers and logs; a
-		// panic yields "", which prepends as a no-op and is dropped by the
-		// drain's elems != "" guard, so the broken fragment never ships
-		// while the signal flush below still proceeds.
+		// panic yields "" — see the empty-frag guard below.
 		frag := ctx.app.renderFragment(ctx)
-		ctx.queue.mu.Lock()
-		// Prepend the auto re-render so any user-explicit Patch.Elements
-		// patches already queued (e.g. from inside the action body) end
-		// up later in the wire frame. Datastar's morph applies patches
-		// in document order with last-write-wins per id, so this keeps
-		// the user's targeted override the authoritative one.
-		ctx.queue.elements = frag + ctx.queue.elements
-		ctx.queue.mu.Unlock()
+		if frag != "" {
+			ctx.queue.mu.Lock()
+			// Replace — never append — the auto re-render. Only the newest
+			// render is correct, and the drain emits it before the
+			// user-explicit elements queue, so a Patch.Elements override
+			// still lands later in the wire frame and stays authoritative
+			// under datastar's last-write-wins-per-id morph.
+			//
+			// Guarded on frag != "": a panicking render yields "", which
+			// must NOT clobber a previously queued GOOD render that hasn't
+			// drained yet (a disconnected tab accumulating renders — one
+			// later panic would otherwise erase the last good frame, and
+			// the drain's elems != "" guard means nothing ships, leaving
+			// the client with no fresh view at all). Replacing only on a
+			// non-empty render preserves the last good frame; the signal
+			// flush below still proceeds either way.
+			ctx.queue.autoElements = frag
+			ctx.queue.mu.Unlock()
+		}
 	}
 
 	if hasSignals {

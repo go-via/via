@@ -41,7 +41,18 @@ func putRenderBuf(b *bytes.Buffer) {
 // / flushDirty only set elements after rendering non-empty content, so
 // the implication holds in both directions.
 type patchQueue struct {
-	mu       sync.Mutex
+	mu sync.Mutex
+	// autoElements holds the view re-render queued by flushDirty. It is
+	// REPLACED (not appended) on every flush: between drains only the
+	// newest render matters, and accumulating them is actively harmful —
+	// the client applies same-id patches last-wins, so a stale fragment
+	// surviving after the fresh one in the drained frame would rewind
+	// the UI to the oldest queued render (seen live on a hidden tab
+	// catching up after several broadcasts).
+	autoElements string
+	// elements holds user-explicit Patch.Elements pushes, appended in
+	// call order. Drained AFTER autoElements so an explicit patch
+	// targeting an id the auto render also ships stays authoritative.
 	elements string
 	signals  map[string]any
 	scripts  strings.Builder

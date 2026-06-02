@@ -38,7 +38,10 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	ctx, ok := a.getCtx(tabID)
 	if !ok {
-		w.WriteHeader(http.StatusNotFound)
+		// Stale-but-plausible tab id (TTL sweep, process restart):
+		// re-bootstrap a fresh Ctx over this same stream instead of
+		// 404ing into Datastar's infinite retry (a frozen tab).
+		a.recoverSSE(w, r, tabID)
 		return
 	}
 	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
@@ -51,12 +54,12 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// descriptor's group middleware so a requireAuth-style guard can
 	// veto the SSE handshake before the stream goes hot.
 	stream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runSSEStream(a, ctx, w, r)
+		runSSEStream(a, ctx, w, r, nil)
 	})
 	applyMiddleware(ctx.desc.groupMW, stream).ServeHTTP(w, r)
 }
 
-func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
+func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot *sseBootstrap) {
 	m := a.metricsOrNoop()
 	m.Counter("via.sse.connect")
 	// Default to "client": every exit path other than a server-side
@@ -87,6 +90,35 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request) {
 
 	sse := datastar.NewSSE(w, r,
 		datastar.WithCompression(datastar.WithBrotli(datastar.WithBrotliLevel(sseLevel))))
+
+	// Latch-and-branch on connection history. A re-bootstrap (boot != nil)
+	// seeds the fresh tab wholesale: signals first (incl. the new via_tab,
+	// so data-* bindings in the incoming elements resolve), then the full
+	// view replacing the stale container. A plain reconnect re-ships only
+	// the view — never signals, which would clobber live client-side
+	// signal state — so a client that drifted while disconnected (e.g. a
+	// trimmed queue, a missed frame) converges back to server truth.
+	if reconnect := ctx.everConnected.Swap(true); boot != nil {
+		setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
+		if err := sse.PatchSignals(boot.signals); err != nil {
+			return
+		}
+		if boot.elements != "" {
+			if err := sse.PatchElements(boot.elements,
+				datastar.WithSelector(boot.selector),
+				datastar.WithMode(datastar.ElementPatchModeReplace)); err != nil {
+				return
+			}
+		}
+	} else if reconnect {
+		m.Counter("via.sse.resync")
+		if frag := a.renderFragment(ctx); frag != "" {
+			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
+			if err := sse.PatchElements(frag); err != nil {
+				return
+			}
+		}
+	}
 
 	// Force-drain anything queued while the previous SSE was
 	// disconnected — patches accumulated during the gap have no wake
@@ -178,7 +210,7 @@ func hasPending(q *patchQueue) bool {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.elements != "" || q.redirect != "" ||
+	return q.autoElements != "" || q.elements != "" || q.redirect != "" ||
 		len(q.signals) > 0 || q.scripts.Len() > 0
 }
 
@@ -186,10 +218,14 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 	setSSEWriteDeadline(w, writeTimeout)
 	q := ctx.queue
 	q.mu.Lock()
-	elems := q.elements
+	// Auto render first, explicit patches after: the morph applies
+	// same-id patches last-wins, so the user's targeted override beats
+	// the auto render of the same element.
+	elems := q.autoElements + q.elements
 	signals := q.signals
 	scripts := q.scripts.String()
 	redirect := q.redirect
+	q.autoElements = ""
 	q.elements = ""
 	q.signals = nil
 	q.scripts.Reset()

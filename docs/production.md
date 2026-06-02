@@ -78,6 +78,8 @@ and emits structured events for ops dashboards:
 | `via.render.total` | counter | `route` |
 | `via.sse.connect` | counter | |
 | `via.sse.disconnect` | counter | |
+| `via.sse.resync` | counter | |
+| `via.sse.recover` | counter | `mode` |
 | `via.ctx.live` | gauge | |
 
 Adapt to Prometheus, OTel, or expvar by implementing three methods
@@ -100,16 +102,30 @@ existing patch queue + SSE drain — no extra wiring. Single-process only.
 ## Restart and tab survivability
 
 A live tab's state lives in memory on the server (the `*via.Ctx` and its
-session). It does **not** survive a process restart:
+session). It does **not** survive a process restart, but the *connection*
+recovers on its own:
 
-- After a deploy, every client's `via_tab` is unknown to the new process.
-  The next SSE reconnect 404s and the next action POST 404s.
-- Datastar retries the SSE connection forever, so a user watching a stale
-  tab sees it freeze rather than recover. Tell users to reload, or pair the
-  deploy with a sticky load balancer that drains long enough for tabs to
-  close naturally.
+- **Transient drop (server up, tab still known):** Datastar reconnects and
+  via re-ships the current view on the reconnect (counted as
+  `via.sse.resync`), so a client that drifted during the gap converges back
+  to server truth. Signals are not re-seeded — live client-side signal
+  state survives the blip. No user action needed.
+- **Stale tab (deploy/restart, or TTL-swept):** the reconnecting `via_tab`
+  is unknown to the process. via **re-bootstraps** the tab over the same
+  stream: it recovers the route from the tab id, rebuilds path/query params
+  from the `Referer`, runs `OnInit`/`OnConnect` on a fresh `*via.Ctx`, and
+  pushes the full view plus a fresh signal seed (including a new `via_tab`).
+  The user sees current — not stale — state without a reload; in-memory tab
+  state starts fresh (`via.sse.recover` with `mode=rebootstrap`).
+- **Unrecoverable (param route with no usable `Referer`, or the app is at
+  `WithMaxContexts` capacity):** via pushes an explicit
+  `window.location.reload()` so the tab recovers via a normal page load
+  instead of freezing (`via.sse.recover` with `mode=reload`).
+- A `via_tab` whose route prefix was never mounted is treated as forged and
+  still 404s — junk traffic can't mint contexts.
 - Sessions are also in-memory; logged-in users re-auth unless you back the
-  session store with something durable.
+  session store with something durable. `OnInit` runs again on every
+  re-bootstrap, so session-backed rehydration (below) applies there too.
 
 For session survivability, persist the `sess.Put`-stored payload (e.g. a JWT
 or opaque token) to a database keyed by the `via_session` cookie value, and
