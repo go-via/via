@@ -22,7 +22,7 @@ func TestApp_servesDatastarJS(t *testing.T) {
 	via.New(via.WithTestServer(&server))
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/_datastar.js")
+	resp, err := server.Client().Get(server.URL + "/_datastar.js")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -38,7 +38,7 @@ func TestApp_routes404ForUnknownPath(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/unknown-path")
+	resp, err := server.Client().Get(server.URL + "/unknown-path")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -57,13 +57,13 @@ func TestApp_handlesMultipleRoutes(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp1, err := http.Get(server.URL + "/first")
+	resp1, err := server.Client().Get(server.URL + "/first")
 	require.NoError(t, err)
 	buf1, _ := io.ReadAll(resp1.Body)
 	resp1.Body.Close()
 	assert.Contains(t, string(buf1), "first")
 
-	resp2, err := http.Get(server.URL + "/second")
+	resp2, err := server.Client().Get(server.URL + "/second")
 	require.NoError(t, err)
 	buf2, _ := io.ReadAll(resp2.Body)
 	resp2.Body.Close()
@@ -82,10 +82,10 @@ func TestApp_builtinEndpointsReject404OnUnknownTab(t *testing.T) {
 		do   func() (*http.Response, error)
 	}{
 		{"GET /_sse", func() (*http.Response, error) {
-			return http.Get(server.URL + "/_sse")
+			return server.Client().Get(server.URL + "/_sse")
 		}},
 		{"POST /_action/Inc", func() (*http.Response, error) {
-			return http.Post(server.URL+"/_action/Inc", "text/plain", nil)
+			return server.Client().Post(server.URL+"/_action/Inc", "text/plain", nil)
 		}},
 	}
 	for _, c := range cases {
@@ -118,7 +118,7 @@ func TestApp_Handle_routesCustomPath(t *testing.T) {
 	app.Handle("/raw", customHandler{})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/raw")
+	resp, err := server.Client().Get(server.URL + "/raw")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
@@ -189,7 +189,7 @@ func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
 		w.Write([]byte("ok"))
 	})
 
-	resp, err := http.Get(server.URL + "/ping")
+	resp, err := server.Client().Get(server.URL + "/ping")
 	require.NoError(t, err)
 	resp.Body.Close()
 

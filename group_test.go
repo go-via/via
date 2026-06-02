@@ -27,7 +27,7 @@ func TestGroup_prefixesRoutes(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/users")
+	resp, err := server.Client().Get(server.URL + "/api/users")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -50,7 +50,7 @@ func TestGroup_middlewareAppliesToHandlerFunc(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/users")
+	resp, err := server.Client().Get(server.URL + "/api/users")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "yes", resp.Header.Get("X-Group"),
@@ -71,7 +71,7 @@ func TestGroup_middlewareCanShortCircuit(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/admin/secret")
+	resp, err := server.Client().Get(server.URL + "/admin/secret")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -98,7 +98,7 @@ func TestGroup_middlewareAppliesToMountedComposition(t *testing.T) {
 	via.Mount[groupedComp](group, "/dashboard")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/admin/dashboard")
+	resp, err := server.Client().Get(server.URL + "/admin/dashboard")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "wrapped", resp.Header.Get("X-Group"),
@@ -124,7 +124,7 @@ func TestGroup_pathParamsUnderGroupPrefix(t *testing.T) {
 	via.Mount[tenantPage](api, "/users/{id}")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/acme/users/42")
+	resp, err := server.Client().Get(server.URL + "/api/acme/users/42")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -153,7 +153,7 @@ func TestGroup_routes404WithoutPrefix(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/users")
+	resp, err := server.Client().Get(server.URL + "/users")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -168,7 +168,7 @@ func TestGroup_Handle_registersCustomHandler(t *testing.T) {
 	group.Handle("/widgets", customHandler{})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/api/widgets")
+	resp, err := server.Client().Get(server.URL + "/api/widgets")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf, _ := io.ReadAll(resp.Body)
@@ -187,14 +187,14 @@ func TestGroup_handleFuncRegistersExplicitMethod(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Post(server.URL+"/api/widgets", "application/json", http.NoBody)
+	resp, err := server.Client().Post(server.URL+"/api/widgets", "application/json", http.NoBody)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(buf), "created")
 
 	// GET to the same path must miss — POST registration shouldn't leak.
-	getResp, err := http.Get(server.URL + "/api/widgets")
+	getResp, err := server.Client().Get(server.URL + "/api/widgets")
 	require.NoError(t, err)
 	defer getResp.Body.Close()
 	assert.Equal(t, http.StatusMethodNotAllowed, getResp.StatusCode)

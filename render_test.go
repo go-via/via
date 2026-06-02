@@ -32,7 +32,7 @@ func TestWritePageDocument_marshalFailureStillRenders(t *testing.T) {
 	via.Mount[unmarshalablePage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	body := readAll(t, resp.Body)
 	resp.Body.Close()
@@ -54,7 +54,7 @@ func TestView_panicReachesTheConfiguredLoggerNotBareStderr(t *testing.T) {
 	app, server, logger := newLoggedApp(t, via.LogError)
 	via.Mount[panicViewPage](app, "/")
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -78,7 +78,7 @@ func TestView_panicProducesControlled500NotADroppedConnection(t *testing.T) {
 	app, server, _ := newLoggedApp(t, via.LogError)
 	via.Mount[panicViewPage](app, "/")
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err,
 		"View panic must yield an HTTP response, not a dropped connection")
 	body := readAll(t, resp.Body)

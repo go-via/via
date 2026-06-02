@@ -41,7 +41,7 @@ func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
 	via.Mount[strictCSPPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -73,7 +73,7 @@ func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
 	via.Mount[strictCSPPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	csp := resp.Header.Get("Content-Security-Policy")
@@ -95,7 +95,7 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 	via.Mount[cspEchoPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "nonce-"+nonce)
@@ -140,7 +140,7 @@ func TestCSPNonce_renderedValueIsBase64URLFormatted(t *testing.T) {
 	via.Mount[cspEchoPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body := readAll(t, resp.Body)
@@ -174,7 +174,7 @@ func TestCSPNonce_isStableAcrossCallsInSameRequest(t *testing.T) {
 	via.Mount[cspTwoNoncePage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body := readAll(t, resp.Body)
@@ -195,7 +195,7 @@ func TestCSPNonce_differsAcrossRequests(t *testing.T) {
 	defer server.Close()
 
 	get := func() string {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		body := readAll(t, resp.Body)

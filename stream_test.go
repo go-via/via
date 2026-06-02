@@ -48,7 +48,7 @@ func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 	// If recoverLog didn't catch the panic, the server goroutine would
 	// be dead and the follow-up GET would fail. Surviving the request
 	// is the assertion.
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)

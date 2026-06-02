@@ -23,7 +23,7 @@ func TestHSTS_defaultHeaderHasOneYearAndSubdomains(t *testing.T) {
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -44,7 +44,7 @@ func TestHSTS_optionsCustomiseHeader(t *testing.T) {
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	got := resp.Header.Get("Strict-Transport-Security")
@@ -67,7 +67,7 @@ func TestRedirectHTTPS_passesHTTPSThroughViaXForwardedProto(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -206,7 +206,7 @@ func TestAccessLog_statusWriterForwardsFlush(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/stream")
+	resp, err := server.Client().Get(server.URL + "/stream")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf := make([]byte, 256)
@@ -225,7 +225,7 @@ func TestAccessLog_includesRequestIDWhenPresent(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Request-ID", "trace-7")
-	resp, _ := http.DefaultClient.Do(req)
+	resp, _ := server.Client().Do(req)
 	resp.Body.Close()
 
 	found := false
@@ -245,7 +245,7 @@ func TestAccessLog_emitsOneRecordPerRequest(t *testing.T) {
 	via.Mount[accessLogPage](app, "/")
 
 	for range 3 {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 	}
@@ -338,7 +338,7 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/half")
+	resp, err := server.Client().Get(server.URL + "/half")
 	require.NoError(t, err)
 	body := readAll(t, resp.Body)
 	resp.Body.Close()
@@ -346,7 +346,7 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 		"headers already flushed → Recover cannot rewrite to 500")
 	assert.Contains(t, body, "partial")
 
-	resp2, err := http.Get(server.URL + "/ok")
+	resp2, err := server.Client().Get(server.URL + "/ok")
 	require.NoError(t, err)
 	body2 := readAll(t, resp2.Body)
 	resp2.Body.Close()
@@ -367,14 +367,14 @@ func TestRecover_panicReturns500AndKeepsServerAlive(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	resp, err := http.Get(server.URL + "/boom")
+	resp, err := server.Client().Get(server.URL + "/boom")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 		"panicking handler should produce 500")
 
 	// Subsequent requests still work.
-	resp2, err := http.Get(server.URL + "/ok")
+	resp2, err := server.Client().Get(server.URL + "/ok")
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.Equal(t, http.StatusOK, resp2.StatusCode,
@@ -426,7 +426,7 @@ func TestRequestID_generatesWhenAbsent(t *testing.T) {
 	via.Mount[ridProbePage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -446,7 +446,7 @@ func TestRequestID_passesThroughInboundHeader(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Request-ID", "my-trace-123")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "my-trace-123", resp.Header.Get("X-Request-ID"),
@@ -468,13 +468,13 @@ func TestDefaults_installsRecoverRequestIDAndAccessLog(t *testing.T) {
 	})
 
 	// Recover survives the panic.
-	resp, err := http.Get(server.URL + "/boom")
+	resp, err := server.Client().Get(server.URL + "/boom")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 
 	// RequestID stamps a header.
-	resp2, err := http.Get(server.URL + "/ok")
+	resp2, err := server.Client().Get(server.URL + "/ok")
 	require.NoError(t, err)
 	resp2.Body.Close()
 	assert.NotEmpty(t, resp2.Header.Get("X-Request-ID"))

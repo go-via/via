@@ -60,7 +60,7 @@ func TestCtxR_ExposesIDAndCookieReadsToView(t *testing.T) {
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.AddCookie(&http.Cookie{Name: "flavor", Value: "mint"})
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := server.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -73,7 +73,7 @@ func TestCtxR_ExposesIDAndCookieReadsToView(t *testing.T) {
 	body2 := func() string {
 		req, _ := http.NewRequest("GET", server.URL+"/", nil)
 		req.AddCookie(&http.Cookie{Name: "flavor", Value: "mint"})
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := server.Client().Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		buf := make([]byte, 0, 1<<14)

@@ -56,7 +56,7 @@ func TestAction_unknownMethodReturns404(t *testing.T) {
 	via.Mount[counterPage](app, "/")
 	defer server.Close()
 
-	resp, err := http.Post(server.URL+"/_action/Nope", "application/json", strings.NewReader(`{}`))
+	resp, err := server.Client().Post(server.URL+"/_action/Nope", "application/json", strings.NewReader(`{}`))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)

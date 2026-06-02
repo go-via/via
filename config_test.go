@@ -81,14 +81,14 @@ func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 	defer server.Close()
 
 	for range 2 {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"first %d requests should fit under the cap", 2)
 	}
 
-	resp, err := http.Get(server.URL + "/")
+	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
@@ -104,7 +104,7 @@ func TestMaxContexts_zeroDisablesTheCap(t *testing.T) {
 	defer server.Close()
 
 	for range 5 {
-		resp, err := http.Get(server.URL + "/")
+		resp, err := server.Client().Get(server.URL + "/")
 		require.NoError(t, err)
 		resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode,

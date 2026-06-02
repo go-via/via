@@ -24,7 +24,7 @@ func TestMiddleware_addsHeaderToResponse(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "applied", resp.Header.Get("X-Middleware"))
@@ -43,7 +43,7 @@ func TestMiddleware_shortCircuits(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
@@ -67,7 +67,7 @@ func TestMiddleware_runsMultiple(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, "one", resp.Header.Get("X-First"))

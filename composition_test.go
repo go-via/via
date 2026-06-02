@@ -39,7 +39,7 @@ func TestMount_renders404OnUnknownRoute(t *testing.T) {
 	via.Mount[simpleCounter](app, "/counter")
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/unknown")
+	resp, err := server.Client().Get(server.URL + "/unknown")
 	defer func() { _ = resp.Body.Close() }()
 	if err != nil {
 		t.Fatal(err)

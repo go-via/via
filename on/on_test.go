@@ -3,7 +3,6 @@ package on_test
 import (
 	"bytes"
 	"io"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -369,7 +368,7 @@ func TestKey_panicsOnAnonymousFunction(t *testing.T) {
 
 func getBody(t *testing.T, server *httptest.Server, path string) string {
 	t.Helper()
-	resp, err := http.Get(server.URL + path)
+	resp, err := server.Client().Get(server.URL + path)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf, _ := io.ReadAll(resp.Body)

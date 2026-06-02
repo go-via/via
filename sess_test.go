@@ -25,7 +25,7 @@ func TestSession_cookieIsSetWithSecureDefaults(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -50,7 +50,7 @@ func TestSession_insecureCookiesDisablesSecureFlag(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -95,7 +95,7 @@ func TestSession_secureFlagWhenWithSecureCookiesEnabled(t *testing.T) {
 	})
 	defer server.Close()
 
-	resp, err := http.Get(server.URL + "/test")
+	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

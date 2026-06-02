@@ -49,7 +49,7 @@ func TestIntegration_fullProductionStack(t *testing.T) {
 	via.Mount[kitchenSinkPage](app, "/page")
 
 	// Page render with query param.
-	resp, err := http.Get(server.URL + "/page?q=hello")
+	resp, err := server.Client().Get(server.URL + "/page?q=hello")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
