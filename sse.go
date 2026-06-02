@@ -210,7 +210,7 @@ func hasPending(q *patchQueue) bool {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.elements != "" || q.redirect != "" ||
+	return q.autoElements != "" || q.elements != "" || q.redirect != "" ||
 		len(q.signals) > 0 || q.scripts.Len() > 0
 }
 
@@ -218,10 +218,14 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 	setSSEWriteDeadline(w, writeTimeout)
 	q := ctx.queue
 	q.mu.Lock()
-	elems := q.elements
+	// Auto render first, explicit patches after: the morph applies
+	// same-id patches last-wins, so the user's targeted override beats
+	// the auto render of the same element.
+	elems := q.autoElements + q.elements
 	signals := q.signals
 	scripts := q.scripts.String()
 	redirect := q.redirect
+	q.autoElements = ""
 	q.elements = ""
 	q.signals = nil
 	q.scripts.Reset()

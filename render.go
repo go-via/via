@@ -196,18 +196,27 @@ func flushDirty(ctx *Ctx) {
 		// autoflush defer (would drop the action connection) and on the
 		// broadcast SyncNow goroutine (would crash the process — no defer
 		// stack to fall back on). renderFragment recovers and logs; a
-		// panic yields "", which prepends as a no-op and is dropped by the
-		// drain's elems != "" guard, so the broken fragment never ships
-		// while the signal flush below still proceeds.
+		// panic yields "" — see the empty-frag guard below.
 		frag := ctx.app.renderFragment(ctx)
-		ctx.queue.mu.Lock()
-		// Prepend the auto re-render so any user-explicit Patch.Elements
-		// patches already queued (e.g. from inside the action body) end
-		// up later in the wire frame. Datastar's morph applies patches
-		// in document order with last-write-wins per id, so this keeps
-		// the user's targeted override the authoritative one.
-		ctx.queue.elements = frag + ctx.queue.elements
-		ctx.queue.mu.Unlock()
+		if frag != "" {
+			ctx.queue.mu.Lock()
+			// Replace — never append — the auto re-render. Only the newest
+			// render is correct, and the drain emits it before the
+			// user-explicit elements queue, so a Patch.Elements override
+			// still lands later in the wire frame and stays authoritative
+			// under datastar's last-write-wins-per-id morph.
+			//
+			// Guarded on frag != "": a panicking render yields "", which
+			// must NOT clobber a previously queued GOOD render that hasn't
+			// drained yet (a disconnected tab accumulating renders — one
+			// later panic would otherwise erase the last good frame, and
+			// the drain's elems != "" guard means nothing ships, leaving
+			// the client with no fresh view at all). Replacing only on a
+			// non-empty render preserves the last good frame; the signal
+			// flush below still proceeds either way.
+			ctx.queue.autoElements = frag
+			ctx.queue.mu.Unlock()
+		}
 	}
 
 	if hasSignals {
