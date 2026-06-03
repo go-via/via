@@ -58,19 +58,71 @@ type patchQueue struct {
 	scripts  strings.Builder
 	redirect string
 	wake     chan struct{}
+	// hold defers wakes while an action handler runs so all of the
+	// action's patches — the auto re-render and any explicit Patch pushes
+	// — drain in a SINGLE frame at action end. Without it a mid-action
+	// Patch.Elements notify can wake the SSE goroutine and drain the
+	// explicit push BEFORE the end-of-action flush queues the auto render,
+	// splitting one action across two frames with the auto render last,
+	// which rewinds the UI off the override under last-wins morphing.
+	// pending records that a wake arrived while held, so releaseNotify
+	// fires exactly one wake to drain the coalesced frame.
+	hold    bool
+	pending bool
 }
 
 func newPatchQueue() *patchQueue {
 	return &patchQueue{wake: make(chan struct{}, 1)}
 }
 
+// notify wakes the SSE drain loop, unless wakes are currently held (see
+// holdNotify) in which case it records a pending wake to fire on release.
+// Acquires q.mu — callers must NOT hold q.mu when calling it.
 func (q *patchQueue) notify() {
 	if q == nil {
 		return
 	}
+	q.mu.Lock()
+	if q.hold {
+		q.pending = true
+		q.mu.Unlock()
+		return
+	}
+	q.mu.Unlock()
+	q.signal()
+}
+
+func (q *patchQueue) signal() {
 	select {
 	case q.wake <- struct{}{}:
 	default:
+	}
+}
+
+// holdNotify starts deferring wakes; pair with releaseNotify. Used to make
+// an action handler's patches atomic in a single SSE frame.
+func (q *patchQueue) holdNotify() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.hold = true
+	q.mu.Unlock()
+}
+
+// releaseNotify stops deferring wakes and fires one wake if any notify
+// arrived while held, draining the action's coalesced patches.
+func (q *patchQueue) releaseNotify() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.hold = false
+	fire := q.pending
+	q.pending = false
+	q.mu.Unlock()
+	if fire {
+		q.signal()
 	}
 }
 
@@ -182,10 +234,13 @@ func genTabID(route string) string {
 func enqueueScript(ctx *Ctx, s string) {
 	q := ctx.queue
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.scripts.WriteString("try{")
 	q.scripts.WriteString(s)
 	q.scripts.WriteString("}catch(e){console.error(e)};")
+	q.mu.Unlock()
+	// notify acquires q.mu, so it must run after the unlock above — every
+	// other call site already enqueues under the lock then notifies after
+	// releasing it.
 	q.notify()
 }
 
