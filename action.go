@@ -166,6 +166,15 @@ func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 	ctx.actionMu.Lock()
 	defer ctx.actionMu.Unlock()
 
+	// Hold queue wakes for the whole handler so the auto re-render and any
+	// explicit Patch pushes drain as one frame at action end, auto render
+	// before explicit (last-wins keeps the override authoritative).
+	// Registered before the flush defer below so it runs AFTER it (LIFO):
+	// the flush populates the queue, then the release fires the single
+	// wake. Resilient to a panic in the flush defer.
+	ctx.queue.holdNotify()
+	defer ctx.queue.releaseNotify()
+
 	ctx.mu.Lock()
 	ctx.w = w
 	ctx.r = r

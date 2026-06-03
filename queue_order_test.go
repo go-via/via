@@ -84,13 +84,20 @@ func TestExplicitElementPatchOverridesAutoRender(t *testing.T) {
 	defer cancel()
 
 	require.Equal(t, http.StatusOK, tc.Action("BumpAndOverride").Fire())
-	body := vt.AwaitFrame(t, frames, 2*time.Second, "OVERRIDE")
+	body := vt.AwaitFrame(t, frames, 2*time.Second, ">1<", "OVERRIDE")
 
 	auto := strings.Index(body, ">1<")
 	override := strings.Index(body, "OVERRIDE")
 	require.GreaterOrEqual(t, auto, 0, "auto render must be in the frame")
 	assert.Greater(t, override, auto,
 		"explicit patch must come after the auto render so last-wins keeps it authoritative")
+	// One action's patches must drain as ONE element-patch event. If the
+	// mid-action Patch.Elements notify triggers an early drain, the
+	// override ships in its own frame BEFORE the end-of-action auto render
+	// — two events, with the auto render last, silently rewinding the UI
+	// off the override under datastar's last-wins-per-id morph.
+	assert.Equal(t, 1, strings.Count(body, "datastar-patch-elements"),
+		"an action's auto render and explicit patch must ship in a single element-patch event")
 }
 
 // Explicit patches from separate offline actions are independent pushes
@@ -172,4 +179,55 @@ func (p *explicitQueuePage) PushB(ctx *via.Ctx) {
 	ctx.Patch.Elements(h.Div(h.ID("b"), h.Text("PATCH-B")))
 }
 
+func (p *explicitQueuePage) PushSilent(ctx *via.Ctx) {
+	ctx.SyncOff()
+	ctx.Patch.Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
+}
+
 func (p *explicitQueuePage) View(ctx *via.CtxR) h.H { return h.Div(h.ID("root")) }
+
+// An action that pushes an explicit patch but mutates no State queues no
+// auto render, so the end-of-action flush renders nothing. The explicit
+// push is then the only thing that can wake the SSE goroutine on a live
+// stream — if an action that holds wakes until it returns fails to
+// release that wake when there's no render, the push never reaches the
+// tab.
+func TestExplicitOnlyActionStillReachesLiveStream(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[explicitQueuePage](app, "/e")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/e")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK, tc.Action("PushA").Fire())
+	body := vt.AwaitFrame(t, frames, 2*time.Second, "PATCH-A")
+	assert.Equal(t, 1, strings.Count(body, "datastar-patch-elements"),
+		"the explicit push must drain in one element-patch event")
+}
+
+// SyncOff suppresses the dirty-bit re-render but NOT explicit Patch.Elements
+// pushes (so a recovery toast still reaches the user on a silent action).
+// The silent branch skips flushDirty entirely, so the held explicit-push
+// wake must still be released at action end or the push is lost.
+func TestSilentActionStillShipsExplicitPatch(t *testing.T) {
+	t.Parallel()
+
+	var server *httptest.Server
+	app := via.New(via.WithTestServer(&server))
+	via.Mount[explicitQueuePage](app, "/e")
+	defer server.Close()
+
+	tc := vt.NewClient(t, server, "/e")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK, tc.Action("PushSilent").Fire())
+	body := vt.AwaitFrame(t, frames, 2*time.Second, "PATCH-A")
+	assert.Contains(t, body, "PATCH-A",
+		"explicit pushes survive SyncOff even though the auto render is suppressed")
+}
