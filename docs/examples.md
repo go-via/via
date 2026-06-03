@@ -32,6 +32,7 @@ walked through step by step in the [tutorial](tutorial).
 | [auth](https://github.com/go-via/via/tree/main/internal/examples/auth) | Typed sessions, `requireAuth` middleware, and `sess.Rotate` after login. |
 | [todos](https://github.com/go-via/via/tree/main/internal/examples/todos) | `StateSess[T]` survives reload, `h.Each`, and `on.SetSignal` for client-bundled writes. |
 | [sysmon](https://github.com/go-via/via/tree/main/internal/examples/sysmon) | An `OnConnect`-driven ticker streaming CPU / RAM / disk / net into ECharts, with a pause + interval-slider UI via `via.Ticker`. |
+| [maps](https://github.com/go-via/via/tree/main/internal/examples/maps) | `maplibre.Plugin()` driving an interactive world map — city fly-to, a ticker-moved "drone", click-to-place pins, marker & feature clicks, hover highlight, and popups, all from Go over SSE. |
 | [upload](https://github.com/go-via/via/tree/main/internal/examples/upload) | A `via.File` field bound to a `multipart/form-data` `<form>`, persisted to disk with a redirect back. |
 | [feed](https://github.com/go-via/via/tree/main/internal/examples/feed) | An append-only / bounded-ring slice stream driven by `Signal[[]T].Update`, paused and cleared from actions. |
 
