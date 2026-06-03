@@ -11,6 +11,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -49,14 +50,15 @@ type Page struct {
 	mu     sync.Mutex
 	leg    int     // index of the current route segment start
 	t      float64 // 0..1 progress along the current segment
+	pins   int     // count of user-dropped pins, for unique marker ids
 	ticker *via.Ticker
 }
 
 func (p *Page) OnInit(ctx *via.Ctx) error {
 	if p.Map == nil {
-		p.Map = maplibre.NewMap(
+		opts := []maplibre.MapOption{
 			maplibre.WithElementID("map"),
-			maplibre.WithCenter(10, 30),
+			maplibre.WithCenter(maplibre.At(10, 30)),
 			maplibre.WithZoom(1.4),
 			maplibre.WithNavigationControl(),
 			maplibre.WithScaleControl(maplibre.BottomLeft),
@@ -70,28 +72,60 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 				maplibre.Layout("line-cap", "round"),
 				maplibre.Layout("line-join", "round"),
 			)),
-		)
+			// A clickable "zone" polygon: a filled GeoJSON feature carrying an
+			// id property. OnFeatureClick reports which zone was clicked.
+			maplibre.WithGeoJSONSource("zones", maplibre.FeatureCollection(
+				maplibre.Feature(
+					maplibre.Polygon([][][]float64{{{20, 0}, {60, 0}, {60, 30}, {20, 30}, {20, 0}}}),
+					map[string]any{"id": "zone-alpha", "name": "Operations zone Alpha"},
+				),
+			), maplibre.GenerateFeatureIDs()),
+			maplibre.WithLayer(maplibre.FillLayer("zones", "zones",
+				// Data-driven fill: amber while hovered, indigo otherwise.
+				maplibre.Paint("fill-color", maplibre.WhenHovered("#ffcc00", "#5856d6")),
+				maplibre.Paint("fill-opacity", 0.45),
+			)),
+			// Hover-to-highlight, entirely client-side (feature-state).
+			maplibre.WithFeatureHover("zones"),
+			// Click-to-place: a tap on the basemap round-trips into Go, which
+			// drops a pin there — the inbound half of the map's interactivity.
+			maplibre.OnClick(p.DropPin),
+			// Marker gestures also round-trip: clicking a pin flies to it,
+			// dragging one reports where it landed.
+			maplibre.OnMarkerClick(p.FocusMarker),
+			maplibre.OnMarkerDragEnd(p.PinMoved),
+			// Clicking a rendered data-layer feature reports which one (by id).
+			maplibre.OnFeatureClick("zones", p.ZoneClicked),
+			// Escape hatch: right-click (contextmenu) reports the location +
+			// live zoom — any MapLibre event can drive Go this way.
+			maplibre.OnMapEvent("contextmenu", p.RightClicked),
+		}
+		// The cities are fixed pins — declare them at construction with
+		// WithMarker, so they render on first paint with no OnConnect work.
+		for _, c := range cities {
+			opts = append(opts, maplibre.WithMarker(c.name, maplibre.At(c.lng, c.lat), maplibre.PopupText(c.name)))
+		}
+		p.Map = maplibre.NewMap(opts...)
 	}
 	return nil
 }
 
 func (p *Page) OnConnect(ctx *via.Ctx) error {
-	for _, c := range cities {
-		p.Map.AddMarker(ctx, c.name, c.lng, c.lat, maplibre.PopupText(c.name))
-	}
-	p.Map.AddMarker(ctx, "drone", route[0][0], route[0][1],
+	// Only the drone is dynamic (a ticker moves it), so it's the one marker
+	// added at connect time rather than declared with WithMarker.
+	p.Map.AddMarker(ctx, "drone", maplibre.At(route[0][0], route[0][1]),
 		maplibre.Color("#ff3b30"), maplibre.PopupText("Drone"))
 
 	p.ticker = via.Stream(ctx, 80*time.Millisecond, func(ctx *via.Ctx, _ time.Time) {
 		lng, lat := p.advance()
-		p.Map.MoveMarker(ctx, "drone", lng, lat)
+		p.Map.MoveMarker(ctx, "drone", maplibre.At(lng, lat))
 	})
 	return nil
 }
 
-// advance steps the drone along the route, ping-ponging at the ends, and
-// returns its new [lng, lat]. Guarded so a click and a tick can't race the
-// leg/progress fields.
+// advance steps the drone along the route, looping back to the first leg after
+// the last, and returns its new [lng, lat]. Guarded so a click and a tick can't
+// race the leg/progress fields.
 func (p *Page) advance() (float64, float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -124,7 +158,54 @@ func (p *Page) FlyToCity(ctx *via.Ctx) {
 		return
 	}
 	c := cities[idx]
-	p.Map.FlyTo(ctx, c.lng, c.lat, c.zoom)
+	p.Map.FlyTo(ctx, maplibre.At(c.lng, c.lat), c.zoom)
+}
+
+// DropPin places a green marker wherever the user clicked the basemap. The
+// clicked [lng, lat] rides back in on the MapEvent — no client JavaScript.
+func (p *Page) DropPin(ctx *via.Ctx) {
+	e := p.Map.Event(ctx)
+	p.mu.Lock()
+	p.pins++
+	n := p.pins
+	p.mu.Unlock()
+	p.Map.AddMarker(ctx, fmt.Sprintf("pin-%d", n), e.LngLat(),
+		maplibre.Color("#34c759"),
+		maplibre.Draggable(),
+		// e.Zoom is the live camera at click time — carried on every gesture.
+		maplibre.PopupText(fmt.Sprintf("Pin %d — %.4f, %.4f @ z%.1f", n, e.Lat, e.Lng, e.Zoom)))
+}
+
+// FocusMarker flies the camera to whichever marker the user clicked. The
+// clicked marker's id and position ride back in on the MapEvent.
+func (p *Page) FocusMarker(ctx *via.Ctx) {
+	e := p.Map.Event(ctx)
+	p.Map.FlyTo(ctx, e.LngLat(), 6)
+	ctx.Toast(fmt.Sprintf("Selected %s", e.MarkerID))
+}
+
+// PinMoved reports where a dragged marker was dropped — drag-to-reposition,
+// driven entirely from Go.
+func (p *Page) PinMoved(ctx *via.Ctx) {
+	e := p.Map.Event(ctx)
+	ctx.Toast(fmt.Sprintf("%s moved to %.4f, %.4f", e.MarkerID, e.Lat, e.Lng))
+}
+
+// ZoneClicked opens a popup ("dialog") at the clicked feature, showing details
+// the server looked up by the feature's id — the server-authoritative
+// selection pattern, surfaced as an on-map dialog.
+func (p *Page) ZoneClicked(ctx *via.Ctx) {
+	e := p.Map.Event(ctx)
+	p.Map.ShowPopup(ctx, "zone-info", e.LngLat(),
+		fmt.Sprintf("Zone %s — click the map to dismiss", e.FeatureID),
+		maplibre.PopupMaxWidth("220px"))
+}
+
+// RightClicked handles a contextmenu (right-click) via the OnMapEvent escape
+// hatch, reporting where and at what zoom.
+func (p *Page) RightClicked(ctx *via.Ctx) {
+	e := p.Map.Event(ctx)
+	ctx.Toast(fmt.Sprintf("Right-clicked %.3f, %.3f @ z%.1f", e.Lat, e.Lng, e.Zoom))
 }
 
 func (p *Page) View(ctx *via.CtxR) h.H {
@@ -137,7 +218,7 @@ func (p *Page) View(ctx *via.CtxR) h.H {
 		h.Main(h.Class("container"),
 			h.HGroup(
 				h.H2(h.T("Via × MapLibre")),
-				h.P(h.T("The camera, markers, and the moving drone are all driven from Go over SSE.")),
+				h.P(h.T("The camera, markers, and the moving drone are all driven from Go over SSE. Click anywhere on the map to drop a pin — the click round-trips through Go.")),
 			),
 			h.Div(append([]h.H{h.Class("grid")}, buttons...)...),
 			h.P(

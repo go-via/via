@@ -15,7 +15,7 @@
 //	    if p.Map == nil {
 //	        p.Map = maplibre.NewMap(
 //	            maplibre.WithElementID("map"),
-//	            maplibre.WithCenter(-122.42, 37.77), // [lng, lat]
+//	            maplibre.WithCenter(maplibre.At(-122.42, 37.77)),
 //	            maplibre.WithZoom(11),
 //	            maplibre.WithNavigationControl(),
 //	        )
@@ -25,25 +25,43 @@
 //
 //	func (p *Page) View(ctx *via.CtxR) h.H { return p.Map.Mount() }
 //
-//	func (p *Page) GoToTokyo(ctx *via.Ctx) { p.Map.FlyTo(ctx, 139.69, 35.69, 10) }
+//	func (p *Page) GoToTokyo(ctx *via.Ctx) { p.Map.FlyTo(ctx, maplibre.At(139.69, 35.69), 10) }
 //
 // # Coordinate order
 //
-// MapLibre — and this package — take coordinates as [lng, lat] (longitude
-// first), the inverse of the lat/lng most map UIs print. WithCenter, FlyTo,
-// AddMarker, and every GeoJSON coordinate follow this order.
+// Coordinates are [lng, lat] (longitude first), the inverse of the lat/lng most
+// map UIs print. The camera, marker, and center APIs take a [LngLat] whose
+// named fields defuse the swap — build it with maplibre.LngLat{Lng: …, Lat: …}
+// (order-independent) or the maplibre.At(lng, lat) shorthand; box APIs take a
+// [Bounds] with named edges. GeoJSON geometry ([Point], [LineString],
+// [Polygon]) stays as raw [lng, lat] arrays.
 //
 // # Camera
 //
 // FlyTo (curved flight), EaseTo (eased hop), JumpTo (instant), plus SetCenter,
-// SetZoom, SetPitch, SetBearing, and FitBounds(w, s, e, n) to frame a box.
+// SetZoom, SetPitch, SetBearing, and FitBounds([Bounds]) to frame a box.
 //
 // # Markers
 //
-// AddMarker(ctx, id, lng, lat, opts…) places a keyed marker; MoveMarker
+// AddMarker(ctx, id, at, opts…) places a keyed marker (at is a [LngLat]);
+// WithMarker declares a static one at construction; MoveMarker
 // repositions it live (vehicle tracking), RemoveMarker / ClearMarkers tear
 // down. Options: Color, Draggable, Scale, PopupText (XSS-safe, for user
 // content), PopupHTML (trusted markup only — MapLibre does not sanitize it).
+//
+// # Popups (dialogs)
+//
+// ShowPopup(ctx, id, at, text, opts…) opens a keyed popup at a point — the
+// "dialog on click" pattern: from an [OnFeatureClick] / [OnClick] handler,
+// ShowPopup at e.LngLat() with details looked up on the server. Re-using an id
+// replaces rather than stacks; ClosePopup closes it; ShowPopupHTML takes
+// trusted HTML. Options: WithoutCloseButton, WithoutCloseOnClick,
+// PopupMaxWidth, PopupClass.
+//
+//	func (p *Page) Picked(ctx *via.Ctx) {
+//	    e := p.Map.Event(ctx)
+//	    p.Map.ShowPopup(ctx, "info", e.LngLat(), p.lookupName(e.FeatureID))
+//	}
 //
 // # Data layers
 //
@@ -55,6 +73,62 @@
 // Filter options. SetPaintProperty, SetLayerVisibility, RemoveLayer, and
 // RemoveLayerAndSource adjust them after the fact. These ops re-arm on the
 // style-load event, so they're safe to fire before the style finishes loading.
+//
+// # Styling expressions
+//
+// Paint/Layout values can be data-driven MapLibre expressions. Instead of
+// hand-writing the nested []any arrays, compose them with the typed builders:
+// Get (a feature property), FeatureState (runtime state), Zoom, Boolean, Case
+// (+ Branch), Interpolate / Step (+ Stop) for zoom/data ramps, and the sugar
+// WhenHovered / WhenState for the common highlight case. They return Expr (an
+// alias for []any), so they nest freely and stay interchangeable with raw
+// []any:
+//
+//	maplibre.Paint("fill-color", maplibre.WhenHovered("#ffcc00", "#5856d6"))
+//	maplibre.Paint("line-width", maplibre.Interpolate(maplibre.Zoom(),
+//	    maplibre.Stop{At: 5, Value: 2}, maplibre.Stop{At: 12, Value: 6}))
+//
+// # Inbound events
+//
+// Register Go handlers for user gestures so the map drives the server, not
+// just the reverse:
+//
+//   - OnClick — a basemap click (sets Lng/Lat).
+//   - OnMoveEnd — the camera settles after a pan/zoom/rotate (sets the center,
+//     Zoom, Bearing, Pitch, and the bounding box West/South/East/North).
+//   - OnMarkerClick / OnMarkerDragEnd — a marker is clicked or a draggable
+//     marker dropped (sets MarkerID and Lng/Lat).
+//   - OnFeatureClick(layer, method) — a rendered data-layer feature is clicked
+//     (sets FeatureID from the feature's id property, plus the click Lng/Lat).
+//
+// The handler reads the gesture with [Map.Event]:
+//
+//	p.Map = maplibre.NewMap(
+//	    maplibre.WithElementID("map"),
+//	    maplibre.OnClick(p.PlacePin),   // bound method, like the on package
+//	    maplibre.OnMoveEnd(p.LoadView),
+//	)
+//
+//	func (p *Page) PlacePin(ctx *via.Ctx) {
+//	    e := p.Map.Event(ctx) // e.Lng, e.Lat
+//	    p.Map.AddMarker(ctx, "pin", e.LngLat())
+//	}
+//
+//	func (p *Page) LoadView(ctx *via.Ctx) {
+//	    e := p.Map.Event(ctx) // e.Zoom plus bounds e.West/South/East/North
+//	    // fetch features inside the box, then SetGeoJSON them
+//	}
+//
+// Zoom/Bearing/Pitch carry the live camera on every gesture; the bounding box
+// is moveend-only and MarkerID/FeatureID are set only by their own gesture —
+// see [MapEvent]. Clickable features and markers show a pointer cursor on
+// hover, so they read as interactive. OnMapEvent(name, method) is the escape
+// hatch for any other map event (dblclick, contextmenu, zoomend, …).
+//
+// WithFeatureHover(layer) highlights the hovered feature client-side via
+// MapLibre feature-state — no round-trip. Reference ['feature-state','hover']
+// in a paint property to style it, and give the source feature ids with
+// GenerateFeatureIDs() so the highlight can target them.
 //
 // # Lifecycle and escape hatch
 //

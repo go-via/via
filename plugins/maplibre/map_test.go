@@ -77,7 +77,7 @@ func TestMap_WithCenter_emitsLngLatOrder(t *testing.T) {
 	t.Parallel()
 	// MapLibre coordinates are [lng, lat] — longitude FIRST. Asserting the
 	// exact pair order guards the single most common MapLibre bug.
-	html := render(t, maplibre.NewMap(maplibre.WithCenter(-122.42, 37.77)))
+	html := render(t, maplibre.NewMap(maplibre.WithCenter(maplibre.At(-122.42, 37.77))))
 	assert.Contains(t, html, `"center":[-122.42,37.77]`,
 		"center must serialize as [lng, lat], not [lat, lng]")
 }
@@ -97,7 +97,7 @@ func TestMap_WithZoomPitchBearing_emitsCameraOptions(t *testing.T) {
 func TestMap_WithMaxBounds_emitsSouthWestNorthEast(t *testing.T) {
 	t.Parallel()
 	// maxBounds is [[west,south],[east,north]] = [sw, ne].
-	html := render(t, maplibre.NewMap(maplibre.WithMaxBounds(-10, 40, 5, 55)))
+	html := render(t, maplibre.NewMap(maplibre.WithMaxBounds(maplibre.Bounds{West: -10, South: 40, East: 5, North: 55})))
 	assert.Contains(t, html, `"maxBounds":[[-10,40],[5,55]]`)
 }
 

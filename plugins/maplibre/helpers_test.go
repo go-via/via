@@ -33,37 +33,72 @@ func (p *mapActionPage) View(ctx *via.CtxR) h.H {
 }
 
 // Camera
-func (p *mapActionPage) FlyTo(ctx *via.Ctx)     { p.Map.FlyTo(ctx, -122.42, 37.77, 12) }
-func (p *mapActionPage) EaseTo(ctx *via.Ctx)    { p.Map.EaseTo(ctx, 2.35, 48.85, 9) }
-func (p *mapActionPage) JumpTo(ctx *via.Ctx)    { p.Map.JumpTo(ctx, 139.69, 35.69, 10) }
-func (p *mapActionPage) SetCenter(ctx *via.Ctx) { p.Map.SetCenter(ctx, -0.12, 51.5) }
+func (p *mapActionPage) FlyTo(ctx *via.Ctx)     { p.Map.FlyTo(ctx, maplibre.At(-122.42, 37.77), 12) }
+func (p *mapActionPage) EaseTo(ctx *via.Ctx)    { p.Map.EaseTo(ctx, maplibre.At(2.35, 48.85), 9) }
+func (p *mapActionPage) JumpTo(ctx *via.Ctx)    { p.Map.JumpTo(ctx, maplibre.At(139.69, 35.69), 10) }
+func (p *mapActionPage) SetCenter(ctx *via.Ctx) { p.Map.SetCenter(ctx, maplibre.At(-0.12, 51.5)) }
 func (p *mapActionPage) SetZoom(ctx *via.Ctx)   { p.Map.SetZoom(ctx, 7) }
 func (p *mapActionPage) SetPitch(ctx *via.Ctx)  { p.Map.SetPitch(ctx, 60) }
 func (p *mapActionPage) SetBearing(ctx *via.Ctx) {
 	p.Map.SetBearing(ctx, 90)
 }
-func (p *mapActionPage) FitBounds(ctx *via.Ctx) { p.Map.FitBounds(ctx, -10, 40, 5, 55) }
+func (p *mapActionPage) FitBounds(ctx *via.Ctx) {
+	p.Map.FitBounds(ctx, maplibre.Bounds{West: -10, South: 40, East: 5, North: 55})
+}
 
 // Markers
-func (p *mapActionPage) AddMarker(ctx *via.Ctx) { p.Map.AddMarker(ctx, "a", -122.42, 37.77) }
+func (p *mapActionPage) AddMarker(ctx *via.Ctx) {
+	p.Map.AddMarker(ctx, "a", maplibre.At(-122.42, 37.77))
+}
 func (p *mapActionPage) AddMarkerColor(ctx *via.Ctx) {
-	p.Map.AddMarker(ctx, "a", 1, 2, maplibre.Color("#ff0000"))
+	p.Map.AddMarker(ctx, "a", maplibre.At(1, 2), maplibre.Color("#ff0000"))
 }
 func (p *mapActionPage) AddMarkerPopupText(ctx *via.Ctx) {
-	p.Map.AddMarker(ctx, "a", 1, 2, maplibre.PopupText("Hello there"))
+	p.Map.AddMarker(ctx, "a", maplibre.At(1, 2), maplibre.PopupText("Hello there"))
 }
 func (p *mapActionPage) AddMarkerPopupHTML(ctx *via.Ctx) {
-	p.Map.AddMarker(ctx, "a", 1, 2, maplibre.PopupHTML("<b>trusted</b>"))
+	p.Map.AddMarker(ctx, "a", maplibre.At(1, 2), maplibre.PopupHTML(h.B(h.T("trusted"))))
+}
+func (p *mapActionPage) AddMarkerPopupLastWins(ctx *via.Ctx) {
+	p.Map.AddMarker(ctx, "a", maplibre.At(1, 2),
+		maplibre.PopupHTML(h.B(h.T("html"))), maplibre.PopupText("text"))
 }
 func (p *mapActionPage) AddMarkerXSS(ctx *via.Ctx) {
-	p.Map.AddMarker(ctx, "a", 1, 2, maplibre.PopupText(`</script><img src=x onerror="alert(1)">`))
+	p.Map.AddMarker(ctx, "a", maplibre.At(1, 2), maplibre.PopupText(`</script><img src=x onerror="alert(1)">`))
 }
 func (p *mapActionPage) AddMarkerQuoteID(ctx *via.Ctx) {
-	p.Map.AddMarker(ctx, `a"b`, 1, 2)
+	p.Map.AddMarker(ctx, `a"b`, maplibre.At(1, 2))
 }
-func (p *mapActionPage) MoveMarker(ctx *via.Ctx)   { p.Map.MoveMarker(ctx, "a", 3, 4) }
+func (p *mapActionPage) MoveMarker(ctx *via.Ctx)   { p.Map.MoveMarker(ctx, "a", maplibre.At(3, 4)) }
 func (p *mapActionPage) RemoveMarker(ctx *via.Ctx) { p.Map.RemoveMarker(ctx, "a") }
 func (p *mapActionPage) ClearMarkers(ctx *via.Ctx) { p.Map.ClearMarkers(ctx) }
+
+// Popups (dialogs)
+func (p *mapActionPage) ShowPopup(ctx *via.Ctx) {
+	p.Map.ShowPopup(ctx, "info", maplibre.At(-122.42, 37.77), "Hello there")
+}
+func (p *mapActionPage) ShowPopupHTML(ctx *via.Ctx) {
+	p.Map.ShowPopupHTML(ctx, "info", maplibre.At(1, 2), h.B(h.T("trusted")))
+}
+func (p *mapActionPage) ShowPopupStructured(ctx *via.Ctx) {
+	p.Map.ShowPopupHTML(ctx, "info", maplibre.At(1, 2),
+		h.Div(h.H3(h.T("Title")), h.P(h.T("body text"))))
+}
+func (p *mapActionPage) ShowPopupEscaped(ctx *via.Ctx) {
+	p.Map.ShowPopupHTML(ctx, "info", maplibre.At(1, 2), h.Div(h.T("</script> & <b>evil")))
+}
+func (p *mapActionPage) ShowPopupNilHTML(ctx *via.Ctx) {
+	p.Map.ShowPopupHTML(ctx, "info", maplibre.At(1, 2), nil)
+}
+func (p *mapActionPage) ShowPopupXSS(ctx *via.Ctx) {
+	p.Map.ShowPopup(ctx, "info", maplibre.At(1, 2), `</script><img onerror="alert(1)">`)
+}
+func (p *mapActionPage) ShowPopupOpts(ctx *via.Ctx) {
+	p.Map.ShowPopup(ctx, "info", maplibre.At(1, 2), "x",
+		maplibre.WithoutCloseButton(), maplibre.WithoutCloseOnClick(),
+		maplibre.PopupMaxWidth("240px"), maplibre.PopupClass("card", "lg"))
+}
+func (p *mapActionPage) ClosePopup(ctx *via.Ctx) { p.Map.ClosePopup(ctx, "info") }
 
 // Data
 func (p *mapActionPage) SetGeoJSON(ctx *via.Ctx) error {

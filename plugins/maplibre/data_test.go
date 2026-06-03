@@ -57,6 +57,36 @@ func TestFeatureCollection_emptyIsNonNullFeaturesArray(t *testing.T) {
 		"an empty collection must emit [] not null, so setData has a valid value")
 }
 
+func TestWithGeoJSONSource_GenerateFeatureIDs_emitsGenerateId(t *testing.T) {
+	t.Parallel()
+	// Feature-state (hover highlighting, selection) targets features by id.
+	// GeoJSON features often lack ids; generateId:true makes MapLibre assign
+	// them so setFeatureState has something to address.
+	html := render(t, maplibre.NewMap(
+		maplibre.WithElementID("m"),
+		maplibre.WithGeoJSONSource("zones", maplibre.FeatureCollection(), maplibre.GenerateFeatureIDs()),
+	))
+	assert.Contains(t, html, `"generateId":true`,
+		"GenerateFeatureIDs must set MapLibre's generateId on the source")
+	// Additive — generateId augments the source spec, it doesn't replace it.
+	assert.Contains(t, html, `"type":"geojson"`,
+		"the source must still be a geojson source")
+	assert.Contains(t, html, "addSource",
+		"the source must still be added")
+}
+
+func TestWithGeoJSONSource_withoutOption_omitsGenerateId(t *testing.T) {
+	t.Parallel()
+	// The default must not silently turn on generateId — a dev who supplies
+	// their own stable feature ids must not have them overwritten.
+	html := render(t, maplibre.NewMap(
+		maplibre.WithElementID("m"),
+		maplibre.WithGeoJSONSource("zones", maplibre.FeatureCollection()),
+	))
+	assert.NotContains(t, html, "generateId",
+		"a source without GenerateFeatureIDs must not emit generateId")
+}
+
 func TestCircleLayer_setsTypeSourceAndNestedPaint(t *testing.T) {
 	t.Parallel()
 	got := maplibre.CircleLayer("dots", "pts",

@@ -90,7 +90,7 @@ type Page struct {
 func (p *Page) OnInit(ctx *via.Ctx) error {
     if p.Map == nil {
         p.Map = maplibre.NewMap(
-            maplibre.WithCenter(-122.42, 37.77), // [lng, lat], longitude first
+            maplibre.WithCenter(maplibre.At(-122.42, 37.77)), // At(lng, lat)
             maplibre.WithZoom(11),
             maplibre.WithNavigationControl(),
         )
@@ -100,21 +100,26 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 
 func (p *Page) View(ctx *via.CtxR) h.H { return p.Map.Mount() }
 
-func (p *Page) GoToTokyo(ctx *via.Ctx) { p.Map.FlyTo(ctx, 139.69, 35.69, 10) }
+func (p *Page) GoToTokyo(ctx *via.Ctx) { p.Map.FlyTo(ctx, maplibre.At(139.69, 35.69), 10) }
 ```
 
-Coordinates are `[lng, lat]` — longitude first — everywhere: `WithCenter`,
-`FlyTo`, `AddMarker`, and all GeoJSON. This is the inverse of the lat/lng most
-map UIs print, and the single most common MapLibre mistake.
+Coordinates are `[lng, lat]` — longitude first — the inverse of the lat/lng most
+map UIs print, and the single most common MapLibre mistake. The camera, marker,
+and center APIs take a typed `LngLat` whose named fields defuse the swap: build
+it with `maplibre.LngLat{Lng: …, Lat: …}` (order-independent) or the
+`maplibre.At(lng, lat)` shorthand; box APIs take a `Bounds{West, South, East,
+North}`. GeoJSON geometry (`Point`, `LineString`, `Polygon`) stays as raw
+`[lng, lat]` arrays.
 
 The runtime surface, all delivered over SSE:
 
-- Camera — `FlyTo` (curved flight), `EaseTo`, `JumpTo`, `SetCenter`,
-  `SetZoom`, `SetPitch`, `SetBearing`, and `FitBounds(w, s, e, n)`.
-- Markers — `AddMarker(ctx, id, lng, lat, opts…)` places a keyed pin;
-  `MoveMarker` repositions it live (vehicle tracking), `RemoveMarker` /
-  `ClearMarkers` tear down. Options: `Color`, `Draggable`, `Scale`,
-  `PopupText` (XSS-safe, for user content), `PopupHTML` (trusted markup only).
+- Camera — `FlyTo` (curved flight), `EaseTo`, `JumpTo`, `SetCenter` (all take a
+  `LngLat`), `SetZoom`, `SetPitch`, `SetBearing`, and `FitBounds(ctx, Bounds)`.
+- Markers — `AddMarker(ctx, id, At(lng, lat), opts…)` places a keyed pin;
+  `WithMarker` declares a static one at construction; `MoveMarker` repositions
+  it live (vehicle tracking), `RemoveMarker` / `ClearMarkers` tear down. Options:
+  `Color`, `Draggable`, `Scale`, `PopupText` (XSS-safe, for user content),
+  `PopupHTML` (an `h.H` body — `h.T` escapes, `h.Raw` is trusted markup only).
 - Data — declare sources/layers with `WithGeoJSONSource` + `WithLayer`, or
   add them at runtime with `AddGeoJSONSource` / `AddLayer`; push live data
   with `SetGeoJSON(ctx, sourceID, fc)`. Build GeoJSON with `Point`,

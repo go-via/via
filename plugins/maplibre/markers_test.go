@@ -29,6 +29,15 @@ func TestMapAPI_AddMarker_popupHTMLUsesSetHTML(t *testing.T) {
 	fireMapAction(t, "AddMarkerPopupHTML", ".setHTML(")
 }
 
+func TestMapAPI_AddMarker_popupTextAndHTMLAreMutuallyExclusiveLastWins(t *testing.T) {
+	t.Parallel()
+	// Both set in one call (HTML then Text): the later one must win and the
+	// earlier must be fully dropped, so the popup can't render twice.
+	frame := fireMapAction(t, "AddMarkerPopupLastWins", "setLngLat")
+	assert.Contains(t, frame, `.setText("text")`, "the later PopupText must win")
+	assert.NotContains(t, frame, ".setHTML(", "the earlier PopupHTML must be cleared")
+}
+
 func TestMapAPI_AddMarker_escapesScriptBreakoutInPopupText(t *testing.T) {
 	t.Parallel()
 	// json.Marshal HTML-escapes `<` to <, so a popup string carrying a

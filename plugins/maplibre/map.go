@@ -33,8 +33,20 @@ type control struct {
 }
 
 type geoSource struct {
-	id   string
-	data map[string]any
+	id    string
+	data  map[string]any
+	genID bool // emit MapLibre generateId:true so features get addressable ids
+}
+
+// SourceOption configures a GeoJSON source declared with [WithGeoJSONSource].
+type SourceOption func(*geoSource)
+
+// GenerateFeatureIDs sets MapLibre's generateId on the source, so its features
+// get stable auto-assigned ids that feature-state ([WithFeatureHover]) and
+// selection can target. Use it when your GeoJSON features have no id of their
+// own; omit it when you supply your own ids (generateId would override them).
+func GenerateFeatureIDs() SourceOption {
+	return func(s *geoSource) { s.genID = true }
 }
 
 // Map is a MapLibre GL map. Construct with [NewMap], render it in View with
@@ -61,9 +73,15 @@ type Map struct {
 	hash        bool
 	extra       map[string]any
 
-	controls []control
-	sources  []geoSource
-	layers   []map[string]any
+	controls       []control
+	sources        []geoSource
+	layers         []map[string]any
+	handlers       []handler
+	markerClick    bool         // attach a click listener to each marker
+	markerDragEnd  bool         // attach a dragend listener to each marker
+	featureClicks  int          // count of OnFeatureClick handlers, for unique event names
+	mapEvents      int          // count of OnMapEvent handlers, for unique event names
+	initialMarkers []markerSpec // markers declared at construction via WithMarker
 }
 
 // MapOption configures a Map. Options are applied in argument order.
@@ -109,13 +127,12 @@ func WithStyle(url string) MapOption {
 	return func(m *Map) { m.style = url }
 }
 
-// WithCenter sets the initial center as longitude, latitude — longitude
-// FIRST, matching MapLibre's [lng, lat] order (the inverse of the lat/lng
-// most map UIs display).
-func WithCenter(lng, lat float64) MapOption {
+// WithCenter sets the initial center. [LngLat]'s named fields keep longitude
+// and latitude from being swapped.
+func WithCenter(at LngLat) MapOption {
 	return func(m *Map) {
-		m.lng = lng
-		m.lat = lat
+		m.lng = at.Lng
+		m.lat = at.Lat
 	}
 }
 
@@ -137,10 +154,10 @@ func WithZoomRange(min, max float64) MapOption {
 	}
 }
 
-// WithMaxBounds restricts panning to the given box, as west, south, east,
-// north — MapLibre's [[sw],[ne]] bounds expressed as edge coordinates.
-func WithMaxBounds(west, south, east, north float64) MapOption {
-	return func(m *Map) { m.maxBounds = &[4]float64{west, south, east, north} }
+// WithMaxBounds restricts panning to the given box. [Bounds]'s named edges
+// keep west/south/east/north from being swapped.
+func WithMaxBounds(b Bounds) MapOption {
+	return func(m *Map) { m.maxBounds = &[4]float64{b.West, b.South, b.East, b.North} }
 }
 
 // WithoutInteraction disables all user interaction (pan/zoom/rotate) for a
@@ -193,8 +210,14 @@ func addControl(expr string, pos []ControlPosition) MapOption {
 // WithGeoJSONSource registers a GeoJSON source added once the style loads.
 // Pair with [WithLayer] to draw it. data is a GeoJSON object (see
 // [FeatureCollection]); the runtime [Map.SetGeoJSON] updates it later.
-func WithGeoJSONSource(id string, data map[string]any) MapOption {
-	return func(m *Map) { m.sources = append(m.sources, geoSource{id: id, data: data}) }
+func WithGeoJSONSource(id string, data map[string]any, opts ...SourceOption) MapOption {
+	return func(m *Map) {
+		s := geoSource{id: id, data: data}
+		for _, o := range opts {
+			o(&s)
+		}
+		m.sources = append(m.sources, s)
+	}
 }
 
 // WithLayer registers a layer added once the style loads. Build spec with
@@ -242,13 +265,22 @@ func NewMap(opts ...MapOption) *Map {
 func (m *Map) Mount() h.H {
 	width := cmp.Or(m.width, "100%")
 	height := cmp.Or(m.height, "400px")
-	return h.Div(
+	kids := []h.H{
 		h.ID(m.elementID),
 		h.Class(m.classes...),
 		h.DataIgnoreMorph(),
 		h.Style(fmt.Sprintf("width:%s;height:%s", width, height)),
-		h.Script(h.Raw(m.initJS())),
-	)
+	}
+	for _, hd := range m.handlers {
+		// A handler with no domEvent is client-only JS (e.g. WithFeatureHover):
+		// it contributes its js in initJS but must not emit a data-on attribute
+		// — an empty data-on: is malformed and datastar rejects it.
+		if hd.domEvent != "" {
+			kids = append(kids, h.Data("on:"+hd.domEvent, hd.expr))
+		}
+	}
+	kids = append(kids, h.Script(h.Raw(m.initJS())))
+	return h.Div(kids...)
 }
 
 func (m *Map) constructorOptions() map[string]any {
@@ -308,7 +340,11 @@ func (m *Map) initJS() string {
 	if len(m.sources) > 0 || len(m.layers) > 0 {
 		b.WriteString("_m.on('load',function(){")
 		for _, s := range m.sources {
-			fmt.Fprintf(&b, "_m.addSource(%s,%s);", mustJSON(s.id), mustJSON(geoJSONSource(s.data)))
+			src := geoJSONSource(s.data)
+			if s.genID {
+				src["generateId"] = true
+			}
+			fmt.Fprintf(&b, "_m.addSource(%s,%s);", mustJSON(s.id), mustJSON(src))
 		}
 		for _, l := range m.layers {
 			fmt.Fprintf(&b, "_m.addLayer(%s);", mustJSON(l))
@@ -316,9 +352,20 @@ func (m *Map) initJS() string {
 		b.WriteString("});")
 	}
 
+	for _, hd := range m.handlers {
+		b.WriteString(hd.js)
+	}
+
 	fmt.Fprintf(&b, "var _ro=new ResizeObserver(function(){var _e=window.__viaMaps[%d];if(_e&&_e.m)_e.m.resize()});", m.seq)
 	b.WriteString("_ro.observe(_el);")
 	fmt.Fprintf(&b, "window.__viaMaps[%d]={m:_m,ro:_ro,markers:{}};", m.seq)
+
+	// Construction markers run last — they look up the registry entry just
+	// assigned above as _e, so they must come after it.
+	for _, ms := range m.initialMarkers {
+		b.WriteString(m.markerScript(ms.id, ms.at, ms.cfg))
+	}
+
 	b.WriteString("})();")
 	return b.String()
 }
@@ -352,4 +399,17 @@ func mustJSON(v any) string {
 		panic(fmt.Errorf("maplibre: internal mustJSON: %v", err))
 	}
 	return string(b)
+}
+
+// renderH renders an [h.H] node to its HTML string for use as popup content. A
+// nil node renders as empty. Rendering into a strings.Builder never errors, so
+// the render error is dropped. Content built with h.T is escaped, so it's safe
+// even for user data; only h.Raw is unescaped.
+func renderH(content h.H) string {
+	if content == nil {
+		return ""
+	}
+	var sb strings.Builder
+	_ = content.Render(&sb)
+	return sb.String()
 }
