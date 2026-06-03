@@ -13,4 +13,4 @@ Task-focused references for the parts of an app.
 - [Rendering (h)](rendering) — the HTML DSL.
 - [Routing, sessions & middleware](routing-sessions-middleware).
 - [File uploads](file-uploads) — the `via.File` field.
-- [Plugins](plugins) — picocss, echarts, and writing your own.
+- [Plugins](plugins) — picocss, echarts, maplibre, and writing your own.

@@ -125,6 +125,19 @@ The runtime surface, all delivered over SSE:
   with `SetGeoJSON(ctx, sourceID, fc)`. Build GeoJSON with `Point`,
   `LineString`, `Polygon`, `Feature`, `FeatureCollection`; build layers with
   `CircleLayer` / `LineLayer` / `FillLayer` / `SymbolLayer`.
+- Events — drive Go from user gestures: `OnClick`, `OnMoveEnd`,
+  `OnMarkerClick`, `OnMarkerDragEnd`, `OnFeatureClick`, and a generic
+  `OnMapEvent` escape hatch (right-click, double-click, …). Each takes a bound
+  method that reads a typed `MapEvent` — the clicked `LngLat`, the `MarkerID` /
+  `FeatureID`, and the live camera — via `p.Map.Event(ctx)`. `WithFeatureHover`
+  highlights the hovered feature client-side, with no round-trip.
+- Styling — compose data-driven paint/layout values with typed expression
+  builders instead of raw `[]any`: `Get`, `FeatureState`, `Zoom`, `Boolean`,
+  `Case`, `Interpolate`, `Step`, plus `WhenHovered` / `WhenState` sugar (e.g.
+  `Paint("fill-color", WhenHovered("#ffcc00", "#5856d6"))`).
+- Dialogs — `ShowPopup(ctx, id, at, text)` / `ShowPopupHTML` (an `h.H` body) /
+  `ClosePopup` show keyed, server-driven popups; the "open a popup at the
+  clicked feature" pattern pairs naturally with `OnFeatureClick`.
 - Lifecycle — `SetStyle`, `Resize`, `Dispose`, and the `Call(ctx, method,
   args…)` escape hatch for any Map method the typed API misses.
 
