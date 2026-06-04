@@ -2239,3 +2239,52 @@ on session A's tab re-renders A's tabs but NOT session B's (broadcastRender scop
 by *session). (3) keep statesess_test.go (9) green single-pod. This proves the
 load-bearing security + convergence behavior deterministically without
 cross-server-cookie gymnastics.
+
+---
+
+## Tick 35 — 2026-06-04 — P3c SHIPPED (StateSess cross-pod) → ✅ PHASE 3 COMPLETE
+
+P3c built on the now-in-place session adoption (9400d48). StateSess[T] is now
+cross-pod convergent, session-scoped, fail-closed.
+
+### Built + result
+- `appval.go`: change.Sid + tailer routing (Sid==""→applyChange else
+  applySessionChange); sessValKey(sid,key)="val:s:"+sid+":"+key (FULL sid);
+  applySessionChange (SECURITY: unknown sid → DROP fail-closed BEFORE any
+  LoadSnapshot/broadcast; else stale-replica drop storeRev>=c.Rev + decode +
+  atomic advanceRev monotone gate + broadcastRender(nil, sess, key) scoped to
+  that one session); reconcileSessions/reconcileSessionKey (sweep, O(sess×keys),
+  noted).
+- `sess.go`: session.revs + revsMu + loadRev/advanceRev (atomic monotone gate).
+- `statesess.go`: StateSess.app + bindApp (register sessDecoder + start tailer →
+  appBinder); Update = CAS-retry on sessValKey + sync L1 + advanceRev + silent-
+  gated hint{Sid} + broadcastRender; Read unchanged.
+- `app.go`: sessDecoders map + init.
+- Tests: existing statesess_test.go (9, incl cross-session no-fanout) GREEN
+  single-pod byte-for-byte; NEW internal sess_change_internal_test.go —
+  applySessionChange fail-closed-NO-LOAD on unknown sid + full-sid-key assertion
+  + stale-replica drop + monotone + poison-survival; reconcileSessionKey
+  advance/no-op/poison. `go test -race ./...` GREEN (13 pkgs), vet clean.
+- Blue: flagged reconcileSessionKey sweep path untested → added it. Cross-pod
+  StateSess e2e + silent-StateSess deferred (vt cross-server-cookie wrinkle /
+  parity with StateApp's tested silent path).
+- Audit (SECURITY): CLEAN. Cross-session isolation verified (full-sid key, per-
+  session broadcast pointer-scoping, decoder shared-by-wireKey but value/broadcast
+  per-session); fail-closed (unknown sid returns before load/broadcast; sid never
+  "" — always 64-hex genSecureID/adopted); CAS-retry byte-identical to StateApp;
+  race-clean (advanceRev atomic gate; no lock nesting across sessionsMu/
+  sessDecodersMu/revsMu); lazy-init safe; single-pod byte-for-byte + SyncOff
+  preserved.
+
+### ✅ PHASE 3 COMPLETE — P3a StateApp cross-pod · P3b reconcile sweep · P3c
+StateSess cross-pod (+ T-SEC-3 session adoption). The value path is now
+cluster-survivable & cross-pod convergent for BOTH StateApp and StateSess, with
+the Store as source of truth, no sticky sessions, and fail-closed session
+scoping. Single-pod behavior byte-for-byte.
+
+### Next step — PHASE 4 (versioning hardening): the StateAppEvents Codec envelope
+(TypeTag+Version+Payload), upcaster chain, drop-on-undecodable (ErrUndecodable →
+fold no-op + via.events.undecodable), ErrForwardIncompatible (envelope version >
+binary → projector halts), Epoch/offset-space-reset detection. Independent of
+the value path; StateAppEvents-side. Sub-slice (envelope+default-codec first,
+then upcasters, then forward-incompat/epoch).

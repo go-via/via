@@ -55,6 +55,12 @@ type App struct {
 	valStatesMu   sync.Mutex
 	valTailerOnce sync.Once // starts the one changes-feed tailer per App
 
+	// sessDecoders holds the typed (Store bytes → T) decoder for each
+	// StateSess wire key, shared across every session of that field — the
+	// type-erased session reconcile/tailer recovers T through it.
+	sessDecoders   map[string]func([]byte) (any, error)
+	sessDecodersMu sync.Mutex
+
 	// backplane backs StateAppEvents and (later) clustered StateApp/StateSess.
 	// Resolved at New: a nil config backplane becomes InMemory(), so the
 	// runtime always drives one Backplane code path. Drained on Shutdown.
@@ -307,6 +313,7 @@ func New(opts ...Option) *App {
 		routes:          make(map[string]string),
 		logs:            make(map[string]*logState),
 		valStates:       make(map[string]*valCell),
+		sessDecoders:    make(map[string]func([]byte) (any, error)),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
