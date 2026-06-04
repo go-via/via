@@ -2622,3 +2622,35 @@ Red (3 tests, undefined checkpoint/snapKey/WithSnapshotInterval) → Yellow (Exp
 
 ### Next step — P5b: optional Compactor (type-asserted) + retained-event floor.
 Then P5c (T2-GO-4 compacted-key durable-genesis migration) → v1 (P0–P5) COMPLETE → STOP loop + PushNotification.
+
+## Tick 41 — 2026-06-04 — P5b: optional Compactor + retained-event floor (one-generation lag)
+
+### Validated against code (file:line evidence)
+- Compactor specced (state-backplane.md:300) but ABSENT from code → added to backplane.go (optional, NOT in Backplane; type-asserted).
+- in-memory log used DENSE 1-based offsets, direct-indexed: Subscribe `records[cursor:]` (inmemory.go:118), Head=`len(records)` (102), append off=`len+1` (44). A physical front-trim would break the offset↔index identity → memLog needed a `base Offset`.
+- Spec EXPLICITLY anticipates compaction holes ("not guaranteed gap-free ... compaction ... create holes", state-backplane.md:162) → NO design-feedback-gate trip; the base-offset model matches the spec's opaque-offset contract.
+- writeSnapshot CAS-success branch (applogsnap.go:75) = the snapshot-FIRST point; compact-SECOND hangs there.
+
+### Converged P5b slice
+- backplane.go: `Compactor interface { Compact(ctx, key, beforeOffset Offset) error }` — discard Offset<beforeOffset, retained offsets UNCHANGED, idempotent+monotone+clamped-to-head.
+- inmemory.go: memLog `base Offset`; append off=base+len+1; Head=base+len; Subscribe start=max(0,cursor-base); compact(before) (clamp to head+1, no-op <=base+1, reslice into a FRESH backing array, base=before-1); inMemoryBackplane.Compact.
+- applog.go: logState.prevSnapOffset.
+- applogsnap.go: writeSnapshot CAS-success → maybeCompact(ls,key,cp.CoveredOffset). Floor = LAG ONE GENERATION: Compact(before:prevSnapOffset) then prevSnapOffset=covered. First snapshot → Compact(before:0)=no-op. Guarantees the current durable snapshot's offset is never truncated (cold start always resumes) + ≥1 generation of tail retained for in-flight subscribers. Decline path: backend without Compactor → snapshot-only.
+
+### Built + tests (applogcompact_internal_test.go — all green -race)
+- TestCompactDropsPrefixButKeepsRetainedOffsetsStable — Compact(before:4) → Subscribe(0) yields {4,5} (offset STABILITY, no renumber).
+- TestCompactIsIdempotentAndClampedToCommitted — before:0/2/2/1/999, head invariant.
+- TestAppendAfterCompactContinuesMonotoneOffsets — append after compact → Offset 6 (continues from head, not base-relative) [Blue gap 1].
+- TestSequentialCompactionsAdvanceMonotonically — floor rises 4→7, backward(5)=no-op, head invariant [Blue gap 2].
+- TestProjectorAutoCompactsTrailingTheDurableSnapshot — lowestRetained>1 AND <=cp.CoveredOffset (snapshot-FIRST).
+- TestFreshProjectorColdStartsAfterPrefixCompacted — payoff: fresh pod reaches [1..5] from the snapshot though offsets 1..3 are gone.
+- TestSnapshotOnlyWhenBackendDeclinesCompaction — embedded-Backplane wrapper hides Compact → snapshot-only, prefix intact.
+
+### TDD-rygba record
+Red (Compactor undefined) → Yellow (Explore: tests airtight; flagged before:0 no-op → added) → Green → Blue (Explore: flagged append-after-compact + sequential-monotone as real testable invariants → added 2 tests; ErrClosed/Compact-error-ignore = acceptable defensive) → Audit (general-purpose: no bugs, 20x -race stress on projector-compacts-while-tailing clean; verified no batch/backing-array aliasing, beforeOffset=0 underflow unreachable by guard order, snapshot-first invariant holds). Conformance suite + memevents.Faulty green (offset model transparent to both).
+
+### KNOWN LIMITATION (follow-up, post-v1 / P6 real backends)
+prevSnapOffset is NOT reset on an epoch reset (projectRecord resets cursor/projection, not prevSnapOffset). For an external backend that BOTH resets epochs AND implements Compactor, a stale large floor across an epoch boundary has undefined semantics. UNREACHABLE in shipped code (in-memory — the only Compactor — never resets epoch; its clamp keeps it safe regardless). Flag when an epoch-resetting Compactor backend lands.
+
+### Next step — P5c: T2-GO-4 compacted-key durable-genesis migration.
+Once a key has compacted, the snapshot is durable GENESIS (the prefix is unrecoverable), so a codec-hash mismatch must NOT discard+re-fold-from-0 (that would silently truncate to the uncompacted tail) — it must run a SEEDED migration (decode old V → seed, fold the retained tail, rewrite the checkpoint). Needs: a "has this key compacted" signal + the seeded-migration path on mismatch. Then v1 (P0-P5) COMPLETE → STOP loop + PushNotification.

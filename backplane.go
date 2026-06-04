@@ -76,6 +76,28 @@ type Backplane interface {
 	io.Closer
 }
 
+// Compactor is an OPTIONAL backplane capability. The runtime type-asserts the
+// Backplane to it and calls Compact only AFTER a snapshot covering the discarded
+// prefix is durably written (snapshot-FIRST, compact-SECOND is mandatory: a
+// crash between them re-replays a few events, never loses one). A backend with
+// no native compaction simply omits it and runs snapshot-only.
+//
+//   - JetStream: purge-up-to-sequence / per-subject limits.
+//   - Redis Streams: XTRIM MINID.
+//   - Postgres: DELETE FROM events WHERE key=$1 AND offset<$2 in the snapshot txn.
+//   - Kafka: the event topic can't native-compact (latest-per-key is wrong for a
+//     log), so it compacts the snapshot topic + delete-records the event topic,
+//     OR declines Compactor and runs snapshot-only.
+type Compactor interface {
+	// Compact reclaims storage for key by discarding every record with
+	// Offset < beforeOffset. Offsets of RETAINED records are UNCHANGED — the log
+	// keeps a front hole, and Subscribe(from:0) resumes at the lowest retained
+	// offset (never renumbered). Idempotent and monotone: a beforeOffset at or
+	// below what was already compacted is a no-op, and one beyond the committed
+	// head is clamped to it (the head never moves).
+	Compact(ctx context.Context, key string, beforeOffset Offset) error
+}
+
 var (
 	// ErrCASConflict is returned by Store.CAS when the current revision moved
 	// since the caller's expectedRev — reload and retry.

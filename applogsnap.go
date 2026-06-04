@@ -74,7 +74,30 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	}
 	if err == nil {
 		a.setSnapRev(ls, newRev)
+		a.maybeCompact(ls, key, cp.CoveredOffset)
 	}
+}
+
+// maybeCompact reclaims the log prefix a DURABLE snapshot now covers. Called
+// only on a successful snapshot CAS (snapshot-FIRST, compact-SECOND). The floor
+// LAGS one snapshot generation — Compact(before:prevSnapOffset) discards only
+// what the PREVIOUS snapshot already covered, so the current snapshot's offset
+// is never truncated (cold start always resumes) and ≥1 generation of tail
+// events survives for any in-flight subscriber. A backend that declines
+// Compactor runs snapshot-only. Called serially from the single projector
+// goroutine, so prevSnapOffset needs no extra synchronization beyond ls.mu.
+func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
+	c, ok := a.backplane.(Compactor)
+	if !ok {
+		return // backend declines compaction → snapshot-only
+	}
+	ls.mu.RLock()
+	floor := ls.prevSnapOffset
+	ls.mu.RUnlock()
+	_ = c.Compact(context.Background(), key, floor) // best-effort; a failure just defers reclamation
+	ls.mu.Lock()
+	ls.prevSnapOffset = covered
+	ls.mu.Unlock()
 }
 
 func (a *App) setSnapRev(ls *logState, rev Rev) {
