@@ -2073,3 +2073,69 @@ fail-closed on an unknown sid (never broadcast-to-all). statesess.go currently
 uses sess.data (per-session kvStore) + broadcastRender(ctx,sess,key). Validate
 the session/sid plumbing (sess.go) before building. After P3c, Phase 3 done →
 P4 versioning.
+
+---
+
+## Tick 32 — 2026-06-04 — P3c CONVERGENCE (StateSess cross-pod) — security-sensitive; build next tick
+
+P3b committed (`daa43a9`). P3c is the session-scoped value path: the most
+security-sensitive slice (sid handling + fail-closed drop), larger than P3a.
+Convergence tick (validate + design + record); build next.
+
+### Validated against code
+- `sess.go:24-27` `session{id string; data kvStore; lastAccess}` — `id` is the
+  FULL session id. `app.go` `sessions map[string]*session` + `sessionsMu`
+  (RWMutex). `sess.go:159` `a.sessions[sess.id]=sess`.
+- `statesess.go:36,68` Read/Update use `ctx.session.Load()` (*session) then
+  `sess.data` (per-session kvStore, live T, zero-serialization) +
+  `broadcastRender(ctx, sess, key)`.
+- `broadcast.go:60,68` broadcastRender(skip, sess, key): when sess != nil, only
+  ctxs with `c.session.Load() == sess` (POINTER equality) re-render. ∴ within a
+  pod, scoping is by the *session object; CROSS-POD the SAME sid is a DIFFERENT
+  *session object on pod B, so B's tailer must resolve sid → B's a.sessions[sid]
+  and broadcast to THAT object (never nil sess → that would fan out app-wide).
+- StateSess does NOT implement appBinder today; bindScopeKeys (runtime.go) calls
+  bindApp on any appBinder → adding StateSess.bindApp wires it in.
+
+### Converged P3c plan (build next tick, TDD)
+- **change struct** gains `Sid string json:"s,omitempty"`; ONE shared changes
+  feed. Tailer routes: Sid=="" → applyChange (StateApp, existing); else →
+  applySessionChange.
+- **session struct**: add `revs map[string]Rev` + a mutex (per-wireKey monotone
+  rev for that session). Init on session create (sess.go getOrCreateSession +
+  Rotate's fresh session).
+- **App**: `sessDecoders map[string]func([]byte)(any,error)` + mutex (wireKey →
+  json→T decoder), registered by StateSess.bindApp; reuse valTailerOnce to start
+  the shared changes-tailer.
+- **sessValKey(sid, wireKey) = "val:s:" + sid + ":" + wireKey** — FULL sid, no
+  truncation.
+- **StateSess.Update**: CAS-retry on sessValKey(sid,key) (LoadSnapshot→decode
+  cur→fn→Marshal→CAS); on success set sess.data[key]=next (sync RYW) +
+  session.revs[key]=newRev (monotone); Append change{Sid:sid,Key:key,Rev:newRev}
+  UNLESS ctx.silent (T3-SRE-2 parity); broadcastRender(ctx, sess, key). Panic on
+  nil ctx (unchanged).
+- **StateSess.Read**: unchanged (sess.data, zero-serialization) — Update keeps it
+  populated; the tailer/sweep populate it on peers.
+- **applySessionChange(c)** [SECURITY-CRITICAL]: sess := a.sessions[c.Sid] under
+  sessionsMu.RLock; if sess == nil → DROP, return, NO broadcast (fail-closed:
+  the session isn't on this pod; NEVER broadcast-to-all on an unknown sid). Else
+  re-pull sessValKey → monotone gate (storeRev > session.revs[key]) → decode via
+  sessDecoders[key] → set sess.data[key] + revs[key]; broadcastRender(nil,
+  sessObj, key) (scoped to that session only).
+- **Reconcile sweep**: extend reconcileValues to also iterate a.sessions (snapshot
+  under sessionsMu) × registered sessDecoder keys → reconcileSessionKey(sessObj,
+  key). NOTE (perf): O(sessions × sessKeys) per tick — acceptable v1; a future
+  optimization could track only dirty (sid,key) pairs. Record.
+- **Security invariants (load-bearing, must be tested):** (1) a session Change
+  for sid X reaching a pod WITHOUT session X is DROPPED (no broadcast, no
+  cross-session leak); (2) convergence reaches ONLY the same sid's tabs, never a
+  different session's; (3) the full sid is in the Store key (no truncation /
+  cross-session aliasing).
+- **Tests:** keep statesess_test.go (9) green (single-pod byte-for-byte) + a
+  two-Apps/one-backplane test: StateSess.Update on session S via pod A converges
+  on session S's tab on pod B, but a DIFFERENT session S2 on pod B does NOT see
+  it (the security scoping). Mirror P3a/P3b shape; vt clients carry session
+  cookies (separate clients = separate sessions; Fork = same session).
+
+### Next step — BUILD P3c under TDD (security-sensitive: assert the fail-closed
+drop + cross-session isolation explicitly). Then Phase 3 DONE → P4 versioning.
