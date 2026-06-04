@@ -2481,3 +2481,38 @@ XTRIM-to-empty / recreated stream / PG restore), re-snapshot from genesis
 Record/Head already carry Epoch (tick-15). NOTE the in-memory backplane never
 resets (epoch stays 0), so test via a small epoch-bumping backplane decorator or
 an internal projector test. After P4c → P5 (snapshot+compaction). v1=through P5.
+
+---
+
+## Tick 39 — 2026-06-04 — P4c: Epoch/offset-space-reset detection (in-band)
+
+P4b shipped (dc3e895). This tick adds reset detection so a recreated/trimmed/
+restored stream re-snapshots instead of silently skipping every new record.
+
+### Validated against code
+- `applog.go` startProjector: `for rec := range ch` → cursor-gated fold (post-P4a
+  halt/skip switch, broadcast-on-advanced outside the lock). logState{projection,
+  cursor,seed,foldBytes,halted} — NO epoch field yet.
+- `backplane.go:24-30` Record carries Epoch; Head returns (Offset,Epoch,error).
+  InMemory always sets Epoch 0 (never resets).
+
+### Converged P4c slice
+- logState gains `epoch Epoch` + `epochSeen bool`.
+- Extract the per-record logic into `(a *App) projectRecord(ls,key,rec) (advanced
+  bool)` (testable without a network): under ls.mu — if halted return false; epoch
+  detection: first record sets the baseline epoch; a LATER record whose Epoch !=
+  ls.epoch → RESET (projection=seed, cursor=0, epoch=rec.Epoch, via.events.epoch_reset
+  Counter), so the new-epoch records (offsets restart at 1) re-fold from genesis
+  rather than being skipped by a bare HWM; then the existing offset-cursor +
+  halt/skip fold. The goroutine becomes `for rec := range ch { if a.projectRecord(...)
+  { a.broadcastRender(nil,nil,key) } }` (broadcast still outside the lock).
+- In-band epoch-change is the primary signal (a reset is followed by writes). The
+  Head<lastApplied backstop (for a reset with NO subsequent write yet) is noted as a
+  later refinement — it needs a periodic Head poll the projector doesn't do; the
+  reconcile-sweep pattern could host it post-v1.
+- InMemory unchanged (epoch always 0 → epochSeen sets 0, no reset). Existing
+  StateAppEvents/chat/counter suites stay green.
+- Test (internal, package via): feed projectRecord crafted Records — same-epoch
+  records fold [1,2]; a new-Epoch record (offset restarts at 1) RESETS → projection
+  becomes [9] (NOT [1,2,9]), cursor 1, epoch 1, via.events.epoch_reset fired. Reuse
+  goodEnv/spyMetrics.
