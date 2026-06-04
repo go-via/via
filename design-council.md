@@ -1823,3 +1823,42 @@ Store godoc (val:<key> bullet). RE-VALIDATED: no other spec claim contradicts.
 
 ### Next step — BUILD P3a (StateApp cross-pod value convergence) under TDD.
 Re-flag each tick: 2d-NATS maintainer-blocked.
+
+---
+
+## Tick 28 — 2026-06-04 — P2d-1: NATS backend UNBLOCKED (maintainer: "do the nats") — module scaffold + embedded-JetStream harness
+
+Maintainer green-lit Phase 2d and chose the NESTED module ./vianats (keeps core
+`via` dependency-free). Test server: EMBEDDED nats-server (no external container/
+CI infra) — my call, recorded.
+
+### Built + verified
+- NEW nested module `./vianats` (own go.mod, `replace github.com/go-via/via =>
+  ../`); deps fetched OK (network works): nats.go v1.52.0, nats-server v2.14.2.
+  Core `via` go.mod untouched → consumers of via never pull nats.
+- `vianats/embedded_test.go`: `startEmbeddedJetStream(t)` boots an in-process
+  JetStream server (random port, t.TempDir store, t.Cleanup shutdown) →
+  ClientURL. Smoke test `TestEmbeddedJetStreamPrimitivesWork` PROVES the
+  primitives the backend rests on work in this sandbox: KV bucket create +
+  CAS-by-revision (stale rev → conflict) + Get; stream publish returns a
+  monotone Sequence; a subject-filtered DeliverAll consumer replays in order.
+  `go test` GREEN; `go vet` clean; core `via build ./...` unaffected.
+
+### Backend design mapping (validated against nats.go jetstream API in the smoke test)
+- Store ← JetStream KV: LoadSnapshot=kv.Get→(Value,Revision); CAS(expectedRev=0)
+  =kv.Create (must-not-exist), else kv.Update(key,data,expectedRev); revision
+  mismatch → ErrCASConflict. Rev = KV revision (uint64).
+- EventLog ← one JetStream stream, subject per key (`<prefix>.<wireKey>`):
+  Append=js.Publish(subject)→PubAck.Sequence (the opaque Offset; per-STREAM seq,
+  non-dense per key — fine, conformance treats offsets opaque). Subscribe(from)=
+  subject-filtered consumer with DeliverByStartSequence=from+1 → Offset>from in
+  order, then live-tails. Head(key)=GetLastMsg(stream,subject).Sequence (0 if
+  none). Close=nc.Close (drain).
+- Epoch stays 0 for v1 (offset-space reset detection is P4).
+
+### Next step — P2d-2: implement vianats.Backplane Store (KV) + EventLog
+(stream/consumer) + Close, then run backplanetest.RunConformance against an
+embedded server (RELEASE-GATING). Sub-slice if needed: Store first (targeted KV
+tests), then EventLog (Append/Head/Subscribe-with-resume + live-tail), then the
+full conformance gate. After P2d ships green, RESUME P3a (StateApp cross-pod
+value convergence) which was converged in tick 27.
