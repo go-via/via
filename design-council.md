@@ -794,3 +794,310 @@ Verified: no "local fold" / `broadcastRender(ctx` left in the doc.
   iface line ~342, Read line ~379, both examples, cold-start ~591). Convergence
   dropped Zero() → seed = `var zero V`. Distinct API-hygiene tick (ripples to the
   interface + 2 examples), do as its own step.
+
+---
+
+## Tick 10 — 2026-06-04 — reconcile doc body: T1-GO-1 (drop Zero(), seed = var zero V)
+
+CONVERGED since tick 4. Picked T1-GO-1 over §4/§6 because it is a VALIDATED
+correctness bug (pointer-E `Zero()` nil-panics, tick 1) still live in the shown
+API — buggy spec code outranks a missing section.
+
+### Done this tick — `E.Zero()` removed from the doc (5 sites)
+Convergence (tick 2 RESOLVED): drop `Zero()`; seed = `var zero V` (Go zero of the
+projection); non-zero empty value → genesis event.
+- **EventReducer interface** — removed the `Zero() V` method + its "determinism
+  rule #1"; single-method `Fold` now; godoc states seed = `var zero V` and why
+  Zero() was dropped (pointer-E nil-deref) + the genesis-event escape.
+- **Read code** — `var ev E; zero := ev.Zero()` → `var zero V`.
+- **Read godoc** — "seeded by E.Zero()" → "seeded by the Go zero of V".
+- **Counter example** — deleted `func (Tick) Zero() int`.
+- **Chat example** — deleted `func (ChatEvent) Zero() []Message`.
+- **#7 cold-start** — "(or Zero(),0)" → "(or `var zero V`, 0)".
+
+Verified: no `Zero()` call/decl left (only the two explanatory mentions in the
+interface godoc + Read comment).
+
+### Convergence status — still CONVERGED; T1-GO-1 CLOSED in doc
+
+### Remaining doc-reconciliation backlog
+- §4 — standalone multi-tenant/session ISOLATION section + GDPR KeyStore
+  (T1-SEC-1/2); only the sid exact-match line exists (in Phase 3).
+- §6 — header `Status` refresh + in-mem-`Backplane`-default / `via.InMemory()` /
+  `memevents` phase-shift (in-mem addendum), not yet in the phased plan.
+
+---
+
+## Tick 11 — 2026-06-04 — reconcile doc body §4: isolation + crypto-shred sections (T1-SEC-1/2)
+
+CONVERGED since tick 4. Picked §4 over §6 (security correctness > framing). The
+two SEC resolutions existed only as scattered lines (#5 GDPR one-liner, Phase 3
+sid exact-match); no standalone section.
+
+### Done this tick — two new sections after #7, before the appendix
+- **## Multi-tenant & session isolation (T1-SEC-1)** — physical boundary
+  (per-tenant namespace + per-pod creds + mTLS, broker rejects cross-namespace)
+  as the LOAD-BEARING layer; logical in-band check (full-sid exact-match,
+  unknown sid DROPs fail-closed) as defence-in-depth; AUTH-1 invariant (Append
+  only via via_tab+session-gated ctx, action.go:107-117); tier-0 trust posture
+  (authn+mTLS mandated, WithInsecureBackplane() opt-out, compromised-pod blast
+  radius named, per-event record-signing DEFERRED).
+- **## GDPR / right-to-erasure — crypto-shred (T1-SEC-2)** — audit-trail-vs-
+  erasure tension named (T1-SEC-WIN); KeyStore{KeyFor,DropKey} seam, DropKey →
+  ErrUndecodable → reuses drop-on-undecodable fold no-op; snapshot invalidation
+  on erasure (+ the compacted-key durable-genesis caveat from T2-GO-4); audit-
+  class vs PII-class separated at declaration; conceded residual (backups expire
+  the key out-of-band; key-drop not tombstone is the erasure mechanism).
+
+### Convergence status — still CONVERGED; doc-reconciliation §4 CLOSED
+
+### Remaining doc-reconciliation backlog (last item)
+- §6 — header `Status` line refresh (still 2026-06-01 "DECIDED", predates the
+  whole council) + the in-mem-`Backplane`-default / `via.InMemory()` / `memevents`
+  phase-shift (in-mem addendum: clean in-mem Backplane → Phase 1 default,
+  `memevents.Faulty` + parameterized conformance suite → Phase 2). Once done, the
+  doc body fully reflects the converged design and the reconciliation pass closes.
+
+---
+
+## Tick 12 — 2026-06-04 — reconcile doc body §6: header refresh + in-mem-default phase shift — RECONCILIATION COMPLETE
+
+CONVERGED since tick 4. Final backlog item (§6).
+
+### Done this tick
+- **Header** — `Status: DECIDED` (dated 2026-06-01, pre-council) → `Status:
+  CONVERGED`, points at design-council.md for the T*-* issue IDs, dual date
+  (scoped 2026-06-01 · council-converged + reconciled 2026-06-04).
+- **Decision bullet** (`nil` backplane) — `nil` stays the honest PUBLIC default
+  but resolves INTERNALLY to a real in-mem Backplane (`memevents.Backplane` /
+  `via.InMemory()`); ONE code path (no nil-special-case bit-rot); hot path
+  synchronous + identity-coded so byte-for-byte/zero-overhead/any-T holds;
+  projector channel hop only for remote Subscribe records.
+- **WithBackplane godoc** — same: nil → via.InMemory() internally, interface
+  exercised on every single-pod run.
+- **Phase 1** — in-process core implemented AS `memevents.Backplane`
+  (via.InMemory()); nil resolves to it; the clean in-mem Backplane lands in
+  Phase 1 (where the projector is already built) per the in-mem addendum.
+- **Phase 2** — `memevents.Faulty` fault-injecting decorator over the Phase-1
+  base + parameterized conformance suite (base / faulty-base / real NATS),
+  two-Apps-one-backplane convergence test (T1-TEST-keystone), real-network job
+  RELEASE-GATING (non-negotiable). NATS reference backend stays here.
+
+### Convergence status — CONVERGED; doc-reconciliation §6 CLOSED
+
+### ✅ RECONCILIATION PASS COMPLETE (ticks 5-12)
+The design doc body now reflects the converged council design end-to-end:
+- §rename (t5): Log→EventLog / StateAppLog→StateAppEvents / via.events.* metrics.
+- §1 (t6): T2-GO-4 snapshot/compaction (4 sites).
+- §2 (t7): typed Codec[E]/Codec[V] (T1-GO-2/T2-GO-4).
+- §5 (t8, maintainer-prioritized): value-path Store-as-SoT + reconcile sweep
+  (T3-SRE-1/T1-SRE-5/T4-SRE-1) — value/sess state no longer pod-local.
+- §3 (t9): projector as sole fold path (T1-SRE-1/2).
+- T1-GO-1 (t10): drop Zero(), seed = var zero V (5 sites).
+- §4 (t11): isolation + crypto-shred sections (T1-SEC-1/2).
+- §6 (t12): header + in-mem-default phase shift.
+
+No known divergence remains between design-council.md and design/state-backplane.md.
+Loop has no further reconciliation work; next tick should either (a) declare the
+loop complete and stop, or (b) take new maintainer input. Recommend flagging to
+the maintainer for a stop decision.
+
+---
+
+## Tick 13 — 2026-06-04 — post-reconciliation COHERENCE AUDIT (round 1)
+
+New loop (cron `5a4adbbf`): "deliberate on current status and next steps, continue
+until convergence." Status: design CONVERGED (t4) + reconciliation complete
+(t5-12). The meaningful work now is auditing the reconciled doc for internal
+contradictions introduced by 8 ticks of piecemeal edits.
+
+### Chair audit this tick — cross-checked the highest-risk junctions
+- **Single-fold-path consistency (t9):** CLEAN — every "writer folds / local
+  fold / re-render" mention is the corrected form; no surviving dual-fold claim.
+- **Source-of-truth contradiction:** FOUND + FIXED. T8 added "the Store cell
+  `val:<key>` is the SINGLE SOURCE OF TRUTH" (value path) next to the pre-existing
+  "the EventLog is the source of truth; the Store holds only fold-snapshots"
+  (line 749, log path). Both correct but scoped to different STATE SHAPES; the
+  doc never stated the Store plays two roles → reads as a contradiction. Fix:
+  added a disambiguation block to the `Store` godoc — two key classes with
+  different authority (`val:<key>` cell = SoT for value state; the EventLog =
+  SoT for log state, its Store snapshot is a cache, durable-genesis once
+  compacted). Resolves the apparent conflict at its source.
+
+### Convergence verdict — tick 13: NOT YET CONVERGED (one fix this round)
+One bounded contradiction found and closed. Deliberation converges when a full
+sweep finds nothing new.
+
+### Next tick — coherence audit round 2 (remaining junctions)
+- AppendIf/ReadAt vs the `Offset` newtype end-to-end (any surviving bare uint64?
+  Read/Append signatures still show `uint64` offset — check vs the "Offset
+  end-to-end" T1-GO-3 decision).
+- Phase 0 ("nil backplane everywhere → zero observable change") vs Phase 1
+  ("implemented AS memevents.Backplane, nil resolves to it") — is Phase 0 still
+  coherent, or does the in-mem-default shift change Phase 0's framing?
+- OnEvent consumer vs single-fold-path (separate tailer, never writes projection).
+- v1 surface claim (Read/Append/Text/Key) vs the code block still showing
+  AppendIf/ReadAt/OnEvent — are they clearly marked post-v1/Advanced?
+If round 2 is clean → declare the deliberation CONVERGED and recommend exiting
+design for implementation (Phase 0).
+
+---
+
+## Tick 14 — 2026-06-04 — coherence audit round 2 (+ round-3 scope)
+
+Continuing the post-reconciliation coherence audit. Two issues found + fixed,
+two more found for next round.
+
+### Fixed this tick
+- **T1-GO-3 (Offset end-to-end) — was NEVER reconciled.** All four user-facing
+  methods still leaked bare `uint64` for offsets (Append/AppendIf/ReadAt/OnEvent)
+  while the `Offset` newtype was defined right above them and the BACKEND
+  EventLog.AppendIf already used Offset. Fixed all four signatures → `Offset`.
+  Verified: zero bare `uint64` left outside the two newtype definitions.
+- **v1 surface demarcation (T1-DX-5).** AppendIf/ReadAt/OnEvent were shown inline
+  with no marker, reading as v1 surface. Added an "ADVANCED (post-v1)" banner
+  before AppendIf/ReadAt (v1 = Read/Append/Text/Key + Counter.Inc) and tagged
+  OnEvent (Text sits between them, so the group isn't contiguous).
+
+### Verified clean
+- OnEvent vs single-fold-path: separate tailer, never writes the projection. ✓
+- Phase 0 "nil backplane → zero observable change": coherent (binding seam,
+  pre-core); the in-mem-default shift lives in Phase 1. ✓
+
+### Found for round 3 (NOT yet converged)
+- **T1-SRE-3 (Epoch) under-reflected.** `epoch` appears only inside the
+  `Checkpoint{}` struct; the converged decision put `Epoch uint64` (generation)
+  on the delivered `Record` AND the `Head` return to detect offset-space resets
+  (Redis XTRIM-to-empty, recreated stream, PG restore). The `Record` struct
+  (~164-168) has no Epoch field; `EventLog.Head` doesn't return it. → add next.
+- **T1-DX-2 (StateAppCounter) absent.** The counter call site still shows raw
+  `StateAppEvents[Tick,int]` + empty `Tick struct{}` + hand-written Inc + the
+  `_, _ =` discard — the exact "worst advertisement" the council voted to replace
+  with a `StateAppCounter{StateAppEvents[tick,int64]}` specialization. → add next.
+
+### Convergence verdict — tick 14: NOT CONVERGED (4 issues across rounds 1-2;
+2 fixed this tick, 2 queued). The audit keeps finding under-reflected converged
+decisions my original §-backlog missed (it focused on the big 7 + named API
+items). Round 3 closes Epoch + StateAppCounter; if a subsequent full sweep finds
+nothing new → declare the deliberation CONVERGED.
+
+---
+
+## Tick 15 — 2026-06-04 — coherence audit round 3 (Epoch + StateAppCounter)
+
+Closing the two round-2 finds. Both were converged decisions the reconciliation
+pass had missed.
+
+### Fixed this tick
+- **T1-SRE-3 (Epoch) now on the wire types.** Added `type Epoch uint64`
+  (per-key stream GENERATION) next to Offset/Rev; added an `Epoch` field to the
+  delivered `Record`; changed `EventLog.Head` to return `(Offset, Epoch, error)`.
+  Godocs state the offset-space-reset detection (Redis XTRIM-empty / recreated
+  stream / PG restore → epoch change or Head<lastApplied → re-snapshot from
+  genesis + via.events.epoch_reset). Previously `epoch` lived ONLY inside the
+  Checkpoint struct, so the reset-detection mechanism had no wire carrier.
+- **T1-DX-2 (StateAppCounter) shipped in the example.** Replaced the raw
+  `StateAppEvents[Tick,int]` counter (user-defined empty `Tick struct{}` + Fold +
+  `_, _ =` discard — the council's "worst advertisement") with the built-in
+  `via.StateAppCounter` specialization (embeds an UNEXPORTED tick + fold, exposes
+  Inc + Read). Added its godoc/decl sketch. Also fixed the illustrative
+  "Tick→int" line in the struct godoc → "increments→int64".
+
+### Verified clean
+- No orphan user-facing `Tick` references remain (only the internal sketch).
+- StateAppCounter wiring consistent with the v1-surface banner ("+ Counter.Inc").
+- Epoch wired end-to-end (type + Record field + Head return).
+
+### Convergence verdict — tick 15: NOT YET DECLARED. Rounds 1-3 found+fixed 6
+under-reflected converged decisions (source-of-truth dual-role; T1-GO-3 Offset;
+v1 demarcation; Epoch; StateAppCounter). The rate is now dropping. Next tick =
+round 4: a FULL end-to-end read for anything still stale (candidates: does the
+chat example / #5-delete / Change type mention epoch where needed? any remaining
+`int` vs `int64` counter mismatch? Backplane godoc "in-memory per-key log" vs the
+memevents framing?). If round 4 finds NOTHING new → declare the deliberation
+CONVERGED and recommend exiting design for implementation (Phase 0).
+
+---
+
+## Tick 16 — 2026-06-04 — coherence audit round 4 (full sweep)
+
+End-to-end staleness sweep across the whole doc.
+
+### Checked
+- counter int vs int64 · Backplane nil godoc vs memevents framing · Change type
+  (rev/epoch needs) · StateAppSlice/StateAppNum refs · broadcastRender path
+  consistency · epoch in chat/#5-delete/Change paths.
+
+### Result — 1 cosmetic alignment, NO substantive contradiction
+- **Fixed (cosmetic):** Backplane `nil` godoc (134-136) predated the tick-12
+  in-mem-default framing — said "in-process kvStore + an in-memory per-key log"
+  with no mention that nil RESOLVES to via.InMemory()/memevents.Backplane.
+  Aligned: nil → via.InMemory(), interface exercised every single-pod run,
+  byte-for-byte (synchronous + identity-coded hot path).
+- **Reviewed, left as-is (correct):**
+  - Appendix "counter→int" pitch lines (628/779) — historical lens theses;
+    illustrative, int-vs-int64 immaterial to the pitch (user-facing example uses
+    StateAppCounter/int64). Same treatment as other appendix lens records.
+  - `Change{key,rev}` is a runtime-INTERNAL control message (decoded by the
+    runtime-internal codec, line 178); no public type decl needed; needs no own
+    epoch (its Record envelope carries Epoch; the value path's SoT is the Store
+    rev via the storeRev≥change.rev gate + reconcile sweep).
+  - StateAppSlice refs (554/588/763) all accurate ("TODAY"/migration/parity);
+    StateAppNum/StateAppSlice cited as precedent for StateAppCounter (532) — correct.
+
+### Then checked error types — FOUND a real gap (round 4 NOT clean)
+The T2-GO-4 prose references `ErrEpochUnbridgeable` and the versioning lens
+references a forward-incompat "hard error", but NEITHER was declared in the
+`var (...)` error block (only ErrCASConflict/ErrLogConflict/ErrUndecodable/
+ErrClosed). Referenced-but-undefined sentinels. **Fixed:** added
+`ErrForwardIncompatible` (envelope version newer than the binary → projector
+halts, roll-forward-only) and `ErrEpochUnbridgeable` (unbridgeable fold-MEANING
+epoch bump → projector halts) to the block with godocs; named
+ErrForwardIncompatible in the Phase-4 line.
+
+### Convergence verdict — tick 16: NOT CONVERGED.
+Round 4 found 2 issues (cosmetic Backplane godoc + the two undefined error
+sentinels) — so the sweep did NOT come back clean. Per "converge when a full
+sweep finds NOTHING new," round 5 is required. Round 5: re-read the least-touched
+sections — "Current state model (grounding)", #5-delete/GDPR consistency,
+Mount/binding details, the metrics named in prose (via.events.undecodable /
+.epoch_reset — both emitted at a described site?), and confirm the two new
+errors are referenced where they fire. If round 5 is clean → DECLARE CONVERGED,
+stop the loop, recommend Phase 0.
+
+---
+
+## Tick 17 — 2026-06-04 — coherence audit round 5 (CLEAN) → ✅ DELIBERATION CONVERGED
+
+Round 5 re-read the least-touched sections + verified the round-3/4 additions.
+
+### All checks CLEAN — nothing new found
+- **Metrics have described emission sites:** `via.events.undecodable` (Decode
+  godoc + #6), `via.events.epoch_reset` (Epoch godoc). ✓
+- **Both new error sentinels referenced where they fire:** `ErrForwardIncompatible`
+  (Phase 4), `ErrEpochUnbridgeable` (#6 T2-GO-4 prose). ✓
+- **#5-delete ↔ GDPR section consistent:** #5 gives the one-line crypto-shred
+  summary; the dedicated T1-SEC-2 section the full treatment. No conflict. ✓
+- **Grounding ("Current state model") + Mount/binding** accurate to current code. ✓
+- **Full regression sweep — every prior-tick fix intact, ZERO reversions:**
+  StateAppLog=0, via.log.*=0, untyped Codec=0 (the 1 hit is the explanatory
+  comment), E.Zero() calls=0, bare uint64 in user API=0, Append-local-fold=0
+  (the 4-5 "local fold" hits are all the CORRECTED "no local fold" text +
+  line-90 value-path grounding, none a regression).
+
+### ✅ CONVERGENCE VERDICT — DELIBERATION CONVERGED (tick 17)
+A full end-to-end sweep found NOTHING new. The coherence audit (ticks 13-17,
+rounds 1-5) found and fixed 8 issues introduced/left by the reconciliation pass:
+source-of-truth dual-role (Store godoc), T1-GO-3 Offset end-to-end (4 sigs),
+v1-surface demarcation, T1-SRE-3 Epoch on Record+Head, T1-DX-2 StateAppCounter,
+Backplane nil/in-mem-default godoc, and two undefined error sentinels
+(ErrForwardIncompatible / ErrEpochUnbridgeable). `design/state-backplane.md` is
+now internally coherent AND fully reflects the converged council design.
+
+### Next step — EXIT DESIGN, BEGIN IMPLEMENTATION
+No design work remains. Recommended: (1) commit + push ticks 10-17; (2) start
+**Phase 0** (binding seam: isStateAppEvents marker + roleStateAppEvents in
+walker.go, scopeSlot kind flag, bindScopeKeys/bindApp wiring; nil backplane →
+zero observable change), which is the smallest additive, fully-testable slice.
+
+**Loop stopped** (cron `5a4adbbf` deleted) — convergence reached at tick 17.
