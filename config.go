@@ -43,6 +43,7 @@ type config struct {
 	logger             Logger
 	notFoundHandler    http.Handler
 	metrics            Metrics
+	backplane          Backplane
 }
 
 // Option configures a via App.
@@ -211,6 +212,13 @@ func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHa
 // tab-count gauges. Default is a no-op backend, so configuring this is
 // purely additive. See the [Metrics] godoc for the event catalogue.
 func WithMetrics(m Metrics) Option { return func(c *config) { c.metrics = m } }
+
+// WithBackplane wires the state backplane that makes app/session-scoped
+// reactive state survive restarts and span a cluster. The default (no option,
+// or a nil b) resolves internally to [InMemory], so the Backplane interface is
+// exercised on every single-pod run and there is no nil-special-case path. Wire
+// it once at boot; it is never swapped at runtime.
+func WithBackplane(b Backplane) Option { return func(c *config) { c.backplane = b } }
 
 // Plugin extends the App at registration time.
 type Plugin interface {
