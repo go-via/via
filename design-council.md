@@ -1767,3 +1767,59 @@ internal package? (c) CI must run a real nats-server (RELEASE-GATING per spec
 785). FLAG TO MAINTAINER before proceeding. Meanwhile Phase 3 (value-path:
 StateApp/StateSess cluster survivability) is infra-free and could proceed first
 if the maintainer prefers to defer NATS — but the phase map orders P2 before P3.
+
+---
+
+## Tick 27 — 2026-06-04 — Phase 3 CONVERGENCE + design gate (T-GO-9). 2d-NATS still maintainer-blocked.
+
+P2c committed (`52fd0f9`). Phase 2 infra-free work DONE; 2d-NATS awaits the
+maintainer (deps/module/CI). Phase 3 rewrites the CORE value-path
+(StateApp/StateSess), so per the loop's "convergence gates the code" this tick is
+convergence + design-gate; build starts next tick.
+
+### Validated against code (the rewrite surface + green guard)
+- `stateapp.go:59-76` StateApp.Update = `ctx.app.appStore.Update(key, fn)` (kvStore
+  pessimistic per-key-mutex RMW) → markStateDirty → broadcastRender(ctx,nil,key).
+  Read (`:27-43`) hits appStore (any, zero-serialization).
+- `statesess.go:67-86` StateSess.Update = `sess.data.Update(key, fn)` (per-session
+  kvStore) → broadcastRender(ctx, sess, key). Read hits sess.data.
+- `sess.go:24-26` session.data is a kvStore (any). `kvstore.go` = sync.Map +
+  per-key-mutex Update.
+- Green guard for the rewrite (single-pod byte-for-byte): statesess_test.go (9),
+  app/shape/op/render/sess tests — a substantial existing StateApp/StateSess
+  suite that MUST stay green.
+
+### DESIGN FEEDBACK GATE — T-GO-9 (value serialization consequence)
+Store.CAS/LoadSnapshot move []byte, so making val:<key> the SoT forces
+StateApp[T]/StateSess[T] values to SERIALIZE (default JSON) on Update→CAS (the L1
+kvStore keeps live T for zero-serialization READS). Since nil→InMemory(), this
+holds single-pod too. So "v0.4.0 byte-for-byte" = identical OBSERVABLE behavior
+for serializable T (the universal case for shared state); a non-serializable T
+(func/chan) in a pod-local kvStore is the one narrow break. Accepted consequence
+of the converged Store-as-SoT design (not a new decision). Spec patched at the
+Store godoc (val:<key> bullet). RE-VALIDATED: no other spec claim contradicts.
+
+### Converged P3 sub-slice plan
+- **P3a (next tick) — StateApp value CROSS-POD convergence (the valuable core):**
+  Update: load current (val, rev) → fn(T) → CAS(`val:`+wireKey, expectedRev,
+  json(newT)) with retry-on-ErrCASConflict (replaces the kvStore mutex RMW); on
+  success update L1 (appStore + an l1Rev[key] map) + Append a value-less
+  Change{key,rev} to a shared changes feed (EventLog key e.g. `via:changes`,
+  runtime-internal codec). One App-level changes-tailer (Subscribe) re-pulls
+  val:<change.key> to Store HEAD per Change, gated storeRev≥change.rev, L1-monotone
+  (apply only if storeRev>l1Rev[key]), then broadcastRender(nil,nil,key). Read
+  unchanged (L1, zero-serialization). Tests: existing StateApp suite GREEN
+  (single-pod byte-for-byte incl. the 200-increment concurrent test now exercising
+  CAS-retry) + a two-Apps StateApp.Update cross-pod convergence test (mirrors the
+  P2c keystone). Files: stateapp.go, app.go (l1Rev map + changes-tailer +
+  startChangesTailer at New/first-use), a new applogval.go or fold into applog.go,
+  runtime-internal Change codec.
+- **P3b — periodic Store-head reconcile sweep** over each pod's subscribed value
+  keys → feed becomes a pure latency optimization; closes crash-between-CAS-and-
+  Append (T4-SRE-1) AND cold-start (a pod that joined after writes, saw no Change).
+- **P3c — StateSess** value cross-pod convergence: same notify-and-pull, session-
+  scoped; Changes carry the FULL 256-bit sid; receiver EXACT-matches sid and DROPS
+  fail-closed on unknown sid (never broadcast-to-all). Net: no sticky sessions.
+
+### Next step — BUILD P3a (StateApp cross-pod value convergence) under TDD.
+Re-flag each tick: 2d-NATS maintainer-blocked.

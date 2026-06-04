@@ -195,7 +195,15 @@ type Record struct {
 // "X is the source of truth" reads differently for value vs log state:
 //   - `val:<key>` — a value-shaped StateApp/StateSess cell. Here the STORE CELL
 //     IS the single source of truth; each pod's kvStore is an L1 cache
-//     reconciled to it (T3/T4-SRE-1).
+//     reconciled to it (T3/T4-SRE-1). Because the Store moves opaque bytes, a
+//     StateApp[T]/StateSess[T] value is SERIALIZED (default JSON) on Update→CAS
+//     and deserialized on reconcile; the L1 kvStore caches the live T so READS
+//     stay zero-serialization. Consequence (T-GO-9): a value-shaped T must be
+//     serializable once a backplane is in play — and since nil resolves to
+//     InMemory(), that holds single-pod too. "v0.4.0 byte-for-byte" therefore
+//     means observable behavior is identical for serializable T (the universal
+//     case for shared/clustered state); a non-serializable T (func/chan) that
+//     happened to work in a pod-local kvStore is the one narrow break.
 //   - the log Checkpoint{epoch,coveredOffset,codecHash,vbytes} for a
 //     StateAppEvents key. Here the EVENTLOG is the source of truth and the Store
 //     holds only a snapshot of the fold — disposable for an uncompacted key,
