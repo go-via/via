@@ -36,8 +36,15 @@ rewriting the v0.4.0 typed API:
 - **`nil` backplane == today's exact in-process behavior**, byte-for-byte —
   `nil` stays the honest *public* default (`via.New()` is in-process-only, named
   by absence) but resolves INTERNALLY to a real in-memory `Backplane`
-  (`memevents.Backplane`, exported as `via.InMemory()`), so there is ONE code
-  path, not a `nil`-special-case that bit-rots. That impl's hot path is
+  (the base in-process impl, exported as `via.InMemory()`), so there is ONE code
+  path, not a `nil`-special-case that bit-rots. (Package placement, T1-GO-6: the
+  BASE in-memory impl lives in package `via` itself, not a separate `memevents`
+  package — `via.InMemory()` and the nil-resolution must CONSTRUCT it, and a
+  separate package would have to import `via` for the `Backplane` interface,
+  making `via`→that-package an import CYCLE. The `memevents` package (Phase 2)
+  still exists for the `Faulty` fault-injecting DECORATOR + the conformance
+  suite, which only WRAP a `via.Backplane` — the cycle-free `memevents`→`via`
+  direction.) That impl's hot path is
   synchronous + identity-coded (no JSON in-process; value path writes/folds
   synchronously), so the byte-for-byte / zero-overhead / any-`T` promise holds;
   the projector's channel hop is load-bearing ONLY for records arriving from a
@@ -132,8 +139,9 @@ event-log model below.
 //	app := via.New(via.WithBackplane(vianats.JetStream(nc)))
 //
 // Wire it once at boot; it is never swapped at runtime. A nil backplane is the
-// documented default and resolves INTERNALLY to via.InMemory() (the
-// memevents.Backplane in-process impl — kvStore cell + in-memory per-key log),
+// documented default and resolves INTERNALLY to via.InMemory() (the base
+// in-process impl in package via — kvStore cell + in-memory per-key log; see
+// T1-GO-6 for why the base impl lives in via, not a separate memevents pkg),
 // so the interface is exercised on every single-pod run; existing v0.4.0 code
 // compiles and behaves identically, byte-for-byte (its hot path is synchronous +
 // identity-coded, so there is no serialization or projector-hop overhead).
@@ -334,7 +342,8 @@ var (
 
 // WithBackplane sets App.backplane. nil (the default) is the in-process-only
 // behavior, byte-for-byte — internally resolved to via.InMemory()
-// (memevents.Backplane), so the interface is exercised on every single-pod run
+// (the base in-process impl in package via; T1-GO-6), so the interface is
+// exercised on every single-pod run
 // and there is no nil-special-case code path. Additive Option in the config.go
 // family.
 func WithBackplane(b Backplane) Option
@@ -772,7 +781,7 @@ is therefore achieved by **crypto-shred**, not by deletion:
 ## Phased plan
 
 - PHASE 0 — binding seam (additive, no behavior change). Add isStateAppEvents() marker + roleStateAppEvents in walker.go classifyField; scopeSlot gains a kind flag (value vs log); bindScopeKeys binds StateAppEvents via the existing scopeBinder path + a new bindApp. nil backplane everywhere → zero observable change. v0.4.0 typed API untouched. Tests: existing suite green + a nil-backplane in-process StateAppEvents folding in RAM (today's StateAppSlice semantics).
-- PHASE 1 — in-process StateAppEvents[E,V] core, implemented AS a real in-memory Backplane. EventReducer constraint + Read (cached projection, O(1), trackRead) + plain Append (no local fold; the projector renders) + Text. App gains logProjection map + the per-(pod,key) projector. The in-process path is NOT a nil-special-case: it is `memevents.Backplane` (exported as `via.InMemory()`), to which `nil` resolves — so the real Backplane interface is exercised on every single-pod run and in default CI, killing the two-code-path bit-rot. Its hot path is synchronous + identity-coded (no JSON in-process; value path synchronous) so the byte-for-byte / zero-overhead promise holds; the projector channel hop fires only for remote records (none yet at Phase 1). Migrate internal/examples/chat to StateAppEvents (still single-pod), delete the trim-Update. (Phase shift per the in-mem addendum: the clean in-mem Backplane lands here, where the projector is already built.)
+- PHASE 1 — in-process StateAppEvents[E,V] core, implemented AS a real in-memory Backplane. EventReducer constraint + Read (cached projection, O(1), trackRead) + plain Append (no local fold; the projector renders) + Text. App gains logProjection map + the per-(pod,key) projector. The in-process path is NOT a nil-special-case: it is the base in-memory `Backplane` in package `via` (exported as `via.InMemory()`; T1-GO-6), to which `nil` resolves — so the real Backplane interface is exercised on every single-pod run and in default CI, killing the two-code-path bit-rot. Its hot path is synchronous + identity-coded (no JSON in-process; value path synchronous) so the byte-for-byte / zero-overhead promise holds; the projector channel hop fires only for remote records (none yet at Phase 1). Migrate internal/examples/chat to StateAppEvents (still single-pod), delete the trim-Update. (Phase shift per the in-mem addendum: the clean in-mem Backplane lands here, where the projector is already built.)
 - PHASE 2 — backend interface hardening + fault-injection + ONE network reference backend. `memevents.Faulty` — a fault-injecting DECORATOR over the same Phase-1 base (controllable reorder-within-allowance, redelivery, mid-Subscribe disconnect) — plus the PARAMETERIZED conformance suite run vs base / faulty-base / a real network backend. Two `App`s sharing one in-mem backplane = an infra-free cross-pod convergence test (the T1-TEST-keystone unlock). Reference network backend: NATS JetStream+KV (durable ordered resumable EventLog AND CAS KV in one dependency). Store(LoadSnapshot/CAS) + EventLog(Append/AppendIf/Subscribe/Head) + io.Closer + per-field Codec[E]/Codec[V]. Cold start = LoadSnapshot→Subscribe(from:coveredOffset)→fold. Conformance covers ordering, gap-free resume, CAS conflict, snapshot-before-compact, offset-space reset — and the real-network-backend job is RELEASE-GATING (non-negotiable: in-mem green CI never stands in for real-backend conformance — it is too forgiving: perfect order, no lag, no redelivery, no crash window). This phase closes #3/#7.
 - PHASE 3 — value-shaped coexistence (cluster-SHARED value state, no longer pod-local). StateApp/StateSess.Update (UNCHANGED API) gains cluster survivability AND cross-pod convergence. The Store cell `val:<key>` is the SINGLE SOURCE OF TRUTH; the local kvStore is an L1 OPTIMISTIC cache, not the owner. Update CASes the Store then Appends a value-less Change{key,rev} to the shared changes feed (a liveness HINT only). Every pod INCL. THE WRITER converges by re-pulling to Store HEAD on each Change — never to change.rev — gated storeRev ≥ change.rev (stale replica read → drop + one bounded backoff re-poll, never apply-stale; closes T1-SRE-5); an L1 monotonicity gate (apply only if storeRev > l1Rev[key]) makes redelivered/out-of-order Changes non-regressing (T3-SRE-1). A PERIODIC Store-head reconcile sweep over each pod's subscribed value keys makes the feed a pure latency optimization → correctness never depends on a Change being emitted, closing the crash-between-CAS-and-Append strand (T4-SRE-1). Writer RYW is sync-optimistic; peers eventual. After reconcile, broadcastRender→SyncNow→Read renders the converged value. Session-scoped Changes carry the FULL 256-bit sid; the receiver EXACT-matches and DROPs fail-closed on an unknown sid (never broadcast-to-all). Net: state correctness no longer needs sticky sessions.
 - PHASE 4 — E-versioning hardening (#6). Versioned envelope MANDATORY (enforced at Mount: no TypeTag → fail fast), RegisterEvent[E](v, Upcaster{From,To}) decode-chain, drop-on-undecodable + via.events.undecodable metric, forward-incompat projector-halt guard (ErrForwardIncompatible). Snapshot=pure disposable cache for UNCOMPACTED keys (invalidate-on-codec-hash → re-fold from 0, evolving V free); COMPACTED keys treat the snapshot as durable genesis — typed `Codec[V]`, seeded migration on mismatch, retained-event floor, `WithFoldVerify` mandatory before compaction (T2-GO-4). Additive-first godoc.

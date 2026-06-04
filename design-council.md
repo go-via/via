@@ -1170,3 +1170,98 @@ through `newCtx` land (the projector is their first consumer). Then migrate the
 chat example and delete the trim-Update. P1 should be sub-sliced — likely
 (1a) Append+Read RAM fold via projector under a nil backplane, (1b) StateAppCounter,
 (1c) chat migration — each its own TDD tick.
+
+---
+
+## Tick 19 — 2026-06-04 — Phase 1 START: design-gate (T1-GO-6) + converge P1.0 (in-memory Backplane foundation)
+
+P0 committed (`feat(state): add StateAppEvents binding seam`). Phase 1 = the
+in-process core. Sub-sliced; this tick builds the foundation.
+
+### DESIGN FEEDBACK GATE — T1-GO-6 (import cycle in the memevents framing)
+- **Claim in spec:** the base in-memory impl is `memevents.Backplane`, and
+  `via.InMemory()` (+ the nil-resolution) returns it (spec lines 39, 136, 337,
+  775).
+- **Disproved by Go import rules:** a separate `memevents` package MUST import
+  `via` to implement the `via.Backplane` interface (so `WithBackplane(b
+  Backplane)` accepts it). `via.InMemory()` / the nil-resolution live IN package
+  `via` and must CONSTRUCT the concrete impl → `via` imports `memevents` →
+  CYCLE.
+- **Resolution:** the BASE in-memory impl lives in package `via` itself
+  (unexported types; `via.InMemory()` returns it). The `memevents` package
+  (Phase 2) still exists for the `Faulty` fault-injecting DECORATOR + the
+  conformance suite — those only WRAP a `via.Backplane`, the cycle-free
+  `memevents`→`via` direction. Spec patched at all four sites (T1-GO-6 note
+  added). No behavioral change; package-placement only.
+
+### Converged slice — P1.0: the in-memory Backplane foundation (NO StateAppEvents wiring)
+Smallest meaningful, fully-unit-testable unit; zero via-runtime wiring (the
+App.backplane field + WithBackplane Option + nil-resolution + the projector +
+StateAppEvents.Append/Read land in the NEXT P1 sub-tick, where they have
+observable consumers).
+
+- **Files:** new `backplane.go` (public contract) + `inmemory.go` (impl) +
+  `inmemory_test.go`.
+- **Public types (package via):** `Offset/Rev/Epoch uint64`, `Record`,
+  `Store` (LoadSnapshot + CAS), `EventLog` (Append + Subscribe + Head),
+  `Backplane` (Store + EventLog + io.Closer), `InMemory() Backplane`.
+  Errors added only as consumed: `ErrCASConflict`, `ErrClosed`.
+- **v1-scope exclusions (recorded):** `EventLog.AppendIf` is DEFERRED — it is the
+  backend primitive for the Advanced `StateAppEvents.AppendIf` (post-v1 per
+  guardrail), exercised by nothing in v1; adding it to the interface later is
+  safe (no external backend impls exist yet). `Compactor` is P5. `Codec` lands
+  with the encode path (next sub-tick). The other error sentinels
+  (ErrLogConflict/ErrUndecodable/ErrForwardIncompatible/ErrEpochUnbridgeable)
+  land with their first code path.
+- **Acceptance (load-bearing guarantees, tested through the public Backplane):**
+  (1) Append assigns a monotone per-key Offset starting at 1; Head reports it.
+  (2) Subscribe(from:K) replays every record with Offset>K in per-key total
+  order, then live-tails new Appends — the resumability that retires #3/#7.
+  (3) Per-key streams are independent (no cross-key ordering).
+  (4) Store CAS: Rev(0)=must-not-exist; matching expectedRev advances rev;
+  stale expectedRev → ErrCASConflict, cell unchanged.
+  (5) After Close, Append/Subscribe return ErrClosed and never block; live
+  subscribers' channels close. No goroutine leak (subscriber goroutine exits on
+  ctx-cancel or Close).
+- **Concurrency design:** per-key `memLog` guarded by its own mutex; a
+  broadcast via a "changed" channel closed+replaced on each Append; the
+  subscriber goroutine selects on {changed, ctx.Done()} and copies the new tail
+  under lock — standard race-clean broadcast idiom, validated with -race.
+
+Next: TDD this slice, then the wiring sub-tick (App.backplane + WithBackplane +
+nil→InMemory + projector + StateAppEvents.Append/Read + Codec + scopeKind/bindApp).
+
+### Tick 19 — BUILT + result
+- NEW `backplane.go`: public contract — `Offset/Rev/Epoch`, `Record`, `Store`,
+  `EventLog` (Append/Subscribe/Head; AppendIf deferred), `Backplane`,
+  `InMemory()`, `ErrCASConflict`/`ErrClosed`.
+- NEW `inmemory.go`: `inMemoryBackplane` — per-key CAS cell + per-key append log
+  with a broadcast `changed` channel (closed+replaced under `lg.mu` on append)
+  and a per-subscriber goroutine selecting on {changed, ctx.Done(), closeCh}.
+- Tests: `inmemory_test.go` (8 public) + `inmemory_internal_test.go` (1).
+  Guarantees locked: monotone per-key offset from 1 + Head HWM; Subscribe(from:K)
+  replay-Offset>K-in-order + genuine live-tail-blocks (expectQuiet) + genesis
+  full-replay; per-key independence; CAS Rev(0)=must-not-exist + stale→
+  ErrCASConflict-unchanged; ctx-cancel unwind; Close→ErrClosed + subscriber
+  close. `go test -race ./...` ALL GREEN, vet clean.
+- Yellow: caught a hardcodable Subscribe + assert/require misuse → fixed
+  (expectQuiet block-proof, genesis full-replay, require on offsets, ctx-cancel
+  test added).
+- Blue: flagged Epoch return / defensive copies / Close-idempotence as
+  load-bearing-but-untested → locked each with a test instead of deleting needed
+  safety (TestAppendOwnsACopyOfTheRecordBytes, TestCloseIsIdempotent,
+  TestHeadReportsGenesisEpoch).
+- Audit: found + FIXED a real Close-vs-Append race (an Append racing a
+  concurrent Close on an existing log could commit a lost write after Close
+  completed). Fix: `memLog.closed` re-checked under `lg.mu` in `memLog.append`;
+  `Close` now calls `lg.close()` per log. Re-verified green.
+
+### Next step — P1.1: wire the in-memory Backplane into the runtime
+App.backplane field + `WithBackplane(b Backplane) Option` + nil→InMemory()
+resolution at New/Mount; then the encode path (Codec[E], default JSON) +
+StateAppEvents.Append (Codec.Encode→EventLog.Append, no local fold) + the
+per-(pod,key) projector goroutine (Subscribe→fold→broadcastRender) + Read
+(cached projection) + Text. This is where scopeKind + bindApp + threading the
+App through newCtx finally land (the projector is their first consumer). Sub-
+slice further if needed (e.g. wiring+Append+synchronous-fold Read first, then
+the async projector tail).
