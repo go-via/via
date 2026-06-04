@@ -2603,3 +2603,22 @@ follow.
   from 0, re-fold all 5 → projection==fold(1..5) (NOT [99]). (3) write: with
   WithSnapshotInterval(1), append events → a Checkpoint appears in the Store at the
   right CoveredOffset with the folded V. Keep existing StateAppEvents/chat/counter green.
+
+### Built (P5a — shipped green)
+- config.go: `snapshotInterval int` (default 64 in New's cfg literal) + `WithSnapshotInterval(n)` (<=0 disables; godoc says disposable cache, never required for correctness).
+- applogsnap.go (new): `checkpoint{Epoch,CoveredOffset,CodecHash,V json.RawMessage}`; `snapKey="snap:"+wireKey`; `maybeSnapshot` (interval gate, resets foldsSinceSnap under ls.mu); `writeSnapshot` (read projection/cursor/epoch/snapRev under RLock, encode, marshal, CAS OUTSIDE ls.mu — ErrCASConflict→LoadSnapshot refresh snapRev+skip, success→setSnapRev); `setSnapRev`.
+- applog.go: logState +encodeSnap/decodeSnap/codecHash/snapRev/foldsSinceSnap; registerLog carries them; startProjector cold-starts via LoadSnapshot(snapKey) seeding projection/cursor/epoch/epochSeen/snapRev when CodecHash matches else from=0; projectRecord increments foldsSinceSnap on advance; goroutine calls maybeSnapshot after an advanced fold.
+- stateappevents.go bindApp: encodeSnap=json(V), decodeSnap=json→V, codecHash=reflect.TypeFor[V]().String() (StateAppCounter inherits via embed — no change).
+
+### Tests added (applogsnap_internal_test.go, all green -race)
+- TestColdStartSeedsFromSnapshotAndReplaysOnlyTheTail — contrived [99] snapshot @offset5 + tail-fold [99,6] proves seed-not-refold.
+- TestColdStartIgnoresSnapshotOnCodecHashMismatch — wrong hash → re-fold [1..5].
+- TestProjectorPersistsSnapshots — WithSnapshotInterval(1) → checkpoint @offset3, V=[1,2,3], hash matches.
+- TestSnapshotWritesDisabledWhenIntervalNonPositive — WithSnapshotInterval(0) → 20 folds, NO snapshot (covers the interval<=0 branch flagged by Blue).
+- TestRoundTripPersistedSnapshotSeedsAFreshProjector — pod A persists, fresh pod B (shared backplane) cold-starts from it + folds the tail. The real end-to-end (write+cold-start interoperate), not two halves vs a fixture.
+
+### TDD-rygba record
+Red (3 tests, undefined checkpoint/snapKey/WithSnapshotInterval) → Yellow (Explore: suite watertight, no changes) → Green (impl above) → Blue (Explore: flagged interval<=0 + round-trip as real testable gaps; ErrCASConflict path needs a conflict-injecting mock → deferred to P5b) → Audit (general-purpose: no bugs; verified V/CoveredOffset read as a consistent pair under one RLock, no off-by-one in Subscribe(from:CoveredOffset), cold-start snapRev set so first write CASes the right rev, snap:/val: no collision; -race clean). Closed Blue's two gaps with the two extra tests. Full suite + vianats green & race-clean.
+
+### Next step — P5b: optional Compactor (type-asserted) + retained-event floor.
+Then P5c (T2-GO-4 compacted-key durable-genesis migration) → v1 (P0–P5) COMPLETE → STOP loop + PushNotification.

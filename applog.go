@@ -2,6 +2,7 @@ package via
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 )
@@ -22,15 +23,27 @@ type logState struct {
 
 	epoch     Epoch // last-applied stream generation; a change means the offset space reset
 	epochSeen bool  // false until the first record establishes the baseline epoch
+
+	// Snapshot cache (P5a): the projection is periodically persisted so a cold
+	// start replays only the tail. encodeSnap/decodeSnap bridge V↔bytes (captured
+	// from the typed handle); codecHash invalidates a stale-codec snapshot.
+	encodeSnap     func(any) ([]byte, error)
+	decodeSnap     func([]byte) (any, error)
+	codecHash      string
+	snapRev        Rev // last snapshot cell revision this pod wrote/saw
+	foldsSinceSnap int // folds applied since the last snapshot write
 }
 
 // registerLog records the typed seed + fold for key (idempotent across the many
 // tabs that bind the same key) and starts the per-key projector exactly once.
-func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, error)) {
+func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, error), encodeSnap func(any) ([]byte, error), decodeSnap func([]byte) (any, error), codecHash string) {
 	a.logsMu.Lock()
 	ls := a.logs[key]
 	if ls == nil {
-		ls = &logState{projection: seed, seed: seed, foldBytes: fold}
+		ls = &logState{
+			projection: seed, seed: seed, foldBytes: fold,
+			encodeSnap: encodeSnap, decodeSnap: decodeSnap, codecHash: codecHash,
+		}
 		a.logs[key] = ls
 	}
 	a.logsMu.Unlock()
@@ -44,7 +57,27 @@ func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, err
 // goroutine exits when the Subscribe channel closes (backplane Close on
 // Shutdown).
 func (a *App) startProjector(key string, ls *logState) {
-	ch, err := a.backplane.Subscribe(context.Background(), key, 0)
+	// Cold start: seed from a durable snapshot so we replay only the tail.
+	// A missing / stale-codec / undecodable snapshot leaves from=0 (re-fold from
+	// genesis) — the snapshot is a disposable cache, never required for
+	// correctness.
+	from := Offset(0)
+	if data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key)); ok {
+		var cp checkpoint
+		if json.Unmarshal(data, &cp) == nil && cp.CodecHash == ls.codecHash {
+			if v, err := ls.decodeSnap(cp.V); err == nil {
+				ls.mu.Lock()
+				ls.projection = v
+				ls.cursor = cp.CoveredOffset
+				ls.epoch = cp.Epoch
+				ls.epochSeen = true
+				ls.snapRev = rev
+				ls.mu.Unlock()
+				from = cp.CoveredOffset
+			}
+		}
+	}
+	ch, err := a.backplane.Subscribe(context.Background(), key, from)
 	if err != nil {
 		return
 	}
@@ -55,6 +88,7 @@ func (a *App) startProjector(key string, ls *logState) {
 			if a.projectRecord(ls, key, rec) {
 				// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
 				a.broadcastRender(nil, nil, key)
+				a.maybeSnapshot(ls, key)
 			}
 		}
 	}()
@@ -91,6 +125,7 @@ func (a *App) projectRecord(ls *logState, key string, rec Record) (advanced bool
 	case ferr == nil:
 		ls.projection = next
 		ls.cursor = rec.Offset
+		ls.foldsSinceSnap++
 		return true
 	case errors.Is(ferr, ErrForwardIncompatible):
 		// A newer binary wrote this record. FREEZE this key — do NOT advance the

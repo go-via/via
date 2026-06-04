@@ -322,6 +322,7 @@ func New(opts ...Option) *App {
 			sessionTTL:      30 * time.Minute,
 			contextTTL:      15 * time.Minute,
 			reconcileInterval: 5 * time.Second,
+			snapshotInterval:  64,
 			sseHeartbeat:    25 * time.Second,
 			sseWriteTimeout: 10 * time.Second,
 			maxRequestBody:  1 << 20,

@@ -3,6 +3,7 @@ package via
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 
 	"github.com/go-via/via/h"
 )
@@ -79,7 +80,21 @@ func (l *StateAppEvents[E, V]) bindApp(a *App) {
 		cur, _ := acc.(V)
 		return ev.Fold(cur, ev), nil
 	}
-	a.registerLog(l.wireKey, any(seed), fold)
+	// Snapshot codec: encode/decode the projected V to/from bytes (the App is
+	// type-erased, so these closures carry V); codecHash invalidates the cache
+	// if V's type changes (evolving V is then free — it re-folds from genesis).
+	encodeSnap := func(p any) ([]byte, error) {
+		v, _ := p.(V)
+		return json.Marshal(v)
+	}
+	decodeSnap := func(b []byte) (any, error) {
+		var v V
+		if err := json.Unmarshal(b, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	}
+	a.registerLog(l.wireKey, any(seed), fold, encodeSnap, decodeSnap, reflect.TypeFor[V]().String())
 }
 
 // Key returns the wire key (lowercase field name unless overridden by `via:` tag).
