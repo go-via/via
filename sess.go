@@ -2,6 +2,7 @@ package via
 
 import (
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,35 @@ type session struct {
 	id         string
 	data       kvStore
 	lastAccess atomic.Int64
+
+	// revs is the per-StateSess-key monotone revision this pod has applied for
+	// THIS session — the gate that makes the changes feed / reconcile sweep
+	// idempotent and non-regressing. Lazily initialized under revsMu.
+	revs   map[string]Rev
+	revsMu sync.Mutex
+}
+
+// loadRev returns the highest revision applied for key on this session (0 if none).
+func (s *session) loadRev(key string) Rev {
+	s.revsMu.Lock()
+	defer s.revsMu.Unlock()
+	return s.revs[key]
+}
+
+// advanceRev sets the applied revision for key to r and reports true ONLY if r
+// is strictly greater than the current one — the atomic monotone gate shared by
+// Update, the changes tailer, and the reconcile sweep.
+func (s *session) advanceRev(key string, r Rev) bool {
+	s.revsMu.Lock()
+	defer s.revsMu.Unlock()
+	if r <= s.revs[key] {
+		return false
+	}
+	if s.revs == nil {
+		s.revs = make(map[string]Rev)
+	}
+	s.revs[key] = r
+	return true
 }
 
 // Session is the per-browser session value bag. Survives tab close;

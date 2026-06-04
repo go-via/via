@@ -10,12 +10,14 @@ import (
 // (bytes, rev, ok) so applyChange's reconcile gates can be exercised in
 // isolation — no real backend needed. Other methods are inert.
 type loadStub struct {
-	data []byte
-	rev  Rev
-	ok   bool
+	data  []byte
+	rev   Rev
+	ok    bool
+	loads []string // keys LoadSnapshot was asked for (call recorder)
 }
 
-func (s *loadStub) LoadSnapshot(context.Context, string) ([]byte, Rev, bool, error) {
+func (s *loadStub) LoadSnapshot(_ context.Context, key string) ([]byte, Rev, bool, error) {
+	s.loads = append(s.loads, key)
 	return s.data, s.rev, s.ok, nil
 }
 func (s *loadStub) CAS(context.Context, string, Rev, []byte) (Rev, error) { return 0, nil }

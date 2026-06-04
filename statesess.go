@@ -1,6 +1,12 @@
 package via
 
-import "github.com/go-via/via/h"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+
+	"github.com/go-via/via/h"
+)
 
 // StateSess is a session-scoped reactive value: shared across every tab
 // opened from the same browser session, expires per via.WithSessionTTL.
@@ -9,13 +15,36 @@ import "github.com/go-via/via/h"
 //	    Theme via.StateSess[string]
 //	}
 //
-// The handle holds only the wire key; storage lives in the session store
-// owned by the via runtime, populated at Mount time.
+// The handle holds only the wire key; the value lives in the backplane Store
+// cell val:s:<sid>:<key> (the source of truth, so a session spans pods), cached
+// per-pod in the session's data. T must be JSON-serializable (the Store moves
+// bytes).
 type StateSess[T any] struct {
 	wireKey string
+	app     *App // bound at Mount; nil before
 }
 
 func (s *StateSess[T]) bindWireKey(k string) { s.wireKey = k }
+
+// bindApp registers this key's typed (Store bytes → T) decoder so the
+// type-erased session changes-tailer / reconcile sweep can recover T, and
+// ensures the shared changes-feed tailer is running. Makes StateSess an
+// appBinder so bindScopeKeys wires it.
+func (s *StateSess[T]) bindApp(app *App) {
+	s.app = app
+	app.sessDecodersMu.Lock()
+	if app.sessDecoders[s.wireKey] == nil {
+		app.sessDecoders[s.wireKey] = func(data []byte) (any, error) {
+			var t T
+			if err := json.Unmarshal(data, &t); err != nil {
+				return nil, err
+			}
+			return t, nil
+		}
+	}
+	app.sessDecodersMu.Unlock()
+	app.valTailerOnce.Do(func() { app.startChangesTailer() })
+}
 
 // Key returns the wire key (lowercase field name unless overridden by tag).
 func (s *StateSess[T]) Key() string { return s.wireKey }
@@ -69,16 +98,49 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 	if fn == nil || sess == nil || ctx.app == nil {
 		return nil
 	}
-	_, err := sess.data.Update(s.wireKey, func(old any) (any, error) {
-		t, _ := old.(T)
-		return fn(t)
-	})
-	if err != nil {
-		return err
+	app := ctx.app
+	bg := context.Background()
+	cellKey := sessValKey(sess.id, s.wireKey)
+
+	for try := 0; try < updateMaxRetries; try++ {
+		data, rev, ok, err := app.backplane.LoadSnapshot(bg, cellKey)
+		if err != nil {
+			return err
+		}
+		var cur T
+		if ok {
+			_ = json.Unmarshal(data, &cur)
+		}
+		next, err := fn(cur)
+		if err != nil {
+			return err // fn rejected: value unchanged
+		}
+		enc, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		newRev, err := app.backplane.CAS(bg, cellKey, rev, enc)
+		if errors.Is(err, ErrCASConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		// Success: set this session's L1 synchronously (sync RYW for every tab
+		// on this session, this pod) and record the rev for the monotone gate.
+		sess.data.Store(s.wireKey, next)
+		sess.advanceRev(s.wireKey, newRev)
+		// Liveness hint carrying the FULL sid — suppressed for a silent action.
+		if !ctx.silent.Load() {
+			if hint, mErr := json.Marshal(change{Sid: sess.id, Key: s.wireKey, Rev: newRev}); mErr == nil {
+				_, _ = app.backplane.Append(bg, changesKey, hint)
+			}
+		}
+		ctx.markStateDirty()
+		app.broadcastRender(ctx, sess, s.wireKey)
+		return nil
 	}
-	ctx.markStateDirty()
-	ctx.app.broadcastRender(ctx, sess, s.wireKey)
-	return nil
+	return errCASExhausted
 }
 
 // Text returns a static text node carrying the current value. Accepts

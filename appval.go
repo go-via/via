@@ -31,10 +31,15 @@ const changesKey = "via.changes"
 type change struct {
 	Key string `json:"k"`
 	Rev Rev    `json:"r"`
+	Sid string `json:"s,omitempty"` // session id for a StateSess change; "" = app-scoped
 }
 
-// valKey namespaces a value cell in the shared Store, distinct from log keys.
+// valKey namespaces an app-scoped value cell in the shared Store.
 func valKey(wireKey string) string { return "val:" + wireKey }
+
+// sessValKey namespaces a session-scoped value cell by the FULL session id, so
+// two sessions (or two pods) never alias each other's cells.
+func sessValKey(sid, wireKey string) string { return "val:s:" + sid + ":" + wireKey }
 
 // registerValCell records the typed decode closure for key (idempotent across
 // the many tabs that bind it — never resets a live l1) and starts the single
@@ -87,6 +92,62 @@ func (a *App) reconcileValues() {
 	for _, k := range keys {
 		a.reconcileKey(k)
 	}
+	a.reconcileSessions()
+}
+
+// reconcileSessions re-pulls every (live session × registered StateSess key) to
+// the Store HEAD, so session state converges even when a hint was missed.
+// O(sessions × sessKeys) per sweep — acceptable for v1; a future optimization
+// could track only dirty (sid,key) pairs. Snapshots both registries first so no
+// lock is held during the per-cell I/O.
+func (a *App) reconcileSessions() {
+	a.sessDecodersMu.Lock()
+	if len(a.sessDecoders) == 0 {
+		a.sessDecodersMu.Unlock()
+		return
+	}
+	keys := make([]string, 0, len(a.sessDecoders))
+	for k := range a.sessDecoders {
+		keys = append(keys, k)
+	}
+	a.sessDecodersMu.Unlock()
+
+	a.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(a.sessions))
+	for _, s := range a.sessions {
+		sessions = append(sessions, s)
+	}
+	a.sessionsMu.RUnlock()
+
+	for _, s := range sessions {
+		for _, k := range keys {
+			a.reconcileSessionKey(s, k)
+		}
+	}
+}
+
+// reconcileSessionKey pulls one session's value cell to the Store HEAD under the
+// same gates as applySessionChange (monotone, decode-safe), broadcasting only
+// when the value advanced.
+func (a *App) reconcileSessionKey(sess *session, key string) {
+	a.sessDecodersMu.Lock()
+	decode := a.sessDecoders[key]
+	a.sessDecodersMu.Unlock()
+	if decode == nil {
+		return
+	}
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), sessValKey(sess.id, key))
+	if !ok || storeRev <= sess.loadRev(key) {
+		return
+	}
+	v, err := decode(data)
+	if err != nil {
+		return
+	}
+	if sess.advanceRev(key, storeRev) {
+		sess.data.Store(key, v)
+		a.broadcastRender(nil, sess, key)
+	}
 }
 
 // reconcileKey pulls one value cell to the Store HEAD. The monotone gate
@@ -128,9 +189,49 @@ func (a *App) startChangesTailer() {
 			if json.Unmarshal(rec.Data, &c) != nil {
 				continue
 			}
-			a.applyChange(c)
+			if c.Sid == "" {
+				a.applyChange(c) // app-scoped value
+			} else {
+				a.applySessionChange(c) // session-scoped value
+			}
 		}
 	}()
+}
+
+// applySessionChange reconciles a session-scoped value cell after a hint.
+// SECURITY: a session Change names a sid; this pod acts ONLY on a session it
+// actually holds. If the sid is unknown here it is DROPPED fail-closed — no
+// Store read, no broadcast — so a session write can never leak into or wake an
+// unrelated session. For a held session it mirrors applyChange's gates
+// (stale-replica drop storeRev>=c.Rev + per-session monotone) but scoped to
+// that one session via broadcastRender(nil, sess, key).
+func (a *App) applySessionChange(c change) {
+	a.sessionsMu.RLock()
+	sess, ok := a.sessions[c.Sid]
+	a.sessionsMu.RUnlock()
+	if !ok {
+		return // fail-closed: this pod does not hold that session
+	}
+	a.sessDecodersMu.Lock()
+	decode := a.sessDecoders[c.Key]
+	a.sessDecodersMu.Unlock()
+	if decode == nil {
+		return
+	}
+	data, storeRev, dok, _ := a.backplane.LoadSnapshot(context.Background(), sessValKey(c.Sid, c.Key))
+	if !dok || storeRev < c.Rev {
+		return // stale replica: never surface a value older than the hint promised
+	}
+	v, err := decode(data)
+	if err != nil {
+		return // poison snapshot: keep the last good value (rev not consumed)
+	}
+	// advanceRev is the atomic monotone gate (the tailer and the reconcile sweep
+	// can both reach the same session): store + broadcast ONLY if it advanced.
+	if sess.advanceRev(c.Key, storeRev) {
+		sess.data.Store(c.Key, v)
+		a.broadcastRender(nil, sess, c.Key)
+	}
 }
 
 // applyChange re-pulls the Store cell for c.Key to its current HEAD and updates
