@@ -2227,3 +2227,15 @@ tick-32 converged plan: change.Sid + tailer routing + applySessionChange
 bindApp/Update CAS on "val:s:"+sid+":"+key + session reconcile. Tests: cross-pod
 same-session converge + cross-session ISOLATION + drop-on-unknown-sid; keep
 statesess_test.go green. Then Phase 3 DONE → P4.
+
+### Tick 34b — P3c test strategy refinement (harness wrinkle)
+vt cookie jars are host-scoped + private, so a two-servers/same-via_session e2e
+is awkward. Test strategy for P3c: (1) DETERMINISTIC internal test (package via,
+loadStub-style) for applySessionChange — the cross-pod mechanism + SECURITY:
+known-sid converges that session's data; UNKNOWN-sid DROPS fail-closed (no panic,
+no effect, no broadcast-to-all); monotone gate; decode-survival. (2) vt single-app
+CROSS-SESSION ISOLATION: two clients (= two sessions) on one app; StateSess.Update
+on session A's tab re-renders A's tabs but NOT session B's (broadcastRender scopes
+by *session). (3) keep statesess_test.go (9) green single-pod. This proves the
+load-bearing security + convergence behavior deterministically without
+cross-server-cookie gymnastics.
