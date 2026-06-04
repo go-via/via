@@ -1,8 +1,9 @@
-// Chat is a live multi-user chatroom in one file. The message log is a
-// single app-scoped slice; appending to it fans a re-render out to every
-// connected tab across every session — so a line typed in one browser
-// shows up instantly in all the others. No Broadcast, no WebSocket, no
-// hand-written JS. Open it in two browsers side by side to watch it sync.
+// Chat is a live multi-user chatroom in one file. The message log is an
+// app-scoped event log: each line is an immutable event you Append, and the
+// rendered list is a pure fold of the log. Appending fans a re-render out to
+// every connected tab across every session — so a line typed in one browser
+// shows up in all the others. No read-modify-write, no Broadcast, no WebSocket,
+// no hand-written JS. Open it in two browsers side by side to watch it sync.
 //
 //	go run ./internal/examples/chat
 //	open http://localhost:3000
@@ -18,18 +19,37 @@ import (
 	"github.com/go-via/via/plugins/picocss"
 )
 
-// recentWindow caps the shared log so a long-lived room can't grow the
-// app store — and every fan-out render — without bound.
+// recentWindow caps the rendered list so a long-lived room can't grow every
+// fan-out render without bound. The trim lives in the fold (below), not in a
+// read-modify-write — the event log itself is bounded later by snapshot +
+// compaction, not by rewriting history.
 const recentWindow = 50
 
 type Message struct {
 	From, Body string
 }
 
+// Posted is the immutable fact appended on every Send. The rendered []Message
+// is a pure fold of the Posted log. Fold MUST be pure and must not mutate acc
+// (two pods replaying the same log have to converge), so it copies before
+// appending and trims to the most recent window.
+type Posted struct {
+	From, Body string
+}
+
+func (Posted) Fold(acc []Message, ev Posted) []Message {
+	next := append(append([]Message(nil), acc...), Message{From: ev.From, Body: ev.Body})
+	if len(next) > recentWindow {
+		next = next[len(next)-recentWindow:]
+	}
+	return next
+}
+
 type Room struct {
-	// Log is app-scoped: one room shared across every session and tab.
-	// Update fans the new line out to every tab that read it in View.
-	Log via.StateAppSlice[Message]
+	// Log is app-scoped: one room shared across every session and tab. Append a
+	// Posted event; the per-key projector folds it and fans the new line out to
+	// every tab that read the log in View.
+	Log via.StateAppEvents[Posted, []Message]
 	// Name and Draft are tab-local and two-way bound to their inputs, so
 	// the latest client values are injected before Send runs. Name rides
 	// along on every message this tab sends.
@@ -46,13 +66,9 @@ func (r *Room) Send(ctx *via.Ctx) {
 	if name == "" {
 		name = "Anon"
 	}
-	r.Log.Op(ctx).Append(Message{From: name, Body: body})
-	_ = r.Log.Update(ctx, func(log []Message) ([]Message, error) {
-		if len(log) > recentWindow {
-			log = log[len(log)-recentWindow:]
-		}
-		return log, nil
-	})
+	// Append never conflicts — no read-modify-write, no trim-Update. The fold
+	// derives the list (and bounds it); the projector renders.
+	_, _ = r.Log.Append(ctx, Posted{From: name, Body: body})
 	r.Draft.Write(ctx, "")
 }
 
