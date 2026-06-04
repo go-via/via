@@ -1557,3 +1557,73 @@ is the cross-pod mechanism); (2d) the NATS JetStream+KV reference backend
 (RELEASE-GATING, real-network) + run the conformance suite against it. NOTE 2d
 needs a real NATS server (external dep) — flag to maintainer; 2a-2c are infra-
 free and can proceed now.
+
+---
+
+## Tick 24 — 2026-06-04 — P2a: parameterized Backplane conformance suite (infra-free)
+
+Phase 1 done (`b816b86`). Phase 2 begins. P2 is large; this tick builds the
+reusable conformance harness and runs it against via.InMemory().
+
+### Validated against code/spec
+- `design:155-166`: Offset is OPAQUE — comparable/ordered WITHIN a key, NOT
+  gap-free, NOT interchangeable across backends; Offset(0)=before-first. ∴ the
+  suite must assert monotone-INCREASING + Head==last-appended + Offset(0)=empty +
+  resumable-from-a-RETURNED-offset + gap-free in-order delivery — NEVER hardcoded
+  offset values (that would bake in InMemory's dense-from-1 detail and reject a
+  valid Kafka/JetStream backend).
+- `design:785` lists conformance coverage: ordering, gap-free resume, CAS
+  conflict, snapshot-before-compact, offset-space reset. Snapshot/compact is P5
+  and Epoch-reset is P4 — those conformance checks are ADDED when those features
+  land. P2a covers: ordering, gap-free resume + live-tail, per-key independence,
+  CAS conflict, Close→ErrClosed.
+
+### Design refinement (T1-TEST-1, package placement)
+Tick-19 loosely put the conformance suite in `memevents`. Refined: the suite
+lives in its OWN package `github.com/go-via/via/backplanetest` (idiomatic like
+fstest/iotest/httptest — a neutral harness any Backplane author imports);
+`memevents` is reserved for the `Faulty` decorator (2b). Cleaner for a NATS
+author than importing an "in-memory-events" package to test their backend. No
+cycle (backplanetest→via only). No spec text contradicted (spec never named the
+package); recorded here.
+
+### Converged slice — P2a
+- **Files:** new `backplanetest/conformance.go`
+  (`RunConformance(t *testing.T, newBackplane func() via.Backplane)` + helpers,
+  imports testing like fstest) + `backplanetest/conformance_test.go`
+  (`TestInMemoryConformance` → RunConformance(t, func()via.Backplane{return
+  via.InMemory()})`).
+- **Acceptance:** the suite's subtests (monotone offsets + Head + empty-Head;
+  genesis replay in order; resume-after-offset; live-tail; per-key independence;
+  CAS must-not-exist/conflict/advance; Close→ErrClosed) all pass against
+  via.InMemory(); whole module green + race-clean. Backend-agnostic (offsets read
+  from Append returns, never hardcoded).
+- This is TEST-HARNESS code (imports testing, no app behavior) → written
+  directly + Explore-reviewed for contract-fidelity, not the full tdd skill.
+
+### Tick 24 — BUILT + result
+- NEW package `backplanetest` (`conformance.go` + `conformance_test.go`):
+  `RunConformance(t, newBackplane func() via.Backplane)` — 9 backend-agnostic
+  subtests: increasing offsets + Head tracking + empty-Head=0; genesis replay in
+  order; resume strictly after a returned offset; live-tail; per-key
+  independence; CONCURRENT appends get distinct offsets + Head=max (#2 total
+  order); independent subscribers see the same stream/offsets; CAS
+  must-not-exist/conflict/advance; Close→ErrClosed. `TestInMemoryConformance`
+  runs it against via.InMemory(). vet + `go test -race ./...` GREEN (12 pkgs).
+- Offsets read from Append returns, never hardcoded → a non-dense
+  Kafka/JetStream/Postgres backend conforms.
+- Explore review confirmed: contract-faithful (no baked-in dense-from-1), CATCHES
+  all 5 broken-backend classes (out-of-order, no-resume, CAS-bypass, Head-stale,
+  no-live-tail), all reads timeout-bounded (recvTimeout=3s, fine for real
+  network). Acted on its two HIGH/MEDIUM gaps → added the concurrent-appends +
+  multi-subscriber subtests. Deferred (correctly): Epoch checks (P4), durability-
+  across-close (P5/integration).
+
+### Next step — P2b: memevents.Faulty fault-injecting decorator
+A decorator over any via.Backplane (wrapping via.InMemory() in tests) injecting
+controllable redelivery, mid-Subscribe disconnect, and reorder-within-allowance
+— then run RunConformance against it (the suite must still pass under
+at-least-once redelivery + reconnect, proving the runtime's offset-dedup/resume
+assumptions). Package `memevents`. After that: P2c two-Apps-one-backplane
+cross-pod convergence test (the keystone). P2d NATS = real-network, RELEASE-
+GATING, needs an external server → FLAG TO MAINTAINER before attempting.
