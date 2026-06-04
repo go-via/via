@@ -1705,3 +1705,65 @@ FAIL here). Validate: how to inject ONE backplane into two Apps
 (via.WithBackplane(shared) on both) and assert convergence (App-B fresh GET /
 SSE shows App-A's appended value). Infra-free. Flag P2d (NATS, real server) to
 maintainer after.
+
+---
+
+## Tick 26 — 2026-06-04 — P2c: two-Apps-one-backplane cross-pod convergence (THE KEYSTONE)
+
+P2b committed (`7d14bb8`). This tick adds the infra-free cross-pod test that
+proves the projector — not a local fold — is the cluster mechanism.
+
+### Validated against code
+- `applog.go:42` each App's projector Subscribes to `a.backplane` (its own
+  field); `broadcast.go:64` broadcastRender iterates `a.snapshotContexts()` (its
+  own ctx registry). ∴ two Apps wired `via.WithBackplane(shared)` each run an
+  independent projector tailing the SHARED log and fold into their OWN per-App
+  logState — they converge because they fold the same log. A local-fold-in-Append
+  impl would update only the writer App's projection and FAIL this test.
+- Two via.App in one process sharing ONE Go backplane object faithfully
+  simulates two pods sharing one NATS (the design's stated infra-free cross-pod
+  test). Real pods are separate processes each with their own backplane CLIENT to
+  the same server; the shared in-mem object stands in.
+- `feedPage` (StateAppEvents[addItem,[]string], Add appends "hello") is reusable
+  from stateappevents_runtime_test.go (same package via_test).
+- Lifecycle note: the test uses httptest server.Close() (NOT App.Shutdown), so
+  the shared backplane is never closed mid-test (App.Shutdown would close the
+  shared object, breaking the peer — a real concern only for the unusual
+  two-Apps-in-one-process setup; real pods each Close their own client).
+
+### Converged slice — P2c (test-only; existing behavior, cross-App)
+- **File:** new `backplane_crosspod_test.go` (package via_test).
+- **Acceptance:** shared := via.InMemory(); App-A and App-B both
+  via.New(WithTestServer, WithBackplane(shared)) + Mount[feedPage]; client A on
+  server A, client B (live SSE) on server B. A fires Add → B's SSE frame
+  (AwaitFrame) shows the folded "hello" → cross-pod convergence. Plus a
+  bidirectional / fresh-GET convergence assertion. Whole module green + race-clean.
+- Written directly (no behavior change — exercises the P1.1b projector across two
+  Apps), then Explore-confirmed it genuinely distinguishes projector from
+  local-fold (would fail a writer-only-fold impl).
+
+### Tick 26 — BUILT + result
+- NEW `backplane_crosspod_test.go` (2 tests): two via.App sharing one
+  via.InMemory() converge — A's Add surfaces folded in B's live SSE frame
+  (TestTwoAppsShareOneBackplaneAndConverge); after appends on both pods, fresh
+  readers on EITHER pod see the same ordered two-item feed
+  (TestCrossPodProjectionsAgreeForFreshReaders). `go test -race ./...` GREEN
+  (13 pkgs), vet clean.
+- Keystone property holds BY CONSTRUCTION: Append does no broadcast/fold and each
+  App's broadcastRender only iterates its OWN registry, so B observing A's append
+  is possible ONLY via B's projector tailing the shared log — a local-fold impl
+  cannot pass. (Explored not needed; the impossibility is structural.)
+- This validates the design's central correctness claim (the projector is the
+  cross-pod mechanism; #3/#7 closed by resumable Subscribe, not census).
+
+### Phase 2 status — 2a✅ conformance · 2b✅ Faulty+at-least-once · 2c✅ cross-pod keystone.
+### Remaining: 2d NATS reference backend — RELEASE-GATING, real-network.
+2d (NATS JetStream+KV backend + run RunConformance against it) needs an external
+NATS server (or an embedded nats-server test dep) + a new module dependency.
+This is the FIRST step requiring a maintainer decision: (a) add github.com/
+nats-io/nats.go (+ nats-server for tests) as deps? (b) where does the backend
+live — a separate module github.com/go-via/vianats (keeps via dep-free) or an
+internal package? (c) CI must run a real nats-server (RELEASE-GATING per spec
+785). FLAG TO MAINTAINER before proceeding. Meanwhile Phase 3 (value-path:
+StateApp/StateSess cluster survivability) is infra-free and could proceed first
+if the maintainer prefers to defer NATS — but the phase map orders P2 before P3.
