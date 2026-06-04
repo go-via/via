@@ -1432,3 +1432,62 @@ Built-in `via.StateAppCounter` = `StateAppEvents[tick, int64]` with an UNEXPORTE
 tick event + fold, exposing Inc(ctx) + Read (no event type / Fold / offset
 ceremony for the user). Then P1.3: migrate internal/examples/chat to
 StateAppEvents + delete the trim-Update.
+
+---
+
+## Tick 22 — 2026-06-04 — P1.2: StateAppCounter specialization
+
+P1.1b committed (`031ce1a`) — StateAppEvents works end-to-end in-process. This
+tick ships the built-in counter so the ubiquitous shared-counter case needs no
+user-defined event type / Fold (T1-DX-2).
+
+### Validated against code
+- `shape_num.go:102` `StateAppNum[T] struct{ StateApp[T] }` is the EXACT
+  embed-and-promote precedent; walker.go:131-133 comment confirms markers
+  "promote across embedded specialized wrappers for free". So
+  `StateAppCounter struct{ StateAppEvents[counterTick,int64] }` reuses the proven
+  path: `implements(StateAppCounter, stateAppEventsMarkerType)` is true via
+  pointer-receiver promotion (StateAppCounter is in viaPkgPath ✓), so the walker
+  classifies a `Hits via.StateAppCounter` field as roleStateAppEvents and binds
+  it (bindWireKey + bindApp promoted). No walker/runtime change needed.
+- The increment event is UNEXPORTED → `Append(ctx, counterTick{})` is promoted
+  but un-callable from outside the package (caller can't name the type), so Inc
+  is the only append path. Read/Text/Key promote and are the intended surface.
+
+### Converged slice — P1.2
+- **File:** new `stateappcounter.go`. `counterTick struct{}` (unexported) +
+  `func (counterTick) Fold(acc int64, _ counterTick) int64 { return acc + 1 }`;
+  `type StateAppCounter struct{ StateAppEvents[counterTick, int64] }`;
+  `func (c *StateAppCounter) Inc(ctx *Ctx) { _, _ = c.Append(ctx, counterTick{}) }`.
+- **Acceptance:** a page with `Hits via.StateAppCounter`; an Inc action; Read
+  defaults to 0, increments by 1 per Inc; a live SSE subscriber sees the bump;
+  a fresh session sees the accumulated count (app-scoped). Existing suite green.
+- **Scope:** no Dec/Add (monotone counter is the v1 surface per the spec name);
+  those can be later StateAppEvents with a signed-delta event if wanted.
+
+### Tick 22 — BUILT + result
+- NEW `stateappcounter.go`: `counterTick struct{}` (unexported) +
+  `Fold(acc int64,_)int64 = acc+1`; `StateAppCounter struct{ StateAppEvents
+  [counterTick,int64] }`; `Inc(ctx)`. Zero walker/runtime change — the embed
+  promotes the markers exactly like StateAppNum (confirmed by Audit: walker's
+  `implements` tests PointerTo(t), and pointer-receiver methods of the embedded
+  value promote to *StateAppCounter).
+- Tests `stateappcounter_test.go` (4): reads 0 before any Inc; 3 Inc → fresh
+  session sees 3 (app-scoped + exact +1 fold, defeats per-tab/wrong-fold/
+  hardcoded-0); Inc reaches a live SSE subscriber; Inc panics on nil ctx.
+  `go test -race ./...` ALL GREEN, vet clean.
+- Yellow: per-test "weak" ratings defeated by the suite collectively (fresh
+  session seeing 3 proves app-scope, kills hardcoded-0 + per-tab + always-1).
+- Blue: no dead code; flagged Inc-nil-ctx panic untested → added the test.
+- Audit: CLEAN, no bugs. Confirmed embed promotion-through-pointer, `{}` json
+  round-trip = exactly +1 (no skip path), per-key projection isolation despite
+  the shared counterTick type, Inc's `_,_=` error-drop acceptable (append-only,
+  no conflict; nil-backplane is a documented no-op).
+
+### Phase 1 status — P1.0✅ P1.1a✅ P1.1b✅ P1.2✅. Remaining: P1.3.
+### Next step — P1.3: migrate internal/examples/chat to StateAppEvents + delete the trim-Update
+The chat example currently models its message list as a value-shaped StateApp
+with a trim-on-Update (the "worst advertisement" the council flagged). Replace
+with StateAppEvents[ChatEvent, []Message] (append a message event; fold builds
+the list), deleting the trim-Update. Validate the chat example builds + its
+tests pass; verify in-browser if feasible. This closes Phase 1.
