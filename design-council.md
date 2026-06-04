@@ -1491,3 +1491,69 @@ with a trim-on-Update (the "worst advertisement" the council flagged). Replace
 with StateAppEvents[ChatEvent, []Message] (append a message event; fold builds
 the list), deleting the trim-Update. Validate the chat example builds + its
 tests pass; verify in-browser if feasible. This closes Phase 1.
+
+---
+
+## Tick 23 — 2026-06-04 — P1.3: migrate chat example to StateAppEvents + delete trim-Update (CLOSES PHASE 1)
+
+P1.2 committed (`e469e2e`). Final P1 slice: replace the chat example's value-
+shaped `StateAppSlice[Message]` + `Op.Append` + trim-`Update` (the council's
+"worst advertisement") with `StateAppEvents[ChatEvent, []Message]`.
+
+### Validated against code
+- `internal/examples/chat/main.go`: Room.Log is `via.StateAppSlice[Message]`
+  (=StateApp[[]Message], shape_slice.go:122); Send does `Log.Op(ctx).Append(msg)`
+  then a trim-`Update` capping at recentWindow=50, then `Draft.Write(ctx,"")`.
+  View `h.Each(r.Log.Read(ctx), ...)`.
+- Existing test `TestChat_messageFansOutAcrossSessions` exercises the full
+  fan-out path (alice Send → bob's SSE frame shows it) — the characterization
+  guard. Baseline GREEN.
+- Behavior is PRESERVED (live cross-session fan-out, bounded render window), so
+  this is a refactor: keep the fan-out test green throughout; add a fold-ordering
+  test for the new event-sourced list-building.
+
+### Converged slice — P1.3
+- **Files:** `internal/examples/chat/main.go` (Room.Log → StateAppEvents; add
+  `ChatEvent{From,Body}` + Fold that copies acc, appends, trims to recentWindow;
+  Send → `Log.Append(ctx, ChatEvent{...})`, delete the trim-Update + Op.Append),
+  `internal/examples/chat/main_test.go` (update the stale "StateApp fan-out"
+  comment; add a multi-message ordering/accumulation test).
+- **Note:** the SENDER's own re-render becomes eventual (projector hop) vs the
+  old synchronous value-update — single-pod in-memory the hop is ~instant; the
+  fan-out test asserts the receiver (bob) which is unaffected. The event LOG now
+  grows unbounded (trim is only on the projection); true log bounding is P5
+  (snapshot+compaction) — fine for the example.
+
+### Tick 23 — BUILT + result → ✅ PHASE 1 COMPLETE
+- `internal/examples/chat/main.go`: Room.Log is now
+  `via.StateAppEvents[Posted, []Message]`; added `Posted{From,Body}` + a pure
+  `Fold` (copies acc, appends, trims to recentWindow); Send Appends a Posted and
+  drops the old `Op.Append` + trim-`Update`. Doc comment updated to the
+  event-log framing.
+- `internal/examples/chat/main_test.go`: fixed the stale "StateApp fan-out"
+  comment; added `TestChat_messagesAccumulateInOrder` (two senders → fresh reader
+  sees both in send order, proving the fold appends + app-scope).
+- Handled as a REFACTOR (behavior preserved: live cross-session fan-out + bounded
+  render), NOT the full tdd skill: the existing fan-out test (real HTTP+SSE via
+  vt, same path a browser hits) stayed green throughout; the new ordering test
+  strengthens coverage. `go vet` + `go test -race ./...` ALL GREEN (11 pkgs).
+- Browser verify skipped: the vt fan-out test drives the identical real-SSE
+  projector path; marginal added confidence not worth the cost this tick.
+
+### ✅ PHASE 1 COMPLETE — in-process StateAppEvents core ships green
+P1.0 in-mem Backplane · P1.1a App DI · P1.1b projector+Append/Read+Text ·
+P1.2 StateAppCounter · P1.3 chat migration + trim-Update deleted. The
+StateAppEvents event-log model works end-to-end single-pod on via.InMemory(),
+race-clean, and the flagship chat example demonstrates it.
+
+### Next step — PHASE 2: Backplane interface hardening + fault injection + conformance + NATS
+P2 is large; sub-slice. Likely order: (2a) the parameterized conformance suite
+run against via.InMemory() (codifying the EventLog/Store guarantees as a reusable
+suite); (2b) `memevents.Faulty` fault-injecting decorator (reorder-within-
+allowance, redelivery, mid-Subscribe disconnect) + run the suite against it;
+(2c) the two-Apps-one-backplane in-process cross-pod CONVERGENCE test (the
+T1-TEST keystone — this is what actually proves the projector, not a local fold,
+is the cross-pod mechanism); (2d) the NATS JetStream+KV reference backend
+(RELEASE-GATING, real-network) + run the conformance suite against it. NOTE 2d
+needs a real NATS server (external dep) — flag to maintainer; 2a-2c are infra-
+free and can proceed now.
