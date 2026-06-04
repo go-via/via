@@ -65,16 +65,33 @@ func (a *App) startProjector(key string, ls *logState) {
 	from := Offset(0)
 	if data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key)); ok {
 		var cp checkpoint
-		if json.Unmarshal(data, &cp) == nil && cp.CodecHash == ls.codecHash {
-			if v, err := ls.decodeSnap(cp.V); err == nil {
-				ls.mu.Lock()
-				ls.projection = v
-				ls.cursor = cp.CoveredOffset
-				ls.epoch = cp.Epoch
-				ls.epochSeen = true
-				ls.snapRev = rev
-				ls.mu.Unlock()
+		if json.Unmarshal(data, &cp) == nil {
+			switch {
+			case cp.CodecHash == ls.codecHash:
+				// Codec matches → seed straight from the snapshot.
+				if v, err := ls.decodeSnap(cp.V); err == nil {
+					a.seedFromSnapshot(ls, v, cp, rev)
+					from = cp.CoveredOffset
+				}
+			case !cp.Compacted:
+				// Uncompacted mismatch → the snapshot is a pure disposable cache;
+				// re-fold from genesis (from stays 0). Evolving V is free.
+			default:
+				// Compacted + mismatch → durable genesis: the event prefix is gone,
+				// so we MUST NOT discard (that would silently truncate to the
+				// surviving tail). Run the registered seeded migration; on a missing
+				// or failing migration HALT the projector (roll-forward-only),
+				// never truncate (T2-GO-4).
 				from = cp.CoveredOffset
+				if migrate, found := lookupSnapMigration(cp.CodecHash); found {
+					if v, err := migrate(cp.V); err == nil {
+						a.seedFromSnapshot(ls, v, cp, rev)
+					} else {
+						a.haltUnbridgeable(ls, key)
+					}
+				} else {
+					a.haltUnbridgeable(ls, key)
+				}
 			}
 		}
 	}
@@ -93,6 +110,30 @@ func (a *App) startProjector(key string, ls *logState) {
 			}
 		}
 	}()
+}
+
+// seedFromSnapshot installs a cold-start seed (from a matching snapshot or a
+// seeded migration) as the projection baseline, resuming the tail at the
+// snapshot's covered offset.
+func (a *App) seedFromSnapshot(ls *logState, v any, cp checkpoint, rev Rev) {
+	ls.mu.Lock()
+	ls.projection = v
+	ls.cursor = cp.CoveredOffset
+	ls.epoch = cp.Epoch
+	ls.epochSeen = true
+	ls.snapRev = rev
+	ls.mu.Unlock()
+}
+
+// haltUnbridgeable freezes a compacted key whose durable-genesis snapshot cannot
+// be bridged to the current fold (no / failing migration). Roll-forward-only:
+// the projector folds nothing further (projectRecord short-circuits on halted),
+// so the value never silently truncates to the surviving tail.
+func (a *App) haltUnbridgeable(ls *logState, key string) {
+	ls.mu.Lock()
+	ls.halted = true
+	ls.mu.Unlock()
+	a.metricsOrNoop().Counter("via.snapshot.unbridgeable", "key", key)
 }
 
 // projectRecord folds one delivered Record into the cached projection under the
