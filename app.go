@@ -314,6 +314,7 @@ func New(opts ...Option) *App {
 			shutdownTimeout: 5 * time.Second,
 			sessionTTL:      30 * time.Minute,
 			contextTTL:      15 * time.Minute,
+			reconcileInterval: 5 * time.Second,
 			sseHeartbeat:    25 * time.Second,
 			sseWriteTimeout: 10 * time.Second,
 			maxRequestBody:  1 << 20,
@@ -354,13 +355,16 @@ func New(opts ...Option) *App {
 	// The context-TTL sweep only reaps stream-less ctxs: a connected stream
 	// is kept alive by Ctx.connected regardless of the TTL, so a short TTL
 	// can no longer kill a live tab and needs no guard against the heartbeat.
-	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 {
+	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 || a.cfg.reconcileInterval > 0 {
 		a.stopSweep = make(chan struct{})
 		if a.cfg.sessionTTL > 0 {
 			go a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 		}
 		if a.cfg.contextTTL > 0 {
 			go a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
+		}
+		if a.cfg.reconcileInterval > 0 {
+			go a.runSweep(a.cfg.reconcileInterval, a.cfg.reconcileInterval, a.reconcileValues)
 		}
 	}
 

@@ -79,3 +79,37 @@ func TestApplyChangeDropsStaleReadsAndNeverRegressesL1(t *testing.T) {
 		t.Fatalf("undecodable snapshot must keep the last good value; l1=%v l1Rev=%d, want 77/5", vc.l1, vc.l1Rev)
 	}
 }
+
+// The reconcile sweep re-pulls a key to Store HEAD unconditionally, so its only
+// guards are the monotone gate (never regress L1) and decode-safety (never
+// corrupt on a poison snapshot). It must advance L1 when the Store moved ahead,
+// and leave it untouched (and NOT signal a change) otherwise.
+func TestReconcileKeyAdvancesOnlyForwardAndSurvivesPoison(t *testing.T) {
+	stub := &loadStub{}
+	app := &App{backplane: stub, valStates: map[string]*valCell{"k": intCell()}}
+	vc := app.valStates["k"]
+
+	// Store ahead of L1 → advance.
+	stub.data, stub.rev, stub.ok = mustJSON(42), 4, true
+	app.reconcileKey("k")
+	if vc.l1 != 42 || vc.l1Rev != 4 {
+		t.Fatalf("reconcile must advance to Store HEAD; l1=%v l1Rev=%d, want 42/4", vc.l1, vc.l1Rev)
+	}
+
+	// Store not ahead (same rev) → no-op, no regression.
+	stub.data, stub.rev, stub.ok = mustJSON(999), 4, true
+	app.reconcileKey("k")
+	if vc.l1 != 42 || vc.l1Rev != 4 {
+		t.Fatalf("reconcile at an unchanged rev must be a no-op; l1=%v l1Rev=%d, want 42/4", vc.l1, vc.l1Rev)
+	}
+
+	// Poison snapshot at a higher rev → keep the last good value.
+	stub.data, stub.rev, stub.ok = []byte("nope"), 7, true
+	app.reconcileKey("k")
+	if vc.l1 != 42 || vc.l1Rev != 4 {
+		t.Fatalf("reconcile must survive a poison snapshot; l1=%v l1Rev=%d, want 42/4", vc.l1, vc.l1Rev)
+	}
+
+	// Absent cell → no panic.
+	app.reconcileKey("missing")
+}

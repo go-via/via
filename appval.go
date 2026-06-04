@@ -71,6 +71,49 @@ func (a *App) valProjection(key string) (any, bool) {
 	return vc.l1, true
 }
 
+// reconcileValues re-pulls every registered value key to the Store HEAD. Run
+// periodically (WithReconcileInterval) so the changes feed is a pure latency
+// optimization — a pod converges even when no Change hint reached it (joined
+// after the write, a crash between CAS and the hint append, or a silent
+// Update). Keys are snapshotted under the registry lock so the per-key I/O does
+// not hold it.
+func (a *App) reconcileValues() {
+	a.valStatesMu.Lock()
+	keys := make([]string, 0, len(a.valStates))
+	for k := range a.valStates {
+		keys = append(keys, k)
+	}
+	a.valStatesMu.Unlock()
+	for _, k := range keys {
+		a.reconcileKey(k)
+	}
+}
+
+// reconcileKey pulls one value cell to the Store HEAD. The monotone gate
+// (storeRev > l1Rev) makes it idempotent, and it broadcasts ONLY when L1
+// actually advanced — so a steady-state sweep tick is a silent no-op, not a
+// render storm.
+func (a *App) reconcileKey(key string) {
+	vc := a.valCellFor(key)
+	if vc == nil {
+		return
+	}
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), valKey(key))
+	vc.mu.Lock()
+	changed := false
+	if ok && storeRev > vc.l1Rev {
+		if v, err := vc.decode(data); err == nil {
+			vc.l1 = v
+			vc.l1Rev = storeRev
+			changed = true
+		}
+	}
+	vc.mu.Unlock()
+	if changed {
+		a.broadcastRender(nil, nil, key)
+	}
+}
+
 // startChangesTailer tails the shared changes feed and reconciles each named
 // Store cell to HEAD. The goroutine exits when the Subscribe channel closes
 // (backplane Close on Shutdown).
