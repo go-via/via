@@ -14,6 +14,7 @@ const (
 	roleState
 	roleStateSess
 	roleStateApp
+	roleStateAppEvents
 	roleParam
 	roleQuery
 	roleFile
@@ -53,7 +54,7 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
 				initRaw:   parseInitTag(f),
 			})
-		case roleStateSess, roleStateApp:
+		case roleStateSess, roleStateApp, roleStateAppEvents:
 			d.scopeSlots = append(d.scopeSlots, scopeSlot{
 				fieldPath: fieldPath,
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
@@ -104,6 +105,9 @@ func classifyField(f reflect.StructField) fieldRole {
 	if isStateAppType(f.Type) {
 		return roleStateApp
 	}
+	if isStateAppEventsType(f.Type) {
+		return roleStateAppEvents
+	}
 	if isFileType(f.Type) {
 		return roleFile
 	}
@@ -125,6 +129,8 @@ var (
 	stateTabMarkerType  = reflect.TypeOf((*stateTabMarker)(nil)).Elem()
 	stateSessMarkerType = reflect.TypeOf((*stateSessMarker)(nil)).Elem()
 	stateAppMarkerType  = reflect.TypeOf((*stateAppMarker)(nil)).Elem()
+
+	stateAppEventsMarkerType = reflect.TypeOf((*stateAppEventsMarker)(nil)).Elem()
 )
 
 // implements reports whether *t (pointer-to-t) implements iface. Used
@@ -143,6 +149,8 @@ func implements(t, iface reflect.Type) bool {
 
 func isStateSessType(t reflect.Type) bool { return implements(t, stateSessMarkerType) }
 func isStateAppType(t reflect.Type) bool  { return implements(t, stateAppMarkerType) }
+
+func isStateAppEventsType(t reflect.Type) bool { return implements(t, stateAppEventsMarkerType) }
 
 // isChildComposition reports whether t is a struct (or pointer-to-struct)
 // in a third-party package whose pointer type implements via.Composition.
