@@ -556,7 +556,18 @@ func (l *StateAppEvents[E, V]) Text(rc readCtx) h.H { return h.Textf("%v", l.Rea
 // ran is skipped. Effectively-once = at-least-once delivery + offset-gated
 // idempotent commit: a handler that must be exactly-once carries an
 // idempotency key derived from off (e.g. Stripe idempotency-key = key+":"+off).
-func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx *Ctx, ev E, off Offset) error)
+//
+// The handler receives a context.Context, NOT a via *Ctx (T-DX-6, P6a council):
+// the consumer is a background tailer that fires on records appended by any pod,
+// with no originating tab/session/request — there is no meaningful *Ctx to pass.
+// The context.Context is the shutdown/cancellation seam (the tailer exits when
+// the backplane closes). The decoded event and its offset are the handler's
+// inputs; everything else (DB handles, mail clients) is captured in the closure.
+//
+// Compaction interaction (P6b): a key with a registered consumer clamps its
+// Compactor floor to the slowest consumer's committed offset, so compaction
+// never discards an event a side-effect consumer has not yet processed.
+func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx context.Context, ev E, off Offset) error)
 
 // ============================================================================
 // CALL SITE 1 — live shared counter (compare against StateApp[int])

@@ -2684,3 +2684,45 @@ Red (Compacted field + RegisterSnapshotMigration undefined) → Yellow (Explore:
 - Full suite (13 pkgs) + backplanetest conformance + vianats all green under -race.
 
 ### Post-v1 (P6, NOT in scope): OnEvent side-effects; Redis/PG/Kafka backends; AppendIf/ReadAt; WithFoldVerify dev-mode + go-vet purity analyzer; the epoch-reset×Compactor floor follow-up (Tick 41). v1 build loop STOPS here.
+
+## Tick 43 — 2026-06-04 — P6a: OnEvent side-effect consumer (council deliberation → consensus)
+
+POST-v1. User opened P6, chose OnEvent first, and asked the council to deliberate the handler signature to consensus. Multi-lens validation against the code (Explore, file:line evidence) reached consensus:
+
+### Consensus — handler signature (DESIGN GATE T-DX-6: spec's *Ctx is wrong)
+`func (l *StateAppEvents[E,V]) OnEvent(name string, fn func(ctx context.Context, ev E, off Offset) error)`
+- runtime/SRE + Go-idioms: a background tailer fires on records appended by ANY pod — no originating tab/session/request, so a via *Ctx would be nil/synthetic (a category error). context.Context is the honest type: the shutdown/cancellation seam (the tailer exits when the backplane closes), idiomatic for background work.
+- DX: the handler's inputs are the decoded event + offset (for idempotency keys); DB/mail clients are captured in the closure. KEEP `off Offset` (the council #1 resolution's idempotency-key = wireKey+":"+off needs it). Drop *Ctx.
+- testing: in-memory testable end-to-end (register, append, assert handler fired with ev+off, assert committed offset, assert restart resume).
+Spec patched (state-backplane.md OnEvent godoc) to context.Context.
+
+### Consensus — mechanics (validated against code)
+- REGISTRATION mirrors registerLog: idempotent register-ONCE per (name,wireKey) via sync.Once, callable from a View/OnInit/action where l.app is bound (walker→bindApp sets l.app, runtime.go:215). App gains a consumers registry (parallels a.logs/a.valStates).
+- DECODE-TO-E reuses the envelope+upcaster path (eventEnvelope/currentVersionFor/runUpcasters); OnEvent is typed (E,V in scope) so it builds the decode closure itself and hands a type-erased deliver() to the App. Drop-on-undecodable: poison record → skip + commit-advance + via.events.undecodable (same as the fold), never wedge.
+- OFFSET COMMIT: separate tailer Subscribe(from:committed); after handler nil → CAS the Store cell "consumer:<name>:<wireKey>" with the new offset, advance. Handler error → DO NOT advance; re-subscribe from committed (head-of-line, preserves order + at-least-once). Cold-start loads the committed cell (like the projector). ErrCASConflict → adopt the peer's higher offset.
+- CLUSTER: per-pod tailer + shared Store offset + at-least-once; dups deduped by the handler's idempotency key. NO leader election exists (confirmed) — intentional, documented.
+
+### DESIGN GATE (CRITICAL, closed in this slice) — consumer-aware compaction floor
+Council line 272 mandates Compact clamp to min(2nd-newest snapshot, min consumer checkpoints); the SHIPPED maybeCompact (applogsnap.go) floor = prevSnapOffset ONLY → a registered consumer lagging behind the snapshot would be TRUNCATED OUT (silent side-effect event loss). Fix in this slice: maybeCompact floor = min(prevSnapOffset, minConsumerOffset(key)); a consumer at committed 0 blocks compaction entirely (correct — can't drop what it hasn't processed).
+
+### Slice (P6a) + TDD next: App consumers registry + startConsumer tailer + commit/cold-start + decode-drop-poison + consumer-aware floor. Tests: handler-fires-with-ev+off; out-of-Fold (projection unaffected); restart-resume-from-committed; handler-error-retries-in-order (at-least-once); poison-skip+commit; compaction-blocked-by-slow-consumer. P6b/c (more backends, AppendIf/ReadAt) later.
+
+## Tick 44 — 2026-06-04 — P6a: OnEvent side-effect consumer (BUILT, post-v1)
+
+Built the P6a slice converged in Tick 43. TDD-rygba.
+
+### Built
+- onevent.go: OnEvent(name, fn func(ctx context.Context, ev E, off Offset) error); consumerState (committed offset + cellRev); consumerKey="consumer:<name>:<wireKey>"; registerConsumer (idempotent once per name+key, cold-loads committed from the Store); startConsumer (per-pod tailer goroutine: Subscribe(from:committed) → deliver → commit; handler error → re-subscribe from committed (head-of-line retry, backoff); exits on backplane Close); commitConsumer (CAS the cell; ErrCASConflict → adopt the peer's higher offset, monotone); minConsumerOffset (for the compaction floor).
+- eventenvelope.go: extracted shared decodeEvent[E] (envelope unmarshal → version gate → upcasters → unmarshal E); stateappevents.go fold refactored to call it (behavior-preserving, P4 tests green).
+- applogsnap.go maybeCompact: floor = min(prevSnapOffset, minConsumerOffset(key)) — closes the council-line-272 design gate (compaction never discards an unprocessed consumer event).
+- app.go: consumers/consumersByKey/consumersMu.
+
+### Tests (onevent_internal_test.go, all green -race, 3x clean)
+- fires-per-event-with-offset + fold-pure; restart-resume-from-committed (gated on durable commit via awaitConsumerCommitted); retry-failed-in-order (head-of-line, at-least-once) + via.consumer.error metric; skip-poison + via.consumer.undecodable; forward-incompatible BLOCKS (does not advance) + via.consumer.forward_incompatible; CAS-conflict adopt-peer (two pods converge); compaction-floor-respects-slow-consumer; compaction-advances-when-consumer-keeps-up.
+
+### TDD-rygba record
+Red → Yellow (Explore: flagged restart commit-race → added awaitConsumerCommitted barrier; goroutine cleanup → defer backplane.Close; consumer-specific metric → via.consumer.undecodable; +positive floor-advance test) → Green → Blue (Explore: found a REAL BUG — deliver() treated ErrForwardIncompatible like poison (skip+advance) → SILENT side-effect loss on deploy-skew; also flagged CAS-adopt + via.consumer.error coverage) → Green2 (fixed: forward-incompat now BLOCKS roll-forward-only + distinct metric; added forward-incompat-block test, deterministic CAS-adopt test, error-metric assertion) → Audit (general-purpose: no further bugs; goroutine exits reliably on Close (both paths), at-least-once gate correct, CAS monotone + adopt no-loop, no lock-order inversion consumersMu→cs.mu, decodeEvent parity with old fold, consumer/projector independence; 3x -race clean).
+
+### DESIGN GATE closed: T-DX-6 (handler ctx = context.Context not *Ctx) + council-line-272 (consumer-aware compaction floor). Spec patched.
+
+### Next P6 (later, separate slices): Redis/PG/Kafka backends (need infra modules); AppendIf/ReadAt (gated on a real claim-ticket case); WithFoldVerify dev-mode + go-vet purity analyzer; epoch-reset×Compactor floor follow-up (Tick 41); the OnEvent shutdown-ctx refinement (handler ctx is per-delivery, not force-cancelled on Shutdown — acceptable v1).
