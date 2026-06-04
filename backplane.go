@@ -82,6 +82,16 @@ var (
 	ErrCASConflict = errors.New("via: store CAS revision conflict")
 	// ErrClosed is returned by a closed backplane's Append/Subscribe.
 	ErrClosed = errors.New("via: backplane closed")
+	// ErrUndecodable: an event record has no viable decode path to the current
+	// version (corrupt bytes, missing envelope, or no upcaster). The projector
+	// treats the record as a no-op (skips it, advancing past it) and emits
+	// via.events.undecodable — a poison record must never panic the pod and
+	// wedge every peer replaying the key.
+	ErrUndecodable = errors.New("via: no decode path to the current event version")
+	// ErrForwardIncompatible: a record's envelope version exceeds what this
+	// binary understands (a rolled-back deploy reading newer events). The key's
+	// projector HALTS rather than silently mis-fold — roll forward, not back.
+	ErrForwardIncompatible = errors.New("via: event version newer than this binary supports; roll forward, not back")
 )
 
 // InMemory returns the base in-process Backplane: a per-key in-memory event log

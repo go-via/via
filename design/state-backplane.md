@@ -314,6 +314,16 @@ type Codec[T any] interface {
 	// Encode wraps v in an Envelope{TypeTag, Version, Payload} at the CURRENT
 	// version and returns the wire bytes. We never rewrite history, so old
 	// records keep their old version bytes on disk.
+	//
+	// v1 (T-DX-3): the default codec AUTO-DERIVES the TypeTag from E's Go type
+	// name and emits Version 1 — so the mandatory envelope ships with NO new
+	// user-facing API (no EventType() method to declare, nothing to enforce at
+	// Mount). VERSION is the load-bearing field (it drives the upcaster chain
+	// and the forward-incompat guard). A user-overridable stable TypeTag and
+	// tagged-union multi-variant discrimination are a post-v1 refinement —
+	// unneeded while each StateAppEvents key carries a single event type E
+	// decoded by its own key's codec (the Go type name is never on the wire as
+	// a routing key, so type rename is already free).
 	Encode(v T) ([]byte, error)
 
 	// Decode reads the envelope, runs the registered upcaster chain from the

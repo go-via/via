@@ -2,6 +2,7 @@ package via
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -17,6 +18,7 @@ type logState struct {
 
 	seed      any                              // Go zero of V
 	foldBytes func(acc any, data []byte) (any, error) // decode one record's E + fold into acc
+	halted    bool                             // forward-incompatible record seen → frozen, roll-forward-only
 }
 
 // registerLog records the typed seed + fold for key (idempotent across the many
@@ -44,17 +46,37 @@ func (a *App) startProjector(key string, ls *logState) {
 		return
 	}
 	go func() {
+		// Keep ranging the channel even once halted, so the backplane's
+		// Subscribe sender never blocks (no goroutine leak); just stop folding.
 		for rec := range ch {
 			ls.mu.Lock()
-			if rec.Offset > ls.cursor {
-				if next, ferr := ls.foldBytes(ls.projection, rec.Data); ferr == nil {
-					ls.projection = next
-				}
+			if ls.halted || rec.Offset <= ls.cursor {
+				ls.mu.Unlock()
+				continue
+			}
+			next, ferr := ls.foldBytes(ls.projection, rec.Data)
+			advanced := false
+			switch {
+			case ferr == nil:
+				ls.projection = next
 				ls.cursor = rec.Offset
+				advanced = true
+			case errors.Is(ferr, ErrForwardIncompatible):
+				// A newer binary wrote this record. FREEZE this key — do NOT
+				// advance the cursor, so a roll-forward redeploy resumes here.
+				ls.halted = true
+				a.metricsOrNoop().Counter("via.events.forward_incompatible", "key", key)
+			default:
+				// Poison / undecodable: skip it (advance past so it is not
+				// retried forever), never wedging the key for any pod.
+				ls.cursor = rec.Offset
+				a.metricsOrNoop().Counter("via.events.undecodable", "key", key)
 			}
 			ls.mu.Unlock()
-			// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
-			a.broadcastRender(nil, nil, key)
+			if advanced {
+				// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
+				a.broadcastRender(nil, nil, key)
+			}
 		}
 	}()
 }
