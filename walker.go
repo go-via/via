@@ -55,14 +55,9 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 				initRaw:   parseInitTag(f),
 			})
 		case roleStateSess, roleStateApp, roleStateAppEvents:
-			kind := scopeValue
-			if role == roleStateAppEvents {
-				kind = scopeLog
-			}
 			d.scopeSlots = append(d.scopeSlots, scopeSlot{
 				fieldPath: fieldPath,
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
-				kind:      kind,
 			})
 		case roleParam:
 			d.paramSlots = append(d.paramSlots, kindedSlot{

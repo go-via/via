@@ -209,10 +209,11 @@ func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor, a *App) {
 	for _, s := range d.scopeSlots {
 		handle := fieldByPath(elem, s.fieldPath).Addr().Interface()
 		handle.(scopeBinder).bindWireKey(s.wireKey)
-		// Log handles additionally bind the App so their projector/codec can
-		// reach the backplane; value handles read the App through the ctx.
-		if s.kind == scopeLog {
-			handle.(appBinder).bindApp(a)
+		// Handles that need the App (StateApp's value cell + changes tailer,
+		// StateAppEvents' projector) bind it here. StateSess reaches the App
+		// through the ctx and does not implement appBinder.
+		if ab, ok := handle.(appBinder); ok {
+			ab.bindApp(a)
 		}
 	}
 }

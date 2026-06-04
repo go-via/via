@@ -47,9 +47,13 @@ type App struct {
 	appSignals   map[string]any
 	appSignalsMu sync.RWMutex
 
-	// appStore backs StateApp[T] with shared storage across every
-	// session and tab. Keyed by the handle's wire key.
-	appStore kvStore
+	// valStates holds the L1 cache + decode closure for each value-shaped
+	// StateApp key. The backplane Store cell `val:<key>` is the source of
+	// truth; valCell.l1 is a per-pod cache reconciled to it. Populated at the
+	// first bindApp for a key.
+	valStates     map[string]*valCell
+	valStatesMu   sync.Mutex
+	valTailerOnce sync.Once // starts the one changes-feed tailer per App
 
 	// backplane backs StateAppEvents and (later) clustered StateApp/StateSess.
 	// Resolved at New: a nil config backplane becomes InMemory(), so the
@@ -302,6 +306,7 @@ func New(opts ...Option) *App {
 		appSignals:      make(map[string]any),
 		routes:          make(map[string]string),
 		logs:            make(map[string]*logState),
+		valStates:       make(map[string]*valCell),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,

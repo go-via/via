@@ -1937,3 +1937,92 @@ convergent, AND a real ordered/durable/resumable NATS JetStream backend passing
 the identical contract suite. #3/#7 (stranding/reconnect) closed.
 
 ### Next step — RESUME P3a (StateApp cross-pod value convergence), converged in tick 27.
+
+---
+
+## Tick 30 — 2026-06-04 — P2 DONE (NATS green); BUILD P3a (StateApp cross-pod value convergence)
+
+P2d-2 committed (`5eaa3f7`) — NATS RELEASE-GATING conformance green. Phase 2 fully
+complete. Now building P3a per the tick-27 convergence.
+
+### Re-validated against code
+- `appStore` used ONLY in stateapp.go:37 (Read) + :66 (Update) + the app.go:52
+  decl → safe to replace with a value-runtime. All existing StateApp test types
+  are serializable (StateApp[int], StateAppNum[int], StateAppSlice[int]) → the
+  T-GO-9 JSON-serialization gate breaks NO existing test.
+- `runtime.go:210-213` bindScopeKeys already splits value/log (calls bindApp only
+  for scopeLog) → add: call bindApp for any scope handle implementing appBinder
+  (StateApp will implement it).
+- KEY byte-for-byte insight: Update sets the SHARED valCell.l1 SYNCHRONOUSLY on
+  CAS success, so every session/tab on ONE App sees it immediately — identical to
+  appStore today. The changes-tailer is a no-op single-pod (monotone gate) and
+  only populates L1 on a PEER App (cross-pod). ∴ existing single-pod StateApp
+  suite stays green; the new two-Apps test is red today (pod-local appStore).
+
+### P3a build plan (handed to tdd-rygba)
+- App: `valStates map[string]*valCell` + mutex; valCell{mu RWMutex; l1 any; l1Rev
+  via.Rev; decode func([]byte)(any,error)}; changes-tailer started once
+  (sync.Once) at first value-bindApp, Subscribe(changesKey="via.changes", from 0).
+  Internal Change{Key string; Rev via.Rev} json codec.
+- StateApp.bindApp(a) [NEW; StateApp becomes an appBinder]: register valCell with
+  a json→T decode closure; ensure changes-tailer running. bindScopeKeys calls
+  bindApp for value handles too.
+- StateApp.Read: trackRead + valCell.l1 cast to T (zero if absent). (drops appStore)
+- StateApp.Update: CAS-retry loop on Store `val:`+wireKey — LoadSnapshot→decode
+  cur T→fn→json(next)→CAS(expectedRev); retry on via.ErrCASConflict; on success
+  set valCell.l1=next + l1Rev=newRev (under cell mu), Append Change{key,newRev} to
+  changesKey, markStateDirty, broadcastRender(ctx,nil,key). Panic on nil ctx
+  (unchanged).
+- changes-tailer: per Change, vc:=valStates[Key]; if Rev>vc.l1Rev: LoadSnapshot(
+  val:Key)→(data,storeRev,ok); if ok && storeRev>=Rev && storeRev>vc.l1Rev: vc.l1=
+  decode(data), vc.l1Rev=storeRev; broadcastRender(nil,nil,Key) (T1-SRE-5 stale-
+  drop + T3-SRE-1 monotone gate).
+- Tests: existing StateApp suite GREEN throughout (byte-for-byte single-pod) + a
+  two-Apps shared-backplane StateApp.Update cross-pod convergence test (mirror P2c
+  keystone). P3b = periodic reconcile sweep (cold-start/crash-strand); P3c =
+  StateSess + full-sid Change matching.
+
+### Tick 30 — BUILT + result → P3a SHIPPED (StateApp cross-pod value convergence)
+- NEW `appval.go`: valCell (L1 + decode + l1Rev under RWMutex), changesKey/change,
+  registerValCell (+ valTailerOnce), startChangesTailer, applyChange (stale-drop
+  + monotone re-pull), valProjection, valKey.
+- `stateapp.go`: StateApp gains `app` + bindApp (registers typed decode + starts
+  tailer); Read hits valProjection (L1, O(1)); Update is a CAS-retry loop on the
+  Store cell `val:`+key (LoadSnapshot→decode→fn→Marshal→CAS, retry on
+  ErrCASConflict up to 100 → errCASExhausted), sets the SHARED L1 synchronously
+  (single-pod byte-for-byte), appends a value-less change hint, broadcastRenders.
+- `app.go`: appStore → valStates map + mutex + once. `runtime.go`: bindScopeKeys
+  calls bindApp on ANY appBinder (value + log). Removed the now-dead scopeKind
+  (descriptor.go/walker.go) superseded by the appBinder type-assert.
+- Tests: existing StateApp suite GREEN throughout (byte-for-byte single-pod) +
+  NEW `backplane_crosspod_value_test.go` (two Apps/one backplane → StateApp.Update
+  on A converges on B's live SSE + fresh reader) + NEW internal
+  `appval_internal_test.go` (applyChange stale-drop T1-SRE-5, monotone T3-SRE-1,
+  undecodable-snapshot drop). `go test -race ./...` GREEN (13 pkgs), vet clean.
+
+### DESIGN FEEDBACK — T3-SRE-2 (silent writes suppress the Change hint)
+The first green run regressed TestSyncOff_skipsStateAppBroadcastAcrossSessions:
+a silent (sync-off) Update appended a Change → the changes-tailer's
+broadcastRender(skip=nil) bypassed the silent-writer suppression. Resolution: a
+silent Update writes the Store + L1 but does NOT append the Change hint — no
+fan-out (local or cross-pod) for that write; the value persists and propagates on
+the next loud write or the reconcile sweep (P3b). Consistent with SyncOff's
+"write, don't notify" semantic. Recorded; spec value-path note already says the
+feed is a liveness hint only, so no contradiction — added the silent gate.
+
+- Yellow: cross-pod test is a watertight proof (backplane is the only shared
+  resource); bidirectional deferrable.
+- Blue: impl sound; flagged applyChange SRE gates as load-bearing-but-implicit →
+  added the internal test. errCASExhausted/marshal-error = acceptable-defensive
+  backstops (retry happy+conflict paths covered by concurrent-200); note for P3b.
+- Audit: CLEAN, no bugs. CAS-retry converges (-race -count=10), all l1 access
+  guarded, broadcastRender outside vc.mu (no deadlock w/ SyncNow→Read→RLock),
+  self-redelivery harmless (monotone no-op), tailer no leak, Marshal-before-CAS
+  so a bad T leaves the Store untouched.
+
+### Next step — P3b: periodic Store-head reconcile sweep
+Closes cold-start (a pod that joined after writes / saw no Change) AND the
+crash-between-CAS-and-Append strand (T4-SRE-1) AND propagation of silent writes —
+making the changes feed a pure latency optimization. Then P3c: StateSess value
+cross-pod convergence with full-256-bit-sid Change matching (drop fail-closed on
+unknown sid).
