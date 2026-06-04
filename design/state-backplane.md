@@ -10,11 +10,17 @@ Related: reconnect-resilience issue #82 (transport-layer companion)
 Give Via cluster fan-out + restart survivability **additively**, without
 rewriting the v0.4.0 typed API:
 
-- **Value state stays as-is.** `StateApp[T]` / `StateSess[T]` keep their exact
-  API (`Update(func(old)(new))`, no `Write`). Cross-pod: CAS a durable
-  `Store`, then append a value-less `Change{key,rev}` to a shared change log;
-  other pods tail it and re-pull (notify-and-pull, reusing the existing
-  `broadcastRender → SyncNow → Read` path).
+- **Value state: same API, no longer pod-local.** `StateApp[T]` / `StateSess[T]`
+  keep their exact API (`Update(func(old)(new))`, no `Write`), but in a cluster
+  they stop being pod-local: the durable `Store` cell `val:<key>` is the **single
+  source of truth** and each pod's in-process kvStore is only an L1 cache
+  reconciled to it. `Update` CASes the Store, then appends a value-less
+  `Change{key,rev}` to a shared feed as a *liveness hint*; every pod **including
+  the writer** converges by re-pulling to Store HEAD (gated `storeRev ≥
+  change.rev`, monotone L1 gate), backed by a periodic reconcile sweep so
+  correctness never depends on a notify arriving. Eventual consistency — and it
+  **removes the sticky-session requirement** for state (a session's tabs may
+  land on different pods and still converge). See `T3-SRE-1` / `T4-SRE-1`.
 - **New opt-in sibling: `StateAppEvents[E, V]`.** For high-churn shared state (a
   shared counter, the chat/ticket queue) you append immutable events `E`; the
   value `V` is a deterministic **fold**. Appends never CAS, so the hot-key
@@ -105,11 +111,12 @@ event-log model below.
 //             correct but less efficient). The gap is visible in the type
 //             system, never hidden behind a silent no-op.
 //
-// The Codec is supplied to the runtime PER StateAppEvents[E] (see WithBackplane
-// / the per-field codec), NOT by the backend — so swapping NATS for Postgres
-// never touches your wire format, and your wire format is never hostage to a
-// backend's native encoding. A backend author moves opaque bytes and assigns
-// offsets; it never sees a Go event type or a generic.
+// The codecs (event Codec[E] + snapshot Codec[V]) are supplied to the runtime
+// PER StateAppEvents[E] (see WithBackplane / the per-field codec), NOT by the
+// backend — so swapping NATS for Postgres never touches your wire format, and
+// your wire format is never hostage to a backend's native encoding. A backend
+// author moves opaque bytes and assigns offsets; it never sees a Go event type
+// or a generic.
 //
 //	app := via.New(via.WithBackplane(vianats.JetStream(nc)))
 //
@@ -141,12 +148,12 @@ type Offset uint64
 type Rev uint64
 
 // Record is one delivered EventLog entry. The runtime, not the backend,
-// interprets Data via the per-key Codec — the backend only moves bytes and
+// interprets Data via the per-key codec — the backend only moves bytes and
 // assigns Offset.
 type Record struct {
 	Key    string // the log subject (a StateAppEvents wire key, or the shared "changes" feed)
 	Offset Offset
-	Data   []byte // opaque; Codec.Decode turns it into an E (or a value-less Change)
+	Data   []byte // opaque; the event Codec[E].Decode turns a log record into an E (the shared "changes" feed's value-less Change is decoded by the runtime-internal codec)
 }
 
 // Store is the durable per-key CURRENT-VALUE snapshot with compare-and-swap.
@@ -236,24 +243,37 @@ type Compactor interface {
 	Compact(ctx context.Context, key string, beforeOffset Offset) error
 }
 
-// Codec serializes events and snapshots. Supplied PER StateAppEvents[E] (the
-// runtime binds one to E at Mount), NOT implemented by the backend. Default
-// is a self-describing JSON codec with a version envelope (see E-versioning).
-// A backend author never writes a Codec.
-type Codec interface {
+// Codec[T] serializes one logical type T to/from versioned wire bytes. The
+// runtime binds TWO per StateAppEvents[E] at Mount — an EVENT codec Codec[E]
+// and a SNAPSHOT codec Codec[V] — NOT implemented by the backend. Default is a
+// self-describing JSON codec with a version envelope (see E-versioning). A
+// backend author never writes a Codec.
+//
+// Typed (not the earlier Encode(any)/Decode() any): the public surface carries
+// no `any` (aligns the no-public-any effort, T1-GO-2) and Decode hands the fold
+// a ready T with no type assertion.
+type Codec[T any] interface {
 	// Encode wraps v in an Envelope{TypeTag, Version, Payload} at the CURRENT
 	// version and returns the wire bytes. We never rewrite history, so old
 	// records keep their old version bytes on disk.
-	Encode(v any) ([]byte, error)
+	Encode(v T) ([]byte, error)
 
 	// Decode reads the envelope, runs the registered upcaster chain from the
-	// stored Version up to current, then unmarshals into a fresh E (or
-	// Change). On NO viable upcaster path it returns ErrUndecodable; the fold
-	// then DROPS the record (treats it as a no-op event) and emits a
-	// via.events.undecodable metric — a poison/forward-incompatible record must
-	// NEVER panic the pod and wedge every peer replaying the key.
-	Decode(data []byte) (any, error)
+	// stored Version up to current, then unmarshals into a fresh T. On NO
+	// viable upcaster path it returns the zero T + ErrUndecodable; for an EVENT
+	// codec the fold then DROPS the record (treats it as a no-op event) and
+	// emits a via.events.undecodable metric — a poison/forward-incompatible
+	// record must NEVER panic the pod and wedge every peer replaying the key.
+	Decode(data []byte) (T, error)
 }
+
+// Event codec = Codec[E]: decodes log Records into E. Snapshot codec = Codec[V]:
+// version-tags each Checkpoint so a COMPACTED key can run a SEEDED V-migration
+// (decode old V → seed, fold the retained tail) instead of an unsafe discard
+// (T2-GO-4); for an UNCOMPACTED key the snapshot version is just an opaque
+// cache-invalidation hash. The value-less Change{key,rev} on the changes feed
+// is a RUNTIME-internal control message with its own internal codec — it never
+// rides the user's Codec[E].
 
 var (
 	ErrCASConflict  = errors.New("via: store CAS revision conflict")
@@ -347,13 +367,17 @@ func (l *StateAppEvents[E, V]) Key() string { return l.wireKey }
 // Read returns the current PROJECTED value: the fold of every event in the
 // EventLog up to this pod's locally-applied offset, seeded by E.Zero(). A Read
 // during View execution subscribes the ctx via ctx.trackRead(wireKey) —
-// IDENTICAL to StateApp.Read — so a later Append anywhere in the cluster fans
-// a re-render out to this tab through the SAME broadcastRender→SyncNow→Read
-// path StateApp uses. No manual Subscribe in View.
+// IDENTICAL to StateApp.Read. The cached projection has exactly ONE writer: the
+// per-(pod,key) PROJECTOR goroutine (see Append). When the projector folds a
+// new offset it fans a re-render out to this pod's subscribed tabs via
+// broadcastRender → SyncNow → Read. Note the two legs: broadcastRender is the
+// INTRA-pod leg (it only reaches tabs on THIS pod); the projector tailing
+// EventLog.Subscribe is the INTER-pod leg that makes a remote Append reach here
+// at all. No manual Subscribe in View.
 //
-// Read is O(1): the runtime keeps a cached projection per key, updated
-// incrementally as EventLog records arrive (one tailer goroutine per key folds
-// each Record forward). Read NEVER re-folds from genesis. Accepts *Ctx or *CtxR.
+// Read is O(1): the projector keeps the cached projection per key, folding each
+// Record forward in offset order as it arrives. Read NEVER re-folds from
+// genesis. Accepts *Ctx or *CtxR.
 func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
 	var ev E
 	zero := ev.Zero()
@@ -378,19 +402,31 @@ func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
 // conflict (the EventLog orders them; there is no CAS to lose), so the chat/ticket
 // hot key cannot retry-storm (#2).
 //
-// On success the event is durably appended at the returned offset; this pod
-// folds it into its cached projection, marks the page dirty (writer re-renders
-// via autoflush), and every other pod tailing the EventLog from its offset
-// fold-forwards and broadcastRenders to its subscribed tabs. The returned
-// offset is useful for read-your-write and effect dedup.
+// On success the event is durably appended at the returned offset. Append does
+// NOT fold and does NOT render: the per-(pod,key) projector is the SOLE fold
+// path on EVERY pod incl. the writer (T1-SRE-2). Each pod's projector tails the
+// EventLog from its offset, folds this record into its cached projection in
+// offset order, then broadcastRenders to its subscribed tabs. Because every pod
+// folds the IDENTICAL offset sequence, the projections converge by construction
+// — there is no second, out-of-order local fold on the writer to diverge from
+// peers on a non-commutative fold. Cross-pod read-your-write is therefore
+// EVENTUAL (the writer's own View updates when ITS projector folds this offset,
+// one in-process hop); use WaitFor(key, off) for strict RYW. The returned
+// offset feeds WaitFor and effect dedup. (A single-pod in-process backplane MAY
+// fold synchronously for immediate RYW — see the in-memory-backplane note; the
+// projector channel hop is only load-bearing for records from a remote
+// Subscribe.)
 //
 // There is intentionally NO Write and NO Update(func(old)(new)) — a blind set
 // of an event log is a category error, and the RMW race the type exists to
 // remove is not even expressible. To reset, append a tombstone variant and
 // Compact.
 //
-// Panics on nil ctx, EXACTLY like StateApp.Update: without a ctx no re-render
-// can fan out, so silently succeeding would desync server state from every tab.
+// Panics on nil ctx, EXACTLY like StateApp.Update — but now the ctx is the
+// AUTHORIZATION gate, not the render driver: Append is reachable only from a
+// via_tab + session-gated action ctx (AUTH-1, action.go), and the projector
+// (not the ctx) fans the re-render out. A nil ctx means the call did not come
+// from a legitimate tab action, so it must not silently mutate shared state.
 func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (offset uint64, err error) {
 	if ctx == nil {
 		panic("via: StateAppEvents.Append called with nil *Ctx")
@@ -398,12 +434,15 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (offset uint64, err error)
 	if l.app == nil {
 		return 0, nil // nil backplane pre-Mount: parity with StateApp's no-op guard
 	}
-	off, err := l.app.appendEvent(l.wireKey, ev) // Codec.Encode + EventLog.Append + local fold
+	// appendEvent = Codec[E].Encode + EventLog.Append ONLY. No local fold, no
+	// broadcastRender here: the per-(pod,key) projector is the single fold path
+	// and the sole render driver (it calls broadcastRender(skip=nil,
+	// sessFor(key), key) after folding). Folding here too would fold out of
+	// offset order on the writer and diverge from peers (T1-SRE-2).
+	off, err := l.app.appendEvent(l.wireKey, ev)
 	if err != nil {
 		return 0, err
 	}
-	ctx.markStateDirty()
-	l.app.broadcastRender(ctx, nil, l.wireKey) // reuse the confirmed render path
 	return off, nil
 }
 
@@ -534,7 +573,7 @@ func (r *Room) View(ctx *via.CtxR) h.H { // identical to the existing example
 
 Picked the api lens as the SPINE (method-on-E fold, two type params E+V, plain Append) because fold purity is the entire correctness model and method-on-E is the ONLY option of the four that makes impurity a visible review smell instead of an invisible closure capture (rejected adapters' `Project(closure)` and versioning's `OnFold(seed,reduce)` — both let you capture a clock; rejected correctness' composition-level StateFolder — can close over struct fields). Compile-time binding via the EventReducer constraint also kills the "forgot to register the reducer" nil path that adapters/versioning/correctness all carry.
 
-Grounded in code: StateApp/StateSess detect via marker iface in walker.go (isStateApp/isStateSess → roleStateApp); bind via scopeBinder.bindWireKey in runtime.go:bindScopeKeys. Gave StateAppEvents its OWN marker isStateAppEvents() + a new roleStateAppEvents (NOT versioning's "reuse isStateApp marker") so the walker starts the per-key projector goroutine only for log keys and scopeSlot carries a kind flag — minimal additive wiring, no conflation of append-mode detection. Read reuses ctx.trackRead/subscribed verbatim (ctx.go); Append reuses broadcastRender→go SyncNow→Read (broadcast.go, confirmed path) and panic-on-nil-ctx parity with StateApp.Update (stateapp.go:60).
+Grounded in code: StateApp/StateSess detect via marker iface in walker.go (isStateApp/isStateSess → roleStateApp); bind via scopeBinder.bindWireKey in runtime.go:bindScopeKeys. Gave StateAppEvents its OWN marker isStateAppEvents() + a new roleStateAppEvents (NOT versioning's "reuse isStateApp marker") so the walker starts the per-key projector goroutine only for log keys and scopeSlot carries a kind flag — minimal additive wiring, no conflation of append-mode detection. Read reuses ctx.trackRead/subscribed verbatim (ctx.go); the per-(pod,key) PROJECTOR — not Append — is the sole fold path and drives the intra-pod render via broadcastRender→go SyncNow→Read (broadcast.go) with skip=nil (the projector holds no action ctx). Append only does Codec[E].Encode + EventLog.Append, no local fold (T1-SRE-2): broadcastRender is the intra-pod leg, the projector tailing EventLog.Subscribe is the inter-pod leg, and tick 1 confirmed broadcastRender alone is pod-LOCAL (broadcast.go:60-89) — it is NOT the cross-pod mechanism. panic-on-nil-ctx is parity with StateApp.Update (stateapp.go:60) but now gates AUTH, not render.
 
 Kept V as the 2nd type param despite the uglier `StateAppEvents[ChatEvent,[]Message]` decl — collapsing it (adapters/versioning erase View to `any`) loses compile-time projection safety and the counter→int / chat→[]Message demo is the core pitch. The decl cost is paid once per field.
 
@@ -620,7 +659,7 @@ Same mechanism as #3. Cold start per key: LoadSnapshot→(V0,coveredOffset) (or 
 - PHASE 0 — binding seam (additive, no behavior change). Add isStateAppEvents() marker + roleStateAppEvents in walker.go classifyField; scopeSlot gains a kind flag (value vs log); bindScopeKeys binds StateAppEvents via the existing scopeBinder path + a new bindApp. nil backplane everywhere → zero observable change. v0.4.0 typed API untouched. Tests: existing suite green + a nil-backplane in-process StateAppEvents folding in RAM (today's StateAppSlice semantics).
 - PHASE 1 — in-process StateAppEvents[E,V] core. EventReducer constraint + Read (cached projection, O(1), trackRead) + plain Append (broadcastRender reuse, nil-ctx panic) + Text. App gains logProjection map + per-key incremental fold under lock. NO backplane yet — proves the user API and the fold/projection cache against the chat+counter call sites. Migrate internal/examples/chat to StateAppEvents behind nothing (still single-pod), delete the trim-Update.
 - PHASE 2 — Backplane interface + ONE reference backend (NATS JetStream+KV: durable ordered resumable EventLog AND CAS KV in one dependency, maps the interface most directly). Store(LoadSnapshot/CAS) + EventLog(Append/AppendIf/Subscribe/Head) + io.Closer + per-field Codec (default versioned-envelope JSON). WithBackplane Option. Cold start = LoadSnapshot→Subscribe(from:coveredOffset)→fold. Ship the backend CONFORMANCE TEST SUITE (ordering, gap-free resume, CAS conflict, snapshot-before-compact). This phase alone closes #3/#7.
-- PHASE 3 — value-shaped coexistence. StateApp/StateSess.Update (UNCHANGED API) gains cluster survivability: CAS the Store at val:<key> then Append value-less Change{key,rev} to the shared changes feed; other pods tail, re-pull from Store, broadcastRender→SyncNow→Read (confirmed path). Local kvStore stays as L1 cache, Store is L2/durable. Session-scoped Changes namespaced by sid, filtered by broadcastRender's sess arg.
+- PHASE 3 — value-shaped coexistence (cluster-SHARED value state, no longer pod-local). StateApp/StateSess.Update (UNCHANGED API) gains cluster survivability AND cross-pod convergence. The Store cell `val:<key>` is the SINGLE SOURCE OF TRUTH; the local kvStore is an L1 OPTIMISTIC cache, not the owner. Update CASes the Store then Appends a value-less Change{key,rev} to the shared changes feed (a liveness HINT only). Every pod INCL. THE WRITER converges by re-pulling to Store HEAD on each Change — never to change.rev — gated storeRev ≥ change.rev (stale replica read → drop + one bounded backoff re-poll, never apply-stale; closes T1-SRE-5); an L1 monotonicity gate (apply only if storeRev > l1Rev[key]) makes redelivered/out-of-order Changes non-regressing (T3-SRE-1). A PERIODIC Store-head reconcile sweep over each pod's subscribed value keys makes the feed a pure latency optimization → correctness never depends on a Change being emitted, closing the crash-between-CAS-and-Append strand (T4-SRE-1). Writer RYW is sync-optimistic; peers eventual. After reconcile, broadcastRender→SyncNow→Read renders the converged value. Session-scoped Changes carry the FULL 256-bit sid; the receiver EXACT-matches and DROPs fail-closed on an unknown sid (never broadcast-to-all). Net: state correctness no longer needs sticky sessions.
 - PHASE 4 — E-versioning hardening (#6). Versioned envelope MANDATORY (enforced at Mount: no TypeTag → fail fast), RegisterEvent[E](v, Upcaster{From,To}) decode-chain, drop-on-undecodable + via.events.undecodable metric, forward-incompat projector-halt guard. Snapshot=pure disposable cache for UNCOMPACTED keys (invalidate-on-codec-hash → re-fold from 0, evolving V free); COMPACTED keys treat the snapshot as durable genesis — typed `Codec[V]`, seeded migration on mismatch, retained-event floor, `WithFoldVerify` mandatory before compaction (T2-GO-4). Additive-first godoc.
 - PHASE 5 — snapshot + compaction. WithLogSnapshotEvery(N) default 512–1000 + on Shutdown; snapshot-DURABLE-FIRST then optional Compactor (type-asserted, backend declines → snapshot-only). Tombstone-delete reclamation (#5). Compact-trails-snapshot invariant + min(consumer-checkpoints) floor so no live consumer is truncated out.
 - PHASE 6 — side effects + remaining backends. OnEvent(name, fn) offset-tracked consumer (#1). Add Redis Streams, Postgres, Kafka backends against the conformance suite. THEN AppendIf/ReadAt (optimistic first-writer-wins) once a real claim-ticket case appears. FOLLOW-UP/orthogonal: BroadcastCluster + ClusterTabCount (#4); dev WithFoldVerify; go-vet purity analyzer.

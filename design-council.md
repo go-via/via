@@ -671,3 +671,126 @@ Continue reconciling the body, next-highest divergence. Candidates, ranked:
 4. Add **value-path Store-as-SoT + reconcile-sweep** invariant (`T3/T4-SRE-1`).
 5. **In-mem `Backplane` default / `via.InMemory()` / `memevents`** phase-shift +
    header `Status` refresh.
+
+---
+
+## Tick 7 — 2026-06-04 — reconcile doc body §2: typed codecs (T1-GO-2 / T2-GO-4)
+
+CONVERGED since tick 4. Per tick 6's ranked next-step list, §2 = typed codecs.
+
+### Done this tick — `design/state-backplane.md` Codec is now generic
+
+The `Codec interface` block declared `Encode(v any) ([]byte,error)` /
+`Decode([]byte) (any,error)` — the pre-council untyped shape. Replaced with the
+converged generic:
+- `type Codec[T any] interface { Encode(v T)…; Decode([]byte) (T,error) }` —
+  kills the public `any` (`T1-GO-2`, aligns no-public-any), Decode hands the fold
+  a ready `T` with no assertion; `ErrUndecodable` → zero `T` + drop (events only).
+- Runtime binds TWO per `StateAppEvents[E]`: event `Codec[E]` + snapshot
+  `Codec[V]` (`T2-GO-4` — the version-tagged snapshot codec enabling the seeded
+  compacted-key migration). Added the explanatory paragraph.
+- Fixed the two supporting refs: `Record.Data` comment ("Codec.Decode → E or
+  Change" → event `Codec[E].Decode → E`; Change is runtime-internal) and the
+  per-field codec comment (now "event Codec[E] + snapshot Codec[V]").
+
+Verified: no `Encode(any)`/`Decode()any`/bare `type Codec interface` left
+(only the comment naming what it replaced).
+
+### Convergence status — still CONVERGED; doc-reconciliation §2 of ~5 CLOSED
+
+### Next step (following tick) — §3: per-pod projector as sole fold path
+
+`T1-SRE-1`/`T1-SRE-2`. Doc still narrates the cross-pod mechanism as "Append
+reuses broadcastRender→SyncNow→Read (confirmed path)" (line ~537/551) — tick 1
+proved that FALSE-as-stated (`broadcastRender` is pod-LOCAL). The converged design:
+`broadcastRender` is the *intra*-pod leg; a per-(pod,key) **projector** tailing
+`EventLog.Subscribe(from=highWater)` is the *inter*-pod leg and the **sole fold
+path on every pod incl. the writer** (eventual-RYW, `WaitFor` for strict). Add/
+correct this; then §4 isolation+KeyStore, §5 value-path sweep + in-mem-default +
+header refresh.
+
+---
+
+## Tick 8 — 2026-06-04 — MAINTAINER FINDING: value/sess state must not be pod-local (reconcile §5, promoted)
+
+Maintainer raised it directly: "on multi-node distributed state, makes no sense
+that app and sess state is pod-local." Correct — and it coincides exactly with
+the converged value-path resolution (T3-SRE-1/T1-SRE-5/T4-SRE-1, ticks 3-4) that
+had NOT yet been propagated to the doc (it was reconciliation backlog §5). The
+maintainer effectively re-prioritized §5 ahead of §3/§4.
+
+### Chair validation
+- Today's code: value state IS pod-local — `kvstore.go` per-pod `sync.Map`,
+  `broadcastRender` re-renders local tabs only. Split-brain in multi-node. (Already
+  validated tick-1/tick-3, citing kvstore.go:12/17/35, stateapp.go:66-74, broadcast.go:68.)
+- Doc Phase 3 (line 637) was the PRE-council version — "other pods tail, re-pull,
+  broadcastRender", with NO writer convergence / monotone gate / sweep. It still
+  encoded the two bugs the council fixed (T3-SRE-1 writer self-skip, T4-SRE-1
+  lost-notify strand). Confirmed absent: grep for "single source of truth /
+  reconcile / monotone / storeRev" returned zero doc hits.
+- Honest tradeoff surfaced to maintainer: converged model is EVENTUAL consistency
+  (L1 cache reconciled to Store-as-SoT), not strong; tab-local StateTab/Signal
+  stay correctly pod-local.
+
+### Done this tick — doc body §5 (value-path) propagated
+- **Decision bullet** "Value state stays as-is" → "Value state: same API, no
+  longer pod-local": Store cell = single source of truth, kvStore = L1 cache,
+  writer-included re-pull-to-HEAD, reconcile sweep, removes sticky-session
+  requirement, eventual.
+- **Phase 3** rewritten to the full converged invariant: Store-as-SoT, L1
+  optimistic cache, re-pull-to-HEAD (never to change.rev) gated storeRev ≥
+  change.rev, L1 monotone gate, periodic reconcile sweep (correctness independent
+  of notify), full-sid exact-match fail-closed, eventual peers / sync-optimistic
+  writer RYW. Tagged T3-SRE-1 / T1-SRE-5 / T4-SRE-1.
+
+### Convergence status — still CONVERGED; doc-reconciliation §5 of ~5 CLOSED (out of order, by maintainer priority)
+
+### Remaining doc-reconciliation backlog
+- §3 — per-pod projector as sole fold path (T1-SRE-1/2); line ~551 still says
+  "Append reuses broadcastRender→SyncNow→Read" as the cross-pod mechanism.
+- §4 — dedicated multi-tenant/session ISOLATION section + GDPR KeyStore
+  (T1-SEC-1/2) — partially seeded by §5's sid exact-match line; still no
+  standalone section.
+- header `Status` refresh + in-mem-`Backplane`-default / `via.InMemory()` /
+  `memevents` phase-shift (in-mem addendum), not yet in the phased plan.
+
+---
+
+## Tick 9 — 2026-06-04 — reconcile doc body §3: projector as sole fold path (T1-SRE-1/2)
+
+CONVERGED since tick 4. Backlog §3 (the maintainer's §5 jump done in tick 8).
+
+### Done this tick — doc body §3 propagated
+The doc still narrated the cross-pod mechanism as "Append folds locally + this
+pod marks dirty + every other pod fold-forwards and broadcastRenders" with the
+code doing `appendEvent (… + local fold)` then `broadcastRender(ctx, nil, key)`
+— i.e. the DUAL-fold-path bug tick 1/2 fixed. Corrected to the converged model:
+- **Read godoc** — projection has exactly ONE writer, the per-(pod,key)
+  projector; named the two legs (broadcastRender = INTRA-pod, projector tailing
+  EventLog.Subscribe = INTER-pod).
+- **Append godoc** — Append does NOT fold and does NOT render; projector is the
+  SOLE fold path on every pod incl. writer → converge by construction; cross-pod
+  RYW EVENTUAL, `WaitFor(key,off)` for strict; single-pod in-process MAY fold
+  synchronously (in-mem note).
+- **Append code** — dropped the `// + local fold` and the
+  `broadcastRender(ctx, nil, key)` call (+ the writer `markStateDirty`); now just
+  `appendEvent = Encode + EventLog.Append`, return offset. Projector renders.
+- **nil-ctx panic rationale** — reframed: ctx is now the AUTH gate (AUTH-1),
+  not the render driver (the projector renders regardless of ctx).
+- **"Grounded in code" para** — replaced "Append reuses broadcastRender…
+  confirmed path" with the projector-drives-render / broadcastRender-is-pod-local
+  framing (cites broadcast.go:60-89, tick-1 finding).
+
+Verified: no "local fold" / `broadcastRender(ctx` left in the doc.
+
+### Convergence status — still CONVERGED; doc-reconciliation §3 CLOSED
+
+### Remaining doc-reconciliation backlog
+- §4 — standalone multi-tenant/session ISOLATION section + GDPR KeyStore
+  (T1-SEC-1/2); partially seeded (sid exact-match in Phase 3), no section yet.
+- §6 — header `Status` refresh + in-mem-`Backplane`-default / `via.InMemory()` /
+  `memevents` phase-shift (in-mem addendum), not in the phased plan.
+- **NEW (T1-GO-1, found this tick):** the code still uses `E.Zero()` (EventReducer
+  iface line ~342, Read line ~379, both examples, cold-start ~591). Convergence
+  dropped Zero() → seed = `var zero V`. Distinct API-hygiene tick (ripples to the
+  interface + 2 examples), do as its own step.
