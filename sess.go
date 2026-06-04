@@ -140,6 +140,21 @@ func RequestSession(r *http.Request) *Session {
 	return &Session{data: a.sessionFromRequest(r), app: a}
 }
 
+// adoptSession returns the session for a cross-pod-presented sid, creating and
+// registering it under the SAME id if this pod has never seen it. The re-check
+// under the write lock is the LoadOrStore guard: concurrent adopters of the same
+// sid converge on one *session — never a double-register that would split state.
+func (a *App) adoptSession(sid string) *session {
+	a.sessionsMu.Lock()
+	defer a.sessionsMu.Unlock()
+	if sess, ok := a.sessions[sid]; ok {
+		return sess
+	}
+	sess := &session{id: sid}
+	a.sessions[sid] = sess
+	return sess
+}
+
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
 	now := time.Now().UnixNano()
 	if c, err := r.Cookie(sessionCookieName); err == nil {
@@ -148,6 +163,17 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 		a.sessionsMu.RUnlock()
 		if ok {
 			sess.lastAccess.Store(now)
+			return sess
+		}
+		// Cross-pod adoption: a well-formed sid this pod never issued is a
+		// session some other pod created and the client legitimately holds (the
+		// 256-bit sid is the bearer credential). Adopt it under the SAME id so
+		// state keyed by that sid converges here — no sticky sessions needed.
+		// A malformed value is never adopted; it falls through to a fresh mint.
+		if validSessionID(c.Value) {
+			sess := a.adoptSession(c.Value)
+			sess.lastAccess.Store(now)
+			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sess.id})
 			return sess
 		}
 	}
