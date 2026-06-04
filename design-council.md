@@ -2516,3 +2516,42 @@ restored stream re-snapshots instead of silently skipping every new record.
   records fold [1,2]; a new-Epoch record (offset restarts at 1) RESETS → projection
   becomes [9] (NOT [1,2,9]), cursor 1, epoch 1, via.events.epoch_reset fired. Reuse
   goodEnv/spyMetrics.
+
+### Tick 39 — BUILT + result → ✅ PHASE 4 COMPLETE
+- `applog.go`: logState gains epoch+epochSeen; per-record logic extracted into
+  `projectRecord(ls,key,rec) (advanced bool)` (the shared fold path); epoch
+  detection before the offset gate — first record sets baseline, a DIFFERING
+  epoch re-snapshots from genesis (projection=seed, cursor=0, via.events.epoch_reset)
+  so a recreated/trimmed/restored stream's restarted offsets aren't skipped by a
+  bare HWM. Goroutine: `for rec := range ch { if projectRecord(...) { broadcast }}`.
+- Tests: NEW epochreset_internal_test.go — same-epoch folds [1,2] (no spurious
+  reset), epoch-1 reset → [9] (genesis re-snapshot, NOT [1,2,9] / NOT frozen) +
+  cursor 1 + epoch_reset metric, [9,10] post-reset fold, BACKWARD epoch reset → [5].
+  `go test -race ./...` GREEN (13 pkgs), vet clean.
+- Yellow: added baseline-no-spurious-reset + backward-epoch assertions.
+- Blue: all branches covered (the existing P4a/P4b/runtime tests now flow through
+  projectRecord — the extracted shared path); no dead code; halted-early-return
+  still hit by the forward-incompat test. No HIGH gaps.
+- Audit: CLEAN, no bugs. Extraction byte-identical for the no-epoch path (InMemory
+  epoch always 0 → never resets); reset uses ls.seed (genuine zero V); broadcast
+  OUTSIDE the lock (defer-unlock then broadcast); halted key never epoch-resets
+  (intended — roll-forward-only, an epoch reset doesn't make this binary newer);
+  -race clean; Offset(0) never delivered (contract) so the cursor-0 gate is a
+  harmless guard.
+
+### ✅ PHASE 4 COMPLETE — P4a envelope+drop+forward-incompat · P4b upcaster registry
+· P4c epoch/offset-space-reset detection. StateAppEvents is now version-hardened:
+events evolve via upcasters, poison records drop (never wedge), newer-binary
+records halt (never mis-fold), and stream resets re-snapshot (never silently skip).
+
+### Next step — PHASE 5 (the LAST v1 phase): snapshot + compaction.
+Snapshot-durable-FIRST (write a fold snapshot to the Store, THEN optionally
+Compact), the OPTIONAL Compactor (type-asserted on the Backplane — backends that
+can't truncate decline + run snapshot-only), the retained-event floor (Compact
+clamped below the 2nd-newest snapshot + consumer checkpoints), T2-GO-4
+compacted-key migration (snapshot becomes durable genesis; typed Codec[V] +
+seeded migration on codec-hash mismatch). Cold start = LoadSnapshot →
+Subscribe(from:coveredOffset) → fold the tail. Sub-slice: (5a) snapshot write +
+cold-start-from-snapshot (Store-only, no Compactor) first; (5b) optional Compactor
++ retained-event floor; (5c) T2-GO-4 compacted-key migration. After P5 → v1 GREEN
+→ STOP + PushNotification.
