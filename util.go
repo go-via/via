@@ -20,6 +20,23 @@ func genSecureID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// validSessionID reports whether s is exactly the shape genSecureID produces:
+// 64 lowercase hex characters (32 random bytes). A pod will adopt a presented
+// session sid only if it passes this check, so a client can never make a pod
+// register an arbitrary attacker-chosen or malformed token as a session.
+func validSessionID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // genCSPNonce returns a 16-byte base64 (URL-safe, no padding) string
 // for strict-CSP nonce attributes. 16 bytes = 128 bits of entropy is
 // the OWASP recommendation.

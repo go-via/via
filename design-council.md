@@ -2189,3 +2189,41 @@ assume, even though the converged spec implies it.
 ### Status: P3c BUILD PAUSED pending the maintainer's choice. Phases 0-3b shipped
 & pushed (commit c12089b). Everything else green. Could proceed to P4 (versioning,
 StateAppEvents-path, independent of the value/session path) while this is decided.
+
+---
+
+## Tick 34 — 2026-06-04 — T-SEC-3 RESOLVED: session sid adoption (maintainer-approved); unblocks P3c
+
+Maintainer chose "Adopt presented sid". Built the cross-pod session-adoption
+unblocker (security-sensitive auth change).
+
+### Built + result
+- `util.go`: `validSessionID(s)` — strict: len==64 && all [0-9a-f] (exactly
+  genSecureID's format). An attacker cannot adopt a non-conforming/garbage token.
+- `sess.go`: `adoptSession(sid)` (Lock + LoadOrStore re-check → one *session per
+  sid, race-safe) + getOrCreateSession adoption branch: cookie present, sid NOT
+  in a.sessions, validSessionID → adopt the SAME id (no sticky sessions); known
+  sid still early-returns (above the branch, unchanged); malformed → mint-new
+  (unchanged). r.AddCookie so the same request resolves it.
+- Tests `sess_adopt_internal_test.go` (package via): validSessionID format
+  (short/long/non-hex/uppercase/empty rejected); unknown-well-formed adopted +
+  registered; known-sid returns SAME object w/ data intact (no clobber);
+  adoptSession idempotent (deterministic re-check guard); malformed not adopted;
+  concurrent 16-racer adoption → ONE shared *session pointer. `go test -race
+  ./...` GREEN (13 pkgs).
+- Yellow: added the known-sid-unchanged + concurrent-pointer-equality assertions.
+- Blue: re-check ok path was only probabilistic → extracted adoptSession +
+  deterministic idempotency test.
+- Audit (SECURITY): CLEAN. validSessionID strict (uppercase/non-hex/null/wrong-len
+  rejected, no strconv/hex.Decode leniency); same key throughout → never clobbers
+  a different session; known-sid early-return wins (data survives); race-clean
+  LoadOrStore; via_tab/CSRF + Session.Rotate + sessionFromRequest unaffected
+  (duplicate via_session cookie resolves to the same sid, harmless); adopted
+  session's empty data is correct until the tailer/sweep populate it (P3c).
+
+### Next step — BUILD P3c (StateSess cross-pod value path), now UNBLOCKED. Per
+tick-32 converged plan: change.Sid + tailer routing + applySessionChange
+(fail-closed drop on unknown sid) + session.revs + sessDecoders + StateSess
+bindApp/Update CAS on "val:s:"+sid+":"+key + session reconcile. Tests: cross-pod
+same-session converge + cross-session ISOLATION + drop-on-unknown-sid; keep
+statesess_test.go green. Then Phase 3 DONE → P4.
