@@ -1101,3 +1101,72 @@ walker.go, scopeSlot kind flag, bindScopeKeys/bindApp wiring; nil backplane →
 zero observable change), which is the smallest additive, fully-testable slice.
 
 **Loop stopped** (cron `5a4adbbf` deleted) — convergence reached at tick 17.
+
+---
+
+## Tick 18 — 2026-06-04 — ✅ EXIT DESIGN → Phase 0 binding seam SHIPPED
+
+First implementation tick. Design converged at tick 17; this builds the smallest
+additive, fully-testable slice of Phase 0.
+
+### Council validation (evidence)
+- `walker.go:9-21` fieldRole enum, `classifyField:88-114` dispatch, marker-type
+  cache `123-128`, `implements():134-142` — matched the spec's binding-seam
+  description exactly.
+- `descriptor.go:30-33` `scopeSlot{fieldPath,wireKey}`; `runtime.go:203-212`
+  `bindScopeKeys` calls only `bindWireKey`, and runs inside `newCtx:146` BEFORE
+  `ctx.app=a` is set (`render.go:19`, `recover.go:143`) — so the app pointer the
+  design wants bound into the handle is NOT available at the current seam.
+- `stateapp.go:27-43` StateApp reads app via the ctx at call-time;
+  `StateAppEvents` (design 386-389) holds its OWN `app *App` — load-bearing for
+  the P1 projector that holds no ctx. Intentional divergence, confirmed.
+
+### Phase-boundary refinement (recorded, NOT a spec change)
+The loop's PHASE MAP is authoritative on build order: P0 = binding seam, and
+P1 explicitly owns "EventReducer, Read (cached projection)... the per-(pod,key)
+projector." So `Read`/folding is P1, NOT P0. The design-doc line-774 P0 test
+("nil-backplane in-process StateAppEvents folding in RAM") describes the P0+P1
+end state; folding lands in P1 with `Read`. The `scopeKind` flag + `bindApp`
+app-pointer wiring (also named in the P0 line) have NO observable consumer until
+the P1 projector/`Read`, and threading `a *App` through `newCtx` speculatively
+can't be TDD'd against any P0-visible behavior — so they ship in P1 with their
+first consumer. Each flag lands with the code that reads it. No spec edit
+required; this is a slice-granularity decision within the converged design.
+
+### Built (TDD red→green→blue→audit)
+- NEW `stateappevents.go`: `StateAppEvents[E EventReducer[E,V], V any]` handle
+  (holds `wireKey`); `EventReducer[E,V]` constraint with `Fold(acc V, ev E) V`
+  (+ determinism godoc); `bindWireKey`, `Key()`, distinct `isStateAppEvents()`
+  marker. No Read/Update/projector/app — deferred to P1.
+- `walker.go`: `roleStateAppEvents` enum value; cached
+  `stateAppEventsMarkerType`; `isStateAppEventsType` helper; `classifyField`
+  branch (after `isStateAppType`, before file/child); `roleStateAppEvents` added
+  to the existing `case roleStateSess, roleStateApp:` → binds via the unchanged
+  `scopeBinder`/`bindWireKey` path.
+
+### Tests + result
+- NEW `stateappevents_test.go`: `TestStateAppEventsKeyBindsThroughMount`
+  (default key = lowercase field name "log") + `TestStateAppEventsKeyHonorsViaTag`
+  (via:"events" override). The default+tag PAIR defeats any hardcoded-constant
+  `Key()` (no single literal satisfies both; a no-op `bindWireKey` leaves
+  wireKey="" → test 1 fails) — the pair IS the dynamic-binding proof.
+- Yellow agent: flagged hardcode risk → answered by the default/tag pair;
+  nested/pointer cases exercise walkStruct's pre-existing recursion (shared by
+  all roles), not this slice's new branch → not added.
+- Blue agent: every added symbol load-bearing (constraint + marker required for
+  compile/reflection), no dead code.
+- Audit agent: no mis-classification possible (3 method-name-distinct unexported
+  markers, flat structs, no embedding); classifyField ordering safe; generic
+  self-referential constraint + pointer-receiver marker detected on the
+  instantiated type; zero observable change to existing classification.
+- `go vet ./` clean; `go test -race ./...` ALL GREEN.
+
+### Next step — Phase 0 → Phase 1 (in-process core)
+P1 is the first slice with real behavior: `EventReducer` fold actually applied,
+`Read` (cached projection seeded by zero V), plain `Append` (Codec encode +
+EventLog.Append, NO local fold), `Text`, the per-(pod,key) projector goroutine,
+and `StateAppCounter`. This is where `scopeKind` + `bindApp` + threading `a`
+through `newCtx` land (the projector is their first consumer). Then migrate the
+chat example and delete the trim-Update. P1 should be sub-sliced — likely
+(1a) Append+Read RAM fold via projector under a nil backplane, (1b) StateAppCounter,
+(1c) chat migration — each its own TDD tick.
