@@ -2139,3 +2139,53 @@ Convergence tick (validate + design + record); build next.
 
 ### Next step — BUILD P3c under TDD (security-sensitive: assert the fail-closed
 drop + cross-session isolation explicitly). Then Phase 3 DONE → P4 versioning.
+
+---
+
+## Tick 33 — 2026-06-04 — P3c BLOCKED on a security decision (T-SEC-3: cross-pod session adoption)
+
+Building P3c (StateSess cross-pod), validation hit a gap between the converged
+spec and the code.
+
+### Gap (evidence)
+- `sess.go:145-160` getOrCreateSession: a presented via_session cookie whose sid
+  is NOT in this pod's `a.sessions` → MINTS A NEW session (fresh genSecureID()),
+  does NOT adopt the presented sid. So the SAME logical session does not exist on
+  a second pod a client visits.
+- Spec line 786 promises "Net: state correctness no longer needs sticky
+  sessions." That REQUIRES a session to be adoptable across pods (any pod serves
+  a presented sid). The spec explicitly specifies only the CHANGES path (drop
+  fail-closed on unknown sid in applySessionChange); it is SILENT on the
+  cookie-adoption path — yet adoption is the precondition for the no-sticky
+  promise.
+- ∴ P3c's headline (cross-pod-same-session convergence) is UNBUILDABLE end-to-end
+  until getOrCreateSession adopts presented sids.
+
+### Why this is a maintainer decision (not an autonomous design-gate fix)
+Adopting client-presented sids changes a CORE AUTH primitive:
+- It is the standard 256-bit-bearer distributed-session model (signed/opaque
+  session cookies work this way — any server trusts the bearer sid).
+- BUT it opens a SESSION-FIXATION surface that the current mint-new behavior
+  closes: an attacker who plants a known sid cookie on a victim could share the
+  session post-auth. Mitigation is Rotate-on-privilege-change (Session.Rotate
+  exists, sess.go:101) — an APP responsibility/discipline.
+- It interacts with the via_tab-as-CSRF-token model (memory: via_tab IS the CSRF
+  token) — which session a via_tab binds to.
+- Minor junk-session-creation vector (attacker spams random sids → records reaped
+  by the TTL sweep).
+This is security-sensitive + hard-to-reverse + outward-facing → FLAG, don't
+assume, even though the converged spec implies it.
+
+### Options put to the maintainer
+- A) Adopt a presented well-formed sid in getOrCreateSession (enables cross-pod
+  sessions = the design's promise; relies on Rotate-on-login; standard model).
+- B) Keep mint-new (sessions stay pod-affine); descope StateSess-cross-pod for v1
+  — build only the value-path mechanics + drop-on-unknown-sid (no end-to-end
+  cross-pod session test); document that StateSess clustering needs sticky LB.
+- C) Adopt ONLY if the cluster shows the session exists (a session registry / a
+  backplane existence check) — closes the junk-session + blind-fixation vector,
+  but more complex.
+
+### Status: P3c BUILD PAUSED pending the maintainer's choice. Phases 0-3b shipped
+& pushed (commit c12089b). Everything else green. Could proceed to P4 (versioning,
+StateAppEvents-path, independent of the value/session path) while this is decided.
