@@ -16,6 +16,12 @@ type checkpoint struct {
 	CoveredOffset Offset          `json:"o"`
 	CodecHash     string          `json:"h"`
 	V             json.RawMessage `json:"v"`
+	// Compacted marks the key as durable genesis: its event prefix has been (or
+	// is about to be) discarded, so a codec-hash mismatch must run a seeded
+	// migration, never discard + re-fold (T2-GO-4). Set durably BEFORE the prefix
+	// is dropped (snapshot-FIRST), so a cold start never sees a dropped prefix
+	// behind a Compacted:false checkpoint.
+	Compacted bool `json:"c"`
 }
 
 // snapKey namespaces a key's snapshot cell in the Store, distinct from val: and
@@ -49,6 +55,12 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	ls.mu.RLock()
 	proj := ls.projection
 	cp := checkpoint{Epoch: ls.epoch, CoveredOffset: ls.cursor, CodecHash: ls.codecHash}
+	// Compacted ⟺ a prefix has been (or, this generation, is about to be)
+	// discarded. maybeCompact below compacts at floor=prevSnapOffset, dropping
+	// offsets < prevSnapOffset, which removes ≥1 record iff prevSnapOffset >= 2.
+	// Setting it here (before that compaction runs) keeps the flag durable BEFORE
+	// the drop — snapshot-FIRST.
+	cp.Compacted = ls.prevSnapOffset >= 2
 	encode := ls.encodeSnap
 	rev := ls.snapRev
 	ls.mu.RUnlock()

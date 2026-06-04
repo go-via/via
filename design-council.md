@@ -2654,3 +2654,33 @@ prevSnapOffset is NOT reset on an epoch reset (projectRecord resets cursor/proje
 
 ### Next step — P5c: T2-GO-4 compacted-key durable-genesis migration.
 Once a key has compacted, the snapshot is durable GENESIS (the prefix is unrecoverable), so a codec-hash mismatch must NOT discard+re-fold-from-0 (that would silently truncate to the uncompacted tail) — it must run a SEEDED migration (decode old V → seed, fold the retained tail, rewrite the checkpoint). Needs: a "has this key compacted" signal + the seeded-migration path on mismatch. Then v1 (P0-P5) COMPLETE → STOP loop + PushNotification.
+
+## Tick 42 — 2026-06-04 — P5c: T2-GO-4 compacted-key durable-genesis migration → v1 COMPLETE
+
+### Validated against code (file:line)
+- checkpoint{Epoch,CoveredOffset,CodecHash,V} (applogsnap.go:14) — needed a Compacted flag.
+- startProjector cold-start (applog.go) mismatch → always from=0 (discard+refold) — unsafe once a key compacts (the prefix is gone → "refold from 0" truncates to the surviving tail).
+- Compaction floor lags one generation (prevSnapOffset); a prefix is physically dropped iff prevSnapOffset>=2 (Compact(before:N) no-ops for N<=1). So Compacted ⟺ prevSnapOffset>=2, computable in writeSnapshot.
+- maybeSnapshot/writeSnapshot/maybeCompact all run on the SINGLE projector goroutine → no extra sync for prevSnapOffset; writeSnapshot CAS (durable) precedes maybeCompact (drop) → snapshot-FIRST.
+- No snapshot-migration registry existed.
+
+### Converged + Built (T2-GO-4)
+- applogmigrate.go (new): RWMutex snapMigrations map[oldCodecHash]func([]byte)(any,error); RegisterSnapshotMigration[V](fromCodecHash, migrate func([]byte)(V,error)) (type-erases V, propagates error); lookupSnapMigration; deleteSnapMigration (test cleanup).
+- applogsnap.go: checkpoint += Compacted bool (json "c"); writeSnapshot sets cp.Compacted = prevSnapOffset>=2 under RLock (durable-FIRST, before the drop).
+- applog.go: 3-way cold-start — (match) seedFromSnapshot; (mismatch && !Compacted) from=0 refold [V-evolution free for uncompacted, unchanged]; (mismatch && Compacted) lookupSnapMigration → migrate ok → seedFromSnapshot + fold tail, else/error → haltUnbridgeable (ls.halted + via.snapshot.unbridgeable metric, roll-forward-only, NEVER truncate). Helpers seedFromSnapshot / haltUnbridgeable; reuses projectRecord's halted short-circuit.
+
+### Tests (applogmigrate_internal_test.go — all green -race)
+- TestRealProjectorMarksCheckpointCompactedAfterDiscardingPrefix — the load-bearing P5b↔P5c link: a REAL projector (interval 1, 5 events) stamps Compacted:true on the durable checkpoint once it discards a prefix [Blue HIGH gap].
+- TestCompactedKeyRunsSeededMigrationOnCodecMismatch — compacted+mismatch+registered → seed [10..50] (UNREACHABLE by any fold: genesis would be [1..5], truncated tail [4,5]) + tail folds to [10..50,6].
+- TestCompactedKeyHaltsWhenNoMigrationRegistered — halt + metric + require.Never(folds) → no silent truncation.
+- TestCompactedKeyHaltsWhenMigrationErrors — failing migration halts (fail-closed), not truncate.
+- TestUncompactedKeyStillRefoldsFromGenesisOnMismatch — locks the !Compacted branch (refold [1..5], not seed [99]).
+
+### TDD-rygba record
+Red (Compacted field + RegisterSnapshotMigration undefined) → Yellow (Explore: tests airtight; flagged registry contamination → added defer deleteSnapMigration) → Green → Blue (Explore: flagged the real-projector-Compacted-link as HIGH → added the link test; metric-is-halt-only confirmed correct) → Audit (general-purpose: durable-first invariant PROVEN by gen-trace 1..6 — "dropped ⟹ durable ckpt.Compacted" holds at every step incl. crash windows; halt never un-halts, metric once-per-cold-start; mismatched-V registration = documented footgun, no crash; -race clean across via + backplanetest + vianats).
+
+### v1 SCOPE COMPLETE — P0–P5 all shipped green & race-clean
+- P0 binding seam · P1 in-process core (via.InMemory) · P2 Backplane hardening + memevents.Faulty + conformance + NATS · P3 value path · P4 versioning (envelope/upcasters/epoch) · P5a snapshot+cold-start · P5b Compactor+floor · P5c durable-genesis migration.
+- Full suite (13 pkgs) + backplanetest conformance + vianats all green under -race.
+
+### Post-v1 (P6, NOT in scope): OnEvent side-effects; Redis/PG/Kafka backends; AppendIf/ReadAt; WithFoldVerify dev-mode + go-vet purity analyzer; the epoch-reset×Compactor floor follow-up (Tick 41). v1 build loop STOPS here.
