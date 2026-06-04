@@ -2398,3 +2398,53 @@ T-DX-3 auto-derived-TypeTag v1 decision (done in this tick's design-gate step).
 run stored-version→current BEFORE unmarshal, so Fold only sees current-shape E;
 additive-first godoc. Then P4c (Epoch/offset-space-reset detection +
 via.events.epoch_reset). After P4 → P5 (snapshot+compaction). v1 = through P5.
+
+---
+
+## Tick 38 — 2026-06-04 — P4b: upcaster registry + design gate (T-DX-4 RegisterEvent API)
+
+P4a shipped (1b22fb5). This tick adds the decode-only upcaster chain so stored
+older-version events decode into the current E shape.
+
+### Validated against code
+- `stateappevents.go` bindApp foldBytes (~53-68) captures E in a closure + decodes
+  the envelope; Append (~116-130) stamps `V: currentEventVersion` (const 1). The
+  closure is the natural seam to run a per-type upcaster chain (E in scope).
+- `eventenvelope.go` currentEventVersion is a global CONST (1). With upcasters,
+  the current version is PER-TYPE → derive it from the registry (default 1 when no
+  upcaster registered → identical to P4a, fully additive).
+
+### DESIGN GATE — T-DX-4 (RegisterEvent API + per-type version)
+Converged (the spec's "RegisterEvent[E](v, Upcaster{From,To,Fn})" is the agreed
+feature; this pins the concrete API):
+- `func RegisterEvent[E any](fromVersion int, upcast func(old json.RawMessage)
+  (json.RawMessage, error))` — registers a single-STEP upcaster migrating a
+  version-`fromVersion` payload of type E to `fromVersion+1`. Called at init/setup
+  BEFORE Mount/Append. The CURRENT version of E = 1 + max(fromVersion registered),
+  or 1 if none.
+- Global registry keyed by `reflect.TypeFor[E]()` (upcasters are per event TYPE,
+  not per key), guarded by a RWMutex (writes at init, reads at runtime → race-safe).
+- Append stamps env.V = currentVersionFor[E]() (was the const). foldBytes: read
+  env.V; cur := currentVersionFor[E](); env.V>cur → ErrForwardIncompatible; env.V<cur
+  → run the chain env.V→cur (any missing step → ErrUndecodable, reusing drop-on-
+  undecodable); then unmarshal the upcasted payload into E. No upcasters → cur=1 →
+  identical to P4a.
+- additive-first godoc: most evolutions need ZERO upcasters (JSON ignores added
+  fields, zeroes missing ones); register an upcaster only for a RESHAPE
+  (rename/split/type-change).
+- Not a maintainer-blocking decision (agreed feature, reasonable API) — recorded
+  via the design gate.
+
+### Converged slice — P4b
+- **Files:** eventenvelope.go (registry + RegisterEvent + currentVersionFor[E] +
+  runUpcasters[E]; keep currentEventVersion as the default-unregistered=1 floor),
+  stateappevents.go (Append uses currentVersionFor[E]; foldBytes runs the chain).
+- **Acceptance:** an event type with a registered v1→v2 upcaster: a v1-stored
+  payload decodes via the upcaster into current-shape E and folds correctly; a
+  v2-stored payload folds directly; a stored version with NO chain to current →
+  ErrUndecodable (dropped). No-upcaster types behave exactly as P4a (env.V=1).
+  Existing StateAppEvents/chat/counter suites GREEN. -race clean.
+- Tests: internal (package via) — register an upcaster for a test type, build the
+  foldBytes via bindApp, feed a v1 envelope + assert it upcasts+folds to the v2
+  shape; feed a version with a gap (no registered step) → ErrUndecodable; confirm
+  Append stamps the type's current version.
