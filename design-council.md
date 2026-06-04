@@ -2555,3 +2555,51 @@ Subscribe(from:coveredOffset) → fold the tail. Sub-slice: (5a) snapshot write 
 cold-start-from-snapshot (Store-only, no Compactor) first; (5b) optional Compactor
 + retained-event floor; (5c) T2-GO-4 compacted-key migration. After P5 → v1 GREEN
 → STOP + PushNotification.
+
+---
+
+## Tick 40 — 2026-06-04 — P5a: snapshot write + cold-start-from-snapshot (Store-only)
+
+Phase 4 done (ca417ab, pushed). Phase 5 (LAST v1 phase) begins; 5a = the snapshot
+cache + cold-start. Compactor (5b) + compacted-key durable-genesis migration (5c)
+follow.
+
+### Validated against code
+- `applog.go` registerLog(key,seed,fold) creates logState{projection:seed,...};
+  startProjector Subscribes from 0 ALWAYS + ranges → projectRecord. logState has
+  projection/cursor/seed/foldBytes/halted/epoch/epochSeen. `bindApp` (stateappevents.go)
+  builds the typed fold closure (V in scope) — the natural place to also capture
+  the snapshot encode/decode (the App is type-erased).
+- `backplane.go` Store LoadSnapshot/CAS (bytes+rev). The snapshot rides the same
+  Store under a distinct key.
+
+### Converged P5a
+- config: `snapshotInterval int` (default 64; WithSnapshotInterval(n); <=0 disables
+  writes). Snapshot is a pure disposable CACHE for uncompacted keys — never
+  required for correctness (cold-start without one re-folds from 0).
+- Checkpoint{Epoch, CoveredOffset Offset, CodecHash string, V json.RawMessage};
+  snapKey(wireKey)="snap:"+wireKey. CodecHash = reflect.TypeFor[V]().String()
+  (a V-type cache key — a type change invalidates → re-fold; serviceable for v1).
+- logState gains encodeSnap(any)→[]byte, decodeSnap([]byte)→any, codecHash string,
+  snapRev Rev, foldsSinceSnap int. bindApp captures encodeSnap=json(V),
+  decodeSnap=json→V, codecHash.
+- registerLog signature carries the snap codec (encode/decode/hash).
+- startProjector COLD-START: LoadSnapshot(snapKey) → decode Checkpoint → if ok &&
+  CodecHash==ls.codecHash → seed ls.projection=decodeSnap(cp.V), cursor=cp.CoveredOffset,
+  epoch=cp.Epoch, epochSeen=true, from=cp.CoveredOffset; else from=0. Subscribe(from).
+- WRITE (off the hot path): projectRecord increments foldsSinceSnap on advance; the
+  GOROUTINE, after an advanced fold, if foldsSinceSnap>=interval → writeSnapshot
+  (RLock to read projection/cursor/epoch, encodeSnap, marshal Checkpoint,
+  CAS(snapKey, ls.snapRev) best-effort — on ErrCASConflict a peer snapshotted, refresh
+  snapRev + skip; on success snapRev=newRev), reset foldsSinceSnap. CAS is OUTSIDE
+  ls.mu (no backplane I/O under the projection lock). NOTE: a per-fold snapshot would
+  reintroduce write-amplification — the interval keeps the event-log's no-CAS-per-event
+  win; tune via WithSnapshotInterval.
+- Tests (internal): (1) cold-start seeds from a pre-written CONTRIVED snapshot +
+  replays only the tail — append 5 real events (offsets 1-5), write a Checkpoint
+  {CoveredOffset:5, V:[99] (distinct from the real fold), CodecHash:ok}, bind → assert
+  projection==[99] (seeded, NOT the from-0 re-fold of 1-5) + cursor 5; append event 6 →
+  folds → [99,<e6>] (tail only). (2) codec-hash MISMATCH → ignore snapshot, Subscribe
+  from 0, re-fold all 5 → projection==fold(1..5) (NOT [99]). (3) write: with
+  WithSnapshotInterval(1), append events → a Checkpoint appears in the Store at the
+  right CoveredOffset with the folded V. Keep existing StateAppEvents/chat/counter green.
