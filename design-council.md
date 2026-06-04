@@ -2288,3 +2288,69 @@ fold no-op + via.events.undecodable), ErrForwardIncompatible (envelope version >
 binary → projector halts), Epoch/offset-space-reset detection. Independent of
 the value path; StateAppEvents-side. Sub-slice (envelope+default-codec first,
 then upcasters, then forward-incompat/epoch).
+
+---
+
+## Tick 36 — 2026-06-04 — Phase 4 CONVERGENCE (versioning hardening) + envelope/TypeTag design gate
+
+Phase 3 done (3d8fb94, pushed). Phase 4 = StateAppEvents E-versioning. It is a
+USER-FACING-API phase + the envelope is "unrecoverable if omitted" (spec 786),
+so converge carefully; build next tick.
+
+### Validated against code
+- `stateappevents.go:116` Append = `json.Marshal(ev)` (NO envelope); `:53-63`
+  bindApp foldBytes = `json.Unmarshal(data,&ev)` then e.Fold. `:109` Append path.
+- `applog.go` projector ALREADY skips the fold on a foldBytes error and STILL
+  advances the cursor → drop-on-undecodable BEHAVIOR mostly exists; P4 formalizes
+  it (envelope + metric + the forward-incompat HALT which must NOT advance).
+- `metrics.go:23` Metrics{Counter/Gauge/Histogram}; `a.metricsOrNoop()`. So
+  via.events.undecodable = a.metricsOrNoop().Counter("via.events.undecodable", ...).
+- Current StateAppEvents event types in-repo: chat `Posted`, `counterTick`,
+  test `addItem`/`tickEvent` — none declare a TypeTag today.
+
+### DESIGN GATE — T-DX-3 (TypeTag is over-specified for v1's one-E-per-key model)
+Spec mandates envelope {t:TypeTag, v, d} with a STABLE USER-DECLARED TypeTag
+(EventType() method / event= tag) enforced at Mount (no tag → fail fast). But:
+- The load-bearing axis for v1 is the VERSION (enables upcasters + forward-incompat
+  detection). TypeTag's stated rationale is (a) rename-freedom and (b) multi-variant
+  discrimination. For the CURRENT one-E-per-key model decoded with plain JSON, the
+  Go TYPE NAME is NOT on the wire (only field names), so type-rename is ALREADY
+  free; and there's a single E per key, so NO discrimination is needed. ∴ a
+  user-declared TypeTag is NOT load-bearing for v1 — and requiring it would add a
+  breaking user-facing API (every event type needs EventType()) + break all 4
+  current in-repo usages.
+- RESOLUTION (record, will patch spec at build time): the v1 default codec emits
+  envelope {t, v, d} with TypeTag AUTO-DERIVED (reflect type name of E) — NO new
+  user API, Mount-enforcement auto-satisfied, the tag is present for diagnostics +
+  future discrimination. The VERSION is the load-bearing field. A user-overridable
+  stable TypeTag (event= tag) + tagged-union multi-variant is a post-v1 refinement
+  (only matters when a key carries multiple event variants). This keeps the
+  converged envelope SHAPE ({t,v,d}) while not imposing a breaking API. Honors
+  "DO NOT CUT the versioned envelope" (we keep it) — only the user-declared-tag
+  requirement is softened to auto-derived for v1.
+
+### Converged P4 sub-slices
+- **P4a — versioned envelope + drop-on-undecodable metric + forward-incompat halt:**
+  default codec wraps Append payloads in {t:typeName(E), v:1, d:json(ev)}; decode
+  reads the envelope: v==currentMax(1) → unmarshal d into E; v>currentMax →
+  ErrForwardIncompatible → projector HALTS that key (stop folding, do NOT advance
+  cursor — roll-forward-only) + metric; bad envelope/payload / no upcaster →
+  ErrUndecodable → projector NO-OPS the record (advance cursor, skip fold) +
+  via.events.undecodable Counter. Migrate the 4 in-repo event types (transparent —
+  auto-derived tag, no code change to them; only the codec wraps). Tests: a normal
+  event still folds; a poison record is dropped (projection intact, cursor advances,
+  metric fires); a forward-version record halts the key (projection frozen, cursor
+  NOT advanced) + metric. Touch: stateappevents.go (encode/decode envelope), applog.go
+  (projector: distinguish ErrForwardIncompatible-halt from ErrUndecodable-skip;
+  emit metric), a small envelope codec.
+- **P4b — upcaster registry:** RegisterEvent[E](fromV, toV, fn) decode-chain run
+  stored-version→current BEFORE unmarshal into current-shape E; additive-first
+  godoc. (Fold only ever sees current E.)
+- **P4c — Epoch/offset-space-reset detection:** projector tracks last-applied epoch;
+  on Head epoch change or Head<lastApplied → re-snapshot from genesis (Subscribe
+  from 0) + via.events.epoch_reset. (Record/Head already carry Epoch from tick-15.)
+  NOTE: full snapshot/compaction is P5; P4c is just the reset DETECTION + re-fold.
+
+### Next step — BUILD P4a (envelope + drop-on-undecodable + forward-incompat halt)
+under TDD. Patch the spec's envelope godoc to the auto-derived-TypeTag v1 decision
+(T-DX-3) as part of the build's design-gate step.
