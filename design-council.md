@@ -2354,3 +2354,47 @@ Spec mandates envelope {t:TypeTag, v, d} with a STABLE USER-DECLARED TypeTag
 ### Next step — BUILD P4a (envelope + drop-on-undecodable + forward-incompat halt)
 under TDD. Patch the spec's envelope godoc to the auto-derived-TypeTag v1 decision
 (T-DX-3) as part of the build's design-gate step.
+
+---
+
+## Tick 37 — 2026-06-04 — P4a SHIPPED: versioned event envelope + drop-on-undecodable + forward-incompat halt
+
+Phase 4 converged (bc894ae). This tick builds P4a; spec Codec godoc patched to the
+T-DX-3 auto-derived-TypeTag v1 decision (done in this tick's design-gate step).
+
+### Built + result
+- NEW `eventenvelope.go`: `eventEnvelope{T,V,D json.RawMessage}`,
+  currentEventVersion=1, eventTypeTag[E]()=reflect.TypeFor[E]().String() (T is
+  diagnostic-only in v1; VERSION is load-bearing).
+- `backplane.go`: ADDED ErrUndecodable + ErrForwardIncompatible (first code path —
+  P1.0 had deferred them; the carry-forward note wrongly assumed they existed).
+- `stateappevents.go`: Append wraps payload in {T,V:1,D}; foldBytes decodes the
+  envelope — bad envelope/payload → ErrUndecodable, env.V>1 → ErrForwardIncompatible,
+  else fold.
+- `applog.go`: logState.halted; projector switch — fold→advance+broadcast;
+  ErrForwardIncompatible→halt (FREEZE, do NOT advance cursor, roll-forward-only)+
+  via.events.forward_incompatible; ErrUndecodable→skip (advance cursor)+
+  via.events.undecodable. Keeps DRAINING the channel when halted (no Subscribe-
+  sender leak). Broadcast only on a real fold (tightening — no regression).
+- Tests: NEW eventenvelope_internal_test.go — foldBytes 4 cases (fold / garbage→
+  Undecodable / v2→ForwardIncompat / bad-payload→Undecodable); projector
+  poison-SKIP (projection [1,2], cursor advanced to 3, undecodable metric) +
+  forward-incompat HALT (projection frozen [1], cursor frozen at 1, metric). Existing
+  StateAppEvents/chat/counter suites GREEN (round-trip end-to-end). `go test -race
+  ./...` GREEN (13 pkgs), vet clean.
+- Yellow: cursor not directly asserted → added cursor==3 (poison advance) + cursor==1
+  (halt freeze) assertions (the roll-forward invariant); switched to require.Eventually
+  + t.Parallel. Round-trip covered by existing runtime tests (encode≠decode would break
+  them).
+- Blue: full coverage; T-field untested-diagnostic (acceptable, documented); Marshal-
+  error branches reachable-defensive (infallible given inner success).
+- Audit: CLEAN, no bugs. Gates correct (forward-incompat no-advance, undecodable
+  advance, errors.Is identity-match); no leak on halt (drains, exits on close); no
+  broadcast regression; RawMessage round-trip consistent; ZERO coupling to value
+  path/conformance (envelope only in stateappevents/eventenvelope); V<1/pre-envelope
+  edge → ErrUndecodable (safe).
+
+### Next step — P4b (upcaster registry): RegisterEvent[E](fromV,toV, fn) decode-chain
+run stored-version→current BEFORE unmarshal, so Fold only sees current-shape E;
+additive-first godoc. Then P4c (Epoch/offset-space-reset detection +
+via.events.epoch_reset). After P4 → P5 (snapshot+compaction). v1 = through P5.
