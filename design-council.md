@@ -2448,3 +2448,36 @@ feature; this pins the concrete API):
   foldBytes via bindApp, feed a v1 envelope + assert it upcasts+folds to the v2
   shape; feed a version with a gap (no registered step) → ErrUndecodable; confirm
   Append stamps the type's current version.
+
+### Tick 38 — BUILT + result
+- `eventenvelope.go`: per-event-type upcaster registry (RWMutex-guarded
+  map[reflect.Type]*eventVersionInfo{current,steps}); `RegisterEvent[E](
+  fromVersion, upcastFn)` (current=max(current,from+1)); `currentVersionFor[E]()`
+  (registered current, else 1); `runUpcasters[E](from,to,d)` (run chain; missing
+  step/failing fn → ErrUndecodable).
+- `stateappevents.go`: Append stamps `currentVersionFor[E]()`; foldBytes —
+  env.V>cur→ErrForwardIncompatible, env.V<cur→runUpcasters then unmarshal, else
+  direct. Unregistered types: cur=1 → identical to P4a (fully additive).
+- Tests `eventupcaster_internal_test.go`: v1→v2 reshape upcasts+folds (field
+  rename — a direct unmarshal would give ""); v2 folds direct; missing-step +
+  failing-upcaster → ErrUndecodable; unregistered type stays v1; MULTI-STEP
+  v1→v2→v3 runs the full chain; current=1+MAX(fromVersion) order-independent;
+  concurrent Register+upcast race-clean. `go test -race ./...` GREEN (13 pkgs).
+- Yellow: tests genuinely require the upcaster to run (rename), distinct types,
+  no t.Parallel (global registry) — clean.
+- Blue: flagged the multi-step chain + max() guard as real-but-untested → added
+  both. The info==nil&&from==to passthrough is dead-in-practice defensive (kept).
+- Audit: found + FIXED a REAL DATA RACE — runUpcasters read info.steps AFTER
+  releasing the RLock, racing a concurrent RegisterEvent's map write; fixed by
+  snapshotting the needed steps under the RLock (user fns run after unlock, off
+  the map) + added TestConcurrentRegisterAndUpcastIsRaceClean. Version math
+  off-by-one-free; additivity confirmed; ErrUndecodable drop-not-misfold correct.
+
+### Phase 4 status — P4a✅ envelope+drop+forward-incompat · P4b✅ upcaster registry.
+### Next step — P4c: Epoch/offset-space-reset DETECTION. The projector tracks the
+last-applied epoch; on a Head epoch CHANGE or Head < lastApplied offset (a Redis
+XTRIM-to-empty / recreated stream / PG restore), re-snapshot from genesis
+(Subscribe from 0, reset the projection to seed + cursor 0) + via.events.epoch_reset.
+Record/Head already carry Epoch (tick-15). NOTE the in-memory backplane never
+resets (epoch stays 0), so test via a small epoch-bumping backplane decorator or
+an internal projector test. After P4c → P5 (snapshot+compaction). v1=through P5.

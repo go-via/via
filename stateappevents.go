@@ -58,11 +58,22 @@ func (l *StateAppEvents[E, V]) bindApp(a *App) {
 		if err := json.Unmarshal(data, &env); err != nil {
 			return acc, ErrUndecodable // not a valid envelope (corrupt / missing)
 		}
-		if env.V > currentEventVersion {
+		curVer := currentVersionFor[E]()
+		if env.V > curVer {
 			return acc, ErrForwardIncompatible // a newer binary wrote it
 		}
+		payload := env.D
+		if env.V < curVer {
+			// Migrate an older stored payload up to the current E shape before
+			// the fold ever sees it (an unbridgeable gap → ErrUndecodable).
+			up, err := runUpcasters[E](env.V, curVer, payload)
+			if err != nil {
+				return acc, err
+			}
+			payload = up
+		}
 		var ev E
-		if err := json.Unmarshal(env.D, &ev); err != nil {
+		if err := json.Unmarshal(payload, &ev); err != nil {
 			return acc, ErrUndecodable // payload won't decode into E
 		}
 		cur, _ := acc.(V)
@@ -126,7 +137,7 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
 	}
 	// Wrap in the versioned envelope so the event can be evolved later (an
 	// event appended without an envelope can never be upcast — see T-DX-3).
-	data, err := json.Marshal(eventEnvelope{T: eventTypeTag[E](), V: currentEventVersion, D: payload})
+	data, err := json.Marshal(eventEnvelope{T: eventTypeTag[E](), V: currentVersionFor[E](), D: payload})
 	if err != nil {
 		return 0, err
 	}
