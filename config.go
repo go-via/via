@@ -27,6 +27,7 @@ type config struct {
 	sessionTTL         time.Duration
 	contextTTL         time.Duration
 	reconcileInterval  time.Duration
+	snapshotInterval   int
 	sseHeartbeat       time.Duration
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
@@ -92,6 +93,14 @@ func WithContextTTL(d time.Duration) Option { return func(c *config) { c.context
 func WithReconcileInterval(d time.Duration) Option {
 	return func(c *config) { c.reconcileInterval = d }
 }
+
+// WithSnapshotInterval sets how many folds a StateAppEvents projector applies
+// before persisting a fold snapshot, so a cold start replays only the tail
+// after the snapshot's offset instead of re-folding the whole log. 0 (or less)
+// disables snapshot writes. The snapshot is a disposable cache — never required
+// for correctness; a missing or stale-codec snapshot just re-folds from genesis.
+// Default 64.
+func WithSnapshotInterval(n int) Option { return func(c *config) { c.snapshotInterval = n } }
 
 // WithSSEHeartbeat sets the SSE keepalive cadence. Default 25s.
 //
