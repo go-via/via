@@ -15,8 +15,7 @@ import (
 // view inside the HTML5 envelope.
 func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Request) {
 	cmpVal := reflect.New(d.typ)
-	ctx := newCtx(d, cmpVal, genTabID(d.route))
-	ctx.app = a
+	ctx := newCtx(a, d, cmpVal, genTabID(d.route))
 	ctx.session.Store(a.sessionFromRequest(r))
 	ctx.mu.Lock()
 	ctx.w = w

@@ -129,7 +129,7 @@ func (q *patchQueue) releaseNotify() {
 // newCtx allocates a Ctx wired to the descriptor's slot bindings and
 // scope keys. The production path layers app / session / writer /
 // request on top of the returned ctx.
-func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
+func newCtx(a *App, d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 	ctx := &Ctx{
 		id:           id,
 		desc:         d,
@@ -138,12 +138,13 @@ func newCtx(d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 		queue:        newPatchQueue(),
 		doneChan:     make(chan struct{}),
 	}
+	ctx.app = a
 	ctx.ctxR = &CtxR{ctx: ctx}
 	ctx.Patch = &Patch{ctx: ctx}
 	ctx.touch()
 	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)
-	bindScopeKeys(cmpVal, d)
+	bindScopeKeys(cmpVal, d, a)
 	bindFileKeys(cmpVal, d)
 	bindDispatchFns(ctx, cmpVal, d)
 	return ctx
@@ -200,14 +201,19 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 // field of the freshly allocated *C by calling the handle's bindWireKey
 // method. The scopeBinder interface assertion is checked once at Mount
 // time, so the per-request path is a straight method call.
-func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor) {
+func bindScopeKeys(cmpVal reflect.Value, d *cmpDescriptor, a *App) {
 	if len(d.scopeSlots) == 0 {
 		return
 	}
 	elem := cmpVal.Elem()
 	for _, s := range d.scopeSlots {
-		field := fieldByPath(elem, s.fieldPath)
-		field.Addr().Interface().(scopeBinder).bindWireKey(s.wireKey)
+		handle := fieldByPath(elem, s.fieldPath).Addr().Interface()
+		handle.(scopeBinder).bindWireKey(s.wireKey)
+		// Log handles additionally bind the App so their projector/codec can
+		// reach the backplane; value handles read the App through the ctx.
+		if s.kind == scopeLog {
+			handle.(appBinder).bindApp(a)
+		}
 	}
 }
 

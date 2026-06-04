@@ -139,8 +139,7 @@ func (a *App) recoveredPageRequest(r *http.Request, d *cmpDescriptor) *http.Requ
 // the victim's session, breaking the via_tab-as-CSRF-token model.
 func (a *App) rebootstrapCtx(d *cmpDescriptor, w http.ResponseWriter, r, pageReq *http.Request, staleID string) (*Ctx, *sseBootstrap) {
 	cmpVal := reflect.New(d.typ)
-	ctx := newCtx(d, cmpVal, genTabID(d.route))
-	ctx.app = a
+	ctx := newCtx(a, d, cmpVal, genTabID(d.route))
 	ctx.session.Store(a.sessionFromRequest(r))
 	ctx.mu.Lock()
 	ctx.w = w

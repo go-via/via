@@ -56,6 +56,11 @@ type App struct {
 	// runtime always drives one Backplane code path. Drained on Shutdown.
 	backplane Backplane
 
+	// logs holds the per-(pod,key) projector state for each StateAppEvents key.
+	// Lazily populated at the first bindApp for a key. Keyed by wire key.
+	logs   map[string]*logState
+	logsMu sync.Mutex
+
 	contextRegistry   map[string]*Ctx
 	contextRegistryMu sync.RWMutex
 
@@ -296,6 +301,7 @@ func New(opts ...Option) *App {
 		sessions:        make(map[string]*session),
 		appSignals:      make(map[string]any),
 		routes:          make(map[string]string),
+		logs:            make(map[string]*logState),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,
