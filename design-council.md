@@ -1862,3 +1862,78 @@ embedded server (RELEASE-GATING). Sub-slice if needed: Store first (targeted KV
 tests), then EventLog (Append/Head/Subscribe-with-resume + live-tail), then the
 full conformance gate. After P2d ships green, RESUME P3a (StateApp cross-pod
 value convergence) which was converged in tick 27.
+
+---
+
+## Tick 29 — 2026-06-04 — P2d-2: implement vianats.Backplane + RELEASE-GATING conformance
+
+P2d-1 scaffold committed (`0b5e481`). This tick implements the backend and gates
+it with backplanetest.RunConformance on an embedded server.
+
+### Validated against the fetched nats.go v1.52.0 jetstream API (module cache)
+- KV: `Get(ctx,key)→(KeyValueEntry{Value()[]byte, Revision()uint64}, ErrKeyNotFound)`;
+  `Create(ctx,key,val)→(rev, ErrKeyExists)`; `Update(ctx,key,val,rev)→(rev,err)`
+  where a WRONG-revision error ALSO satisfies `errors.Is(err, jetstream.ErrKeyExists)`
+  (KV CAS uses expected-last-subject-seq → code StreamWrongLastSequence, the same
+  sentinel). ∴ map BOTH conflict paths via errors.Is(ErrKeyExists)→via.ErrCASConflict.
+- Stream: `GetLastMsgForSubject(ctx,subject)→(RawStreamMsg{Sequence}, ErrMsgNotFound)`
+  → Head (Offset 0 on ErrMsgNotFound). `js.Publish(ctx,subj,data)→PubAck{Sequence}`
+  = the opaque Offset. OrderedConsumer(FilterSubjects, DeliverPolicy/OptStartSeq) +
+  Messages() iterator for resume+live-tail; msg.Metadata().Sequence.Stream = offset.
+
+### Converged slice — P2d-2 (one coherent backend + the gate)
+- **Files (nested module ./vianats):** `vianats.go` (the Backplane impl + JetStream
+  constructor) + `conformance_test.go` (RunConformance gate). Reuse the embedded
+  harness from embedded_test.go.
+- **Constructor:** `JetStream(nc *nats.Conn, opts ...Option) (*Backplane, error)` —
+  ensures a KV bucket + one stream (subjects `<prefix>.>`, default prefix "via.ev")
+  at construction (context.Background+timeout). Option for name prefix (test
+  isolation). Returns via.Backplane.
+- **Store:** LoadSnapshot=kv.Get (ErrKeyNotFound→ok=false); CAS(expectedRev 0 →
+  kv.Create, else kv.Update(key,data,expectedRev)); errors.Is(ErrKeyExists)→
+  via.ErrCASConflict; Rev=uint64 revision.
+- **EventLog:** key→subject `<prefix>.<sanitized wireKey>`. Append=js.Publish→
+  Offset(ack.Sequence). Head=GetLastMsgForSubject. Subscribe(from): OrderedConsumer
+  with DeliverAll (from==0) or DeliverByStartSequence OptStartSeq=from+1; a goroutine
+  drains Messages() → out chan (Record{Key,Offset,Data}), exits on ctx-cancel or
+  conn-close (Messages errors) → close(out). Epoch 0.
+- **Close:** nc is owned by the caller; Backplane.Close drains its consumers/iters
+  (stop them) — does NOT close the caller's nc unless constructed to. (Decide: the
+  backplane should stop its own subscriptions on Close so projector goroutines
+  unwind; the conformance Close→ErrClosed subtest requires Append after Close to
+  fail — so Close must mark closed and reject Append. Add a `closed` flag.)
+- **Gate:** RunConformance(t, factory) where factory creates a fresh backplane with
+  a UNIQUE name prefix per call (nuid) on a per-test embedded server → isolation.
+  RELEASE-GATING: this is the real-network conformance the spec mandates.
+
+### Tick 29 — BUILT + result → ✅ PHASE 2 COMPLETE (incl. RELEASE-GATING NATS)
+- NEW `vianats/vianats.go`: `JetStream(nc, opts...) (*Backplane, error)` +
+  `WithPrefix`. Store=JetStream KV (LoadSnapshot/CAS, both conflict modes →
+  via.ErrCASConflict via errors.Is(ErrKeyExists)); EventLog=one stream,
+  subject-per-key (`<prefix>.ev.<sanitized>`; Append→PubAck.Sequence,
+  Head→GetLastMsgForSubject, Subscribe→OrderedConsumer DeliverAll/
+  DeliverByStartSequence(from+1) + Messages() drained by a goroutine that unwinds
+  on ctx-cancel or Close); Close marks closed + closes done (doesn't close the
+  caller's nc); AllowDirect stream for fast Head; sanitize() maps arbitrary wire
+  keys to safe, collision-free subject/KV tokens.
+- Tests: `conformance_test.go` runs backplanetest.RunConformance against a fresh
+  uniquely-prefixed backplane per subtest on ONE embedded JetStream server —
+  ALL 9 subtests PASS, `-race` clean (this is the RELEASE-GATING real-backend
+  conformance). + `sanitize_internal_test.go` locks the non-alnum/empty/
+  collision branches (pure logic).
+- Yellow: test sound; durability-across-reconnect flagged as post-v1 (correct).
+- Blue: only sanitize's non-alnum/empty branches untested → added the internal
+  unit test. Close-idempotent + watcher it.Stop() are reachable-defensive (kept).
+- Audit: CLEAN, no bugs. Verified Subscribe closes `out` exactly once (only the
+  drain loop closes it; watcher only receives b.done — no race), it.Stop()
+  idempotent (nats.go CAS-guarded), Close idempotent + doesn't touch nc, CAS
+  mapping has no context/transient misclassification, offsets are one
+  stream-seq space so OptStartSeq=from+1 resumes strictly-after even with
+  interleaved keys (probed), ordered consumers server-GC'd via it.Stop().
+
+### ✅ PHASE 2 COMPLETE — 2a conformance · 2b Faulty+at-least-once · 2c cross-pod keystone · 2d NATS reference backend (RELEASE-GATING green).
+The Backplane abstraction is proven: in-memory base, fault-injected, cross-pod
+convergent, AND a real ordered/durable/resumable NATS JetStream backend passing
+the identical contract suite. #3/#7 (stranding/reconnect) closed.
+
+### Next step — RESUME P3a (StateApp cross-pod value convergence), converged in tick 27.
