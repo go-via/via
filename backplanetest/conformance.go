@@ -104,16 +104,11 @@ func testGenesisReplay(t *testing.T, bp via.Backplane) {
 	}
 	ch := mustSubscribe(t, bp, ctx, "k", via.Offset(0))
 
-	var last via.Offset
+	got := collectDistinct(t, ch, len(want))
 	for i, w := range want {
-		r := recv(t, ch)
-		if string(r.Data) != w {
-			t.Fatalf("genesis replay record %d = %q, want %q", i, r.Data, w)
+		if string(got[i].Data) != w {
+			t.Fatalf("genesis replay record %d = %q, want %q", i, got[i].Data, w)
 		}
-		if i > 0 && !(r.Offset > last) {
-			t.Fatalf("genesis replay offsets must increase, got %d after %d", r.Offset, last)
-		}
-		last = r.Offset
 	}
 }
 
@@ -130,7 +125,7 @@ func testResumeAfterOffset(t *testing.T, bp via.Backplane) {
 	// Resuming from "b" must yield only what came strictly after it ("c"),
 	// never "a" or "b" — the resume primitive that retires stranding.
 	ch := mustSubscribe(t, bp, ctx, "k", from)
-	r := recv(t, ch)
+	r := collectDistinct(t, ch, 1)[0]
 	if string(r.Data) != "c" {
 		t.Fatalf("resume from %d delivered %q, want %q (only records after the cursor)", from, r.Data, "c")
 	}
@@ -150,7 +145,7 @@ func testLiveTail(t *testing.T, bp via.Backplane) {
 	// be one appended AFTER the subscription — proving live tailing.
 	ch := mustSubscribe(t, bp, ctx, "k", head)
 	mustAppend(t, bp, "k", "b")
-	r := recv(t, ch)
+	r := collectDistinct(t, ch, 1)[0]
 	if string(r.Data) != "b" {
 		t.Fatalf("live tail delivered %q, want the post-subscription append %q", r.Data, "b")
 	}
@@ -169,11 +164,12 @@ func testPerKeyIndependence(t *testing.T, bp via.Backplane) {
 	// A subscription to alpha must see only alpha's records, in order, with no
 	// beta records bleeding in (no cross-key ordering).
 	ch := mustSubscribe(t, bp, ctx, "alpha", via.Offset(0))
-	if r := recv(t, ch); string(r.Data) != "a1" {
-		t.Fatalf("alpha[0] = %q, want a1 (beta must not leak in)", r.Data)
+	got := collectDistinct(t, ch, 2)
+	if string(got[0].Data) != "a1" {
+		t.Fatalf("alpha[0] = %q, want a1 (beta must not leak in)", got[0].Data)
 	}
-	if r := recv(t, ch); string(r.Data) != "a2" {
-		t.Fatalf("alpha[1] = %q, want a2", r.Data)
+	if string(got[1].Data) != "a2" {
+		t.Fatalf("alpha[1] = %q, want a2 (beta must not leak in)", got[1].Data)
 	}
 }
 
@@ -245,13 +241,14 @@ func testMultipleSubscribers(t *testing.T, bp via.Backplane) {
 	// non-deterministic ordering.
 	ch1 := mustSubscribe(t, bp, ctx, "k", via.Offset(0))
 	ch2 := mustSubscribe(t, bp, ctx, "k", via.Offset(0))
-	for _, w := range want {
-		r1, r2 := recv(t, ch1), recv(t, ch2)
-		if string(r1.Data) != w || string(r2.Data) != w {
-			t.Fatalf("subscribers disagree on record: %q / %q, want %q", r1.Data, r2.Data, w)
+	got1 := collectDistinct(t, ch1, len(want))
+	got2 := collectDistinct(t, ch2, len(want))
+	for i, w := range want {
+		if string(got1[i].Data) != w || string(got2[i].Data) != w {
+			t.Fatalf("subscribers disagree on record %d: %q / %q, want %q", i, got1[i].Data, got2[i].Data, w)
 		}
-		if r1.Offset != r2.Offset {
-			t.Fatalf("subscribers disagree on offset for %q: %d vs %d", w, r1.Offset, r2.Offset)
+		if got1[i].Offset != got2[i].Offset {
+			t.Fatalf("subscribers disagree on offset for %q: %d vs %d", w, got1[i].Offset, got2[i].Offset)
 		}
 	}
 }
@@ -313,6 +310,32 @@ func mustSubscribe(t *testing.T, bp via.Backplane, ctx context.Context, key stri
 	ch, err := bp.Subscribe(ctx, key, from)
 	mustNoErr(t, err)
 	return ch
+}
+
+// collectDistinct reads until it has seen `count` records with distinct
+// offsets, skipping at-least-once duplicates, and asserts each newly-seen
+// offset is strictly greater than the previous — i.e. the FIRST delivery of
+// each record arrives in per-key offset order. This makes the suite tolerate a
+// conforming at-least-once backend (in-order redelivery) while still rejecting
+// genuine out-of-order or gap violations.
+func collectDistinct(t *testing.T, ch <-chan via.Record, count int) []via.Record {
+	t.Helper()
+	seen := make(map[via.Offset]bool, count)
+	out := make([]via.Record, 0, count)
+	var last via.Offset
+	for len(out) < count {
+		r := recv(t, ch)
+		if seen[r.Offset] {
+			continue // a tolerated at-least-once duplicate
+		}
+		if len(out) > 0 && !(r.Offset > last) {
+			t.Fatalf("first delivery of offset %d arrived out of per-key order (after %d)", r.Offset, last)
+		}
+		seen[r.Offset] = true
+		last = r.Offset
+		out = append(out, r)
+	}
+	return out
 }
 
 func recv(t *testing.T, ch <-chan via.Record) via.Record {

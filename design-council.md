@@ -1627,3 +1627,81 @@ at-least-once redelivery + reconnect, proving the runtime's offset-dedup/resume
 assumptions). Package `memevents`. After that: P2c two-Apps-one-backplane
 cross-pod convergence test (the keystone). P2d NATS = real-network, RELEASE-
 GATING, needs an external server → FLAG TO MAINTAINER before attempting.
+
+---
+
+## Tick 25 — 2026-06-04 — P2b: memevents.Faulty redelivery decorator + at-least-once-tolerant conformance
+
+P2a committed (`2d33586`). This tick adds the fault-injecting decorator and runs
+the conformance suite against it.
+
+### DESIGN FEEDBACK GATE — T1-TEST-2 (conformance suite was over-strict)
+- **Finding:** P2a's RunConformance asserts EXACTLY-once delivery (genesis sees
+  a,b,c exactly). But the EventLog contract is AT-LEAST-once (`design:233-235`:
+  "Redelivery after reconnect is possible (hence at-least-once); the runtime
+  dedupes by Offset") and line 785 mandates the SAME suite pass against
+  faulty-base + NATS, which redeliver. So the suite over-asserted — it would
+  reject a conforming at-least-once backend. The runtime already tolerates this:
+  the projector cursor-gates (`applog.go:49 rec.Offset > ls.cursor`).
+- **Resolution:** make the Subscribe-consuming conformance assertions dedupe by
+  offset and assert FIRST-delivery-in-increasing-order (a `collectDistinct`
+  helper), tolerating in-order duplicates. InMemory (exactly-once) is a subset →
+  still green. No spec edit (the spec already says at-least-once); the suite is
+  brought into line. Recorded as T1-TEST-2.
+
+### Scope decision — redelivery only this tick
+Spec line 785 lists Faulty faults: reorder-within-allowance, redelivery,
+mid-Subscribe disconnect. P2b implements REDELIVERY (in-order duplicate of each
+record) — the clean, conformance-suite-relevant fault. DISCONNECT is deferred: a
+closed channel is TERMINAL per the EventLog godoc ("closes on ctx-cancel or
+unrecoverable error"; transient reconnect is the backend's own concern), so it
+is a runtime-resilience test, not a raw-backend conformance case. REORDER within
+a key would violate the hard per-key total-order guarantee, so it is not
+injected (the "within-allowance" is the redelivery window, modeled as in-order
+dups). Both deferred faults recorded for a later slice.
+
+### Converged slice — P2b
+- **Files:** refactor `backplanetest/conformance.go` (collectDistinct helper;
+  make genesis/resume/livetail/perKey/multiSubscriber tests dedupe-by-offset).
+  New package `memevents` (`faulty.go`: `Faulty` decorator over a via.Backplane
+  with a Redeliver count; wraps Subscribe to emit each record Redeliver+1 times
+  in order; delegates Store/Append/Head/Close) + `faulty_test.go`
+  (RunConformance against Faulty{InMemory(), Redeliver:1}).
+- **Acceptance:** RunConformance passes against BOTH via.InMemory() AND
+  Faulty(InMemory, Redeliver:1); whole module green + race-clean. The Faulty
+  Subscribe wrapper leaks no goroutine (exits when the underlying channel closes
+  or ctx cancels).
+
+### Tick 25 — BUILT + result
+- Refactored `backplanetest/conformance.go`: added `collectDistinct` (dedupe by
+  offset, assert first-delivery-in-increasing-order); genesis/resume/livetail/
+  perKey/multiSubscriber tests now at-least-once-tolerant. InMemory conformance
+  stayed GREEN (exactly-once is a subset).
+- NEW package `memevents` (`faulty.go`): `Faulty struct{ via.Backplane;
+  Redeliver int }` — embeds+delegates, overrides Subscribe to emit each record
+  Redeliver+1 times in order via one goroutine (select on out/ctx.Done,
+  defer close → no leak).
+- Tests `faulty_test.go` (5): RunConformance passes against
+  Faulty{InMemory,Redeliver:1}; redelivery actually duplicates (one Append →
+  same offset twice); Redeliver:0 exactly-once passthrough (no spurious 3rd);
+  ctx-cancel unwinds the wrapper goroutine; Subscribe propagates underlying
+  ErrClosed. `go test -race ./...` GREEN (13 pkgs), vet clean.
+- Yellow: added the ctx-cancel leak test; confirmed test1-looseness acceptable
+  (test2 proves redelivery), Redeliver:2 unnecessary.
+- Blue: flagged the Subscribe err-passthrough branch untested → added the
+  Subscribe-after-Close→ErrClosed test.
+- Audit: CLEAN, no bugs. No goroutine leak within the documented Subscribe
+  contract (caller cancels/Closes); race-clean; order preserved (dups in place);
+  `for range Redeliver+1` valid on go1.26; negative Redeliver out-of-contract
+  (no guard, matches repo style). Faulty satisfies via.Backplane via embed.
+
+### Next step — P2c: two-Apps-one-backplane cross-pod CONVERGENCE test (the keystone)
+Wire TWO via.App instances to ONE shared backplane (a single via.InMemory(), or
+Faulty over it for realism). An Append/Inc on App-A's StateAppEvents must
+converge on App-B's projection (App-B's projector tails the SHARED backplane's
+Subscribe). This is THE test that proves the projector — not a local fold — is
+the cross-pod mechanism (a local-fold impl would pass single-pod P1 tests but
+FAIL here). Validate: how to inject ONE backplane into two Apps
+(via.WithBackplane(shared) on both) and assert convergence (App-B fresh GET /
+SSE shows App-A's appended value). Infra-free. Flag P2d (NATS, real server) to
+maintainer after.
