@@ -51,6 +51,11 @@ type App struct {
 	// session and tab. Keyed by the handle's wire key.
 	appStore kvStore
 
+	// backplane backs StateAppEvents and (later) clustered StateApp/StateSess.
+	// Resolved at New: a nil config backplane becomes InMemory(), so the
+	// runtime always drives one Backplane code path. Drained on Shutdown.
+	backplane Backplane
+
 	contextRegistry   map[string]*Ctx
 	contextRegistryMu sync.RWMutex
 
@@ -315,6 +320,13 @@ func New(opts ...Option) *App {
 		if plugin != nil {
 			plugin.Register(a)
 		}
+	}
+
+	// A nil backplane resolves to the in-process default, so the Backplane
+	// interface is exercised on every single-pod run (no nil-special-case path).
+	a.backplane = a.cfg.backplane
+	if a.backplane == nil {
+		a.backplane = InMemory()
 	}
 
 	a.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {

@@ -1265,3 +1265,78 @@ per-(pod,key) projector goroutine (Subscribe→fold→broadcastRender) + Read
 App through newCtx finally land (the projector is their first consumer). Sub-
 slice further if needed (e.g. wiring+Append+synchronous-fold Read first, then
 the async projector tail).
+
+---
+
+## Tick 20 — 2026-06-04 — P1.1a: App-level Backplane DI (WithBackplane + nil→InMemory + Shutdown drain)
+
+P1.0 committed (`ff5a864`). Phase 1 continues: wire the backplane into the
+runtime. Sub-sliced; this tick does the App-level dependency injection only.
+
+### Council validation (evidence)
+- `config.go:19-45` config struct + `config.go:49` `Option func(*config)`; the
+  WithX family (`config.go:52+`) is the additive pattern to match.
+- `app.go:280-313` `New` applies opts then sets defaults — the spot to resolve a
+  nil backplane to `InMemory()`. App fields live on the struct (`app.go:30-69`,
+  e.g. `appStore kvStore`); add `backplane Backplane` there.
+- `server.go:79-122` `Shutdown` is the graceful-drain path (handles srv==nil in
+  tests) — the design's "io.Closer: graceful drain on App.Shutdown". Add the
+  backplane Close near the tail (after sweep stop), guarded for nil.
+- `broadcast.go:60` `broadcastRender(skip,sess,key)` + `ctx.go:414/426`
+  trackRead/subscribed are the projector's render path — NEXT slice, not this one.
+
+### Converged slice — P1.1a (smallest with a clean observable)
+- **Files:** `config.go` (field + WithBackplane), `app.go` (App.backplane field +
+  nil→InMemory in New), `server.go` (Shutdown drains it). New test in
+  `backplane_wire_test.go`.
+- **Acceptance:** (1) `WithBackplane(bp)` stores bp and `Shutdown(ctx)` Closes it
+  (a caller's reference to bp returns ErrClosed on Append afterward). (2) A
+  default `via.New()` (no WithBackplane) Shutsdown cleanly (its resolved InMemory
+  is closed) — nil→InMemory resolution. (3) Existing suite green.
+- **Deferred to P1.1b:** `bindApp` + `scopeKind` + threading the App through
+  `newCtx` + the per-key projector + `Read`/`Text`/`Append`. Their observable is
+  `Read`, which doesn't exist yet — so per TDD they land with the projector slice.
+
+### Open design wrinkle to resolve in P1.1b (flagged, not yet blocking)
+The spec says the in-memory hot path is "identity-coded (no JSON in-process)"
+(lines 40/135/775) but `EventLog.Append` moves `[]byte` — an arbitrary E can't
+become []byte without serialization. Resolution candidates for next tick: (a)
+runtime always Codec[E].Encode→[]byte (uniform one-code-path; JSON default;
+treat "no JSON in-process" as a deferred perf optimization), vs (b) the typed
+handle registers typed closures at bindApp so the in-memory path folds E
+directly. Also unresolved: HOW the runtime obtains a typed Codec[E]/Fold from a
+reflection-detected, type-erased field — likely the `bindApp` method on the
+typed handle registering typed closures with the App. To be converged in P1.1b
+with code evidence (DESIGN FEEDBACK GATE candidate).
+
+### Tick 20 — BUILT + result
+- `config.go`: `backplane Backplane` field + `WithBackplane(b Backplane) Option`.
+- `app.go`: `App.backplane` field; New() resolves `a.cfg.backplane`, nil→`InMemory()`.
+- `server.go`: Shutdown drains `a.backplane.Close()` (guarded) after the existing
+  dispose/sweep/sessions steps.
+- Tests `backplane_wire_test.go`: `TestWithBackplaneIsDrainedOnShutdown`
+  (caller's bp → ErrClosed after Shutdown — proves stored+drained) +
+  `TestDefaultAppShutsDownCleanlyWithBackplaneDrain` (regression guard).
+  `go test -race ./...` GREEN, vet clean.
+- Yellow: caught that the default-app test couldn't prove nil→InMemory black-box
+  (no public App.Append; deferred to P1.1b) → reframed it honestly as a Shutdown
+  regression guard; nil→InMemory is DI-wiring verified by build + P1.1b.
+- Blue: all reachable code COVERED or DI-wiring-exempt; no dead code.
+- Audit: no bugs, no changes. Future-safety NOTES (not present bugs): (a)
+  Shutdown closing the backplane LAST is correct now and future-safe (disposeCtx
+  runs before Close); (b) plugin `Register` runs BEFORE the nil→InMemory
+  resolution — fine today (no plugin reads a.backplane), but if a future plugin
+  needs the backplane at Register time, move the resolution before the plugin
+  loop. Double-Shutdown is safe (InMemory.Close idempotent).
+
+### Next step — P1.1b: the typed projector + Read/Append (the heart of P1)
+Converge the two open design questions FIRST (with code evidence): (1) how the
+runtime obtains a typed Codec[E]/Fold from a reflection-detected, type-erased
+StateAppEvents field — likely the typed `bindApp` method registering typed
+closures with the App; (2) the "no JSON in-process / identity-coded" claim vs
+EventLog moving []byte — decide uniform-Codec-encode (one code path) vs an
+in-mem identity fast-path. Then build: scopeKind + bindApp + thread App through
+newCtx, the per-(pod,key) projector goroutine (Subscribe→fold→broadcastRender),
+StateAppEvents.Append (encode→EventLog.Append, no local fold), Read (cached
+projection + trackRead), Text. Observable: an action Appends an event, the
+projector folds it, a subscribed tab re-renders showing the folded value.

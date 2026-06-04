@@ -118,5 +118,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	clear(a.sessions)
 	a.sessionsMu.Unlock()
 
+	// Graceful drain of the state backplane (io.Closer): after Close its
+	// Append/Subscribe return ErrClosed and never block.
+	if a.backplane != nil {
+		_ = a.backplane.Close()
+	}
+
 	return srvErr
 }
