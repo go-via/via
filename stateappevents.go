@@ -55,27 +55,12 @@ func (l *StateAppEvents[E, V]) bindApp(a *App) {
 	l.app = a
 	var seed V
 	fold := func(acc any, data []byte) (any, error) {
-		var env eventEnvelope
-		if err := json.Unmarshal(data, &env); err != nil {
-			return acc, ErrUndecodable // not a valid envelope (corrupt / missing)
-		}
-		curVer := currentVersionFor[E]()
-		if env.V > curVer {
-			return acc, ErrForwardIncompatible // a newer binary wrote it
-		}
-		payload := env.D
-		if env.V < curVer {
-			// Migrate an older stored payload up to the current E shape before
-			// the fold ever sees it (an unbridgeable gap → ErrUndecodable).
-			up, err := runUpcasters[E](env.V, curVer, payload)
-			if err != nil {
-				return acc, err
-			}
-			payload = up
-		}
-		var ev E
-		if err := json.Unmarshal(payload, &ev); err != nil {
-			return acc, ErrUndecodable // payload won't decode into E
+		// Decode through the shared version-envelope path (same as OnEvent
+		// consumers), then fold; a decode error (undecodable / forward-incompat)
+		// propagates to the projector's drop / halt handling unchanged.
+		ev, err := decodeEvent[E](data)
+		if err != nil {
+			return acc, err
 		}
 		cur, _ := acc.(V)
 		return ev.Fold(cur, ev), nil

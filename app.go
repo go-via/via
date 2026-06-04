@@ -71,6 +71,13 @@ type App struct {
 	logs   map[string]*logState
 	logsMu sync.Mutex
 
+	// consumers holds the per-(name,key) side-effect consumer state (OnEvent),
+	// started once per consumer. consumersByKey indexes them by wire key so the
+	// Compactor floor can clamp below the slowest consumer's committed offset.
+	consumers      map[string]*consumerState
+	consumersByKey map[string][]*consumerState
+	consumersMu    sync.Mutex
+
 	contextRegistry   map[string]*Ctx
 	contextRegistryMu sync.RWMutex
 

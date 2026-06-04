@@ -73,6 +73,38 @@ func RegisterEvent[E any](fromVersion int, upcast upcastFn) {
 
 // currentVersionFor returns the version the binary stamps and reads for E:
 // 1+max(registered fromVersion), or currentEventVersion (1) when unregistered.
+// decodeEvent decodes one record's wire bytes into E through the version
+// envelope: unmarshal the envelope, gate the version (a newer one →
+// ErrForwardIncompatible, this binary must roll forward), run the upcaster chain
+// stored-version→current, then unmarshal the migrated payload into a fresh E.
+// Anything that can't reach the current E shape returns ErrUndecodable. Shared
+// by the projection fold and OnEvent side-effect consumers so both decode a
+// record identically.
+func decodeEvent[E any](data []byte) (E, error) {
+	var zero E
+	var env eventEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return zero, ErrUndecodable // not a valid envelope (corrupt / missing)
+	}
+	curVer := currentVersionFor[E]()
+	if env.V > curVer {
+		return zero, ErrForwardIncompatible // a newer binary wrote it
+	}
+	payload := env.D
+	if env.V < curVer {
+		up, err := runUpcasters[E](env.V, curVer, payload)
+		if err != nil {
+			return zero, err
+		}
+		payload = up
+	}
+	var ev E
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		return zero, ErrUndecodable // payload won't decode into E
+	}
+	return ev, nil
+}
+
 func currentVersionFor[E any]() int {
 	eventRegistry.mu.RLock()
 	defer eventRegistry.mu.RUnlock()

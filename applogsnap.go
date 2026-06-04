@@ -106,6 +106,12 @@ func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
 	ls.mu.RLock()
 	floor := ls.prevSnapOffset
 	ls.mu.RUnlock()
+	// Never discard an event a registered side-effect consumer has not yet
+	// processed: clamp the floor to the slowest consumer's committed offset
+	// (council line 272 / T-DX-6). A consumer at offset 0 pins it at genesis.
+	if cmin, ok := a.minConsumerOffset(key); ok && cmin < floor {
+		floor = cmin
+	}
 	_ = c.Compact(context.Background(), key, floor) // best-effort; a failure just defers reclamation
 	ls.mu.Lock()
 	ls.prevSnapOffset = covered
