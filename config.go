@@ -26,6 +26,7 @@ type config struct {
 	shutdownTimeout    time.Duration
 	sessionTTL         time.Duration
 	contextTTL         time.Duration
+	reconcileInterval  time.Duration
 	sseHeartbeat       time.Duration
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
@@ -81,6 +82,16 @@ func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.session
 // kept alive for its stream's lifetime regardless of this value, so a short
 // TTL can never reap a live tab.
 func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
+
+// WithReconcileInterval sets how often each pod re-pulls its value-shaped
+// StateApp keys to the backplane Store HEAD. This periodic sweep makes the
+// changes feed a pure latency optimization: a pod converges to shared state
+// even when no Change hint reached it (a pod that joined after the write, a
+// crash between the CAS and the hint append, or a silent Update). 0 disables
+// the sweep (the changes feed alone then carries convergence). Default 5s.
+func WithReconcileInterval(d time.Duration) Option {
+	return func(c *config) { c.reconcileInterval = d }
+}
 
 // WithSSEHeartbeat sets the SSE keepalive cadence. Default 25s.
 //

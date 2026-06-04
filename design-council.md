@@ -2026,3 +2026,50 @@ crash-between-CAS-and-Append strand (T4-SRE-1) AND propagation of silent writes 
 making the changes feed a pure latency optimization. Then P3c: StateSess value
 cross-pod convergence with full-256-bit-sid Change matching (drop fail-closed on
 unknown sid).
+
+---
+
+## Tick 31 — 2026-06-04 — P3b: periodic Store-head reconcile sweep SHIPPED
+
+P3a committed (`397817b`). This tick makes the changes feed a pure latency
+optimization.
+
+### Built + result
+- `config.go`: `reconcileInterval` + `WithReconcileInterval(d)` (0 disables;
+  default 5s).
+- `app.go`: default 5s in New; sweep guard widened to include
+  `reconcileInterval>0` (so stopSweep is created); starts
+  `go runSweep(interval, interval, a.reconcileValues)` under the existing
+  stopSweep lifecycle (Shutdown closes it).
+- `appval.go`: `reconcileValues` (snapshot keys under valStatesMu, release, then
+  per-key) + `reconcileKey` (LoadSnapshot val:key → monotone gate storeRev>l1Rev
+  → decode → update L1 → broadcast ONLY when L1 advanced).
+- Tests: NEW `backplane_reconcile_test.go` —
+  TestReconcileSweepConvergesPeerWithoutAChangeHint (A SILENT write emits no
+  hint → B's tailer never fires → B converges ONLY via the 50ms sweep) +
+  TestChangesFeedAloneConvergesWithReconcileDisabled (WithReconcileInterval(0) →
+  a loud write still converges B via the tailer, documented sweep-off mode).
+  Extended `appval_internal_test.go` with TestReconcileKeyAdvancesOnlyForwardAnd
+  SurvivesPoison (advance / no-op-no-regression / poison-survival / absent-cell).
+  `go test -race ./...` GREEN (13 pkgs), vet clean.
+- Yellow: confirmed the silent-write path genuinely bypasses the tailer (only the
+  sweep can pass the test); flagged the disabled-mode + no-op-broadcast gaps.
+- Blue: flagged WithReconcileInterval(0) untested → added the changes-feed-only
+  test; broadcast-only-on-change covered via the internal changed-flag/l1 proxy
+  (acceptable-defensive). No dead code.
+- Audit: CLEAN, no bugs. Goroutine lifecycle safe (stopSweep created when
+  reconcileInterval>0, closed once on Shutdown); lock order consistent
+  valStatesMu→vc.mu everywhere, broadcasts outside vc.mu; steady-state tick
+  no-ops (monotone gate) → no render storm; empty valStates → zero LoadSnapshot;
+  sweep+tailer idempotent; SyncOff "no frame" tests unaffected (5s default >
+  300ms window AND writer already set l1Rev → sweep no-op).
+
+### Phase 3 status — P3a✅ (StateApp cross-pod) · P3b✅ (reconcile sweep). Remaining: P3c.
+### Next step — P3c: StateSess value cross-pod convergence + full-256-bit-sid Change matching
+StateSess.Update → CAS Store cell (session-scoped key incorporating the FULL sid)
++ Append a session Change carrying the full 256-bit sid; the tailer/sweep
+reconcile per-session, and a receiving pod EXACT-matches the sid and DROPs
+fail-closed on an unknown sid (never broadcast-to-all). statesess.go currently
+uses sess.data (per-session kvStore) + broadcastRender(ctx,sess,key). Validate
+the session/sid plumbing (sess.go) before building. After P3c, Phase 3 done →
+P4 versioning.
