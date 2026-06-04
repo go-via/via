@@ -1340,3 +1340,95 @@ newCtx, the per-(pod,key) projector goroutine (Subscribe→fold→broadcastRende
 StateAppEvents.Append (encode→EventLog.Append, no local fold), Read (cached
 projection + trackRead), Text. Observable: an action Appends an event, the
 projector folds it, a subscribed tab re-renders showing the folded value.
+
+---
+
+## Tick 21 — 2026-06-04 — P1.1b convergence: typed projector + Append/Read (heart of P1)
+
+P1.1a committed (`1ccd779`). This is the irreducible in-process core. Two open
+design questions from tick 20 RESOLVED with code evidence; no spec contradiction
+(both are under-specified mechanics, not disproven claims — recorded as notes).
+
+### Validated against code
+- Spec is firm (lines 469-505, 646; T1-SRE-2): **Append never folds** — only
+  `Encode + EventLog.Append`; the per-(pod,key) projector tailing
+  `EventLog.Subscribe` is the SOLE fold path and drives intra-pod render via
+  `broadcastRender(skip=nil, sess, key)` (`broadcast.go:60`). No synchronous
+  fold-in-Append (it would diverge peers on a non-commutative fold).
+- `broadcast.go:60-75`: skip=nil includes all tabs; sess=nil = app-wide; skips
+  `!subscribed(key)`. `ctx.go:414/426` trackRead/subscribed reused verbatim by
+  Read (parity with `stateapp.go:36`). `vt.AwaitFrame` (stateapp_test.go:107)
+  makes the async projector deterministically testable.
+- `render.go:18`+`recover.go:142` are the ONLY newCtx callers; each sets
+  ctx.app=a immediately after → threading `a` into newCtx is safe & behavior-
+  preserving (existing render/rebootstrap tests are the characterization).
+
+### T1-GO-7 — in-mem codec / "no JSON in-process"
+P1 uses plain `encoding/json` Marshal (Append, for the durable EventLog bytes) +
+Unmarshal (projector decode → E, then E.Fold). The full versioned `Codec[E]`
+ENVELOPE + upcaster chain is Phase 4 (versioning) — NOT built now. The
+"identity-coded / zero-serialization in-process" promise (spec 147) is a
+backward-compat guarantee for the EXISTING StateApp value path (P3) and a future
+StateAppEvents optimization; new StateAppEvents may JSON-encode in v1. No spec
+edit — the claim stands for its actual scope (value path).
+
+### T1-GO-8 — typed bridge from a type-erased reflected field
+The walker detects the field type-erased (P0). The TYPED `bindApp(*App)` method
+on `StateAppEvents[E,V]` (it has E,V in scope) registers with the App, keyed by
+wireKey: the seed (zero V) + a `foldBytes(acc any, data []byte) (any,error)`
+closure (json.Unmarshal→E, then `e.Fold(acc.(V), e)`), and starts the per-key
+projector via `sync.Once`. So the App holds only type-erased `any`/closures; all
+generic work is captured in the closure at bind time. Append/Read are typed
+handle methods (encode/cast directly). Projector lifetime = until
+backplane.Close (Subscribe channel closes → goroutine exits; Shutdown drains).
+
+### Converged slice — P1.1b (one coherent, fully-testable unit)
+- **Files:** `descriptor.go` (scopeSlot.kind + scopeKind type), `walker.go`
+  (set kind=scopeLog for roleStateAppEvents), `runtime.go` (thread `a *App` into
+  newCtx; bindScopeKeys binds app on scopeLog slots via an appBinder iface),
+  `render.go`+`recover.go` (pass `a` to newCtx, drop the separate ctx.app=a),
+  `stateappevents.go` (add `app *App`, bindApp, Append, Read, Text), new
+  `applog.go` (App.logState map + registerLog + startProjector + logProjection),
+  `app.go` (logState map field), test `stateappevents_runtime_test.go`.
+- **Acceptance:** a composition with `StateAppEvents[E,V]`; an action calls
+  Append(ev); a SECOND subscribed client's SSE frame (AwaitFrame) shows the
+  folded V; a fresh page GET also shows it (projection is app-wide, survives the
+  tab). nil ctx → Append panics (AUTH parity w/ StateApp.Update). Existing suite
+  green + race-clean.
+- **Scope guard:** no AppendIf/ReadAt/OnEvent; no Codec envelope; no
+  StateAppCounter yet (next sub-tick); no snapshot/compaction.
+
+### Tick 21 — BUILT + result
+- `descriptor.go`: scopeKind (scopeValue/scopeLog) + scopeSlot.kind + appBinder iface.
+- `walker.go`: log slots get kind=scopeLog.
+- `runtime.go`: newCtx(*App,...) sets ctx.app; bindScopeKeys(*App) calls bindApp
+  on scopeLog slots. `render.go`/`recover.go`: pass a, drop the redundant ctx.app=a.
+- `app.go`: `logs map[string]*logState` + logsMu, initialized in New.
+- NEW `applog.go`: logState (projection/cursor/seed/foldBytes/once), registerLog
+  (get-or-create + sync.Once projector start), startProjector (Subscribe→cursor-
+  gated fold→broadcastRender(nil,nil,key)), logProjection.
+- `stateappevents.go`: app field; bindApp (typed seed+foldBytes closure → registerLog,
+  T1-GO-8 bridge); Append (json.Marshal→backplane.Append, no fold, panics on nil
+  ctx); Read (trackRead+logProjection→V); Text. JSON codec inline (Codec envelope=P4).
+- Tests `stateappevents_runtime_test.go` (5): empty-projection zero-value;
+  appended-event folds + reaches a live SSE subscriber (AwaitFrame); projection
+  app-scoped + outlives writer (two appends → "hello,hello", which also catches
+  double-fold); Append nil-ctx panic; Text renders projection.
+  `go test -race ./...` ALL GREEN, vet clean.
+- Yellow: added the missing empty-projection test; noted projector-vs-local-fold
+  is NOT black-box distinguishable single-pod (locked by the P2 two-Apps test);
+  confirmed double-fold IS caught by the two-append test.
+- Blue: Text was dead-for-slice → locked with a test (v1 surface). Remaining
+  untested branches are defensive I/O/contract-violation guards (parity w/
+  StateApp's own untested nil guards) — acceptable.
+- Audit: CLEAN, no bugs/changes. Verified: no projector goroutine leak (Shutdown
+  →Close→channel close→range exits); projection RW-guarded; broadcastRender
+  called OUTSIDE ls.mu; offset gate has no off-by-one (offset 1 folded once from
+  zero-V seed); registerLog idempotent across tabs (create-only + once); ctx.app
+  early-set is the sole assignment, no double-set.
+
+### Next step — P1.2: StateAppCounter specialization
+Built-in `via.StateAppCounter` = `StateAppEvents[tick, int64]` with an UNEXPORTED
+tick event + fold, exposing Inc(ctx) + Read (no event type / Fold / offset
+ceremony for the user). Then P1.3: migrate internal/examples/chat to
+StateAppEvents + delete the trim-Update.

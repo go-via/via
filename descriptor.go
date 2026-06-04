@@ -27,9 +27,25 @@ type signalSlot struct {
 // application code can't reach in and desync a handle from its slot.
 type scopeBinder interface{ bindWireKey(string) }
 
+// appBinder is implemented by log-shaped scope handles (StateAppEvents) whose
+// projector/codec needs the *App bound at Mount — not just the wire key. The
+// runtime calls bindApp on scopeLog slots only.
+type appBinder interface{ bindApp(*App) }
+
+// scopeKind distinguishes a value-shaped scope handle (StateApp/StateSess, the
+// zero value) from a log-shaped one (StateAppEvents), so the runtime binds the
+// App and starts a projector only for log keys.
+type scopeKind uint8
+
+const (
+	scopeValue scopeKind = iota
+	scopeLog
+)
+
 type scopeSlot struct {
-	fieldPath []int  // index path from root *C
-	wireKey   string // session/app store key
+	fieldPath []int     // index path from root *C
+	wireKey   string    // session/app store key
+	kind      scopeKind // value vs log
 }
 
 // kindedSlot is the shared shape for path:"…" and query:"…" tagged

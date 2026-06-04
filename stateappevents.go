@@ -1,5 +1,12 @@
 package via
 
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/go-via/via/h"
+)
+
 // StateAppEvents is an app-scoped, event-sourced reactive value: the value is
 // the fold of an append-only event log shared across every session and tab.
 // Unlike StateApp[T] (which CAS-writes a single value), the projected value is
@@ -17,6 +24,7 @@ package via
 // populated at Mount time.
 type StateAppEvents[E EventReducer[E, V], V any] struct {
 	wireKey string
+	app     *App // bound at Mount; nil before
 }
 
 // EventReducer constrains E to be its own reducer: the fold lives on the event
@@ -37,8 +45,85 @@ type EventReducer[E any, V any] interface {
 // scopeBinder seam StateApp/StateSess use.
 func (l *StateAppEvents[E, V]) bindWireKey(k string) { l.wireKey = k }
 
+// bindApp binds the App and registers this key's typed seed + fold with the
+// per-key projector (started once per key). Called by the runtime for log-kind
+// scope slots only. Being a method on the typed handle is how the runtime
+// bridges from a reflection-detected, type-erased field to the generic E/V fold
+// (T1-GO-8): the closure captures E and V; the App stores only `any`.
+func (l *StateAppEvents[E, V]) bindApp(a *App) {
+	l.app = a
+	var seed V
+	fold := func(acc any, data []byte) (any, error) {
+		var ev E
+		if err := json.Unmarshal(data, &ev); err != nil {
+			return acc, err
+		}
+		cur, _ := acc.(V)
+		return ev.Fold(cur, ev), nil
+	}
+	a.registerLog(l.wireKey, any(seed), fold)
+}
+
 // Key returns the wire key (lowercase field name unless overridden by `via:` tag).
 func (l *StateAppEvents[E, V]) Key() string { return l.wireKey }
+
+// Read returns the current PROJECTED value: the fold of every event up to this
+// pod's locally-applied offset, seeded by the Go zero of V. A Read during View
+// execution subscribes the ctx via trackRead — IDENTICAL to StateApp.Read — so
+// a later Append (folded by the projector) fans a re-render out to this tab.
+// O(1): returns the cached projection; never re-folds from genesis. Accepts
+// *Ctx or *CtxR.
+func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
+	var zero V
+	if rc == nil || l.app == nil {
+		return zero
+	}
+	ctx := rc.rctx()
+	if ctx == nil {
+		return zero
+	}
+	ctx.trackRead(l.wireKey)
+	v, ok := l.app.logProjection(l.wireKey)
+	if !ok {
+		return zero
+	}
+	t, _ := v.(V)
+	return t
+}
+
+// Append commits ONE immutable event to the EventLog. Unlike StateApp.Update
+// there is no read-modify-write and no old value: you describe WHAT HAPPENED,
+// the fold derives the new value. Concurrent Appends never conflict (the
+// EventLog orders them).
+//
+// Append does NOT fold and does NOT render: the per-(pod,key) projector is the
+// SOLE fold path on every pod incl. the writer (T1-SRE-2). The writer's own
+// View updates when ITS projector folds this offset (one in-process hop), so
+// cross-tab read-your-write is eventual. The returned offset is the commit
+// position.
+//
+// Panics on nil ctx, exactly like StateApp.Update — the ctx is the
+// AUTHORIZATION gate (Append is reachable only from a via_tab + session-gated
+// action ctx), and the projector, not the ctx, drives the re-render. A nil ctx
+// means the call did not come from a legitimate tab action.
+func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
+	if ctx == nil {
+		panic("via: StateAppEvents.Append called with nil *Ctx")
+	}
+	if l.app == nil {
+		return 0, nil // nil backplane pre-Mount: parity with StateApp's no-op guard
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		return 0, err
+	}
+	// context.Background for now — the in-memory backplane ignores it; wiring
+	// the action's request context for cancellation is a later refinement.
+	return l.app.backplane.Append(context.Background(), l.wireKey, data)
+}
+
+// Text returns the projected value as a text node. Sibling of StateApp.Text.
+func (l *StateAppEvents[E, V]) Text(rc readCtx) h.H { return h.Textf("%v", l.Read(rc)) }
 
 // stateAppEventsMarker tags StateAppEvents[E, V] (and types that embed it) with
 // its OWN marker — distinct from stateAppMarker — so the walker can later start
