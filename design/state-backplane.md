@@ -1,8 +1,11 @@
 # Scoping: the Via State Backplane (event-log model)
 
-Status: DECIDED — scoped event-log approach (not a core/API rewrite)
+Status: CONVERGED — scoped event-log approach (not a core/API rewrite). A
+multidisciplinary design council pressure-tested this doc to convergence (tick 4)
+and the body has been reconciled to its decisions; see `design-council.md` for
+the full record and issue IDs (T*-*) referenced below.
 Branch: `design/state-backplane`
-Date: 2026-06-01
+Date: scoped 2026-06-01 · council-converged + reconciled 2026-06-04
 Related: reconnect-resilience issue #82 (transport-layer companion)
 
 ## Decision
@@ -30,7 +33,15 @@ rewriting the v0.4.0 typed API:
   interface**, implementable over NATS JetStream(+KV), Redis (Streams+Hash),
   Postgres (snapshot + append/seq table), or Kafka(+snapshot). Adapters live
   in separate modules so core takes zero infra deps.
-- **`nil` backplane == today's exact in-process behavior**, byte-for-byte.
+- **`nil` backplane == today's exact in-process behavior**, byte-for-byte —
+  `nil` stays the honest *public* default (`via.New()` is in-process-only, named
+  by absence) but resolves INTERNALLY to a real in-memory `Backplane`
+  (`memevents.Backplane`, exported as `via.InMemory()`), so there is ONE code
+  path, not a `nil`-special-case that bit-rots. That impl's hot path is
+  synchronous + identity-coded (no JSON in-process; value path writes/folds
+  synchronously), so the byte-for-byte / zero-overhead / any-`T` promise holds;
+  the projector's channel hop is load-bearing ONLY for records arriving from a
+  remote `Subscribe`.
 
 Explicitly NOT doing: a full event-sourcing rewrite of Via's core/API. Event
 sourcing is a domain-persistence pattern; most Via state (`StateTab`,
@@ -120,9 +131,12 @@ event-log model below.
 //
 //	app := via.New(via.WithBackplane(vianats.JetStream(nc)))
 //
-// Wire it once at boot; it is never swapped at runtime. A nil backplane is
-// the documented default and means the in-process kvStore + an in-memory
-// per-key log: existing v0.4.0 code compiles and behaves identically.
+// Wire it once at boot; it is never swapped at runtime. A nil backplane is the
+// documented default and resolves INTERNALLY to via.InMemory() (the
+// memevents.Backplane in-process impl — kvStore cell + in-memory per-key log),
+// so the interface is exercised on every single-pod run; existing v0.4.0 code
+// compiles and behaves identically, byte-for-byte (its hot path is synchronous +
+// identity-coded, so there is no serialization or projector-hop overhead).
 type Backplane interface {
 	Store
 	EventLog
@@ -147,16 +161,39 @@ type Offset uint64
 // have independent counters; a backend MAY alias them but need not).
 type Rev uint64
 
+// Epoch is the per-key stream GENERATION (T1-SRE-3). Offsets are only unique
+// and monotone WITHIN an epoch; an offset-space RESET — Redis XTRIM-to-empty, a
+// recreated JetStream stream, a Postgres restore — restarts offsets from 0 in a
+// NEW epoch, so a bare "last-applied offset" high-water-mark would silently skip
+// every new record. The backend bumps Epoch on any such reset; the runtime
+// pairs it with the offset and, on a seen epoch change (or Head < lastApplied),
+// re-snapshots from genesis and emits via.events.epoch_reset. Epoch(0) is the
+// genesis generation.
+type Epoch uint64
+
 // Record is one delivered EventLog entry. The runtime, not the backend,
 // interprets Data via the per-key codec — the backend only moves bytes and
 // assigns Offset.
 type Record struct {
 	Key    string // the log subject (a StateAppEvents wire key, or the shared "changes" feed)
+	Epoch  Epoch  // stream generation; a change vs the last-applied epoch signals an offset-space reset → re-snapshot from genesis (T1-SRE-3)
 	Offset Offset
 	Data   []byte // opaque; the event Codec[E].Decode turns a log record into an E (the shared "changes" feed's value-less Change is decoded by the runtime-internal codec)
 }
 
-// Store is the durable per-key CURRENT-VALUE snapshot with compare-and-swap.
+// Store is the durable per-key CURRENT-VALUE cell with compare-and-swap.
+//
+// Two key classes ride the same Store with DIFFERENT authority — this is why
+// "X is the source of truth" reads differently for value vs log state:
+//   - `val:<key>` — a value-shaped StateApp/StateSess cell. Here the STORE CELL
+//     IS the single source of truth; each pod's kvStore is an L1 cache
+//     reconciled to it (T3/T4-SRE-1).
+//   - the log Checkpoint{epoch,coveredOffset,codecHash,vbytes} for a
+//     StateAppEvents key. Here the EVENTLOG is the source of truth and the Store
+//     holds only a snapshot of the fold — disposable for an uncompacted key,
+//     durable genesis once the key has compacted (T2-GO-4).
+// So the Store is authoritative ONLY for `val:<key>` cells; for event-log state
+// the EventLog is authoritative and its Store snapshot is (mostly) a cache.
 //
 // Backend mapping: JetStream KV (Update w/ revision), Redis Hash + WATCH/MULTI
 // or a Lua CAS, Postgres `UPDATE … WHERE rev=$1`, Kafka compacted topic keyed
@@ -220,9 +257,14 @@ type EventLog interface {
 	// that retires #3/#7 — no census, no re-broadcast.
 	Subscribe(ctx context.Context, key string, from Offset) (<-chan Record, error)
 
-	// Head returns the current highest committed Offset for key (cold-start
-	// replay bounds, AppendIf preflight, diagnostics). Offset(0) if empty.
-	Head(ctx context.Context, key string) (Offset, error)
+	// Head returns the current highest committed Offset for key AND the key's
+	// current Epoch (cold-start replay bounds, AppendIf preflight, offset-space
+	// reset detection, diagnostics). Offset(0) if empty. A returned Epoch that
+	// differs from the pod's last-applied epoch — or an Offset BELOW the
+	// last-applied offset — means the stream was reset; the runtime re-snapshots
+	// from genesis rather than resume from a now-meaningless high-water-mark
+	// (T1-SRE-3).
+	Head(ctx context.Context, key string) (Offset, Epoch, error)
 }
 
 // Compactor is OPTIONAL. The runtime type-asserts the Backplane to it and
@@ -280,10 +322,21 @@ var (
 	ErrLogConflict  = errors.New("via: log head moved since expected offset")
 	ErrUndecodable  = errors.New("via: no upcaster path to current event version")
 	ErrClosed       = errors.New("via: backplane closed")
+	// ErrForwardIncompatible: a record's envelope version exceeds this binary's
+	// max (a rolled-back deploy reading newer events). The key's projector HALTS
+	// rather than silently mis-fold — roll forward, not back, past an E bump.
+	ErrForwardIncompatible = errors.New("via: event version newer than this binary supports; roll forward, not back")
+	// ErrEpochUnbridgeable: a compacted key's snapshot epoch cannot be bridged to
+	// the current fold (an unbridgeable fold-MEANING bump, see T2-GO-4); the
+	// projector HALTS (roll-forward-only, same class as ErrForwardIncompatible).
+	ErrEpochUnbridgeable = errors.New("via: snapshot epoch cannot be bridged to the current fold; roll forward only")
 )
 
-// WithBackplane sets App.backplane. nil (the default) == in-process
-// today's-behavior. Additive Option in the config.go family.
+// WithBackplane sets App.backplane. nil (the default) is the in-process-only
+// behavior, byte-for-byte — internally resolved to via.InMemory()
+// (memevents.Backplane), so the interface is exercised on every single-pod run
+// and there is no nil-special-case code path. Additive Option in the config.go
+// family.
 func WithBackplane(b Backplane) Option
 ```
 
@@ -310,7 +363,7 @@ func WithBackplane(b Backplane) Option
 // E is the immutable on-the-wire fact, versioned FOREVER. V is the projected
 // value your View reads, free to change every deploy (it is never persisted
 // except as a disposable snapshot — see E-versioning). They are SEPARATE type
-// params on purpose: a counter folds Tick→int; a room folds ChatEvent→[]Message.
+// params on purpose: a counter folds increments→int64; a room folds ChatEvent→[]Message.
 //
 // The fold is a METHOD on E (the EventReducer constraint), NOT a func field
 // and NOT a runtime-registered closure. This is the single most important
@@ -334,15 +387,17 @@ type StateAppEvents[E EventReducer[E, V], V any] struct {
 	app     *App // bound at Mount; nil before
 }
 
-// EventReducer constrains E to be its own reducer. The fold lives on the TYPE.
+// EventReducer constrains E to be its own reducer. The fold lives on the TYPE,
+// as a single method.
 type EventReducer[E any, V any] interface {
-	// Zero returns the fold seed: the projected value of an EMPTY log.
-	// Determinism rule #1: Zero() is a constant — it must not read instance
-	// state, a clock, or a global.
-	Zero() V
-
-	// Fold returns the new accumulator after applying THIS event to acc.
-	// Determinism rule #2 (LOAD-BEARING): Fold is a PURE function of
+	// Fold returns the new accumulator after applying THIS event to acc. The
+	// fold SEED — the projected value of an EMPTY log — is the Go zero value of
+	// V (`var zero V`); there is NO Zero() method (dropped per T1-GO-1: a Zero()
+	// on a pointer E nil-derefs and panics, and the realistic seeds are all just
+	// V's zero anyway). A non-zero "empty" value is expressed as a genesis
+	// event, keeping "the value IS a pure fold of the log" literally true.
+	//
+	// Determinism rule (LOAD-BEARING): Fold is a PURE function of
 	// (acc, receiver). No clock, no RNG, no I/O, no package globals, no map
 	// iteration order leaking into the result. Two pods replaying the same
 	// offset range MUST converge to the same V or the cluster desyncs. The
@@ -365,7 +420,7 @@ func (*StateAppEvents[E, V]) isStateAppEvents()          {} // distinct marker �
 func (l *StateAppEvents[E, V]) Key() string { return l.wireKey }
 
 // Read returns the current PROJECTED value: the fold of every event in the
-// EventLog up to this pod's locally-applied offset, seeded by E.Zero(). A Read
+// EventLog up to this pod's locally-applied offset, seeded by the Go zero of V. A Read
 // during View execution subscribes the ctx via ctx.trackRead(wireKey) —
 // IDENTICAL to StateApp.Read. The cached projection has exactly ONE writer: the
 // per-(pod,key) PROJECTOR goroutine (see Append). When the projector folds a
@@ -379,8 +434,7 @@ func (l *StateAppEvents[E, V]) Key() string { return l.wireKey }
 // Record forward in offset order as it arrives. Read NEVER re-folds from
 // genesis. Accepts *Ctx or *CtxR.
 func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
-	var ev E
-	zero := ev.Zero()
+	var zero V // fold seed = Go zero of V; no Zero() method (T1-GO-1)
 	if rc == nil || l.app == nil {
 		return zero
 	}
@@ -427,7 +481,7 @@ func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
 // via_tab + session-gated action ctx (AUTH-1, action.go), and the projector
 // (not the ctx) fans the re-render out. A nil ctx means the call did not come
 // from a legitimate tab action, so it must not silently mutate shared state.
-func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (offset uint64, err error) {
+func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (offset Offset, err error) {
 	if ctx == nil {
 		panic("via: StateAppEvents.Append called with nil *Ctx")
 	}
@@ -446,22 +500,27 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (offset uint64, err error)
 	return off, nil
 }
 
+// --- ADVANCED (post-v1). The v1 surface is Read / Append / Text / Key (+
+//     Counter.Inc); AppendIf, ReadAt and OnEvent below ship in a later phase
+//     and are shown here only for completeness (T1-DX-5). ---
+
 // AppendIf is the rare optimistic, first-writer-wins sibling: commit ev only
 // if the key's head offset is still expectedHead, else ErrLogConflict and the
 // caller re-reads and decides. Get expectedHead from ReadAt (the only way to
 // obtain a head — you cannot fabricate a stale-but-plausible number). Use it
 // for claim-ticket-if-unclaimed / resolve-if-unresolved. 99% of call sites use
 // plain Append.
-func (l *StateAppEvents[E, V]) AppendIf(ctx *Ctx, expectedHead uint64, ev E) (offset uint64, err error)
+func (l *StateAppEvents[E, V]) AppendIf(ctx *Ctx, expectedHead Offset, ev E) (offset Offset, err error)
 
 // ReadAt returns the projected value AND the head offset it reflects, for the
 // read-then-conditionally-append (AppendIf) flow. Subscribes like Read.
-func (l *StateAppEvents[E, V]) ReadAt(rc readCtx) (V, uint64)
+func (l *StateAppEvents[E, V]) ReadAt(rc readCtx) (V, Offset)
 
 // Text returns the projected value as a text node. Sibling of StateApp.Text.
 func (l *StateAppEvents[E, V]) Text(rc readCtx) h.H { return h.Textf("%v", l.Read(rc)) }
 
-// OnEvent registers a NAMED, offset-tracked, side-effecting consumer over the
+// OnEvent (ADVANCED, post-v1 — see the banner above) registers a NAMED,
+// offset-tracked, side-effecting consumer over the
 // EventLog (send email on ticket-closed, charge a card). Side effects do NOT live
 // in Fold (Fold must stay pure); they live here. The runtime drives a separate
 // tailer whose committed offset is persisted in the Store
@@ -470,25 +529,28 @@ func (l *StateAppEvents[E, V]) Text(rc readCtx) h.H { return h.Textf("%v", l.Rea
 // ran is skipped. Effectively-once = at-least-once delivery + offset-gated
 // idempotent commit: a handler that must be exactly-once carries an
 // idempotency key derived from off (e.g. Stripe idempotency-key = key+":"+off).
-func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx *Ctx, ev E, off uint64) error)
+func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx *Ctx, ev E, off Offset) error)
 
 // ============================================================================
 // CALL SITE 1 — live shared counter (compare against StateApp[int])
 // ============================================================================
 // StateApp[int] today: Hits.Update(ctx, func(n int)(int,error){return n+1,nil})
 //   → cluster CAS on key "hits"; N pods clicking → CAS contention, retries.
-// StateAppEvents: append a Tick. Appends are ordered, never conflict.
+// StateAppCounter: a BUILT-IN StateAppEvents specialization — just .Inc(), no
+// event type to declare, no Fold, no offset discard. Appends never conflict.
 
-type Tick struct{} // "one increment happened". Empty on purpose.
-
-func (Tick) Zero() int              { return 0 }     // empty log → 0
-func (Tick) Fold(n int, _ Tick) int { return n + 1 } // each Tick adds 1
+// StateAppCounter is the shipped specialization for the ubiquitous monotonic
+// counter (precedent: StateAppNum / StateAppSlice). It embeds an UNEXPORTED
+// increment event + its fold, exposing only Inc + Read, so the empty-event
+// ceremony stays inside the library (T1-DX-2):
+//   type StateAppCounter struct{ StateAppEvents[tick, int64] } // tick unexported
+//   func (c *StateAppCounter) Inc(ctx *Ctx) { _, _ = c.Append(ctx, tick{}) }
 
 type Counter struct {
-	Hits via.StateAppEvents[Tick, int]
+	Hits via.StateAppCounter
 }
 
-func (c *Counter) Inc(ctx *via.Ctx) { _, _ = c.Hits.Append(ctx, Tick{}) }
+func (c *Counter) Inc(ctx *via.Ctx) { c.Hits.Inc(ctx) }
 
 func (c *Counter) View(ctx *via.CtxR) h.H { // Read subscribes; any pod's Inc re-renders here
 	return h.Div(
@@ -517,8 +579,7 @@ type ChatEvent struct {
 
 const recentWindow = 50
 
-func (ChatEvent) Zero() []Message { return nil }
-
+// seed = nil []Message (Go zero of V); no Zero() method (T1-GO-1)
 func (e ChatEvent) Fold(log []Message, _ ChatEvent) []Message {
 	switch e.Kind {
 	case "clear":
@@ -607,7 +668,61 @@ Mandatory versioned self-describing envelope {t:TypeTag, v:version, d:body}; Typ
 
 ### #7 reconnect-rehydrate — RESOLVED
 
-Same mechanism as #3. Cold start per key: LoadSnapshot→(V0,coveredOffset) (or Zero(),0); Subscribe(from=coveredOffset) folds the tail to live head. A returning SSE tab's first Read reflects the pod's offset-current projection; if the POD reconnected, Subscribe-from-offset rehydrated it first. The tab never sees a gap. First View on a fresh pod blocks only until the projector catches the tail (bounded by snapshot cadence, not log age).
+Same mechanism as #3. Cold start per key: LoadSnapshot→(V0,coveredOffset) (or `var zero V`, 0); Subscribe(from=coveredOffset) folds the tail to live head. A returning SSE tab's first Read reflects the pod's offset-current projection; if the POD reconnected, Subscribe-from-offset rehydrated it first. The tab never sees a gap. First View on a fresh pod blocks only until the projector catches the tail (bounded by snapshot cadence, not log age).
+
+
+## Multi-tenant & session isolation (T1-SEC-1)
+
+Today isolation is an in-process pointer compare (`broadcast.go:68`) — meaningless
+on a shared bus. On a backplane it must be enforced at two layers, with the
+physical layer load-bearing:
+
+- **Physical boundary (the real one).** Per-tenant subject/key **namespace** +
+  per-pod **credentials** + **mTLS**. The broker REJECTS any publish/subscribe
+  outside a pod's namespace, so a tenant is contained by the infrastructure, not
+  by app-layer trust. This is what actually isolates; the in-band check below is
+  defence-in-depth, not the boundary.
+- **Logical check (in-band, fail-closed).** Session-scoped `Change`s carry the
+  **full 256-bit sid**; the receiver does an **exact-match** `byID`, and an
+  **unknown sid DROPs fail-closed** — never a broadcast-to-all fallback.
+  Post-receive filtering is the last line, never the first.
+- **AUTH-1 invariant.** `Append` is reachable ONLY through a `via_tab` +
+  session-gated action ctx (`action.go:107-117`, 403 on mismatch); `via_tab`/`sid`
+  are 256-bit crypto-rand (`util.go:11`). There is no raw-client path that
+  reaches `Append` or writes the Store directly.
+- **Trust posture.** The backplane is **tier-0 trust**: authn + mTLS are
+  MANDATED, with an explicit `WithInsecureBackplane()` opt-out for
+  local/trusted-network dev (godoc names the risk). Compromised-pod blast radius
+  is named, not waved away: a pod holding creds can publish within its own
+  tenant namespace — bounding cross-tenant damage to the namespace. **Per-event
+  record-signing (authenticity within a namespace) is DEFERRED** — named as the
+  residual, not solved in v1.
+
+## GDPR / right-to-erasure — crypto-shred (T1-SEC-2)
+
+The append-only log is a free tamper-evident **audit trail** (T1-SEC-WIN) — which
+directly **tensions with erasure**: an immutable log cannot delete a past record,
+and a tombstone event only removes an ID from the *projection* while the original
+PII bytes persist forever (Kafka keeps them; the Compactor is optional). Erasure
+is therefore achieved by **crypto-shred**, not by deletion:
+
+- **Encrypt PII per data-subject** behind a `KeyStore{ KeyFor(subject), DropKey(subject) }`
+  seam. Erasure = `DropKey` → the ciphertext is permanently unreadable → `Decode`
+  returns `ErrUndecodable` → this **reuses the drop-on-undecodable fold no-op** (the
+  event silently leaves the projection). No log rewrite required.
+- **Snapshot invalidation on erasure.** Snapshots fold *plaintext* V, so they would
+  retain erased PII — erasure MUST invalidate affected snapshots and force a
+  PII-free re-fold. For a COMPACTED key whose snapshot is durable genesis (T2-GO-4),
+  the snapshot must be re-encoded PII-free / the key re-snapshotted post-erasure,
+  or the PII is unreachable-by-key but still resident.
+- **Audit-class vs PII-class events are separated at declaration.** A single event
+  type must not be both: audit-class events are retained (PII-free), PII-class
+  events are crypto-shreddable. This resolves the audit-vs-erasure tension by class
+  rather than per-record.
+- **Conceded residual.** Backups and replicas must independently expire the key
+  (out of band) — the design cannot reach bytes it does not own. Tombstone +
+  Compact reclaims *storage*; the **key-drop**, not the tombstone, is the erasure
+  mechanism.
 
 
 ## Per-dimension, 4 architects by lens
@@ -657,10 +772,10 @@ Same mechanism as #3. Cold start per key: LoadSnapshot→(V0,coveredOffset) (or 
 ## Phased plan
 
 - PHASE 0 — binding seam (additive, no behavior change). Add isStateAppEvents() marker + roleStateAppEvents in walker.go classifyField; scopeSlot gains a kind flag (value vs log); bindScopeKeys binds StateAppEvents via the existing scopeBinder path + a new bindApp. nil backplane everywhere → zero observable change. v0.4.0 typed API untouched. Tests: existing suite green + a nil-backplane in-process StateAppEvents folding in RAM (today's StateAppSlice semantics).
-- PHASE 1 — in-process StateAppEvents[E,V] core. EventReducer constraint + Read (cached projection, O(1), trackRead) + plain Append (broadcastRender reuse, nil-ctx panic) + Text. App gains logProjection map + per-key incremental fold under lock. NO backplane yet — proves the user API and the fold/projection cache against the chat+counter call sites. Migrate internal/examples/chat to StateAppEvents behind nothing (still single-pod), delete the trim-Update.
-- PHASE 2 — Backplane interface + ONE reference backend (NATS JetStream+KV: durable ordered resumable EventLog AND CAS KV in one dependency, maps the interface most directly). Store(LoadSnapshot/CAS) + EventLog(Append/AppendIf/Subscribe/Head) + io.Closer + per-field Codec (default versioned-envelope JSON). WithBackplane Option. Cold start = LoadSnapshot→Subscribe(from:coveredOffset)→fold. Ship the backend CONFORMANCE TEST SUITE (ordering, gap-free resume, CAS conflict, snapshot-before-compact). This phase alone closes #3/#7.
+- PHASE 1 — in-process StateAppEvents[E,V] core, implemented AS a real in-memory Backplane. EventReducer constraint + Read (cached projection, O(1), trackRead) + plain Append (no local fold; the projector renders) + Text. App gains logProjection map + the per-(pod,key) projector. The in-process path is NOT a nil-special-case: it is `memevents.Backplane` (exported as `via.InMemory()`), to which `nil` resolves — so the real Backplane interface is exercised on every single-pod run and in default CI, killing the two-code-path bit-rot. Its hot path is synchronous + identity-coded (no JSON in-process; value path synchronous) so the byte-for-byte / zero-overhead promise holds; the projector channel hop fires only for remote records (none yet at Phase 1). Migrate internal/examples/chat to StateAppEvents (still single-pod), delete the trim-Update. (Phase shift per the in-mem addendum: the clean in-mem Backplane lands here, where the projector is already built.)
+- PHASE 2 — backend interface hardening + fault-injection + ONE network reference backend. `memevents.Faulty` — a fault-injecting DECORATOR over the same Phase-1 base (controllable reorder-within-allowance, redelivery, mid-Subscribe disconnect) — plus the PARAMETERIZED conformance suite run vs base / faulty-base / a real network backend. Two `App`s sharing one in-mem backplane = an infra-free cross-pod convergence test (the T1-TEST-keystone unlock). Reference network backend: NATS JetStream+KV (durable ordered resumable EventLog AND CAS KV in one dependency). Store(LoadSnapshot/CAS) + EventLog(Append/AppendIf/Subscribe/Head) + io.Closer + per-field Codec[E]/Codec[V]. Cold start = LoadSnapshot→Subscribe(from:coveredOffset)→fold. Conformance covers ordering, gap-free resume, CAS conflict, snapshot-before-compact, offset-space reset — and the real-network-backend job is RELEASE-GATING (non-negotiable: in-mem green CI never stands in for real-backend conformance — it is too forgiving: perfect order, no lag, no redelivery, no crash window). This phase closes #3/#7.
 - PHASE 3 — value-shaped coexistence (cluster-SHARED value state, no longer pod-local). StateApp/StateSess.Update (UNCHANGED API) gains cluster survivability AND cross-pod convergence. The Store cell `val:<key>` is the SINGLE SOURCE OF TRUTH; the local kvStore is an L1 OPTIMISTIC cache, not the owner. Update CASes the Store then Appends a value-less Change{key,rev} to the shared changes feed (a liveness HINT only). Every pod INCL. THE WRITER converges by re-pulling to Store HEAD on each Change — never to change.rev — gated storeRev ≥ change.rev (stale replica read → drop + one bounded backoff re-poll, never apply-stale; closes T1-SRE-5); an L1 monotonicity gate (apply only if storeRev > l1Rev[key]) makes redelivered/out-of-order Changes non-regressing (T3-SRE-1). A PERIODIC Store-head reconcile sweep over each pod's subscribed value keys makes the feed a pure latency optimization → correctness never depends on a Change being emitted, closing the crash-between-CAS-and-Append strand (T4-SRE-1). Writer RYW is sync-optimistic; peers eventual. After reconcile, broadcastRender→SyncNow→Read renders the converged value. Session-scoped Changes carry the FULL 256-bit sid; the receiver EXACT-matches and DROPs fail-closed on an unknown sid (never broadcast-to-all). Net: state correctness no longer needs sticky sessions.
-- PHASE 4 — E-versioning hardening (#6). Versioned envelope MANDATORY (enforced at Mount: no TypeTag → fail fast), RegisterEvent[E](v, Upcaster{From,To}) decode-chain, drop-on-undecodable + via.events.undecodable metric, forward-incompat projector-halt guard. Snapshot=pure disposable cache for UNCOMPACTED keys (invalidate-on-codec-hash → re-fold from 0, evolving V free); COMPACTED keys treat the snapshot as durable genesis — typed `Codec[V]`, seeded migration on mismatch, retained-event floor, `WithFoldVerify` mandatory before compaction (T2-GO-4). Additive-first godoc.
+- PHASE 4 — E-versioning hardening (#6). Versioned envelope MANDATORY (enforced at Mount: no TypeTag → fail fast), RegisterEvent[E](v, Upcaster{From,To}) decode-chain, drop-on-undecodable + via.events.undecodable metric, forward-incompat projector-halt guard (ErrForwardIncompatible). Snapshot=pure disposable cache for UNCOMPACTED keys (invalidate-on-codec-hash → re-fold from 0, evolving V free); COMPACTED keys treat the snapshot as durable genesis — typed `Codec[V]`, seeded migration on mismatch, retained-event floor, `WithFoldVerify` mandatory before compaction (T2-GO-4). Additive-first godoc.
 - PHASE 5 — snapshot + compaction. WithLogSnapshotEvery(N) default 512–1000 + on Shutdown; snapshot-DURABLE-FIRST then optional Compactor (type-asserted, backend declines → snapshot-only). Tombstone-delete reclamation (#5). Compact-trails-snapshot invariant + min(consumer-checkpoints) floor so no live consumer is truncated out.
 - PHASE 6 — side effects + remaining backends. OnEvent(name, fn) offset-tracked consumer (#1). Add Redis Streams, Postgres, Kafka backends against the conformance suite. THEN AppendIf/ReadAt (optimistic first-writer-wins) once a real claim-ticket case appears. FOLLOW-UP/orthogonal: BroadcastCluster + ClusterTabCount (#4); dev WithFoldVerify; go-vet purity analyzer.
 
