@@ -81,7 +81,7 @@ func testAppendOffsetsAndHead(t *testing.T, bp via.Backplane) {
 	o1 := mustAppend(t, bp, "k", "a")
 	o2 := mustAppend(t, bp, "k", "b")
 	o3 := mustAppend(t, bp, "k", "c")
-	if !(o1 < o2 && o2 < o3) {
+	if o1 >= o2 || o2 >= o3 {
 		t.Fatalf("offsets must strictly increase within a key, got %d,%d,%d", o1, o2, o3)
 	}
 
@@ -129,7 +129,7 @@ func testResumeAfterOffset(t *testing.T, bp via.Backplane) {
 	if string(r.Data) != "c" {
 		t.Fatalf("resume from %d delivered %q, want %q (only records after the cursor)", from, r.Data, "c")
 	}
-	if !(r.Offset > from) {
+	if r.Offset <= from {
 		t.Fatalf("resumed record offset %d must be > the resume cursor %d", r.Offset, from)
 	}
 }
@@ -281,7 +281,7 @@ func testCAS(t *testing.T, bp via.Backplane) {
 	// A writer with the current revision succeeds and advances it.
 	rev2, err := bp.CAS(ctx, "cell", rev1, []byte("second"))
 	mustNoErr(t, err)
-	if !(rev2 != rev1) {
+	if rev2 == rev1 {
 		t.Fatalf("a successful CAS must advance the revision, got %d (== %d)", rev2, rev1)
 	}
 }
@@ -328,7 +328,7 @@ func collectDistinct(t *testing.T, ch <-chan via.Record, count int) []via.Record
 		if seen[r.Offset] {
 			continue // a tolerated at-least-once duplicate
 		}
-		if len(out) > 0 && !(r.Offset > last) {
+		if len(out) > 0 && r.Offset <= last {
 			t.Fatalf("first delivery of offset %d arrived out of per-key order (after %d)", r.Offset, last)
 		}
 		seen[r.Offset] = true

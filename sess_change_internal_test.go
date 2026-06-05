@@ -11,6 +11,7 @@ import (
 // seen must be DROPPED fail-closed — never re-pulled, never broadcast — or a
 // session write could leak into / wake an unrelated session.
 func TestApplySessionChangeDropsUnknownSidFailClosed(t *testing.T) {
+	t.Parallel()
 	stub := &loadStub{data: mustJSON(7), rev: 3, ok: true}
 	app := &App{
 		backplane:    stub,
@@ -33,6 +34,7 @@ func TestApplySessionChangeDropsUnknownSidFailClosed(t *testing.T) {
 // cell to HEAD (keyed by the full sid) and converges that session's value —
 // gated monotone so a stale/out-of-order Change cannot regress it.
 func TestApplySessionChangeConvergesKnownSidMonotonically(t *testing.T) {
+	t.Parallel()
 	stub := &loadStub{}
 	sess := &session{id: "X"}
 	app := &App{
@@ -80,6 +82,7 @@ func TestApplySessionChangeConvergesKnownSidMonotonically(t *testing.T) {
 // even when a hint was missed — silent write, cold pod). Like reconcileKey it
 // must advance only forward and survive a poison snapshot, scoped per session.
 func TestReconcileSessionKeyAdvancesOnlyForwardAndSurvivesPoison(t *testing.T) {
+	t.Parallel()
 	stub := &loadStub{}
 	sess := &session{id: "X"}
 	app := &App{

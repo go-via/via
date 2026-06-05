@@ -59,6 +59,7 @@ type nonCompactingBackplane struct{ Backplane }
 // still resume exactly after N. Re-numbering the survivors to 1 would silently
 // re-deliver or skip events.
 func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
+	t.Parallel()
 	b := InMemory()
 	defer b.Close()
 	ctx := context.Background()
@@ -87,6 +88,7 @@ func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
 // A re-issued, stale, or over-large beforeOffset must never corrupt the log or
 // move the head — compaction is idempotent and clamped to committed offsets.
 func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
+	t.Parallel()
 	b := InMemory()
 	defer b.Close()
 	ctx := context.Background()
@@ -110,6 +112,7 @@ func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
 // continue from the head, never restart base-relative. A renumbered offset would
 // let a resuming pod silently re-process or skip events.
 func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
+	t.Parallel()
 	b := InMemory()
 	defer b.Close()
 	ctx := context.Background()
@@ -134,6 +137,7 @@ func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
 // out-of-order beforeOffset must not move the floor backward (which would
 // "resurrect" discarded offsets) or move the head.
 func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
+	t.Parallel()
 	b := InMemory()
 	defer b.Close()
 	ctx := context.Background()
@@ -158,6 +162,7 @@ func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
 // DURABLE snapshot (snapshot-FIRST, compact-SECOND) — it must never discard at
 // or beyond the covered offset, or a cold start could not resume.
 func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
 	defer server.Close()
@@ -194,6 +199,7 @@ func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 // still cold-starts to the full projection — it seeds from the snapshot and
 // never needs the discarded events.
 func TestFreshProjectorColdStartsAfterPrefixCompacted(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
 	defer server.Close()
@@ -225,6 +231,7 @@ func TestFreshProjectorColdStartsAfterPrefixCompacted(t *testing.T) {
 // A backend that declines Compactor must still snapshot — the runtime falls back
 // to snapshot-only and never panics or wedges, leaving the prefix intact.
 func TestSnapshotOnlyWhenBackendDeclinesCompaction(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	bp := nonCompactingBackplane{InMemory()}
 	app := New(WithTestServer(&server), WithBackplane(bp), WithSnapshotInterval(1))

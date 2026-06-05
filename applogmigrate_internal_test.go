@@ -38,6 +38,8 @@ func compactedKeyWithMismatchedSnapshot(t *testing.T, app *App, key, oldHash str
 // REAL projector must stamp Compacted:true on the durable checkpoint once it has
 // discarded a prefix. If it never did, a genuinely compacted key would be
 // mis-classified as a disposable cache and silently truncate on a codec change.
+//
+//nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestRealProjectorMarksCheckpointCompactedAfterDiscardingPrefix(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -72,6 +74,8 @@ func TestRealProjectorMarksCheckpointCompactedAfterDiscardingPrefix(t *testing.T
 // migration (decode old V → seed, fold the retained tail on top), NEVER discard
 // and re-fold — the deleted prefix is unrecoverable, so discarding would silently
 // truncate the value to whatever events happen to survive.
+//
+//nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestCompactedKeyRunsSeededMigrationOnCodecMismatch(t *testing.T) {
 	const oldHash = "p5c.test.seeded.oldhash"
 	RegisterSnapshotMigration(oldHash, func(b []byte) ([]int, error) {
@@ -110,6 +114,8 @@ func TestCompactedKeyRunsSeededMigrationOnCodecMismatch(t *testing.T) {
 // A COMPACTED key with NO registered migration for its old codec must HALT —
 // roll-forward-only — and emit via.snapshot.unbridgeable. A stuck projector is
 // the safe failure; silently truncating to the surviving tail is not.
+//
+//nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestCompactedKeyHaltsWhenNoMigrationRegistered(t *testing.T) {
 	const oldHash = "p5c.test.unbridgeable.oldhash" // never registered
 	spy := &spyMetrics{}
@@ -137,6 +143,8 @@ func TestCompactedKeyHaltsWhenNoMigrationRegistered(t *testing.T) {
 // A migration that ERRORS is no safer than none: the key must HALT (never
 // truncate), so a broken migration fails closed rather than producing a
 // plausible-but-wrong value.
+//
+//nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestCompactedKeyHaltsWhenMigrationErrors(t *testing.T) {
 	const oldHash = "p5c.test.migration-error.oldhash"
 	RegisterSnapshotMigration(oldHash, func([]byte) ([]int, error) {
@@ -161,6 +169,8 @@ func TestCompactedKeyHaltsWhenMigrationErrors(t *testing.T) {
 // An UNCOMPACTED key still discards + re-folds from genesis on a codec-hash
 // mismatch — V evolution stays free for the common case; the durable-genesis
 // path must NOT change this when the prefix is intact.
+//
+//nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestUncompactedKeyStillRefoldsFromGenesisOnMismatch(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server))

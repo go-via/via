@@ -12,6 +12,7 @@ import (
 // a client cannot make a pod adopt an arbitrary attacker-chosen token or a
 // malformed value that would land odd keys in the session map / Store.
 func TestValidSessionIDAcceptsOnlyTheGenSecureIDFormat(t *testing.T) {
+	t.Parallel()
 	if !validSessionID(genSecureID()) {
 		t.Fatal("a freshly generated id must be valid")
 	}
@@ -40,6 +41,7 @@ func cookieReq(sid string) *http.Request {
 // presented, well-formed sid this pod has never seen must be ADOPTED (the
 // returned session keeps that exact id), not replaced with a fresh one.
 func TestUnknownButWellFormedSidIsAdopted(t *testing.T) {
+	t.Parallel()
 	var s *httptest.Server
 	a := New(WithTestServer(&s))
 	defer s.Close()
@@ -62,6 +64,7 @@ func TestUnknownButWellFormedSidIsAdopted(t *testing.T) {
 // already-registered sid must return the SAME session object (with its data
 // intact), never replace it — otherwise every request would wipe the session.
 func TestKnownSidReturnsTheSameSessionUnchanged(t *testing.T) {
+	t.Parallel()
 	var s *httptest.Server
 	a := New(WithTestServer(&s))
 	defer s.Close()
@@ -83,6 +86,7 @@ func TestKnownSidReturnsTheSameSessionUnchanged(t *testing.T) {
 // already-registered sid returns the SAME object (the LoadOrStore path a racer
 // hits), never a fresh replacement that would split the session's state.
 func TestAdoptSessionIsIdempotentForTheSameSid(t *testing.T) {
+	t.Parallel()
 	var s *httptest.Server
 	a := New(WithTestServer(&s))
 	defer s.Close()
@@ -98,6 +102,7 @@ func TestAdoptSessionIsIdempotentForTheSameSid(t *testing.T) {
 // A malformed cookie value must NEVER be adopted — the pod mints a fresh,
 // well-formed session instead, so garbage can't become a session key.
 func TestMalformedSidIsNotAdopted(t *testing.T) {
+	t.Parallel()
 	var s *httptest.Server
 	a := New(WithTestServer(&s))
 	defer s.Close()
@@ -115,6 +120,7 @@ func TestMalformedSidIsNotAdopted(t *testing.T) {
 // record — never double-register or hand back divergent session objects (which
 // would split a user's state).
 func TestConcurrentAdoptionOfSameSidYieldsOneSession(t *testing.T) {
+	t.Parallel()
 	var s *httptest.Server
 	a := New(WithTestServer(&s))
 	defer s.Close()

@@ -23,6 +23,8 @@ func (renamed) Fold(acc []string, e renamed) []string {
 // registered upcaster migrates a v1 payload into the current v2 shape BEFORE the
 // fold, so Fold only ever sees current-shape E. This is the whole point of the
 // upcaster chain — events are immortal, so old wire bytes must keep decoding.
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestRegisteredUpcasterMigratesOldRecordsBeforeFold(t *testing.T) {
 	// v1 stored {"msg": X}; v2 is {"text": X}. Upcaster renames the field.
 	RegisterEvent[renamed](1, func(old json.RawMessage) (json.RawMessage, error) {
@@ -64,6 +66,8 @@ func TestRegisteredUpcasterMigratesOldRecordsBeforeFold(t *testing.T) {
 // A stored record we cannot migrate to the current version must be DROPPED
 // (ErrUndecodable), never mis-folded — reusing drop-on-undecodable so one
 // un-upcastable record can't wedge the key.
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestUnbridgeableVersionGapIsUndecodable(t *testing.T) {
 	// gapEvent's current version is 3 (steps 1→2 and... 2→3 missing on purpose
 	// would leave a gap; here we register only 2→3 so 1→2 is missing).
@@ -91,6 +95,8 @@ func (racedEvent) Fold(acc int, e racedEvent) int { return acc + e.N }
 // info then walks its steps; if that walk escapes the lock while RegisterEvent
 // writes the same steps map, -race trips on a concurrent map access. Running
 // both against one event type under -race is what would surface that bug.
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestConcurrentRegisterAndUpcastIsRaceClean(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
@@ -121,6 +127,8 @@ func (multiEv) Fold(acc []string, e multiEv) []string {
 // A type that evolved across MULTIPLE versions must run the FULL upcaster chain
 // (v1→v2→v3), not just the last step — otherwise a record from two reshapes ago
 // would decode into garbage. This exercises the chain loop more than once.
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestMultiStepUpcasterChainRunsEveryStep(t *testing.T) {
 	RegisterEvent[multiEv](1, func(old json.RawMessage) (json.RawMessage, error) {
 		var v1 struct {
@@ -161,6 +169,8 @@ func TestMultiStepUpcasterChainRunsEveryStep(t *testing.T) {
 // The current version is 1+MAX(registered fromVersion): registering a LOWER
 // fromVersion after a higher one must not lower it (registration order is the
 // developer's, and gaps are filled, not regressed).
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestCurrentVersionTakesTheMaxFromVersion(t *testing.T) {
 	id := func(old json.RawMessage) (json.RawMessage, error) { return old, nil }
 	RegisterEvent[maxEvent](3, id) // current → 4
@@ -183,6 +193,8 @@ func (failEvent) Fold(acc int, e failEvent) int { return acc + e.N }
 // An event type with NO registered upcaster has current version 1, so Append
 // stamps v1 and foldBytes folds directly — the common, zero-ceremony case must
 // be untouched by the registry.
+//
+//nolint:paralleltest // mutates the process-global event-version registry
 func TestUnregisteredTypeStaysAtVersionOne(t *testing.T) {
 	require.Equal(t, 1, currentVersionFor[envEv](), "an unregistered event type stays at version 1")
 }

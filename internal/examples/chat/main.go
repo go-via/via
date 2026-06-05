@@ -38,7 +38,7 @@ type Posted struct {
 }
 
 func (Posted) Fold(acc []Message, ev Posted) []Message {
-	next := append(append([]Message(nil), acc...), Message{From: ev.From, Body: ev.Body})
+	next := append(append([]Message(nil), acc...), Message(ev))
 	if len(next) > recentWindow {
 		next = next[len(next)-recentWindow:]
 	}
