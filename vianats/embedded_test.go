@@ -14,7 +14,7 @@ import (
 // random port with a temp file store, so the backend's conformance run needs no
 // external server or container. Returns the client URL; the server is shut down
 // at test end.
-func startEmbeddedJetStream(t *testing.T) string {
+func startEmbeddedJetStream(t testing.TB) string {
 	t.Helper()
 	opts := &server.Options{
 		Port:      -1, // random free port
