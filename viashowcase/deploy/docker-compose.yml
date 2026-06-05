@@ -1,0 +1,119 @@
+# Spins up the whole "Signal" cluster: Postgres (auth/profiles/rooms), one
+# JetStream-enabled NATS server (the durable backplane), three Via app pods, and
+# a sticky-cookie HAProxy load balancer in front of them. Vote on one phone,
+# watch it land on the big-screen host view served by another pod — that fan-out
+# is the backplane.
+#
+#   docker compose -f viashowcase/deploy/docker-compose.yml up --build
+#   open http://localhost:3000   # via the load balancer (sticky per browser)
+#
+# The load balancer pins each browser to ONE pod (via a VIA_LB cookie), because
+# a tab's context is in-memory on the pod that served it; the SHARED room state
+# still crosses pods via the backplane. Open separate browsers to land on
+# different pods and watch them converge.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: via
+      POSTGRES_PASSWORD: via
+      POSTGRES_DB: via
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U via -d via"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"] # -js: enable JetStream; -m: monitoring port for the healthcheck
+    ports:
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  app1:
+    build:
+      context: ../..
+      dockerfile: viashowcase/deploy/Dockerfile
+    environment:
+      DATABASE_URL: postgres://via:via@postgres:5432/via?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NODE_NAME: app1
+      PORT: "3000"
+    ports:
+      - "3001:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  app2:
+    build:
+      context: ../..
+      dockerfile: viashowcase/deploy/Dockerfile
+    environment:
+      DATABASE_URL: postgres://via:via@postgres:5432/via?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NODE_NAME: app2
+      PORT: "3000"
+    ports:
+      - "3002:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  app3:
+    build:
+      context: ../..
+      dockerfile: viashowcase/deploy/Dockerfile
+    environment:
+      DATABASE_URL: postgres://via:via@postgres:5432/via?sslmode=disable
+      NATS_URL: nats://nats:4222
+      NODE_NAME: app3
+      PORT: "3000"
+    ports:
+      - "3003:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  lb:
+    image: haproxy:2.9-alpine
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      app1:
+        condition: service_healthy
+      app2:
+        condition: service_healthy
+      app3:
+        condition: service_healthy
