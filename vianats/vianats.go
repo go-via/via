@@ -251,7 +251,7 @@ func (b *Backplane) isClosed() bool {
 
 // --- key mapping ---
 
-func (b *Backplane) storeKey(key string) string  { return sanitize(key) }
+func (b *Backplane) storeKey(key string) string   { return sanitize(key) }
 func (b *Backplane) subjectFor(key string) string { return b.prefix + ".ev." + sanitize(key) }
 
 // sanitize maps an arbitrary via wire key into a single safe NATS subject token

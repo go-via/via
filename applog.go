@@ -24,9 +24,9 @@ type logState struct {
 	projection any    // current folded V (seeded with seed on create)
 	cursor     Offset // highest offset folded so far (gates re-delivery)
 
-	seed      any                              // Go zero of V
+	seed      any                                     // Go zero of V
 	foldBytes func(acc any, data []byte) (any, error) // decode one record's E + fold into acc
-	halted    bool                             // forward-incompatible record seen → frozen, roll-forward-only
+	halted    bool                                    // forward-incompatible record seen → frozen, roll-forward-only
 
 	epoch     Epoch // last-applied stream generation; a change means the offset space reset
 	epochSeen bool  // false until the first record establishes the baseline epoch

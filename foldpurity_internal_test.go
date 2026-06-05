@@ -109,7 +109,7 @@ func replayFixedLogDigest() uint32 {
 	got, _ := acc.([]int)
 	h := fnv.New32a()
 	for _, v := range got {
-		fmt.Fprintf(h, "%d,", v)
+		_, _ = fmt.Fprintf(h, "%d,", v)
 	}
 	return h.Sum32()
 }

@@ -46,9 +46,13 @@ type spyMetrics struct {
 	counters []string
 }
 
-func (m *spyMetrics) Counter(name string, _ ...string)          { m.mu.Lock(); m.counters = append(m.counters, name); m.mu.Unlock() }
-func (m *spyMetrics) Gauge(string, float64, ...string)          {}
-func (m *spyMetrics) Histogram(string, float64, ...string)      {}
+func (m *spyMetrics) Counter(name string, _ ...string) {
+	m.mu.Lock()
+	m.counters = append(m.counters, name)
+	m.mu.Unlock()
+}
+func (m *spyMetrics) Gauge(string, float64, ...string)     {}
+func (m *spyMetrics) Histogram(string, float64, ...string) {}
 func (m *spyMetrics) saw(name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
