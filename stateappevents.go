@@ -20,9 +20,17 @@ import (
 // The zero value is usable: declare the field, no init. With a nil backplane it
 // degrades to today's single-pod in-process behavior, no API difference.
 //
-// The handle holds only the wire key (and, once Read/Update land, the bound
-// app); the log itself lives in the backplane owned by the via runtime,
-// populated at Mount time.
+// Mutation grammar: StateAppEvents uses DIRECT verbs — l.Append(ctx, ev) and
+// l.Read(ctx) — not the l.Op(ctx).Verb() grammar that the collection shapes
+// (StateAppSlice/StateAppMap) use. That is deliberate, not an oversight: those
+// shapes expose MANY mutators (Append/Insert/Delete/Set/…) and route them
+// through a single Op(ctx) so the ctx is captured once; StateAppEvents has
+// exactly ONE mutator (Append), so a direct ctx-first method is both simpler and
+// consistent with its true peer, StateApp.Update(ctx, …), which is also a direct
+// ctx-first verb. One verb → one method.
+//
+// The handle holds only the wire key and the bound app; the log itself lives in
+// the backplane owned by the via runtime, populated at Mount time.
 type StateAppEvents[E EventReducer[E, V], V any] struct {
 	wireKey string
 	app     *App // bound at Mount; nil before
@@ -58,7 +66,7 @@ func (l *StateAppEvents[E, V]) bindApp(a *App) {
 		// Decode through the shared version-envelope path (same as OnEvent
 		// consumers), then fold; a decode error (undecodable / forward-incompat)
 		// propagates to the projector's drop / halt handling unchanged.
-		ev, err := decodeEvent[E](data)
+		ev, err := decodeEvent[E](data, a.eventDecryptor())
 		if err != nil {
 			return acc, err
 		}
@@ -124,6 +132,15 @@ func (l *StateAppEvents[E, V]) Read(rc readCtx) V {
 // AUTHORIZATION gate (Append is reachable only from a via_tab + session-gated
 // action ctx), and the projector, not the ctx, drives the re-render. A nil ctx
 // means the call did not come from a legitimate tab action.
+//
+// Error surface: returns a non-nil error only if the event cannot be encoded
+// (a json.Marshal failure on ev — a programming error, surfaced rather than
+// panicked) or the backplane rejects the append (e.g. ErrClosed during
+// Shutdown). It returns (0, nil) — a deliberate no-op — before Mount when no
+// backplane is bound, parity with StateApp's pre-Mount guard. Most call sites
+// can ignore the error (as the chat example does); handle it where a failed
+// append must be surfaced to the user (e.g. a form that should report "not
+// saved").
 func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
 	if ctx == nil {
 		panic("via: StateAppEvents.Append called with nil *Ctx")
@@ -131,19 +148,42 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
 	if l.app == nil {
 		return 0, nil // nil backplane pre-Mount: parity with StateApp's no-op guard
 	}
-	payload, err := json.Marshal(ev)
-	if err != nil {
-		return 0, err
-	}
-	// Wrap in the versioned envelope so the event can be evolved later (an
-	// event appended without an envelope can never be upcast — see T-DX-3).
-	data, err := json.Marshal(eventEnvelope{T: eventTypeTag[E](), V: currentVersionFor[E](), D: payload})
+	data, err := marshalEvent(l.app, ev)
 	if err != nil {
 		return 0, err
 	}
 	// context.Background for now — the in-memory backplane ignores it; wiring
 	// the action's request context for cancellation is a later refinement.
 	return l.app.backplane.Append(context.Background(), l.wireKey, data)
+}
+
+// marshalEvent builds the wire record for one event: marshal the payload, wrap
+// it in the versioned envelope (so it can be evolved later — T-DX-3), and, when
+// a KeyStore is configured and the event implements DataSubject, encrypt the
+// payload under that subject's key (crypto-shred). Shared by Append and tests so
+// both produce identical records.
+func marshalEvent[E any](a *App, ev E) ([]byte, error) {
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		return nil, err
+	}
+	env := eventEnvelope{T: eventTypeTag[E](), V: currentVersionFor[E](), D: payload}
+	if ks := a.cfg.keyStore; ks != nil {
+		if ds, ok := any(ev).(DataSubject); ok {
+			if subject := ds.DataSubject(); subject != "" {
+				key, err := ks.KeyFor(context.Background(), subject)
+				if err != nil {
+					return nil, err
+				}
+				token, err := encryptPayload(key, payload)
+				if err != nil {
+					return nil, err
+				}
+				env.S, env.D = subject, token
+			}
+		}
+	}
+	return json.Marshal(env)
 }
 
 // Text returns the projected value as a text node. Sibling of StateApp.Text.

@@ -2,6 +2,7 @@ package via
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"sync"
 )
@@ -21,6 +22,10 @@ type eventEnvelope struct {
 	T string          `json:"t"`
 	V int             `json:"v"`
 	D json.RawMessage `json:"d"`
+	// S is the data subject when D is encrypted (per-subject crypto-shred). Empty
+	// (omitted) for plaintext events, so the wire format is unchanged when no
+	// KeyStore is in use. When set, D is the encrypted payload token.
+	S string `json:"s,omitempty"`
 }
 
 // eventTypeTag returns the auto-derived (diagnostic) type tag for E.
@@ -80,7 +85,7 @@ func RegisterEvent[E any](fromVersion int, upcast upcastFn) {
 // Anything that can't reach the current E shape returns ErrUndecodable. Shared
 // by the projection fold and OnEvent side-effect consumers so both decode a
 // record identically.
-func decodeEvent[E any](data []byte) (E, error) {
+func decodeEvent[E any](data []byte, decrypt eventDecryptFn) (E, error) {
 	var zero E
 	var env eventEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
@@ -91,6 +96,21 @@ func decodeEvent[E any](data []byte) (E, error) {
 		return zero, ErrForwardIncompatible // a newer binary wrote it
 	}
 	payload := env.D
+	if env.S != "" {
+		// Encrypted payload: decrypt under the data subject's key. No keystore →
+		// can't decode (fail safe, not mis-fold); a dropped key → ErrErased.
+		if decrypt == nil {
+			return zero, ErrUndecodable
+		}
+		pt, err := decrypt(env.S, env.D)
+		if errors.Is(err, ErrErased) {
+			return zero, ErrErased
+		}
+		if err != nil {
+			return zero, ErrUndecodable
+		}
+		payload = pt
+	}
 	if env.V < curVer {
 		up, err := runUpcasters[E](env.V, curVer, payload)
 		if err != nil {

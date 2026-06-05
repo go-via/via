@@ -113,6 +113,151 @@ func TestFaultySubscribePropagatesUnderlyingError(t *testing.T) {
 	}
 }
 
+// Disconnect models a transient mid-stream drop: after delivering Disconnect
+// records the wrapper closes its channel WITHOUT closing the underlying
+// backplane, so a runtime that re-subscribes from its cursor can resume. The
+// decorator must actually cut the stream at the boundary, not deliver everything.
+func TestDisconnectCutsTheStreamAfterNRecords(t *testing.T) {
+	t.Parallel()
+	bp := memevents.Faulty{Backplane: via.InMemory(), Disconnect: 2}
+	defer bp.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, d := range []string{"a", "b", "c", "d"} {
+		if _, err := bp.Append(ctx, "k", []byte(d)); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	ch, err := bp.Subscribe(ctx, "k", via.Offset(0))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	got := []string{string(recvWithin(t, ch).Data), string(recvWithin(t, ch).Data)}
+	if got[0] != "a" || got[1] != "b" {
+		t.Fatalf("first two = %v, want [a b]", got)
+	}
+	// After Disconnect=2 records the channel must CLOSE (transient drop), even
+	// though more records remain in the underlying stream.
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				goto reconnect
+			}
+		case <-deadline:
+			t.Fatal("Disconnect must close the stream after N records, but it stayed open")
+		}
+	}
+reconnect:
+	// The underlying stream is intact: a fresh Subscribe from the last-seen
+	// offset resumes with the remaining records (gap-free).
+	ch2, err := bp.Subscribe(ctx, "k", via.Offset(2))
+	if err != nil {
+		t.Fatalf("re-subscribe: %v", err)
+	}
+	if r := recvWithin(t, ch2); string(r.Data) != "c" {
+		t.Fatalf("resume after disconnect = %q, want c", r.Data)
+	}
+}
+
+// Reorder lets the decorator deliver records out of order within a bounded
+// window (a real at-least-once bus can interleave a redelivery with newer
+// records). Every record in the window must still be delivered exactly within
+// that window — reorder permutes, it never drops or invents records.
+func TestReorderPermutesWithinAWindowWithoutLosingRecords(t *testing.T) {
+	t.Parallel()
+	bp := memevents.Faulty{Backplane: via.InMemory(), Reorder: 2}
+	defer bp.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, d := range []string{"a", "b", "c", "d"} {
+		if _, err := bp.Append(ctx, "k", []byte(d)); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	ch, err := bp.Subscribe(ctx, "k", via.Offset(0))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	seen := map[string]int{}
+	for range 4 {
+		r := recvWithin(t, ch)
+		seen[string(r.Data)]++
+	}
+	for _, d := range []string{"a", "b", "c", "d"} {
+		if seen[d] != 1 {
+			t.Fatalf("reorder must deliver every record exactly once, got %v for %q", seen[d], d)
+		}
+	}
+
+	// With a window of 2 the order must actually be permuted at least once
+	// (offsets are not strictly increasing), or "Reorder" is a no-op.
+	chk, _ := bp.Subscribe(ctx, "k", via.Offset(0))
+	var offs []via.Offset
+	for range 4 {
+		offs = append(offs, recvWithin(t, chk).Offset)
+	}
+	strictlyIncreasing := true
+	for i := 1; i < len(offs); i++ {
+		if offs[i] <= offs[i-1] {
+			strictlyIncreasing = false
+		}
+	}
+	if strictlyIncreasing {
+		t.Fatalf("Reorder:2 must permute order within the window, got strictly increasing %v", offs)
+	}
+}
+
+// Reorder composed with Disconnect exercises the early-stop branches inside the
+// reorder flush: emit returns false (Disconnect threshold reached) part-way
+// through a window, so the wrapper must stop flushing and close — not keep
+// emitting past the drop. The underlying stream stays intact for a reconnect.
+func TestReorderWithDisconnectStopsMidFlush(t *testing.T) {
+	t.Parallel()
+	bp := memevents.Faulty{Backplane: via.InMemory(), Reorder: 2, Disconnect: 1}
+	defer bp.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for _, d := range []string{"a", "b", "c", "d"} {
+		if _, err := bp.Append(ctx, "k", []byte(d)); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	ch, err := bp.Subscribe(ctx, "k", via.Offset(0))
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	// Exactly Disconnect=1 record is delivered, then the channel must close
+	// (the drop fires inside the first reorder flush).
+	_ = recvWithin(t, ch)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				goto resumed
+			}
+			t.Fatal("Disconnect=1 must stop after one record, got more")
+		case <-deadline:
+			t.Fatal("Disconnect must close the stream, but it stayed open")
+		}
+	}
+resumed:
+	// Underlying stream intact: a reconnect from offset 0 still has every record.
+	ch2, err := bp.Subscribe(ctx, "k", via.Offset(0))
+	if err != nil {
+		t.Fatalf("re-subscribe: %v", err)
+	}
+	_ = recvWithin(t, ch2) // resumes with records still present
+}
+
 // Redeliver:0 is a faithful exactly-once passthrough: each record arrives once,
 // in order, with no spurious duplicate.
 func TestRedeliverZeroIsExactlyOncePassthrough(t *testing.T) {

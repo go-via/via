@@ -4,8 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
+	"time"
 )
+
+// reconnectBackoff paces a projector's re-subscribe after a transient
+// disconnect, so a backend that is briefly unavailable cannot spin the
+// reconnect loop hot.
+const reconnectBackoff = 10 * time.Millisecond
 
 // logState is the per-(pod,key) projector state for one StateAppEvents key: the
 // cached projection plus the type-erased fold captured from the typed handle at
@@ -23,6 +30,8 @@ type logState struct {
 
 	epoch     Epoch // last-applied stream generation; a change means the offset space reset
 	epochSeen bool  // false until the first record establishes the baseline epoch
+
+	diverged bool // WithFoldVerify saw a non-deterministic fold → never compact this key
 
 	// Snapshot cache (P5a): the projection is periodically persisted so a cold
 	// start replays only the tail. encodeSnap/decodeSnap bridge V↔bytes (captured
@@ -66,7 +75,21 @@ func (a *App) startProjector(key string, ls *logState) {
 	if data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key)); ok {
 		var cp checkpoint
 		if json.Unmarshal(data, &cp) == nil {
+			// A snapshot folded BEFORE a crypto-shred erasure may hold shredded
+			// PII; if the authoritative generation has advanced past it, it is
+			// invalid.
+			erasureStale := cp.ErasureGen < a.loadErasureGen()
 			switch {
+			case erasureStale && cp.Compacted:
+				// Durable-genesis snapshot invalidated by erasure: the event prefix
+				// is gone, so re-folding from 0 would silently TRUNCATE to the
+				// surviving tail — dropping SURVIVING subjects' data, not only the
+				// erased one. Halt (roll-forward-only); compaction + erasure of one
+				// key needs snapshot re-encryption (documented follow-up).
+				a.haltErasure(ls, key)
+			case erasureStale:
+				// Uncompacted + stale → re-fold from genesis (from stays 0); the
+				// erased subject's now-undecryptable events drop on the way.
 			case cp.CodecHash == ls.codecHash:
 				// Codec matches → seed straight from the snapshot.
 				if v, err := ls.decodeSnap(cp.V); err == nil {
@@ -84,7 +107,7 @@ func (a *App) startProjector(key string, ls *logState) {
 				// never truncate (T2-GO-4).
 				from = cp.CoveredOffset
 				if migrate, found := lookupSnapMigration(cp.CodecHash); found {
-					if v, err := migrate(cp.V); err == nil {
+					if v, err := migrate.decode(cp.V); err == nil {
 						a.seedFromSnapshot(ls, v, cp, rev)
 					} else {
 						a.haltUnbridgeable(ls, key)
@@ -95,21 +118,48 @@ func (a *App) startProjector(key string, ls *logState) {
 			}
 		}
 	}
-	ch, err := a.backplane.Subscribe(context.Background(), key, from)
-	if err != nil {
-		return
-	}
 	go func() {
-		// Keep ranging the channel even once halted, so the backplane's
-		// Subscribe sender never blocks (no goroutine leak); just stop folding.
-		for rec := range ch {
-			if a.projectRecord(ls, key, rec) {
-				// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
-				a.broadcastRender(nil, nil, key)
-				a.maybeSnapshot(ls, key)
+		// Reconnect loop: each Subscribe tails until its channel closes. A close
+		// while the app is still running is a TRANSIENT disconnect (the backend
+		// dropped the consumer, the stream survives) — re-subscribe from the
+		// cursor and rehydrate. A close during Shutdown (backplaneDone) or an
+		// ErrClosed is a graceful stop — exit. Otherwise one network blip would
+		// strand the key forever.
+		for {
+			ch, err := a.backplane.Subscribe(context.Background(), key, from)
+			if err != nil {
+				return // ErrClosed (or unrecoverable) → stop
 			}
+			// Keep ranging the channel even once halted, so the backplane's
+			// Subscribe sender never blocks (no goroutine leak); just stop folding.
+			for rec := range ch {
+				if a.projectRecord(ls, key, rec) {
+					// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
+					a.broadcastRender(nil, nil, key)
+					a.emitFoldDigest(ls, key)
+					a.maybeSnapshot(ls, key)
+				}
+			}
+			if a.shuttingDown() {
+				return
+			}
+			ls.mu.RLock()
+			from = ls.cursor // resume strictly after what we have folded
+			ls.mu.RUnlock()
+			time.Sleep(reconnectBackoff)
 		}
 	}()
+}
+
+// shuttingDown reports whether Shutdown has begun (backplaneDone closed), so a
+// projector/consumer can tell a graceful stop from a transient disconnect.
+func (a *App) shuttingDown() bool {
+	select {
+	case <-a.backplaneDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // seedFromSnapshot installs a cold-start seed (from a matching snapshot or a
@@ -134,6 +184,19 @@ func (a *App) haltUnbridgeable(ls *logState, key string) {
 	ls.halted = true
 	ls.mu.Unlock()
 	a.metricsOrNoop().Counter("via.snapshot.unbridgeable", "key", key)
+}
+
+// haltErasure freezes a key whose COMPACTED snapshot was invalidated by a
+// crypto-shred erasure: its event prefix is gone, so neither seeding the
+// (PII-bearing, stale) snapshot nor re-folding from a truncated log is correct.
+// Roll-forward-only until the operator re-encrypts the snapshot (the documented
+// compaction+erasure follow-up), so surviving subjects' data is never silently
+// truncated.
+func (a *App) haltErasure(ls *logState, key string) {
+	ls.mu.Lock()
+	ls.halted = true
+	ls.mu.Unlock()
+	a.metricsOrNoop().Counter("via.snapshot.erasure_halt", "key", key)
 }
 
 // projectRecord folds one delivered Record into the cached projection under the
@@ -165,6 +228,16 @@ func (a *App) projectRecord(ls *logState, key string, rec Record) (advanced bool
 	next, ferr := ls.foldBytes(ls.projection, rec.Data)
 	switch {
 	case ferr == nil:
+		if a.cfg.foldVerify && !ls.diverged {
+			// Re-fold the SAME record from the SAME accumulator: a deterministic
+			// reducer must produce an identical result. A mismatch (or a verify
+			// error) proves impurity — flag the key so it is never compacted, so
+			// the bad projection can't be crystallized into durable genesis.
+			if next2, verr := ls.foldBytes(ls.projection, rec.Data); verr != nil || !reflect.DeepEqual(next, next2) {
+				ls.diverged = true
+				a.metricsOrNoop().Counter("via.fold.divergence", "key", key)
+			}
+		}
 		ls.projection = next
 		ls.cursor = rec.Offset
 		ls.foldsSinceSnap++
@@ -174,6 +247,13 @@ func (a *App) projectRecord(ls *logState, key string, rec Record) (advanced bool
 		// cursor, so a roll-forward redeploy resumes here.
 		ls.halted = true
 		a.metricsOrNoop().Counter("via.events.forward_incompatible", "key", key)
+		return false
+	case errors.Is(ferr, ErrErased):
+		// The data subject was erased (crypto-shred): the payload is permanently
+		// unreadable BY DESIGN. Skip + advance, exactly like a poison record, but
+		// record it as an intentional erasure, not corruption.
+		ls.cursor = rec.Offset
+		a.metricsOrNoop().Counter("via.events.erased", "key", key)
 		return false
 	default:
 		// Poison / undecodable: skip it (advance past so it is not retried

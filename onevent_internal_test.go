@@ -237,11 +237,15 @@ func TestOnEventAdoptsPeerOffsetOnCommitConflict(t *testing.T) {
 		return json.Unmarshal(data, &off) == nil && off == 1
 	}, 2*time.Second, 10*time.Millisecond, "the shared committed offset converges to 1")
 
-	// At-least-once: each pod fires at most once; after convergence, no re-fire storm.
-	settled := atomic.LoadInt32(&fires)
-	require.LessOrEqual(t, settled, int32(2), "at-least-once: at most one fire per pod")
-	require.Never(t, func() bool { return atomic.LoadInt32(&fires) > settled },
-		300*time.Millisecond, 50*time.Millisecond, "neither pod re-fires the committed offset")
+	// At-least-once with per-pod dedup (rec.Offset <= committed → skip): the one
+	// appended offset fires AT MOST once per pod, so total fires never exceeds 2,
+	// ever — including after the CAS-loser adopts the winner's offset. Asserting
+	// the absolute ceiling (not a mid-flight `settled` baseline) is race-free: a
+	// baseline snapshot read before the second pod's in-flight fire would spuriously
+	// trip on a legitimate second fire.
+	require.Never(t, func() bool { return atomic.LoadInt32(&fires) > 2 },
+		300*time.Millisecond, 50*time.Millisecond, "neither pod re-fires the committed offset (≤1 per pod)")
+	require.GreaterOrEqual(t, atomic.LoadInt32(&fires), int32(1), "the event must fire at least once")
 }
 
 // A poison/undecodable record is skipped and the offset advanced (never wedging
@@ -307,8 +311,30 @@ func TestCompactionFloorRespectsSlowConsumer(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// The Never condition must be a pure predicate with NO require/t.Fatal: a
+	// late poll-tick can fire after the test body returns and closes the
+	// backplane (defer above), and a require/t.Fatal from that goroutine panics
+	// with "Fail in goroutine after test completed". lowestRetained tolerates a
+	// closed backplane by reporting 0 (nothing retained beyond the floor).
+	lowestRetained := func() Offset {
+		c, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		sub, err := app.backplane.Subscribe(c, "k", 0)
+		if err != nil {
+			return 0 // backplane closed (teardown) → treat as nothing retained
+		}
+		select {
+		case r, ok := <-sub:
+			if !ok {
+				return 0
+			}
+			return r.Offset
+		case <-time.After(time.Second):
+			return 0
+		}
+	}
 	require.Never(t, func() bool {
-		return lowestRetainedOffset(t, app.backplane, "k") > 1
+		return lowestRetained() > 1
 	}, 600*time.Millisecond, 50*time.Millisecond,
 		"compaction must not pass the slow consumer's committed offset")
 }
@@ -332,6 +358,16 @@ func TestCompactionAdvancesWhenConsumerKeepsUp(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: i}))
 		require.NoError(t, err)
+	}
+	// Compaction is driven by snapshot writes (one per fold); after the last fold
+	// no further compaction is attempted. So barrier on the consumer durably
+	// committing the whole prefix FIRST — then a single extra append drives one
+	// more snapshot+compact whose floor reflects the now-caught-up consumer,
+	// making the assertion deterministic rather than racing the consumer's
+	// async commit against the final snapshot.
+	awaitConsumerCommitted(t, app.backplane, "keeps-up", "k", 6)
+	if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 7})); err != nil {
+		t.Fatalf("append: %v", err)
 	}
 
 	require.Eventually(t, func() bool {

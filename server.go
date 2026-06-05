@@ -119,7 +119,10 @@ func (a *App) Shutdown(ctx context.Context) error {
 	a.sessionsMu.Unlock()
 
 	// Graceful drain of the state backplane (io.Closer): after Close its
-	// Append/Subscribe return ErrClosed and never block.
+	// Append/Subscribe return ErrClosed and never block. Signal the tailers
+	// FIRST (close backplaneDone) so a channel close they observe during the
+	// drain is read as "stop", not "transient disconnect → reconnect".
+	a.backplaneDoneOnce.Do(func() { close(a.backplaneDone) })
 	if a.backplane != nil {
 		_ = a.backplane.Close()
 	}

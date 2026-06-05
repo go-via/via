@@ -2,13 +2,23 @@ package via
 
 import "sync"
 
+// snapshotMigration is the type-erased boundary for a registered snapshot
+// migration: it decodes a COMPACTED key's old durable-genesis snapshot bytes
+// into the current projected type V (returned as any, since the App is
+// type-erased). Naming the boundary confines the one unavoidable
+// func([]byte)(any,error) erasure to a single type, instead of repeating it
+// across the registry, the lookup signature, and the call site.
+type snapshotMigration struct {
+	// decode turns old-codec snapshot bytes into the current V (as any). The
+	// typed RegisterSnapshotMigration captures the concrete V in this closure.
+	decode func([]byte) (any, error)
+}
+
 // snapMigrations bridges a COMPACTED key's durable-genesis snapshot across a
-// change to the projected type V, keyed by the PREVIOUS V codec hash. Stored
-// type-erased (the App is type-erased); the typed RegisterSnapshotMigration
-// captures V in the closure.
+// change to the projected type V, keyed by the PREVIOUS V codec hash.
 var (
 	snapMigrationsMu sync.RWMutex
-	snapMigrations   = map[string]func([]byte) (any, error){}
+	snapMigrations   = map[string]snapshotMigration{}
 )
 
 // RegisterSnapshotMigration teaches the runtime how to bridge a COMPACTED key's
@@ -29,21 +39,23 @@ var (
 func RegisterSnapshotMigration[V any](fromCodecHash string, migrate func([]byte) (V, error)) {
 	snapMigrationsMu.Lock()
 	defer snapMigrationsMu.Unlock()
-	snapMigrations[fromCodecHash] = func(b []byte) (any, error) {
-		v, err := migrate(b)
-		if err != nil {
-			return nil, err
-		}
-		return v, nil
+	snapMigrations[fromCodecHash] = snapshotMigration{
+		decode: func(b []byte) (any, error) {
+			v, err := migrate(b)
+			if err != nil {
+				return nil, err
+			}
+			return v, nil
+		},
 	}
 }
 
 // lookupSnapMigration returns the migration registered for an old codec hash.
-func lookupSnapMigration(fromCodecHash string) (func([]byte) (any, error), bool) {
+func lookupSnapMigration(fromCodecHash string) (snapshotMigration, bool) {
 	snapMigrationsMu.RLock()
 	defer snapMigrationsMu.RUnlock()
-	fn, ok := snapMigrations[fromCodecHash]
-	return fn, ok
+	m, ok := snapMigrations[fromCodecHash]
+	return m, ok
 }
 
 // deleteSnapMigration removes a registration — used by internal tests to keep

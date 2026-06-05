@@ -87,6 +87,14 @@ type App struct {
 	stopSweep     chan struct{}
 	stopSweepOnce sync.Once
 
+	// backplaneDone is closed at the START of Shutdown, BEFORE backplane.Close,
+	// so the projector/consumer tailers can tell a graceful stop (exit) from a
+	// transient mid-stream disconnect (re-subscribe from the cursor and
+	// rehydrate). Without it a single dropped subscription would strand a key
+	// forever — the deploy-freeze class of bug the backplane exists to fix.
+	backplaneDone     chan struct{}
+	backplaneDoneOnce sync.Once
+
 	middlewareMu sync.Mutex
 	middleware   []Middleware
 
@@ -321,6 +329,7 @@ func New(opts ...Option) *App {
 		logs:            make(map[string]*logState),
 		valStates:       make(map[string]*valCell),
 		sessDecoders:    make(map[string]func([]byte) (any, error)),
+		backplaneDone:   make(chan struct{}),
 		cfg: config{
 			addr:            ":3000",
 			logLevel:        LogWarn,

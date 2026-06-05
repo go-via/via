@@ -7,6 +7,22 @@
 //	nc, _ := nats.Connect(url)
 //	bp, _ := vianats.JetStream(nc)
 //	app := via.New(via.WithBackplane(bp))
+//
+// SECURITY (multi-tenant, MANDATORY on a shared bus): JetStream takes the
+// caller's *nats.Conn, so transport security is configured at Connect and is the
+// operator's responsibility — vianats never downgrades it. For any deployment
+// where pods are not on a fully trusted network, supply per-pod credentials and
+// mTLS, and give each tenant its own backplane prefix (WithPrefix) so subjects
+// and the KV bucket are namespaced and the broker rejects cross-tenant access:
+//
+//	nc, _ := nats.Connect(url,
+//	    nats.Secure(tlsConfig),              // mTLS
+//	    nats.UserCredentials("pod.creds"),   // per-pod identity
+//	)
+//	bp, _ := vianats.JetStream(nc, vianats.WithPrefix("tenant-acme"))
+//
+// In-band session-isolation checks (full-sid exact match, fail-closed) are
+// defence-in-depth; the broker's per-pod authz is the load-bearing boundary.
 package vianats
 
 import (
@@ -27,6 +43,7 @@ type Backplane struct {
 	js     jetstream.JetStream
 	kv     jetstream.KeyValue
 	stream jetstream.Stream
+	epoch  via.Epoch // per-stream generation: the stream's creation identity
 	prefix string
 	nc     *nats.Conn
 
@@ -73,10 +90,25 @@ func JetStream(nc *nats.Conn, opts ...Option) (*Backplane, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vianats: create stream: %w", err)
 	}
+	// Epoch = the stream's creation identity. JetStream purge keeps sequence
+	// numbers monotone (no offset-space reset), so the ONLY reset is a stream
+	// delete+recreate, which yields a fresh Created timestamp. Stamping it on
+	// Head + every Record lets the projector detect that reset (applog.go);
+	// every client on the same live stream reads the same Created → same epoch.
+	//
+	// CreateOrUpdateStream returns a Stream whose CachedInfo is populated from
+	// the server's success response (non-nil in nats.go v1.52.0). Guard against
+	// a malformed/empty response so a nil StreamInfo surfaces as an error rather
+	// than a nil-deref panic at construction.
+	info := stream.CachedInfo()
+	if info == nil {
+		return nil, fmt.Errorf("vianats: stream %q returned no info (cannot derive epoch)", cfg.prefix+"_ev")
+	}
 	return &Backplane{
 		js:     js,
 		kv:     kv,
 		stream: stream,
+		epoch:  via.Epoch(info.Created.UnixNano()),
 		prefix: cfg.prefix,
 		nc:     nc,
 		done:   make(chan struct{}),
@@ -131,12 +163,14 @@ func (b *Backplane) Append(ctx context.Context, key string, record []byte) (via.
 func (b *Backplane) Head(ctx context.Context, key string) (via.Offset, via.Epoch, error) {
 	msg, err := b.stream.GetLastMsgForSubject(ctx, b.subjectFor(key))
 	if errors.Is(err, jetstream.ErrMsgNotFound) {
-		return 0, 0, nil
+		// Empty key: no committed offset yet, but the stream still has its
+		// generation — report it so empty→non-empty is not seen as a reset.
+		return 0, b.epoch, nil
 	}
 	if err != nil {
 		return 0, 0, err
 	}
-	return via.Offset(msg.Sequence), 0, nil
+	return via.Offset(msg.Sequence), b.epoch, nil
 }
 
 func (b *Backplane) Subscribe(ctx context.Context, key string, from via.Offset) (<-chan via.Record, error) {
@@ -180,7 +214,7 @@ func (b *Backplane) Subscribe(ctx context.Context, key string, from via.Offset) 
 			if err != nil {
 				return
 			}
-			rec := via.Record{Key: key, Offset: via.Offset(meta.Sequence.Stream), Data: msg.Data()}
+			rec := via.Record{Key: key, Epoch: b.epoch, Offset: via.Offset(meta.Sequence.Stream), Data: msg.Data()}
 			select {
 			case out <- rec:
 			case <-ctx.Done():

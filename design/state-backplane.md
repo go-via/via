@@ -728,11 +728,15 @@ physical layer load-bearing:
   session-gated action ctx (`action.go:107-117`, 403 on mismatch); `via_tab`/`sid`
   are 256-bit crypto-rand (`util.go:11`). There is no raw-client path that
   reaches `Append` or writes the Store directly.
-- **Trust posture.** The backplane is **tier-0 trust**: authn + mTLS are
-  MANDATED, with an explicit `WithInsecureBackplane()` opt-out for
-  local/trusted-network dev (godoc names the risk). Compromised-pod blast radius
-  is named, not waved away: a pod holding creds can publish within its own
-  tenant namespace — bounding cross-tenant damage to the namespace. **Per-event
+- **Trust posture.** The backplane is **tier-0 trust**: on a shared bus, per-pod
+  **credentials** + **mTLS** + per-tenant **subject namespacing** are MANDATORY,
+  not optional. They are configured on the transport the operator supplies —
+  `vianats.JetStream(nc, …)` takes the caller's `*nats.Conn`, so TLS/creds are
+  set on `nats.Connect(url, nats.Secure(tlsCfg), nats.UserCredentials(…))`; via
+  never downgrades them. (`vianats` package godoc states this.) The in-memory
+  backplane is single-process and needs none. Compromised-pod blast radius is
+  named, not waved away: a pod holding creds can publish within its own tenant
+  namespace — bounding cross-tenant damage to the namespace. **Per-event
   record-signing (authenticity within a namespace) is DEFERRED** — named as the
   residual, not solved in v1.
 
@@ -742,25 +746,39 @@ The append-only log is a free tamper-evident **audit trail** (T1-SEC-WIN) — wh
 directly **tensions with erasure**: an immutable log cannot delete a past record,
 and a tombstone event only removes an ID from the *projection* while the original
 PII bytes persist forever (Kafka keeps them; the Compactor is optional). Erasure
-is therefore achieved by **crypto-shred**, not by deletion:
+is therefore achieved by **crypto-shred**, not by deletion. **SHIPPED**
+(`crypto.go`, `WithKeyStore`, `App.EraseDataSubject`):
 
-- **Encrypt PII per data-subject** behind a `KeyStore{ KeyFor(subject), DropKey(subject) }`
-  seam. Erasure = `DropKey` → the ciphertext is permanently unreadable → `Decode`
-  returns `ErrUndecodable` → this **reuses the drop-on-undecodable fold no-op** (the
-  event silently leaves the projection). No log rewrite required.
-- **Snapshot invalidation on erasure.** Snapshots fold *plaintext* V, so they would
-  retain erased PII — erasure MUST invalidate affected snapshots and force a
-  PII-free re-fold. For a COMPACTED key whose snapshot is durable genesis (T2-GO-4),
-  the snapshot must be re-encoded PII-free / the key re-snapshotted post-erasure,
-  or the PII is unreachable-by-key but still resident.
-- **Audit-class vs PII-class events are separated at declaration.** A single event
-  type must not be both: audit-class events are retained (PII-free), PII-class
-  events are crypto-shreddable. This resolves the audit-vs-erasure tension by class
-  rather than per-record.
-- **Conceded residual.** Backups and replicas must independently expire the key
-  (out of band) — the design cannot reach bytes it does not own. Tombstone +
-  Compact reclaims *storage*; the **key-drop**, not the tombstone, is the erasure
-  mechanism.
+- **Encrypt PII per data-subject** behind `KeyStore{ KeyFor, Key, DropKey }`. An
+  event opts in by implementing `DataSubject() string`; at `Append`,
+  `marshalEvent` AES-256-GCM-encrypts its payload under the subject's key (the
+  envelope carries the subject in `S`, ciphertext in `D`). `KeyFor` is
+  create-or-get (Append); `Key` is **lookup-only** (decode) and never recreates a
+  dropped key. Erasure = `DropKey`.
+- **Distinct `ErrErased`.** A dropped key → decode returns `ErrErased` →
+  projector and consumers **skip + advance** (the drop-no-op), metered as
+  `via.events.erased` / `via.consumer.erased` (distinct from corruption). An
+  encrypted record reaching a pod with NO keystore → `ErrUndecodable` (fail-safe,
+  never mis-folded as plaintext).
+- **Snapshot invalidation by generation.** `EraseDataSubject` bumps a global
+  erasure generation (`erasure:gen` Store cell, CAS loop); the `checkpoint`
+  stamps the gen it folded under; cold-start ignores any checkpoint below the
+  authoritative gen and re-folds from the now-undecryptable log. The plaintext
+  snapshot cell is physically overwritten on the next snapshot write; an
+  SLA-bound deployment must also expire the snapshot store per retention policy.
+- **Compacted + erasure → HALT, never truncate.** A compacted key's snapshot is
+  durable genesis (prefix gone); if erasure invalidates it, re-folding from 0
+  would silently truncate surviving subjects' data, so the projector halts
+  (`via.snapshot.erasure_halt`, roll-forward-only). Snapshot re-encryption for
+  this case is a documented follow-up, not silent loss.
+- **Audit-class vs PII-class by declaration.** Audit-class events carry no
+  `DataSubject` (retained, PII-free); PII-class events implement it and are
+  crypto-shreddable.
+- **Conceded residuals.** (a) A pod's running in-memory projection holds the
+  pre-erasure value until it cold-starts/redeploys. (b) Backups/replicas must
+  independently expire the key. The **key-drop** is the erasure mechanism; in a
+  cluster every pod must share the same `KeyStore` (a KMS/Vault impl, not
+  `InMemoryKeyStore`).
 
 
 ## Per-dimension, 4 architects by lens
@@ -806,6 +824,54 @@ is therefore achieved by **crypto-shred**, not by deletion:
 - COMPACT-BEFORE-SNAPSHOT-DURABLE in a third-party backend permanently loses events (Compactor turns a recoverable read bug into data loss). Mitigate: Compactor godoc demands snapshot-durability-first; ship a backend conformance test suite that asserts the ordering and gap-free resumable delivery.
 - ENVELOPE-OMISSION IS UNRECOVERABLE: an event appended without a version envelope can never be evolved (records immortal). The envelope MUST be in the very first byte ever appended — default JSON codec enforces it; a type with no registered TypeTag fails fast at Mount, not in prod replay.
 - FORWARD-INCOMPAT ROLLBACK: a rolled-back deploy reading events written at a newer version. Decode whose version exceeds the binary's max returns a hard error that STOPS that key's projector rather than silently mis-folding — roll forward, not back, past an E schema bump. Operational constraint, must be documented.
+
+## Council-remediation pass (post-rating) — SHIPPED + residuals
+
+After the design-council rated the branch, a remediation pass closed the open
+findings. Shipped here, with the residual limitations stated honestly:
+
+- **Fold-determinism now has runtime + CI gates** (was the #1 unguarded risk):
+  `WithFoldVerify()` re-folds each record and, on a mismatch, emits
+  `via.fold.divergence` and PERMANENTLY refuses to compact that key (never
+  crystallizes a non-deterministic fold into durable genesis). An unconditional
+  per-fold canary emits `via.fold.offset` + `via.fold.digest` (the council's
+  `(key,offset,fnv)` triple) for cross-pod divergence detection. CI gates: a
+  fuzz (`FuzzFoldIsDeterministicAndNeverPanics`) and a SUBPROCESS two-replay
+  convergence test (catches per-process state — map order, pid — that
+  same-process checks cannot). Residual: a deterministic-but-WRONG v2 re-fold
+  still needs a manual snapshot+epoch; the runtime cannot force it.
+- **`vianats` epoch is real** (was hard `Epoch(0)` → reset detection never fired
+  on NATS): derived from the stream's creation identity, stamped on `Head` +
+  every `Record`, so a stream delete+recreate is detected.
+- **Reconnect-rehydrate** (#3/#7): projector AND consumer now distinguish a
+  graceful Shutdown (exit) from a transient mid-stream disconnect (re-subscribe
+  from the cursor/committed offset and rehydrate), via an App `backplaneDone`
+  signal closed before `backplane.Close()`. `memevents.Faulty` gained
+  `Disconnect` + `Reorder` modes to exercise it.
+- **GDPR crypto-shred** shipped (see the erasure section above).
+- **Observability deltas**: new metrics `via.fold.offset`, `via.fold.digest`,
+  `via.fold.divergence`, `via.events.erased`, `via.consumer.erased`,
+  `via.snapshot.erasure_halt`.
+
+Residual / documented follow-ups (NOT silent loss — each fails safe):
+- Read-your-write across tabs is eventual (one projector hop); the writer's own
+  View updates when ITS projector folds the offset.
+- A pod's running in-memory projection clears erased PII only on cold-start /
+  redeploy; the durable log + snapshots are shredded immediately.
+- Compaction × (erasure | epoch-reset) of the SAME key: the compacted snapshot
+  is durable genesis, so it HALTS (`via.snapshot.erasure_halt`) rather than
+  truncate; snapshot re-encryption is the follow-up.
+- `WithFoldVerify` uses `reflect.DeepEqual`, which can false-positive on a V with
+  func/chan fields or NaN floats — fail-safe (needless refuse-to-compact, never
+  bad genesis).
+- The value-reconciliation `changes` tailer (`startChangesTailer`, StateApp/
+  StateSess) does NOT yet share the projector/consumer reconnect-rehydrate; a
+  transient drop there is masked by the periodic Store-head reconcile sweep
+  (T4-SRE-1), so it is not a deploy-freeze, but wiring it to `backplaneDone` for
+  symmetry is a small follow-up.
+- `via.fold.digest` carries an `offset` label (needed to compare pods at the same
+  offset); on a hot key that is high-cardinality for a Prometheus-style sink —
+  operators should relabel/drop it outside divergence investigations.
 
 ## Phased plan
 

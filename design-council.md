@@ -2726,3 +2726,42 @@ Red → Yellow (Explore: flagged restart commit-race → added awaitConsumerComm
 ### DESIGN GATE closed: T-DX-6 (handler ctx = context.Context not *Ctx) + council-line-272 (consumer-aware compaction floor). Spec patched.
 
 ### Next P6 (later, separate slices): Redis/PG/Kafka backends (need infra modules); AppendIf/ReadAt (gated on a real claim-ticket case); WithFoldVerify dev-mode + go-vet purity analyzer; epoch-reset×Compactor floor follow-up (Tick 41); the OnEvent shutdown-ctx refinement (handler ctx is per-delivery, not force-cancelled on Shutdown — acceptable v1).
+
+## Tick 45 — 2026-06-05 — Council ratings + full remediation pass
+
+The council reconvened to individually rate the branch /10 (per-lens), then the
+maintainer asked to address EVERY finding. Ratings: Go-idioms 8.2, SRE 8.2,
+Security 7.2, Testing 6.8, DX 6.5 (mean 7.4). The drag was a consistent edge
+cluster three lenses flagged independently: deferred test rigor, the `vianats`
+Epoch(0) stub, and the unbuilt GDPR seam.
+
+All shipped this pass (each via the TDD-rygba cycle; full suite + backplanetest
++ vianats green under -race, both modules):
+
+1. **vianats real stream-generation Epoch** (Head + every Record) — reset
+   detection now fires on NATS. [SRE#5]
+2. **Fold-divergence canary** — unconditional `via.fold.offset`+`via.fold.digest`
+   per fold. [T1-SRE-7]
+3. **memevents.Faulty Disconnect + Reorder** + **reconnect-rehydrate** for
+   projector AND consumer (graceful-stop vs transient-drop via App.backplaneDone).
+   [T1-TEST-KEYSTONE, #3/#7]
+4. **Fuzz fold-purity** + **subprocess two-replay convergence gate**. [T1-TEST-1]
+5. **snapMigrations** registry → typed `snapshotMigration` (confined erasure). [GO]
+6. **DX**: chat field `Log`→`Messages`; `.Op()`-divergence + Append/OnEvent error
+   godoc + OnEvent side-effect example. [T1-DX-1, DX]
+7. **WithFoldVerify** mandatory-before-compact gate (re-fold compare → refuse
+   compaction + `via.fold.divergence`). [SRE#4/Sec#4]
+8. **GDPR crypto-shred**: `KeyStore`(KeyFor/Key/DropKey) + per-subject AES-256-GCM
+   + `DataSubject` + `App.EraseDataSubject` + `ErrErased` + erasure-gen snapshot
+   invalidation + compacted-key HALT-not-truncate. [T1-SEC-2]
+9. **Docs**: mTLS/per-pod-creds/namespacing MANDATORY (configured on the caller's
+   nats.Conn; vianats godoc) + reconciled isolation/GDPR/known-limitation
+   sections. [T1-SEC-1]
+
+Also fixed 3 PRE-EXISTING test flakes surfaced under -count (compaction/consumer
+timing + the lowestRetainedOffset helper racing Close).
+
+Residuals are documented & fail-safe (see spec "Council-remediation pass"):
+eventual read-your-write; live-projection erasure clears on cold-start;
+compaction×erasure halts pending snapshot re-encryption; DeepEqual fold-verify
+false-positive on func/chan/NaN V. New metrics catalogued in the spec.
