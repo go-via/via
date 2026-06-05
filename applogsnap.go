@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
+	"strconv"
 )
 
 // checkpoint is the durable fold snapshot for a StateAppEvents key: the
@@ -22,6 +24,12 @@ type checkpoint struct {
 	// is dropped (snapshot-FIRST), so a cold start never sees a dropped prefix
 	// behind a Compacted:false checkpoint.
 	Compacted bool `json:"c"`
+	// ErasureGen is the crypto-shred generation this snapshot was folded under. A
+	// GDPR erasure (App.EraseDataSubject) bumps the global generation; a cold
+	// start whose authoritative generation is HIGHER than the checkpoint's
+	// ignores the snapshot and re-folds from the (now-undecryptable) log, so the
+	// erased subject's PII is never seeded from a pre-erasure snapshot.
+	ErasureGen uint64 `json:"g,omitempty"`
 }
 
 // snapKey namespaces a key's snapshot cell in the Store, distinct from val: and
@@ -64,6 +72,9 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	encode := ls.encodeSnap
 	rev := ls.snapRev
 	ls.mu.RUnlock()
+	// Stamp the crypto-shred generation so a post-erasure cold start ignores a
+	// snapshot folded before the erasure (its V may hold now-shredded PII).
+	cp.ErasureGen = a.loadErasureGen()
 	if encode == nil {
 		return
 	}
@@ -105,7 +116,15 @@ func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
 	}
 	ls.mu.RLock()
 	floor := ls.prevSnapOffset
+	diverged := ls.diverged
 	ls.mu.RUnlock()
+	if diverged {
+		// WithFoldVerify proved this key's fold non-deterministic. NEVER compact —
+		// dropping the prefix would crystallize the bad projection into durable
+		// genesis with no path back. Keep the full log so a fixed (deterministic)
+		// build can re-fold from scratch.
+		return
+	}
 	// Never discard an event a registered side-effect consumer has not yet
 	// processed: clamp the floor to the slowest consumer's committed offset
 	// (council line 272 / T-DX-6). A consumer at offset 0 pins it at genesis.
@@ -122,4 +141,39 @@ func (a *App) setSnapRev(ls *logState, rev Rev) {
 	ls.mu.Lock()
 	ls.snapRev = rev
 	ls.mu.Unlock()
+}
+
+// emitFoldDigest publishes the cheap, unconditional fold-divergence canary
+// (council T1-SRE-7): after every advancing fold a pod emits its applied offset
+// and a digest of the resulting projection, both gauged by key. Two pods that
+// have folded a key to the same offset MUST report the same digest; a persistent
+// (key, offset)-matched digest MISMATCH across pods is fold non-determinism
+// caught before it corrupts a durable snapshot. The digest reuses the snapshot
+// codec (encodeSnap), so a key with no codec simply skips the canary — never
+// panics. Best-effort: a transient encode error just skips this sample.
+//
+// Cost: this re-encodes the FULL projection on EVERY advancing fold (O(state)
+// per event), unlike maybeSnapshot which amortizes its encode over an interval.
+// "Cheap" is relative to the cross-pod corruption it catches, not to the fold
+// itself — for a large projection on a hot key the per-event encode is real. It
+// reuses the encode the projector already performs at snapshot time, so it adds
+// no new serialization machinery, only frequency.
+func (a *App) emitFoldDigest(ls *logState, key string) {
+	ls.mu.RLock()
+	proj := ls.projection
+	off := ls.cursor
+	encode := ls.encodeSnap
+	ls.mu.RUnlock()
+	if encode == nil {
+		return
+	}
+	b, err := encode(proj)
+	if err != nil {
+		return
+	}
+	h := fnv.New32a()
+	_, _ = h.Write(b)
+	m := a.metricsOrNoop()
+	m.Gauge("via.fold.offset", float64(off), "key", key)
+	m.Gauge("via.fold.digest", float64(h.Sum32()), "key", key, "offset", strconv.FormatUint(uint64(off), 10))
 }

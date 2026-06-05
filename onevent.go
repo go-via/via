@@ -44,11 +44,29 @@ func consumerKey(name, wireKey string) string { return "consumer:" + name + ":" 
 // is skipped. Delivery is at-least-once (a crash between effect and commit, or
 // two pods both running the consumer, re-runs the handler), so a handler that
 // must be exactly-once carries an idempotency key derived from off (e.g. a
-// Stripe idempotency-key = wireKey+":"+off). A handler error does NOT advance —
-// the record is retried (head-of-line, preserving order); an undecodable record
-// is skipped (drop-on-undecodable, like the fold). A registered consumer also
-// pins the Compactor floor to its committed offset, so compaction never discards
-// an event it has not yet processed.
+// Stripe idempotency-key = wireKey+":"+off):
+//
+//	func (t *Tickets) OnInit(ctx *via.Ctx) {
+//	    t.Events.OnEvent("notify", func(ctx context.Context, ev TicketEvent, off via.Offset) error {
+//	        if ev.Kind != Closed {
+//	            return nil // not interested → committed, advance past it
+//	        }
+//	        // idempotency key = key+offset: a redelivery (crash/two pods) is a no-op
+//	        return mailer.Send(ctx, ev.Email, "Closed", mail.IdempotencyKey(t.Events.Key()+":"+strconv.FormatUint(uint64(off),10)))
+//	    })
+//	}
+//
+// Error surface, by outcome:
+//   - handler returns nil      → commit + advance (effect ran exactly once on this pod)
+//   - handler returns an error → DO NOT advance; re-subscribe from committed and
+//     retry head-of-line (preserves order); via.consumer.error.
+//   - undecodable record       → skip + advance (drop-on-undecodable, like the
+//     fold); via.consumer.undecodable.
+//   - forward-incompatible      → BLOCK (do not advance), so a rolled-back deploy
+//     never silently skips an event it cannot yet understand; via.consumer.forward_incompatible.
+//
+// A registered consumer also pins the Compactor floor to its committed offset,
+// so compaction never discards an event it has not yet processed.
 //
 // The handler receives a context.Context scoping the delivery (cancelled when
 // the consumer stops delivering), NOT a via *Ctx — a background tailer fires on
@@ -65,7 +83,7 @@ func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx context.Context,
 	// clean handle or an undecodable (poison/forward-incompatible) record advances;
 	// a handler error does NOT (the record is retried).
 	deliver := func(ctx context.Context, data []byte, off Offset) bool {
-		ev, err := decodeEvent[E](data)
+		ev, err := decodeEvent[E](data, app.eventDecryptor())
 		if errors.Is(err, ErrForwardIncompatible) {
 			// A newer binary wrote this event. Roll-forward-only: do NOT advance —
 			// skipping would silently drop the side effect. Block here (the record
@@ -73,6 +91,13 @@ func (l *StateAppEvents[E, V]) OnEvent(name string, fn func(ctx context.Context,
 			// projector's halt.
 			app.metricsOrNoop().Counter("via.consumer.forward_incompatible", "name", name, "key", key)
 			return false
+		}
+		if errors.Is(err, ErrErased) {
+			// The subject was erased (crypto-shred): the effect can never run on
+			// shredded data. Skip + advance (like a poison record) — do NOT block,
+			// or erasure would wedge the consumer forever.
+			app.metricsOrNoop().Counter("via.consumer.erased", "name", name, "key", key)
+			return true
 		}
 		if err != nil {
 			// Poison / undecodable: this binary can never process it, so skip +
@@ -143,9 +168,13 @@ func (a *App) startConsumer(name, key string, cs *consumerState, deliver func(co
 				}
 			}
 			cancel()
-			if !retry {
-				return // channel closed (shutdown), nothing pending
+			if !retry && a.shuttingDown() {
+				return // graceful stop: backplane closing, nothing pending
 			}
+			// Either a handler error (retry) OR a transient disconnect (channel
+			// closed while still running) → re-subscribe from the committed
+			// offset and rehydrate. At-least-once is preserved: a dropped
+			// subscription must never silently drop side effects.
 			time.Sleep(consumerRetryBackoff)
 		}
 	}()

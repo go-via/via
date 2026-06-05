@@ -46,10 +46,12 @@ func (Posted) Fold(acc []Message, ev Posted) []Message {
 }
 
 type Room struct {
-	// Log is app-scoped: one room shared across every session and tab. Append a
-	// Posted event; the per-key projector folds it and fans the new line out to
-	// every tab that read the log in View.
-	Log via.StateAppEvents[Posted, []Message]
+	// Messages is app-scoped: one room shared across every session and tab.
+	// Append a Posted event; the per-key projector folds it and fans the new
+	// line out to every tab that read the log in View. (Named for the domain,
+	// not "Log" — the handle is an event log, but the field is the chat's
+	// messages.)
+	Messages via.StateAppEvents[Posted, []Message]
 	// Name and Draft are tab-local and two-way bound to their inputs, so
 	// the latest client values are injected before Send runs. Name rides
 	// along on every message this tab sends.
@@ -68,17 +70,17 @@ func (r *Room) Send(ctx *via.Ctx) {
 	}
 	// Append never conflicts — no read-modify-write, no trim-Update. The fold
 	// derives the list (and bounds it); the projector renders.
-	_, _ = r.Log.Append(ctx, Posted{From: name, Body: body})
+	_, _ = r.Messages.Append(ctx, Posted{From: name, Body: body})
 	r.Draft.Write(ctx, "")
 }
 
 func (r *Room) View(ctx *via.CtxR) h.H {
-	// Reading Log here subscribes this tab; any Send anywhere re-renders it.
+	// Reading Messages here subscribes this tab; any Send anywhere re-renders it.
 	return h.Main(h.Class("container"),
 		h.H1(h.Text("Via Chat")),
 		h.P(h.Small(h.Text("Open another browser — messages appear live in both."))),
 		h.Article(h.Style("max-height:60vh;overflow-y:auto"),
-			h.Each(r.Log.Read(ctx), func(m Message) h.H {
+			h.Each(r.Messages.Read(ctx), func(m Message) h.H {
 				return h.P(h.Strong(h.Text(m.From+": ")), h.Text(m.Body))
 			}),
 		),

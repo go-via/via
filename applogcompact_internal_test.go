@@ -31,7 +31,13 @@ func lowestRetainedOffset(t *testing.T, bp Backplane, key string) Offset {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sub, err := bp.Subscribe(ctx, key, 0)
-	require.NoError(t, err)
+	if err != nil {
+		// A torn-down backplane (Close during a require.Never/Eventually poll,
+		// whose check fn runs in a straggler goroutine that can outlive the test
+		// body's deferred Close) retains nothing — report 0 rather than failing
+		// the test from inside the polled goroutine.
+		return 0
+	}
 	select {
 	case r, ok := <-sub:
 		if !ok {

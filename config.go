@@ -28,6 +28,8 @@ type config struct {
 	contextTTL         time.Duration
 	reconcileInterval  time.Duration
 	snapshotInterval   int
+	foldVerify         bool
+	keyStore           KeyStore
 	sseHeartbeat       time.Duration
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
@@ -101,6 +103,37 @@ func WithReconcileInterval(d time.Duration) Option {
 // for correctness; a missing or stale-codec snapshot just re-folds from genesis.
 // Default 64.
 func WithSnapshotInterval(n int) Option { return func(c *config) { c.snapshotInterval = n } }
+
+// WithFoldVerify turns on runtime fold-determinism checking for every
+// StateAppEvents projector: each record is folded a SECOND time from the same
+// accumulator and the two results compared. A mismatch means the reducer is
+// impure (it read a clock, RNG, mutable global, or otherwise depends on
+// something other than (acc, event)) — the runtime emits via.fold.divergence AND
+// permanently REFUSES to compact that key, so a non-deterministic fold can never
+// be crystallized into a durable-genesis snapshot (which no later re-fold could
+// recover). It roughly doubles fold CPU, so it is opt-in — run it in dev/CI (and
+// optionally a canary pod) to catch impurity before it reaches production
+// compaction. Off by default.
+//
+// The check uses reflect.DeepEqual on the two fold results, which can spuriously
+// flag a PURE fold whose V contains uncomparable parts (func/chan fields, or NaN
+// floats — for which a==a is false). That is fail-SAFE, not fail-open: the worst
+// case is a needless via.fold.divergence and a refusal to compact, never a bad
+// snapshot. Such a V is also not JSON-snapshottable, so it could not be compacted
+// anyway.
+func WithFoldVerify() Option { return func(c *config) { c.foldVerify = true } }
+
+// WithKeyStore enables per-data-subject encryption (crypto-shred GDPR erasure)
+// for StateAppEvents. Events whose type implements DataSubject have their
+// payload encrypted under the subject's key (from the KeyStore) before they are
+// appended to the durable log, and App.EraseDataSubject drops a subject's key so
+// every ciphertext for them becomes permanently unreadable — even in an
+// append-only log or a backup — without rewriting history. Non-DataSubject
+// events are unaffected (stored plaintext).
+//
+// In a cluster every pod must share the SAME KeyStore (a KMS/Vault-backed impl),
+// or a pod without a subject's key cannot decode that subject's events.
+func WithKeyStore(ks KeyStore) Option { return func(c *config) { c.keyStore = ks } }
 
 // WithSSEHeartbeat sets the SSE keepalive cadence. Default 25s.
 //
