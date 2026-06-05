@@ -1,0 +1,62 @@
+# Spins up the whole cluster: one JetStream-enabled NATS server (the durable
+# backplane), two Via app nodes, and a sticky-cookie HAProxy load balancer in
+# front of them. Type in one browser, watch the message appear in another — that
+# fan-out is the backplane.
+#
+#   docker compose -f internal/examples/chatcluster/docker-compose.yml up --build
+#   open http://localhost:3000   # via the load balancer (sticky per browser)
+#
+# The load balancer pins each browser to ONE node (via a VIA_LB cookie), because
+# a tab's context is in-memory on the node that served it; the SHARED state still
+# crosses nodes via the backplane. Open it in two SEPARATE browsers (or one +
+# incognito) to land on different nodes and watch them sync. The nodes are also
+# exposed directly on :3001 / :3002 if you want to bypass the balancer.
+services:
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"] # -js: enable JetStream; -m: monitoring port for the healthcheck
+    ports:
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  node-one:
+    build:
+      context: ../../..
+      dockerfile: internal/examples/chatcluster/Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      NODE_NAME: node-one
+      PORT: "3000"
+    ports:
+      - "3001:3000"
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  node-two:
+    build:
+      context: ../../..
+      dockerfile: internal/examples/chatcluster/Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+      NODE_NAME: node-two
+      PORT: "3000"
+    ports:
+      - "3002:3000"
+    depends_on:
+      nats:
+        condition: service_healthy
+
+  lb:
+    image: haproxy:2.9-alpine
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - node-one
+      - node-two
