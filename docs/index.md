@@ -112,6 +112,22 @@ view reactivity. UI state the client owns (modal open, current tab, filter
 string) reacts instantly with zero SSE traffic; state the server owns (DB
 rows, cross-tab invariants, secrets) flows through actions and re-renders.
 
+## Scale across pods
+
+The **Shared** counter above is per-pod by default. Wire in a
+[backplane](distributed-state) and it converges across every instance — and
+survives a restart — with the *same typed fields*. One line at boot:
+
+```go
+app := via.New(via.WithBackplane(via.InMemory())) // dev: no infra
+// prod: via.WithBackplane(bp) where bp, _ := vianats.JetStream(nc) — durable, clustered
+```
+
+`StateApp`/`StateSess` cluster with no API change; a new opt-in
+`StateAppEvents[E, V]` carries high-churn shared state — a counter, a chat feed,
+a queue — as an append-only event log that every pod folds to the same value.
+In **preview** on the way to 1.0; see [Distributed state](distributed-state).
+
 ## Where to go next
 
 - **New here?** [Getting started](getting-started), then build a

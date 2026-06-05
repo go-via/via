@@ -124,3 +124,12 @@ type Page struct {
     Open  via.SignalBool        // key defaults to "open"
 }
 ```
+
+## Across the cluster
+
+The four shapes above are per-pod by default — `StateApp[T]` lives in the
+process that serves the tab. Wire in a [backplane](distributed-state) and
+`StateApp`/`StateSess` converge across every pod and survive a restart with the
+**same API**, and a new opt-in sibling — `StateAppEvents[E, V]` — carries
+high-churn shared state as an append-only event log. See
+[Distributed state](distributed-state).
