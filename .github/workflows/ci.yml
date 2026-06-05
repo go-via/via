@@ -13,25 +13,61 @@ permissions:
 
 jobs:
   build-test:
+    # NOTE: this job always RUNS and reports, even for docs-only changes — only
+    # its heavy steps are skipped (see the "Detect" step). Keeping the job (and
+    # its "Build and Test" name) unconditional is deliberate: it is a required
+    # status check, and a `paths`/`paths-ignore` trigger filter would make the
+    # workflow not run on a docs-only PR, leaving the required check pending
+    # forever and blocking the merge.
     name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need history to diff against the base for the docs-only check
+
+      - name: Detect code (non-docs) changes
+        id: changes
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          [ -n "$base" ] || base="${{ github.event.before }}"
+          zero="0000000000000000000000000000000000000000"
+          # Unknown/zero/unreachable base (first push, force-push, new branch) →
+          # run the full pipeline (fail safe; never skip CI on uncertainty).
+          if [ -z "$base" ] || [ "$base" = "$zero" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            # Capture changed files that are NOT markdown / not under docs/. Using
+            # a non-empty check (not `grep -q`'s exit code) keeps this correct
+            # across grep implementations. `|| true` guards the no-match exit
+            # under `set -e`-style runners.
+            nondoc="$(git diff --name-only "$base" "${{ github.sha }}" | grep -vE '(\.md$|^docs/)' || true)"
+            if [ -n "$nondoc" ]; then
+              echo "code=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "code=false" >> "$GITHUB_OUTPUT"
+              echo "Only markdown/docs changed — skipping the Go CI pipeline."
+            fi
+          fi
 
       - name: Setup Go
+        if: steps.changes.outputs.code == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.26.4'
           cache: true
 
       - name: Setup Node
+        if: steps.changes.outputs.code == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 'lts/*'
 
       - name: Install markdownlint-cli
+        if: steps.changes.outputs.code == 'true'
         run: npm install -g markdownlint-cli
 
       - name: Run CI checks
+        if: steps.changes.outputs.code == 'true'
         run: bash ./ci-check.sh
