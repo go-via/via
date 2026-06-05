@@ -77,10 +77,36 @@ and emits structured events for ops dashboards:
 | `via.action.latency` | histogram | `method` |
 | `via.render.total` | counter | `route` |
 | `via.sse.connect` | counter | |
-| `via.sse.disconnect` | counter | |
+| `via.sse.disconnect` | counter | `reason` |
 | `via.sse.resync` | counter | |
 | `via.sse.recover` | counter | `mode` |
 | `via.ctx.live` | gauge | |
+| `via.ctx.reap` | counter | `reason` |
+
+State backplane (`StateAppEvents`, the clustered event-log path):
+
+| Event | Kind | Labels | Meaning |
+|---|---|---|---|
+| `via.events.epoch_reset` | counter | `key` | stream offset-space reset (recreate/trim/restore); projector re-folds from genesis |
+| `via.events.undecodable` | counter | `key` | poison record skipped (no decode path) — never wedges the key |
+| `via.events.forward_incompatible` | counter | `key` | record written by a newer binary; projector HALTS (roll forward, not back) |
+| `via.events.erased` | counter | `key` | record skipped because its data subject was crypto-shredded (GDPR erasure) |
+| `via.events.compaction_reseed` | counter | `key` | projector fell behind the compacted prefix and recovered from the snapshot |
+| `via.events.compaction_gap_halt` | counter | `key` | a compaction gap had no bridging snapshot; projector HALTS rather than diverge |
+| `via.fold.offset` | gauge | `key` | applied offset after each fold (cross-pod convergence signal) |
+| `via.fold.digest` | gauge | `key`, `offset` | fnv digest of the projection — compare across pods at the same offset to detect fold divergence (high-cardinality `offset`; relabel/drop outside investigations) |
+| `via.fold.divergence` | counter | `key` | `WithFoldVerify` caught a non-deterministic fold; the key will not compact |
+| `via.snapshot.unbridgeable` | counter | `key` | compacted-key snapshot can't be migrated to the current codec; projector HALTS |
+| `via.snapshot.erasure_halt` | counter | `key` | a crypto-shred erasure invalidated a compacted (durable-genesis) snapshot; projector HALTS |
+| `via.consumer.error` | counter | `name`, `key` | `OnEvent` handler returned an error; retried head-of-line (does not advance) |
+| `via.consumer.undecodable` | counter | `name`, `key` | `OnEvent` skipped a poison record |
+| `via.consumer.forward_incompatible` | counter | `name`, `key` | `OnEvent` blocked on a newer-binary record |
+| `via.consumer.erased` | counter | `name`, `key` | `OnEvent` skipped a crypto-shredded record |
+
+Alerting hints: a sustained nonzero `via.fold.divergence`, a persistent
+`via.fold.digest` mismatch across pods at the same `key`+`offset`, or any
+`via.events.compaction_gap_halt` / `via.snapshot.*_halt` is a halted projector —
+investigate before the affected key's state can advance.
 
 Adapt to Prometheus, OTel, or expvar by implementing three methods
 (`Counter`, `Gauge`, `Histogram`) that forward to your backend. The default
@@ -142,3 +168,28 @@ regressions fail CI.
 
 `h.Static(...)` pre-renders fragments that don't depend on per-request state
 — see [Rendering](rendering#static-pre-render).
+
+### State backplane under load
+
+`backplanebench_internal_test.go` (in-memory, multi-pod) and
+`vianats/bench_test.go` (durable JetStream) load-test the clustered
+`StateAppEvents` path. Run them on your hardware; the shape, not the absolute
+numbers, is what matters:
+
+- **Cross-pod convergence is fan-out.** Every pod independently decodes and
+  folds every event, so AGGREGATE fold throughput scales with pod count (until
+  it saturates cores) while the per-event INPUT rate a fixed cluster sustains
+  drops inversely as you add pods. Size the cluster for the input rate you need,
+  not the fold rate.
+- **Per-fold cost is decode-bound** (envelope + payload JSON, plus the
+  always-on `via.fold.digest` encode). `WithFoldVerify` roughly doubles it (it
+  folds each record twice) — run it on a canary, not the whole fleet.
+- **A real backend keeps the log off-heap**; the in-memory backplane holds the
+  whole log in the Go heap, so its GC cost grows with total events. Production
+  bounds the log with snapshot+compaction (`WithSnapshotInterval`), which is
+  also what keeps cold-start fast.
+
+A keeping-up consumer or a fast pod compacting the shared log will not truncate
+a lagging peer: a projector that falls behind a compacted prefix re-seeds from
+the snapshot (`via.events.compaction_reseed`), or halts rather than diverge
+(`via.events.compaction_gap_halt`).
