@@ -70,7 +70,6 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	// the drop — snapshot-FIRST.
 	cp.Compacted = ls.prevSnapOffset >= 2
 	encode := ls.encodeSnap
-	rev := ls.snapRev
 	ls.mu.RUnlock()
 	// Stamp the crypto-shred generation so a post-erasure cold start ignores a
 	// snapshot folded before the erasure (its V may hold now-shredded PII).
@@ -87,10 +86,23 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	if err != nil {
 		return
 	}
-	newRev, err := a.backplane.CAS(context.Background(), snapKey(key), rev, b)
+	// MONOTONIC: never regress the shared snapshot's CoveredOffset. The cell is
+	// shared across pods; a lagging pod must not overwrite a leader's
+	// higher-covered snapshot with a lower one, or compaction (which trusts the
+	// durable snapshot to cover the prefix it drops) and a peer's gap-reseed
+	// would lose records. Read the current cell, skip if we don't advance it, and
+	// CAS against the rev we just read.
+	curData, curRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	if ok {
+		var curCp checkpoint
+		if json.Unmarshal(curData, &curCp) == nil && cp.CoveredOffset <= curCp.CoveredOffset {
+			a.setSnapRev(ls, curRev)
+			return // a peer's snapshot already covers at least this offset
+		}
+	}
+	newRev, err := a.backplane.CAS(context.Background(), snapKey(key), curRev, b)
 	if errors.Is(err, ErrCASConflict) {
-		// A peer wrote a newer snapshot; resync our rev so the next write CASes
-		// against it, and skip this one.
+		// A peer wrote concurrently; resync our rev and retry next interval.
 		_, fresh, _, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
 		a.setSnapRev(ls, fresh)
 		return
