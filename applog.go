@@ -133,7 +133,7 @@ func (a *App) startProjector(key string, ls *logState) {
 			// Keep ranging the channel even once halted, so the backplane's
 			// Subscribe sender never blocks (no goroutine leak); just stop folding.
 			for rec := range ch {
-				if a.projectRecord(ls, key, rec) {
+				if a.applyRecord(ls, key, rec) {
 					// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
 					a.broadcastRender(nil, nil, key)
 					a.emitFoldDigest(ls, key)
@@ -197,6 +197,71 @@ func (a *App) haltErasure(ls *logState, key string) {
 	ls.halted = true
 	ls.mu.Unlock()
 	a.metricsOrNoop().Counter("via.snapshot.erasure_halt", "key", key)
+}
+
+// applyRecord handles one delivered record. It first guards against COMPACTION
+// OVERTAKE: if this projector has folded up to cursor C but the next record's
+// offset is beyond C+1, the log dropped records C+1..(offset-1) that this pod
+// never folded (a faster peer compacted the shared log below this pod's
+// position). Folding the post-gap record onto the stale projection would
+// silently and permanently diverge this pod from its peers — the cross-pod
+// truncation bug. Instead re-seed from the durable snapshot (which covers the
+// gap) and let the fold continue; if no snapshot can recover the gap, HALT
+// rather than diverge. Then delegate to projectRecord. Runs on the single
+// projector goroutine, so the read-then-reseed is not racing another folder.
+func (a *App) applyRecord(ls *logState, key string, rec Record) bool {
+	ls.mu.RLock()
+	cur, halted := ls.cursor, ls.halted
+	ls.mu.RUnlock()
+	// rec.Offset > cur+1 is a gap: records cur+1..rec.Offset-1 are missing. This
+	// fires for a fresh projector (cur=0) whose FIRST delivered record has offset
+	// > 1 too — the log's prefix was compacted before its subscriber first read,
+	// so it must recover from the snapshot, not fold onto the seed. (A genuinely
+	// fresh stream's first record is offset 1 == cur+1, no gap.)
+	if !halted && rec.Offset > cur+1 {
+		// A gap: compaction dropped records cur+1..rec.Offset-1 we never folded.
+		// Recover from the snapshot, but ONLY if it bridges the whole gap
+		// (CoveredOffset >= rec.Offset-1) and moves us forward (> cur). Otherwise
+		// halt rather than fold onto a stale projection or seed backwards.
+		if a.reseedFromSnapshot(ls, key, cur, rec.Offset-1) {
+			a.metricsOrNoop().Counter("via.events.compaction_reseed", "key", key)
+		} else {
+			ls.mu.Lock()
+			ls.halted = true
+			ls.mu.Unlock()
+			a.metricsOrNoop().Counter("via.events.compaction_gap_halt", "key", key)
+			return false
+		}
+	}
+	return a.projectRecord(ls, key, rec)
+}
+
+// reseedFromSnapshot reloads the durable snapshot for key and installs it as the
+// projection baseline (projection=V, cursor=CoveredOffset), so a projector that
+// fell behind a compacted prefix recovers the dropped records from the snapshot
+// instead of skipping them. Returns false if there is no snapshot or its codec
+// hash no longer matches (can't be bridged live — the caller halts). The
+// backplane read is OUTSIDE ls.mu; seedFromSnapshot takes the lock.
+func (a *App) reseedFromSnapshot(ls *logState, key string, cur, needCovered Offset) bool {
+	data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	if !ok {
+		return false
+	}
+	var cp checkpoint
+	if json.Unmarshal(data, &cp) != nil || cp.CodecHash != ls.codecHash {
+		return false
+	}
+	// Only recover if the snapshot BRIDGES the gap (covers up to the record
+	// before rec) and moves us FORWARD — never seed behind our current position.
+	if cp.CoveredOffset < needCovered || cp.CoveredOffset <= cur {
+		return false
+	}
+	v, err := ls.decodeSnap(cp.V)
+	if err != nil {
+		return false
+	}
+	a.seedFromSnapshot(ls, v, cp, rev)
+	return true
 }
 
 // projectRecord folds one delivered Record into the cached projection under the
