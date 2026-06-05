@@ -20,7 +20,7 @@ func (s *loadStub) LoadSnapshot(_ context.Context, key string) ([]byte, Rev, boo
 	s.loads = append(s.loads, key)
 	return s.data, s.rev, s.ok, nil
 }
-func (s *loadStub) CAS(context.Context, string, Rev, []byte) (Rev, error) { return 0, nil }
+func (s *loadStub) CAS(context.Context, string, Rev, []byte) (Rev, error)  { return 0, nil }
 func (s *loadStub) Append(context.Context, string, []byte) (Offset, error) { return 0, nil }
 func (s *loadStub) Head(context.Context, string) (Offset, Epoch, error)    { return 0, 0, nil }
 func (s *loadStub) Subscribe(context.Context, string, Offset) (<-chan Record, error) {

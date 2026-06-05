@@ -16,11 +16,11 @@ func TestValidSessionIDAcceptsOnlyTheGenSecureIDFormat(t *testing.T) {
 		t.Fatal("a freshly generated id must be valid")
 	}
 	cases := map[string]string{
-		"too short":   strings.Repeat("a", 63),
-		"too long":    strings.Repeat("a", 65),
-		"non-hex":     strings.Repeat("a", 63) + "g",
-		"uppercase":   strings.Repeat("a", 63) + "A",
-		"empty":       "",
+		"too short": strings.Repeat("a", 63),
+		"too long":  strings.Repeat("a", 65),
+		"non-hex":   strings.Repeat("a", 63) + "g",
+		"uppercase": strings.Repeat("a", 63) + "A",
+		"empty":     "",
 	}
 	for name, s := range cases {
 		if validSessionID(s) {
