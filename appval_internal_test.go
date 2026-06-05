@@ -46,6 +46,7 @@ func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 // (storeRev < the hint's rev) must NOT be applied (T1-SRE-5), and a redelivered
 // or out-of-order older change must NOT regress L1 (T3-SRE-1 monotone gate).
 func TestApplyChangeDropsStaleReadsAndNeverRegressesL1(t *testing.T) {
+	t.Parallel()
 	stub := &loadStub{}
 	app := &App{backplane: stub, valStates: map[string]*valCell{"k": intCell()}}
 	vc := app.valStates["k"]
@@ -87,6 +88,7 @@ func TestApplyChangeDropsStaleReadsAndNeverRegressesL1(t *testing.T) {
 // corrupt on a poison snapshot). It must advance L1 when the Store moved ahead,
 // and leave it untouched (and NOT signal a change) otherwise.
 func TestReconcileKeyAdvancesOnlyForwardAndSurvivesPoison(t *testing.T) {
+	t.Parallel()
 	stub := &loadStub{}
 	app := &App{backplane: stub, valStates: map[string]*valCell{"k": intCell()}}
 	vc := app.valStates["k"]

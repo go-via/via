@@ -26,6 +26,7 @@ func writeContrivedSnapshot(t *testing.T, app *App, key string, cp checkpoint) {
 // events resumes instantly). We prove it with a snapshot whose value could ONLY
 // come from the snapshot, never from re-folding the real log.
 func TestColdStartSeedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()
@@ -71,6 +72,7 @@ func TestColdStartSeedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
 // the real log ([1..5]); were it (wrongly) seeded, the projection would be [99].
 // This asserts the gen-invalidation directly, not transitively through erasure.
 func TestColdStartIgnoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()
@@ -109,6 +111,7 @@ func TestColdStartIgnoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
 // authoritative erasure generation is still a valid cache and IS seeded — gen
 // invalidation must not nuke every snapshot, only pre-erasure ones.
 func TestColdStartSeedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()
@@ -142,6 +145,7 @@ func TestColdStartSeedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
 // re-folded from genesis — so evolving the projection type V is free (the
 // snapshot is a disposable cache, invalidated on a codec-hash mismatch).
 func TestColdStartIgnoresSnapshotOnCodecHashMismatch(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()
@@ -172,6 +176,7 @@ func TestColdStartIgnoresSnapshotOnCodecHashMismatch(t *testing.T) {
 // them. With an interval of 1, a snapshot appears in the Store after folds,
 // covering the latest offset and decoding to the current projection.
 func TestProjectorPersistsSnapshots(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
 	defer server.Close()
@@ -207,6 +212,7 @@ func TestProjectorPersistsSnapshots(t *testing.T) {
 // public Option promises. After many folds the Store must hold no snapshot, so
 // the feature is genuinely off (not merely deferred to a larger threshold).
 func TestSnapshotWritesDisabledWhenIntervalNonPositive(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(0))
 	defer server.Close()
@@ -232,6 +238,7 @@ func TestSnapshotWritesDisabledWhenIntervalNonPositive(t *testing.T) {
 // from that very snapshot and folds only the tail — proving write and cold-start
 // interoperate, not just each half against a contrived fixture.
 func TestRoundTripPersistedSnapshotSeedsAFreshProjector(t *testing.T) {
+	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
 	defer server.Close()

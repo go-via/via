@@ -82,7 +82,7 @@ func TestEmbeddedJetStreamPrimitivesWork(t *testing.T) {
 		t.Fatalf("publish: %v", err)
 	}
 	a2, _ := js.Publish(ctx, "ev.alpha", []byte("a2"))
-	if !(a2.Sequence > a1.Sequence) {
+	if a2.Sequence <= a1.Sequence {
 		t.Fatalf("stream sequences must increase, got %d then %d", a1.Sequence, a2.Sequence)
 	}
 

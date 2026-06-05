@@ -31,6 +31,8 @@ func awaitConsumerCommitted(t *testing.T, bp Backplane, name, key string, off Of
 // A side-effect consumer fires once per appended event, receiving the DECODED
 // event and its offset (the offset is the idempotency-key seed). The effect runs
 // OUTSIDE Fold, so the projection folds independently and stays pure.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventFiresPerAppendedEventWithOffsetAndLeavesFoldPure(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -73,6 +75,8 @@ func TestOnEventFiresPerAppendedEventWithOffsetAndLeavesFoldPure(t *testing.T) {
 // The committed offset is durable, so a restart (a fresh pod on the same
 // backplane, same consumer name) resumes from it — events whose effect already
 // ran are never re-delivered.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventResumesFromCommittedOffsetAfterRestart(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -124,6 +128,8 @@ func TestOnEventResumesFromCommittedOffsetAfterRestart(t *testing.T) {
 // A handler error must NOT advance the committed offset: the record is retried
 // and later events wait behind it (head-of-line), so a side effect is never
 // skipped and ordering is preserved (at-least-once).
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventRetriesFailedEventInOrderWithoutAdvancing(t *testing.T) {
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -169,6 +175,8 @@ func TestOnEventRetriesFailedEventInOrderWithoutAdvancing(t *testing.T) {
 // consumer: skipping would silently drop the side effect on a deploy-skewed pod.
 // Roll-forward-only — the consumer blocks (does not advance) until a rolled-
 // forward binary can decode it, mirroring the projector's halt.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventBlocksOnForwardIncompatibleRecord(t *testing.T) {
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -201,6 +209,8 @@ func TestOnEventBlocksOnForwardIncompatibleRecord(t *testing.T) {
 // Two pods running the same-named consumer both fire (at-least-once); the loser
 // of the commit CAS adopts the peer's offset so the shared checkpoint converges
 // and neither pod re-fires the committed offset.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventAdoptsPeerOffsetOnCommitConflict(t *testing.T) {
 	bp := InMemory()
 	defer bp.Close()
@@ -251,6 +261,8 @@ func TestOnEventAdoptsPeerOffsetOnCommitConflict(t *testing.T) {
 // A poison/undecodable record is skipped and the offset advanced (never wedging
 // the consumer on a record it can never decode) — the same drop-on-undecodable
 // the fold uses.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventSkipsPoisonRecordAndAdvances(t *testing.T) {
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -293,6 +305,8 @@ func TestOnEventSkipsPoisonRecordAndAdvances(t *testing.T) {
 // processed: the Compactor floor clamps to the slowest consumer's committed
 // offset. A consumer stuck at offset 0 (its handler never succeeds) pins the
 // floor, so no prefix is reclaimed.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestCompactionFloorRespectsSlowConsumer(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -342,6 +356,8 @@ func TestCompactionFloorRespectsSlowConsumer(t *testing.T) {
 // The clamp is min(snapshot floor, consumer offset) — NOT "block forever". A
 // consumer that keeps up advances its committed offset, so compaction proceeds:
 // proving the floor tracks the consumer rather than pinning at genesis.
+//
+//nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestCompactionAdvancesWhenConsumerKeepsUp(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))

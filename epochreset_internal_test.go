@@ -14,6 +14,7 @@ import (
 // and re-snapshot from genesis so the projection re-converges — emitting
 // via.events.epoch_reset.
 func TestProjectorReSnapshotsOnEpochReset(t *testing.T) {
+	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithMetrics(spy))
