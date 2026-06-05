@@ -33,7 +33,7 @@ rewriting the v0.4.0 typed API:
   interface**, implementable over NATS JetStream(+KV), Redis (Streams+Hash),
   Postgres (snapshot + append/seq table), or Kafka(+snapshot). Adapters live
   in separate modules so core takes zero infra deps.
-- **`nil` backplane == today's exact in-process behavior**, byte-for-byte —
+- **`nil` backplane == the existing single-pod in-process behavior**, byte-for-byte —
   `nil` stays the honest *public* default (`via.New()` is in-process-only, named
   by absence) but resolves INTERNALLY to a real in-memory `Backplane`
   (the base in-process impl, exported as `via.InMemory()`), so there is ONE code
@@ -672,7 +672,7 @@ func (r *Room) View(ctx *via.CtxR) h.H { // identical to the existing example
 
 Picked the api lens as the SPINE (method-on-E fold, two type params E+V, plain Append) because fold purity is the entire correctness model and method-on-E is the ONLY option of the four that makes impurity a visible review smell instead of an invisible closure capture (rejected adapters' `Project(closure)` and versioning's `OnFold(seed,reduce)` — both let you capture a clock; rejected correctness' composition-level StateFolder — can close over struct fields). Compile-time binding via the EventReducer constraint also kills the "forgot to register the reducer" nil path that adapters/versioning/correctness all carry.
 
-Grounded in code: StateApp/StateSess detect via marker iface in walker.go (isStateApp/isStateSess → roleStateApp); bind via scopeBinder.bindWireKey in runtime.go:bindScopeKeys. Gave StateAppEvents its OWN marker isStateAppEvents() + a new roleStateAppEvents (NOT versioning's "reuse isStateApp marker") so the walker starts the per-key projector goroutine only for log keys and scopeSlot carries a kind flag — minimal additive wiring, no conflation of append-mode detection. Read reuses ctx.trackRead/subscribed verbatim (ctx.go); the per-(pod,key) PROJECTOR — not Append — is the sole fold path and drives the intra-pod render via broadcastRender→go SyncNow→Read (broadcast.go) with skip=nil (the projector holds no action ctx). Append only does Codec[E].Encode + EventLog.Append, no local fold (T1-SRE-2): broadcastRender is the intra-pod leg, the projector tailing EventLog.Subscribe is the inter-pod leg, and tick 1 confirmed broadcastRender alone is pod-LOCAL (broadcast.go:60-89) — it is NOT the cross-pod mechanism. panic-on-nil-ctx is parity with StateApp.Update (stateapp.go:60) but now gates AUTH, not render.
+Grounded in code: StateApp/StateSess detect via marker iface in walker.go (isStateApp/isStateSess → roleStateApp); bind via scopeBinder.bindWireKey in runtime.go:bindScopeKeys. Gave StateAppEvents its OWN marker isStateAppEvents() + a new roleStateAppEvents (NOT versioning's "reuse isStateApp marker") so the walker starts the per-key projector goroutine only for log keys and scopeSlot carries a kind flag — minimal additive wiring, no conflation of append-mode detection. Read reuses ctx.trackRead/subscribed verbatim (ctx.go); the per-(pod,key) PROJECTOR — not Append — is the sole fold path and drives the intra-pod render via broadcastRender→go SyncNow→Read (broadcast.go) with skip=nil (the projector holds no action ctx). Append only does Codec[E].Encode + EventLog.Append, no local fold (T1-SRE-2): broadcastRender is the intra-pod leg, the projector tailing EventLog.Subscribe is the inter-pod leg, and broadcastRender alone is pod-LOCAL — it is NOT the cross-pod mechanism. panic-on-nil-ctx is parity with StateApp.Update but gates AUTH, not render.
 
 Kept V as the 2nd type param despite the uglier `StateAppEvents[ChatEvent,[]Message]` decl — collapsing it (adapters/versioning erase View to `any`) loses compile-time projection safety and the counter→int / chat→[]Message demo is the core pitch. The decl cost is paid once per field.
 
@@ -711,7 +711,7 @@ Same mechanism as #3. Cold start per key: LoadSnapshot→(V0,coveredOffset) (or 
 
 ## Multi-tenant & session isolation (T1-SEC-1)
 
-Today isolation is an in-process pointer compare (`broadcast.go:68`) — meaningless
+In-process isolation is a pointer compare (`broadcast.go`) — meaningless
 on a shared bus. On a backplane it must be enforced at two layers, with the
 physical layer load-bearing:
 
@@ -725,8 +725,8 @@ physical layer load-bearing:
   **unknown sid DROPs fail-closed** — never a broadcast-to-all fallback.
   Post-receive filtering is the last line, never the first.
 - **AUTH-1 invariant.** `Append` is reachable ONLY through a `via_tab` +
-  session-gated action ctx (`action.go:107-117`, 403 on mismatch); `via_tab`/`sid`
-  are 256-bit crypto-rand (`util.go:11`). There is no raw-client path that
+  session-gated action ctx (403 on mismatch); `via_tab`/`sid` are 256-bit
+  crypto-rand. There is no raw-client path that
   reaches `Append` or writes the Store directly.
 - **Trust posture.** The backplane is **tier-0 trust**: on a shared bus, per-pod
   **credentials** + **mTLS** + per-tenant **subject namespacing** are MANDATORY,
@@ -825,42 +825,61 @@ is therefore achieved by **crypto-shred**, not by deletion. **SHIPPED**
 - ENVELOPE-OMISSION IS UNRECOVERABLE: an event appended without a version envelope can never be evolved (records immortal). The envelope MUST be in the very first byte ever appended — default JSON codec enforces it; a type with no registered TypeTag fails fast at Mount, not in prod replay.
 - FORWARD-INCOMPAT ROLLBACK: a rolled-back deploy reading events written at a newer version. Decode whose version exceeds the binary's max returns a hard error that STOPS that key's projector rather than silently mis-folding — roll forward, not back, past an E schema bump. Operational constraint, must be documented.
 
-## Council-remediation pass (post-rating) — SHIPPED + residuals
+## Hardening invariants
 
-After the design-council rated the branch, a remediation pass closed the open
-findings. Shipped here, with the residual limitations stated honestly:
+Beyond the core model, the backplane holds the following invariants (the history
+of how they were reached — ratings, bugs, fixes — lives in `design-council.md`):
 
-- **Fold-determinism now has runtime + CI gates** (was the #1 unguarded risk):
-  `WithFoldVerify()` re-folds each record and, on a mismatch, emits
-  `via.fold.divergence` and PERMANENTLY refuses to compact that key (never
-  crystallizes a non-deterministic fold into durable genesis). An unconditional
-  per-fold canary emits `via.fold.offset` + `via.fold.digest` (the council's
-  `(key,offset,fnv)` triple) for cross-pod divergence detection. CI gates: a
-  fuzz (`FuzzFoldIsDeterministicAndNeverPanics`) and a SUBPROCESS two-replay
-  convergence test (catches per-process state — map order, pid — that
-  same-process checks cannot). Residual: a deterministic-but-WRONG v2 re-fold
-  still needs a manual snapshot+epoch; the runtime cannot force it.
-- **`vianats` epoch is real** (was hard `Epoch(0)` → reset detection never fired
-  on NATS): derived from the stream's creation identity, stamped on `Head` +
-  every `Record`, so a stream delete+recreate is detected.
-- **Reconnect-rehydrate** (#3/#7): projector AND consumer now distinguish a
-  graceful Shutdown (exit) from a transient mid-stream disconnect (re-subscribe
-  from the cursor/committed offset and rehydrate), via an App `backplaneDone`
-  signal closed before `backplane.Close()`. `memevents.Faulty` gained
-  `Disconnect` + `Reorder` modes to exercise it.
-- **GDPR crypto-shred** shipped (see the erasure section above).
-- **Observability deltas**: new metrics `via.fold.offset`, `via.fold.digest`,
-  `via.fold.divergence`, `via.events.erased`, `via.consumer.erased`,
-  `via.snapshot.erasure_halt`.
+- **Fold-determinism is gated, not just documented.** `WithFoldVerify()` re-folds
+  each record and, on a mismatch, emits `via.fold.divergence` and PERMANENTLY
+  refuses to compact that key — a non-deterministic fold is never crystallized
+  into durable genesis. An unconditional per-fold canary emits `via.fold.offset`
+  + `via.fold.digest` so a divergence is detectable by comparing the digest
+  across pods at the same key+offset. A deterministic-but-CHANGED fold (a v2 that
+  re-folds old events to a different V) still requires a manual snapshot+epoch —
+  the runtime cannot force it.
+- **A backend reports a real per-key epoch**, derived from the stream's
+  generation/creation identity, returned from `Head` and stamped on every
+  `Record`, so an offset-space reset (recreate/trim/restore) is detected and the
+  projector re-folds from genesis. (The in-memory backplane never resets → 0.)
+- **Tailers distinguish graceful stop from transient disconnect.** Projector and
+  `OnEvent` consumers exit on Shutdown, but on a mid-stream drop they re-subscribe
+  from their cursor/committed offset and rehydrate — one network blip never
+  strands a key.
+- **Compaction never truncates a lagging peer.** A projector that falls behind a
+  compacted prefix — its subscriber resumes past a gap (`rec.Offset > cursor+1`,
+  including a fresh projector whose first delivered record is post-compaction) —
+  re-seeds from the snapshot that bridges the gap (`via.events.compaction_reseed`)
+  rather than fold onto a stale projection; if no snapshot bridges it, it HALTS
+  (`via.events.compaction_gap_halt`). Snapshot writes are MONOTONIC in
+  `CoveredOffset`: a lagging pod can never regress the shared snapshot below the
+  compaction floor, which is what keeps the gap always bridgeable.
+- **GDPR crypto-shred** — see the erasure section above.
 
-Residual / documented follow-ups (NOT silent loss — each fails safe):
+Full metrics catalogue: `docs/production.md`.
+
+Load profile (shape, not absolute numbers — benchmark on your own hardware):
+cross-pod convergence is fan-out, so AGGREGATE fold throughput scales with pod
+count while the per-event INPUT rate a fixed cluster sustains drops inversely;
+per-fold cost is JSON-decode-bound (and `WithFoldVerify` roughly doubles it); the
+in-memory log is heap-resident, so production bounds it with snapshot+compaction
+while a real backend keeps it off-heap.
+
+Documented scope limits (NOT silent loss — each fails safe):
 - Read-your-write across tabs is eventual (one projector hop); the writer's own
   View updates when ITS projector folds the offset.
 - A pod's running in-memory projection clears erased PII only on cold-start /
   redeploy; the durable log + snapshots are shredded immediately.
-- Compaction × (erasure | epoch-reset) of the SAME key: the compacted snapshot
-  is durable genesis, so it HALTS (`via.snapshot.erasure_halt`) rather than
-  truncate; snapshot re-encryption is the follow-up.
+- Compaction × erasure of the SAME key: the compacted snapshot is durable
+  genesis, so it HALTS (`via.snapshot.erasure_halt`) rather than truncate;
+  snapshot re-encryption is the follow-up.
+- Narrow corner (orthogonal to compaction-gap recovery): a stream
+  delete+recreate under a NEW epoch whose fresh prefix is compacted BEFORE a
+  high-cursor lagging pod reads it — the gap check runs against the stale
+  pre-reset cursor, so the projector's epoch-reset (which clears cursor) fires
+  only after. Requires a true recreate + immediate compaction + a lagging pod;
+  JetStream purge keeps the epoch stable, so it does not arise from compaction
+  alone. Documented, not handled.
 - `WithFoldVerify` uses `reflect.DeepEqual`, which can false-positive on a V with
   func/chan fields or NaN floats — fail-safe (needless refuse-to-compact, never
   bad genesis).
@@ -916,7 +935,7 @@ StateAppEvents[E] is StateApp's append-a-fact sibling: you Append immutable even
 - CUT the #4 broadcast census entirely — document the count as local-only and stop. The opt-in census is speculative telemetry; it adds a cross-pod synchronous path to a fire-and-forget primitive for a number nobody acts on programmatically.
 - CUT per-variant snapshot versioning cleverness: since V is always re-derivable from E, a snapshot is pure cache — version it with a single opaque codec hash and INVALIDATE-on-mismatch (re-fold from events). No snapshot upcasters, ever. Shrinks the Codec contract to envelope + event upcasters only. **[SUPERSEDED by T2-GO-4 — holds for UNCOMPACTED keys only; "no snapshot upcasters ever" is rescinded for compacted keys, where V is NOT re-derivable (prefix deleted) and the snapshot needs a typed `Codec[V]` + seeded migration. See #6.]**
 - DEFER the OnEvent side-effect consumer to a follow-up. It's a clean addition (another Subscribe + offset commit) but orthogonal to the state-projection core; landing Read/Append/fold first lets the side-effect story bake against real usage.
-- NON-NEGOTIABLE, stays: Append + Project + ReadLog, the Store+EventLog+Codec interface, envelope+upcaster versioning, snapshot+optional-Compactor, and nil-backplane == today's exact behaviour.
+- NON-NEGOTIABLE, stays: Append + Project + ReadLog, the Store+EventLog+Codec interface, envelope+upcaster versioning, snapshot+optional-Compactor, and nil-backplane == the existing single-pod behaviour.
 
 ### versioning
 

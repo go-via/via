@@ -2765,3 +2765,44 @@ Residuals are documented & fail-safe (see spec "Council-remediation pass"):
 eventual read-your-write; live-projection erasure clears on cold-start;
 compaction×erasure halts pending snapshot re-encryption; DeepEqual fold-verify
 false-positive on func/chan/NaN V. New metrics catalogued in the spec.
+
+## Tick 46 — 2026-06-05 — Multi-node load benchmark + cross-pod truncation fix
+
+Post-remediation, load-tested the clustered backplane under very large concurrent
+load. Added the benchmark suite (backplanebench_internal_test.go: append ceiling,
+cross-pod convergence vs pod count, feature cost; vianats/bench_test.go: durable
+JetStream append + fanout). The load test caught a real divergence the
+conformance suite missed.
+
+### Bug (cross-pod projection truncation under compaction)
+Default snapshotInterval=64 → a fast pod compacts the shared log; a peer projector
+lagging >1 snapshot-generation behind has its subscriber fall below the compacted
+base. The in-memory Subscribe clamps to base+1 (and JetStream's
+DeliverByStartSequence does the equivalent after a purge), so the projector
+SILENTLY SKIPS the dropped records → permanent cross-pod divergence, no error, no
+metric. Easily triggered (the safety window is ~one interval, which a GC pause
+blows through). The council's "≥1 generation survives for in-flight subscribers"
+assumed peers stay within one generation; load breaks that.
+
+### Fix (two root causes, TDD, audited)
+1. applyRecord re-seeds a live projector from the snapshot on a gap
+   (rec.Offset>cursor+1, incl. a fresh cursor=0 pod whose first read is
+   post-compaction), or HALTS if no snapshot bridges it — never folds onto a
+   stale projection. Extends cold-start recovery to the live case.
+   New metrics: via.events.compaction_reseed / via.events.compaction_gap_halt.
+2. writeSnapshot is now monotonic — a lagging pod cannot regress the shared
+   snapshot cell's CoveredOffset (which would break the snapshot-covers-prefix
+   invariant compaction + gap-reseed depend on).
+
+Verified: convergence WITH compaction hammered 90x + -race, zero divergence; 6
+deterministic regression tests; full suite green -race both modules. Adversarial
+audit: truncation path fully closed; flagged one orthogonal pre-existing corner
+(epoch-reset + immediate compaction of the new prefix + a lagging pod), now in the
+spec residuals.
+
+### Load profile (shape > absolute)
+Cross-pod convergence is fan-out: aggregate fold throughput scales with pod count
+(core-bound), per-event input rate drops inversely. Per-fold cost is
+JSON-decode-bound; WithFoldVerify ~2x. In-mem log is heap-resident (GC scales with
+total events) → production bounds it with snapshot+compaction; the durable backend
+keeps the log off-heap. Full metrics catalogue now in docs/production.md.

@@ -109,11 +109,12 @@ typed `Op(ctx)` verbs (`Add`, `Toggle`, `Append`, …).
   best for internal tools, dashboards, and line-of-business apps you'd
   otherwise build with LiveView, Hotwire, or htmx + hand-written JS.
 - **Is not** an SPA framework — the browser receives HTML, not a JSON bundle.
-- **Is not** a cluster runtime — `StateApp[T]` and `Broadcast` are
-  single-process; horizontal scaling needs sticky sessions.
+- **Single-process by default** — `StateApp[T]` and `Broadcast` are per-pod;
+  horizontal scaling needs sticky sessions. Cross-instance state convergence
+  (`WithBackplane`) is in preview; `Broadcast` stays pod-local.
 - **Is not** offline-first or stable yet — drop the SSE stream and the tab
-  freezes until the client reconnects (Datastar retries automatically), and
-  APIs can still shift pre-1.0.
+  freezes until the client reconnects (transient drops retry automatically; a
+  clean-close deploy may fall back to a reload), and APIs can still shift pre-1.0.
 
 ## Documentation
 
