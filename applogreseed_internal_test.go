@@ -90,8 +90,9 @@ func TestProjectorHaltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
-	// Snapshot exists but under a DIFFERENT codec hash → cannot bridge live.
-	writeSnap(t, app, "k", checkpoint{Epoch: 0, CoveredOffset: 8, CodecHash: "OTHER", V: mustJSON(8)})
+	// Snapshot is COMPACTED (a prefix was discarded) but under a DIFFERENT codec
+	// hash → cannot bridge live; a genuine lost prefix must halt, not truncate.
+	writeSnap(t, app, "k", checkpoint{Epoch: 0, CoveredOffset: 8, CodecHash: "OTHER", V: mustJSON(8), Compacted: true})
 
 	advanced := app.applyRecord(ls, "k", Record{Key: "k", Offset: 9, Data: goodBenchEnv()})
 
@@ -154,9 +155,10 @@ func TestProjectorHaltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
-	// Gap is 6..19 (rec at 20). Snapshot only covers 12 — forward of cur (5) but
-	// short of needCovered (19): folding 20 onto 12 would skip 13..19.
-	writeSnap(t, app, "k", checkpoint{Epoch: 0, CoveredOffset: 12, CodecHash: "h", V: mustJSON(12)})
+	// Gap is 6..19 (rec at 20). COMPACTED snapshot only covers 12 — forward of cur
+	// (5) but short of needCovered (19): folding 20 onto 12 would skip 13..19, and
+	// the discarded prefix means we cannot recover them → halt.
+	writeSnap(t, app, "k", checkpoint{Epoch: 0, CoveredOffset: 12, CodecHash: "h", V: mustJSON(12), Compacted: true})
 
 	advanced := app.applyRecord(ls, "k", Record{Key: "k", Offset: 20, Data: goodBenchEnv()})
 
