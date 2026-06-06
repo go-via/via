@@ -108,6 +108,15 @@ Alerting hints: a sustained nonzero `via.fold.divergence`, a persistent
 `via.events.compaction_gap_halt` / `via.snapshot.*_halt` is a halted projector —
 investigate before the affected key's state can advance.
 
+{: .note }
+**Non-contiguous offsets are normal.** A backend may number a key's events from a
+sequence it shares across keys — e.g. a single NATS JetStream stream sequenced
+globally across subjects, so each key's offsets skip the numbers other keys took
+(3, 7, 12 rather than 1, 2, 3). The projector treats those gaps as benign and
+folds every record; it only flags a lost prefix (`via.events.compaction_gap_halt`)
+when a *Compacted* snapshot proves one. So `compaction_gap_halt` is a genuine
+compaction problem, never just a side-effect of a multi-key/multi-subject backend.
+
 Adapt to Prometheus, OTel, or expvar by implementing three methods
 (`Counter`, `Gauge`, `Histogram`) that forward to your backend. The default
 backend discards every event, so apps that don't configure metrics pay no

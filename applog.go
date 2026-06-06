@@ -24,9 +24,10 @@ type logState struct {
 	projection any    // current folded V (seeded with seed on create)
 	cursor     Offset // highest offset folded so far (gates re-delivery)
 
-	seed      any                                     // Go zero of V
-	foldBytes func(acc any, data []byte) (any, error) // decode one record's E + fold into acc
-	halted    bool                                    // forward-incompatible record seen → frozen, roll-forward-only
+	seed       any                                     // Go zero of V
+	foldBytes  func(acc any, data []byte) (any, error) // decode one record's E + fold into acc
+	halted     bool                                    // forward-incompatible record seen → frozen, roll-forward-only
+	gapsBenign bool                                    // backend has non-contiguous per-key offsets → offset gaps are normal, not compaction
 
 	epoch     Epoch // last-applied stream generation; a change means the offset space reset
 	epochSeen bool  // false until the first record establishes the baseline epoch
@@ -211,57 +212,77 @@ func (a *App) haltErasure(ls *logState, key string) {
 // projector goroutine, so the read-then-reseed is not racing another folder.
 func (a *App) applyRecord(ls *logState, key string, rec Record) bool {
 	ls.mu.RLock()
-	cur, halted := ls.cursor, ls.halted
+	cur, halted, gapsBenign := ls.cursor, ls.halted, ls.gapsBenign
 	ls.mu.RUnlock()
-	// rec.Offset > cur+1 is a gap: records cur+1..rec.Offset-1 are missing. This
-	// fires for a fresh projector (cur=0) whose FIRST delivered record has offset
-	// > 1 too — the log's prefix was compacted before its subscriber first read,
-	// so it must recover from the snapshot, not fold onto the seed. (A genuinely
-	// fresh stream's first record is offset 1 == cur+1, no gap.)
-	if !halted && rec.Offset > cur+1 {
-		// A gap: compaction dropped records cur+1..rec.Offset-1 we never folded.
-		// Recover from the snapshot, but ONLY if it bridges the whole gap
-		// (CoveredOffset >= rec.Offset-1) and moves us forward (> cur). Otherwise
-		// halt rather than fold onto a stale projection or seed backwards.
-		if a.reseedFromSnapshot(ls, key, cur, rec.Offset-1) {
+	// rec.Offset > cur+1 is a gap: offsets cur+1..rec.Offset-1 were not delivered.
+	// That can mean a compacted prefix (real data loss) OR simply a backend whose
+	// per-key offsets are not contiguous — e.g. a JetStream stream sequenced
+	// GLOBALLY across subjects, where each key's records carry the shared stream
+	// sequence and skip the numbers other keys took. classifyGap tells them apart;
+	// once a backend proves non-contiguous we latch (gapsBenign) and stop checking,
+	// so a busy shared stream does not pay a snapshot read per record.
+	if !halted && !gapsBenign && rec.Offset > cur+1 {
+		switch a.classifyGap(ls, key, cur, rec.Offset-1) {
+		case gapReseeded:
 			a.metricsOrNoop().Counter("via.events.compaction_reseed", "key", key)
-		} else {
+		case gapHalt:
 			ls.mu.Lock()
 			ls.halted = true
 			ls.mu.Unlock()
 			a.metricsOrNoop().Counter("via.events.compaction_gap_halt", "key", key)
 			return false
+		case gapBenign:
+			// Not a lost prefix — fold the record and latch so subsequent
+			// non-contiguous records skip the gap check (and its snapshot read).
+			ls.mu.Lock()
+			ls.gapsBenign = true
+			ls.mu.Unlock()
 		}
 	}
 	return a.projectRecord(ls, key, rec)
 }
 
-// reseedFromSnapshot reloads the durable snapshot for key and installs it as the
-// projection baseline (projection=V, cursor=CoveredOffset), so a projector that
-// fell behind a compacted prefix recovers the dropped records from the snapshot
-// instead of skipping them. Returns false if there is no snapshot or its codec
-// hash no longer matches (can't be bridged live — the caller halts). The
-// backplane read is OUTSIDE ls.mu; seedFromSnapshot takes the lock.
-func (a *App) reseedFromSnapshot(ls *logState, key string, cur, needCovered Offset) bool {
+// gapClass is how applyRecord interprets an offset gap.
+type gapClass int
+
+const (
+	gapBenign   gapClass = iota // not a lost prefix → fold the record
+	gapReseeded                 // recovered from a bridging snapshot
+	gapHalt                     // a compacted prefix we cannot bridge → freeze (never truncate)
+)
+
+// classifyGap decides what a gap (rec.Offset > cursor+1) means. A gap is a lost
+// prefix ONLY if compaction discarded it, and compaction always writes a
+// Compacted snapshot FIRST (snapshot-FIRST). So:
+//   - no snapshot, or an unreadable one          → benign (no compaction ran)
+//   - a snapshot that bridges the gap            → reseed from it (projection=V,
+//     cursor=CoveredOffset), recovering the dropped prefix instead of skipping it
+//   - a Compacted snapshot that cannot bridge    → halt, never truncate to the tail
+//   - an uncompacted snapshot that cannot bridge → benign (it is a disposable
+//     cache; the gap is just non-contiguous offsets, nothing was lost)
+//
+// The backplane read is OUTSIDE ls.mu; seedFromSnapshot takes the lock.
+func (a *App) classifyGap(ls *logState, key string, cur, needCovered Offset) gapClass {
 	data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
 	if !ok {
-		return false
+		return gapBenign
 	}
 	var cp checkpoint
-	if json.Unmarshal(data, &cp) != nil || cp.CodecHash != ls.codecHash {
-		return false
+	if json.Unmarshal(data, &cp) != nil {
+		return gapBenign
 	}
-	// Only recover if the snapshot BRIDGES the gap (covers up to the record
-	// before rec) and moves us FORWARD — never seed behind our current position.
-	if cp.CoveredOffset < needCovered || cp.CoveredOffset <= cur {
-		return false
+	// Recover only if the snapshot BRIDGES the gap (covers up to the record before
+	// rec) and moves us FORWARD — never seed behind our current position.
+	if cp.CodecHash == ls.codecHash && cp.CoveredOffset >= needCovered && cp.CoveredOffset > cur {
+		if v, err := ls.decodeSnap(cp.V); err == nil {
+			a.seedFromSnapshot(ls, v, cp, rev)
+			return gapReseeded
+		}
 	}
-	v, err := ls.decodeSnap(cp.V)
-	if err != nil {
-		return false
+	if cp.Compacted {
+		return gapHalt
 	}
-	a.seedFromSnapshot(ls, v, cp, rev)
-	return true
+	return gapBenign
 }
 
 // projectRecord folds one delivered Record into the cached projection under the

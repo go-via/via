@@ -12,6 +12,15 @@ import (
 // ordered WITHIN one key, never interchangeable across keys or backends, and
 // not guaranteed gap-free in a real backend. Offset(0) means "before the first
 // record"; Subscribe(from:0) replays all.
+//
+// Monotone, NOT contiguous: a backend may assign a key's offsets from a sequence
+// it shares across keys (e.g. a single NATS JetStream stream sequenced globally
+// across subjects), so a key's records can skip numbers other keys took — 3, 7,
+// 12 rather than 1, 2, 3. The projector treats such gaps as benign and folds
+// every delivered record; it only suspects a lost prefix (and reseeds from, or
+// halts behind, a snapshot) when a Compacted snapshot proves one. Implementations
+// MUST keep offsets strictly increasing per key and stable across a resume; they
+// need NOT make them dense.
 type Offset uint64
 
 // Rev is the Store cell's CAS version, DISTINCT from Offset (Store and EventLog

@@ -95,11 +95,12 @@ non-goals are deliberate.
   behavior. Via removes hand-written reactive JS; it does not abstract over the
   runtime and cannot outlive it.
 - **Single-process by default.** App state is per-pod and horizontal scaling
-  needs sticky sessions. A backplane that converges state across instances
-  (`WithBackplane` + `StateAppEvents`, clustered `StateApp`/`StateSess`) is in
-  **preview** on the way to 1.0 — eventually consistent, with no global ordering
-  or cross-key transactions, and cross-tab `Broadcast` stays pod-local. Treat
-  single-process as the supported topology until it ships.
+  needs sticky sessions. A [backplane](distributed-state) lifts that —
+  `WithBackplane` clusters `StateApp`/`StateSess` with no API change and adds an
+  opt-in `StateAppEvents[E, V]` event-log shape — but it is in **preview** on the
+  way to 1.0: eventually consistent, with no global ordering or cross-key
+  transactions, and cross-tab `Broadcast` stays pod-local. Treat single-process
+  as the supported topology until it ships.
 - **Not offline-first.** Drop the SSE stream and the tab is inert until it
   reconnects. Transient drops usually resync or re-bootstrap automatically; some
   cases (e.g. a deploy that closes the stream cleanly) fall back to a full page
