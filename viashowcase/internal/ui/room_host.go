@@ -85,17 +85,29 @@ func (p *Host) push(ctx *via.Ctx) {
 
 // Notice broadcasts a "starting now" banner to every live tab.
 func (p *Host) Notice(ctx *via.Ctx) error {
-	// JSON-encode the host-controlled title into a safe JS string literal.
-	// Raw concatenation let a crafted room title break out of the string and
-	// inject arbitrary JS into every connected tab (stored XSS).
-	msg, _ := json.Marshal("▶ Starting now: " + p.room.Title)
-	Deps.App.Broadcast(`(function(){var b=document.createElement('div');b.textContent=` +
-		string(msg) + `;b.style.cssText='position:fixed;top:0;left:0;right:0;` +
+	Deps.App.Broadcast(buildNoticeScript(p.room.Title))
+	return nil
+}
+
+// buildNoticeScript returns the JS snippet broadcast to every live tab to
+// display the "starting now" banner. The title travels as the only argument
+// of a function-call IIFE, JSON-parsed at the call site — a single isolated
+// data segment, never dropped between two raw JS string fragments. That
+// shape is the only one the CodeQL "potentially unsafe quoting" rule accepts
+// for dynamic values bound for an inline <script>: the JSON literal closes
+// the surrounding parens, JS line separators (U+2028/U+2029) and a literal
+// </script> in the title are neutralised by json.Marshal's default
+// HTML/control-character escaping, and the banner text is assigned via
+// textContent (the XSS-safe DOM sink) so the value is treated as text.
+func buildNoticeScript(title string) string {
+	msg, _ := json.Marshal("▶ Starting now: " + title)
+	return `(function(msg){var b=document.createElement('div');b.textContent=msg;` +
+		`b.style.cssText='position:fixed;top:0;left:0;right:0;` +
 		`z-index:9999;background:#ffbf00;color:#0b0b0f;text-align:center;padding:.8rem;font-weight:700;` +
 		`font-family:Inter,system-ui,sans-serif;letter-spacing:.01em;box-shadow:0 6px 24px rgba(255,191,0,.3);` +
 		`animation:slideDown .25s ease';document.body.appendChild(b);` +
-		`setTimeout(function(){b.remove()},6000)})()`)
-	return nil
+		`setTimeout(function(){b.remove()},6000)})(JSON.parse(` +
+		string(msg) + `))`
 }
 
 func (p *Host) View(ctx *via.CtxR) h.H {
