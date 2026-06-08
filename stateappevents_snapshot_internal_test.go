@@ -278,3 +278,35 @@ func TestRoundTripPersistedSnapshotSeedsAFreshProjector(t *testing.T) {
 		return len(p) == 4 && p[3] == 4
 	}, 2*time.Second, 10*time.Millisecond, "pod B folds the tail onto the seeded snapshot")
 }
+
+// The shared snapshot cell must be MONOTONIC in CoveredOffset: a lagging pod must
+// not overwrite a leader's higher-covered snapshot with a lower one. If it could,
+// compaction (which trusts the durable snapshot to cover the prefix it drops) and
+// a peer's gap-reseed would recover a snapshot that doesn't bridge the gap.
+func TestSnapshotWriteNeverRegressesCoveredOffset(t *testing.T) {
+	t.Parallel()
+	var server *httptest.Server
+	app := New(WithTestServer(&server))
+	defer server.Close()
+	ctx := context.Background()
+
+	// A leader's snapshot already covers offset 100.
+	writeSnap(t, app, "k", checkpoint{Epoch: 0, CoveredOffset: 100, CodecHash: "h", V: mustJSON(100)})
+
+	// A lagging pod (cursor 40) attempts to write — must NOT regress the cell.
+	ls := manualLogState(app, "k", 40, "h")
+	app.writeSnapshot(ls, "k")
+
+	data, _, ok, _ := app.backplane.LoadSnapshot(ctx, snapKey("k"))
+	require.True(t, ok)
+	var cp checkpoint
+	require.NoError(t, json.Unmarshal(data, &cp))
+	require.Equal(t, Offset(100), cp.CoveredOffset, "a lagging pod must not regress the shared snapshot's CoveredOffset")
+
+	// A pod that genuinely advances it (cursor 150) DOES write.
+	ls2 := manualLogState(app, "k", 150, "h")
+	app.writeSnapshot(ls2, "k")
+	data, _, _, _ = app.backplane.LoadSnapshot(ctx, snapKey("k"))
+	require.NoError(t, json.Unmarshal(data, &cp))
+	require.Equal(t, Offset(150), cp.CoveredOffset, "a higher-covered snapshot DOES advance the cell")
+}
