@@ -171,12 +171,35 @@ cross-cutting protocol tests that exercise several source files on purpose
 (`shape_test.go` — one page over every shape by design; `patch_test.go`,
 `csp_push_test.go`, `h/render_test.go`).
 
-NOTE: `stateappevents_projector_internal_test.go` is now ~1260 lines — large,
-but it is one concern (the projector). Splitting the projector SOURCE into
-sub-concern files (and its tests with it) is a possible future refactor; the
-functions are currently intertwined (projectRecord folds + verifies + handles
-epoch reset), so it was out of scope here.
-
 Result: gofmt clean; `go vet ./...` + `go test -race ./...` green across via,
 vianats, viashowcase, and all plugins.
+
+## Follow-up — split the projector source + redistribute its tests (user-requested)
+
+The 1:1 alignment left `stateappevents_projector_internal_test.go` at ~1260
+lines because the projector source was one 373-line file doing four jobs. Split
+both source and tests by responsibility (package unchanged — the functions share
+the `logState` struct, not control flow, so it is a clean file split, not a
+package boundary; an `internal/projector` package was considered and rejected
+because every function is an `*App` method woven into App's mutable state, which
+would force a wide speculative interface).
+
+Source (was `stateappevents_projector.go`, 373 lines → 7 files, 39–125 lines):
+
+- `stateappevents_projector.go` — lifecycle (logState, registerLog,
+  startProjector, shuttingDown, logProjection)
+- `stateappevents_coldstart.go` — coldStartFrom, seedFromSnapshot, halt*
+- `stateappevents_gap.go` — applyRecord, classifyGap, gapClass
+- `stateappevents_fold.go` — projectRecord
+- `stateappevents_canary.go` — emitFoldDigest (carved from snapshot.go)
+- `stateappevents_compact.go` — maybeCompact (carved from snapshot.go)
+- `stateappevents_snapshot.go` — maybeSnapshot/writeSnapshot/setSnapRev (slimmed)
+
+Tests: the 42-func merged file was redistributed to mirror each source file,
+with shared doubles/helpers in one `stateappevents_helpers_test.go`. Same 42
+test funcs, none lost or duplicated. Every source file now has a matching test
+file; all at/under the ~300-line guideline (helpers_test.go excepted as test
+infrastructure).
+
+Result: gofmt clean; `go vet` + `go test -race .` green.
 
