@@ -11,6 +11,7 @@ func TestSanitizeMakesArbitraryKeysSafeAndDistinct(t *testing.T) {
 	cases := map[string]string{
 		"alpha":   "alpha",      // alnum passes through untouched
 		"a-b":     "a-b",        // '-' is allowed
+		"a_b":     "a_5f_b",     // '_' is the escape delimiter, so it is itself escaped
 		"chart.x": "chart_2e_x", // '.' (subject separator) is encoded
 		"a*b":     "a_2a_b",     // '*' wildcard encoded
 		"a>b":     "a_3e_b",     // '>' wildcard encoded
