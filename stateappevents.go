@@ -3,6 +3,7 @@ package via
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 
 	"github.com/go-via/via/h"
@@ -162,7 +163,15 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
 // a KeyStore is configured and the event implements DataSubject, encrypt the
 // payload under that subject's key (crypto-shred). Shared by Append and tests so
 // both produce identical records.
-func marshalEvent[E any](a *App, ev E) ([]byte, error) {
+func marshalEvent[E any](a *App, ev E) (out []byte, err error) {
+	// Single origin prefix for every failure path (payload encode, key lookup,
+	// encrypt, envelope encode) — this is StateAppEvents.Append's error surface,
+	// so a bare "json: unsupported type" must not reach an operator unlabelled.
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("via: marshal event: %v", err)
+		}
+	}()
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return nil, err

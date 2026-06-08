@@ -66,3 +66,21 @@ the backend module.
 
 Result: test-only, behavior preserved. `go test -race ./vianats/...` green.
 
+## Tick 5 — give marshalEvent errors a via: origin prefix
+
+What: `stateappevents.go` `marshalEvent` (the documented error surface of
+`StateAppEvents.Append`) returned bare `json.Marshal`/keystore/encrypt errors
+with no origin, against the CONVENTIONS "errors carry a short origin prefix"
+rule. Added a single named-return `defer` that prefixes every failure path with
+`via: marshal event:` (one branch, not four scattered wraps). TDD cycle
+(red/yellow/green/blue/audit); new internal test
+`TestMarshalEvent_errorNamesViaOrigin`.
+
+Why: a failed event commit surfaced `json: unsupported type` to operators with
+no hint it came from the backplane write path. `%v` (not `%w`) per CONVENTIONS;
+`ErrClosed` from the backplane bypasses marshalEvent so `errors.Is` still
+matches.
+
+Result: `go test -race .` + `go vet ./...` green; no existing error-string
+assertions broken.
+
