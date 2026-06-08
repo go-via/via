@@ -126,3 +126,57 @@ Result: pure file rename (package unchanged), `git mv` preserves history.
 `go build ./...` + `go test -race .` (via) and `go test -race ./...` (vianats)
 all green.
 
+## Follow-up — align every test file with its source file (user-requested)
+
+Goal: each `_test.go` should correspond to a same-named source file (one
+concept/responsibility per source file + its test). Surveyed all packages,
+fixed the offenders (51 → 16 unmatched, all remaining legit). Same-package
+scenario test files were merged (goimports reconciled imports — no
+duplicate-declaration risk since they already shared the package); internal
+(`package via`) vs external (`package via_test`) tests kept as separate files
+that share the base name.
+
+Renames/merges (all `git mv` / history-preserving):
+
+- `marshalevent_internal_test.go` → `stateappevents_internal_test.go`
+  (marshalEvent lives in stateappevents.go — fixes a name I introduced in tick 5)
+- `ctxr_test.go` → folded into `ctx_test.go` (CtxR is in ctx.go)
+- `eventupcaster_internal_test.go` → folded into `eventenvelope_internal_test.go`
+- `queue_order_test.go` → folded into `action_test.go`
+- 8 projector scenario tests (canary/compact/noncontiguous/reconnect/reseed/
+  epochreset/foldpurity/foldverify) → `stateappevents_projector_internal_test.go`;
+  `stateappevents_runtime_test.go` → `stateappevents_projector_test.go`
+- `sse_brotli_test.go` + `sse_liveness_test.go` → `sse_test.go`;
+  `sse_recover_test.go` → `recover_test.go`
+- `backplane_{crosspod,crosspod_value,reconcile,wire}_test.go` → `backplane_test.go`
+- `sess_adopt_internal_test.go` + `sess_change_internal_test.go`
+  → `sess_internal_test.go`
+- vianats: `conformance/embedded/epoch_test.go` → `vianats_test.go`;
+  `sanitize_internal_test.go` → `vianats_internal_test.go`
+- picocss: `pico_options_test.go` → `pico_test.go`;
+  `pico_fetch_test.go` → `pico_internal_test.go`
+- maplibre: `multimap_test.go` → `map_test.go`; `withmarker_test.go`
+  → `markers_test.go`
+- echarts: `runtime_error_test.go` → `runtime_test.go`
+- vt: `vt_isolation_test.go` → `vt_test.go`
+- showcase: `join_test.go` → `room_join_test.go`;
+  `notice_internal_test.go` → `room_host_internal_test.go` (buildNoticeScript
+  lives in room_host.go)
+
+Deliberately LEFT (legit standalone, not 1:1 with a single source file):
+benchmarks (`*bench_test.go`), integration/e2e (`integration_test.go`,
+`e2e_test.go`, showcase `convergence_test.go`), test-only helpers
+(`helpers_test.go`), Go example convention (`example_test.go`), and genuinely
+cross-cutting protocol tests that exercise several source files on purpose
+(`shape_test.go` — one page over every shape by design; `patch_test.go`,
+`csp_push_test.go`, `h/render_test.go`).
+
+NOTE: `stateappevents_projector_internal_test.go` is now ~1260 lines — large,
+but it is one concern (the projector). Splitting the projector SOURCE into
+sub-concern files (and its tests with it) is a possible future refactor; the
+functions are currently intertwined (projectRecord folds + verifies + handles
+epoch reset), so it was out of scope here.
+
+Result: gofmt clean; `go vet ./...` + `go test -race ./...` green across via,
+vianats, viashowcase, and all plugins.
+
