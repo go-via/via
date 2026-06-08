@@ -84,3 +84,22 @@ matches.
 Result: `go test -race .` + `go vet ./...` green; no existing error-string
 assertions broken.
 
+## Sweep concluded (after tick 5)
+
+The tick-6 survey turned up no genuinely substantive hygiene item — only
+intentional design choices or changes that would be churn/risky abstraction.
+Recorded here so a future sweep does not re-litigate them:
+
+- Swallowed `LoadSnapshot` errors in `appval.go` `reconcileKey` /
+  `reconcileSessionKey` — intentional best-effort, idempotent sweeps that retry
+  on the next tick; surfacing the error would be an observability *feature*, not
+  hygiene.
+- `reconcileKey` vs `reconcileSessionKey` near-duplication — deduping would
+  force a leaky app-vs-session abstraction; the parallel structure is clearer.
+- `context.Background()` on the event-append write path
+  (`stateappevents.go`) — already documented as a deliberate deferred
+  refinement (request-context cancellation wiring).
+
+Backplane / core code is clean and well-documented. Stopping the loop;
+re-run only if new code lands.
+
