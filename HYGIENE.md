@@ -51,3 +51,18 @@ Result: pure rename, no behavior change. `go test -race ./vianats/...` green.
 (Deferred to a later tick: two vianats tests still use raw t.Fatalf instead of
 testify — a distinct item.)
 
+## Tick 4 — convert remaining vianats tests to testify
+
+What: `embedded_test.go` (incl. the `startEmbeddedJetStream` helper) and
+`sanitize_internal_test.go` used raw `t.Fatalf`/`t.Errorf`, which CONVENTIONS
+forbids ("Do not use raw t.Error, t.Fatal … use testify"). Converted to
+`require`/`assert` (require for preconditions, assert for behavioral claims).
+Also tightened embedded_test's second Publish to check its error instead of
+discarding it.
+
+Why: testify gives uniform failure output and the require/assert split makes
+precondition-vs-claim explicit; these two files were the last raw-t holdouts in
+the backend module.
+
+Result: test-only, behavior preserved. `go test -race ./vianats/...` green.
+

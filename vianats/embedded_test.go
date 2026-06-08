@@ -8,6 +8,8 @@ import (
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // startEmbeddedJetStream boots an in-process JetStream-enabled nats-server on a
@@ -22,13 +24,9 @@ func startEmbeddedJetStream(t testing.TB) string {
 		StoreDir:  t.TempDir(),
 	}
 	srv, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatalf("new embedded nats-server: %v", err)
-	}
+	require.NoError(t, err, "new embedded nats-server")
 	go srv.Start()
-	if !srv.ReadyForConnections(10 * time.Second) {
-		t.Fatal("embedded nats-server not ready")
-	}
+	require.True(t, srv.ReadyForConnections(10*time.Second), "embedded nats-server not ready")
 	t.Cleanup(srv.Shutdown)
 	return srv.ClientURL()
 }
@@ -42,67 +40,47 @@ func TestJetStream_primitivesWorkOnEmbeddedServer(t *testing.T) {
 	ctx := context.Background()
 
 	nc, err := nats.Connect(url)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
+	require.NoError(t, err, "connect")
 	defer nc.Close()
 	js, err := jetstream.New(nc)
-	if err != nil {
-		t.Fatalf("jetstream: %v", err)
-	}
+	require.NoError(t, err, "jetstream")
 
 	// KV: create returns a revision; a stale-revision Update must conflict.
 	kv, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: "store"})
-	if err != nil {
-		t.Fatalf("create kv: %v", err)
-	}
+	require.NoError(t, err, "create kv")
 	rev, err := kv.Create(ctx, "cell", []byte("first"))
-	if err != nil {
-		t.Fatalf("kv create: %v", err)
-	}
-	if _, err := kv.Update(ctx, "cell", []byte("clobber"), rev-1+0); err == nil {
-		// rev is >=1; updating with a wrong (0) revision must fail.
-		t.Fatal("kv Update with a stale revision should have failed")
-	}
+	require.NoError(t, err, "kv create")
+	// rev is >=1; updating with a wrong (0) revision must fail.
+	_, err = kv.Update(ctx, "cell", []byte("clobber"), rev-1)
+	require.Error(t, err, "kv Update with a stale revision should have failed")
 	entry, err := kv.Get(ctx, "cell")
-	if err != nil || string(entry.Value()) != "first" {
-		t.Fatalf("kv get = %q err=%v, want first", entry.Value(), err)
-	}
+	require.NoError(t, err, "kv get")
+	assert.Equal(t, "first", string(entry.Value()))
 
 	// Stream: ordered publish returns a monotonic sequence; a subject-filtered
 	// consumer replays in order.
-	if _, err := js.CreateStream(ctx, jetstream.StreamConfig{
+	_, err = js.CreateStream(ctx, jetstream.StreamConfig{
 		Name:     "evlog",
 		Subjects: []string{"ev.>"},
-	}); err != nil {
-		t.Fatalf("create stream: %v", err)
-	}
+	})
+	require.NoError(t, err, "create stream")
 	a1, err := js.Publish(ctx, "ev.alpha", []byte("a1"))
-	if err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	a2, _ := js.Publish(ctx, "ev.alpha", []byte("a2"))
-	if a2.Sequence <= a1.Sequence {
-		t.Fatalf("stream sequences must increase, got %d then %d", a1.Sequence, a2.Sequence)
-	}
+	require.NoError(t, err, "publish")
+	a2, err := js.Publish(ctx, "ev.alpha", []byte("a2"))
+	require.NoError(t, err, "publish")
+	assert.Greater(t, a2.Sequence, a1.Sequence, "stream sequences must increase")
 
 	cons, err := js.CreateOrUpdateConsumer(ctx, "evlog", jetstream.ConsumerConfig{
 		FilterSubject: "ev.alpha",
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckPolicy:     jetstream.AckNonePolicy,
 	})
-	if err != nil {
-		t.Fatalf("consumer: %v", err)
-	}
+	require.NoError(t, err, "consumer")
 	batch, err := cons.Fetch(2, jetstream.FetchMaxWait(2*time.Second))
-	if err != nil {
-		t.Fatalf("fetch: %v", err)
-	}
+	require.NoError(t, err, "fetch")
 	var got []string
 	for msg := range batch.Messages() {
 		got = append(got, string(msg.Data()))
 	}
-	if len(got) != 2 || got[0] != "a1" || got[1] != "a2" {
-		t.Fatalf("consumer replay = %v, want [a1 a2] in order", got)
-	}
+	assert.Equal(t, []string{"a1", "a2"}, got, "consumer must replay in order")
 }
