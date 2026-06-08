@@ -36,7 +36,7 @@ func startEmbeddedJetStream(t testing.TB) string {
 // Before building the backend, prove the embedded JetStream primitives the
 // backend rests on actually work in this environment: a KV bucket with
 // create/get/CAS-revision, and a stream with ordered publish + consume.
-func TestEmbeddedJetStreamPrimitivesWork(t *testing.T) {
+func TestJetStream_primitivesWorkOnEmbeddedServer(t *testing.T) {
 	t.Parallel()
 	url := startEmbeddedJetStream(t)
 	ctx := context.Background()

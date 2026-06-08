@@ -16,7 +16,7 @@ import (
 // in-mem suite never stands in for a real ordered, durable, resumable log.
 // Each conformance subtest gets a freshly-named bucket+stream (unique prefix) on
 // one embedded JetStream server, so subtests are isolated.
-func TestJetStreamConformance(t *testing.T) {
+func TestJetStream_passesBackplaneConformance(t *testing.T) {
 	t.Parallel()
 	url := startEmbeddedJetStream(t)
 

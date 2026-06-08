@@ -21,7 +21,7 @@ import (
 // non-zero per-stream generation on Head and on every delivered Record, and that
 // generation must be identical for any two clients looking at the SAME live
 // stream (else two pods would each think the other reset).
-func TestEpochIsNonZeroAndStableAcrossClientsOnTheSameStream(t *testing.T) {
+func TestEpoch_isNonZeroAndStableAcrossClients(t *testing.T) {
 	t.Parallel()
 	url := startEmbeddedJetStream(t)
 	ctx := context.Background()
@@ -52,7 +52,7 @@ func TestEpochIsNonZeroAndStableAcrossClientsOnTheSameStream(t *testing.T) {
 // recreated JetStream stream, Redis XTRIM-to-empty, PG restore). The epoch MUST
 // change across that boundary, otherwise the projector cannot tell "offset 1 of
 // the new generation" from "already-applied offset 1" and would strand the key.
-func TestEpochDiffersAfterStreamDeleteAndRecreate(t *testing.T) {
+func TestEpoch_differsAfterStreamDeleteAndRecreate(t *testing.T) {
 	t.Parallel()
 	url := startEmbeddedJetStream(t)
 	ctx := context.Background()
@@ -81,7 +81,7 @@ func TestEpochDiffersAfterStreamDeleteAndRecreate(t *testing.T) {
 // first Append (empty→non-empty) does NOT look like an offset-space reset: a
 // reader that saw epoch 0 on the empty key and then the real epoch on the first
 // record would spuriously re-snapshot.
-func TestEmptyKeyHeadReportsTheStreamEpochNotZero(t *testing.T) {
+func TestHead_reportsStreamEpochForEmptyKey(t *testing.T) {
 	t.Parallel()
 	url := startEmbeddedJetStream(t)
 	ctx := context.Background()

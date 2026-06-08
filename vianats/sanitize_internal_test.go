@@ -6,7 +6,7 @@ import "testing"
 // contain '.', '*', '>' (subject structure) or be empty. sanitize must map any
 // such key to a single safe, collision-free token, or a dotted key like
 // "chart.x" would silently fan out across subject levels and corrupt routing.
-func TestSanitizeMakesArbitraryKeysSafeAndDistinct(t *testing.T) {
+func TestSanitize_makesArbitraryKeysSafeAndDistinct(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"alpha":   "alpha",      // alnum passes through untouched

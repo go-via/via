@@ -33,3 +33,21 @@ reintroduce subject/KV-name collisions.
 Result: doc + characterization test only, no behavior change.
 `go test -race ./vianats` green.
 
+## Tick 3 — rename vianats tests to the CONVENTIONS name format
+
+What: all 6 `vianats` test functions used freeform names
+(`TestEpochIsNonZeroAndStableAcrossClientsOnTheSameStream`) instead of the
+mandated `Test` + Subject + `_` + camelCase-behavior format. Renamed to
+`TestEpoch_isNonZeroAndStableAcrossClients`, `TestJetStream_passesBackplane
+Conformance`, `TestJetStream_primitivesWorkOnEmbeddedServer`,
+`TestEpoch_differsAfterStreamDeleteAndRecreate`,
+`TestHead_reportsStreamEpochForEmptyKey`, `TestSanitize_makesArbitraryKeysSafe
+AndDistinct`.
+
+Why: the convention separates *what* from *does what* so tests read as
+behavioral claims; the backend module had drifted entirely off it.
+
+Result: pure rename, no behavior change. `go test -race ./vianats/...` green.
+(Deferred to a later tick: two vianats tests still use raw t.Fatalf instead of
+testify — a distinct item.)
+
