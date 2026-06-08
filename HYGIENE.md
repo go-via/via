@@ -103,3 +103,26 @@ Recorded here so a future sweep does not re-litigate them:
 Backplane / core code is clean and well-documented. Stopping the loop;
 re-run only if new code lands.
 
+## Follow-up — rename applog* family to stateappevents_* (user-requested)
+
+What: `applog.go` read like "application logging" (collides with `log.go`, the
+slog adapter) and was actually the per-key projector RUNTIME behind the public
+`StateAppEvents` handle. The whole `applog*` family was `git mv`'d to bind to
+the public concept (and unify with the pre-existing
+`stateappevents_runtime_test.go`):
+
+- applog.go            → stateappevents_projector.go
+- applogsnap.go        → stateappevents_snapshot.go
+- applogmigrate.go     → stateappevents_migrate.go
+- applog*_internal_test.go → stateappevents_<concern>_internal_test.go (7 files)
+
+Updated two live cross-reference comments in vianats (vianats.go, epoch_test.go)
+to the new filename. Left design-council.md as a historical record.
+
+Why: a file name should name its concept; `applog` was ambiguous against actual
+logging and split from the `stateappevents`/`stateapp`/`statesess` family.
+
+Result: pure file rename (package unchanged), `git mv` preserves history.
+`go build ./...` + `go test -race .` (via) and `go test -race ./...` (vianats)
+all green.
+

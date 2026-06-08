@@ -13,7 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The projector's offset-space-reset detection (via applog.go projectRecord)
+// The projector's offset-space-reset detection (stateappevents_projector.go,
+// projectRecord)
 // fires only when a Record's Epoch differs from the last-seen epoch. A backend
 // that always reports Epoch(0) makes a stream delete+recreate (which restarts the
 // offset space) silently undetectable — the projector keeps its stale

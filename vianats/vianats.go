@@ -93,7 +93,8 @@ func JetStream(nc *nats.Conn, opts ...Option) (*Backplane, error) {
 	// Epoch = the stream's creation identity. JetStream purge keeps sequence
 	// numbers monotone (no offset-space reset), so the ONLY reset is a stream
 	// delete+recreate, which yields a fresh Created timestamp. Stamping it on
-	// Head + every Record lets the projector detect that reset (applog.go);
+	// Head + every Record lets the projector detect that reset
+	// (stateappevents_projector.go);
 	// every client on the same live stream reads the same Created → same epoch.
 	//
 	// CreateOrUpdateStream returns a Stream whose CachedInfo is populated from
