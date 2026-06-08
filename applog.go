@@ -68,57 +68,7 @@ func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, err
 // goroutine exits when the Subscribe channel closes (backplane Close on
 // Shutdown).
 func (a *App) startProjector(key string, ls *logState) {
-	// Cold start: seed from a durable snapshot so we replay only the tail.
-	// A missing / stale-codec / undecodable snapshot leaves from=0 (re-fold from
-	// genesis) — the snapshot is a disposable cache, never required for
-	// correctness.
-	from := Offset(0)
-	if data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key)); ok {
-		var cp checkpoint
-		if json.Unmarshal(data, &cp) == nil {
-			// A snapshot folded BEFORE a crypto-shred erasure may hold shredded
-			// PII; if the authoritative generation has advanced past it, it is
-			// invalid.
-			erasureStale := cp.ErasureGen < a.loadErasureGen()
-			switch {
-			case erasureStale && cp.Compacted:
-				// Durable-genesis snapshot invalidated by erasure: the event prefix
-				// is gone, so re-folding from 0 would silently TRUNCATE to the
-				// surviving tail — dropping SURVIVING subjects' data, not only the
-				// erased one. Halt (roll-forward-only); compaction + erasure of one
-				// key needs snapshot re-encryption (documented follow-up).
-				a.haltErasure(ls, key)
-			case erasureStale:
-				// Uncompacted + stale → re-fold from genesis (from stays 0); the
-				// erased subject's now-undecryptable events drop on the way.
-			case cp.CodecHash == ls.codecHash:
-				// Codec matches → seed straight from the snapshot.
-				if v, err := ls.decodeSnap(cp.V); err == nil {
-					a.seedFromSnapshot(ls, v, cp, rev)
-					from = cp.CoveredOffset
-				}
-			case !cp.Compacted:
-				// Uncompacted mismatch → the snapshot is a pure disposable cache;
-				// re-fold from genesis (from stays 0). Evolving V is free.
-			default:
-				// Compacted + mismatch → durable genesis: the event prefix is gone,
-				// so we MUST NOT discard (that would silently truncate to the
-				// surviving tail). Run the registered seeded migration; on a missing
-				// or failing migration HALT the projector (roll-forward-only),
-				// never truncate (T2-GO-4).
-				from = cp.CoveredOffset
-				if migrate, found := lookupSnapMigration(cp.CodecHash); found {
-					if v, err := migrate.decode(cp.V); err == nil {
-						a.seedFromSnapshot(ls, v, cp, rev)
-					} else {
-						a.haltUnbridgeable(ls, key)
-					}
-				} else {
-					a.haltUnbridgeable(ls, key)
-				}
-			}
-		}
-	}
+	from := a.coldStartFrom(ls, key)
 	go func() {
 		// Reconnect loop: each Subscribe tails until its channel closes. A close
 		// while the app is still running is a TRANSIENT disconnect (the backend
@@ -150,6 +100,64 @@ func (a *App) startProjector(key string, ls *logState) {
 			time.Sleep(reconnectBackoff)
 		}
 	}()
+}
+
+// coldStartFrom seeds ls from a durable snapshot (so the projector replays only
+// the tail) and returns the offset to subscribe from. A missing / stale-codec /
+// undecodable snapshot returns 0 (re-fold from genesis) — the snapshot is a
+// disposable cache, never required for correctness. Returns the snapshot's
+// covered offset only when a bridging seed (matching codec or seeded migration)
+// was installed; otherwise a halt is latched on ls and folding stops.
+func (a *App) coldStartFrom(ls *logState, key string) Offset {
+	data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	if !ok {
+		return 0
+	}
+	var cp checkpoint
+	if json.Unmarshal(data, &cp) != nil {
+		return 0
+	}
+	// A snapshot folded BEFORE a crypto-shred erasure may hold shredded PII; if
+	// the authoritative generation has advanced past it, it is invalid.
+	erasureStale := cp.ErasureGen < a.loadErasureGen()
+	switch {
+	case erasureStale && cp.Compacted:
+		// Durable-genesis snapshot invalidated by erasure: the event prefix is
+		// gone, so re-folding from 0 would silently TRUNCATE to the surviving
+		// tail — dropping SURVIVING subjects' data, not only the erased one. Halt
+		// (roll-forward-only); compaction + erasure of one key needs snapshot
+		// re-encryption (documented follow-up).
+		a.haltErasure(ls, key)
+		return 0
+	case erasureStale:
+		// Uncompacted + stale → re-fold from genesis; the erased subject's
+		// now-undecryptable events drop on the way.
+		return 0
+	case cp.CodecHash == ls.codecHash:
+		// Codec matches → seed straight from the snapshot.
+		if v, err := ls.decodeSnap(cp.V); err == nil {
+			a.seedFromSnapshot(ls, v, cp, rev)
+			return cp.CoveredOffset
+		}
+		return 0
+	case !cp.Compacted:
+		// Uncompacted mismatch → the snapshot is a pure disposable cache; re-fold
+		// from genesis. Evolving V is free.
+		return 0
+	default:
+		// Compacted + mismatch → durable genesis: the event prefix is gone, so we
+		// MUST NOT discard (that would silently truncate to the surviving tail).
+		// Run the registered seeded migration; on a missing or failing migration
+		// HALT the projector (roll-forward-only), never truncate (T2-GO-4).
+		if migrate, found := lookupSnapMigration(cp.CodecHash); found {
+			if v, err := migrate.decode(cp.V); err == nil {
+				a.seedFromSnapshot(ls, v, cp, rev)
+				return cp.CoveredOffset
+			}
+		}
+		a.haltUnbridgeable(ls, key)
+		return cp.CoveredOffset
+	}
 }
 
 // shuttingDown reports whether Shutdown has begun (backplaneDone closed), so a
