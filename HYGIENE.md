@@ -235,3 +235,17 @@ shrinks the logState surface (the council's one true decoupling lever).
 Result: pure deletion (no reads existed); `go build`/`vet`/`test -race .` green.
 The only behavior delta is one fewer backplane LoadSnapshot on the CAS-conflict
 path — unobservable (its result fed only the deleted field).
+
+### Q3 — convert raw t.Fatal in the projector test cluster to testify
+
+What: 12 raw `t.Fatal`/`t.Fatalf` sites across stateappevents_{projector,fold,
+gap,helpers}_test.go violated CONVENTIONS ("use testify, not raw t.Fatal").
+Converted: 7 append-loop guards + 1 CAS-seed guard → `require.NoError(t, err,
+…)`; 2 Shutdown-hang and 1 recv timeout + 1 child-output failure → `require.
+FailNow`/`require.FailNow(t, fmt.Sprintf(…))`.
+
+Why: uniform failure output + the testify precondition idiom, matching the
+tick-3/4 vianats precedent; the cluster the split created was the last raw-t
+island.
+
+Result: test-only; no raw t.Fatal remain; gofmt + vet + `test -race .` green.

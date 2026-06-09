@@ -128,9 +128,8 @@ func TestFoldVerifyDetectsImpureFoldAndBlocksCompaction(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 1; i <= 6; i++ {
-		if _, err := app.backplane.Append(ctx, "k", envFor(flakyEv{N: i})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", envFor(flakyEv{N: i}))
+		require.NoError(t, err, "append")
 	}
 
 	// The impurity is detected.
@@ -160,9 +159,8 @@ func TestFoldVerifyAllowsPureFoldToCompact(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 1; i <= 6; i++ {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: i})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: i}))
+		require.NoError(t, err, "append")
 	}
 
 	require.Eventually(t, func() bool { return lowestRetainedOffset(t, app.backplane, "k") > 1 },
@@ -185,9 +183,8 @@ func TestFoldVerifyIsOptInAndOffByDefault(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 1; i <= 6; i++ {
-		if _, err := app.backplane.Append(ctx, "k", envFor(flakyEv{N: i})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", envFor(flakyEv{N: i}))
+		require.NoError(t, err, "append")
 	}
 	// Without WithFoldVerify the divergence signal is never raised (no double-fold).
 	require.Never(t, func() bool { return spy.saw("via.fold.divergence") },

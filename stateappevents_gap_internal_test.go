@@ -24,9 +24,8 @@ func TestProjectorFoldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T)
 	ctx := context.Background()
 
 	for _, n := range []int{1, 2, 3, 4, 5} {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 
 	require.Eventually(t, func() bool {
@@ -102,9 +101,8 @@ func TestGapWithUnreadableSnapshotFolds(t *testing.T) {
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
-	if _, err := app.backplane.CAS(context.Background(), snapKey("k"), 0, []byte("not-json")); err != nil {
-		t.Fatalf("seed corrupt snapshot: %v", err)
-	}
+	_, err := app.backplane.CAS(context.Background(), snapKey("k"), 0, []byte("not-json"))
+	require.NoError(t, err, "seed corrupt snapshot")
 	advanced := app.applyRecord(ls, "k", Record{Key: "k", Offset: 9, Data: goodBenchEnv()})
 
 	require.True(t, advanced, "an unreadable snapshot is not evidence of compaction → fold")

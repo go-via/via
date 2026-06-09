@@ -25,9 +25,8 @@ func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
 	ctx := context.Background()
 
 	for _, n := range []int{1, 2, 3, 4, 5} {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 
 	// The first subscription delivers 2 records then drops; the projector must
@@ -65,9 +64,8 @@ func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
 
 	ctx := context.Background()
 	for _, n := range []int{1, 2, 3, 4, 5} {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 
 	require.Eventually(t, func() bool {
@@ -116,7 +114,7 @@ func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Shutdown hung — consumer likely reconnect-spinning instead of exiting")
+		require.FailNow(t, "Shutdown hung — consumer likely reconnect-spinning instead of exiting")
 	}
 }
 
@@ -144,6 +142,6 @@ func TestProjectorExitsCleanlyOnShutdown(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Shutdown hung — projector likely reconnect-spinning instead of exiting")
+		require.FailNow(t, "Shutdown hung — projector likely reconnect-spinning instead of exiting")
 	}
 }

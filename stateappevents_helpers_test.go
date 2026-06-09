@@ -95,9 +95,8 @@ func foldKEvents(t *testing.T, gs *gaugeSpy, key string, ns ...int) (float64, fl
 	bindLog(app, key)
 	ctx := context.Background()
 	for _, n := range ns {
-		if _, err := app.backplane.Append(ctx, key, goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, key, goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 	require.Eventually(t, func() bool { return len(projection(app, key)) == len(ns) },
 		2*time.Second, 10*time.Millisecond, "all events must fold")
@@ -116,7 +115,7 @@ func recvOffset(t *testing.T, sub <-chan Record) Offset {
 	case r := <-sub:
 		return r.Offset
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for a record")
+		require.FailNow(t, "timed out waiting for a record")
 		return 0
 	}
 }
@@ -330,7 +329,7 @@ func runReplayChild(t *testing.T) uint32 {
 			return d
 		}
 	}
-	t.Fatalf("child did not print a digest:\n%s", out)
+	require.FailNow(t, fmt.Sprintf("child did not print a digest:\n%s", out))
 	return 0
 }
 
