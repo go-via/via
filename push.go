@@ -19,13 +19,13 @@ import (
 // element fragment into the live DOM. Reach for these only when the
 // typed path (Signal[T].Set, View re-render) doesn't fit:
 //
-//	ctx.Patch.Signal("_picoTheme", "purple")           // ad-hoc client signal
-//	ctx.Patch.Signals(map[string]any{"a": 1, "b": 2})  // batched merge
-//	ctx.Patch.Element(h.Div(h.ID("toast"), ...))       // single morph
-//	ctx.Patch.Elements(div1, div2)                     // variadic morph batch
+//	ctx.Patch().Signal("_picoTheme", "purple")           // ad-hoc client signal
+//	ctx.Patch().Signals(map[string]any{"a": 1, "b": 2})  // batched merge
+//	ctx.Patch().Element(h.Div(h.ID("toast"), ...))       // single morph
+//	ctx.Patch().Elements(div1, div2)                     // variadic morph batch
 //
-// The Patch handle is allocated eagerly in newCtx; access is a plain
-// field load with no allocation. Mirrors how *CtxR is cached.
+// The Patch handle is allocated eagerly in newCtx; ctx.Patch() is a
+// plain field load with no allocation. Mirrors how *CtxR is cached.
 type Patch struct {
 	ctx *Ctx
 }

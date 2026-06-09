@@ -45,30 +45,30 @@ func (p *eventPage) AddPin(ctx *via.Ctx) {
 // Selected / Moved echo the marker identity + position the gesture posted.
 func (p *eventPage) Selected(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"gotId": e.MarkerID, "gotLng": e.Lng, "gotLat": e.Lat})
+	ctx.Patch().Signals(map[string]any{"gotId": e.MarkerID, "gotLng": e.Lng, "gotLat": e.Lat})
 }
 
 func (p *eventPage) Moved(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"gotId": e.MarkerID, "gotLng": e.Lng, "gotLat": e.Lat})
+	ctx.Patch().Signals(map[string]any{"gotId": e.MarkerID, "gotLng": e.Lng, "gotLat": e.Lat})
 }
 
 // Picked echoes which feature the user clicked in a data layer.
 func (p *eventPage) Picked(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"gotFid": e.FeatureID, "gotLng": e.Lng, "gotLat": e.Lat})
+	ctx.Patch().Signals(map[string]any{"gotFid": e.FeatureID, "gotLng": e.Lng, "gotLat": e.Lat})
 }
 
 // PlacePin echoes the clicked coordinates back as signals.
 func (p *eventPage) PlacePin(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"gotLng": e.Lng, "gotLat": e.Lat})
+	ctx.Patch().Signals(map[string]any{"gotLng": e.Lng, "gotLat": e.Lat})
 }
 
 // Recenter echoes the settled viewport back as signals.
 func (p *eventPage) Recenter(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Patch.Signals(map[string]any{
+	ctx.Patch().Signals(map[string]any{
 		"gotZoom": e.Zoom, "gotBearing": e.Bearing, "gotPitch": e.Pitch,
 		"gotW": e.West, "gotS": e.South, "gotE": e.East, "gotN": e.North,
 	})

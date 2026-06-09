@@ -239,7 +239,7 @@ func (c *connectStateCheck) OnConnect(ctx *via.Ctx) error {
 	}
 	// Drive a signal so the SSE drain has something to flush — that's
 	// the await condition below.
-	ctx.Patch.Signal("_connected", true)
+	ctx.Patch().Signal("_connected", true)
 	return nil
 }
 
@@ -928,13 +928,13 @@ func (p *syncOffExplicitPage) SilentToast(ctx *via.Ctx) error {
 
 func (p *syncOffExplicitPage) SilentPatchSignal(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	ctx.Patch.Signal("_marker", "hello")
+	ctx.Patch().Signal("_marker", "hello")
 	return nil
 }
 
 func (p *syncOffExplicitPage) SilentSyncElements(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	ctx.Patch.Elements(h.Div(h.ID("marker"), h.Text("morphed")))
+	ctx.Patch().Elements(h.Div(h.ID("marker"), h.Text("morphed")))
 	return nil
 }
 

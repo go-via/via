@@ -254,7 +254,7 @@ func (a *App) renderFragment(ctx *Ctx) string {
 	buf := getRenderBuf()
 	defer putRenderBuf(buf)
 	// View runs without queue.mu held — user code is allowed to call
-	// ctx.Patch.Signal / ctx.Patch.Elements, which would deadlock on a
+	// ctx.Patch().Signal / ctx.Patch().Elements, which would deadlock on a
 	// re-entrant queue.mu acquisition.
 	ctx.beginRender()
 	defer ctx.endRender()

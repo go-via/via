@@ -14,7 +14,7 @@ import (
 type syncPage struct{}
 
 func (p *syncPage) PushList(ctx *via.Ctx) error {
-	ctx.Patch.Elements(
+	ctx.Patch().Elements(
 		h.Ul(h.ID("results"),
 			h.Li(h.Text("first")),
 			h.Li(h.Text("second")),
@@ -24,7 +24,7 @@ func (p *syncPage) PushList(ctx *via.Ctx) error {
 }
 
 func (p *syncPage) PickTheme(ctx *via.Ctx) error {
-	ctx.Patch.Signal("_picoTheme", "purple")
+	ctx.Patch().Signal("_picoTheme", "purple")
 	return nil
 }
 
