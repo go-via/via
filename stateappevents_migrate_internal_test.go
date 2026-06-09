@@ -40,7 +40,7 @@ func compactedKeyWithMismatchedSnapshot(t *testing.T, app *App, key, oldHash str
 // mis-classified as a disposable cache and silently truncate on a codec change.
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
-func TestRealProjectorMarksCheckpointCompactedAfterDiscardingPrefix(t *testing.T) {
+func TestMigrate_marksCheckpointCompactedAfterDiscardingPrefix(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
 	defer server.Close()
@@ -76,7 +76,7 @@ func TestRealProjectorMarksCheckpointCompactedAfterDiscardingPrefix(t *testing.T
 // truncate the value to whatever events happen to survive.
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
-func TestCompactedKeyRunsSeededMigrationOnCodecMismatch(t *testing.T) {
+func TestMigrate_runsSeededMigrationOnCodecMismatch(t *testing.T) {
 	const oldHash = "p5c.test.seeded.oldhash"
 	RegisterSnapshotMigration(oldHash, func(b []byte) ([]int, error) {
 		var v []int
@@ -116,7 +116,7 @@ func TestCompactedKeyRunsSeededMigrationOnCodecMismatch(t *testing.T) {
 // the safe failure; silently truncating to the surviving tail is not.
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
-func TestCompactedKeyHaltsWhenNoMigrationRegistered(t *testing.T) {
+func TestMigrate_haltsWhenNoMigrationRegistered(t *testing.T) {
 	const oldHash = "p5c.test.unbridgeable.oldhash" // never registered
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -145,7 +145,7 @@ func TestCompactedKeyHaltsWhenNoMigrationRegistered(t *testing.T) {
 // plausible-but-wrong value.
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
-func TestCompactedKeyHaltsWhenMigrationErrors(t *testing.T) {
+func TestMigrate_haltsWhenMigrationErrors(t *testing.T) {
 	const oldHash = "p5c.test.migration-error.oldhash"
 	RegisterSnapshotMigration(oldHash, func([]byte) ([]int, error) {
 		return nil, context.DeadlineExceeded // any error
@@ -171,7 +171,7 @@ func TestCompactedKeyHaltsWhenMigrationErrors(t *testing.T) {
 // path must NOT change this when the prefix is intact.
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
-func TestUncompactedKeyStillRefoldsFromGenesisOnMismatch(t *testing.T) {
+func TestMigrate_uncompactedKeyRefoldsFromGenesisOnMismatch(t *testing.T) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()

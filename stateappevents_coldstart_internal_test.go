@@ -14,7 +14,7 @@ import (
 // The payoff: a fresh pod sharing a backplane whose prefix has been compacted
 // still cold-starts to the full projection — it seeds from the snapshot and
 // never needs the discarded events.
-func TestFreshProjectorColdStartsAfterPrefixCompacted(t *testing.T) {
+func TestColdStart_resumesAfterPrefixCompacted(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -48,7 +48,7 @@ func TestFreshProjectorColdStartsAfterPrefixCompacted(t *testing.T) {
 // log — that is the entire point of snapshots (an old key with millions of
 // events resumes instantly). We prove it with a snapshot whose value could ONLY
 // come from the snapshot, never from re-folding the real log.
-func TestColdStartSeedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
+func TestColdStart_seedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -94,7 +94,7 @@ func TestColdStartSeedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
 // the distinct-[99] trick: a stale-gen snapshot is ignored → projection re-folds
 // the real log ([1..5]); were it (wrongly) seeded, the projection would be [99].
 // This asserts the gen-invalidation directly, not transitively through erasure.
-func TestColdStartIgnoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
+func TestColdStart_ignoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -133,7 +133,7 @@ func TestColdStartIgnoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
 // The mirror of the stale-gen case: a snapshot stamped at OR ABOVE the
 // authoritative erasure generation is still a valid cache and IS seeded — gen
 // invalidation must not nuke every snapshot, only pre-erasure ones.
-func TestColdStartSeedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
+func TestColdStart_seedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -167,7 +167,7 @@ func TestColdStartSeedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
 // A snapshot written by an incompatible V codec must be IGNORED and the key
 // re-folded from genesis — so evolving the projection type V is free (the
 // snapshot is a disposable cache, invalidated on a codec-hash mismatch).
-func TestColdStartIgnoresSnapshotOnCodecHashMismatch(t *testing.T) {
+func TestColdStart_ignoresSnapshotOnCodecHashMismatch(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))

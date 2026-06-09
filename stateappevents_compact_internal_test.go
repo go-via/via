@@ -14,7 +14,7 @@ import (
 // MUST keep their original offsets — a resuming pod that passed offset N must
 // still resume exactly after N. Re-numbering the survivors to 1 would silently
 // re-deliver or skip events.
-func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
+func TestCompact_dropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -43,7 +43,7 @@ func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
 
 // A re-issued, stale, or over-large beforeOffset must never corrupt the log or
 // move the head — compaction is idempotent and clamped to committed offsets.
-func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
+func TestCompact_isIdempotentAndClampedToCommitted(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -67,7 +67,7 @@ func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
 // Offsets are a monotone resume primitive: an append AFTER compaction must
 // continue from the head, never restart base-relative. A renumbered offset would
 // let a resuming pod silently re-process or skip events.
-func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
+func TestCompact_appendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -92,7 +92,7 @@ func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
 // Compaction is monotone: the retained floor only ever rises. A stale or
 // out-of-order beforeOffset must not move the floor backward (which would
 // "resurrect" discarded offsets) or move the head.
-func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
+func TestCompact_sequentialCompactionsAdvanceMonotonically(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -117,7 +117,7 @@ func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
 // The projector reclaims storage automatically, but compaction must trail a
 // DURABLE snapshot (snapshot-FIRST, compact-SECOND) — it must never discard at
 // or beyond the covered offset, or a cold start could not resume.
-func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
+func TestCompact_autoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -153,7 +153,7 @@ func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 
 // A backend that declines Compactor must still snapshot — the runtime falls back
 // to snapshot-only and never panics or wedges, leaving the prefix intact.
-func TestSnapshotOnlyWhenBackendDeclinesCompaction(t *testing.T) {
+func TestCompact_snapshotOnlyWhenBackendDeclines(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	bp := nonCompactingBackplane{InMemory()}

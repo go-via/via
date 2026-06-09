@@ -13,7 +13,7 @@ import (
 // an operator comparing the two gauges across pods can detect a non-deterministic
 // fold before it corrupts a snapshot. So the digest must be a pure function of
 // the folded projection — identical inputs → identical digest.
-func TestFoldDigestIsDeterministicForTheSameSequence(t *testing.T) {
+func TestFoldDigest_isDeterministicForTheSameSequence(t *testing.T) {
 	t.Parallel()
 	off1, dig1 := foldKEvents(t, &gaugeSpy{}, "k", 1, 2, 3)
 	off2, dig2 := foldKEvents(t, &gaugeSpy{}, "k", 1, 2, 3)
@@ -26,7 +26,7 @@ func TestFoldDigestIsDeterministicForTheSameSequence(t *testing.T) {
 // the canary is useless — it would report agreement even when two pods diverged.
 // Both sequences fold three events (→ offset 3), so a digest that merely echoes
 // the offset would compare equal here and be rejected.
-func TestFoldDigestDiffersForDifferentProjections(t *testing.T) {
+func TestFoldDigest_differsForDifferentProjections(t *testing.T) {
 	t.Parallel()
 	offA, digA := foldKEvents(t, &gaugeSpy{}, "k", 1, 2, 3)
 	offB, digB := foldKEvents(t, &gaugeSpy{}, "k", 1, 2, 4)
@@ -38,7 +38,7 @@ func TestFoldDigestDiffersForDifferentProjections(t *testing.T) {
 // the canary triple is (key, offset, digest), and an operator correlates a
 // cross-pod digest MISMATCH to the exact offset it occurred at. A digest gauge
 // without the offset label would force comparing two unanchored hash streams.
-func TestFoldDigestGaugeCarriesOffsetLabel(t *testing.T) {
+func TestFoldDigest_gaugeCarriesOffsetLabel(t *testing.T) {
 	t.Parallel()
 	gs := &gaugeSpy{}
 	off, _ := foldKEvents(t, gs, "k", 1, 2, 3)
@@ -51,7 +51,7 @@ func TestFoldDigestGaugeCarriesOffsetLabel(t *testing.T) {
 // Within a single pod the digest must track the projection as it grows — a
 // digest that hashes only part of the state (or a constant) would not change as
 // events accumulate, blinding the canary to a fold that stopped advancing.
-func TestFoldDigestTracksProjectionGrowth(t *testing.T) {
+func TestFoldDigest_tracksProjectionGrowth(t *testing.T) {
 	t.Parallel()
 	off2, dig2 := foldKEvents(t, &gaugeSpy{}, "k", 1, 2)
 	off3, dig3 := foldKEvents(t, &gaugeSpy{}, "k", 1, 2, 3)

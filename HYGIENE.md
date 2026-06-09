@@ -263,3 +263,17 @@ were mis-discoverable under snapshot.
 
 Result: test-only move; snapshot 312→151 lines, coldstart now owns all 5
 cold-start tests; gofmt + vet + `test -race .` green.
+
+### Q5 — rename cluster test funcs to Test+Subject_behavior
+
+What: 52 stateappevents cluster test/fuzz funcs used freeform PascalCase names
+(e.g. TestFoldDigestIsDeterministicForTheSameSequence) instead of the mandated
+Test + Subject + `_` + camelCase-behavior form. Renamed all to the convention,
+grouping by subject (FoldDigest/Fold/FoldVerify/ColdStart/Compact/Snapshot/
+Projector/Consumer/Migrate/Gap/StateAppEvents).
+
+Why: CONVENTIONS Test-Names rule; the just-created cluster was the largest
+non-compliant island. Names now read as behavioral claims.
+
+Result: pure rename (no internal callers; word-boundary global replace), 53
+test/fuzz funcs unchanged in count; gofmt + vet + `test -race .` green.

@@ -317,7 +317,7 @@ func replayFixedLogDigest() uint32 {
 // child env set, and parses the digest line the child prints.
 func runReplayChild(t *testing.T) uint32 {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestFoldConvergesAcrossProcesses$", "-test.v")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFold_convergesAcrossProcesses$", "-test.v")
 	cmd.Env = append(os.Environ(), "VIA_FOLD_REPLAY_CHILD=1")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "child process failed: %s", out)

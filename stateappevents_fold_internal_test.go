@@ -17,7 +17,7 @@ import (
 // silently freezing the projection. The projector must DETECT the epoch change
 // and re-snapshot from genesis so the projection re-converges — emitting
 // via.events.epoch_reset.
-func TestProjectorReSnapshotsOnEpochReset(t *testing.T) {
+func TestFold_reSnapshotsOnEpochReset(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -54,13 +54,13 @@ func TestProjectorReSnapshotsOnEpochReset(t *testing.T) {
 	require.Equal(t, []int{5}, projection(app, "k"), "a backward epoch change also re-snapshots from genesis")
 }
 
-// FuzzFoldIsDeterministicAndNeverPanics drives arbitrary bytes through the real
+// FuzzFold_isDeterministicAndNeverPanics drives arbitrary bytes through the real
 // projector decode+fold path. The decode must classify every input (fold,
 // ErrUndecodable, or ErrForwardIncompatible) WITHOUT panicking — a poison record
 // must never crash a pod — and folding the same bytes from the same accumulator
 // twice must yield the identical result and error (purity). A reducer that read
 // a clock or RNG would fail the second-fold equality.
-func FuzzFoldIsDeterministicAndNeverPanics(f *testing.F) {
+func FuzzFold_isDeterministicAndNeverPanics(f *testing.F) {
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
 	defer server.Close()
@@ -92,13 +92,13 @@ func FuzzFoldIsDeterministicAndNeverPanics(f *testing.F) {
 	})
 }
 
-// TestFoldConvergesAcrossProcesses replays a fixed event log in two SEPARATE OS
+// TestFold_convergesAcrossProcesses replays a fixed event log in two SEPARATE OS
 // processes and asserts both reach the identical projection digest. Same-process
 // determinism (the fuzz above) cannot catch a reducer that reads process-global
 // state (a package var, an env-seeded value) — two goroutines share it, two
 // processes do not. This is the only gate that distinguishes "pure" from "agrees
 // with itself in one process".
-func TestFoldConvergesAcrossProcesses(t *testing.T) {
+func TestFold_convergesAcrossProcesses(t *testing.T) {
 	t.Parallel()
 	if os.Getenv("VIA_FOLD_REPLAY_CHILD") == "1" {
 		fmt.Printf("VIA_FOLD_DIGEST=%d\n", replayFixedLogDigest())
@@ -116,7 +116,7 @@ func TestFoldConvergesAcrossProcesses(t *testing.T) {
 // it re-folds each record and, on a mismatch, emits via.fold.divergence AND
 // REFUSES to compact the key — never letting a proven-non-deterministic fold
 // reach durable genesis.
-func TestFoldVerifyDetectsImpureFoldAndBlocksCompaction(t *testing.T) {
+func TestFoldVerify_detectsImpureFoldAndBlocksCompaction(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -147,7 +147,7 @@ func TestFoldVerifyDetectsImpureFoldAndBlocksCompaction(t *testing.T) {
 // A PURE fold under WithFoldVerify must behave exactly as without it: no
 // divergence signal, and compaction proceeds normally. The guard must not flag
 // or block correct reducers.
-func TestFoldVerifyAllowsPureFoldToCompact(t *testing.T) {
+func TestFoldVerify_allowsPureFoldToCompact(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -172,7 +172,7 @@ func TestFoldVerifyAllowsPureFoldToCompact(t *testing.T) {
 // pay the double-fold cost, so an impure fold is NOT flagged and compaction is
 // not blocked by it. This pins the cost as opt-in (the council's dev-mode
 // framing) rather than always-on.
-func TestFoldVerifyIsOptInAndOffByDefault(t *testing.T) {
+func TestFoldVerify_isOptInAndOffByDefault(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server

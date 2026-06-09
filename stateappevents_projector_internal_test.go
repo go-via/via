@@ -16,7 +16,7 @@ import (
 // re-subscribe from its cursor and fold the rest — otherwise one network blip
 // freezes a tab's state forever (the deploy-freeze class of bug the backplane
 // exists to fix, reappearing one layer down).
-func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
+func TestProjector_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -43,7 +43,7 @@ func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
 // the remaining events, or a deploy blip silently loses side effects (emails,
 // payments) — the failure mode OnEvent's at-least-once contract exists to
 // prevent.
-func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
+func TestConsumer_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -80,7 +80,7 @@ func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
 // Closed, the consumer's in-flight subscription closes and it must read that as
 // a graceful stop (not a transient drop → reconnect) and exit. Without the
 // shuttingDown() guard the consumer would reconnect-spin and Shutdown would hang.
-func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
+func TestConsumer_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -123,7 +123,7 @@ func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
 // projector must exit. This pins the distinction between a transient drop
 // (reconnect) and a graceful stop (exit) — without it, Shutdown would never
 // quiesce.
-func TestProjectorExitsCleanlyOnShutdown(t *testing.T) {
+func TestProjector_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))

@@ -14,7 +14,7 @@ import (
 // The projector must actually persist snapshots, so a future cold start can use
 // them. With an interval of 1, a snapshot appears in the Store after folds,
 // covering the latest offset and decoding to the current projection.
-func TestProjectorPersistsSnapshots(t *testing.T) {
+func TestSnapshot_projectorPersistsSnapshots(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -50,7 +50,7 @@ func TestProjectorPersistsSnapshots(t *testing.T) {
 // WithSnapshotInterval(0) disables snapshot writes — an operator opt-out the
 // public Option promises. After many folds the Store must hold no snapshot, so
 // the feature is genuinely off (not merely deferred to a larger threshold).
-func TestSnapshotWritesDisabledWhenIntervalNonPositive(t *testing.T) {
+func TestSnapshot_writesDisabledWhenIntervalNonPositive(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(0))
@@ -76,7 +76,7 @@ func TestSnapshotWritesDisabledWhenIntervalNonPositive(t *testing.T) {
 // then a FRESH projector on the SAME backplane (a restart / new pod) cold-starts
 // from that very snapshot and folds only the tail — proving write and cold-start
 // interoperate, not just each half against a contrived fixture.
-func TestRoundTripPersistedSnapshotSeedsAFreshProjector(t *testing.T) {
+func TestSnapshot_roundTripSeedsAFreshProjector(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -122,7 +122,7 @@ func TestRoundTripPersistedSnapshotSeedsAFreshProjector(t *testing.T) {
 // not overwrite a leader's higher-covered snapshot with a lower one. If it could,
 // compaction (which trusts the durable snapshot to cover the prefix it drops) and
 // a peer's gap-reseed would recover a snapshot that doesn't bridge the gap.
-func TestSnapshotWriteNeverRegressesCoveredOffset(t *testing.T) {
+func TestSnapshot_writeNeverRegressesCoveredOffset(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))

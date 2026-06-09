@@ -15,7 +15,7 @@ import (
 // compaction — hence no snapshot — every event must still fold. This is the
 // viashowcase multi-log bug, where the projector halted on the very first event
 // (offset > 1) and silently dropped them all.
-func TestProjectorFoldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T) {
+func TestGap_foldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(gappedOffsets{Backplane: InMemory(), stride: 3}))
@@ -39,7 +39,7 @@ func TestProjectorFoldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T)
 // A gap with NO snapshot at all cannot be a lost prefix: compaction always writes
 // a snapshot FIRST (snapshot-FIRST invariant), so no snapshot ⇒ no compaction.
 // The record must fold, not halt.
-func TestGapWithNoSnapshotFoldsInsteadOfHalting(t *testing.T) {
+func TestGap_withNoSnapshotFoldsInsteadOfHalting(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -56,7 +56,7 @@ func TestGapWithNoSnapshotFoldsInsteadOfHalting(t *testing.T) {
 
 // An UNCOMPACTED snapshot that cannot bridge a gap is a disposable cache, not
 // evidence of a discarded prefix → benign fold, never halt.
-func TestGapWithUncompactedUnbridgeableSnapshotFolds(t *testing.T) {
+func TestGap_withUncompactedUnbridgeableSnapshotFolds(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -74,7 +74,7 @@ func TestGapWithUncompactedUnbridgeableSnapshotFolds(t *testing.T) {
 
 // Safety preserved: a COMPACTED snapshot that cannot bridge a gap means a real
 // prefix was discarded → HALT rather than silently truncate to the surviving tail.
-func TestGapWithCompactedUnbridgeableSnapshotStillHalts(t *testing.T) {
+func TestGap_withCompactedUnbridgeableSnapshotStillHalts(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -94,7 +94,7 @@ func TestGapWithCompactedUnbridgeableSnapshotStillHalts(t *testing.T) {
 // An UNREADABLE snapshot (corrupt bytes) is treated as no usable snapshot — the
 // same as cold start, which ignores a snapshot it cannot unmarshal. A gap behind
 // it is benign (a disposable cache can't prove a lost prefix), so fold, not halt.
-func TestGapWithUnreadableSnapshotFolds(t *testing.T) {
+func TestGap_withUnreadableSnapshotFolds(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -113,7 +113,7 @@ func TestGapWithUnreadableSnapshotFolds(t *testing.T) {
 // to DECODE is an unusable cache; if it is UNCOMPACTED no prefix was lost, so the
 // gap is benign (fold), mirroring cold start's re-fold-from-genesis on a decode
 // failure rather than halting.
-func TestGapWithUndecodableUncompactedSnapshotFolds(t *testing.T) {
+func TestGap_withUndecodableUncompactedSnapshotFolds(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server))
@@ -135,7 +135,7 @@ func TestGapWithUndecodableUncompactedSnapshotFolds(t *testing.T) {
 // shared stream produces a gap on essentially every record, so a per-record
 // LoadSnapshot would be a real cost. The latch must read the snapshot at most
 // once.
-func TestProjectorKeepsFoldingAfterFirstBenignGapWithoutRereadingSnapshot(t *testing.T) {
+func TestGap_keepsFoldingAfterFirstBenignGapWithoutRereadingSnapshot(t *testing.T) {
 	t.Parallel()
 	var loads int32
 	var server *httptest.Server
@@ -159,7 +159,7 @@ func TestProjectorKeepsFoldingAfterFirstBenignGapWithoutRereadingSnapshot(t *tes
 // stale projection. Folding onto the stale value silently and permanently
 // diverges this pod from its peers (the cross-pod truncation bug the multi-node
 // load test surfaced).
-func TestProjectorReseedsFromSnapshotOnCompactionGap(t *testing.T) {
+func TestGap_reseedsFromSnapshotOnCompactionGap(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -185,7 +185,7 @@ func TestProjectorReseedsFromSnapshotOnCompactionGap(t *testing.T) {
 // (missing, or a codec mismatch that can't be bridged live), the projector must
 // HALT (roll-forward-only) rather than fold onto a stale projection — fail safe,
 // never silently diverge.
-func TestProjectorHaltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
+func TestGap_haltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -207,7 +207,7 @@ func TestProjectorHaltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
 
 // A contiguous record (offset == cursor+1) is the normal case: fold directly, no
 // reseed, no snapshot read.
-func TestProjectorFoldsContiguousRecordWithoutReseed(t *testing.T) {
+func TestGap_foldsContiguousRecordWithoutReseed(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -226,7 +226,7 @@ func TestProjectorFoldsContiguousRecordWithoutReseed(t *testing.T) {
 // rec.Offset). The reseed must still fire (it bridges the gap and moves forward),
 // but the post-reseed projectRecord must DEDUP the record (rec.Offset <= cursor)
 // rather than double-fold it — the projection lands exactly at the snapshot value.
-func TestProjectorReseedDedupsWhenSnapshotCoversIncomingRecord(t *testing.T) {
+func TestGap_reseedDedupsWhenSnapshotCoversIncomingRecord(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -248,7 +248,7 @@ func TestProjectorReseedDedupsWhenSnapshotCoversIncomingRecord(t *testing.T) {
 // Boundary: a snapshot that moves forward (CoveredOffset > cur) but does NOT
 // bridge the whole gap (CoveredOffset < rec.Offset-1) must HALT, not partial-seed
 // and fold — folding rec onto a projection short of the gap still diverges.
-func TestProjectorHaltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
+func TestGap_haltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
@@ -275,7 +275,7 @@ func TestProjectorHaltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
 // seed (which would set proj=1,cursor=N and diverge by N-1 forever). This is the
 // exact multi-node truncation the load test caught: a slow pod whose first read
 // races a peer's compaction.
-func TestFreshProjectorReseedsWhenFirstRecordIsPostCompaction(t *testing.T) {
+func TestGap_freshProjectorReseedsWhenFirstRecordIsPostCompaction(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
 	var server *httptest.Server
