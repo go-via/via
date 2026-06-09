@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
@@ -30,10 +29,9 @@ func (p *benchPage) View(ctx *via.CtxR) h.H {
 // BenchmarkCounterRender measures per-page-render allocations on a typical
 // composition: one State, one Signal, one action button.
 func BenchmarkCounterRender(b *testing.B) {
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(b, app)
 	via.Mount[benchPage](app, "/")
-	defer server.Close()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -51,10 +49,9 @@ func BenchmarkCounterRender(b *testing.B) {
 // path. The bench fires Inc on a single tab repeatedly; allocations are
 // dominated by reflect.Value boxing and JSON decode of the request body.
 func BenchmarkCounterAction(b *testing.B) {
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(b, app)
 	via.Mount[benchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(b, server, "/")
 
@@ -77,14 +74,12 @@ func (discardLogger) Log(via.LogLevel, string, ...any) {}
 // action. Pairs with BenchmarkCounterAction so a regression in one
 // shows up against the other.
 func BenchmarkCounterActionWithLogger(b *testing.B) {
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithLogger(discardLogger{}),
 		via.WithLogLevel(via.LogDebug), // exercise the full logger path
 	)
+	server := vt.Serve(b, app)
 	via.Mount[benchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(b, server, "/")
 

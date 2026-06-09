@@ -1,11 +1,11 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,10 +17,9 @@ func (p *liveTabsPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestLiveTabs_reflectsRegisteredCount(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[liveTabsPage](app, "/")
-	defer server.Close()
 
 	assert.Equal(t, 0, app.LiveTabs(), "starts at zero")
 

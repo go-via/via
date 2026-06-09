@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"errors"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -44,10 +43,9 @@ func (p *userRoundTripPage) View(ctx *via.CtxR) h.H {
 func TestUser_setThenRenderRoundTrips(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Set").Fire())
@@ -61,10 +59,9 @@ func TestUser_setThenRenderRoundTrips(t *testing.T) {
 func TestUser_updateAppliesFn(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Set").Fire())  // count := 7
@@ -79,10 +76,9 @@ func TestUser_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
 	// The wire key surfaces in the page's data-signals payload. No need
 	// for a separate Key() unit test — the mounted output is the contract.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/")
-	defer server.Close()
 
 	body := vt.NewClient(t, server, "/").HTML()
 	assert.Contains(t, body, "theme")
@@ -103,11 +99,10 @@ func (p *silentUserPage) View(ctx *via.CtxR) h.H {
 func TestUser_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/reader")
 	via.Mount[silentUserPage](app, "/silent")
-	defer server.Close()
 
 	reader := vt.NewClient(t, server, "/reader")
 	silent := reader.Fork("/silent")
@@ -128,10 +123,9 @@ func TestUser_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := a.Fork("/")
@@ -146,10 +140,9 @@ func TestUser_writePropagatesLiveToOtherTabsOnSameSession(t *testing.T) {
 func TestUser_writeDoesNotLeakAcrossSessions(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[userRoundTripPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/")
@@ -198,10 +191,9 @@ func (p *setIfChangedSessPage) View(ctx *via.CtxR) h.H {
 func TestUpdate_StateSess_writesThroughOnFirstAndDistinctValues(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[setIfChangedSessPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -248,10 +240,9 @@ func (p *sessUpdateErrPage) View(ctx *via.CtxR) h.H {
 
 func TestStateSess_updateErrorIsReturnedAndLeavesStoreUnchanged(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[sessUpdateErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

@@ -24,14 +24,13 @@ func TestMessageConvergesAcrossNodesSharingABackplane(t *testing.T) {
 
 	shared := via.InMemory()
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared))
+	appA := via.New(via.WithBackplane(shared))
+	serverA := vt.Serve(t, appA)
 	via.Mount[Room](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared))
+	appB := via.New(via.WithBackplane(shared))
+	serverB := vt.Serve(t, appB)
 	via.Mount[Room](appB, "/")
-	defer serverB.Close()
 
 	// Node B starts empty — so a later sighting of the message proves it
 	// crossed the backplane, not that B was pre-populated or is secretly node A.
@@ -57,10 +56,9 @@ func TestMessageConvergesAcrossNodesSharingABackplane(t *testing.T) {
 func TestMessagesAccumulateInOrderWithinANode(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithBackplane(via.InMemory()))
+	app := via.New(via.WithBackplane(via.InMemory()))
+	server := vt.Serve(t, app)
 	via.Mount[Room](app, "/")
-	defer server.Close()
 
 	alice := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, alice.Action("Send").
@@ -87,10 +85,9 @@ func TestViewShowsTheServingNodeName(t *testing.T) {
 	prev := nodeName
 	defer func() { nodeName = prev }()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithBackplane(via.InMemory()))
+	app := via.New(via.WithBackplane(via.InMemory()))
+	server := vt.Serve(t, app)
 	via.Mount[Room](app, "/")
-	defer server.Close()
 
 	// Flip the identity between two renders: the banner must track the var, so
 	// a hardcoded constant can't satisfy both assertions.

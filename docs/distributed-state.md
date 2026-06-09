@@ -105,18 +105,23 @@ func (p *Feed) View(ctx *via.CtxR) h.H {
 The wire key defaults to the lower-cased field name; set it (and share one log
 across compositions) with the `via:"name"` tag, same as the other state shapes.
 
-### The counter shortcut
+### The counter pattern
 
-A monotonic shared counter is the canonical tiny example, so it ships built in —
-`StateAppCounter` is a `StateAppEvents` whose event is a tick and whose fold is
-`+1`:
+A monotonic shared counter is the canonical tiny example — a `StateAppEvents`
+whose event is an empty tick and whose fold is `+1`. Each `Inc` appends an
+immutable tick that never conflicts, so it sidesteps the CAS retry-storm a
+`StateApp[int]` hits under churn:
 
 ```go
+type tick struct{}
+
+func (tick) Fold(acc int64, _ tick) int64 { return acc + 1 }
+
 type Page struct {
-    Hits via.StateAppCounter
+    Hits via.StateAppEvents[tick, int64]
 }
 
-func (p *Page) Bump(ctx *via.Ctx) { p.Hits.Inc(ctx) }
+func (p *Page) Bump(ctx *via.Ctx) { p.Hits.Append(ctx, tick{}) }
 func (p *Page) View(ctx *via.CtxR) h.H { return p.Hits.Text(ctx) }
 ```
 

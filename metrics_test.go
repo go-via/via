@@ -3,7 +3,6 @@ package via_test
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"sync"
 	"testing"
@@ -69,10 +68,9 @@ func TestMetrics_emitsActionAndRenderEvents(t *testing.T) {
 	// names and label shape so a Prometheus/OTel adapter built against
 	// this contract doesn't silently break on a renamed key.
 	m := &captureMetrics{}
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	app := via.New(via.WithMetrics(m))
+	server := vt.Serve(t, app)
 	via.Mount[metricsPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, tc.Action("Bump").Fire())
@@ -101,10 +99,9 @@ func TestMetrics_emitsSSEConnectAndDisconnect(t *testing.T) {
 	// The action/render test never opens an SSE stream, so the documented
 	// sse.connect / sse.disconnect lifecycle counters need their own pass.
 	m := &captureMetrics{}
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	app := via.New(via.WithMetrics(m))
+	server := vt.Serve(t, app)
 	via.Mount[metricsPage](app, "/")
-	defer server.Close()
 
 	hasCounter := func(name string) bool {
 		m.mu.Lock()
@@ -137,10 +134,9 @@ func TestMetrics_SSEDisconnectReason_shutdown(t *testing.T) {
 	// from client navigations. Without the fix the counter is emitted
 	// label-less and this assertion fails.
 	m := &captureMetrics{}
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	app := via.New(via.WithMetrics(m))
+	server := vt.Serve(t, app)
 	via.Mount[metricsPage](app, "/")
-	defer server.Close()
 
 	hasCounter := func(name string) bool {
 		m.mu.Lock()
@@ -172,14 +168,12 @@ func TestMetrics_CtxReapReason_ttl(t *testing.T) {
 	// via.ctx.reap{reason=ttl}. (A connected stream is never TTL-swept, so
 	// ttl no longer reaches via.sse.disconnect.)
 	m := &captureMetrics{}
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithMetrics(m),
 		via.WithContextTTL(40*time.Millisecond),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[metricsPage](app, "/")
-	defer server.Close()
 	defer func() {
 		shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer shutCancel()
@@ -206,10 +200,9 @@ func TestMetrics_CtxReapReason_shutdown(t *testing.T) {
 	// at the dispose chokepoint, distinct from the via.sse.disconnect
 	// {reason=shutdown} the woken SSE loop emits.
 	m := &captureMetrics{}
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithMetrics(m))
+	app := via.New(via.WithMetrics(m))
+	server := vt.Serve(t, app)
 	via.Mount[metricsPage](app, "/")
-	defer server.Close()
 
 	hasCounter := func(name string) bool {
 		m.mu.Lock()

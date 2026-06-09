@@ -16,8 +16,9 @@ import (
 // never needs the discarded events.
 func TestColdStart_resumesAfterPrefixCompacted(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -32,7 +33,9 @@ func TestColdStart_resumesAfterPrefixCompacted(t *testing.T) {
 		return lowestRetainedOffset(t, app.backplane, "k") > 1
 	}, 2*time.Second, 10*time.Millisecond, "the prefix must be compacted before the fresh pod starts")
 
-	appB := New(WithTestServer(&server), WithBackplane(app.backplane))
+	appB := New(WithBackplane(app.backplane))
+	serverB := httptest.NewServer(appB)
+	t.Cleanup(serverB.Close)
 	var hB StateAppEvents[envEv, []int]
 	hB.bindWireKey("k")
 	hB.bindApp(appB)
@@ -50,8 +53,9 @@ func TestColdStart_resumesAfterPrefixCompacted(t *testing.T) {
 // come from the snapshot, never from re-folding the real log.
 func TestColdStart_seedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -96,8 +100,9 @@ func TestColdStart_seedsFromSnapshotAndReplaysOnlyTheTail(t *testing.T) {
 // This asserts the gen-invalidation directly, not transitively through erasure.
 func TestColdStart_ignoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -135,8 +140,9 @@ func TestColdStart_ignoresSnapshotBelowAuthoritativeErasureGen(t *testing.T) {
 // invalidation must not nuke every snapshot, only pre-erasure ones.
 func TestColdStart_seedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -169,8 +175,9 @@ func TestColdStart_seedsSnapshotAtOrAboveAuthoritativeErasureGen(t *testing.T) {
 // snapshot is a disposable cache, invalidated on a codec-hash mismatch).
 func TestColdStart_ignoresSnapshotOnCodecHashMismatch(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 

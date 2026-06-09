@@ -18,8 +18,9 @@ import (
 // exists to fix, reappearing one layer down).
 func TestProjector_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	app := New(WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 	ctx := context.Background()
@@ -45,8 +46,9 @@ func TestProjector_rehydratesAfterTransientDisconnect(t *testing.T) {
 // prevent.
 func TestConsumer_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	app := New(WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	var hdl StateAppEvents[envEv, []int]
@@ -82,8 +84,9 @@ func TestConsumer_rehydratesAfterTransientDisconnect(t *testing.T) {
 // shuttingDown() guard the consumer would reconnect-spin and Shutdown would hang.
 func TestConsumer_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	app := New(WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	var hdl StateAppEvents[envEv, []int]
@@ -125,8 +128,9 @@ func TestConsumer_exitsCleanlyOnShutdown(t *testing.T) {
 // quiesce.
 func TestProjector_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	app := New(WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 	ctx := context.Background()

@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -33,10 +32,9 @@ func (p *statePage) View(ctx *via.CtxR) h.H {
 func TestState_initialZeroValueAppearsInRender(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[statePage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<p>0</p>",
@@ -46,10 +44,9 @@ func TestState_initialZeroValueAppearsInRender(t *testing.T) {
 func TestState_actionMutatesStateForCurrentTab(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[statePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -73,10 +70,9 @@ func (p *stateIntInitPage) View(ctx *via.CtxR) h.H { return h.Div(p.N.Text(ctx))
 
 func TestState_initTagSeedsNumericValueFromStructTag(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[stateIntInitPage](app, "/")
-	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<div>3</div>",
 		"StateTab[int] with init=3 must render the seeded value on first load")
@@ -92,10 +88,9 @@ func (p *stateStringInitPage) View(ctx *via.CtxR) h.H {
 
 func TestState_initTagSeedsStringValueFromStructTag(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[stateStringInitPage](app, "/")
-	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "<div>--</div>",
 		"StateTab[string] with init=-- must render the seeded value on first load")
@@ -121,10 +116,9 @@ func (p *stateScalarTextPage) View(ctx *via.CtxR) h.H {
 
 func TestStateTabText_rendersBoolUintFloatAndCompositeKinds(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[stateScalarTextPage](app, "/")
-	defer server.Close()
 
 	// StateTab[T].Text routes every value kind through scalarString; the
 	// existing tests only exercised string + int.
@@ -147,10 +141,9 @@ func (p *stateFloat32TextPage) View(ctx *via.CtxR) h.H {
 
 func TestStateTabText_rendersFloat32WithoutFloat64Noise(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[stateFloat32TextPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `<span id="rate">0.1</span>`,
@@ -187,10 +180,9 @@ func (p *updatePage) View(ctx *via.CtxR) h.H {
 func TestUpdate_appliesFnToState(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[updatePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -204,10 +196,9 @@ func TestUpdate_appliesFnToState(t *testing.T) {
 func TestUpdate_appliesFnToSignal(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[updatePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

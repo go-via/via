@@ -3,7 +3,6 @@ package via_test
 import (
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -89,10 +88,9 @@ func (p *opGenericPage) View(ctx *via.CtxR) h.H {
 func TestOp_TypedAddOnEveryKind(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[opGenericPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -114,10 +112,9 @@ func TestOp_TypedAddOnEveryKind(t *testing.T) {
 func TestOp_ToOnEveryKind(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[opGenericPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -140,10 +137,9 @@ func TestOp_UpdateErrorRejectsTheWrite(t *testing.T) {
 	t.Parallel()
 	// Update's fn returning a non-nil error must leave the value
 	// unchanged — the new value computed by fn is discarded.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[opGenericPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

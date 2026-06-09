@@ -196,6 +196,7 @@ func marshalEvent[E any](a *App, ev E) (out []byte, err error) {
 }
 
 // Text returns the projected value as a text node. Sibling of StateApp.Text.
+// Accepts either *Ctx (action handlers) or *CtxR (View).
 func (l *StateAppEvents[E, V]) Text(rc readCtx) h.H { return h.Textf("%v", l.Read(rc)) }
 
 // stateAppEventsMarker tags StateAppEvents[E, V] (and types that embed it) with

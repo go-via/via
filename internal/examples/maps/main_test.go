@@ -3,7 +3,6 @@ package main
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,10 +19,9 @@ import (
 func TestMaps_pageRendersWithMapAndPluginAssets(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -41,10 +39,9 @@ func TestMaps_pageRendersWithMapAndPluginAssets(t *testing.T) {
 func TestMaps_flyToCityPushesCameraOverSSE(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -60,10 +57,9 @@ func TestMaps_flyToCityPushesCameraOverSSE(t *testing.T) {
 func TestMaps_clickDropsPinAtClickedCoordinates(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -79,10 +75,9 @@ func TestMaps_clickDropsPinAtClickedCoordinates(t *testing.T) {
 func TestMaps_markerClickFliesToTheClickedMarker(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -98,10 +93,9 @@ func TestMaps_markerClickFliesToTheClickedMarker(t *testing.T) {
 func TestMaps_featureClickReportsTheClickedZone(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -117,10 +111,9 @@ func TestMaps_featureClickReportsTheClickedZone(t *testing.T) {
 func TestMaps_rightClickReportsLocationAndZoom(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

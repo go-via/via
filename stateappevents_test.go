@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
@@ -32,10 +31,9 @@ func (p *evtKeyPage) View(ctx *via.CtxR) h.H {
 func TestStateAppEventsKeyBindsThroughMount(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[evtKeyPage](app, "/")
-	defer server.Close()
 
 	c := vt.NewClient(t, server, "/")
 	assert.Contains(t, c.HTML(), `<span id="k">log</span>`,
@@ -55,10 +53,9 @@ func (p *evtTaggedPage) View(ctx *via.CtxR) h.H {
 func TestStateAppEventsKeyHonorsViaTag(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[evtTaggedPage](app, "/")
-	defer server.Close()
 
 	c := vt.NewClient(t, server, "/")
 	assert.Contains(t, c.HTML(), `<span id="k">events</span>`,

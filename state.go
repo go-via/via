@@ -86,7 +86,8 @@ func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 // happen as part of the view fragment, not via a client signal. Mirrors
 // StateSess/StateApp.Text so every reactive-value Text(ctx) reads the
 // same way; the ctx is unused on StateTab (the value lives on the
-// struct) and accepted only for signature parity.
+// struct) and accepted only for signature parity. Accepts either *Ctx
+// (action handlers) or *CtxR (View).
 func (s *StateTab[T]) Text(_ readCtx) h.H {
 	return h.Text(scalarString(reflect.ValueOf(s.val)))
 }

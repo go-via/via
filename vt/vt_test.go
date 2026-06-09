@@ -2,7 +2,6 @@ package vt_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,13 +29,36 @@ func (p *tcPage) View(ctx *via.CtxR) h.H {
 	return h.Div(p.N.Text(ctx), h.Button(h.Text("+"), on.Click(p.Bump)))
 }
 
+func TestServe_drivesTheMountedAppOverHTTP(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	via.Mount[tcPage](app, "/")
+	server := vt.Serve(t, app)
+
+	tc := vt.NewClient(t, server, "/")
+	assert.Contains(t, tc.Reload(), "hello")
+}
+
+func TestServe_serverWorksWhenMountHappensAfterServe(t *testing.T) {
+	t.Parallel()
+
+	// Serve dispatches through App.ServeHTTP dynamically, so a Mount after
+	// Serve is still routed — the helper does not snapshot the route table.
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[tcPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	assert.Contains(t, tc.Reload(), "hello")
+}
+
 func TestNewClient_picksUpTabIDFromRender(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	tab := tc.TabID()
@@ -48,10 +70,9 @@ func TestNewClient_picksUpTabIDFromRender(t *testing.T) {
 func TestClient_HTML_returnsLastFetchedBody(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	body := tc.HTML()
@@ -62,10 +83,9 @@ func TestClient_HTML_returnsLastFetchedBody(t *testing.T) {
 func TestClient_Reload_refetchesAndReturnsCurrentBody(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	originalTab := tc.TabID()
@@ -85,10 +105,9 @@ func TestClient_Reload_refetchesAndReturnsCurrentBody(t *testing.T) {
 func TestActionCall_Fire_returnsResponseStatus(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Bump").Fire())
@@ -97,10 +116,9 @@ func TestActionCall_Fire_returnsResponseStatus(t *testing.T) {
 func TestAction_acceptsBoundMethodValue(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	page := &tcPage{}
@@ -112,10 +130,9 @@ func TestAction_acceptsBoundMethodValue(t *testing.T) {
 func TestActionCall_Fire_returns404OnUnknownMethod(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	assert.Equal(t, 404, tc.Action("DoesNotExist").Fire())
@@ -124,10 +141,9 @@ func TestActionCall_Fire_returns404OnUnknownMethod(t *testing.T) {
 func TestActionCall_WithSignal_carriesValueIntoActionPayload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -174,10 +190,9 @@ func (p *uploadPage) View(ctx *via.CtxR) h.H { return h.Div(p.Echo.Text(ctx)) }
 func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[uploadPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -197,10 +212,9 @@ func TestActionRequest_WithFile_sendsMultipartBody(t *testing.T) {
 func TestActionRequest_WithFile_andWithSignal_combineScalarTypes(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[uploadPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	// Multipart only requires a file to switch transports; signal scalars
@@ -218,13 +232,11 @@ func TestActionRequest_WithFile_andWithSignal_combineScalarTypes(t *testing.T) {
 func TestSSE_streamsHeartbeatsAndPatches(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
-		via.WithSSEHeartbeat(50*time.Millisecond),
+		via.WithSSEHeartbeat(50 * time.Millisecond),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -261,10 +273,9 @@ func swapDefaultTransport(t *testing.T) *atomic.Int32 {
 func TestNewClient_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
 	hits := swapDefaultTransport(t)
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Bump").Fire())
@@ -275,10 +286,9 @@ func TestNewClient_usesIsolatedHTTPTransport(t *testing.T) { //nolint:parallelte
 }
 
 func TestClient_Fork_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	hits := swapDefaultTransport(t)
@@ -291,10 +301,9 @@ func TestClient_Fork_usesIsolatedHTTPTransport(t *testing.T) { //nolint:parallel
 }
 
 func TestClient_SSE_usesIsolatedHTTPTransport(t *testing.T) { //nolint:paralleltest // swaps the process-global http.DefaultTransport
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	hits := swapDefaultTransport(t)

@@ -3,7 +3,6 @@ package via_test
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,13 +18,12 @@ import (
 func TestGroup_prefixesRoutes(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/api")
 	group.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("users"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/api/users")
 	require.NoError(t, err)
@@ -38,8 +36,8 @@ func TestGroup_prefixesRoutes(t *testing.T) {
 func TestGroup_middlewareAppliesToHandlerFunc(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/api")
 	group.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("X-Group", "yes")
@@ -48,7 +46,6 @@ func TestGroup_middlewareAppliesToHandlerFunc(t *testing.T) {
 	group.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("users"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/api/users")
 	require.NoError(t, err)
@@ -60,8 +57,8 @@ func TestGroup_middlewareAppliesToHandlerFunc(t *testing.T) {
 func TestGroup_middlewareCanShortCircuit(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/admin")
 	group.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.WriteHeader(http.StatusForbidden)
@@ -69,7 +66,6 @@ func TestGroup_middlewareCanShortCircuit(t *testing.T) {
 	group.HandleFunc("/secret", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("LEAK"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/admin/secret")
 	require.NoError(t, err)
@@ -88,15 +84,14 @@ func (g *groupedComp) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestGroup_middlewareAppliesToMountedComposition(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/admin")
 	group.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("X-Group", "wrapped")
 		next.ServeHTTP(w, r)
 	})
 	via.Mount[groupedComp](group, "/dashboard")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/admin/dashboard")
 	require.NoError(t, err)
@@ -118,11 +113,10 @@ func (p *tenantPage) View(ctx *via.CtxR) h.H {
 func TestGroup_pathParamsUnderGroupPrefix(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	api := app.Group("/api/{tenant}")
 	via.Mount[tenantPage](api, "/users/{id}")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/api/acme/users/42")
 	require.NoError(t, err)
@@ -145,13 +139,12 @@ func readGroupBody(t *testing.T, resp *http.Response) string {
 func TestGroup_routes404WithoutPrefix(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/api")
 	group.HandleFunc("/users", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("users"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/users")
 	require.NoError(t, err)
@@ -162,11 +155,10 @@ func TestGroup_routes404WithoutPrefix(t *testing.T) {
 func TestGroup_Handle_registersCustomHandler(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/api")
 	group.Handle("/widgets", customHandler{})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/api/widgets")
 	require.NoError(t, err)
@@ -179,13 +171,12 @@ func TestGroup_Handle_registersCustomHandler(t *testing.T) {
 func TestGroup_handleFuncRegistersExplicitMethod(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	group := app.Group("/api")
 	group.HandleFunc("POST /widgets", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("created"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Post(server.URL+"/api/widgets", "application/json", http.NoBody)
 	require.NoError(t, err)
@@ -222,8 +213,8 @@ func TestGroupMiddleware_appliesToActionPOST(t *testing.T) {
 	var allowed atomic.Bool
 	allowed.Store(true)
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 
 	g := app.Group("/p")
 	g.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
@@ -235,7 +226,6 @@ func TestGroupMiddleware_appliesToActionPOST(t *testing.T) {
 		next.ServeHTTP(w, r)
 	})
 	via.Mount[protectedPage](g, "/secret")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/p/secret")
 	require.True(t, seenAuth.Load(), "middleware must run on the page render")
@@ -255,8 +245,8 @@ func TestGroupMiddleware_appliesToSSEHandshake(t *testing.T) {
 	t.Parallel()
 
 	var seen atomic.Bool
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 
 	g := app.Group("/p")
 	g.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
@@ -264,7 +254,6 @@ func TestGroupMiddleware_appliesToSSEHandshake(t *testing.T) {
 		next.ServeHTTP(w, r)
 	})
 	via.Mount[protectedPage](g, "/secret")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/p/secret")
 	require.True(t, seen.Load(), "render hit middleware")

@@ -2,7 +2,6 @@ package via
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"time"
 )
 
@@ -34,7 +33,6 @@ type config struct {
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
 	cookieSecuritySet  bool
-	testServer         **httptest.Server
 	httpServerHook     func(*http.Server)
 	readHeaderTimeout  time.Duration
 	readTimeout        time.Duration
@@ -190,12 +188,6 @@ func WithInsecureCookies() Option {
 // WithPlugins registers plugins. They run Register at New time.
 func WithPlugins(plugins ...Plugin) Option {
 	return func(c *config) { c.plugins = append(c.plugins, plugins...) }
-}
-
-// WithTestServer creates an httptest.Server bound to the app's handler and
-// writes it to *server before New returns. Caller must Close it.
-func WithTestServer(server **httptest.Server) Option {
-	return func(c *config) { c.testServer = server }
 }
 
 // WithHTTPServer hands the user the *http.Server before listening so

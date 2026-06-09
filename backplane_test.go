@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"context"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -27,14 +26,13 @@ func TestTwoAppsShareOneBackplaneAndConverge(t *testing.T) {
 
 	shared := via.InMemory()
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared))
+	appA := via.New(via.WithBackplane(shared))
+	serverA := vt.Serve(t, appA)
 	via.Mount[feedPage](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared))
+	appB := via.New(via.WithBackplane(shared))
+	serverB := vt.Serve(t, appB)
 	via.Mount[feedPage](appB, "/")
-	defer serverB.Close()
 
 	// A client on each pod; B watches live so we observe the cross-pod re-render.
 	a := vt.NewClient(t, serverA, "/")
@@ -59,14 +57,13 @@ func TestCrossPodProjectionsAgreeForFreshReaders(t *testing.T) {
 
 	shared := via.InMemory()
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared))
+	appA := via.New(via.WithBackplane(shared))
+	serverA := vt.Serve(t, appA)
 	via.Mount[feedPage](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared))
+	appB := via.New(via.WithBackplane(shared))
+	serverB := vt.Serve(t, appB)
 	via.Mount[feedPage](appB, "/")
-	defer serverB.Close()
 
 	// Mount a client on each pod so both projectors are running, then append
 	// from each side.
@@ -96,14 +93,13 @@ func TestStateAppConvergesAcrossPods(t *testing.T) {
 
 	shared := via.InMemory()
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared))
+	appA := via.New(via.WithBackplane(shared))
+	serverA := vt.Serve(t, appA)
 	via.Mount[appCounterPage](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared))
+	appB := via.New(via.WithBackplane(shared))
+	serverB := vt.Serve(t, appB)
 	via.Mount[appCounterPage](appB, "/")
-	defer serverB.Close()
 
 	a := vt.NewClient(t, serverA, "/")
 	b := vt.NewClient(t, serverB, "/")
@@ -134,14 +130,13 @@ func TestReconcileSweepConvergesPeerWithoutAChangeHint(t *testing.T) {
 	shared := via.InMemory()
 	interval := via.WithReconcileInterval(50 * time.Millisecond)
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared), interval)
+	appA := via.New(via.WithBackplane(shared), interval)
+	serverA := vt.Serve(t, appA)
 	via.Mount[syncOffAppPage](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared), interval)
+	appB := via.New(via.WithBackplane(shared), interval)
+	serverB := vt.Serve(t, appB)
 	via.Mount[syncOffAppPage](appB, "/")
-	defer serverB.Close()
 
 	// Register B's value cell (a reader mounts the page) so the sweep has a key
 	// to reconcile, then have A write SILENTLY (no Change hint emitted).
@@ -168,14 +163,13 @@ func TestChangesFeedAloneConvergesWithReconcileDisabled(t *testing.T) {
 	shared := via.InMemory()
 	off := via.WithReconcileInterval(0)
 
-	var serverA, serverB *httptest.Server
-	appA := via.New(via.WithTestServer(&serverA), via.WithBackplane(shared), off)
+	appA := via.New(via.WithBackplane(shared), off)
+	serverA := vt.Serve(t, appA)
 	via.Mount[appCounterPage](appA, "/")
-	defer serverA.Close()
 
-	appB := via.New(via.WithTestServer(&serverB), via.WithBackplane(shared), off)
+	appB := via.New(via.WithBackplane(shared), off)
+	serverB := vt.Serve(t, appB)
 	via.Mount[appCounterPage](appB, "/")
-	defer serverB.Close()
 
 	a := vt.NewClient(t, serverA, "/")
 	b := vt.NewClient(t, serverB, "/")
@@ -195,9 +189,8 @@ func TestWithBackplaneIsDrainedOnShutdown(t *testing.T) {
 	t.Parallel()
 
 	bp := via.InMemory()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithBackplane(bp))
-	defer server.Close()
+	app := via.New(via.WithBackplane(bp))
+	_ = vt.Serve(t, app)
 
 	require.NoError(t, app.Shutdown(context.Background()))
 
@@ -214,9 +207,8 @@ func TestWithBackplaneIsDrainedOnShutdown(t *testing.T) {
 func TestDefaultAppShutsDownCleanlyWithBackplaneDrain(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	defer server.Close()
+	app := via.New()
+	_ = vt.Serve(t, app)
 
 	assert.NotPanics(t, func() {
 		require.NoError(t, app.Shutdown(context.Background()))

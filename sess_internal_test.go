@@ -43,8 +43,9 @@ func cookieReq(sid string) *http.Request {
 // returned session keeps that exact id), not replaced with a fresh one.
 func TestUnknownButWellFormedSidIsAdopted(t *testing.T) {
 	t.Parallel()
-	var s *httptest.Server
-	a := New(WithTestServer(&s))
+	a := New()
+	s := httptest.NewServer(a)
+	t.Cleanup(s.Close)
 	defer s.Close()
 
 	sid := genSecureID() // valid, but this pod has never issued it
@@ -66,8 +67,9 @@ func TestUnknownButWellFormedSidIsAdopted(t *testing.T) {
 // intact), never replace it — otherwise every request would wipe the session.
 func TestKnownSidReturnsTheSameSessionUnchanged(t *testing.T) {
 	t.Parallel()
-	var s *httptest.Server
-	a := New(WithTestServer(&s))
+	a := New()
+	s := httptest.NewServer(a)
+	t.Cleanup(s.Close)
 	defer s.Close()
 
 	sid := genSecureID()
@@ -88,8 +90,9 @@ func TestKnownSidReturnsTheSameSessionUnchanged(t *testing.T) {
 // hits), never a fresh replacement that would split the session's state.
 func TestAdoptSessionIsIdempotentForTheSameSid(t *testing.T) {
 	t.Parallel()
-	var s *httptest.Server
-	a := New(WithTestServer(&s))
+	a := New()
+	s := httptest.NewServer(a)
+	t.Cleanup(s.Close)
 	defer s.Close()
 
 	sid := genSecureID()
@@ -104,8 +107,9 @@ func TestAdoptSessionIsIdempotentForTheSameSid(t *testing.T) {
 // well-formed session instead, so garbage can't become a session key.
 func TestMalformedSidIsNotAdopted(t *testing.T) {
 	t.Parallel()
-	var s *httptest.Server
-	a := New(WithTestServer(&s))
+	a := New()
+	s := httptest.NewServer(a)
+	t.Cleanup(s.Close)
 	defer s.Close()
 
 	sess := a.getOrCreateSession(httptest.NewRecorder(), cookieReq("not-a-valid-sid"))
@@ -122,8 +126,9 @@ func TestMalformedSidIsNotAdopted(t *testing.T) {
 // would split a user's state).
 func TestConcurrentAdoptionOfSameSidYieldsOneSession(t *testing.T) {
 	t.Parallel()
-	var s *httptest.Server
-	a := New(WithTestServer(&s))
+	a := New()
+	s := httptest.NewServer(a)
+	t.Cleanup(s.Close)
 	defer s.Close()
 
 	sid := genSecureID()

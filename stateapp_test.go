@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"errors"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -33,10 +32,9 @@ func (p *appCounterPage) View(ctx *via.CtxR) h.H {
 func TestApp_writesAreVisibleAcrossSessions(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[appCounterPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, a.Action("Bump").Fire())
@@ -62,11 +60,10 @@ func (p *silentAppPage) View(ctx *via.CtxR) h.H {
 func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[appCounterPage](app, "/reader")
 	via.Mount[silentAppPage](app, "/silent")
-	defer server.Close()
 
 	reader := vt.NewClient(t, server, "/reader")
 	silent := vt.NewClient(t, server, "/silent")
@@ -94,10 +91,9 @@ func TestApp_writeWakesOnlyTabsThatReadTheKey(t *testing.T) {
 func TestApp_writePropagatesLiveToEveryOtherTab(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[appCounterPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/")
@@ -112,10 +108,9 @@ func TestApp_writePropagatesLiveToEveryOtherTab(t *testing.T) {
 func TestApp_concurrentUpdatesDoNotLoseIncrements(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[appCounterPage](app, "/")
-	defer server.Close()
 
 	const writers = 4
 	const perWriter = 50
@@ -176,10 +171,9 @@ func (p *appUpdateErrPage) View(ctx *via.CtxR) h.H {
 
 func TestStateApp_updateErrorIsReturnedAndLeavesStoreUnchanged(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[appUpdateErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

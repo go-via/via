@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -103,10 +102,9 @@ var tabSignalRE = regexp.MustCompile(`"via_tab":"([^"]+)"`)
 func TestSSE_reconnectResyncsViewElements(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverPage](app, "/r")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/r")
 	frames, cancel := tc.SSEReady()
@@ -132,10 +130,9 @@ func TestSSE_reconnectResyncsViewElements(t *testing.T) {
 func TestSSE_firstConnectDoesNotResync(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverPage](app, "/r")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/r")
 	frames, cancel := tc.SSEReady()
@@ -158,10 +155,9 @@ func TestSSE_firstConnectDoesNotResync(t *testing.T) {
 func TestSSE_unknownTabRebootstrapsFreshCtx(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverPage](app, "/r")
-	defer server.Close()
 
 	httpc := jarClient(t)
 	stale := "/r_" + staleSuffix
@@ -198,10 +194,9 @@ func TestSSE_unknownTabRebootstrapsFreshCtx(t *testing.T) {
 func TestSSE_unknownTabRecoversPathParamsFromReferer(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverParamPage](app, "/u/{name}")
-	defer server.Close()
 
 	stale := "/u/{name}_" + staleSuffix
 	status, frames, cancel := openRawSSE(t, jarClient(t), server.URL, stale, server.URL+"/u/alice")
@@ -213,10 +208,9 @@ func TestSSE_unknownTabRecoversPathParamsFromReferer(t *testing.T) {
 func TestSSE_unknownTabParamRouteWithoutRefererFallsBackToReload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverParamPage](app, "/u/{name}")
-	defer server.Close()
 
 	stale := "/u/{name}_" + staleSuffix
 	status, frames, cancel := openRawSSE(t, jarClient(t), server.URL, stale, "")
@@ -229,10 +223,9 @@ func TestSSE_unknownTabParamRouteWithoutRefererFallsBackToReload(t *testing.T) {
 func TestSSE_unknownTabUnmountedRoutePrefix404s(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverPage](app, "/r")
-	defer server.Close()
 
 	status, _, cancel := openRawSSE(t, jarClient(t), server.URL, "/nope_"+staleSuffix, server.URL+"/nope")
 	defer cancel()
@@ -243,10 +236,9 @@ func TestSSE_unknownTabUnmountedRoutePrefix404s(t *testing.T) {
 func TestSSE_unknownTabMalformedID404s(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[recoverPage](app, "/r")
-	defer server.Close()
 
 	for _, id := range []string{"", "garbage", "/r_nothex", "/r_" + staleSuffix[:10]} {
 		status, _, cancel := openRawSSE(t, jarClient(t), server.URL, id, server.URL+"/r")

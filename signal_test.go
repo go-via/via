@@ -30,10 +30,9 @@ func (c *signalCounter) View(ctx *via.CtxR) h.H {
 func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalCounter](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	cases := []struct {
@@ -62,10 +61,9 @@ func (p *signalShowPage) View(ctx *via.CtxR) h.H {
 func TestSignal_showRendersDataShowExpression(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalShowPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `data-show="$open"`,
@@ -81,10 +79,9 @@ func (c *fieldNameKey) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestSignal_keyDefaultsToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fieldNameKey](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `&#34;myField&#34;:0`)
@@ -115,10 +112,9 @@ func (p *attrStylePage) View(ctx *via.CtxR) h.H {
 
 func TestSignal_Attr_rendersDataAttrSyntax(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[attrStylePage](app, "/")
-	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `data-attr-disabled="$disabled"`,
 		"Signal.Attr(name) should emit Datastar's data-attr-<name>=\"$key\"")
@@ -126,10 +122,9 @@ func TestSignal_Attr_rendersDataAttrSyntax(t *testing.T) {
 
 func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[attrStylePage](app, "/")
-	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `data-style-color="$hue"`,
 		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
@@ -143,10 +138,9 @@ func (p *boolInitPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func TestSignal_initTagParsesBoolFromStructTag(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[boolInitPage](app, "/")
-	defer server.Close()
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `&#34;on&#34;:true`,
 		"Signal[bool] with init=true must initialise to true (struct tags arrive as strings)")
@@ -228,10 +222,9 @@ func (p *signalHelpersPage) View(ctx *via.CtxR) h.H {
 func TestUpdate_flipsBoolSignalSurfacingInSSE(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -249,10 +242,9 @@ func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 	// Pins that StateTab[bool].Update works the same as Signal[bool].Update —
 	// via.StateTab stays a drop-in substitute for via.Signal in reactive
 	// read-modify-write code.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -265,10 +257,9 @@ func TestUpdate_flipsBoolStateTabSurfacingInView(t *testing.T) {
 func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -282,10 +273,9 @@ func TestUpdate_intSignalAcceptsPositiveAndNegativeDeltas(t *testing.T) {
 func TestUpdate_floatSignalRespectsType(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -315,10 +305,9 @@ func (p *scalarDecodePage) View(ctx *via.CtxR) h.H {
 func TestSignalInit_decodesUintAndFloatFromTagStrings(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[scalarDecodePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -341,10 +330,9 @@ func (p *signalFloat32Page) View(ctx *via.CtxR) h.H {
 func TestSignalEncode_float32WireValueHasNoFloat64Noise(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalFloat32Page](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -361,10 +349,9 @@ func TestSignalEncode_float32WireValueHasNoFloat64Noise(t *testing.T) {
 func TestSignalAction_coercesUintFloatBoolFromJSONPayload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[scalarDecodePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -388,10 +375,9 @@ func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 	t.Parallel()
 	// Mirror of TestUpdate_flipsBoolStateTabSurfacingInView for numeric
 	// state: StateTab[int].Update + Text() must produce the running total.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -404,10 +390,9 @@ func TestUpdate_numericStateTabRendersThroughView(t *testing.T) {
 func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -420,10 +405,9 @@ func TestUpdate_appendsItemsToSliceSignal(t *testing.T) {
 func TestUpdate_boundedRingKeepsOnlyLatestMaxItems(t *testing.T) {
 	t.Parallel()
 	// Push five into a max=3 buffer: oldest two roll off, leaving [3,4,5].
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[signalHelpersPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -459,10 +443,9 @@ func (p *setIfChangedPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestUpdate_changedValueProducesSignalFrame(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[setIfChangedPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -477,10 +460,9 @@ func TestUpdate_unchangedValueProducesNoFrame(t *testing.T) {
 	// The inline Get != v guard must short-circuit before the Update
 	// call, so no datastar-patch-signals frame should appear for this
 	// action. Wait briefly; absence is the assertion.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[setIfChangedPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

@@ -48,14 +48,12 @@ func (c *captureLogger) snapshot() []logRec {
 func newLoggedApp(t *testing.T, level via.LogLevel, opts ...via.Option) (*via.App, *httptest.Server, *captureLogger) {
 	t.Helper()
 	logger := &captureLogger{}
-	var server *httptest.Server
 	full := append([]via.Option{
 		via.WithLogger(logger),
 		via.WithLogLevel(level),
-		via.WithTestServer(&server),
 	}, opts...)
 	app := via.New(full...)
-	t.Cleanup(func() { server.Close() })
+	server := vt.Serve(t, app)
 	return app, server, logger
 }
 
@@ -242,14 +240,12 @@ func TestSlogLogger_routesRecordsToProvidedSlog(t *testing.T) {
 	var buf bytes.Buffer
 	sl := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithLogger(via.SlogLogger(sl)),
 		via.WithLogLevel(via.LogDebug),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[panicPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())

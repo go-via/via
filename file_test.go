@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,10 +38,9 @@ func (p *uploadPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestFile_typedFieldPopulatedFromMultipartUpload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[uploadPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	dir := t.TempDir()
@@ -84,10 +82,9 @@ func (p *readMultipartPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestMultipartReader_streamsRawParts(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[readMultipartPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -118,10 +115,9 @@ func (p *bytesEchoPage) View(ctx *via.CtxR) h.H { return h.Div(p.Length.Text(ctx
 func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[bytesEchoPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	payload := []byte("hello-from-Bytes")
@@ -138,13 +134,11 @@ func TestFile_Bytes_readsMultipartContent(t *testing.T) {
 func TestFile_oversizedRequestReturns413(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithMaxUploadSize(64), // tiny cap for the multipart path
 	)
+	server := vt.Serve(t, app)
 	via.Mount[uploadPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -170,10 +164,9 @@ func (p *fileMetaPage) View(ctx *via.CtxR) h.H { return h.Div(p.Info.Text(ctx)) 
 func TestFile_metadataAccessorsReflectUpload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fileMetaPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -191,10 +184,9 @@ func TestFile_metadataAccessorsReflectUpload(t *testing.T) {
 func TestFile_metadataAccessorsAreZeroWhenNoUpload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fileMetaPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -247,10 +239,9 @@ func (p *fileErrPage) View(ctx *via.CtxR) h.H { return h.Div(p.Result.Text(ctx))
 func TestFile_openBytesSaveReturnErrorWhenNoUpload(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fileErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -268,10 +259,9 @@ func TestFile_openBytesSaveReturnErrorWhenNoUpload(t *testing.T) {
 func TestMultipartReader_errorsOnNonMultipartRequest(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fileErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -287,10 +277,9 @@ func TestMultipartReader_errorsOnNonMultipartRequest(t *testing.T) {
 func TestFile_saveSurfacesOpenFileError(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[fileErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

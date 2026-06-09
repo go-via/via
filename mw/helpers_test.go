@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 )
 
 type captureLogger struct {
@@ -40,14 +41,12 @@ func (c *captureLogger) snapshot() []logRec {
 func newLoggedApp(t *testing.T, level via.LogLevel, opts ...via.Option) (*via.App, *httptest.Server, *captureLogger) {
 	t.Helper()
 	logger := &captureLogger{}
-	var server *httptest.Server
 	full := append([]via.Option{
 		via.WithLogger(logger),
 		via.WithLogLevel(level),
-		via.WithTestServer(&server),
 	}, opts...)
 	app := via.New(full...)
-	t.Cleanup(func() { server.Close() })
+	server := vt.Serve(t, app)
 	return app, server, logger
 }
 

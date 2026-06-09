@@ -3,13 +3,13 @@ package via_test
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,13 +85,11 @@ func TestWithNotFound_servesCustomHandlerOnUnknownRoute(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 		_, _ = w.Write([]byte("missing"))
 	})
-	var server *httptest.Server
 	app := via.New(
 		via.WithNotFound(custom),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[introspectPage](app, "/known")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/no-such-thing")
 	require.NoError(t, err)
@@ -107,13 +105,11 @@ func TestWithNotFound_doesNotInterceptKnownRoutes(t *testing.T) {
 	custom := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("not-found handler must not intercept matched routes")
 	})
-	var server *httptest.Server
 	app := via.New(
 		via.WithNotFound(custom),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[introspectPage](app, "/known")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/known")
 	require.NoError(t, err)
@@ -201,10 +197,9 @@ func TestHandleStatic_servesFromFS(t *testing.T) {
 		"sub/inner.txt": {Data: []byte("hello")},
 	}
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.HandleStatic("/static/", fsys)
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/static/app.css")
 	require.NoError(t, err)
@@ -228,10 +223,9 @@ func TestHandleStatic_notFoundFallsThrough(t *testing.T) {
 		"existing.txt": {Data: []byte("ok")},
 	}
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.HandleStatic("/assets/", fsys)
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/assets/missing.txt")
 	require.NoError(t, err)

@@ -16,8 +16,9 @@ import (
 // covering the latest offset and decoding to the current projection.
 func TestSnapshot_projectorPersistsSnapshots(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -52,8 +53,9 @@ func TestSnapshot_projectorPersistsSnapshots(t *testing.T) {
 // the feature is genuinely off (not merely deferred to a larger threshold).
 func TestSnapshot_writesDisabledWhenIntervalNonPositive(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(0))
+	app := New(WithSnapshotInterval(0))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -78,8 +80,9 @@ func TestSnapshot_writesDisabledWhenIntervalNonPositive(t *testing.T) {
 // interoperate, not just each half against a contrived fixture.
 func TestSnapshot_roundTripSeedsAFreshProjector(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -97,7 +100,9 @@ func TestSnapshot_roundTripSeedsAFreshProjector(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "pod A must persist a snapshot")
 
 	// Pod B: a fresh App sharing the SAME backplane, a brand-new projector.
-	appB := New(WithTestServer(&server), WithBackplane(app.backplane))
+	appB := New(WithBackplane(app.backplane))
+	serverB := httptest.NewServer(appB)
+	t.Cleanup(serverB.Close)
 	var hB StateAppEvents[envEv, []int]
 	hB.bindWireKey("k")
 	hB.bindApp(appB) // cold-starts from pod A's persisted snapshot
@@ -124,8 +129,9 @@ func TestSnapshot_roundTripSeedsAFreshProjector(t *testing.T) {
 // a peer's gap-reseed would recover a snapshot that doesn't bridge the gap.
 func TestSnapshot_writeNeverRegressesCoveredOffset(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 

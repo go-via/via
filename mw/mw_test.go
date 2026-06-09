@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/mw"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,11 +18,10 @@ import (
 func TestHSTS_defaultHeaderHasOneYearAndSubdomains(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.HSTS())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -34,15 +34,14 @@ func TestHSTS_defaultHeaderHasOneYearAndSubdomains(t *testing.T) {
 func TestHSTS_optionsCustomiseHeader(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.HSTS(
 		mw.HSTSMaxAge(60*60*24*30), // 30 days
 		mw.HSTSIncludeSubdomains(false),
 		mw.HSTSPreload(true),
 	))
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -57,13 +56,12 @@ func TestHSTS_optionsCustomiseHeader(t *testing.T) {
 func TestRedirectHTTPS_passesHTTPSThroughViaXForwardedProto(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.RedirectHTTPS())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
@@ -77,13 +75,12 @@ func TestRedirectHTTPS_passesHTTPSThroughViaXForwardedProto(t *testing.T) {
 func TestRedirectHTTPS_redirectsPlainHTTP(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.RedirectHTTPS())
 	app.HandleFunc("/path", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	client := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -106,13 +103,12 @@ func TestRedirectHTTPSStrict_ignoresXForwardedProto(t *testing.T) {
 	// Direct-bind variant: a forged X-Forwarded-Proto: https header must
 	// NOT bypass the redirect — only real TLS does. Catches a regression
 	// where Strict accidentally fell back to header sniffing.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.RedirectHTTPSStrict())
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("served"))
 	})
-	defer server.Close()
 
 	client := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -190,8 +186,8 @@ func TestCSP_extraDirectivesAppended(t *testing.T) {
 func TestAccessLog_statusWriterForwardsFlush(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.AccessLog(app))
 	app.HandleFunc("/stream", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -204,7 +200,6 @@ func TestAccessLog_statusWriterForwardsFlush(t *testing.T) {
 		w.Write([]byte("data: b\n\n"))
 		f.Flush()
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/stream")
 	require.NoError(t, err)
@@ -325,8 +320,8 @@ func TestAccessLog_stripsCRLFFromRequestID(t *testing.T) {
 func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.Recover(app))
 	app.HandleFunc("/half", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -336,7 +331,6 @@ func TestRecover_panicAfterPartialWriteKeepsServerAlive(t *testing.T) {
 	app.HandleFunc("/ok", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("alive"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/half")
 	require.NoError(t, err)
@@ -420,11 +414,10 @@ func TestRecover_stripsCRLFFromUserPath(t *testing.T) {
 func TestRequestID_generatesWhenAbsent(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.RequestID())
 	via.Mount[ridProbePage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -438,11 +431,10 @@ func TestRequestID_generatesWhenAbsent(t *testing.T) {
 func TestRequestID_passesThroughInboundHeader(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.RequestID())
 	via.Mount[ridProbePage](app, "/")
-	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.Header.Set("X-Request-ID", "my-trace-123")

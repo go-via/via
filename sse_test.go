@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"net/url"
 	"regexp"
 	"strings"
@@ -27,13 +26,11 @@ func (p *sseEmptyPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestHandleSSEClose_oversizedBodyReturns413(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithMaxRequestBody(16),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[sseEmptyPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Post(
 		server.URL+"/_sse/close",
@@ -48,10 +45,9 @@ func TestHandleSSEClose_oversizedBodyReturns413(t *testing.T) {
 func TestHandleSSEClose_unknownTabIsNoOp200(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[sseEmptyPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Post(
 		server.URL+"/_sse/close",
@@ -78,13 +74,11 @@ func (p *sseDeadlinePage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestWithSSEWriteTimeout_doesNotBreakNormalDrains(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
-		via.WithSSEWriteTimeout(500*time.Millisecond),
+		via.WithSSEWriteTimeout(500 * time.Millisecond),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[sseDeadlinePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -116,10 +110,9 @@ var brotliTabRE = regexp.MustCompile(`&#34;via_tab&#34;:&#34;([^"&]+)&#34;`)
 func TestSSE_brotliHandshakeIsCompressionSafe(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[brotliProbePage](app, "/")
-	defer server.Close()
 
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
@@ -167,14 +160,12 @@ func (p *liveTabPage) View(ctx *via.CtxR) h.H {
 func TestSSE_connectedTabSurvivesContextTTLWithoutHeartbeat(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithSSEHeartbeat(0),                 // floors the keepalive; won't fire in-window
 		via.WithContextTTL(80*time.Millisecond), // sweep ticks every 40ms
 	)
+	server := vt.Serve(t, app)
 	via.Mount[liveTabPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

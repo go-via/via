@@ -9,6 +9,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,10 +32,9 @@ func (p *setSignalPage) View(ctx *via.CtxR) h.H {
 func TestSetSignal_writesAssignmentBeforePost(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[setSignalPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `$step=5;@post(&#39;/_action/Apply&#39;)`,
@@ -73,10 +73,9 @@ func (p *modifierPage) View(ctx *via.CtxR) h.H {
 func TestOn_modifiersAppendToTrigger(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[modifierPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	cases := []struct {
@@ -106,10 +105,9 @@ func (p *keyFilterPage) View(ctx *via.CtxR) h.H {
 func TestOn_KeyAttributeIncludesNamedKey(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[keyFilterPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, "on:keydown.Enter",
@@ -119,10 +117,9 @@ func TestOn_KeyAttributeIncludesNamedKey(t *testing.T) {
 func TestSetSignal_quotesStringValues(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[setSignalStringPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	// JSON-encoded string is quoted; HTML-escaped quotes become &#34;.
@@ -171,10 +168,9 @@ func (p *eventCoveragePage) View(ctx *via.CtxR) h.H {
 func TestOn_NamedEventHelpersRenderExpectedTriggers(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[eventCoveragePage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 

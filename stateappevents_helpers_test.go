@@ -89,8 +89,9 @@ func (g *gaugeSpy) latestLabel(name, wantKey, want string) (string, bool) {
 }
 func foldKEvents(t *testing.T, gs *gaugeSpy, key string, ns ...int) (float64, float64) {
 	t.Helper()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(gs))
+	app := New(WithMetrics(gs))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	t.Cleanup(server.Close)
 	bindLog(app, key)
 	ctx := context.Background()
@@ -292,8 +293,8 @@ func goodEnvBytes(n int) []byte {
 // real projector decode+fold path and returns an fnv digest of the projection —
 // the value an independent pod must reproduce exactly.
 func replayFixedLogDigest() uint32 {
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
 	defer server.Close()
 	fold := bindLog(app, "k")
 

@@ -17,8 +17,9 @@ import (
 // (offset > 1) and silently dropped them all.
 func TestGap_foldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(gappedOffsets{Backplane: InMemory(), stride: 3}))
+	app := New(WithBackplane(gappedOffsets{Backplane: InMemory(), stride: 3}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 	ctx := context.Background()
@@ -42,8 +43,9 @@ func TestGap_foldsNonContiguousOffsetsWhenNothingWasCompacted(t *testing.T) {
 func TestGap_withNoSnapshotFoldsInsteadOfHalting(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -58,8 +60,9 @@ func TestGap_withNoSnapshotFoldsInsteadOfHalting(t *testing.T) {
 // evidence of a discarded prefix → benign fold, never halt.
 func TestGap_withUncompactedUnbridgeableSnapshotFolds(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -77,8 +80,9 @@ func TestGap_withUncompactedUnbridgeableSnapshotFolds(t *testing.T) {
 func TestGap_withCompactedUnbridgeableSnapshotStillHalts(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -96,8 +100,9 @@ func TestGap_withCompactedUnbridgeableSnapshotStillHalts(t *testing.T) {
 // it is benign (a disposable cache can't prove a lost prefix), so fold, not halt.
 func TestGap_withUnreadableSnapshotFolds(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -115,8 +120,9 @@ func TestGap_withUnreadableSnapshotFolds(t *testing.T) {
 // failure rather than halting.
 func TestGap_withUndecodableUncompactedSnapshotFolds(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -138,8 +144,9 @@ func TestGap_withUndecodableUncompactedSnapshotFolds(t *testing.T) {
 func TestGap_keepsFoldingAfterFirstBenignGapWithoutRereadingSnapshot(t *testing.T) {
 	t.Parallel()
 	var loads int32
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(countingSnapshots{Backplane: InMemory(), loads: &loads}))
+	app := New(WithBackplane(countingSnapshots{Backplane: InMemory(), loads: &loads}))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -162,8 +169,9 @@ func TestGap_keepsFoldingAfterFirstBenignGapWithoutRereadingSnapshot(t *testing.
 func TestGap_reseedsFromSnapshotOnCompactionGap(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	// Projector has folded up to offset 5 (projection == 5).
@@ -188,8 +196,9 @@ func TestGap_reseedsFromSnapshotOnCompactionGap(t *testing.T) {
 func TestGap_haltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -210,8 +219,9 @@ func TestGap_haltsOnCompactionGapWithoutRecoverableSnapshot(t *testing.T) {
 func TestGap_foldsContiguousRecordWithoutReseed(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -229,8 +239,9 @@ func TestGap_foldsContiguousRecordWithoutReseed(t *testing.T) {
 func TestGap_reseedDedupsWhenSnapshotCoversIncomingRecord(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -251,8 +262,9 @@ func TestGap_reseedDedupsWhenSnapshotCoversIncomingRecord(t *testing.T) {
 func TestGap_haltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 5, "h")
@@ -278,8 +290,9 @@ func TestGap_haltsWhenSnapshotDoesNotBridgeWholeGap(t *testing.T) {
 func TestGap_freshProjectorReseedsWhenFirstRecordIsPostCompaction(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	ls := manualLogState(app, "k", 0, "h") // fresh: cursor 0, projection 0, never folded

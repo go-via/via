@@ -1,7 +1,6 @@
 package maplibre_test
 
 import (
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -147,8 +146,8 @@ func (p *mapActionPage) CallBad(ctx *via.Ctx) error {
 func fireMapAction(t *testing.T, action string, needles ...string) string {
 	t.Helper()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[mapActionPage](app, "/")
 	t.Cleanup(server.Close)
 

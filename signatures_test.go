@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -30,10 +29,9 @@ func (p *voidActionPage) View(ctx *via.CtxR) h.H {
 func TestAction_voidReturnIsRecognised(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[voidActionPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -59,10 +57,9 @@ func (p *onlyVoidPage) View(ctx *via.CtxR) h.H {
 func TestAction_voidReturnRendersAtPostURL(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[onlyVoidPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `@post(&#39;/_action/Bump&#39;)`,

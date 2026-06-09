@@ -3,13 +3,13 @@ package via_test
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,10 +48,9 @@ func TestRender_documentMetadataOptions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			var server *httptest.Server
-			app := via.New(append([]via.Option{via.WithTestServer(&server)}, c.opts...)...)
+			app := via.New(c.opts...)
+			server := vt.Serve(t, app)
 			via.Mount[langPage](app, "/")
-			defer server.Close()
 			body := getBody(t, server, "/")
 			for _, n := range c.contains {
 				assert.Contains(t, body, n)
@@ -72,13 +71,11 @@ func (p *maxCtxPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithMaxContexts(2),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[maxCtxPage](app, "/")
-	defer server.Close()
 
 	for range 2 {
 		resp, err := server.Client().Get(server.URL + "/")
@@ -98,10 +95,9 @@ func TestMaxContexts_rejectsBeyondCap(t *testing.T) {
 func TestMaxContexts_zeroDisablesTheCap(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server)) // no WithMaxContexts
+	app := via.New() // no WithMaxContexts
+	server := vt.Serve(t, app)
 	via.Mount[maxCtxPage](app, "/")
-	defer server.Close()
 
 	for range 5 {
 		resp, err := server.Client().Get(server.URL + "/")

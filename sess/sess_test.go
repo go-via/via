@@ -2,7 +2,6 @@ package sess_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -49,10 +48,9 @@ func (p *authPage) View(ctx *via.CtxR) h.H {
 func TestPutSess_makesValueAvailableInRender(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[authPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -68,8 +66,8 @@ func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 
 	var sawEmail atomic.Pointer[string]
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		if u, ok := sess.Get[sessUser](r); ok {
 			s := u.Email
@@ -78,7 +76,6 @@ func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 		next.ServeHTTP(w, r)
 	})
 	via.Mount[authPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "bob@example.com").Fire())
@@ -96,10 +93,9 @@ func TestGetSess_visibleFromMiddlewareViaRequest(t *testing.T) {
 func TestPutSess_andClearSess_roundTrip(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[authPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("LogIn").WithSignal("email", "alice").Fire())
@@ -131,10 +127,9 @@ func (p *clearViaRenderPage) View(ctx *via.CtxR) h.H {
 func TestClearSess_viaCtxRRemovesValue(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[clearViaRenderPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Store").Fire())
@@ -160,10 +155,9 @@ func (p *loginPage) View(ctx *via.CtxR) h.H {
 func TestRotateSession_changesCookieValue(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[loginPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 

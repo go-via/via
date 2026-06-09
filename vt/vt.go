@@ -2,9 +2,9 @@
 // lets tests drive a Composition by HTTP without parsing HTML, by
 // name-addressing actions and signals through the descriptor.
 //
-//	var srv *httptest.Server
-//	app := via.New(via.WithTestServer(&srv))
+//	app := via.New()
 //	via.Mount[Counter](app, "/")
+//	srv := vt.Serve(t, app)
 //	tc := vt.NewClient(t, srv, "/")
 //	tc.Action(p.Inc).WithSignal("step", 3).Fire()
 //	require.Contains(t, tc.Reload(), ">3<")
@@ -27,8 +27,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-via/via"
 	"github.com/go-via/via/internal/spec"
 )
+
+// Serve starts an httptest.Server bound to app and registers its shutdown
+// with t.Cleanup, so a test gets a live URL in one line:
+//
+//	app := via.New()
+//	via.Mount[Counter](app, "/")
+//	srv := vt.Serve(t, app)
+//	tc := vt.NewClient(t, srv, "/")
+//
+// app is its own http.Handler, so the server dispatches through App.ServeHTTP
+// on every request — routes mounted before or after Serve are both reachable.
+func Serve(t testing.TB, app *via.App) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(app)
+	t.Cleanup(srv.Close)
+	return srv
+}
 
 // Client drives a mounted Composition over HTTP for tests.
 type Client struct {

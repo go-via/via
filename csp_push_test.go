@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -49,11 +48,10 @@ func pathKeyedNonce() via.Middleware {
 func TestPushedToast_carriesPageNonceNotRequestNonce(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(pathKeyedNonce())
 	via.Mount[cspPushPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -68,11 +66,10 @@ func TestPushedToast_carriesPageNonceNotRequestNonce(t *testing.T) {
 func TestPushedRedirect_carriesPageNonce(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(pathKeyedNonce())
 	via.Mount[cspPushPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -88,10 +85,9 @@ func TestPushedRedirect_carriesPageNonce(t *testing.T) {
 func TestPushedScript_hasNoNonceWithoutCSP(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cspPushPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -120,10 +116,9 @@ func (p *cspPushNonceViewPage) View(ctx *via.CtxR) h.H {
 func TestPushedScript_ignoresViewMintedNonceWithoutCSP(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cspPushNonceViewPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -138,8 +133,8 @@ func TestPushedScript_ignoresViewMintedNonceWithoutCSP(t *testing.T) {
 func TestPushedScript_escapesNonceAttribute(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	// Only reachable if an app threads a non-base64 nonce through the
 	// exported RequestWithCSPNonce; the SSE sink must escape it rather than
 	// let a quote break out into a new attribute.
@@ -151,7 +146,6 @@ func TestPushedScript_escapesNonceAttribute(t *testing.T) {
 		next.ServeHTTP(w, r)
 	})
 	via.Mount[cspPushPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

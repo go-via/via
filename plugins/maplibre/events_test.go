@@ -1,7 +1,6 @@
 package maplibre_test
 
 import (
-	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -545,8 +544,8 @@ func TestOnMoveEnd_panicsOnNonBoundMethod(t *testing.T) {
 func fireEventAction(t *testing.T, action string, sigs map[string]any, needles ...string) string {
 	t.Helper()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[eventPage](app, "/")
 	t.Cleanup(server.Close)
 
