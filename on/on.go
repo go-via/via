@@ -25,6 +25,15 @@ import (
 	"github.com/go-via/via/internal/spec"
 )
 
+// Option configures a handler's trigger — debounce/throttle timing, DOM
+// modifiers (preventDefault/stopPropagation), or a bundled signal write.
+// Construct one with Debounce, Throttle, Prevent, Stop, or SetSignal and
+// pass it to any handler (Click, Input, …); the set is closed, so there
+// is no user-authored Option. Named here (rather than left as the
+// internal trigger-spec type) so callers can hold and pass option values
+// — e.g. build a []on.Option and spread it into on.Click(fn, opts...).
+type Option = spec.Option
+
 // eventAttrCache pre-computes the "on:<event>" attribute name for every
 // event the on package knows about. Lookups skip the runtime "on:" + name
 // concat — the resulting string already lives in the binary.
@@ -42,33 +51,33 @@ var eventAttrCache = map[string]string{
 }
 
 // Click binds a click handler.
-func Click[F via.Action](fn F, opts ...spec.Option) h.H { return event("click", fn, opts...) }
+func Click[F via.Action](fn F, opts ...Option) h.H { return event("click", fn, opts...) }
 
 // Change binds a change handler (e.g. <select>, <input type=checkbox>).
-func Change[F via.Action](fn F, opts ...spec.Option) h.H { return event("change", fn, opts...) }
+func Change[F via.Action](fn F, opts ...Option) h.H { return event("change", fn, opts...) }
 
 // Input binds an input handler.
-func Input[F via.Action](fn F, opts ...spec.Option) h.H { return event("input", fn, opts...) }
+func Input[F via.Action](fn F, opts ...Option) h.H { return event("input", fn, opts...) }
 
 // Submit binds a form submit handler.
-func Submit[F via.Action](fn F, opts ...spec.Option) h.H { return event("submit", fn, opts...) }
+func Submit[F via.Action](fn F, opts ...Option) h.H { return event("submit", fn, opts...) }
 
 // Focus binds a focus handler.
-func Focus[F via.Action](fn F, opts ...spec.Option) h.H { return event("focus", fn, opts...) }
+func Focus[F via.Action](fn F, opts ...Option) h.H { return event("focus", fn, opts...) }
 
 // Blur binds a blur handler.
-func Blur[F via.Action](fn F, opts ...spec.Option) h.H { return event("blur", fn, opts...) }
+func Blur[F via.Action](fn F, opts ...Option) h.H { return event("blur", fn, opts...) }
 
 // DblClick binds a double-click handler.
-func DblClick[F via.Action](fn F, opts ...spec.Option) h.H { return event("dblclick", fn, opts...) }
+func DblClick[F via.Action](fn F, opts ...Option) h.H { return event("dblclick", fn, opts...) }
 
 // MouseEnter binds a mouseenter handler (does not bubble).
-func MouseEnter[F via.Action](fn F, opts ...spec.Option) h.H {
+func MouseEnter[F via.Action](fn F, opts ...Option) h.H {
 	return event("mouseenter", fn, opts...)
 }
 
 // MouseLeave binds a mouseleave handler (does not bubble).
-func MouseLeave[F via.Action](fn F, opts ...spec.Option) h.H {
+func MouseLeave[F via.Action](fn F, opts ...Option) h.H {
 	return event("mouseleave", fn, opts...)
 }
 
@@ -77,7 +86,7 @@ func MouseLeave[F via.Action](fn F, opts ...spec.Option) h.H {
 // appears in the DOM:
 //
 //	h.Div(on.Load(p.RefreshChart))
-func Load[F via.Action](fn F, opts ...spec.Option) h.H { return event("load", fn, opts...) }
+func Load[F via.Action](fn F, opts ...Option) h.H { return event("load", fn, opts...) }
 
 // Event is the escape hatch for any DOM event not covered by a named
 // helper above. Pass the event name as it would appear after `on:`
@@ -90,13 +99,13 @@ func Load[F via.Action](fn F, opts ...spec.Option) h.H { return event("load", fn
 // user input or per-request data would grow the cache unboundedly. The
 // cache is sized correctly when call sites are static — tens to
 // hundreds of bindings for any real app.
-func Event[F via.Action](name string, fn F, opts ...spec.Option) h.H {
+func Event[F via.Action](name string, fn F, opts ...Option) h.H {
 	return event(name, fn, opts...)
 }
 
 // Key binds a keydown handler that fires only when the named key matches.
 // "Enter", "Escape", "ArrowUp", … (W3C key codes).
-func Key[F via.Action](key string, fn F, opts ...spec.Option) h.H {
+func Key[F via.Action](key string, fn F, opts ...Option) h.H {
 	spec := &spec.Trigger{
 		Event:     "keydown",
 		Method:    fn,
@@ -109,24 +118,24 @@ func Key[F via.Action](key string, fn F, opts ...spec.Option) h.H {
 }
 
 // Debounce returns a trigger option that debounces firing.
-func Debounce(d string) spec.Option { return func(s *spec.Trigger) { s.Debounce = d } }
+func Debounce(d string) Option { return func(s *spec.Trigger) { s.Debounce = d } }
 
 // Throttle returns a trigger option that throttles firing.
-func Throttle(d string) spec.Option { return func(s *spec.Trigger) { s.Throttle = d } }
+func Throttle(d string) Option { return func(s *spec.Trigger) { s.Throttle = d } }
 
 // preventFn / stopFn are pre-allocated trigger-option closures so each
 // `on.Click(fn, on.Prevent())` call doesn't allocate a fresh closure. The
 // only state captured is the modifier name, which is constant.
 var (
-	preventFn spec.Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "prevent") }
-	stopFn    spec.Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "stop") }
+	preventFn Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "prevent") }
+	stopFn    Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "stop") }
 )
 
 // Prevent calls e.preventDefault() before invoking the action.
-func Prevent() spec.Option { return preventFn }
+func Prevent() Option { return preventFn }
 
 // Stop calls e.stopPropagation() before invoking the action.
-func Stop() spec.Option { return stopFn }
+func Stop() Option { return stopFn }
 
 // SetSignal bundles a typed signal write into the same trigger as the
 // action — the signal updates client-side first, then the @post fires
@@ -139,7 +148,7 @@ func Stop() spec.Option { return stopFn }
 // sig must be a Signal[T] handle bound at Mount (any Signal[T] field
 // reached through the composition struct satisfies this). value is
 // JSON-encoded into the rendered JS expression.
-func SetSignal[T any](sig *via.Signal[T], value T) spec.Option {
+func SetSignal[T any](sig *via.Signal[T], value T) Option {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		// json.Marshal on a typed Signal[T] value only fails for T's that
@@ -200,7 +209,7 @@ func isClosureName(name string) bool {
 	return false
 }
 
-func event(name string, fn any, opts ...spec.Option) h.H {
+func event(name string, fn any, opts ...Option) h.H {
 	// Fast path for the bare `on.Click(c.Inc)` shape — no opts means no
 	// modifiers, no debounce/throttle, no pre-statements. Skipping the
 	// spec.Trigger allocation here pairs with render's same-shape fast
