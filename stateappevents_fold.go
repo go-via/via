@@ -8,7 +8,7 @@ import (
 // projectRecord folds one delivered Record into the cached projection under the
 // key's lock, returning whether the projection advanced (and a re-render is due).
 // It is the single fold path — shared by the live projector loop. broadcastRender
-// is the caller's job, OUTSIDE the lock.
+// is the caller's job (it is I/O, kept outside the lock — see logState).
 func (a *App) projectRecord(ls *logState, key string, rec Record) (advanced bool) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()

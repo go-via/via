@@ -13,8 +13,8 @@ import (
 // silently and permanently diverge this pod from its peers — the cross-pod
 // truncation bug. Instead re-seed from the durable snapshot (which covers the
 // gap) and let the fold continue; if no snapshot can recover the gap, HALT
-// rather than diverge. Then delegate to projectRecord. Runs on the single
-// projector goroutine, so the read-then-reseed is not racing another folder.
+// rather than diverge. Then delegate to projectRecord. The read-then-reseed is
+// safe under the single-writer contract (see logState).
 func (a *App) applyRecord(ls *logState, key string, rec Record) bool {
 	ls.mu.RLock()
 	cur, halted, gapsBenign := ls.cursor, ls.halted, ls.gapsBenign

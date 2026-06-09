@@ -8,8 +8,8 @@ import "context"
 // what the PREVIOUS snapshot already covered, so the current snapshot's offset
 // is never truncated (cold start always resumes) and ≥1 generation of tail
 // events survives for any in-flight subscriber. A backend that declines
-// Compactor runs snapshot-only. Called serially from the single projector
-// goroutine, so prevSnapOffset needs no extra synchronization beyond ls.mu.
+// Compactor runs snapshot-only. Runs on the single projector goroutine, so
+// prevSnapOffset is unsynchronized beyond ls.mu (see logState).
 func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
 	c, ok := a.backplane.(Compactor)
 	if !ok {

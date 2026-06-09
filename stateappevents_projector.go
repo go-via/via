@@ -13,7 +13,23 @@ const reconnectBackoff = 10 * time.Millisecond
 
 // logState is the per-(pod,key) projector state for one StateAppEvents key: the
 // cached projection plus the type-erased fold captured from the typed handle at
-// bindApp. The projection has exactly ONE writer — the projector goroutine.
+// bindApp.
+//
+// Concurrency contract (the projector's methods across this package — coldStartFrom,
+// applyRecord, classifyGap, projectRecord, maybeSnapshot/writeSnapshot, maybeCompact,
+// emitFoldDigest — all rely on this; they cite it rather than restate it):
+//
+//   - SINGLE WRITER. Exactly one goroutine ever mutates a logState: the per-key
+//     projector started once in startProjector (registerLog's sync.Once). So a
+//     read-then-act sequence on the projector goroutine (e.g. classifyGap's
+//     read-then-reseed) is never racing another folder, and prevSnapOffset needs
+//     no synchronization beyond ls.mu.
+//   - ls.mu GUARDS THE FIELDS. Tabs read the projection concurrently via
+//     logProjection (RLock), so every field write still takes ls.mu even though
+//     the writer is single — the lock exists for the readers, not rival writers.
+//   - I/O IS OUTSIDE THE LOCK. Backplane calls (LoadSnapshot, CAS, broadcastRender)
+//     never run under ls.mu; the projector reads what it needs under the lock,
+//     releases it, does the I/O, then re-takes the lock to apply the result.
 type logState struct {
 	once sync.Once
 	mu   sync.RWMutex

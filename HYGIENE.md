@@ -277,3 +277,18 @@ non-compliant island. Names now read as behavioral claims.
 
 Result: pure rename (no internal callers; word-boundary global replace), 53
 test/fuzz funcs unchanged in count; gofmt + vet + `test -race .` green.
+
+### Q6 — anchor the projector concurrency contract in one doc-block
+
+What: the split scattered the single-writer / ls.mu / I/O-outside-the-lock
+invariant across projector.go, gap.go, fold.go, compact.go as partial
+restatements. Wrote ONE authoritative contract block on the `logState` type
+(single writer = the startProjector goroutine; ls.mu guards fields for concurrent
+tab readers; backplane I/O stays outside the lock) and trimmed the three
+scattered restatements to back-pointers ("see logState").
+
+Why: the split made the invariant emergent across four files; one owning
+statement + references is drift insurance and makes applyRecord's
+RLock-then-Lock read as deliberate.
+
+Result: doc-only; gofmt + build + vet + `test -race .` green.
