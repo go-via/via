@@ -140,7 +140,7 @@ func newCtx(a *App, d *cmpDescriptor, cmpVal reflect.Value, id string) *Ctx {
 	}
 	ctx.app = a
 	ctx.ctxR = &CtxR{ctx: ctx}
-	ctx.Patch = &Patch{ctx: ctx}
+	ctx.patch = &Patch{ctx: ctx}
 	ctx.touch()
 	ctx.cmpReflect = cmpVal
 	bindSlots(ctx, cmpVal, d)

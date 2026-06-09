@@ -10,19 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ctx.Patch.* groups the low-level wire-push primitives behind a single
+// ctx.Patch().* groups the low-level wire-push primitives behind a single
 // sub-object so they don't crowd the top-level Ctx surface and read as
 // what they are: emit-a-frame, not the first-reach for typed state.
 
 type patchPage struct{}
 
 func (p *patchPage) PushSignal(ctx *via.Ctx) error {
-	ctx.Patch.Signal("_picoTheme", "purple")
+	ctx.Patch().Signal("_picoTheme", "purple")
 	return nil
 }
 
 func (p *patchPage) PushSignalsBatch(ctx *via.Ctx) error {
-	ctx.Patch.Signals(map[string]any{
+	ctx.Patch().Signals(map[string]any{
 		"_picoTheme": "amber",
 		"_density":   3,
 	})
@@ -30,12 +30,12 @@ func (p *patchPage) PushSignalsBatch(ctx *via.Ctx) error {
 }
 
 func (p *patchPage) PushElement(ctx *via.Ctx) error {
-	ctx.Patch.Element(h.Div(h.ID("solo"), h.Text("only")))
+	ctx.Patch().Element(h.Div(h.ID("solo"), h.Text("only")))
 	return nil
 }
 
 func (p *patchPage) PushElements(ctx *via.Ctx) error {
-	ctx.Patch.Elements(
+	ctx.Patch().Elements(
 		h.Div(h.ID("a"), h.Text("first")),
 		h.Div(h.ID("b"), h.Text("second")),
 	)
@@ -43,12 +43,12 @@ func (p *patchPage) PushElements(ctx *via.Ctx) error {
 }
 
 func (p *patchPage) EmptyGuards(ctx *via.Ctx) error {
-	ctx.Patch.Signal("", "ignored")
-	ctx.Patch.Signals(nil)
-	ctx.Patch.Signals(map[string]any{})
-	ctx.Patch.Element(nil)
-	ctx.Patch.Elements()
-	ctx.Patch.Elements(nil, nil)
+	ctx.Patch().Signal("", "ignored")
+	ctx.Patch().Signals(nil)
+	ctx.Patch().Signals(map[string]any{})
+	ctx.Patch().Element(nil)
+	ctx.Patch().Elements()
+	ctx.Patch().Elements(nil, nil)
 	return nil
 }
 

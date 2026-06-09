@@ -246,12 +246,12 @@ func (p *twoMapPage) View(ctx *via.CtxR) h.H {
 
 func (p *twoMapPage) ClickA(ctx *via.Ctx) {
 	e := p.A.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"clicked": "A", "gotLng": e.Lng})
+	ctx.Patch().Signals(map[string]any{"clicked": "A", "gotLng": e.Lng})
 }
 
 func (p *twoMapPage) ClickB(ctx *via.Ctx) {
 	e := p.B.Event(ctx)
-	ctx.Patch.Signals(map[string]any{"clicked": "B", "gotLng": e.Lng})
+	ctx.Patch().Signals(map[string]any{"clicked": "B", "gotLng": e.Lng})
 }
 
 // renderTwoMapPage boots a one-page app with two maps and returns the rendered

@@ -46,7 +46,7 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 	}
 	ctxs := a.snapshotContexts()
 	for _, c := range ctxs {
-		c.Patch.Signals(values)
+		c.patch.Signals(values)
 	}
 	return len(ctxs)
 }

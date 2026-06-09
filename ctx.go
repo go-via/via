@@ -78,7 +78,7 @@ type Ctx struct {
 	// `func(*Ctx) error` shape; nil means "no such hook".
 	viewFn    func(*CtxR) h.H
 	ctxR      *CtxR  // read-only view, allocated eagerly in newCtx
-	Patch     *Patch // wire-push primitives, allocated eagerly in newCtx
+	patch     *Patch // wire-push primitives, allocated eagerly in newCtx
 	initFn    func(*Ctx) error
 	connectFn func(*Ctx) error
 	disposeFn func(*Ctx)
@@ -226,6 +226,14 @@ func (ctx *Ctx) Request() *http.Request {
 	return ctx.r
 }
 
+// Patch returns the imperative client-push handle for this request —
+// the escape hatch for pushing a signal value to a key not bound to a
+// typed Signal[T], or morphing an arbitrary element fragment into the
+// live DOM. See [Patch] for the primitives. The handle is allocated
+// eagerly in newCtx, so this is a plain field load that never returns
+// nil for a live ctx.
+func (ctx *Ctx) Patch() *Patch { return ctx.patch }
+
 // Session returns a [Session] bound to ctx. Stores performed through
 // the returned handle mark the page dirty and fan out to subscribed
 // tabs. Survives tab close; expires per [WithSessionTTL].
@@ -335,7 +343,7 @@ func (ctx *Ctx) SyncNow() {
 // browser this action. A later loud action that re-touches the state
 // surfaces the value via the normal dirty-bit path.
 //
-// Explicit publish primitives (ctx.Patch.{Signal,Signals,Element,Elements},
+// Explicit publish primitives (ctx.Patch().{Signal,Signals,Element,Elements},
 // ExecScript, Toast, Reload, Redirect) are NOT suppressed by SyncOff
 // — they enqueue patches directly rather than through the dirty-bit
 // flush. This is deliberate so a panic-recovery error toast still

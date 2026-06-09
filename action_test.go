@@ -293,7 +293,7 @@ func (p *queueOrderPage) BumpAndOverride(ctx *via.Ctx) error {
 	if err := p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil }); err != nil {
 		return err
 	}
-	ctx.Patch.Elements(h.Div(h.ID("n"), h.Text("OVERRIDE")))
+	ctx.Patch().Elements(h.Div(h.ID("n"), h.Text("OVERRIDE")))
 	return nil
 }
 
@@ -435,16 +435,16 @@ func TestPanickingRenderDoesNotEraseQueuedGoodRender(t *testing.T) {
 type explicitQueuePage struct{}
 
 func (p *explicitQueuePage) PushA(ctx *via.Ctx) {
-	ctx.Patch.Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
+	ctx.Patch().Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
 }
 
 func (p *explicitQueuePage) PushB(ctx *via.Ctx) {
-	ctx.Patch.Elements(h.Div(h.ID("b"), h.Text("PATCH-B")))
+	ctx.Patch().Elements(h.Div(h.ID("b"), h.Text("PATCH-B")))
 }
 
 func (p *explicitQueuePage) PushSilent(ctx *via.Ctx) {
 	ctx.SyncOff()
-	ctx.Patch.Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
+	ctx.Patch().Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
 }
 
 func (p *explicitQueuePage) View(ctx *via.CtxR) h.H { return h.Div(h.ID("root")) }
