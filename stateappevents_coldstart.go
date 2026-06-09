@@ -12,7 +12,7 @@ import (
 // covered offset only when a bridging seed (matching codec or seeded migration)
 // was installed; otherwise a halt is latched on ls and folding stops.
 func (a *App) coldStartFrom(ls *logState, key string) Offset {
-	data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	data, _, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
 	if !ok {
 		return 0
 	}
@@ -39,7 +39,7 @@ func (a *App) coldStartFrom(ls *logState, key string) Offset {
 	case cp.CodecHash == ls.codecHash:
 		// Codec matches → seed straight from the snapshot.
 		if v, err := ls.decodeSnap(cp.V); err == nil {
-			a.seedFromSnapshot(ls, v, cp, rev)
+			a.seedFromSnapshot(ls, v, cp)
 			return cp.CoveredOffset
 		}
 		return 0
@@ -54,7 +54,7 @@ func (a *App) coldStartFrom(ls *logState, key string) Offset {
 		// HALT the projector (roll-forward-only), never truncate (T2-GO-4).
 		if migrate, found := lookupSnapMigration(cp.CodecHash); found {
 			if v, err := migrate.decode(cp.V); err == nil {
-				a.seedFromSnapshot(ls, v, cp, rev)
+				a.seedFromSnapshot(ls, v, cp)
 				return cp.CoveredOffset
 			}
 		}
@@ -66,13 +66,12 @@ func (a *App) coldStartFrom(ls *logState, key string) Offset {
 // seedFromSnapshot installs a cold-start seed (from a matching snapshot or a
 // seeded migration) as the projection baseline, resuming the tail at the
 // snapshot's covered offset.
-func (a *App) seedFromSnapshot(ls *logState, v any, cp checkpoint, rev Rev) {
+func (a *App) seedFromSnapshot(ls *logState, v any, cp checkpoint) {
 	ls.mu.Lock()
 	ls.projection = v
 	ls.cursor = cp.CoveredOffset
 	ls.epoch = cp.Epoch
 	ls.epochSeen = true
-	ls.snapRev = rev
 	ls.mu.Unlock()
 }
 

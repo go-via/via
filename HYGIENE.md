@@ -219,3 +219,19 @@ metrics are an honesty bug (same class as the earlier disconnect-reason fix).
 
 Result: documented set now reconciles exactly against emit sites (both
 set-diffs empty); doc-only, `go build ./...` green.
+
+### Q2 — remove write-only ls.snapRev + setSnapRev
+
+What: `ls.snapRev` was written at `seedFromSnapshot` and `setSnapRev` (3 call
+sites) but read NOWHERE; its comment claimed it backed the snapshot CAS, yet
+`writeSnapshot` CASes against a freshly-read `curRev`. Deleted the field,
+`setSnapRev`, the `rev` param of `seedFromSnapshot`, and the now-dead
+rev-resync `LoadSnapshot` on the CAS-conflict path.
+
+Why: a write-only field on a shared-mutable struct that advertises load-bearing
+synchronization it doesn't provide is a correctness trap; deleting it also
+shrinks the logState surface (the council's one true decoupling lever).
+
+Result: pure deletion (no reads existed); `go build`/`vet`/`test -race .` green.
+The only behavior delta is one fewer backplane LoadSnapshot on the CAS-conflict
+path — unobservable (its result fed only the deleted field).

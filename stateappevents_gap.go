@@ -68,7 +68,7 @@ const (
 //
 // The backplane read is OUTSIDE ls.mu; seedFromSnapshot takes the lock.
 func (a *App) classifyGap(ls *logState, key string, cur, needCovered Offset) gapClass {
-	data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	data, _, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
 	if !ok {
 		return gapBenign
 	}
@@ -80,7 +80,7 @@ func (a *App) classifyGap(ls *logState, key string, cur, needCovered Offset) gap
 	// rec) and moves us FORWARD — never seed behind our current position.
 	if cp.CodecHash == ls.codecHash && cp.CoveredOffset >= needCovered && cp.CoveredOffset > cur {
 		if v, err := ls.decodeSnap(cp.V); err == nil {
-			a.seedFromSnapshot(ls, v, cp, rev)
+			a.seedFromSnapshot(ls, v, cp)
 			return gapReseeded
 		}
 	}

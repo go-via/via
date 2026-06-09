@@ -37,7 +37,6 @@ type logState struct {
 	encodeSnap     func(any) ([]byte, error)
 	decodeSnap     func([]byte) (any, error)
 	codecHash      string
-	snapRev        Rev    // last snapshot cell revision this pod wrote/saw
 	foldsSinceSnap int    // folds applied since the last snapshot write
 	prevSnapOffset Offset // covered offset of the PREVIOUS snapshot — the compaction floor (lag one generation)
 }

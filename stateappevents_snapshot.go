@@ -94,25 +94,14 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	if ok {
 		var curCp checkpoint
 		if json.Unmarshal(curData, &curCp) == nil && cp.CoveredOffset <= curCp.CoveredOffset {
-			a.setSnapRev(ls, curRev)
 			return // a peer's snapshot already covers at least this offset
 		}
 	}
-	newRev, err := a.backplane.CAS(context.Background(), snapKey(key), curRev, b)
+	_, err = a.backplane.CAS(context.Background(), snapKey(key), curRev, b)
 	if errors.Is(err, ErrCASConflict) {
-		// A peer wrote concurrently; resync our rev and retry next interval.
-		_, fresh, _, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
-		a.setSnapRev(ls, fresh)
-		return
+		return // a peer wrote concurrently; retry next interval
 	}
 	if err == nil {
-		a.setSnapRev(ls, newRev)
 		a.maybeCompact(ls, key, cp.CoveredOffset)
 	}
-}
-
-func (a *App) setSnapRev(ls *logState, rev Rev) {
-	ls.mu.Lock()
-	ls.snapRev = rev
-	ls.mu.Unlock()
 }
