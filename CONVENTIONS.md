@@ -192,6 +192,23 @@ func WithDarkMode() Option {
 }
 ```
 
+Rule: Export the option type; keep the config it mutates unexported and
+in the same package. Callers must be able to name the option type — to
+hold one in a variable, build a `[]Option` slice, or write a helper that
+returns options — so a constructor's signature may not reference an
+unexported or `internal/` type. The `func(*config)` target stays
+unexported because the option set is closed: users compose the provided
+`WithX` constructors, they never author an option by hand.
+
+- ✅ `type Option func(*config)` — `config` unexported, same package
+- ✅ `type HSTSOption func(*hstsConfig)`, `type ChartOption func(*Chart)`
+- ❌ `func Debounce(d string) spec.Option` (leaks `internal/spec` — a
+  downstream module can't name the return type)
+
+A package that needs the same option type a sibling already defines
+should re-export it with an alias (`type Option = spec.Option`) rather
+than expose the shared internal type in its signatures.
+
 ## Panic on Invalid Registration
 
 Reasoning: Errors during page or plugin registration are programming
