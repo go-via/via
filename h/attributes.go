@@ -108,25 +108,57 @@ func Data(name, value string) H {
 // (HTML-escaped) via [buildAttr]. For an attribute without a shorthand use
 // [Attr]; for data-* use [Data]; for boolean attributes see [Selected],
 // [Checked], [Required], [Disabled].
-func Href(v string) H        { return buildAttr("href", v) }
-func Type(v string) H        { return buildAttr("type", v) }
-func Src(v string) H         { return buildAttr("src", v) }
-func ID(v string) H          { return buildAttr("id", v) }
-func Value(v string) H       { return buildAttr("value", v) }
-func Name(v string) H        { return buildAttr("name", v) }
+// Href emits the href attribute.
+func Href(v string) H { return buildAttr("href", v) }
+
+// Type emits the type attribute.
+func Type(v string) H { return buildAttr("type", v) }
+
+// Src emits the src attribute.
+func Src(v string) H { return buildAttr("src", v) }
+
+// ID emits the id attribute.
+func ID(v string) H { return buildAttr("id", v) }
+
+// Value emits the value attribute.
+func Value(v string) H { return buildAttr("value", v) }
+
+// Name emits the name attribute.
+func Name(v string) H { return buildAttr("name", v) }
+
+// Placeholder emits the placeholder attribute.
 func Placeholder(v string) H { return buildAttr("placeholder", v) }
-func Rel(v string) H         { return buildAttr("rel", v) }
-func Role(v string) H        { return buildAttr("role", v) }
-func Min(v string) H         { return buildAttr("min", v) }
-func Max(v string) H         { return buildAttr("max", v) }
-func Step(v string) H        { return buildAttr("step", v) }
-func For(v string) H         { return buildAttr("for", v) }
-func Lang(v string) H        { return buildAttr("lang", v) }
-func Content(v string) H     { return buildAttr("content", v) }
-func Charset(v string) H     { return buildAttr("charset", v) }
+
+// Rel emits the rel attribute.
+func Rel(v string) H { return buildAttr("rel", v) }
+
+// Role emits the role attribute.
+func Role(v string) H { return buildAttr("role", v) }
+
+// Min emits the min attribute.
+func Min(v string) H { return buildAttr("min", v) }
+
+// Max emits the max attribute.
+func Max(v string) H { return buildAttr("max", v) }
+
+// Step emits the step attribute.
+func Step(v string) H { return buildAttr("step", v) }
+
+// For emits the for attribute.
+func For(v string) H { return buildAttr("for", v) }
+
+// Lang emits the lang attribute.
+func Lang(v string) H { return buildAttr("lang", v) }
+
+// Content emits the content attribute.
+func Content(v string) H { return buildAttr("content", v) }
+
+// Charset emits the charset attribute.
+func Charset(v string) H { return buildAttr("charset", v) }
 
 // Style emits an inline `style="..."` attribute. For the
 // `<style>...</style>` element use [StyleEl].
+// Style emits the style attribute.
 func Style(v string) H { return buildAttr("style", v) }
 
 // Styles joins non-empty CSS declarations with `;` and emits one
