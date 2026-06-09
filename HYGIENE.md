@@ -249,3 +249,17 @@ tick-3/4 vianats precedent; the cluster the split created was the last raw-t
 island.
 
 Result: test-only; no raw t.Fatal remain; gofmt + vet + `test -race .` green.
+
+### Q4 — re-file TestColdStart* into the coldstart test file
+
+What: the 4 `TestColdStart*` funcs (they exercise `coldStartFrom`) sat in
+stateappevents_snapshot_internal_test.go, falsifying the split's 1:1 claim.
+Moved them to stateappevents_coldstart_internal_test.go, and relocated their
+shared helper `writeContrivedSnapshot` (used only by coldstart + migrate, no
+staying snapshot test) into stateappevents_helpers_test.go.
+
+Why: a test file should match the source file it covers; cold-start gate tests
+were mis-discoverable under snapshot.
+
+Result: test-only move; snapshot 312→151 lines, coldstart now owns all 5
+cold-start tests; gofmt + vet + `test -race .` green.

@@ -359,3 +359,13 @@ func bindFlaky(app *App, key string) {
 	h.bindWireKey(key)
 	h.bindApp(app)
 }
+
+// writeContrivedSnapshot stores a checkpoint at snapKey(key) directly, so a
+// cold-starting projector can be observed seeding from it.
+func writeContrivedSnapshot(t *testing.T, app *App, key string, cp checkpoint) {
+	t.Helper()
+	b, err := json.Marshal(cp)
+	require.NoError(t, err)
+	_, err = app.backplane.CAS(context.Background(), snapKey(key), 0, b)
+	require.NoError(t, err)
+}
