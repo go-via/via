@@ -195,11 +195,14 @@ Source (was `stateappevents_projector.go`, 373 lines → 7 files, 39–125 lines
 - `stateappevents_compact.go` — maybeCompact (carved from snapshot.go)
 - `stateappevents_snapshot.go` — maybeSnapshot/writeSnapshot/setSnapRev (slimmed)
 
-Tests: the 42-func merged file was redistributed to mirror each source file,
-with shared doubles/helpers in one `stateappevents_helpers_test.go`. Same 42
-test funcs, none lost or duplicated. Every source file now has a matching test
-file; all at/under the ~300-line guideline (helpers_test.go excepted as test
-infrastructure).
+Tests: the merged projector test file (35 funcs — 34 Test + 1 Fuzz) was
+redistributed to mirror each source file, with shared doubles/helpers in one
+`stateappevents_helpers_test.go`; the snapshot test file kept its own 7 funcs
+and gained one moved in. The redistribution conserved the function set — the
+count before and after matches, none lost or duplicated (an earlier draft of
+this note said "42 → 42", conflating the 35-func merged file with snapshot's
+pre-existing 7). Every source file now has a matching test file; all at/under
+the ~300-line guideline (helpers_test.go excepted as test infrastructure).
 
 Result: gofmt clean; `go vet` + `go test -race .` green.
 
@@ -292,3 +295,21 @@ statement + references is drift insurance and makes applyRecord's
 RLock-then-Lock read as deliberate.
 
 Result: doc-only; gofmt + build + vet + `test -race .` green.
+
+### Q7 — correct the projector-split test-count claim
+
+What: the projector-split follow-up entry claimed a "42-func merged file" and
+"Same 42 test funcs". The merged projector test file actually held 35 funcs
+(34 Test + 1 Fuzz); 42 conflated it with the snapshot test file's pre-existing
+7. Reworded to the accurate numbers and the conservation claim.
+
+Why: the council flagged the miscount; the decision ledger should be accurate.
+
+Result: doc-only (HYGIENE.md); no code touched.
+
+---
+
+Council do-now queue COMPLETE (#1–#7). Deferred items (N-goroutine -race
+characterization test; prevSnapOffset read/write cross-ref) and rejected items
+(marshalEvent error-discrimination; (0,nil)/ErrClosed re-doc) intentionally not
+done.
