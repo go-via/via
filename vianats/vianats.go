@@ -93,7 +93,8 @@ func JetStream(nc *nats.Conn, opts ...Option) (*Backplane, error) {
 	// Epoch = the stream's creation identity. JetStream purge keeps sequence
 	// numbers monotone (no offset-space reset), so the ONLY reset is a stream
 	// delete+recreate, which yields a fresh Created timestamp. Stamping it on
-	// Head + every Record lets the projector detect that reset (applog.go);
+	// Head + every Record lets the projector detect that reset
+	// (stateappevents_projector.go);
 	// every client on the same live stream reads the same Created → same epoch.
 	//
 	// CreateOrUpdateStream returns a Stream whose CachedInfo is populated from
@@ -255,9 +256,11 @@ func (b *Backplane) storeKey(key string) string   { return sanitize(key) }
 func (b *Backplane) subjectFor(key string) string { return b.prefix + ".ev." + sanitize(key) }
 
 // sanitize maps an arbitrary via wire key into a single safe NATS subject token
-// / KV key: characters outside [A-Za-z0-9_-] become `_<hex>_`, so '.', '*',
-// '>', and the like cannot break subject structure. Deterministic and
-// reversible-enough for isolation (collision-free for distinct inputs).
+// / KV key: characters outside [A-Za-z0-9-] become `_<hex>_`, so '.', '*', '>',
+// and the like cannot break subject structure. Underscore is the escape
+// DELIMITER, so a literal '_' is itself escaped (to `_5f_`) — otherwise the key
+// "a_b" would collide with the encoding of "a.b" (`a_2e_b`). Deterministic and
+// collision-free for distinct inputs.
 func sanitize(key string) string {
 	var sb strings.Builder
 	for _, r := range key {

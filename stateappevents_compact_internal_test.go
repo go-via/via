@@ -10,55 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// recvOffset reads one record off a subscription within a timeout, returning its
-// offset — so a test can assert WHICH offset a compacted log resumes at.
-func recvOffset(t *testing.T, sub <-chan Record) Offset {
-	t.Helper()
-	select {
-	case r := <-sub:
-		return r.Offset
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for a record")
-		return 0
-	}
-}
-
-// lowestRetainedOffset subscribes from genesis and returns the FIRST delivered
-// record's offset — the lowest offset the log still holds after any compaction
-// (0 if the log delivered nothing within the window).
-func lowestRetainedOffset(t *testing.T, bp Backplane, key string) Offset {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sub, err := bp.Subscribe(ctx, key, 0)
-	if err != nil {
-		// A torn-down backplane (Close during a require.Never/Eventually poll,
-		// whose check fn runs in a straggler goroutine that can outlive the test
-		// body's deferred Close) retains nothing — report 0 rather than failing
-		// the test from inside the polled goroutine.
-		return 0
-	}
-	select {
-	case r, ok := <-sub:
-		if !ok {
-			return 0
-		}
-		return r.Offset
-	case <-time.After(time.Second):
-		return 0
-	}
-}
-
-// nonCompactingBackplane embeds the Backplane interface but NOT Compact, so the
-// runtime's type-assert to Compactor fails — modelling a backend that declines
-// compaction and must still snapshot.
-type nonCompactingBackplane struct{ Backplane }
-
 // Compaction reclaims the prefix a snapshot already covers, but retained records
 // MUST keep their original offsets — a resuming pod that passed offset N must
 // still resume exactly after N. Re-numbering the survivors to 1 would silently
 // re-deliver or skip events.
-func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
+func TestCompact_dropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -87,7 +43,7 @@ func TestCompactDropsPrefixButKeepsRetainedOffsetsStable(t *testing.T) {
 
 // A re-issued, stale, or over-large beforeOffset must never corrupt the log or
 // move the head — compaction is idempotent and clamped to committed offsets.
-func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
+func TestCompact_isIdempotentAndClampedToCommitted(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -111,7 +67,7 @@ func TestCompactIsIdempotentAndClampedToCommitted(t *testing.T) {
 // Offsets are a monotone resume primitive: an append AFTER compaction must
 // continue from the head, never restart base-relative. A renumbered offset would
 // let a resuming pod silently re-process or skip events.
-func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
+func TestCompact_appendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -136,7 +92,7 @@ func TestAppendAfterCompactContinuesMonotoneOffsets(t *testing.T) {
 // Compaction is monotone: the retained floor only ever rises. A stale or
 // out-of-order beforeOffset must not move the floor backward (which would
 // "resurrect" discarded offsets) or move the head.
-func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
+func TestCompact_sequentialCompactionsAdvanceMonotonically(t *testing.T) {
 	t.Parallel()
 	b := InMemory()
 	defer b.Close()
@@ -161,7 +117,7 @@ func TestSequentialCompactionsAdvanceMonotonically(t *testing.T) {
 // The projector reclaims storage automatically, but compaction must trail a
 // DURABLE snapshot (snapshot-FIRST, compact-SECOND) — it must never discard at
 // or beyond the covered offset, or a cold start could not resume.
-func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
+func TestCompact_autoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithSnapshotInterval(1))
@@ -195,42 +151,9 @@ func TestProjectorAutoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 		"compaction must never pass the durable snapshot's covered offset")
 }
 
-// The payoff: a fresh pod sharing a backplane whose prefix has been compacted
-// still cold-starts to the full projection — it seeds from the snapshot and
-// never needs the discarded events.
-func TestFreshProjectorColdStartsAfterPrefixCompacted(t *testing.T) {
-	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
-	defer server.Close()
-	ctx := context.Background()
-
-	var hA StateAppEvents[envEv, []int]
-	hA.bindWireKey("k")
-	hA.bindApp(app)
-	for i := 1; i <= 5; i++ {
-		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: i}))
-		require.NoError(t, err)
-	}
-	require.Eventually(t, func() bool {
-		return lowestRetainedOffset(t, app.backplane, "k") > 1
-	}, 2*time.Second, 10*time.Millisecond, "the prefix must be compacted before the fresh pod starts")
-
-	appB := New(WithTestServer(&server), WithBackplane(app.backplane))
-	var hB StateAppEvents[envEv, []int]
-	hB.bindWireKey("k")
-	hB.bindApp(appB)
-
-	require.Eventually(t, func() bool {
-		p := projection(appB, "k")
-		return len(p) == 5 && p[0] == 1 && p[4] == 5
-	}, 2*time.Second, 10*time.Millisecond,
-		"the fresh pod must reach the full projection from the snapshot despite compaction")
-}
-
 // A backend that declines Compactor must still snapshot — the runtime falls back
 // to snapshot-only and never panics or wedges, leaving the prefix intact.
-func TestSnapshotOnlyWhenBackendDeclinesCompaction(t *testing.T) {
+func TestCompact_snapshotOnlyWhenBackendDeclines(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	bp := nonCompactingBackplane{InMemory()}

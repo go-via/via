@@ -36,7 +36,7 @@ func (p *feedPage) View(ctx *via.CtxR) h.H {
 // An empty log projects to the Go zero of V (no Zero() method, no genesis
 // event): a freshly-loaded feed with no appends yet must render the empty
 // projection, not a nil-deref or a missing node.
-func TestReadProjectsZeroValueBeforeAnyAppend(t *testing.T) {
+func TestStateAppEvents_readProjectsZeroValueBeforeAnyAppend(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -53,7 +53,7 @@ func TestReadProjectsZeroValueBeforeAnyAppend(t *testing.T) {
 // surface — folded into the projected value — in every other live tab that read
 // the key. If the projector or the broadcast were missing, the appended event
 // would never reach a peer's render.
-func TestAppendedEventFoldsAndReachesALiveSubscriber(t *testing.T) {
+func TestStateAppEvents_appendedEventFoldsAndReachesALiveSubscriber(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -74,7 +74,7 @@ func TestAppendedEventFoldsAndReachesALiveSubscriber(t *testing.T) {
 // The projection is app-scoped: it lives in the backplane, not the writing tab.
 // A brand-new session loading the page must see the already-folded value in its
 // very first render — proving the value outlives the tab that appended it.
-func TestProjectionIsAppScopedAndOutlivesTheWriter(t *testing.T) {
+func TestStateAppEvents_projectionIsAppScopedAndOutlivesTheWriter(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -106,7 +106,7 @@ func (p *textFeedPage) View(ctx *via.CtxR) h.H {
 	return h.Div(h.ID("t"), p.Items.Text(ctx))
 }
 
-func TestTextRendersTheProjectedValue(t *testing.T) {
+func TestStateAppEvents_textRendersTheProjectedValue(t *testing.T) {
 	t.Parallel()
 
 	var server *httptest.Server
@@ -122,7 +122,7 @@ func TestTextRendersTheProjectedValue(t *testing.T) {
 // Append is reachable only from a via_tab + session-gated action ctx; a nil ctx
 // means the call did not come from a legitimate tab action, so it must panic
 // rather than silently mutate shared state (parity with StateApp.Update).
-func TestAppendPanicsOnNilCtx(t *testing.T) {
+func TestStateAppEvents_appendPanicsOnNilCtx(t *testing.T) {
 	t.Parallel()
 	var l via.StateAppEvents[addItem, []string]
 	assert.PanicsWithValue(t,

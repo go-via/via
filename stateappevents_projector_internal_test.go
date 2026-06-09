@@ -10,47 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// dropAfter wraps a Backplane and closes each Subscribe channel after delivering
-// n records, WITHOUT closing the backplane itself — a transient connection drop
-// (the JetStream OrderedConsumer dies, the stream survives). The underlying
-// stream is intact, so a runtime that re-subscribes from its cursor must resume
-// gap-free. It models the mid-Subscribe-disconnect fault the council's keystone
-// requires (reconnect-rehydrate, #3/#7).
-type dropAfter struct {
-	Backplane
-	n int
-}
-
-func (d dropAfter) Subscribe(ctx context.Context, key string, from Offset) (<-chan Record, error) {
-	in, err := d.Backplane.Subscribe(ctx, key, from)
-	if err != nil {
-		return nil, err
-	}
-	out := make(chan Record)
-	go func() {
-		defer close(out)
-		sent := 0
-		for r := range in {
-			select {
-			case out <- r:
-			case <-ctx.Done():
-				return
-			}
-			if sent++; sent >= d.n {
-				return // drop the stream after n records (out closes)
-			}
-		}
-	}()
-	return out, nil
-}
-
 // A transient mid-stream disconnect must NOT permanently strand a key's
 // projector. When the Subscribe channel closes while the app is still running
 // (the backend dropped the consumer, not a Shutdown), the projector must
 // re-subscribe from its cursor and fold the rest — otherwise one network blip
 // freezes a tab's state forever (the deploy-freeze class of bug the backplane
 // exists to fix, reappearing one layer down).
-func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
+func TestProjector_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -59,9 +25,8 @@ func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
 	ctx := context.Background()
 
 	for _, n := range []int{1, 2, 3, 4, 5} {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 
 	// The first subscription delivers 2 records then drops; the projector must
@@ -78,7 +43,7 @@ func TestProjectorRehydratesAfterTransientDisconnect(t *testing.T) {
 // the remaining events, or a deploy blip silently loses side effects (emails,
 // payments) — the failure mode OnEvent's at-least-once contract exists to
 // prevent.
-func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
+func TestConsumer_rehydratesAfterTransientDisconnect(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -99,9 +64,8 @@ func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
 
 	ctx := context.Background()
 	for _, n := range []int{1, 2, 3, 4, 5} {
-		if _, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n})); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+		_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: n}))
+		require.NoError(t, err, "append")
 	}
 
 	require.Eventually(t, func() bool {
@@ -116,7 +80,7 @@ func TestConsumerRehydratesAfterTransientDisconnect(t *testing.T) {
 // Closed, the consumer's in-flight subscription closes and it must read that as
 // a graceful stop (not a transient drop → reconnect) and exit. Without the
 // shuttingDown() guard the consumer would reconnect-spin and Shutdown would hang.
-func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
+func TestConsumer_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -150,7 +114,7 @@ func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Shutdown hung — consumer likely reconnect-spinning instead of exiting")
+		require.FailNow(t, "Shutdown hung — consumer likely reconnect-spinning instead of exiting")
 	}
 }
 
@@ -159,7 +123,7 @@ func TestConsumerExitsCleanlyOnShutdown(t *testing.T) {
 // projector must exit. This pins the distinction between a transient drop
 // (reconnect) and a graceful stop (exit) — without it, Shutdown would never
 // quiesce.
-func TestProjectorExitsCleanlyOnShutdown(t *testing.T) {
+func TestProjector_exitsCleanlyOnShutdown(t *testing.T) {
 	t.Parallel()
 	var server *httptest.Server
 	app := New(WithTestServer(&server), WithBackplane(dropAfter{Backplane: InMemory(), n: 2}))
@@ -178,6 +142,6 @@ func TestProjectorExitsCleanlyOnShutdown(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("Shutdown hung — projector likely reconnect-spinning instead of exiting")
+		require.FailNow(t, "Shutdown hung — projector likely reconnect-spinning instead of exiting")
 	}
 }
