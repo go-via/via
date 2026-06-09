@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -18,12 +17,11 @@ import (
 func TestSession_cookieIsSetWithSecureDefaults(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
@@ -43,12 +41,11 @@ func TestSession_cookieIsSetWithSecureDefaults(t *testing.T) {
 func TestSession_insecureCookiesDisablesSecureFlag(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithInsecureCookies())
+	app := via.New(via.WithInsecureCookies())
+	server := vt.Serve(t, app)
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
@@ -88,12 +85,11 @@ func TestSession_repeatedCookieOptionIsIdempotent(t *testing.T) {
 func TestSession_secureFlagWhenWithSecureCookiesEnabled(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server), via.WithSecureCookies())
+	app := via.New(via.WithSecureCookies())
+	server := vt.Serve(t, app)
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
@@ -136,10 +132,9 @@ func TestRotateSession_doesNotRaceWithSiblingSessionBroadcast(t *testing.T) {
 	// sessions so neither invalidates the other, isolating the pointer
 	// race: a plain *session field trips -race; the contract is that
 	// concurrent rotate + fan-out stays goroutine-safe.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[rotateRacePage](app, "/")
-	defer server.Close()
 
 	tabA := vt.NewClient(t, server, "/")
 	_, cancelA := tabA.SSEReady()

@@ -31,15 +31,19 @@ type eventEnvelope struct {
 // eventTypeTag returns the auto-derived (diagnostic) type tag for E.
 func eventTypeTag[E any]() string { return reflect.TypeFor[E]().String() }
 
-// upcastFn migrates a stored event payload from version N to version N+1.
-type upcastFn = func(old json.RawMessage) (json.RawMessage, error)
+// Upcaster migrates a stored event payload from version N to version N+1.
+// It works on raw JSON at the codec boundary and is the value passed to
+// RegisterEvent. Exported so callers can name the function type they pass
+// (e.g. when building a step from a helper) rather than rely on an
+// unnamed-in-godoc parameter type.
+type Upcaster = func(old json.RawMessage) (json.RawMessage, error)
 
 // eventVersionInfo is the registered version history for one event type:
 // current is the highest version the binary writes/reads; steps[from] migrates
 // a version-`from` payload to `from+1`.
 type eventVersionInfo struct {
 	current int
-	steps   map[int]upcastFn
+	steps   map[int]Upcaster
 }
 
 // eventRegistry maps an event type to its version history. Written by
@@ -61,13 +65,13 @@ var eventRegistry = struct {
 // — renaming, splitting, or changing the type of a field — needs one. The
 // upcaster works on raw JSON and never touches Fold, so version logic stays at
 // the codec boundary.
-func RegisterEvent[E any](fromVersion int, upcast upcastFn) {
+func RegisterEvent[E any](fromVersion int, upcast Upcaster) {
 	key := reflect.TypeFor[E]()
 	eventRegistry.mu.Lock()
 	defer eventRegistry.mu.Unlock()
 	info := eventRegistry.m[key]
 	if info == nil {
-		info = &eventVersionInfo{current: currentEventVersion, steps: map[int]upcastFn{}}
+		info = &eventVersionInfo{current: currentEventVersion, steps: map[int]Upcaster{}}
 		eventRegistry.m[key] = info
 	}
 	info.steps[fromVersion] = upcast
@@ -141,7 +145,7 @@ func runUpcasters[E any](from, to int, d json.RawMessage) (json.RawMessage, erro
 	// Snapshot the steps we need UNDER the lock: the steps map is mutated by a
 	// concurrent RegisterEvent, so reading it after releasing the lock would be a
 	// data race. User upcaster fns run after the lock is dropped, off the map.
-	steps := make([]upcastFn, 0, to-from)
+	steps := make([]Upcaster, 0, to-from)
 	eventRegistry.mu.RLock()
 	info := eventRegistry.m[reflect.TypeFor[E]()]
 	if info != nil {

@@ -2,10 +2,10 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,8 +13,8 @@ import (
 func TestMiddleware_addsHeaderToResponse(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("X-Middleware", "applied")
 		next.ServeHTTP(w, r)
@@ -22,7 +22,6 @@ func TestMiddleware_addsHeaderToResponse(t *testing.T) {
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
@@ -33,15 +32,14 @@ func TestMiddleware_addsHeaderToResponse(t *testing.T) {
 func TestMiddleware_shortCircuits(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.WriteHeader(http.StatusForbidden)
 	})
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)
@@ -52,8 +50,8 @@ func TestMiddleware_shortCircuits(t *testing.T) {
 func TestMiddleware_runsMultiple(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("X-First", "one")
 		next.ServeHTTP(w, r)
@@ -65,7 +63,6 @@ func TestMiddleware_runsMultiple(t *testing.T) {
 	app.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/test")
 	require.NoError(t, err)

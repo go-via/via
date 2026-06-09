@@ -3,13 +3,13 @@ package maplibre_test
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/maplibre"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -205,8 +205,8 @@ func TestWithMarker_needsNoOnConnectToAppear(t *testing.T) {
 	t.Parallel()
 	// The whole point: a fixed marker must show on first paint, with no
 	// OnConnect and no SSE round-trip — so it's in the GET response body.
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[staticMarkerPage](app, "/")
 	t.Cleanup(server.Close)
 

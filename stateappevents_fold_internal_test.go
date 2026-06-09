@@ -20,8 +20,9 @@ import (
 func TestFold_reSnapshotsOnEpochReset(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	var h StateAppEvents[envEv, []int]
@@ -61,8 +62,8 @@ func TestFold_reSnapshotsOnEpochReset(t *testing.T) {
 // twice must yield the identical result and error (purity). A reducer that read
 // a clock or RNG would fail the second-fold equality.
 func FuzzFold_isDeterministicAndNeverPanics(f *testing.F) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
 	defer server.Close()
 	fold := bindLog(app, "k")
 
@@ -119,9 +120,9 @@ func TestFold_convergesAcrossProcesses(t *testing.T) {
 func TestFoldVerify_detectsImpureFoldAndBlocksCompaction(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy),
+	app := New(WithMetrics(spy),
 		WithSnapshotInterval(1), WithFoldVerify())
+	server := httptest.NewServer(app)
 	defer server.Close()
 	defer app.backplane.Close()
 	bindFlaky(app, "k")
@@ -150,9 +151,9 @@ func TestFoldVerify_detectsImpureFoldAndBlocksCompaction(t *testing.T) {
 func TestFoldVerify_allowsPureFoldToCompact(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy),
+	app := New(WithMetrics(spy),
 		WithSnapshotInterval(1), WithFoldVerify())
+	server := httptest.NewServer(app)
 	defer server.Close()
 	defer app.backplane.Close()
 	bindLog(app, "k") // envEv.Fold is pure
@@ -175,8 +176,9 @@ func TestFoldVerify_allowsPureFoldToCompact(t *testing.T) {
 func TestFoldVerify_isOptInAndOffByDefault(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy), WithSnapshotInterval(1))
+	app := New(WithMetrics(spy), WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close()
 	bindFlaky(app, "k")

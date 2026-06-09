@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,10 +37,9 @@ func (c *counterPage) View(ctx *via.CtxR) h.H {
 func TestAction_methodNameAppearsInOnClickPost(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[counterPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `@post(&#39;/_action/Inc&#39;)`,
@@ -51,10 +49,9 @@ func TestAction_methodNameAppearsInOnClickPost(t *testing.T) {
 func TestAction_unknownMethodReturns404(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[counterPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Post(server.URL+"/_action/Nope", "application/json", strings.NewReader(`{}`))
 	require.NoError(t, err)
@@ -127,10 +124,9 @@ func (e assertSaveErr) Error() string { return string(e) }
 func TestAction_defaultErrorPathToastsTheBrowser(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[erroringActionPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -164,10 +160,9 @@ func (p *panicStringPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestAction_defaultPanicToastHidesInternalMessage(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[panicStringPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -198,15 +193,13 @@ func TestAction_panicWithTypedErrorPreservesType(t *testing.T) {
 	t.Parallel()
 
 	var got error
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
 			got = err
 		}),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[panicTypedPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Boom").Fire())
@@ -221,16 +214,14 @@ func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
 	t.Parallel()
 
 	var seenErr atomic.Pointer[string]
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
 			s := err.Error()
 			seenErr.Store(&s)
 		}),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[customErrPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, tc.Action("Save").Fire())
@@ -262,10 +253,9 @@ func (p *serialPage) View(ctx *via.CtxR) h.H {
 func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[serialPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 
@@ -320,10 +310,9 @@ func (p *queueOrderPage) View(ctx *via.CtxR) h.H {
 func TestReconnectAfterOfflineActionsShowsNewestState(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[queueOrderPage](app, "/q")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/q")
 	// Three state-mutating actions with no SSE stream open: each flush
@@ -351,10 +340,9 @@ func TestReconnectAfterOfflineActionsShowsNewestState(t *testing.T) {
 func TestExplicitElementPatchOverridesAutoRender(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[queueOrderPage](app, "/q")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/q")
 	frames, cancel := tc.SSEReady()
@@ -383,10 +371,9 @@ func TestExplicitElementPatchOverridesAutoRender(t *testing.T) {
 func TestExplicitPatchesFromSeparateActionsAllSurviveReconnect(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[explicitQueuePage](app, "/e")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/e")
 	require.Equal(t, http.StatusOK, tc.Action("PushA").Fire())
@@ -427,10 +414,9 @@ func (p *panicRenderPage) View(ctx *via.CtxR) h.H {
 func TestPanickingRenderDoesNotEraseQueuedGoodRender(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[panicRenderPage](app, "/p")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/p")
 	// N=1: good render queued. N=2: view panics, empty fragment — must not
@@ -472,10 +458,9 @@ func (p *explicitQueuePage) View(ctx *via.CtxR) h.H { return h.Div(h.ID("root"))
 func TestExplicitOnlyActionStillReachesLiveStream(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[explicitQueuePage](app, "/e")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/e")
 	frames, cancel := tc.SSEReady()
@@ -494,10 +479,9 @@ func TestExplicitOnlyActionStillReachesLiveStream(t *testing.T) {
 func TestSilentActionStillShipsExplicitPatch(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[explicitQueuePage](app, "/e")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/e")
 	frames, cancel := tc.SSEReady()

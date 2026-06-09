@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -27,10 +26,9 @@ func (p *unmarshalablePage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestWritePageDocument_marshalFailureStillRenders(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[unmarshalablePage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)

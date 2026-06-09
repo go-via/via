@@ -46,10 +46,9 @@ func withFakeDB(t *testing.T, f fakeDB) {
 
 func mountJoin(t *testing.T) *httptest.Server {
 	t.Helper()
-	var srv *httptest.Server
-	app := via.New(via.WithTestServer(&srv), via.WithBackplane(via.InMemory()))
+	app := via.New(via.WithBackplane(via.InMemory()))
+	srv := vt.Serve(t, app)
 	via.Mount[ui.Join](app, "/r/{code}")
-	t.Cleanup(func() { srv.Close() })
 	return srv
 }
 

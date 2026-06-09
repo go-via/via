@@ -258,8 +258,8 @@ func (p *twoMapPage) ClickB(ctx *via.Ctx) {
 // HTML plus the live server for action firing.
 func renderTwoMapPage(t *testing.T) (string, *httptest.Server) {
 	t.Helper()
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(maplibre.Plugin()), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(maplibre.Plugin()))
+	server := vt.Serve(t, app)
 	via.Mount[twoMapPage](app, "/")
 	t.Cleanup(server.Close)
 

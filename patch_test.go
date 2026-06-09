@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -59,10 +58,9 @@ func (p *patchPage) View(ctx *via.CtxR) h.H {
 
 func TestPatch_SignalEmitsWirePatchSignals(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[patchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -74,10 +72,9 @@ func TestPatch_SignalEmitsWirePatchSignals(t *testing.T) {
 
 func TestPatch_SignalsEmitsBatchedWirePatch(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[patchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -89,10 +86,9 @@ func TestPatch_SignalsEmitsBatchedWirePatch(t *testing.T) {
 
 func TestPatch_ElementEmitsSingleElementMorph(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[patchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -107,10 +103,9 @@ func TestPatch_EmptyInputsAreNoOps(t *testing.T) {
 	// Empty key, nil/empty map, nil element, no args, all-nil-args: every
 	// guard must be a silent no-op. A regression would surface as an
 	// unexpected SSE frame within the wait window.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[patchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -127,10 +122,9 @@ func TestPatch_EmptyInputsAreNoOps(t *testing.T) {
 
 func TestPatch_ElementsEmitsVariadicElementMorphs(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[patchPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

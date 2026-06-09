@@ -3,13 +3,13 @@ package via_test
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/mw"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +35,10 @@ func (p *strictCSPPage) View(ctx *via.CtxR) h.H {
 func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.CSP())
 	via.Mount[strictCSPPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -67,11 +66,10 @@ func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
 func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(mw.CSP("img-src 'self' data:"))
 	via.Mount[strictCSPPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -84,8 +82,8 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 	t.Parallel()
 
 	const nonce = "test-mw-nonce-XYZ"
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		w.Header().Set("Content-Security-Policy",
 			"script-src 'self' 'nonce-"+nonce+"'")
@@ -93,7 +91,6 @@ func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
 		next.ServeHTTP(w, via.RequestWithCSPNonce(r, nonce))
 	})
 	via.Mount[cspEchoPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -135,10 +132,9 @@ func extractNonceFromSpan(body, id string) string {
 func TestCSPNonce_renderedValueIsBase64URLFormatted(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cspEchoPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -169,10 +165,9 @@ func TestCSPNonce_isStableAcrossCallsInSameRequest(t *testing.T) {
 	// A view that embeds the nonce twice must observe the same value —
 	// otherwise the script tag the view writes and the header the
 	// middleware writes would desync on every request.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cspTwoNoncePage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -189,10 +184,9 @@ func TestCSPNonce_isStableAcrossCallsInSameRequest(t *testing.T) {
 func TestCSPNonce_differsAcrossRequests(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cspEchoPage](app, "/")
-	defer server.Close()
 
 	get := func() string {
 		resp, err := server.Client().Get(server.URL + "/")

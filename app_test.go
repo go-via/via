@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,9 +19,8 @@ import (
 func TestApp_servesDatastarJS(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	via.New(via.WithTestServer(&server))
-	defer server.Close()
+	app := via.New()
+	server := vt.Serve(t, app)
 
 	resp, err := server.Client().Get(server.URL + "/_datastar.js")
 	require.NoError(t, err)
@@ -31,12 +31,11 @@ func TestApp_servesDatastarJS(t *testing.T) {
 func TestApp_routes404ForUnknownPath(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.HandleFunc("/known", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("known"))
 	})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/unknown-path")
 	require.NoError(t, err)
@@ -47,15 +46,14 @@ func TestApp_routes404ForUnknownPath(t *testing.T) {
 func TestApp_handlesMultipleRoutes(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.HandleFunc("/first", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("first"))
 	})
 	app.HandleFunc("/second", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("second"))
 	})
-	defer server.Close()
 
 	resp1, err := server.Client().Get(server.URL + "/first")
 	require.NoError(t, err)
@@ -73,9 +71,8 @@ func TestApp_handlesMultipleRoutes(t *testing.T) {
 func TestApp_builtinEndpointsReject404OnUnknownTab(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	via.New(via.WithTestServer(&server))
-	t.Cleanup(func() { server.Close() })
+	app := via.New()
+	server := vt.Serve(t, app)
 
 	cases := []struct {
 		name string
@@ -113,10 +110,9 @@ func (customHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 func TestApp_Handle_routesCustomPath(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	app.Handle("/raw", customHandler{})
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/raw")
 	require.NoError(t, err)
@@ -159,9 +155,8 @@ func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
 	t.Parallel()
 
 	const N = 32
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
-	t.Cleanup(func() { server.Close() })
+	app := via.New()
+	server := vt.Serve(t, app)
 
 	var counter int32
 	var counterMu sync.Mutex
@@ -203,13 +198,11 @@ func TestUse_concurrentBootCallsKeepAllMiddlewareInChain(t *testing.T) {
 func TestApp_pluginRegistrationInjectsDocumentAndAppSignals(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithPlugins(signalSeedingPlugin{key: "_pluginKey", val: "seeded"}),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[pluginHostPage](app, "/")
-	defer server.Close()
 
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `data-plugin="active"`,

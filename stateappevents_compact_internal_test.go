@@ -119,8 +119,9 @@ func TestCompact_sequentialCompactionsAdvanceMonotonically(t *testing.T) {
 // or beyond the covered offset, or a cold start could not resume.
 func TestCompact_autoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -155,9 +156,10 @@ func TestCompact_autoCompactsTrailingTheDurableSnapshot(t *testing.T) {
 // to snapshot-only and never panics or wedges, leaving the prefix intact.
 func TestCompact_snapshotOnlyWhenBackendDeclines(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
 	bp := nonCompactingBackplane{InMemory()}
-	app := New(WithTestServer(&server), WithBackplane(bp), WithSnapshotInterval(1))
+	app := New(WithBackplane(bp), WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 

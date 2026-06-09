@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -19,10 +18,9 @@ import (
 func TestChat_messageFansOutAcrossSessions(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[Room](app, "/")
-	defer server.Close()
 
 	alice := vt.NewClient(t, server, "/")
 	bob := vt.NewClient(t, server, "/") // a different session
@@ -44,10 +42,9 @@ func TestChat_messageFansOutAcrossSessions(t *testing.T) {
 func TestChat_messagesAccumulateInOrder(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[Room](app, "/")
-	defer server.Close()
 
 	alice := vt.NewClient(t, server, "/")
 	require.Equal(t, http.StatusOK, alice.Action("Send").

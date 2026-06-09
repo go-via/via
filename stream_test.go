@@ -2,7 +2,6 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,13 +30,11 @@ func (p *streamPanicPage) View(ctx *via.CtxR) h.H { return h.Div(p.ticks.Text())
 func TestStream_callbackPanicDoesNotCrashServer(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithLogLevel(via.LogError),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[streamPanicPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSE()
@@ -75,10 +72,9 @@ func (p *clockPage) View(ctx *via.CtxR) h.H {
 func TestStream_pushesPeriodicUpdatesOverSSE(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[clockPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -91,10 +87,9 @@ func TestStream_pushesPeriodicUpdatesOverSSE(t *testing.T) {
 func TestStream_stopsWhenCtxDone(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[clockPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSE()
@@ -142,10 +137,9 @@ func (p *streamRacePage) View(ctx *via.CtxR) h.H {
 func TestStream_doesNotRaceWithConcurrentActions(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[streamRacePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSEReady()
@@ -190,10 +184,9 @@ func TestTicker_pauseStopsAndResumeRestartsCallback(t *testing.T) {
 	// the SSE stream; Resume restarts them. A regression where Pause
 	// leaked further ticks would show up as frames during the paused
 	// window.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tickerControlPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -229,10 +222,9 @@ func TestTicker_setIntervalChangesCadence(t *testing.T) {
 	// SetInterval must take effect on subsequent ticks. Start at 20ms,
 	// observe a tick, fire SpeedUp (10ms), assert several follow-up ticks
 	// arrive in a window that would be too short at the original cadence.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tickerControlPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -284,10 +276,9 @@ func TestTicker_stopPermanentlyTerminatesCallbacks(t *testing.T) {
 	// Stop must be terminal: Resume after Stop cannot revive the
 	// ticker. A regression that wired Stop to the same flag as Pause
 	// would let a stray Resume restart the stream.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[tickerStopPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()

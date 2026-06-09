@@ -34,8 +34,9 @@ func awaitConsumerCommitted(t *testing.T, bp Backplane, name, key string, off Of
 //
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventFiresPerAppendedEventWithOffsetAndLeavesFoldPure(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close() // stop the consumer + projector tailers when the test ends
 	ctx := context.Background()
@@ -78,8 +79,9 @@ func TestOnEventFiresPerAppendedEventWithOffsetAndLeavesFoldPure(t *testing.T) {
 //
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventResumesFromCommittedOffsetAfterRestart(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close() // stop the consumer + projector tailers when the test ends
 	ctx := context.Background()
@@ -103,7 +105,9 @@ func TestOnEventResumesFromCommittedOffsetAfterRestart(t *testing.T) {
 	awaitConsumerCommitted(t, app.backplane, "rec", "k", 3)
 
 	// Restart: a fresh App sharing the backplane, same consumer name.
-	appB := New(WithTestServer(&server), WithBackplane(app.backplane))
+	appB := New(WithBackplane(app.backplane))
+	serverB := httptest.NewServer(appB)
+	t.Cleanup(serverB.Close)
 	var mu sync.Mutex
 	var offs []int
 	var hB StateAppEvents[envEv, []int]
@@ -132,8 +136,9 @@ func TestOnEventResumesFromCommittedOffsetAfterRestart(t *testing.T) {
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventRetriesFailedEventInOrderWithoutAdvancing(t *testing.T) {
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close() // stop the consumer + projector tailers when the test ends
 	ctx := context.Background()
@@ -179,8 +184,9 @@ func TestOnEventRetriesFailedEventInOrderWithoutAdvancing(t *testing.T) {
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventBlocksOnForwardIncompatibleRecord(t *testing.T) {
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close()
 	ctx := context.Background()
@@ -214,11 +220,12 @@ func TestOnEventBlocksOnForwardIncompatibleRecord(t *testing.T) {
 func TestOnEventAdoptsPeerOffsetOnCommitConflict(t *testing.T) {
 	bp := InMemory()
 	defer bp.Close()
-	var serverA, serverB *httptest.Server
-	appA := New(WithTestServer(&serverA), WithBackplane(bp))
-	defer serverA.Close()
-	appB := New(WithTestServer(&serverB), WithBackplane(bp))
-	defer serverB.Close()
+	appA := New(WithBackplane(bp))
+	serverA := httptest.NewServer(appA)
+	t.Cleanup(serverA.Close)
+	appB := New(WithBackplane(bp))
+	serverB := httptest.NewServer(appB)
+	t.Cleanup(serverB.Close)
 	ctx := context.Background()
 
 	var fires int32
@@ -265,8 +272,9 @@ func TestOnEventAdoptsPeerOffsetOnCommitConflict(t *testing.T) {
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestOnEventSkipsPoisonRecordAndAdvances(t *testing.T) {
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close() // stop the consumer + projector tailers when the test ends
 	ctx := context.Background()
@@ -308,8 +316,9 @@ func TestOnEventSkipsPoisonRecordAndAdvances(t *testing.T) {
 //
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestCompactionFloorRespectsSlowConsumer(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close() // stop the consumer + projector tailers when the test ends
 	ctx := context.Background()
@@ -359,8 +368,9 @@ func TestCompactionFloorRespectsSlowConsumer(t *testing.T) {
 //
 //nolint:paralleltest // timing-sensitive consumer/compaction convergence; serialized to avoid load-induced flakes
 func TestCompactionAdvancesWhenConsumerKeepsUp(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	defer app.backplane.Close()
 	ctx := context.Background()

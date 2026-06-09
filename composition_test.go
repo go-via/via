@@ -2,11 +2,11 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,10 +22,9 @@ func (c *simpleCounter) View(ctx *via.CtxR) h.H {
 func TestMount_rendersComposition(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[simpleCounter](app, "/counter")
-	defer server.Close()
 
 	body := getBody(t, server, "/counter")
 	assert.Contains(t, body, "<div>")
@@ -34,10 +33,9 @@ func TestMount_rendersComposition(t *testing.T) {
 func TestMount_renders404OnUnknownRoute(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[simpleCounter](app, "/counter")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/unknown")
 	defer func() { _ = resp.Body.Close() }()
@@ -146,10 +144,9 @@ func (p *pathParamPage) View(ctx *via.CtxR) h.H {
 func TestMount_decodesPathParamsIntoTaggedFields(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[pathParamPage](app, "/u/{id}/posts/{slug}")
-	defer server.Close()
 
 	body := getBody(t, server, "/u/42/posts/hello")
 	assert.Contains(t, body, "user=42", "path param int decoded into typed field")

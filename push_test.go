@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -36,10 +35,9 @@ func (p *syncPage) View(ctx *via.CtxR) h.H {
 func TestSyncElements_pushesManualPatchOverSSE(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -76,10 +74,9 @@ func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
 func TestPatchSignal_pushesKeyedValueToClient(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()

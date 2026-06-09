@@ -2,13 +2,13 @@ package echarts_test
 
 import (
 	"io"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/echarts"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,13 +20,11 @@ func (p *echartsPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestPlugin_appendsCDNScriptToHead(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(echarts.Plugin()),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[echartsPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -40,13 +38,11 @@ func TestPlugin_appendsCDNScriptToHead(t *testing.T) {
 func TestPlugin_WithSource_replacesCDNURLEntirely(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(echarts.Plugin(echarts.WithSource("/static/echarts.min.js"))),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[echartsPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -63,16 +59,14 @@ func TestPlugin_WithSource_replacesCDNURLEntirely(t *testing.T) {
 func TestPlugin_WithSource_winsOverWithVersion(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(echarts.Plugin(
 			echarts.WithVersion("5.4.3"),
 			echarts.WithSource("/custom/echarts.js"),
 		)),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[echartsPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
@@ -94,13 +88,11 @@ func TestPlugin_WithSource_winsOverWithVersion(t *testing.T) {
 func TestPlugin_versionOverridable(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(echarts.Plugin(echarts.WithVersion("5.4.3"))),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[echartsPage](app, "/")
-	defer server.Close()
 
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)

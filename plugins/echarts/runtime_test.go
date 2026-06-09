@@ -1,7 +1,6 @@
 package echarts_test
 
 import (
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -137,8 +136,8 @@ func (p *chartActionPage) View(ctx *via.CtxR) h.H {
 func fireChartAction(t *testing.T, action string, needles ...string) {
 	t.Helper()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[chartActionPage](app, "/")
 	t.Cleanup(server.Close)
 
@@ -175,10 +174,9 @@ func TestChartAPI_AppendData_emitsAppendDataCall(t *testing.T) {
 func TestChartAPI_AppendData_emptyDataIsNoop(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[chartActionPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -366,10 +364,8 @@ func (p *badChartPage) View(ctx *via.CtxR) h.H {
 
 func fireBadChartAction(t *testing.T, action string) (<-chan string, error) {
 	t.Helper()
-	var server *httptest.Server
 	errs := make(chan error, 1)
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithActionErrorHandler(func(_ *via.Ctx, err error) {
 			select {
 			case errs <- err:
@@ -377,6 +373,7 @@ func fireBadChartAction(t *testing.T, action string) (<-chan string, error) {
 			}
 		}),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[badChartPage](app, "/")
 	t.Cleanup(server.Close)
 

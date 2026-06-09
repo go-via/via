@@ -41,8 +41,9 @@ func compactedKeyWithMismatchedSnapshot(t *testing.T, app *App, key, oldHash str
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestMigrate_marksCheckpointCompactedAfterDiscardingPrefix(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithSnapshotInterval(1))
+	app := New(WithSnapshotInterval(1))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -87,8 +88,9 @@ func TestMigrate_runsSeededMigrationOnCodecMismatch(t *testing.T) {
 	})
 	defer deleteSnapMigration(oldHash)
 
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	compactedKeyWithMismatchedSnapshot(t, app, "k", oldHash, []int{10, 20, 30, 40, 50})
 
@@ -119,8 +121,9 @@ func TestMigrate_runsSeededMigrationOnCodecMismatch(t *testing.T) {
 func TestMigrate_haltsWhenNoMigrationRegistered(t *testing.T) {
 	const oldHash = "p5c.test.unbridgeable.oldhash" // never registered
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	compactedKeyWithMismatchedSnapshot(t, app, "k", oldHash, []int{10, 20, 30, 40, 50})
 
@@ -152,8 +155,9 @@ func TestMigrate_haltsWhenMigrationErrors(t *testing.T) {
 	})
 	defer deleteSnapMigration(oldHash)
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	compactedKeyWithMismatchedSnapshot(t, app, "k", oldHash, []int{10, 20, 30})
 
@@ -172,8 +176,9 @@ func TestMigrate_haltsWhenMigrationErrors(t *testing.T) {
 //
 //nolint:paralleltest // mutates the process-global snapshot-migration registry
 func TestMigrate_uncompactedKeyRefoldsFromGenesisOnMismatch(t *testing.T) {
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 	for i := 1; i <= 5; i++ {

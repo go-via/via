@@ -2,12 +2,12 @@ package maplibre_test
 
 import (
 	"io"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/maplibre"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,11 +21,10 @@ func (p *maplibrePage) View(ctx *via.CtxR) h.H { return h.Div() }
 func servePage(t *testing.T, opts ...maplibre.PluginOption) string {
 	t.Helper()
 
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(maplibre.Plugin(opts...)),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[maplibrePage](app, "/")
 	t.Cleanup(server.Close)
 

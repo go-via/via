@@ -81,8 +81,9 @@ func bindLog(app *App, key string) func(any, []byte) (any, error) {
 // halts rather than mis-folds a future event).
 func TestFoldBytesClassifiesEnvelopeByVersion(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	fold := bindLog(app, "k")
 
@@ -138,8 +139,9 @@ func logCursor(app *App, key string) Offset {
 func TestProjectorSkipsPoisonRecordAndKeepsFolding(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 	ctx := context.Background()
@@ -167,8 +169,9 @@ func TestProjectorSkipsPoisonRecordAndKeepsFolding(t *testing.T) {
 func TestProjectorHaltsOnForwardIncompatibleRecord(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithMetrics(spy))
+	app := New(WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 	ctx := context.Background()
@@ -222,8 +225,9 @@ func TestRegisteredUpcasterMigratesOldRecordsBeforeFold(t *testing.T) {
 	// Registration bumped the current version of `renamed` to 2.
 	require.Equal(t, 2, currentVersionFor[renamed](), "one 1→2 upcaster makes the current version 2")
 
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	var h StateAppEvents[renamed, []string]
 	h.bindWireKey("r")
@@ -332,8 +336,9 @@ func TestMultiStepUpcasterChainRunsEveryStep(t *testing.T) {
 	})
 	require.Equal(t, 3, currentVersionFor[multiEv](), "two chained upcasters make the current version 3")
 
-	var server *httptest.Server
-	app := New(WithTestServer(&server))
+	app := New()
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	var h StateAppEvents[multiEv, []string]
 	h.bindWireKey("m")

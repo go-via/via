@@ -9,6 +9,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/plugins/picocss"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,8 +23,8 @@ func renderPage(t *testing.T, opts ...picocss.PicoOption) string {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(picocss.Plugin(opts...)), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(picocss.Plugin(opts...)))
+	server := vt.Serve(t, app)
 	via.Mount[emptyPage](app, "/")
 	t.Cleanup(server.Close)
 	resp, err := server.Client().Get(server.URL + "/")
@@ -52,13 +53,11 @@ func TestPicocss_servesThemeCSS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
 	app := via.New(
 		via.WithPlugins(picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue}))),
-		via.WithTestServer(&server),
 	)
+	server := vt.Serve(t, app)
 	_ = app
-	defer server.Close()
 	resp, err := server.Client().Get(server.URL + "/_plugins/picocss/theme/blue")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -71,12 +70,10 @@ func picoBlueServer(t *testing.T) *httptest.Server {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	_ = via.New(
+	app := via.New(
 		via.WithPlugins(picocss.Plugin(picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue}))),
-		via.WithTestServer(&server),
 	)
-	t.Cleanup(func() { server.Close() })
+	server := vt.Serve(t, app)
 	return server
 }
 
@@ -135,8 +132,8 @@ func renderPageBody(t *testing.T, opts ...picocss.PicoOption) string {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	app := via.New(via.WithPlugins(picocss.Plugin(opts...)), via.WithTestServer(&server))
+	app := via.New(via.WithPlugins(picocss.Plugin(opts...)))
+	server := vt.Serve(t, app)
 	via.Mount[emptyPage](app, "/")
 	t.Cleanup(server.Close)
 	resp, err := server.Client().Get(server.URL + "/")
@@ -161,15 +158,13 @@ func TestPicocss_WithClassless_swapsAssetPath(t *testing.T) {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	via.New(
+	app := via.New(
 		via.WithPlugins(picocss.Plugin(
 			picocss.WithThemes([]picocss.PicoTheme{picocss.PicoThemeBlue}),
 			picocss.WithClassless(),
 		)),
-		via.WithTestServer(&server),
 	)
-	defer server.Close()
+	server := vt.Serve(t, app)
 	resp, err := server.Client().Get(server.URL + "/_plugins/picocss/theme/classless/blue")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -182,12 +177,10 @@ func TestPicocss_WithColorClasses_servesUtilityCSS(t *testing.T) {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	via.New(
+	app := via.New(
 		via.WithPlugins(picocss.Plugin(picocss.WithColorClasses())),
-		via.WithTestServer(&server),
 	)
-	defer server.Close()
+	server := vt.Serve(t, app)
 	resp, err := server.Client().Get(server.URL + "/_plugins/picocss/color-classes")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -201,12 +194,10 @@ func colorClassesServer(t *testing.T) *httptest.Server {
 	if testing.Short() {
 		t.Skip("plugin test reaches the picocss CDN; skipped under -short")
 	}
-	var server *httptest.Server
-	_ = via.New(
+	app := via.New(
 		via.WithPlugins(picocss.Plugin(picocss.WithColorClasses())),
-		via.WithTestServer(&server),
 	)
-	t.Cleanup(func() { server.Close() })
+	server := vt.Serve(t, app)
 	return server
 }
 

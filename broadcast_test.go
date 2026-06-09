@@ -46,10 +46,9 @@ func awaitNeedleOnAll(t *testing.T, frames []<-chan string, needle string, timeo
 func TestBroadcast_pushesScriptToEveryLiveTab(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[broadcastPage](app, "/")
-	defer server.Close()
 
 	frames, cancel := openSSEStreams(t, server, "/", 3)
 	defer cancel()
@@ -63,10 +62,9 @@ func TestBroadcast_pushesScriptToEveryLiveTab(t *testing.T) {
 func TestBroadcastSignals_pushesPatchToEveryLiveTab(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[broadcastPage](app, "/")
-	defer server.Close()
 
 	frames, cancel := openSSEStreams(t, server, "/", 2)
 	defer cancel()
@@ -80,10 +78,9 @@ func TestBroadcastSignals_pushesPatchToEveryLiveTab(t *testing.T) {
 func TestBroadcastSignals_emptyMapIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[broadcastPage](app, "/")
-	defer server.Close()
 
 	_ = vt.NewClient(t, server, "/")
 	assert.Equal(t, 0, app.BroadcastSignals(nil),
@@ -95,10 +92,9 @@ func TestBroadcastSignals_emptyMapIsNoOp(t *testing.T) {
 func TestBroadcast_emptyIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[broadcastPage](app, "/")
-	defer server.Close()
 
 	_ = vt.NewClient(t, server, "/")
 	assert.Equal(t, 0, app.Broadcast(""),

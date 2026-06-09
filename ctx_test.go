@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -33,10 +32,9 @@ func (p *cookieEchoPage) View(ctx *via.CtxR) h.H {
 func TestCookie_readsValueFromRequest(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cookieEchoPage](app, "/")
-	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.AddCookie(&http.Cookie{Name: "flavor", Value: "mint"})
@@ -75,10 +73,9 @@ func (p *cookieWritePage) View(ctx *via.CtxR) h.H {
 func TestSetCookie_writesCookieReadableOnNextAction(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cookieWritePage](app, "/")
-	defer server.Close()
 
 	// vt's client shares a cookie jar: a cookie SetCookie writes on one
 	// action's response is sent back on the next request, where ctx.Cookie
@@ -95,10 +92,9 @@ func TestSetCookie_writesCookieReadableOnNextAction(t *testing.T) {
 func TestDelCookie_clearsCookieForNextAction(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[cookieWritePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -127,10 +123,9 @@ func (s *searchPage) View(ctx *via.CtxR) h.H {
 func TestQuery_decodesIntoTaggedFields(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[searchPage](app, "/search")
-	defer server.Close()
 
 	body := getBody(t, server, "/search?"+url.Values{
 		"q":     {"hello"},
@@ -145,10 +140,9 @@ func TestQuery_decodesIntoTaggedFields(t *testing.T) {
 func TestQuery_missingFieldsKeepZeroValue(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[searchPage](app, "/search")
-	defer server.Close()
 
 	body := getBody(t, server, "/search")
 	assert.Contains(t, body, `q=&#34;&#34;`)
@@ -174,10 +168,9 @@ func (p *sessionProbePage) View(*via.CtxR) h.H { return h.Div() }
 func TestCtx_Session_isPopulatedOnHTTPDrivenAction(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[sessionProbePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -212,13 +205,11 @@ func TestContextSweep_disposesIdleTabAfterTTL(t *testing.T) {
 	t.Parallel()
 	sweepDisposed.Store(false)
 
-	var server *httptest.Server
 	// A plain GET registers a Ctx but never opens an SSE stream, so
 	// connected stays 0 and the idle sweep reclaims it after the TTL.
-	app := via.New(via.WithTestServer(&server),
-		via.WithContextTTL(40*time.Millisecond))
+	app := via.New(via.WithContextTTL(40 * time.Millisecond))
+	server := vt.Serve(t, app)
 	via.Mount[sweepDisposePage](app, "/")
-	defer server.Close()
 
 	// A plain GET registers an idle Ctx; with no SSE or action to touch it,
 	// the background TTL sweep (every contextTTL/2) must remove and dispose
@@ -262,10 +253,9 @@ func TestOnConnect_ctxIsLiveAndDoneIsOpen(t *testing.T) {
 	disposedFalseInsideOnConnect.Store(false)
 	doneOpenInsideOnConnect.Store(false)
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[connectStateCheck](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -299,10 +289,9 @@ func TestDone_channelClosedInsideOnDispose(t *testing.T) {
 	// ctx.doneChan before invoking the user's OnDispose, so a select
 	// on ctx.Done() returns immediately throughout the callback body.
 	doneChanClosedInsideOnDispose.Store(false)
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[doneSelfCheck](app, "/")
-	defer server.Close()
 
 	_ = vt.NewClient(t, server, "/")
 	require.NoError(t, app.Shutdown(context.Background()))
@@ -328,10 +317,9 @@ func TestDisposed_trueInsideOnDispose(t *testing.T) {
 	// the user's OnDispose. The user contract is "ctx.Disposed() returns
 	// true throughout the OnDispose body" — pin it.
 	disposedFlagSeenInsideOnDispose.Store(false)
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[disposedSelfCheck](app, "/")
-	defer server.Close()
 
 	_ = vt.NewClient(t, server, "/")
 	require.NoError(t, app.Shutdown(context.Background()))
@@ -345,10 +333,9 @@ func TestDispose_runsOnAppShutdown(t *testing.T) {
 	t.Parallel()
 
 	disposed.Store(0)
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[disposable](app, "/")
-	defer server.Close()
 
 	_ = vt.NewClient(t, server, "/")
 
@@ -445,10 +432,9 @@ func (p *ctxScriptPage) View(ctx *via.CtxR) h.H { return h.Div() }
 func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -461,10 +447,9 @@ func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 func TestCtx_Toast_rendersStyledToastNotAlert(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -483,10 +468,9 @@ func TestCtx_Toast_injectsMessageAsJSStringLiteral(t *testing.T) {
 	// engine parses a string literal. Catches a regression where Toast
 	// interpolated the raw message into the script and let it break out
 	// of the string context.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -505,10 +489,9 @@ func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
 	// inert JSON string literal, never as live markup. The test inspects
 	// the emitted frame (not the DOM): a SetEscapeHTML(false) regression
 	// would surface a literal "<img" here and fail the assertion.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -527,10 +510,9 @@ func TestCtx_Toast_cannotBreakOutOfTheScriptElement(t *testing.T) {
 	// element-breakout vector. json.Marshal escapes < and >, so the
 	// sequence can't appear verbatim and the message stays inside the
 	// script.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -545,10 +527,9 @@ func TestCtx_Toast_cannotBreakOutOfTheScriptElement(t *testing.T) {
 func TestCtx_Redirect_emitsRedirectFrame(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxScriptPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -573,10 +554,9 @@ func TestCtx_Redirect_allowsSafeURLs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var server *httptest.Server
-			app := via.New(via.WithTestServer(&server))
+			app := via.New()
+			server := vt.Serve(t, app)
 			via.Mount[redirectPage](app, "/")
-			defer server.Close()
 
 			tc := vt.NewClient(t, server, "/")
 			frames, cancel := tc.SSEReady()
@@ -613,10 +593,9 @@ func TestCtx_Redirect_dropsDangerousURLs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			var server *httptest.Server
-			app := via.New(via.WithTestServer(&server))
+			app := via.New()
+			server := vt.Serve(t, app)
 			via.Mount[redirectPage](app, "/")
-			defer server.Close()
 
 			tc := vt.NewClient(t, server, "/")
 			frames, cancel := tc.SSEReady()
@@ -665,10 +644,9 @@ func (p *syncOffPage) View(ctx *via.CtxR) h.H {
 func TestSyncOff_skipsEndOfActionFlush(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -704,10 +682,9 @@ func TestSyncOff_skipsStateAppBroadcastAcrossSessions(t *testing.T) {
 	// siblings. The sibling-tab test (same session via Fork) doesn't
 	// cover this fan-out scope, so we exercise it directly with two
 	// distinct sessions.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffAppPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/") // different session
@@ -728,10 +705,9 @@ func TestSyncOff_skipsStateAppBroadcastAcrossSessions(t *testing.T) {
 func TestSyncOff_skipsBroadcastToSiblingTabs(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := a.Fork("/")
@@ -752,10 +728,9 @@ func TestSyncOff_skipsBroadcastToSiblingTabs(t *testing.T) {
 func TestSyncOff_writesPersistAndSurfaceOnNextLoudAction(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -771,10 +746,9 @@ func TestSyncOff_writesPersistAndSurfaceOnNextLoudAction(t *testing.T) {
 func TestSyncOff_dirtyBitsDoNotLeakIntoNextActionFlush(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -833,10 +807,9 @@ func (p *syncOffStreamPage) View(ctx *via.CtxR) h.H {
 func TestSyncOff_suppressesStreamTickPublish(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffStreamPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSE()
@@ -895,10 +868,9 @@ func TestSyncOff_doesNotRaceWithRawGoroutineUpdate(t *testing.T) {
 	// ctx.silent without holding actionMu, while a parallel action
 	// resets the flag at entry. Plain-bool implementation tripped -race;
 	// atomic.Bool keeps the contract goroutine-safe.
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[syncOffRacePage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	_, cancel := tc.SSEReady()
@@ -930,13 +902,11 @@ func TestSyncOff_panicErrorToastStillReachesClient(t *testing.T) {
 	// patch queue. SyncOff suppresses dirty-bit flushes but must not
 	// swallow explicit publish primitives — otherwise a panicking
 	// silent action would fail without any user-visible signal.
-	var server *httptest.Server
 	app := via.New(
-		via.WithTestServer(&server),
 		via.WithLogLevel(via.LogError),
 	)
+	server := vt.Serve(t, app)
 	via.Mount[syncOffPanicPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -986,10 +956,9 @@ func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			var server *httptest.Server
-			app := via.New(via.WithTestServer(&server))
+			app := via.New()
+			server := vt.Serve(t, app)
 			via.Mount[syncOffExplicitPage](app, "/")
-			defer server.Close()
 
 			tc := vt.NewClient(t, server, "/")
 			frames, cancel := tc.SSEReady()
@@ -1019,10 +988,9 @@ func (p *ctxRPage) View(ctx *via.CtxR) h.H {
 func TestCtxR_ViewSignature_mountsAndRenders(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxRPage](app, "/")
-	defer server.Close()
 
 	body := vt.NewClient(t, server, "/").HTML()
 	assert.Contains(t, body, `<span id="hits">0</span>`,
@@ -1042,10 +1010,9 @@ func (p *ctxRAccessorsPage) View(ctx *via.CtxR) h.H {
 
 func TestCtxR_ExposesIDAndCookieReadsToView(t *testing.T) {
 	t.Parallel()
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[ctxRAccessorsPage](app, "/")
-	defer server.Close()
 
 	req, _ := http.NewRequest("GET", server.URL+"/", nil)
 	req.AddCookie(&http.Cookie{Name: "flavor", Value: "mint"})

@@ -48,12 +48,13 @@ func TestErasedSubjectIsCryptoShreddedFromTheLog(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
 	// No snapshot interval: this test asserts crypto-shred from the LOG itself, so
 	// the log must stay intact (snapshotting at interval 1 would also COMPACT it,
 	// discarding alice's first record by truncation rather than by erasure — the
 	// compaction+erasure interaction is a separate, documented v1 follow-up).
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindPII(app, "k")
 	ctx := context.Background()
@@ -77,8 +78,9 @@ func TestErasedSubjectIsCryptoShreddedFromTheLog(t *testing.T) {
 	// A fresh pod cold-starting from the SAME log + keystore must fold to bob's
 	// data only — alice's events are now undecryptable and dropped.
 	spy := &spyMetrics{}
-	var server2 *httptest.Server
-	app2 := New(WithTestServer(&server2), WithBackplane(bp), WithKeyStore(ks), WithMetrics(spy))
+	app2 := New(WithBackplane(bp), WithKeyStore(ks), WithMetrics(spy))
+	server2 := httptest.NewServer(app2)
+	t.Cleanup(server2.Close)
 	defer server2.Close()
 	bindPII(app2, "k")
 
@@ -102,15 +104,17 @@ func TestEncryptedRecordWithoutKeyStoreIsDropped(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindPII(app, "k")
 	appendEvent(t, app, "k", pii{"alice", "s"})
 
 	spy := &spyMetrics{}
-	var server2 *httptest.Server
-	app2 := New(WithTestServer(&server2), WithBackplane(bp), WithMetrics(spy)) // no keystore
+	app2 := New(WithBackplane(bp), WithMetrics(spy)) // no keystore
+	server2 := httptest.NewServer(app2)
+	t.Cleanup(server2.Close)
 	defer server2.Close()
 	bindPII(app2, "k")
 
@@ -127,8 +131,9 @@ func TestNonDataSubjectEventsStayPlaintext(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k") // envEv does not implement DataSubject
 	if _, err := app.backplane.Append(context.Background(), "k", goodEnv(t, envEv{N: 42})); err != nil {
@@ -161,8 +166,9 @@ func TestConsumerSkipsErasedEvent(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -176,8 +182,9 @@ func TestConsumerSkipsErasedEvent(t *testing.T) {
 	// A fresh consumer tailing from genesis re-delivers both records: alice's is
 	// now undecryptable (skipped, metered), bob's still fires.
 	spy := &spyMetrics{}
-	var server2 *httptest.Server
-	app2 := New(WithTestServer(&server2), WithBackplane(bp), WithKeyStore(ks), WithMetrics(spy))
+	app2 := New(WithBackplane(bp), WithKeyStore(ks), WithMetrics(spy))
+	server2 := httptest.NewServer(app2)
+	t.Cleanup(server2.Close)
 	defer server2.Close()
 	var hdl StateAppEvents[pii, []string]
 	hdl.bindWireKey("k")
@@ -260,8 +267,9 @@ func TestEraseDataSubjectRequiresKeyStore(t *testing.T) {
 	t.Parallel()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp)) // no keystore
+	app := New(WithBackplane(bp)) // no keystore
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	require.Error(t, app.EraseDataSubject(context.Background(), "alice"),
 		"EraseDataSubject without WithKeyStore must error")
@@ -276,8 +284,9 @@ func TestEraseDataSubjectBumpsDurableGeneration(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	ctx := context.Background()
 
@@ -296,8 +305,9 @@ func TestEraseDataSubjectConcurrentBumpsAllLand(t *testing.T) {
 	ks := InMemoryKeyStore()
 	bp := InMemory()
 	defer bp.Close()
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithKeyStore(ks))
+	app := New(WithBackplane(bp), WithKeyStore(ks))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 
 	const n = 16
@@ -337,8 +347,9 @@ func TestErasureInvalidatedCompactedSnapshotHaltsInsteadOfTruncating(t *testing.
 	}
 
 	spy := &spyMetrics{}
-	var server *httptest.Server
-	app := New(WithTestServer(&server), WithBackplane(bp), WithMetrics(spy))
+	app := New(WithBackplane(bp), WithMetrics(spy))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
 	defer server.Close()
 	bindLog(app, "k")
 

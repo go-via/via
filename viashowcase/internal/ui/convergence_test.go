@@ -42,12 +42,12 @@ func TestVoteFoldsIntoProjectionAcrossApps(t *testing.T) {
 	shared := via.InMemory()
 
 	var srvA, srvB *httptest.Server
-	appA := via.New(via.WithTestServer(&srvA), via.WithBackplane(shared))
+	appA := via.New(via.WithBackplane(shared))
+	srvA := vt.Serve(t, appA)
 	via.Mount[probe](appA, "/")
-	defer srvA.Close()
-	appB := via.New(via.WithTestServer(&srvB), via.WithBackplane(shared))
+	appB := via.New(via.WithBackplane(shared))
+	srvB := vt.Serve(t, appB)
 	via.Mount[probe](appB, "/")
-	defer srvB.Close()
 
 	// Sanity: B starts with no votes.
 	require.Contains(t, vt.NewClient(t, srvB, "/").HTML(), "blue=0")
@@ -66,10 +66,9 @@ func TestVoteFoldsIntoProjectionAcrossApps(t *testing.T) {
 // (read-your-write is eventual but must land).
 func TestVoteFoldsIntoProjectionSameApp(t *testing.T) {
 	t.Parallel()
-	var srv *httptest.Server
-	app := via.New(via.WithTestServer(&srv), via.WithBackplane(via.InMemory()))
+	app := via.New(via.WithBackplane(via.InMemory()))
+	srv := vt.Serve(t, app)
 	via.Mount[probe](app, "/")
-	defer srv.Close()
 
 	a := vt.NewClient(t, srv, "/")
 	require.Equal(t, http.StatusOK, a.Action("Cast").WithSignal("draft", "blue").Fire())

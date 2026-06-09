@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -392,9 +391,6 @@ func New(opts ...Option) *App {
 		}
 	}
 
-	if a.cfg.testServer != nil {
-		*a.cfg.testServer = httptest.NewServer(a.handler)
-	}
 	return a
 }
 

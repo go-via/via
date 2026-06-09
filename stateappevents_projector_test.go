@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -39,10 +38,9 @@ func (p *feedPage) View(ctx *via.CtxR) h.H {
 func TestStateAppEvents_readProjectsZeroValueBeforeAnyAppend(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[feedPage](app, "/")
-	defer server.Close()
 
 	c := vt.NewClient(t, server, "/")
 	assert.Contains(t, c.HTML(), `<div id="feed"></div>`,
@@ -56,10 +54,9 @@ func TestStateAppEvents_readProjectsZeroValueBeforeAnyAppend(t *testing.T) {
 func TestStateAppEvents_appendedEventFoldsAndReachesALiveSubscriber(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[feedPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	b := vt.NewClient(t, server, "/")
@@ -77,10 +74,9 @@ func TestStateAppEvents_appendedEventFoldsAndReachesALiveSubscriber(t *testing.T
 func TestStateAppEvents_projectionIsAppScopedAndOutlivesTheWriter(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[feedPage](app, "/")
-	defer server.Close()
 
 	a := vt.NewClient(t, server, "/")
 	require.Equal(t, 200, a.Action("Add").Fire())
@@ -109,10 +105,9 @@ func (p *textFeedPage) View(ctx *via.CtxR) h.H {
 func TestStateAppEvents_textRendersTheProjectedValue(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[textFeedPage](app, "/")
-	defer server.Close()
 
 	c := vt.NewClient(t, server, "/")
 	assert.Contains(t, c.HTML(), `<div id="t">[]</div>`,

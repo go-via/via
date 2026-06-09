@@ -52,10 +52,9 @@ func (p *formPage) View(ctx *via.CtxR) h.H {
 func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -71,10 +70,9 @@ func TestDecodeForm_readsSignalsIntoTaggedStruct(t *testing.T) {
 func TestDecodeForm_decodesBoolSignalIntoTypedField(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formFallbackPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -116,10 +114,9 @@ func (p *numericFormPage) View(ctx *via.CtxR) h.H { return h.Div(p.Captured.Text
 func TestDecodeForm_decodesUintAndFloatSignals(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[numericFormPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -155,10 +152,9 @@ func (p *formNoTag) View(ctx *via.CtxR) h.H { return h.Div(p.Captured.Text(ctx))
 func TestDecodeForm_defaultsKeyToLowercasedFieldName(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formNoTag](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -275,10 +271,9 @@ func (c *rawTabClient) OpenSSEReady() (<-chan string, func()) {
 func TestDecodeForm_fallsBackToURLQueryWhenSignalAbsent(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formFallbackPage](app, "/")
-	defer server.Close()
 
 	c := newRawTabClient(t, server, "/")
 	frames, cancel := c.OpenSSEReady()
@@ -295,10 +290,9 @@ func TestDecodeForm_fallsBackToURLQueryWhenSignalAbsent(t *testing.T) {
 func TestDecodeForm_signalPayloadWinsOverQuery(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formFallbackPage](app, "/")
-	defer server.Close()
 
 	c := newRawTabClient(t, server, "/")
 	frames, cancel := c.OpenSSEReady()
@@ -314,10 +308,9 @@ func TestDecodeForm_signalPayloadWinsOverQuery(t *testing.T) {
 func TestDecodeForm_unparseableValueLeavesFieldZero(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[formFallbackPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
@@ -365,10 +358,9 @@ func (p *unexportedFieldPage) View(ctx *via.CtxR) h.H {
 func TestDecodeForm_skipsUnexportedFieldsAndLeavesMissingKeysZero(t *testing.T) {
 	t.Parallel()
 
-	var server *httptest.Server
-	app := via.New(via.WithTestServer(&server))
+	app := via.New()
+	server := vt.Serve(t, app)
 	via.Mount[unexportedFieldPage](app, "/")
-	defer server.Close()
 
 	tc := vt.NewClient(t, server, "/")
 	frames, cancel := tc.SSEReady()
