@@ -8,15 +8,45 @@ package via
 // The default implementation is [noopMetrics], which discards every
 // event — apps that don't configure metrics pay no allocation cost.
 //
-// Event catalogue:
+// Event catalogue (every name via emits; keep in sync with the call sites):
 //
-//   - "via.action.total"      counter, labels: method, status
+// Actions & render:
+//   - "via.action.total"      counter, labels: method
 //   - "via.action.latency"    histogram (seconds), labels: method
-//   - "via.render.total"      counter, labels: route, status
-//   - "via.sse.connect"       counter — incremented on each successful handshake
+//   - "via.render.total"      counter, labels: route
+//
+// SSE lifecycle:
+//   - "via.sse.connect"       counter — each successful handshake
 //   - "via.sse.disconnect"    counter, labels: reason ("client", "shutdown")
-//   - "via.ctx.reap"          counter, labels: reason ("ttl", "shutdown")
+//   - "via.sse.recover"       counter, labels: mode ("reload", "rebootstrap")
+//   - "via.sse.resync"        counter — a tab re-synced its signal state
+//
+// Tab (Ctx) lifecycle:
 //   - "via.ctx.live"          gauge — current registered tab count
+//   - "via.ctx.reap"          counter, labels: reason ("ttl", "shutdown")
+//
+// Event-log projection (StateAppEvents projector), all labelled by key:
+//   - "via.events.epoch_reset"           counter — stream generation reset, re-folded
+//   - "via.events.forward_incompatible"  counter — record from a newer binary; key halted
+//   - "via.events.erased"                counter — crypto-shred-erased payload, skipped
+//   - "via.events.undecodable"           counter — poison record, skipped
+//   - "via.events.compaction_reseed"     counter — gap recovered from a bridging snapshot
+//   - "via.events.compaction_gap_halt"   counter — unbridgeable compacted gap; key halted
+//
+// Fold-divergence canary:
+//   - "via.fold.offset"       gauge, labels: key — applied offset after each fold
+//   - "via.fold.digest"       gauge, labels: key, offset — projection digest at that offset
+//   - "via.fold.divergence"   counter, labels: key — WithFoldVerify saw an impure fold
+//
+// Snapshot cold-start:
+//   - "via.snapshot.unbridgeable"  counter, labels: key — compacted snapshot, no migration; halted
+//   - "via.snapshot.erasure_halt"  counter, labels: key — compacted snapshot invalidated by erasure; halted
+//
+// Side-effect consumers (OnEvent), all labelled by name, key:
+//   - "via.consumer.forward_incompatible"  counter — record from a newer binary
+//   - "via.consumer.erased"                counter — erased payload, skipped
+//   - "via.consumer.undecodable"           counter — poison record, skipped
+//   - "via.consumer.error"                 counter — the consumer callback returned an error
 //
 // Labels are passed as flat key,value pairs to keep the call site
 // allocation-free in the noop path.

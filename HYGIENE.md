@@ -203,3 +203,19 @@ infrastructure).
 
 Result: gofmt clean; `go vet` + `go test -race .` green.
 
+
+## Council queue (charted by the hygiene-council workflow, ranked do-now)
+
+### Q1 — fix metrics.go catalogue (phantom labels + missing names)
+
+What: the godoc catalogue documented a `status` label on `via.action.total` /
+`via.render.total` that no call site emits (action.go emits only `method`,
+render.go only `route`), and listed just 7 of the 24 emitted `via.*` names.
+Rewrote the catalogue to the full, grouped, accurate set and dropped the phantom
+`status` labels.
+
+Why: it is the doc ops teams read first; a phantom label and 17 undocumented
+metrics are an honesty bug (same class as the earlier disconnect-reason fix).
+
+Result: documented set now reconciles exactly against emit sites (both
+set-diffs empty); doc-only, `go build ./...` green.
