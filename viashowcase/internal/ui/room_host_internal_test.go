@@ -35,16 +35,16 @@ func TestBuildNoticeScript_safeAcrossMaliciousTitles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			script := buildNoticeScript("ROOMCODE", tt.title)
-			// The dynamic values travel as the arguments of a function-call
-			// IIFE, JSON-parsed at the call site — isolated data segments, never
-			// dropped between two raw JS string fragments. This is the shape
-			// CodeQL's "potentially unsafe quoting" rule accepts.
+			// The dynamic values travel as the arguments of a function-call IIFE,
+			// each a json.Marshal'd JS string literal passed directly (NOT wrapped
+			// in JSON.parse — the marshaled value is already a JS string, so
+			// JSON.parse would try to parse the decoded text as JSON and throw).
 			require.True(t, strings.HasPrefix(script, "(function(code,msg){"),
 				"script must be a function-call IIFE taking (code,msg); got %q", script)
 			require.True(t, strings.HasSuffix(script, ")"),
 				"script must close the IIFE call; got %q", script)
-			assert.Contains(t, script, "JSON.parse(",
-				"the dynamic value must be parsed from a JSON literal, not concatenated into JS")
+			assert.NotContains(t, script, "JSON.parse(",
+				"the marshaled value is already a JS string literal; JSON.parse would throw at runtime")
 			assert.Contains(t, script, ".textContent=msg",
 				"the banner text must be assigned via the XSS-safe textContent sink, not innerHTML")
 			// A literal </script> in the title would close the surrounding
@@ -88,9 +88,11 @@ func TestBuildNoticeScript_safeAcrossMaliciousCodes(t *testing.T) {
 	require.True(t, strings.HasPrefix(script, "(function(code,msg){"),
 		"script must remain a well-formed IIFE; got %q", script)
 	require.True(t, strings.HasSuffix(script, ")"), "script must close the IIFE call")
-	// The crafted code's leading quote must be backslash-escaped inside a JSON
-	// literal (a raw concatenation would emit a bare quote that breaks out of
-	// JSON.parse and into executable JS).
-	assert.Contains(t, script, `JSON.parse("\"});alert(1)//")`,
-		"a crafted code must be JSON-escaped, not concatenated raw")
+	// The crafted code's leading quote must be backslash-escaped inside the JS
+	// string literal (a raw concatenation would emit a bare quote that closes the
+	// argument string and spills into executable JS).
+	assert.Contains(t, script, `"\"});alert(1)//"`,
+		"a crafted code must be a json.Marshal-escaped string literal, not concatenated raw")
+	assert.NotContains(t, script, `});alert(1)//")`,
+		"the crafted code must not appear unescaped as executable JS")
 }

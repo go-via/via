@@ -90,14 +90,14 @@ func (p *Host) Notice(ctx *via.Ctx) error {
 // since codes are variable-length — a short code must not match a longer
 // code's path.
 //
-// Both the code and the title travel as the JSON-parsed arguments of a
-// function-call IIFE — isolated data segments, never dropped between two raw
-// JS string fragments. That shape is the only one the CodeQL "potentially
-// unsafe quoting" rule accepts for dynamic values bound for an inline
-// <script>: the JSON literal closes the surrounding parens, JS line separators
-// (U+2028/U+2029) and a literal </script> are neutralised by json.Marshal's
-// default HTML/control-character escaping, and the banner text is assigned via
-// textContent (the XSS-safe DOM sink) so the value is treated as text.
+// Both the code and the title travel as the arguments of a function-call IIFE,
+// each a json.Marshal'd value passed DIRECTLY — json.Marshal already produces a
+// JS string literal, so it is dropped in as-is (wrapping it in JSON.parse would
+// make the script parse the decoded text as JSON at runtime and throw). They
+// are isolated data segments, never concatenated between two raw JS fragments:
+// JS line separators (U+2028/U+2029) and a literal </script> are neutralised by
+// json.Marshal's default HTML/control-character escaping, and the banner text
+// is assigned via textContent (the XSS-safe DOM sink) so the value is text.
 func buildNoticeScript(code, title string) string {
 	codeJSON, _ := json.Marshal(code)
 	msg, _ := json.Marshal("▶ Starting now: " + title)
@@ -107,8 +107,8 @@ func buildNoticeScript(code, title string) string {
 		`z-index:9999;background:#ffbf00;color:#0b0b0f;text-align:center;padding:.8rem;font-weight:700;` +
 		`font-family:Inter,system-ui,sans-serif;letter-spacing:.01em;box-shadow:0 6px 24px rgba(255,191,0,.3);` +
 		`animation:slideDown .25s ease';document.body.appendChild(b);` +
-		`setTimeout(function(){b.remove()},6000)})(JSON.parse(` +
-		string(codeJSON) + `),JSON.parse(` + string(msg) + `))`
+		`setTimeout(function(){b.remove()},6000)})(` +
+		string(codeJSON) + `,` + string(msg) + `)`
 }
 
 func (p *Host) View(ctx *via.CtxR) h.H {
