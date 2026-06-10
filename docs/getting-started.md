@@ -64,7 +64,10 @@ go run .
 ```
 
 No template files. No build step. No hand-written JavaScript.
-`on.Click(c.Inc)` is a typed method reference — a typo is a compile error.
+`on.Click(c.Inc)` is a typed method reference: the handler signature is
+compile-checked and a misspelled method name won't build. It must be a real
+bound method — a closure or plain function type-checks but panics at the first
+render, since it has no name to route to.
 
 ## What just happened
 

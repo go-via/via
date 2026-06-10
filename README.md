@@ -37,8 +37,11 @@ go get github.com/go-via/via
 Two counters, two scopes. `Local` is per-tab server state; `Shared` is one
 value across every session — clicking `+1` bumps `Local` only in that tab, but
 `Shared` everywhere at once. No `Broadcast`, no WebSocket, no client JS.
-`on.Click(p.IncShared)` is a typed method reference — a typo is a compile
-error.
+`on.Click(p.IncShared)` is a typed method reference: the handler signature is
+compile-checked and a misspelled method name won't build. It must be a real
+bound method, though — a closure or plain function satisfies the type but has
+no name to route to, so it panics at the first render rather than at compile
+time.
 
 ```go
 package main
