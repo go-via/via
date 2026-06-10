@@ -225,6 +225,9 @@ func avatarHandler(db *store.Store) func(http.ResponseWriter, *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", ct)
+		// Defense in depth: never let the browser sniff a stored avatar into an
+		// executable type. Upload also restricts stored types to raster images.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-cache")
 		_, _ = w.Write(data)
 	}

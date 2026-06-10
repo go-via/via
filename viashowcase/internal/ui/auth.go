@@ -8,6 +8,7 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
 	"github.com/go-via/viashowcase/internal/auth"
+	"github.com/go-via/viashowcase/internal/core"
 )
 
 // Login is the host sign-in form.
@@ -18,7 +19,7 @@ type Login struct {
 }
 
 func (p *Login) Submit(ctx *via.Ctx) error {
-	email := strings.TrimSpace(p.Email.Read(ctx))
+	email := core.NormalizeEmail(p.Email.Read(ctx))
 	u, hash, err := Deps.DB.UserByEmail(context.Background(), email)
 	if err != nil || !auth.Verify(hash, p.Password.Read(ctx)) {
 		p.Err.Write(ctx, "Invalid email or password")
@@ -59,11 +60,15 @@ type Signup struct {
 }
 
 func (p *Signup) Submit(ctx *via.Ctx) error {
-	email := strings.TrimSpace(p.Email.Read(ctx))
+	email := core.NormalizeEmail(p.Email.Read(ctx))
 	display := strings.TrimSpace(p.Display.Read(ctx))
 	pw := p.Password.Read(ctx)
 	if email == "" || display == "" || pw == "" {
 		p.Err.Write(ctx, "All fields are required")
+		return nil
+	}
+	if !core.PasswordLongEnough(pw) {
+		p.Err.Write(ctx, "Password must be at least 8 characters")
 		return nil
 	}
 	hash, err := auth.Hash(pw)

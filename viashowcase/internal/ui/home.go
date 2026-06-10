@@ -39,10 +39,11 @@ func (c *Home) Create(ctx *via.Ctx) error {
 	kind := c.Kind.Read(ctx)
 	var choices []string
 	if kind == "poll" {
-		for _, p := range strings.Split(c.Choices.Read(ctx), ",") {
-			if p = strings.TrimSpace(p); p != "" {
-				choices = append(choices, p)
-			}
+		// A poll with no valid choices renders zero vote buttons and rejects
+		// every vote — a dead room. Refuse to create it.
+		if choices = core.PollChoices(c.Choices.Read(ctx)); len(choices) == 0 {
+			ctx.Toast("A poll needs at least one choice.")
+			return nil
 		}
 	}
 	code := newRoomCode()

@@ -2,13 +2,26 @@ package core
 
 import "sort"
 
-// Vote covers both poll and word-cloud; choices are free strings.
-type Vote struct{ Room, Choice, By string }
+// Vote covers both poll and word-cloud; choices are free strings. Single marks
+// a poll vote (one per voter, latest choice wins); word-cloud votes leave it
+// false so every word a participant submits keeps counting.
+type Vote struct {
+	Room, Choice, By string
+	Single           bool
+}
 
-type (
-	Tally   map[string]int   // choice -> count
-	Tallies map[string]Tally // room code -> tally
-)
+// Tally maps a choice to its count.
+type Tally map[string]int
+
+// Tallies is the votes projection. Counts feeds the render path; Voted records,
+// for Single (poll) votes only, each voter's current choice so a re-vote moves
+// their single tally instead of adding a new one. Both fields are exported so
+// the projection survives the JSON snapshot — an unexported Voted would be
+// dropped and dedup would silently break on cold start / cross-pod reseed.
+type Tallies struct {
+	Counts map[string]Tally
+	Voted  map[string]map[string]string
+}
 
 // Pair is a ranked (choice, count) entry.
 type Pair struct {
@@ -16,25 +29,54 @@ type Pair struct {
 	Count  int
 }
 
-// Fold returns a copy of acc with ev applied (acc[ev.Room][ev.Choice]++).
+// Fold returns a copy of acc with ev applied. A word-cloud vote (!Single) just
+// increments its choice. A poll vote (Single) keeps one vote per voter: the
+// first counts, re-voting the same choice is a no-op, and switching moves the
+// vote (the abandoned choice is removed at zero).
 func (Vote) Fold(acc Tallies, ev Vote) Tallies {
-	out := make(Tallies, len(acc)+1)
-	for room, t := range acc {
+	out := Tallies{
+		Counts: make(map[string]Tally, len(acc.Counts)+1),
+		Voted:  make(map[string]map[string]string, len(acc.Voted)+1),
+	}
+	for room, t := range acc.Counts {
 		nt := make(Tally, len(t))
 		for c, n := range t {
 			nt[c] = n
 		}
-		out[room] = nt
+		out.Counts[room] = nt
 	}
-	if out[ev.Room] == nil {
-		out[ev.Room] = Tally{}
+	for room, v := range acc.Voted {
+		nv := make(map[string]string, len(v))
+		for by, choice := range v {
+			nv[by] = choice
+		}
+		out.Voted[room] = nv
 	}
-	out[ev.Room][ev.Choice]++
+	if out.Counts[ev.Room] == nil {
+		out.Counts[ev.Room] = Tally{}
+	}
+	if !ev.Single {
+		out.Counts[ev.Room][ev.Choice]++
+		return out
+	}
+	if out.Voted[ev.Room] == nil {
+		out.Voted[ev.Room] = map[string]string{}
+	}
+	if prev, had := out.Voted[ev.Room][ev.By]; had {
+		if prev == ev.Choice {
+			return out
+		}
+		if out.Counts[ev.Room][prev]--; out.Counts[ev.Room][prev] <= 0 {
+			delete(out.Counts[ev.Room], prev)
+		}
+	}
+	out.Counts[ev.Room][ev.Choice]++
+	out.Voted[ev.Room][ev.By] = ev.Choice
 	return out
 }
 
 // For is a nil-safe read of one room's tally.
-func (t Tallies) For(code string) Tally { return t[code] }
+func (t Tallies) For(code string) Tally { return t.Counts[code] }
 
 func (t Tally) Total() int {
 	n := 0
