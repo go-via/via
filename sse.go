@@ -45,6 +45,8 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
+		a.metricsOrNoop().Counter("via.session.mismatch")
+		a.logErr(ctx, "session mismatch on SSE handshake: the tab's bound session no longer matches the request cookie (two via apps on the same host:port clobbering via_session?) — the tab will freeze on Datastar retry exhaustion")
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -56,10 +58,15 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 	stream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		runSSEStream(a, ctx, w, r, nil)
 	})
-	applyMiddleware(ctx.desc.groupMW, stream).ServeHTTP(w, r)
+	applyMiddleware(ctx.desc.groupMW, stream).ServeHTTP(w, requestWithRoute(r, ctx.desc.route))
 }
 
 func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot *sseBootstrap) {
+	// nginx (and similar reverse proxies) buffer proxied responses by default,
+	// which holds SSE frames until the buffer fills — heartbeat and patches
+	// never reach the browser. Opt the stream out before NewSSE writes headers.
+	// datastar's NewSSE already sets Cache-Control/Content-Type/Connection.
+	w.Header().Set("X-Accel-Buffering", "no")
 	m := a.metricsOrNoop()
 	m.Counter("via.sse.connect")
 	// Default to "client": every exit path other than a server-side
@@ -104,6 +111,7 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot
 			return
 		}
 		if boot.elements != "" {
+			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 			if err := sse.PatchElements(boot.elements,
 				datastar.WithSelector(boot.selector),
 				datastar.WithMode(datastar.ElementPatchModeReplace)); err != nil {
@@ -173,12 +181,16 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot
 			reason = ctx.disposeReasonOrDefault(disconnectClient)
 			return
 		case <-t.C:
-			// Keepalive: a real write that fails on a dead peer (no
-			// touch — connected, not lastAccess, owns liveness now).
+			// Keepalive: a real write that fails on a dead peer (the ctx's
+			// own liveness is owned by connected, not lastAccess). A
+			// successful tick also proves the tab is alive, so keep its
+			// session warm — the session sweep keys on lastAccess and would
+			// otherwise reap a live-but-idle stream's session out from under it.
 			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 			if err := sse.PatchSignals(heartbeatPayload); err != nil {
 				return
 			}
+			ctx.touchSession()
 		case <-ctx.queue.wake:
 			if err := drainQueue(sse, ctx, w, a.cfg.sseWriteTimeout); err != nil {
 				return
@@ -232,11 +244,17 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 	q.redirect = ""
 	q.mu.Unlock()
 
+	// Re-arm the write deadline before EACH network write: a single deadline
+	// set at entry would span the sum of up to four sequential writes, so a
+	// peer that stalls on a later write has already burned the budget on the
+	// earlier ones. Per-write keeps every write bounded independently.
 	nonceOpts := ctx.scriptNonceOpts()
 	if redirect != "" {
+		setSSEWriteDeadline(w, writeTimeout)
 		return sse.Redirect(redirect, nonceOpts...)
 	}
 	if elems != "" {
+		setSSEWriteDeadline(w, writeTimeout)
 		if err := sse.PatchElements(elems); err != nil {
 			return err
 		}
@@ -250,13 +268,17 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 			if ctx.app != nil {
 				ctx.app.logErr(ctx, "drainQueue: json.Marshal signals: %v", err)
 			}
-		} else if err := sse.PatchSignals(out); err != nil {
-			recycleSignalsMap(q, signals)
-			return err
+		} else {
+			setSSEWriteDeadline(w, writeTimeout)
+			if err := sse.PatchSignals(out); err != nil {
+				recycleSignalsMap(q, signals)
+				return err
+			}
 		}
 		recycleSignalsMap(q, signals)
 	}
 	if scripts != "" {
+		setSSEWriteDeadline(w, writeTimeout)
 		if err := sse.ExecuteScript(scripts, nonceOpts...); err != nil {
 			return err
 		}

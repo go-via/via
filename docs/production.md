@@ -15,6 +15,7 @@ nav_order: 2
 
 ```go
 app := via.New(
+    via.WithAddr(":8080"),
     via.WithLang("en"),
     via.WithLogger(via.SlogLogger(slog.Default())),
     via.WithMaxRequestBody(1<<20),
@@ -31,7 +32,13 @@ api := app.Group("/api")
 api.Use(requireAuth)
 via.Mount[Profile](api, "/profile")
 
-http.ListenAndServe(":8080", app)
+// app.Start() (or app.Run() to handle the bind error) wires SIGINT/SIGTERM
+// to a graceful Shutdown — draining SSE streams, running OnDispose, and
+// closing the backplane. A raw http.ListenAndServe(app) skips all of that
+// and hard-kills in-flight streams on deploy.
+if err := app.Run(); err != nil {
+    log.Fatal(err)
+}
 ```
 
 ## Configuration

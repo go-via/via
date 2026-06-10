@@ -96,6 +96,36 @@ func TestPicocss_servesUncompressedCSSWhenGzipNotAccepted(t *testing.T) {
 	assert.NotEmpty(t, body, "uncompressed branch must still return the CSS body")
 }
 
+// The gzip and identity bodies are distinct representations of one URL, so they
+// must carry distinct ETags and a Vary: Accept-Encoding header — otherwise a
+// shared/intermediary cache can hand a gzipped body to a client that didn't ask
+// for it (corrupted CSS), and a cross-encoding If-None-Match could 304 the wrong
+// representation. (RFC 7232 §2.3.3 / RFC 9110.)
+func TestPicocss_assetCachingIsRepresentationSpecific(t *testing.T) {
+	t.Parallel()
+	server := picoBlueServer(t)
+	url := server.URL + "/_plugins/picocss/theme/blue"
+
+	gzReq, _ := http.NewRequest("GET", url, nil)
+	gzReq.Header.Set("Accept-Encoding", "gzip")
+	gz, err := server.Client().Do(gzReq)
+	require.NoError(t, err)
+	defer gz.Body.Close()
+
+	idReq, _ := http.NewRequest("GET", url, nil)
+	idReq.Header.Set("Accept-Encoding", "identity")
+	id, err := server.Client().Do(idReq)
+	require.NoError(t, err)
+	defer id.Body.Close()
+
+	assert.Equal(t, "Accept-Encoding", gz.Header.Get("Vary"),
+		"gzip response must Vary on Accept-Encoding so caches key per encoding")
+	assert.Equal(t, "Accept-Encoding", id.Header.Get("Vary"),
+		"identity response must Vary on Accept-Encoding too")
+	assert.NotEqual(t, id.Header.Get("ETag"), gz.Header.Get("ETag"),
+		"gzip and identity are distinct representations and must not share an ETag")
+}
+
 func TestPicocss_returns404ForUnknownTheme(t *testing.T) {
 	t.Parallel()
 	server := picoBlueServer(t)

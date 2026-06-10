@@ -39,6 +39,16 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	decodePathParams(cmpVal, r, d)
 	decodeQueryParams(cmpVal, r, d)
 
+	// Cap check is fused with the registry insert so two concurrent
+	// renders can't both observe live==limit-1 and both proceed. Runs
+	// BEFORE OnInit so an over-capacity (503-bound) request never executes
+	// user init work.
+	if !a.tryRegisterCtx(ctx, a.cfg.maxContexts) {
+		a.logWarn(nil, "max contexts reached (%d); rejecting page render", a.cfg.maxContexts)
+		http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
+		return
+	}
+
 	if ctx.initFn != nil {
 		// Symmetric with OnConnect / OnDispose (see sse.go, runtime.go):
 		// a panicking OnInit must not propagate up through renderPage
@@ -52,14 +62,6 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 				a.logErr(ctx, "OnInit: %v", err)
 			}
 		}()
-	}
-
-	// Cap check is fused with the registry insert so two concurrent
-	// renders can't both observe live==limit-1 and both proceed.
-	if !a.tryRegisterCtx(ctx, a.cfg.maxContexts) {
-		a.logWarn(nil, "max contexts reached (%d); rejecting page render", a.cfg.maxContexts)
-		http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
-		return
 	}
 
 	body, ok := a.renderView(ctx, w)
@@ -264,6 +266,13 @@ func (a *App) renderFragment(ctx *Ctx) string {
 		}
 	}()
 	body := ctx.viewFn(ctx.readView())
-	_ = h.Div(h.ID(ctx.id), body).Render(buf)
+	if err := h.Div(h.ID(ctx.id), body).Render(buf); err != nil {
+		// Consistent with the page-render path (which logs Render errors):
+		// return "" rather than a half-written fragment so the empty-frag
+		// guard in flushDirty preserves the last good frame instead of
+		// shipping truncated HTML the client would morph in as authoritative.
+		a.logErr(ctx, "fragment render: %v", err)
+		return ""
+	}
 	return buf.String()
 }

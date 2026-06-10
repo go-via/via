@@ -25,7 +25,7 @@ func (g *Greeter) GreetAlice(ctx *via.Ctx) {
 
 func (g *Greeter) View(ctx *via.CtxR) h.H {
 	return h.Div(
-		h.P(h.Text("Greeting: "), g.Greeting.Text()),
+		h.P(h.Text("Greeting: "), g.Greeting.TextSpan()),
 		h.Button(h.Text("Greet Bob"), on.Click(g.GreetBob)),
 		h.Button(h.Text("Greet Alice"), on.Click(g.GreetAlice)),
 	)

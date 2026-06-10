@@ -16,7 +16,8 @@ import (
 //	c.Step.Read(ctx)       // returns int
 //	c.Step.Write(ctx, 5)   // marks dirty, browser updates next flush
 //	c.Step.Bind()          // <input> two-way bind: data-bind="step"
-//	c.Step.Text()          // <span data-text="$step"></span>
+//	c.Step.Text()          // data-text="$step" attribute (attach to any element)
+//	c.Step.TextSpan()      // <span data-text="$step"></span>
 //
 // Untyped, untagged Signal[T] fields use the lower-cased field name as the
 // wire key. Tag form: `via:"name,init=value"`; either part is optional.
@@ -82,14 +83,41 @@ func (s *Signal[T]) Bind() h.H {
 	return h.Data("bind", s.key)
 }
 
-// Text returns a reactive text span: <span data-text="$key"></span>.
+// Text returns a reactive `data-text="$key"` attribute that binds this
+// signal's value as the text content of whatever element it is attached to.
+// For a standalone reactive span use [Signal.TextSpan].
 func (s *Signal[T]) Text() h.H {
+	return h.Data("text", s.dollar)
+}
+
+// TextSpan wraps [Signal.Text] in its own span: <span data-text="$key"></span>.
+// Use it where no host element is available to carry the binding.
+func (s *Signal[T]) TextSpan() h.H {
 	return h.Span(h.Data("text", s.dollar))
 }
 
 // Show returns a data-show attribute that toggles display by truthiness.
 func (s *Signal[T]) Show() h.H {
 	return h.Data("show", s.dollar)
+}
+
+// ShowUnless is the negation of [Signal.Show]: the element is hidden while
+// the signal is truthy and shown while falsy. Saves hand-writing the "!$key"
+// expression (and re-juggling the $ prefix the typed helpers exist to hide).
+func (s *Signal[T]) ShowUnless() h.H {
+	return h.Data("show", "!"+s.dollar)
+}
+
+// Class toggles the named CSS class on the host element by this signal's
+// truthiness, emitting Datastar's data-class-<name> attribute.
+//
+// name must be lower-case (or kebab-case). HTML attribute names are folded to
+// lower-case by the browser parser, so a mixed-case name like "myThing"
+// resolves to the class "mything" at runtime — pass "my-thing" if you need a
+// hyphen. For a camelCase class name use Datastar's object form via
+// h.DataClass with an explicit expression instead.
+func (s *Signal[T]) Class(name string) h.H {
+	return h.Data("class-"+name, s.dollar)
 }
 
 // Attr returns a data-attr-<name> attribute that mirrors this signal's

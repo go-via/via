@@ -1,6 +1,7 @@
 package vt_test
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -313,4 +314,53 @@ func TestClient_SSE_usesIsolatedHTTPTransport(t *testing.T) { //nolint:parallelt
 
 	assert.Zero(t, hits.Load(),
 		"SSE's http.Client must use its own Transport, not http.DefaultTransport")
+}
+
+// TabIDFromHTML is the one canonical via_tab extractor; tests across the repo
+// were hand-rolling four different regexes against the HTML-escaped meta.
+func TestTabIDFromHTML_extractsTheRenderedViaTabID(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	srv := vt.Serve(t, app)
+	via.Mount[tcPage](app, "/")
+
+	html := vt.NewClient(t, srv, "/").Reload()
+	id := vt.TabIDFromHTML(html)
+	assert.NotEmpty(t, id, "must extract the via_tab id from the rendered data-signals meta")
+	assert.Regexp(t, `_[0-9a-f]{64}$`, id, "the extracted id must be the route-prefixed 64-hex tab id")
+}
+
+// recordTB captures Logf so a test can assert vt emitted a (non-fatal) warning.
+type recordTB struct {
+	testing.TB
+	logs []string
+}
+
+func (r *recordTB) Helper() {}
+func (r *recordTB) Logf(format string, args ...any) {
+	r.logs = append(r.logs, fmt.Sprintf(format, args...))
+}
+
+// A real browser never POSTs a `_`-prefixed (client-only) signal, so a test
+// using WithSignal("_x", ...) is reproducing behavior that can't happen in the
+// browser. vt warns (does not fail) so the author notices at test-write time.
+func TestWithSignal_warnsOnUnderscoreLocalSignal(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	srv := vt.Serve(t, app)
+	via.Mount[tcPage](app, "/")
+
+	rec := &recordTB{TB: t}
+	vt.NewClient(rec, srv, "/").Action("Apply").WithSignal("_draft", "x")
+	var warned bool
+	for _, l := range rec.logs {
+		if strings.Contains(l, "_draft") {
+			warned = true
+		}
+	}
+	assert.True(t, warned, "WithSignal must warn on a `_`-prefixed local signal name")
+
+	rec2 := &recordTB{TB: t}
+	vt.NewClient(rec2, srv, "/").Action("Apply").WithSignal("step", 5)
+	assert.Empty(t, rec2.logs, "a normal signal name must not warn")
 }

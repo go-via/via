@@ -75,6 +75,7 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 			d.fileSlots = append(d.fileSlots, fileSlot{
 				fieldPath: fieldPath,
 				wireKey:   qualify(pathPrefix, parseLocalID(f)),
+				plural:    isFilesType(f.Type),
 			})
 		case roleChild:
 			child := f.Type
@@ -108,7 +109,7 @@ func classifyField(f reflect.StructField) fieldRole {
 	if isStateAppEventsType(f.Type) {
 		return roleStateAppEvents
 	}
-	if isFileType(f.Type) {
+	if isFileType(f.Type) || isFilesType(f.Type) {
 		return roleFile
 	}
 	if isChildComposition(f.Type) {

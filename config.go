@@ -1,6 +1,7 @@
 package via
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 )
@@ -33,6 +34,7 @@ type config struct {
 	sseWriteTimeout    time.Duration
 	secureCookies      bool
 	cookieSecuritySet  bool
+	cookieName         string
 	httpServerHook     func(*http.Server)
 	readHeaderTimeout  time.Duration
 	readTimeout        time.Duration
@@ -50,6 +52,25 @@ type config struct {
 
 // Option configures a via App.
 type Option func(*config)
+
+// validate panics on clearly-invalid option values at New — a registration-time
+// programming mistake, per CONVENTIONS "Panic on Invalid Registration". Only
+// negatives are rejected: 0 is a meaningful value (unlimited/default) for the
+// size and context caps, and a 0 shutdown timeout is a deliberate force-kill.
+func (c *config) validate() {
+	if c.shutdownTimeout < 0 {
+		panic(fmt.Sprintf("via.WithShutdownTimeout: must be >= 0, got %v", c.shutdownTimeout))
+	}
+	if c.maxRequestBody < 0 {
+		panic(fmt.Sprintf("via.WithMaxRequestBody: must be >= 0, got %d", c.maxRequestBody))
+	}
+	if c.maxUploadSize < 0 {
+		panic(fmt.Sprintf("via.WithMaxUploadSize: must be >= 0, got %d", c.maxUploadSize))
+	}
+	if c.maxContexts < 0 {
+		panic(fmt.Sprintf("via.WithMaxContexts: must be >= 0, got %d", c.maxContexts))
+	}
+}
 
 // WithAddr sets the HTTP listen address.
 func WithAddr(addr string) Option { return func(c *config) { c.addr = addr } }
@@ -183,6 +204,17 @@ func WithInsecureCookies() Option {
 		c.secureCookies = false
 		c.cookieSecuritySet = true
 	}
+}
+
+// WithSessionCookieName overrides the default "via_session" cookie name. Two
+// via apps on the same host (different ports) otherwise share — and clobber —
+// one cookie, since the port is not part of a cookie's scope. Give co-located
+// apps distinct names to keep their sessions independent.
+func WithSessionCookieName(name string) Option {
+	if name == "" {
+		panic("via: WithSessionCookieName requires a non-empty name")
+	}
+	return func(c *config) { c.cookieName = name }
 }
 
 // WithPlugins registers plugins. They run Register at New time.

@@ -262,40 +262,41 @@ func (p *plugin) servePluginAssets(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		etag := p.themeETags[theme]
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "text/css")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Header().Set("ETag", etag)
-		if acceptsGzip(r) {
-			w.Header().Set("Content-Encoding", "gzip")
-			_, _ = w.Write(p.themeCSSGzip[theme])
-		} else {
-			_, _ = w.Write(css)
-		}
+		writeCSSAsset(w, r, css, p.themeCSSGzip[theme], p.themeETags[theme])
 		return
 	}
 	if path == colorClassesPath && p.opts.colorClasses {
-		etag := p.colorClassesETag
-		if r.Header.Get("If-None-Match") == etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		w.Header().Set("Content-Type", "text/css")
-		w.Header().Set("Cache-Control", "public, max-age=86400")
-		w.Header().Set("ETag", etag)
-		if acceptsGzip(r) {
-			w.Header().Set("Content-Encoding", "gzip")
-			_, _ = w.Write(p.colorClassesCSSGzip)
-		} else {
-			_, _ = w.Write(p.colorClassesCSS)
-		}
+		writeCSSAsset(w, r, p.colorClassesCSS, p.colorClassesCSSGzip, p.colorClassesETag)
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// writeCSSAsset serves a CSS asset with encoding-correct caching: a
+// Vary: Accept-Encoding header so shared caches key per encoding, and a
+// representation-specific ETag (the gzip variant is suffixed) so a cross-
+// encoding If-None-Match can't 304 the wrong body. baseETag is the validator
+// for the identity representation.
+func writeCSSAsset(w http.ResponseWriter, r *http.Request, identity, gz []byte, baseETag string) {
+	w.Header().Set("Vary", "Accept-Encoding")
+	gzip := acceptsGzip(r)
+	etag := baseETag
+	if gzip {
+		etag = baseETag + "-gz"
+	}
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("ETag", etag)
+	if gzip {
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(gz)
+	} else {
+		_, _ = w.Write(identity)
+	}
 }
 
 const (

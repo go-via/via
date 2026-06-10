@@ -100,7 +100,8 @@ fine-grained, with no re-render and no round-trip:
 
 ```go
 s.Bind()              // <input data-bind="key"> two-way binding
-s.Text()              // <span data-text="$key"></span>
+s.Text()              // data-text="$key" attribute — attach to a host element
+s.TextSpan()          // <span data-text="$key"></span> — standalone span
 s.Show()              // data-show="$key" — toggle display by truthiness
 s.Attr("disabled")    // data-attr-disabled="$key" — drives an HTML attr
 s.Style("color")      // data-style-color="$key" — drives an inline CSS prop

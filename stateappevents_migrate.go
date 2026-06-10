@@ -27,7 +27,7 @@ var (
 // Once a key has compacted, the discarded event prefix is unrecoverable, so a
 // snapshot codec-hash mismatch can no longer be resolved by re-folding from
 // genesis — the snapshot IS the genesis. Register, keyed by the PREVIOUS V codec
-// hash (reflect.TypeFor[OldV]().String()), a function that decodes the old
+// hash (`reflect.TypeFor[OldV]().String()`), a function that decodes the old
 // snapshot bytes into the current V; on cold start the runtime seeds from it and
 // folds the retained tail on top. A compacted key whose old hash has no
 // registered migration (or whose migration errors) HALTS its projector

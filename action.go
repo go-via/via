@@ -57,8 +57,13 @@ func releaseSigs(m map[string]any) {
 	sigsPool.Put(m)
 }
 
-// handleAction dispatches POST /_action/{cmpID}.{methodName} (or just
-// /_action/{methodName} for root). The {id} URL segment encodes both.
+// handleAction dispatches POST /_action/{methodName}. The {id} URL segment
+// is the bare method name, resolved against the mounted page's root
+// composition (action methods are registered from the root type only —
+// see buildDescriptor). Actions must therefore live on the root
+// composition; a method on a nested child composition is not registered
+// and will 404. Children forward to their own methods from a root action
+// instead (see internal/examples/countercomp).
 func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -112,6 +117,8 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
+		a.metricsOrNoop().Counter("via.session.mismatch")
+		a.logErr(ctx, "session mismatch on action: the tab's bound session no longer matches the request cookie (two via apps on the same host:port clobbering via_session?)")
 		http.Error(w, "session mismatch", http.StatusForbidden)
 		return
 	}
@@ -130,7 +137,7 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		runAction(a, ctx, slotIdx, slot, w, r, sigs, form)
 	})
-	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, r)
+	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, requestWithRoute(r, d.route))
 	// runAction has finished by the time ServeHTTP returns. Release the
 	// sigs map back to the pool. We deliberately don't null out
 	// ctx.lastSignals here — a concurrent action POST on the same tab

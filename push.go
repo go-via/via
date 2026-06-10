@@ -10,14 +10,14 @@ import (
 
 // Imperative client-push helpers on *Ctx: ways for the server to tell
 // the browser "patch these signals / morph these elements / run this JS
-// / navigate / alert / reload" at the next flush. Pairs with the typed
-// [Redirect] / [Toast] sentinel-error intents in action.go — those
-// return errors; these queue side effects directly on the patch queue.
+// / navigate / alert / reload" at the next flush. [Ctx.Redirect] and
+// [Ctx.Toast] are convenience wrappers over the same patch queue; all of
+// these queue side effects directly rather than returning errors.
 
 // Patch groups the low-level wire-push primitives — push a signal value
 // for a key not bound to a typed Signal[T] field, or morph an arbitrary
 // element fragment into the live DOM. Reach for these only when the
-// typed path (Signal[T].Set, View re-render) doesn't fit:
+// typed path ([Signal.Write], View re-render) doesn't fit:
 //
 //	ctx.Patch().Signal("_picoTheme", "purple")           // ad-hoc client signal
 //	ctx.Patch().Signals(map[string]any{"a": 1, "b": 2})  // batched merge
@@ -138,11 +138,21 @@ func (ctx *Ctx) Toast(message string) {
 	if ctx == nil || message == "" {
 		return
 	}
+	if script, ok := buildToastScript(message); ok {
+		ctx.ExecScript(script)
+	}
+}
+
+// buildToastScript wraps message into the self-contained, XSS-safe toast
+// snippet (JSON-encoded so arbitrary text — including markup — is inert).
+// Shared by [Ctx.Toast] and [App.BroadcastToast]. ok is false only when the
+// message can't be JSON-encoded, which for a string never happens.
+func buildToastScript(message string) (string, bool) {
 	b, err := json.Marshal(message)
 	if err != nil {
-		return
+		return "", false
 	}
-	ctx.ExecScript(toastScriptHead + string(b) + toastScriptTail)
+	return toastScriptHead + string(b) + toastScriptTail, true
 }
 
 // toastScriptHead / toastScriptTail wrap a JSON-encoded message into the

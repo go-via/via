@@ -2,11 +2,13 @@ package via_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +98,155 @@ func openRawSSE(t *testing.T, httpc *http.Client, serverURL, tabID, referer stri
 var staleSuffix = strings.Repeat("ab", 32) // 64 hex chars, valid shape, never issued
 
 var tabSignalRE = regexp.MustCompile(`"via_tab":"([^"]+)"`)
+
+// A session-mismatch 403 (the localhost cookie-clobber freeze and the
+// stale-cookie case) must be observable: a bare metric + log line, not a
+// silent dead-end the developer can't diagnose. Here a page GET binds a
+// session to the ctx, then a cookie-less action on that tab trips the gate.
+func TestSession_mismatch403IsMeteredForObservability(t *testing.T) {
+	t.Parallel()
+	m := &captureMetrics{}
+	app := via.New(via.WithMetrics(m))
+	server := vt.Serve(t, app)
+	via.Mount[recoverPage](app, "/")
+
+	body := getBody(t, server, "/")
+	// The page HTML-escapes the data-signals JSON, so match the tab id by its
+	// stable shape (/_ + 64 hex) rather than the unescaped "via_tab":"…" form.
+	tabID := regexp.MustCompile(`/_[0-9a-f]{64}`).FindString(body)
+	require.NotEmpty(t, tabID, "rendered page must carry a via_tab id")
+
+	resp, err := server.Client().Post(server.URL+"/_action/Bump", "application/json",
+		strings.NewReader(`{"via_tab":"`+tabID+`"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"a cookie-less action on a session-bound tab must 403 (session mismatch)")
+	assert.Contains(t, m.counters, "via.session.mismatch:",
+		"a session-mismatch 403 must increment via.session.mismatch for diagnosability")
+}
+
+// Two via apps on the same host (different ports) share the via_session cookie
+// and clobber each other. WithSessionCookieName lets co-located apps pick
+// distinct names so each keeps its own session.
+func TestWithSessionCookieName_usesTheConfiguredCookieName(t *testing.T) {
+	t.Parallel()
+	app := via.New(via.WithSessionCookieName("myapp_sess"), via.WithInsecureCookies())
+	server := vt.Serve(t, app)
+	via.Mount[recoverPage](app, "/")
+
+	httpc := jarClient(t)
+	resp, err := httpc.Get(server.URL + "/")
+	require.NoError(t, err)
+	pageBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	var got string
+	for _, c := range resp.Cookies() {
+		if c.Name == "myapp_sess" {
+			got = c.Name
+		}
+		assert.NotEqual(t, "via_session", c.Name,
+			"the default cookie name must not leak when a custom name is set")
+	}
+	assert.Equal(t, "myapp_sess", got, "session cookie must use the configured name")
+
+	// The renamed cookie must still round-trip: a follow-up action on the same
+	// jar carries it, so the session matches and the action is not a 403.
+	tabID := regexp.MustCompile(`/_[0-9a-f]{64}`).FindString(string(pageBytes))
+	require.NotEmpty(t, tabID)
+	ar, err := httpc.Post(server.URL+"/_action/Bump", "application/json",
+		strings.NewReader(`{"via_tab":"`+tabID+`"}`))
+	require.NoError(t, err)
+	defer ar.Body.Close()
+	assert.Equal(t, http.StatusOK, ar.StatusCode,
+		"the renamed session cookie must round-trip so the action is authorized")
+}
+
+func TestWithSessionCookieName_panicsOnEmptyName(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t,
+		"via: WithSessionCookieName requires a non-empty name",
+		func() { via.WithSessionCookieName("") },
+		"an empty cookie name is a programming error and must panic at registration")
+}
+
+// nginx and other reverse proxies buffer proxied responses by default, holding
+// an SSE stream's frames until the buffer fills — heartbeat and patches never
+// reach the browser. The X-Accel-Buffering: no header opts the stream out.
+// (datastar's NewSSE sets Cache-Control but not this.)
+func TestSSE_setsXAccelBufferingHeaderSoProxiesDontStall(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[recoverPage](app, "/")
+
+	httpc := jarClient(t)
+	resp, err := httpc.Get(server.URL + "/")
+	require.NoError(t, err)
+	pageBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	tabID := regexp.MustCompile(`/_[0-9a-f]{64}`).FindString(string(pageBytes))
+	require.NotEmpty(t, tabID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	u := server.URL + "/_sse?datastar=" + url.QueryEscape(`{"via_tab":"`+tabID+`"}`)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	sse, err := httpc.Do(req)
+	require.NoError(t, err)
+	defer sse.Body.Close()
+	require.Equal(t, http.StatusOK, sse.StatusCode)
+	assert.Equal(t, "no", sse.Header.Get("X-Accel-Buffering"),
+		"SSE response must disable proxy buffering so frames aren't held by nginx/proxies")
+}
+
+type routeProbePage struct{}
+
+func (p *routeProbePage) Act(ctx *via.Ctx) error { return nil }
+func (p *routeProbePage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+// A group middleware guarding actions/SSE must see the logical PAGE route, not
+// the global "/_action/{id}" / "/_sse" path — otherwise path-based guards and
+// per-route policy can't tell which page they're protecting. via.RouteFrom(r)
+// exposes the resolved route on all three entry points.
+func TestRouteFrom_groupMiddlewareSeesPageRouteNotActionPath(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	server := vt.Serve(t, app)
+
+	var mu sync.Mutex
+	var captured string
+	grp := app.Group("/grp")
+	grp.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
+		mu.Lock()
+		captured = via.RouteFrom(r)
+		mu.Unlock()
+		next.ServeHTTP(w, r)
+	})
+	via.Mount[routeProbePage](grp, "/pg")
+
+	httpc := jarClient(t)
+	resp, err := httpc.Get(server.URL + "/grp/pg")
+	require.NoError(t, err)
+	pageBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	tabID := regexp.MustCompile(`via_tab&#34;:&#34;([^&]+)&#34;`).FindStringSubmatch(string(pageBytes))
+	require.Len(t, tabID, 2, "page must carry a via_tab")
+
+	ar, err := httpc.Post(server.URL+"/_action/Act", "application/json",
+		strings.NewReader(`{"via_tab":"`+tabID[1]+`"}`))
+	require.NoError(t, err)
+	ar.Body.Close()
+
+	mu.Lock()
+	got := captured
+	mu.Unlock()
+	assert.NotContains(t, got, "_action",
+		"RouteFrom on an action request must NOT be the /_action path")
+	assert.Equal(t, "/grp/pg", got,
+		"RouteFrom must return the resolved page route even on the action POST")
+}
 
 // --- known-tab reconnect ---
 

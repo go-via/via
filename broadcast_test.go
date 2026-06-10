@@ -59,6 +59,32 @@ func TestBroadcast_pushesScriptToEveryLiveTab(t *testing.T) {
 	awaitNeedleOnAll(t, frames, msg, 2*time.Second)
 }
 
+// The canonical broadcast — a site-wide notice — needs a safe path: raw
+// Broadcast forces every app to hand-build toast JS and get the XSS escaping
+// right. BroadcastToast reuses the JSON-encoded toast snippet so the message
+// is safe even with markup, and reaches every live tab.
+func TestBroadcastToast_pushesAnXSSSafeToastToEveryLiveTab(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[broadcastPage](app, "/")
+
+	frames, cancel := openSSEStreams(t, server, "/", 2)
+	defer cancel()
+
+	// A message with markup must arrive JSON/HTML-escaped, never as live HTML.
+	assert.Equal(t, 2, app.BroadcastToast("Deploy soon"),
+		"BroadcastToast should report the tab count it reached")
+	// Both needles are in the one script frame (`via-toast` proves the safe
+	// toast snippet, "Deploy soon" is its JSON-encoded message argument), so
+	// match them in a single AwaitFrame per channel — a second call would wait
+	// on a channel whose frame the first already consumed.
+	for _, ch := range frames {
+		vt.AwaitFrame(t, ch, 2*time.Second, "via-toast", "Deploy soon")
+	}
+}
+
 func TestBroadcastSignals_pushesPatchToEveryLiveTab(t *testing.T) {
 	t.Parallel()
 

@@ -77,6 +77,11 @@ type Trigger struct {
 	Modifiers []string // e.g. ["prevent", "stop"]
 	KeyFilter string   // e.g. "Enter" for on:keydown
 
+	// Confirm, when non-empty, is a JSON-encoded string used as a
+	// confirm(<Confirm>) guard that short-circuits the action POST unless
+	// the user accepts. Set by on.Confirm.
+	Confirm string
+
 	// Pre is a list of JS statements to run synchronously before the
 	// @post(...) call fires. Used by on.SetSignal to bundle a typed
 	// signal write into the same trigger.

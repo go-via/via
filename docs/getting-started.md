@@ -29,8 +29,6 @@ methods, and `View` renders it.
 package main
 
 import (
-    "net/http"
-
     "github.com/go-via/via"
     "github.com/go-via/via/h"
     "github.com/go-via/via/on"
@@ -56,7 +54,7 @@ func (c *Counter) View(ctx *via.CtxR) h.H {
 func main() {
     app := via.New()
     via.Mount[Counter](app, "/")
-    _ = http.ListenAndServe(":3000", app)
+    app.Start() // binds :3000, wires SIGINT/SIGTERM to a graceful Shutdown
 }
 ```
 

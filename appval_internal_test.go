@@ -83,6 +83,36 @@ func TestApplyChangeDropsStaleReadsAndNeverRegressesL1(t *testing.T) {
 	}
 }
 
+// applyChange must wake subscribed tabs ONLY when the re-pull actually advanced
+// L1 — a redelivered or stale hint that changes nothing must be a silent no-op,
+// not a render storm (T5-ARCH-2). applyChangeL1 reports whether L1 moved so the
+// caller can gate broadcastRender, mirroring reconcileKey/applySessionChange.
+func TestApplyChange_signalsChangedOnlyWhenL1Advances(t *testing.T) {
+	t.Parallel()
+	stub := &loadStub{}
+	app := &App{backplane: stub, valStates: map[string]*valCell{"k": intCell()}}
+
+	// First catching-up hint advances L1 → changed.
+	stub.data, stub.rev, stub.ok = mustJSON(77), 5, true
+	if !app.applyChangeL1(change{Key: "k", Rev: 5}) {
+		t.Fatal("a hint that advances L1 must report changed=true")
+	}
+	// Stale replica read (storeRev 3 < hint rev 5) → no change.
+	stub.data, stub.rev, stub.ok = mustJSON(33), 3, true
+	if app.applyChangeL1(change{Key: "k", Rev: 6}) {
+		t.Fatal("a stale-replica read must report changed=false (no broadcast)")
+	}
+	// Redelivered older change → monotone gate, no change.
+	stub.data, stub.rev, stub.ok = mustJSON(33), 3, true
+	if app.applyChangeL1(change{Key: "k", Rev: 3}) {
+		t.Fatal("a redelivered older change must report changed=false (no broadcast)")
+	}
+	// Unknown cell → no change, no panic.
+	if app.applyChangeL1(change{Key: "missing", Rev: 1}) {
+		t.Fatal("an unknown cell must report changed=false")
+	}
+}
+
 // The reconcile sweep re-pulls a key to Store HEAD unconditionally, so its only
 // guards are the monotone gate (never regress L1) and decode-safety (never
 // corrupt on a poison snapshot). It must advance L1 when the Store moved ahead,

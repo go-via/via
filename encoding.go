@@ -112,5 +112,22 @@ func decodeScalarInto(dst reflect.Value, raw any) {
 				dst.SetFloat(f)
 			}
 		}
+	case reflect.Slice, reflect.Map, reflect.Struct, reflect.Array:
+		// Composite signals (SignalSlice/SignalMap) mirror the encodeScalar
+		// json fallback: round-trip the already-decoded value back through
+		// JSON into dst so an inbound composite signal reaches the action,
+		// matching the scalar parity. dst is always addressable (both callers
+		// pass reflect.ValueOf(&field).Elem()). Best-effort: a shape mismatch
+		// (client sends a string for a []int signal) zeros dst rather than
+		// erroring — the prior value is meaningless once the client diverges.
+		//
+		// Zero dst first so the decode is a full replace, not a merge:
+		// json.Unmarshal into a non-nil map keeps pre-existing keys, so a
+		// client that removed a SignalMap key would otherwise leave the stale
+		// key alive server-side — diverging from the scalar replace contract.
+		if b, err := json.Marshal(raw); err == nil {
+			dst.Set(reflect.Zero(dst.Type()))
+			_ = json.Unmarshal(b, dst.Addr().Interface())
+		}
 	}
 }
