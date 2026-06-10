@@ -479,3 +479,25 @@ func TestUpload_plainFormPostBindsFileAndReturnsHandlerRedirect(t *testing.T) {
 	assert.Equal(t, int64(7), plainUploadGot.Load(),
 		"the avatar file must bind from the multipart form POST")
 }
+
+// An oversize upload trips MaxBytesReader before any action handler runs, so the
+// only way to give it a friendly response (instead of the bare 413 text page) is
+// a framework hook. WithRequestTooLarge installs one.
+func TestWithRequestTooLarge_invokesCustomHandlerInsteadOfBare413(t *testing.T) {
+	t.Parallel()
+	app := via.New(
+		via.WithMaxUploadSize(64),
+		via.WithRequestTooLarge(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusTeapot) // sentinel proving our handler ran
+		})),
+	)
+	server := vt.Serve(t, app)
+	via.Mount[uploadPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	got := tc.Action("Upload").
+		WithFile("avatar", "big.bin", bytes.Repeat([]byte("X"), 4096)).
+		Fire()
+	assert.Equal(t, http.StatusTeapot, got,
+		"an oversize upload must route to WithRequestTooLarge, not the bare 413")
+}

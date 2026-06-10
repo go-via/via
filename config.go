@@ -46,6 +46,7 @@ type config struct {
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
+	tooLargeHandler    http.Handler
 	metrics            Metrics
 	backplane          Backplane
 }
@@ -283,6 +284,17 @@ func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
 // and decide whether to redirect, render a "not found" composition, or
 // short-circuit with an empty body.
 func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHandler = h } }
+
+// WithRequestTooLarge sets the handler invoked when an action POST exceeds the
+// body cap (WithMaxRequestBody / WithMaxUploadSize) — the limit trips in
+// MaxBytesReader before any action handler runs, so this is the only place to
+// turn the default bare "request too large" 413 into a friendly response (e.g.
+// redirect a too-large file upload back to its form with a flash message).
+// h receives the raw request; without this option the framework writes a plain
+// 413.
+func WithRequestTooLarge(h http.Handler) Option {
+	return func(c *config) { c.tooLargeHandler = h }
+}
 
 // WithMetrics installs a [Metrics] backend that receives counter / gauge
 // / histogram events for actions, renders, SSE connect/disconnect, and
