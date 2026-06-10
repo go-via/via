@@ -43,6 +43,7 @@ type config struct {
 	maxRequestBody     int64
 	maxUploadSize      int64
 	maxContexts        int
+	maxSessions        int
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
@@ -70,6 +71,9 @@ func (c *config) validate() {
 	}
 	if c.maxContexts < 0 {
 		panic(fmt.Sprintf("via.WithMaxContexts: must be >= 0, got %d", c.maxContexts))
+	}
+	if c.maxSessions < 0 {
+		panic(fmt.Sprintf("via.WithMaxSessions: must be >= 0, got %d", c.maxSessions))
 	}
 }
 
@@ -265,6 +269,14 @@ func WithMaxUploadSize(n int64) Option { return func(c *config) { c.maxUploadSiz
 // crude but effective floor against tab-spam DoS. Default 0 (no
 // cap). Tune to (expected peak users × tabs per user × 2).
 func WithMaxContexts(n int) Option { return func(c *config) { c.maxContexts = n } }
+
+// WithMaxSessions caps the number of concurrent live sessions. Once the cap
+// is met, a request that would mint or adopt a NEW session is rejected with
+// 503 instead of growing the session map — a crude floor against the
+// cookieless-crawler flood that would otherwise OOM the pod. A client that
+// already holds a session is unaffected. Default 0 (no cap). Tune to
+// (expected peak users × 2).
+func WithMaxSessions(n int) Option { return func(c *config) { c.maxSessions = n } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
 // callback for action errors and panics. The error from a panic is wrapped
