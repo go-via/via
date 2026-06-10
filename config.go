@@ -305,6 +305,8 @@ func WithoutSSEReconnect() Option { return func(c *config) { c.noReconnect = tru
 // log regardless; this only controls what the DEFAULT client notification
 // shows. Off by default — leaking raw panic text to clients is an
 // information-disclosure risk. Turn it on in development for faster feedback.
+//
+// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
 func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
 
 // WithoutDevChecks disables via's by-default runtime binding check. That check
@@ -314,6 +316,8 @@ func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = tru
 // zeroes the runtime's by-address binding and leaves the page rendering once
 // then going dead. It's on by default because that footgun is silent and
 // expensive to debug; opt out only if it ever false-positives in your build.
+//
+// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
 func WithoutDevChecks() Option { return func(c *config) { c.devChecks = false } }
 
 // WithStrictDecode rejects a client signal value that cannot be represented in
@@ -323,6 +327,8 @@ func WithoutDevChecks() Option { return func(c *config) { c.devChecks = false } 
 // error and its handler does not run, so corrupt input can't reach server
 // state. Off by default; turn it on when client input is untrusted and a lossy
 // decode must fail loud rather than silently clamp.
+//
+// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
 func WithStrictDecode() Option { return func(c *config) { c.strictDecode = true } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
@@ -368,9 +374,17 @@ func WithMetrics(m Metrics) Option { return func(c *config) { c.metrics = m } }
 // or a nil b) resolves internally to [InMemory], so the Backplane interface is
 // exercised on every single-pod run and there is no nil-special-case path. Wire
 // it once at boot; it is never swapped at runtime.
+//
+// EXPERIMENTAL: the clustered/distributed path is pre-GA. Single-pod use (the
+// default InMemory backplane) is stable, but the [Backplane] interface and its
+// cross-pod consistency semantics may change before 1.0 — 1.0 does not promise
+// a distributed GA. Wire a custom backplane knowing the contract can shift.
 func WithBackplane(b Backplane) Option { return func(c *config) { c.backplane = b } }
 
 // Plugin extends the App at registration time.
+//
+// EXPERIMENTAL: the plugin system (this interface and the bundled picocss /
+// echarts / maplibre packages) is young and may change before 1.0.
 type Plugin interface {
 	Register(*App)
 }

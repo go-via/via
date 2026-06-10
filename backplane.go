@@ -79,6 +79,10 @@ type EventLog interface {
 // fuses a durable per-key CAS Store and a durable ordered EventLog, plus a
 // graceful drain on App.Shutdown. After Close, Append/Subscribe return
 // ErrClosed and never block.
+//
+// EXPERIMENTAL: the clustered/distributed path is pre-GA. The default InMemory
+// (single-pod) backplane is stable, but this interface and the surrounding
+// guarantees may change before 1.0 — 1.0 does not promise a distributed GA.
 type Backplane interface {
 	Store
 	EventLog

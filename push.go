@@ -135,6 +135,10 @@ func (ctx *Ctx) Reload() {
 // encoded into the snippet so it can neither break out of the JS string
 // nor inject markup — Go's json HTML-escaping also neutralises a
 // </script> breakout of the surrounding datastar script element.
+//
+// EXPERIMENTAL: the contract (show a transient message) is stable, but the
+// rendered SURFACE — the toast markup, styling, and stacking — may change
+// before 1.0; don't depend on the emitted DOM.
 func (ctx *Ctx) Notify(message string) {
 	if ctx == nil || message == "" {
 		return
