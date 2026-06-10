@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 )
 
@@ -97,7 +96,7 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 func (a *App) dispatchBroadcast(rec broadcastRecord) int {
 	if a.cfg.backplane != nil {
 		if b, err := json.Marshal(rec); err == nil {
-			_, _ = a.backplane.Append(context.Background(), broadcastKey, b)
+			_, _ = a.backplane.Append(a.backplaneCtx, broadcastKey, b)
 		}
 		return len(a.snapshotContexts())
 	}
@@ -128,7 +127,7 @@ func (a *App) applyBroadcast(rec broadcastRecord) int {
 // ephemeral, not convergent. The goroutine exits when the Subscribe channel
 // closes (backplane Close on Shutdown). Only started when clustered.
 func (a *App) startBroadcastTailer() {
-	bg := context.Background()
+	bg := a.backplaneCtx
 	head, _, err := a.backplane.Head(bg, broadcastKey)
 	if err != nil {
 		return

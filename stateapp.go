@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -96,7 +95,7 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		return nil
 	}
 	app := ctx.app
-	bg := context.Background()
+	bg := app.backplaneCtx
 
 	for try := 0; try < updateMaxRetries; try++ {
 		data, rev, ok, err := app.backplane.LoadSnapshot(bg, valKey(a.wireKey))

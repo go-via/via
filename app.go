@@ -94,6 +94,13 @@ type App struct {
 	backplaneDone     chan struct{}
 	backplaneDoneOnce sync.Once
 
+	// backplaneCtx is the parent of every backplane I/O call (Subscribe, Append,
+	// CAS, LoadSnapshot, Compact). Shutdown cancels it so a wedged backend cannot
+	// keep an in-flight call alive and block the drain — without it those calls
+	// rode context.Background() and could never be aborted.
+	backplaneCtx    context.Context
+	backplaneCancel context.CancelFunc
+
 	middlewareMu sync.Mutex
 	middleware   []Middleware
 
@@ -330,6 +337,7 @@ func New(opts ...Option) *App {
 	verifyMethodNameTrampoline()
 
 	mux := http.NewServeMux()
+	backplaneCtx, backplaneCancel := context.WithCancel(context.Background())
 	a := &App{
 		mux:             mux,
 		contextRegistry: make(map[string]*Ctx),
@@ -340,6 +348,8 @@ func New(opts ...Option) *App {
 		valStates:       make(map[string]*valCell),
 		sessDecoders:    make(map[string]func([]byte) (any, error)),
 		backplaneDone:   make(chan struct{}),
+		backplaneCtx:    backplaneCtx,
+		backplaneCancel: backplaneCancel,
 		cfg: config{
 			addr:              ":3000",
 			logLevel:          LogWarn,

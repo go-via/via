@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 )
@@ -90,14 +89,14 @@ func (a *App) writeSnapshot(ls *logState, key string) {
 	// durable snapshot to cover the prefix it drops) and a peer's gap-reseed
 	// would lose records. Read the current cell, skip if we don't advance it, and
 	// CAS against the rev we just read.
-	curData, curRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	curData, curRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, snapKey(key))
 	if ok {
 		var curCp checkpoint
 		if json.Unmarshal(curData, &curCp) == nil && cp.CoveredOffset <= curCp.CoveredOffset {
 			return // a peer's snapshot already covers at least this offset
 		}
 	}
-	_, err = a.backplane.CAS(context.Background(), snapKey(key), curRev, b)
+	_, err = a.backplane.CAS(a.backplaneCtx, snapKey(key), curRev, b)
 	if errors.Is(err, ErrCASConflict) {
 		return // a peer wrote concurrently; retry next interval
 	}

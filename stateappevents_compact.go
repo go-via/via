@@ -1,7 +1,5 @@
 package via
 
-import "context"
-
 // maybeCompact reclaims the log prefix a DURABLE snapshot now covers. Called
 // only on a successful snapshot CAS (snapshot-FIRST, compact-SECOND). The floor
 // LAGS one snapshot generation — Compact(before:prevSnapOffset) discards only
@@ -32,7 +30,7 @@ func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
 	if cmin, ok := a.minConsumerOffset(key); ok && cmin < floor {
 		floor = cmin
 	}
-	_ = c.Compact(context.Background(), key, floor) // best-effort; a failure just defers reclamation
+	_ = c.Compact(a.backplaneCtx, key, floor) // best-effort; a failure just defers reclamation
 	ls.mu.Lock()
 	ls.prevSnapOffset = covered
 	ls.mu.Unlock()
