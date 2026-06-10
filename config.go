@@ -46,6 +46,7 @@ type config struct {
 	maxSessions        int
 	noHealth           bool
 	verboseErrors      bool
+	devChecks          bool
 	strictDecode       bool
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
@@ -295,6 +296,14 @@ func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = tru
 // shows. Off by default — leaking raw panic text to clients is an
 // information-disclosure risk. Turn it on in development for faster feedback.
 func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
+
+// WithDevChecks enables development-only runtime assertions that cost a little
+// per render and so are off in production. Currently it re-walks a page's bound
+// state handles after OnInit and fails the render if one was orphaned by
+// replacing a child composition by value (p.Child = T{...}), which silently
+// zeroes the runtime's by-address binding — the page would otherwise render
+// once and then go dead. Run it in dev/CI to catch the footgun early.
+func WithDevChecks() Option { return func(c *config) { c.devChecks = true } }
 
 // WithStrictDecode rejects a client signal value that cannot be represented in
 // its Signal[T] type — a number that overflows the target int/uint/float width,

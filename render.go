@@ -64,6 +64,14 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 		}()
 	}
 
+	if a.cfg.devChecks {
+		if err := validateBindings(ctx, cmpVal, d); err != nil {
+			a.logErr(ctx, "%v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	body, ok := a.renderView(ctx, w)
 	if !ok {
 		return
