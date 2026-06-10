@@ -344,7 +344,7 @@ func (ctx *Ctx) SyncNow() {
 // surfaces the value via the normal dirty-bit path.
 //
 // Explicit publish primitives (ctx.Patch().{Signal,Signals,Element,Elements},
-// ExecScript, Toast, Reload, Redirect) are NOT suppressed by SyncOff
+// ExecScript, Notify, Reload, Redirect) are NOT suppressed by SyncOff
 // — they enqueue patches directly rather than through the dirty-bit
 // flush. This is deliberate so a panic-recovery error toast still
 // reaches the user even when the action was running silent.

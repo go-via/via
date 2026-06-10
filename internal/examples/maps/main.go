@@ -181,14 +181,14 @@ func (p *Page) DropPin(ctx *via.Ctx) {
 func (p *Page) FocusMarker(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
 	p.Map.FlyTo(ctx, e.LngLat(), 6)
-	ctx.Toast(fmt.Sprintf("Selected %s", e.MarkerID))
+	ctx.Notify(fmt.Sprintf("Selected %s", e.MarkerID))
 }
 
 // PinMoved reports where a dragged marker was dropped — drag-to-reposition,
 // driven entirely from Go.
 func (p *Page) PinMoved(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Toast(fmt.Sprintf("%s moved to %.4f, %.4f", e.MarkerID, e.Lat, e.Lng))
+	ctx.Notify(fmt.Sprintf("%s moved to %.4f, %.4f", e.MarkerID, e.Lat, e.Lng))
 }
 
 // ZoneClicked opens a popup ("dialog") at the clicked feature, showing details
@@ -205,7 +205,7 @@ func (p *Page) ZoneClicked(ctx *via.Ctx) {
 // hatch, reporting where and at what zoom.
 func (p *Page) RightClicked(ctx *via.Ctx) {
 	e := p.Map.Event(ctx)
-	ctx.Toast(fmt.Sprintf("Right-clicked %.3f, %.3f @ z%.1f", e.Lat, e.Lng, e.Zoom))
+	ctx.Notify(fmt.Sprintf("Right-clicked %.3f, %.3f @ z%.1f", e.Lat, e.Lng, e.Zoom))
 }
 
 func (p *Page) View(ctx *via.CtxR) h.H {

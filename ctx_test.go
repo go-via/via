@@ -375,7 +375,7 @@ func TestCtx_coreHelpersTolerateNilReceiver(t *testing.T) {
 	}
 }
 
-// Reload / Toast / Redirect — ctx imperative helpers emit SSE frames
+// Reload / Notify / Redirect — ctx imperative helpers emit SSE frames
 
 type ctxScriptPage struct{}
 
@@ -385,24 +385,24 @@ func (p *ctxScriptPage) DoReload(ctx *via.Ctx) error {
 }
 
 func (p *ctxScriptPage) DoToast(ctx *via.Ctx) error {
-	ctx.Toast("saved!")
+	ctx.Notify("saved!")
 	return nil
 }
 
 func (p *ctxScriptPage) DoToastSpecial(ctx *via.Ctx) error {
 	// Embedded quotes, newline, and a backslash exercise escape paths
 	// where Go's %q diverges from JSON / JS string literal syntax.
-	ctx.Toast(`he said "ok\n done"`)
+	ctx.Notify(`he said "ok\n done"`)
 	return nil
 }
 
 func (p *ctxScriptPage) DoToastHTML(ctx *via.Ctx) error {
-	ctx.Toast(`<img src=x onerror="boom()">`)
+	ctx.Notify(`<img src=x onerror="boom()">`)
 	return nil
 }
 
 func (p *ctxScriptPage) DoToastScriptBreakout(ctx *via.Ctx) error {
-	ctx.Toast(`</script><img src=x onerror=boom()>`)
+	ctx.Notify(`</script><img src=x onerror=boom()>`)
 	return nil
 }
 
@@ -421,7 +421,7 @@ func (p *redirectPage) Go(ctx *via.Ctx) error {
 }
 
 func (p *redirectPage) Ack(ctx *via.Ctx) error {
-	ctx.Toast("ack")
+	ctx.Notify("ack")
 	return nil
 }
 
@@ -444,7 +444,7 @@ func TestCtx_Reload_emitsLocationReloadScript(t *testing.T) {
 	vt.AwaitFrame(t, frames, 2*time.Second, "location.reload()")
 }
 
-func TestCtx_Toast_rendersStyledToastNotAlert(t *testing.T) {
+func TestCtx_Notify_rendersStyledToastNotAlert(t *testing.T) {
 	t.Parallel()
 
 	app := via.New()
@@ -461,11 +461,11 @@ func TestCtx_Toast_rendersStyledToastNotAlert(t *testing.T) {
 		"default toast must not fall back to a blocking window.alert")
 }
 
-func TestCtx_Toast_injectsMessageAsJSStringLiteral(t *testing.T) {
+func TestCtx_Notify_injectsMessageAsJSStringLiteral(t *testing.T) {
 	t.Parallel()
 	// The message rides into the toast script as a JSON-encoded literal:
 	// the inner quote becomes \" and the newline \n, matching how a JS
-	// engine parses a string literal. Catches a regression where Toast
+	// engine parses a string literal. Catches a regression where Notify
 	// interpolated the raw message into the script and let it break out
 	// of the string context.
 	app := via.New()
@@ -482,7 +482,7 @@ func TestCtx_Toast_injectsMessageAsJSStringLiteral(t *testing.T) {
 	assert.NotContains(t, frame, "alert(")
 }
 
-func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
+func TestCtx_Notify_escapesHTMLMarkupInMessage(t *testing.T) {
 	t.Parallel()
 	// json.Marshal HTML-escapes the angle brackets and ampersand to their
 	// unicode-escaped forms, so an HTML payload reaches the wire as an
@@ -503,7 +503,7 @@ func TestCtx_Toast_escapesHTMLMarkupInMessage(t *testing.T) {
 		"user HTML must be escaped, never emitted as live markup")
 }
 
-func TestCtx_Toast_cannotBreakOutOfTheScriptElement(t *testing.T) {
+func TestCtx_Notify_cannotBreakOutOfTheScriptElement(t *testing.T) {
 	t.Parallel()
 	// datastar delivers the toast snippet inside a <script>…</script>
 	// element, so a message carrying a literal </script> is the
@@ -573,7 +573,7 @@ func TestCtx_Redirect_allowsSafeURLs(t *testing.T) {
 func TestCtx_Redirect_dropsDangerousURLs(t *testing.T) {
 	t.Parallel()
 	// Open-redirect / XSS vectors must not reach the client. The Redirect
-	// patch is dropped; a subsequent observable patch (Toast) confirms the
+	// patch is dropped; a subsequent observable patch (Notify) confirms the
 	// SSE stream is still alive and that the dangerous URL never appears
 	// in any frame that did arrive.
 	cases := []struct {
@@ -922,7 +922,7 @@ func (p *syncOffExplicitPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
 func (p *syncOffExplicitPage) SilentToast(ctx *via.Ctx) error {
 	ctx.SyncOff()
-	ctx.Toast("ping")
+	ctx.Notify("ping")
 	return nil
 }
 
@@ -941,7 +941,7 @@ func (p *syncOffExplicitPage) SilentSyncElements(ctx *via.Ctx) error {
 func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
 	t.Parallel()
 	// SyncOff gates dirty-bit-driven publishing. PatchSignal /
-	// SyncElements / Toast write directly onto the patch queue and
+	// SyncElements / Notify write directly onto the patch queue and
 	// must surface even while silent — they're how user code signals
 	// "publish this regardless of pending dirty bits".
 	cases := []struct {
@@ -949,7 +949,7 @@ func TestSyncOff_doesNotSuppressExplicitPublishPrimitives(t *testing.T) {
 		action string
 		expect string
 	}{
-		{"Toast", "SilentToast", "ping"},
+		{"Notify", "SilentToast", "ping"},
 		{"PatchSignal", "SilentPatchSignal", "hello"},
 		{"SyncElements", "SilentSyncElements", `id="marker"`},
 	}

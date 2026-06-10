@@ -376,6 +376,13 @@ func New(opts ...Option) *App {
 		a.backplane = InMemory()
 	}
 
+	// Clustered only: tail the shared broadcast feed so site-wide Broadcasts
+	// issued on any pod reach this pod's tabs. The default in-process backplane
+	// has no peers, so a single-pod app applies broadcasts inline instead.
+	if a.cfg.backplane != nil {
+		a.startBroadcastTailer()
+	}
+
 	a.mux.HandleFunc("GET /_datastar.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
 		_, _ = w.Write(datastarJS)

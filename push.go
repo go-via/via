@@ -11,7 +11,7 @@ import (
 // Imperative client-push helpers on *Ctx: ways for the server to tell
 // the browser "patch these signals / morph these elements / run this JS
 // / navigate / alert / reload" at the next flush. [Ctx.Redirect] and
-// [Ctx.Toast] are convenience wrappers over the same patch queue; all of
+// [Ctx.Notify] are convenience wrappers over the same patch queue; all of
 // these queue side effects directly rather than returning errors.
 
 // Patch groups the low-level wire-push primitives — push a signal value
@@ -123,7 +123,8 @@ func (ctx *Ctx) Reload() {
 	ctx.ExecScript("location.reload()")
 }
 
-// Toast shows message as a small, styled, non-blocking notice that slides
+// Notify shows message as a transient notification. The default (and
+// currently only) surface is a small, styled, non-blocking toast that slides
 // into a fixed overlay and auto-dismisses after a few seconds. It is the
 // default surface for recovered action-handler panics, and the "show a
 // quick notice and move on" sugar for app code. Zero setup: the first
@@ -134,7 +135,7 @@ func (ctx *Ctx) Reload() {
 // encoded into the snippet so it can neither break out of the JS string
 // nor inject markup — Go's json HTML-escaping also neutralises a
 // </script> breakout of the surrounding datastar script element.
-func (ctx *Ctx) Toast(message string) {
+func (ctx *Ctx) Notify(message string) {
 	if ctx == nil || message == "" {
 		return
 	}
@@ -145,7 +146,7 @@ func (ctx *Ctx) Toast(message string) {
 
 // buildToastScript wraps message into the self-contained, XSS-safe toast
 // snippet (JSON-encoded so arbitrary text — including markup — is inert).
-// Shared by [Ctx.Toast] and [App.BroadcastToast]. ok is false only when the
+// Shared by [Ctx.Notify] and [App.BroadcastNotify]. ok is false only when the
 // message can't be JSON-encoded, which for a string never happens.
 func buildToastScript(message string) (string, bool) {
 	b, err := json.Marshal(message)
@@ -156,7 +157,7 @@ func buildToastScript(message string) (string, bool) {
 }
 
 // toastScriptHead / toastScriptTail wrap a JSON-encoded message into the
-// self-contained toast snippet ctx.Toast emits. It rides ExecScript — the
+// self-contained toast snippet ctx.Notify emits. It rides ExecScript — the
 // same script-frame path the previous alert() used — so there is no
 // document change, no new public API, and no CSP posture shift versus the
 // alert it replaces. The <style> and container are keyed by element id so
