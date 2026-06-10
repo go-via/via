@@ -45,6 +45,7 @@ type config struct {
 	maxContexts        int
 	maxSessions        int
 	noHealth           bool
+	noReconnect        bool
 	verboseErrors      bool
 	devChecks          bool
 	strictDecode       bool
@@ -288,6 +289,15 @@ func WithMaxSessions(n int) Option { return func(c *config) { c.maxSessions = n 
 // and /healthz report 200 while the process is up; /readyz reports 503 once
 // Shutdown begins draining. Opt out when the app needs to own those paths.
 func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = true } }
+
+// WithoutSSEReconnect removes the small client-side reconnect manager via
+// injects into every page. By default that manager watches Datastar's fetch
+// lifecycle: it shows a "Reconnecting…" banner while the SSE stream is retrying
+// and, once Datastar's retries are exhausted (a graceful-deploy clean close or
+// a persistent failure that would otherwise leave the tab silently frozen),
+// reloads the page to re-bootstrap a fresh stream and session — bounded by a
+// reload-loop guard. Opt out to supply your own reconnect handling.
+func WithoutSSEReconnect() Option { return func(c *config) { c.noReconnect = true } }
 
 // WithVerboseErrors surfaces the real error message of a recovered action
 // panic to the browser instead of the generic "Something went wrong". The

@@ -195,6 +195,15 @@ recovers on its own:
   instead of freezing (`via.sse.recover` with `mode=reload`).
 - A `via_tab` whose route prefix was never mounted is treated as forged and
   still 404s — junk traffic can't mint contexts.
+- **Retries exhausted (clean-close deploy, or a persistent failure):** the
+  server-side recovery above can only run once a reconnect *reaches* the
+  server. If Datastar's own retries are exhausted first — a graceful
+  clean-close on deploy, or a session mismatch that keeps 403-ing — the tab
+  would otherwise freeze silently. via injects a small client-side reconnect
+  manager that shows a "Reconnecting…" banner while retrying and, on
+  `retries-failed`, reloads the page (jittered, and bounded to a few attempts
+  so a down server can't pin a reload loop) to re-bootstrap a fresh stream and
+  session. Disable it with `WithoutSSEReconnect()` to supply your own.
 - Sessions are also in-memory; logged-in users re-auth unless you back the
   session store with something durable. `OnInit` runs again on every
   re-bootstrap, so session-backed rehydration (below) applies there too.

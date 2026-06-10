@@ -1,0 +1,35 @@
+package via
+
+// reconnectInit is the client-side reconnect manager injected into every page
+// as a Datastar data-init expression (unless WithoutSSEReconnect). It watches
+// the global `datastar-fetch` lifecycle events Datastar dispatches for its SSE
+// fetch:
+//
+//   - retrying       → the stream dropped and Datastar is re-attempting; show a
+//     "Reconnecting…" banner so the freeze is visible, not silent.
+//   - started/finished → a healthy fetch; clear the banner.
+//   - retries-failed → Datastar gave up (a graceful-deploy clean close, or a
+//     persistent failure / session mismatch that would otherwise leave the tab
+//     frozen forever). Reload to re-bootstrap a fresh stream + session, after a
+//     jittered delay so a fleet of tabs doesn't stampede the new pod at once.
+//
+// A sessionStorage counter bounds reloads to 3 per failure episode so a server
+// that stays down can't pin the tab in a reload loop; a successful load clears
+// it after the page has been stable for a few seconds. It is a single IIFE so a
+// double injection (e.g. a re-bootstrap) is a no-op via the window guard.
+const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
+	`var K='__via_rc_reloads',b;` +
+	`function show(m){if(!b){b=document.createElement('div');b.id='via-reconnect-banner';` +
+	`b.setAttribute('role','status');b.style.cssText='position:fixed;top:0;left:0;right:0;` +
+	`z-index:2147483647;padding:.5rem 1rem;text-align:center;font:14px system-ui,sans-serif;` +
+	`background:#b45309;color:#fff';(document.body||document.documentElement).appendChild(b)}` +
+	`b.textContent=m;b.style.display='block'}` +
+	`function hide(){if(b)b.style.display='none'}` +
+	`document.addEventListener('datastar-fetch',function(e){var t=e.detail&&e.detail.type;` +
+	`if(t==='retrying'){show('Reconnecting...')}` +
+	`else if(t==='started'||t==='finished'){hide()}` +
+	`else if(t==='retries-failed'){var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
+	`if(n>=3){show('Connection lost. Please refresh the page.');return}` +
+	`show('Connection lost - reconnecting...');try{sessionStorage.setItem(K,n+1)}catch(_){}` +
+	`setTimeout(function(){location.reload()},500+Math.floor(Math.random()*1500))}});` +
+	`addEventListener('load',function(){setTimeout(function(){try{sessionStorage.removeItem(K)}catch(_){}},5000)})})()`
