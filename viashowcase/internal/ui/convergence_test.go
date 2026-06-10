@@ -2,7 +2,6 @@ package ui_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +40,6 @@ func TestVoteFoldsIntoProjectionAcrossApps(t *testing.T) {
 	t.Parallel()
 	shared := via.InMemory()
 
-	var srvA, srvB *httptest.Server
 	appA := via.New(via.WithBackplane(shared))
 	srvA := vt.Serve(t, appA)
 	via.Mount[probe](appA, "/")

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,17 +54,12 @@ func (j *Join) OnDispose(ctx *via.Ctx)       { _ = j.bump(ctx, -1) }
 
 func (j *Join) bump(ctx *via.Ctx, d int) error {
 	return j.Present.Update(ctx, func(m map[string]int) (map[string]int, error) {
-		out := make(map[string]int, len(m)+1)
-		for k, v := range m {
-			out[k] = v
-		}
-		out[j.Code] += d
-		return out, nil
+		return core.BumpPresence(m, j.Code, d), nil
 	})
 }
 
 func (j *Join) nick(ctx *via.Ctx) string {
-	n := strings.TrimSpace(j.Nick.Read(ctx))
+	n := core.NormalizeText(j.Nick.Read(ctx), 40)
 	if n == "" {
 		return "guest"
 	}
@@ -71,12 +67,21 @@ func (j *Join) nick(ctx *via.Ctx) string {
 }
 
 // Vote records a choice for poll rooms (the choice label rides on the signal).
+// The vote buttons are bypassable — the choice arrives on a client-set signal —
+// so poll rooms reject anything not on the fixed ballot; word-cloud rooms accept
+// free text.
 func (j *Join) Vote(ctx *via.Ctx) error {
 	c := strings.TrimSpace(j.Draft.Read(ctx))
-	if c == "" {
+	if c == "" || (j.room.Kind == "poll" && !slices.Contains(j.room.Choices, c)) {
 		return nil
 	}
-	_, err := j.Votes.Append(ctx, core.Vote{Room: j.Code, Choice: c, By: j.nick(ctx)})
+	if j.room.Kind == "cloud" {
+		c = core.NormalizeText(c, 40) // cap free-text words; poll choices stay exact for ballot matching
+	}
+	// Poll votes are one-per-voter (latest choice wins); word-cloud words all count.
+	_, err := j.Votes.Append(ctx, core.Vote{
+		Room: j.Code, Choice: c, By: j.nick(ctx), Single: j.room.Kind == "poll",
+	})
 	j.Draft.Op(ctx).Clear()
 	if err == nil {
 		ctx.Toast("Vote counted ✓") // phone feedback — the tap registered
@@ -86,7 +91,7 @@ func (j *Join) Vote(ctx *via.Ctx) error {
 
 // Ask appends a new question to the board.
 func (j *Join) Ask(ctx *via.Ctx) error {
-	t := strings.TrimSpace(j.Draft.Read(ctx))
+	t := core.NormalizeText(j.Draft.Read(ctx), 280)
 	if t == "" {
 		return nil
 	}
@@ -106,7 +111,7 @@ func (j *Join) Up(ctx *via.Ctx) error {
 	if id == "" {
 		return nil
 	}
-	_, err := j.QA.Append(ctx, core.QAEvent{Room: j.Code, Kind: "up", ID: id})
+	_, err := j.QA.Append(ctx, core.QAEvent{Room: j.Code, Kind: "up", ID: id, By: j.nick(ctx)})
 	return err
 }
 

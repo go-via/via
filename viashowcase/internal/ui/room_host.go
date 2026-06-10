@@ -51,15 +51,7 @@ func (p *Host) OnDispose(ctx *via.Ctx) { p.bumpPresence(ctx, -1) }
 
 func (p *Host) bumpPresence(ctx *via.Ctx, d int) {
 	_ = p.Present.Update(ctx, func(m map[string]int) (map[string]int, error) {
-		out := make(map[string]int, len(m)+1)
-		for k, v := range m {
-			out[k] = v
-		}
-		out[p.Code] += d
-		if out[p.Code] < 0 {
-			out[p.Code] = 0
-		}
-		return out, nil
+		return core.BumpPresence(m, p.Code, d), nil
 	})
 }
 
@@ -85,29 +77,38 @@ func (p *Host) push(ctx *via.Ctx) {
 
 // Notice broadcasts a "starting now" banner to every live tab.
 func (p *Host) Notice(ctx *via.Ctx) error {
-	Deps.App.Broadcast(buildNoticeScript(p.room.Title))
+	Deps.App.Broadcast(buildNoticeScript(p.room.Code, p.room.Title))
 	return nil
 }
 
-// buildNoticeScript returns the JS snippet broadcast to every live tab to
-// display the "starting now" banner. The title travels as the only argument
-// of a function-call IIFE, JSON-parsed at the call site — a single isolated
-// data segment, never dropped between two raw JS string fragments. That
-// shape is the only one the CodeQL "potentially unsafe quoting" rule accepts
-// for dynamic values bound for an inline <script>: the JSON literal closes
-// the surrounding parens, JS line separators (U+2028/U+2029) and a literal
-// </script> in the title are neutralised by json.Marshal's default
-// HTML/control-character escaping, and the banner text is assigned via
+// buildNoticeScript returns the JS snippet broadcast to display the "starting
+// now" banner. App.Broadcast queues it on every live tab app-wide, so the
+// script gates itself to this room: it early-returns unless the tab's path
+// ends with the room code (room URLs are /r/{code} and /host/{code}, so the
+// code is always the final segment), keeping the banner off other rooms and
+// the home/login pages. endsWith (not indexOf) avoids a substring false match
+// since codes are variable-length — a short code must not match a longer
+// code's path.
+//
+// Both the code and the title travel as the JSON-parsed arguments of a
+// function-call IIFE — isolated data segments, never dropped between two raw
+// JS string fragments. That shape is the only one the CodeQL "potentially
+// unsafe quoting" rule accepts for dynamic values bound for an inline
+// <script>: the JSON literal closes the surrounding parens, JS line separators
+// (U+2028/U+2029) and a literal </script> are neutralised by json.Marshal's
+// default HTML/control-character escaping, and the banner text is assigned via
 // textContent (the XSS-safe DOM sink) so the value is treated as text.
-func buildNoticeScript(title string) string {
+func buildNoticeScript(code, title string) string {
+	codeJSON, _ := json.Marshal(code)
 	msg, _ := json.Marshal("▶ Starting now: " + title)
-	return `(function(msg){var b=document.createElement('div');b.textContent=msg;` +
+	return `(function(code,msg){if(!location.pathname.endsWith('/'+code)){return;}` +
+		`var b=document.createElement('div');b.textContent=msg;` +
 		`b.style.cssText='position:fixed;top:0;left:0;right:0;` +
 		`z-index:9999;background:#ffbf00;color:#0b0b0f;text-align:center;padding:.8rem;font-weight:700;` +
 		`font-family:Inter,system-ui,sans-serif;letter-spacing:.01em;box-shadow:0 6px 24px rgba(255,191,0,.3);` +
 		`animation:slideDown .25s ease';document.body.appendChild(b);` +
 		`setTimeout(function(){b.remove()},6000)})(JSON.parse(` +
-		string(msg) + `))`
+		string(codeJSON) + `),JSON.parse(` + string(msg) + `))`
 }
 
 func (p *Host) View(ctx *via.CtxR) h.H {

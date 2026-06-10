@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -50,13 +49,10 @@ func (p *Profile) SaveName(ctx *via.Ctx) error {
 	if !ok {
 		return nil
 	}
-	name := strings.TrimSpace(p.Name.Read(ctx))
+	name := core.NormalizeText(p.Name.Read(ctx), 60)
 	if name == "" {
 		p.Name.Write(ctx, u.Display)
 		return nil
-	}
-	if len(name) > 60 {
-		name = name[:60]
 	}
 	if err := Deps.DB.SetDisplay(context.Background(), u.ID, name); err != nil {
 		return err
@@ -106,6 +102,14 @@ func (p *Profile) Upload(ctx *via.Ctx) error {
 			return err
 		}
 		ct := http.DetectContentType(data)
+		// accept="image/*" is client-side only; a crafted upload could smuggle
+		// HTML that avatarHandler would serve inline (stored XSS). Reject
+		// anything that isn't a safe raster image.
+		if !core.IsAllowedAvatarType(ct) {
+			ctx.Toast("Avatar must be a PNG, JPEG, GIF or WebP image.")
+			http.Redirect(ctx.Writer(), ctx.Request(), "/app/profile", http.StatusSeeOther)
+			return nil
+		}
 		if err := Deps.DB.SetAvatar(context.Background(), u.ID, ct, data); err != nil {
 			return err
 		}
@@ -154,7 +158,7 @@ func (p *Profile) View(ctx *via.CtxR) h.H {
 				h.Input(h.Type("hidden"), h.Name("via_tab"), h.Value(ctx.ID())),
 				h.Label(h.Text("Choose an image"),
 					h.Input(h.Type("file"), h.Name("avatar"), h.Attr("accept", "image/*"), h.Attr("required")),
-					h.Small(h.Class("hint"), h.Text("Square images look best. PNG, JPG or SVG."))),
+					h.Small(h.Class("hint"), h.Text("Square images look best. PNG, JPG, GIF or WebP."))),
 				h.Button(h.Type("submit"), h.Text("Upload avatar")),
 			),
 		),
