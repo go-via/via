@@ -307,13 +307,14 @@ func WithoutSSEReconnect() Option { return func(c *config) { c.noReconnect = tru
 // information-disclosure risk. Turn it on in development for faster feedback.
 func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
 
-// WithDevChecks enables development-only runtime assertions that cost a little
-// per render and so are off in production. Currently it re-walks a page's bound
-// state handles after OnInit and fails the render if one was orphaned by
+// WithoutDevChecks disables via's by-default runtime binding check. That check
+// runs once per composition descriptor (the cost amortizes to ~zero across
+// renders): after OnInit it verifies no bound state handle was orphaned by
 // replacing a child composition by value (p.Child = T{...}), which silently
-// zeroes the runtime's by-address binding — the page would otherwise render
-// once and then go dead. Run it in dev/CI to catch the footgun early.
-func WithDevChecks() Option { return func(c *config) { c.devChecks = true } }
+// zeroes the runtime's by-address binding and leaves the page rendering once
+// then going dead. It's on by default because that footgun is silent and
+// expensive to debug; opt out only if it ever false-positives in your build.
+func WithoutDevChecks() Option { return func(c *config) { c.devChecks = false } }
 
 // WithStrictDecode rejects a client signal value that cannot be represented in
 // its Signal[T] type — a number that overflows the target int/uint/float width,

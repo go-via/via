@@ -154,6 +154,7 @@ func buildDescriptor[C any]() *cmpDescriptor {
 		initIdx:      -1,
 		connectIdx:   -1,
 		disposeIdx:   -1,
+		bind:         &bindGuard{},
 	}
 
 	walkStruct(desc, typ, nil, "")
