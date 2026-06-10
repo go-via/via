@@ -103,7 +103,14 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mb *http.MaxBytesError
 		if errors.As(err, &mb) {
-			http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			// The body cap trips here, before the action handler runs, so a
+			// friendly response (vs the bare 413) is only reachable via the
+			// app-level WithRequestTooLarge hook.
+			if h := a.cfg.tooLargeHandler; h != nil {
+				h.ServeHTTP(w, r)
+			} else {
+				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
+			}
 			return
 		}
 		// Malformed body / wrong content type — fall through to the

@@ -20,6 +20,9 @@ type Profile struct {
 	Name   via.SignalStr `via:"display"`
 	Theme  via.SignalStr `via:"theme"`
 	Mode   via.SignalStr `via:"mode"`
+	// AvatarTooBig is set ("1") when WithRequestTooLarge bounced an oversize
+	// avatar back here, so the page shows a friendly message instead of a 413.
+	AvatarTooBig string `query:"avatarTooBig"`
 }
 
 // OnInit loads the saved preference into the bound signals and reflects
@@ -150,6 +153,9 @@ func (p *Profile) View(ctx *via.CtxR) h.H {
 		),
 		h.Article(h.Class("form-card"),
 			h.H3(h.Text("Avatar")),
+			h.If(p.AvatarTooBig != "", h.Small(h.Role("alert"), h.Class("hint"),
+				h.Style("color:var(--pico-del-color,#b3261e)"),
+				h.Text("That image was over 10 MB — please choose a smaller one."))),
 			// Plain multipart form: file bytes can't ride a Datastar JSON @post.
 			h.Form(
 				h.Method("POST"),

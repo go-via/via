@@ -94,6 +94,12 @@ func run() error {
 		via.WithBackplane(bp),
 		via.WithInsecureCookies(), // demo runs over plain http behind the LB
 		via.WithMaxUploadSize(maxUpload),
+		// The avatar upload is the only oversize-prone action; a too-large file
+		// would otherwise hit a bare 413 page. Bounce back to the profile with a
+		// flag it renders as a friendly message.
+		via.WithRequestTooLarge(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/app/profile?avatarTooBig=1", http.StatusSeeOther)
+		})),
 		via.WithLogger(via.SlogLogger(slog.Default())),
 		via.WithMetrics(logMetrics{}),
 	)
