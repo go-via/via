@@ -92,6 +92,8 @@ func (s *Signal[T]) Text() h.H {
 
 // TextSpan wraps [Signal.Text] in its own span: <span data-text="$key"></span>.
 // Use it where no host element is available to carry the binding.
+//
+// EXPERIMENTAL: a young convenience helper; may change before 1.0.
 func (s *Signal[T]) TextSpan() h.H {
 	return h.Span(h.Data("text", s.dollar))
 }
@@ -104,6 +106,8 @@ func (s *Signal[T]) Show() h.H {
 // ShowUnless is the negation of [Signal.Show]: the element is hidden while
 // the signal is truthy and shown while falsy. Saves hand-writing the "!$key"
 // expression (and re-juggling the $ prefix the typed helpers exist to hide).
+//
+// EXPERIMENTAL: a young convenience helper; may change before 1.0.
 func (s *Signal[T]) ShowUnless() h.H {
 	return h.Data("show", "!"+s.dollar)
 }

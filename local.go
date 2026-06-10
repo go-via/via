@@ -57,6 +57,8 @@ func (l LocalSignal) Text() h.H { return h.Data("text", l.dollar) }
 func (l LocalSignal) Show() h.H { return h.Data("show", l.dollar) }
 
 // ShowUnless is the negation of [LocalSignal.Show].
+//
+// EXPERIMENTAL: a young convenience helper; may change before 1.0.
 func (l LocalSignal) ShowUnless() h.H { return h.Data("show", "!"+l.dollar) }
 
 // Class toggles the named CSS class by the signal's truthiness. See

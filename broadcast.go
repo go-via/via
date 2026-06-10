@@ -36,6 +36,10 @@ type broadcastRecord struct {
 // pod-local. Either way the returned count is THIS pod's live-tab count at call
 // time — the cluster-wide total is unknowable synchronously. Empty script is a
 // no-op.
+//
+// EXPERIMENTAL: the single-process behavior is stable; the cross-pod semantics
+// (the BroadcastNotify / BroadcastSignals family included) ride the pre-GA
+// backplane and may change before 1.0.
 func (a *App) Broadcast(script string) int {
 	if script == "" {
 		return 0
