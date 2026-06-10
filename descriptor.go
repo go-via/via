@@ -70,6 +70,18 @@ type cmpDescriptor struct {
 	disposeIdx   int // method index of OnDispose or -1
 
 	groupMW []Middleware // middleware from the owning Group, if any
+
+	// bind runs validateBindings a single time per composition type (the
+	// by-value child clobber is deterministic per type), caching the verdict so
+	// the per-render cost amortizes to ~zero. A POINTER so per-mount clones
+	// (clone := *desc) share one guard — and so the descriptor stays copyable
+	// (a sync.Once value would trip vet copylocks on the clone).
+	bind *bindGuard
+}
+
+type bindGuard struct {
+	once sync.Once
+	err  error
 }
 
 var (

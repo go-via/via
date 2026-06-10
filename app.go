@@ -402,6 +402,10 @@ func New(opts ...Option) *App {
 			// admin dashboards) is exactly where a non-Secure cookie leaks
 			// on an http downgrade. WithInsecureCookies opts out for dev.
 			secureCookies: true,
+			// The by-value child-clobber check is on by default — it's a real
+			// footgun and the cost amortizes to ~zero (once per descriptor).
+			// WithoutDevChecks opts out.
+			devChecks: true,
 		},
 	}
 	for _, opt := range opts {

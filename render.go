@@ -65,9 +65,13 @@ func (a *App) renderPage(d *cmpDescriptor, w http.ResponseWriter, r *http.Reques
 	}
 
 	if a.cfg.devChecks {
-		if err := validateBindings(ctx, cmpVal, d); err != nil {
-			a.logErr(ctx, "%v", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		// Run the binding check once per descriptor and cache the verdict — the
+		// by-value clobber is deterministic per composition type, so a single
+		// post-OnInit walk catches it and every later render pays nothing.
+		d.bind.once.Do(func() { d.bind.err = validateBindings(ctx, cmpVal, d) })
+		if d.bind.err != nil {
+			a.logErr(ctx, "%v", d.bind.err)
+			http.Error(w, d.bind.err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}

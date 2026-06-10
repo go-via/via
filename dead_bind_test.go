@@ -34,25 +34,10 @@ type ddGoodPage struct {
 
 func (p *ddGoodPage) View(ctx *via.CtxR) h.H { return h.Div() }
 
-// With WithDevChecks a by-value child clobber must be caught loudly at render
-// instead of silently producing dead client bindings that fail only later.
-func TestDeadBind_devChecksCatchByValueClobber(t *testing.T) {
-	t.Parallel()
-
-	app := via.New(via.WithDevChecks())
-	server := vt.Serve(t, app)
-	via.Mount[ddClobberPage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
-		"a by-value child clobber under dev checks must fail the render loudly")
-}
-
-// Without the dev flag, production pays nothing — the (buggy) page still
-// renders, matching today's behavior.
-func TestDeadBind_offByDefault(t *testing.T) {
+// A by-value child clobber must be caught loudly at render BY DEFAULT —
+// silently producing dead client bindings that fail only later is the footgun;
+// the check is cheap (amortized once per descriptor) so it's on without a flag.
+func TestDeadBind_caughtByDefault(t *testing.T) {
 	t.Parallel()
 
 	app := via.New()
@@ -62,15 +47,31 @@ func TestDeadBind_offByDefault(t *testing.T) {
 	resp, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"without WithDevChecks the render is unaffected (prod pays nothing)")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"a by-value child clobber must fail the render loudly by default")
 }
 
-// Dev checks must not false-positive on a correctly-bound composition.
-func TestDeadBind_devChecksPassIntactBindings(t *testing.T) {
+// WithoutDevChecks is the escape hatch: disable the check (e.g. if it ever
+// false-positives) and the buggy page renders as it did before.
+func TestDeadBind_withoutDevChecksRenders(t *testing.T) {
 	t.Parallel()
 
-	app := via.New(via.WithDevChecks())
+	app := via.New(via.WithoutDevChecks())
+	server := vt.Serve(t, app)
+	via.Mount[ddClobberPage](app, "/")
+
+	resp, err := server.Client().Get(server.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"WithoutDevChecks disables the check — the render is unaffected")
+}
+
+// The default check must not false-positive on a correctly-bound composition.
+func TestDeadBind_intactBindingsPass(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
 	server := vt.Serve(t, app)
 	via.Mount[ddGoodPage](app, "/")
 
@@ -78,5 +79,5 @@ func TestDeadBind_devChecksPassIntactBindings(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"an intact composition must render cleanly under dev checks")
+		"an intact composition must render cleanly under the default check")
 }
