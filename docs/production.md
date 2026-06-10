@@ -109,7 +109,9 @@ State backplane (`StateAppEvents`, the clustered event-log path):
 | `via.fold.divergence` | counter | `key` | `WithFoldVerify` caught a non-deterministic fold; the key will not compact |
 | `via.snapshot.unbridgeable` | counter | `key` | compacted-key snapshot can't be migrated to the current codec; projector HALTS |
 | `via.snapshot.erasure_halt` | counter | `key` | a crypto-shred erasure invalidated a compacted (durable-genesis) snapshot; projector HALTS |
-| `via.consumer.error` | counter | `name`, `key` | `OnEvent` handler returned an error; retried head-of-line (does not advance) |
+| `via.consumer.error` | counter | `name`, `key` | `OnEvent` handler returned an error; retried head-of-line with exponential backoff + jitter (does not advance). By default retries forever; `WithMaxAttempts(n>0)` opts the record into being skipped (poisoned) after `n` attempts |
+| `via.consumer.stuck` | gauge | `name`, `key` | per-pod retry attempt count for the head-of-line record an `OnEvent` handler keeps failing; nonzero means the consumer is blocked and pinning the Compactor floor (loud even when blocking forever) |
+| `via.consumer.poisoned` | counter | `name`, `key` | `OnEvent` skipped (dead-lettered or dropped) a record whose handler failed `WithMaxAttempts` times; only fires when skipping is opted into |
 | `via.consumer.undecodable` | counter | `name`, `key` | `OnEvent` skipped a poison record |
 | `via.consumer.forward_incompatible` | counter | `name`, `key` | `OnEvent` blocked on a newer-binary record |
 | `via.consumer.erased` | counter | `name`, `key` | `OnEvent` skipped a crypto-shredded record |
