@@ -171,8 +171,8 @@ func TestFoldVerify_allowsPureFoldToCompact(t *testing.T) {
 
 // Fold-verify is OPT-IN: by default (no WithFoldVerify) the projector does NOT
 // pay the double-fold cost, so an impure fold is NOT flagged and compaction is
-// not blocked by it. This pins the cost as opt-in (the council's dev-mode
-// framing) rather than always-on.
+// not blocked by it. This keeps the cost opt-in (a dev-mode concern)
+// rather than always-on.
 func TestFoldVerify_isOptInAndOffByDefault(t *testing.T) {
 	t.Parallel()
 	spy := &spyMetrics{}

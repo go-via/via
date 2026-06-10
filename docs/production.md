@@ -141,6 +141,30 @@ app.LiveTabs()
 a signal patch. Both return the tab count they reached and deliver via the
 existing patch queue + SSE drain — no extra wiring. Single-process only.
 
+## Horizontal scaling & affinity
+
+A tab's `*via.Ctx` — its SSE stream and the action POSTs that drive it — is
+in-memory on the pod that first served it. So the rule for scaling out is:
+**affinity for transport, backplane for state.** Put the pods behind a
+load balancer that pins each browser to the pod it first hit (sticky by
+cookie), and wire a [backplane](distributed-state) so the *shared* state
+converges across pods. Stickiness only governs per-tab transport; it is not a
+state-sharing mechanism.
+
+Plain round-robin breaks a live tab: its SSE stream and its action POSTs would
+land on different pods, and the pod handling the action has no `*via.Ctx` to
+render against. Two things the load balancer must get right:
+
+- **Sticky cookie** — pin a browser to one pod after its first request.
+- **Generous tunnel/read timeouts** — SSE streams are long-lived; default LB
+  timeouts silently sever an idle-but-open stream.
+
+A complete, runnable deployment ships in
+[`internal/examples/chatcluster`](https://github.com/go-via/via/tree/main/internal/examples/chatcluster):
+JetStream NATS + two app nodes behind an HAProxy that inserts a `VIA_LB`
+cookie, with the affinity config (and the timeout settings) spelled out in
+`haproxy.cfg`. `docker compose up` and it's live.
+
 ## Restart and tab survivability
 
 A live tab's state lives in memory on the server (the `*via.Ctx` and its

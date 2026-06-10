@@ -117,7 +117,7 @@ the public concept (and unify with the pre-existing
 - applog*_internal_test.go → stateappevents_<concern>_internal_test.go (7 files)
 
 Updated two live cross-reference comments in vianats (vianats.go, epoch_test.go)
-to the new filename. Left design-council.md as a historical record.
+to the new filename.
 
 Why: a file name should name its concept; `applog` was ambiguous against actual
 logging and split from the `stateappevents`/`stateapp`/`statesess` family.

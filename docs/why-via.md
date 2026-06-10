@@ -20,8 +20,8 @@ Its one idea: Via expresses the **client/server reactive split as a Go type**.
 `StateSess[T]`, and `StateApp[T]` are server-owned. Whether a piece of UI state
 *round-trips* — makes a server request to change — is decided at the field
 declaration and checked by the compiler, not by a convention you grep for. The
-browser runtime is Datastar (its reactivity engine is called Alien Signals);
-Via ships it so you don't hand-write the reactive layer.
+browser runtime is Datastar, which keeps the page reactive and updates it in
+place; Via ships it so you don't hand-write the reactive layer.
 
 ```go
 type Page struct {
@@ -54,12 +54,12 @@ Each row is an alternative you might already use — skim to the one you know.
 
 | | Language | Authoring | Client runtime | Build step | Reactive state |
 |---|---|---|---|---|---|
-| **Via** | Go | typed structs + `h` DSL | Datastar (Alien Signals) | none | typed fields, client + server |
+| **Via** | Go | typed structs + `h` DSL | Datastar | none | typed fields, client + server |
 | HTMX | any | HTML + `hx-*` attributes | tiny attribute interpreter | none | server-only, manual |
 | templ + HTMX (+ Alpine) | Go | `.templ` files + `hx-*`/`data-*` | HTMX + BYO reactivity | `templ generate` | typed templates, untyped state wiring |
 | Phoenix LiveView | Elixir | EEx templates + macros | morphdom + tiny JS | asset pipeline | `assigns` (server, Elixir-typed) |
 | Hotwire (Turbo) | Ruby | ERB + Turbo Streams | Turbo (HTTP; Streams over WS/SSE) | asset pipeline | server-only, untyped DOM |
-| Datastar (direct) | any | HTML + `data-*` attrs | Datastar (Alien Signals) | none | client signals, manual |
+| Datastar (direct) | any | HTML + `data-*` attrs | Datastar | none | client signals, manual |
 
 Via's wedge is the first column most of the table can't claim: the
 client/server state split is a **typed Go field — end-to-end, compiler-checked,
@@ -90,8 +90,8 @@ non-goals are deliberate.
 - **Not stable yet.** Pre-1.0: APIs can shift between minor versions.
 - **Not an SPA framework.** Routes are server-rendered pages; the browser
   receives HTML, not a JSON bundle. No client-side routing, no offline store.
-- **Coupled to Datastar.** The client reactivity *is* Datastar's Alien Signals
-  runtime — a third-party dependency you inherit, including its reconnect/retry
+- **Coupled to Datastar.** The client reactivity *is* the Datastar runtime —
+  a third-party dependency you inherit, including its reconnect/retry
   behavior. Via removes hand-written reactive JS; it does not abstract over the
   runtime and cannot outlive it.
 - **Single-process by default.** App state is per-pod and horizontal scaling

@@ -27,8 +27,8 @@ func (a *App) maybeCompact(ls *logState, key string, covered Offset) {
 		return
 	}
 	// Never discard an event a registered side-effect consumer has not yet
-	// processed: clamp the floor to the slowest consumer's committed offset
-	// (council line 272 / T-DX-6). A consumer at offset 0 pins it at genesis.
+	// processed: clamp the floor to the slowest consumer's committed offset.
+	// A consumer at offset 0 pins it at genesis.
 	if cmin, ok := a.minConsumerOffset(key); ok && cmin < floor {
 		floor = cmin
 	}

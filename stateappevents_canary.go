@@ -5,8 +5,8 @@ import (
 	"strconv"
 )
 
-// emitFoldDigest publishes the cheap, unconditional fold-divergence canary
-// (council T1-SRE-7): after every advancing fold a pod emits its applied offset
+// emitFoldDigest publishes the cheap, unconditional fold-divergence canary:
+// after every advancing fold a pod emits its applied offset
 // and a digest of the resulting projection, both gauged by key. Two pods that
 // have folded a key to the same offset MUST report the same digest; a persistent
 // (key, offset)-matched digest MISMATCH across pods is fold non-determinism
