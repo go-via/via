@@ -46,6 +46,7 @@ type config struct {
 	maxSessions        int
 	noHealth           bool
 	verboseErrors      bool
+	strictDecode       bool
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
@@ -294,6 +295,15 @@ func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = tru
 // shows. Off by default — leaking raw panic text to clients is an
 // information-disclosure risk. Turn it on in development for faster feedback.
 func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
+
+// WithStrictDecode rejects a client signal value that cannot be represented in
+// its Signal[T] type — a number that overflows the target int/uint/float width,
+// or a value whose JSON shape doesn't match the field — instead of silently
+// truncating it (the best-effort default). The offending action surfaces an
+// error and its handler does not run, so corrupt input can't reach server
+// state. Off by default; turn it on when client input is untrusted and a lossy
+// decode must fail loud rather than silently clamp.
+func WithStrictDecode() Option { return func(c *config) { c.strictDecode = true } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
 // callback for action errors and panics. The error from a panic is wrapped

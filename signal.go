@@ -149,7 +149,7 @@ func (s *Signal[T]) Key() string { return s.key }
 type signalRef interface {
 	bindSlot(slot uint16, key string)
 	encode() ([]byte, error)
-	decodeRaw(raw any)
+	decodeRaw(raw any) error
 }
 
 // signalMarker tags Signal[T] (and types that embed it). Used by the
@@ -171,6 +171,6 @@ func (s *Signal[T]) encode() ([]byte, error) {
 	return encodeScalar(reflect.ValueOf(s.val))
 }
 
-func (s *Signal[T]) decodeRaw(raw any) {
-	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
+func (s *Signal[T]) decodeRaw(raw any) error {
+	return decodeScalarChecked(reflect.ValueOf(&s.val).Elem(), raw)
 }

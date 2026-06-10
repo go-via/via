@@ -192,7 +192,9 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 		ref.bindSlot(uint16(i), s.wireKey)
 		ctx.signalRefs[i] = ref
 		if s.initRaw != "" {
-			ref.decodeRaw(s.initRaw)
+			// Author-supplied `init=` tag value: best-effort, never strict —
+			// a struct-tag default isn't untrusted client input.
+			_ = ref.decodeRaw(s.initRaw)
 		}
 	}
 }

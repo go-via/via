@@ -2,6 +2,8 @@ package via
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 )
@@ -60,14 +62,28 @@ func encodeScalar(v reflect.Value) ([]byte, error) {
 // you accept from the client; validate explicitly inside the action
 // handler if untrusted input might overflow.
 func decodeScalarInto(dst reflect.Value, raw any) {
+	// Best-effort: discard the shape/overflow error so server-side and
+	// non-strict client decodes keep their lenient contract. WithStrictDecode
+	// uses decodeScalarChecked directly to surface it.
+	_ = decodeScalarChecked(dst, raw)
+}
+
+// decodeScalarChecked is decodeScalarInto with reporting: it performs the same
+// best-effort Set (so a discarded error leaves behavior identical) but returns
+// a non-nil error when raw's JSON shape doesn't match dst's kind or a numeric
+// value overflows dst's width. The error never names the field — the caller
+// (injectSignals) wraps it with the wire key.
+func decodeScalarChecked(dst reflect.Value, raw any) error {
 	if raw == nil {
-		return
+		return nil
 	}
 	switch dst.Kind() {
 	case reflect.String:
-		if s, ok := raw.(string); ok {
-			dst.SetString(s)
+		s, ok := raw.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", raw)
 		}
+		dst.SetString(s)
 	case reflect.Bool:
 		switch v := raw.(type) {
 		case bool:
@@ -75,43 +91,88 @@ func decodeScalarInto(dst reflect.Value, raw any) {
 		case string:
 			// `via:"open,init=true"` arrives as a string from the struct
 			// tag; ParseBool covers "true"/"false"/"1"/"0" and friends.
-			if b, err := strconv.ParseBool(v); err == nil {
-				dst.SetBool(b)
+			b, err := strconv.ParseBool(v)
+			if err != nil {
+				return fmt.Errorf("cannot parse %q as bool", v)
 			}
+			dst.SetBool(b)
+		default:
+			return fmt.Errorf("expected bool, got %T", raw)
 		}
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		var val int64
 		switch n := raw.(type) {
 		case float64:
-			dst.SetInt(int64(n))
+			if n != math.Trunc(n) {
+				return fmt.Errorf("value %v is not an integer", n)
+			}
+			val = int64(n)
 		case int64:
-			dst.SetInt(n)
+			val = n
 		case int:
-			dst.SetInt(int64(n))
+			val = int64(n)
 		case string:
-			if i, err := strconv.ParseInt(n, 10, 64); err == nil {
-				dst.SetInt(i)
+			i, err := strconv.ParseInt(n, 10, 64)
+			if err != nil {
+				return fmt.Errorf("cannot parse %q as integer", n)
 			}
+			val = i
+		default:
+			return fmt.Errorf("expected integer, got %T", raw)
 		}
+		if dst.OverflowInt(val) {
+			dst.SetInt(val) // truncates — preserves best-effort for non-strict
+			return fmt.Errorf("value %d overflows %s", val, dst.Kind())
+		}
+		dst.SetInt(val)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		var val uint64
 		switch n := raw.(type) {
 		case float64:
-			dst.SetUint(uint64(n))
+			if n != math.Trunc(n) {
+				return fmt.Errorf("value %v is not an integer", n)
+			}
+			if n < 0 {
+				dst.SetUint(uint64(int64(n)))
+				return fmt.Errorf("value %v overflows unsigned %s", n, dst.Kind())
+			}
+			val = uint64(n)
 		case uint64:
-			dst.SetUint(n)
+			val = n
 		case string:
-			if i, err := strconv.ParseUint(n, 10, 64); err == nil {
-				dst.SetUint(i)
+			i, err := strconv.ParseUint(n, 10, 64)
+			if err != nil {
+				return fmt.Errorf("cannot parse %q as unsigned integer", n)
 			}
+			val = i
+		default:
+			return fmt.Errorf("expected unsigned integer, got %T", raw)
 		}
+		if dst.OverflowUint(val) {
+			dst.SetUint(val)
+			return fmt.Errorf("value %d overflows %s", val, dst.Kind())
+		}
+		dst.SetUint(val)
 	case reflect.Float32, reflect.Float64:
+		var f float64
 		switch n := raw.(type) {
 		case float64:
-			dst.SetFloat(n)
+			f = n
 		case string:
-			if f, err := strconv.ParseFloat(n, 64); err == nil {
-				dst.SetFloat(f)
+			x, err := strconv.ParseFloat(n, 64)
+			if err != nil {
+				return fmt.Errorf("cannot parse %q as number", n)
 			}
+			f = x
+		default:
+			return fmt.Errorf("expected number, got %T", raw)
 		}
+		if dst.OverflowFloat(f) {
+			dst.SetFloat(f)
+			return fmt.Errorf("value %v overflows %s", f, dst.Kind())
+		}
+		dst.SetFloat(f)
+		return nil
 	case reflect.Slice, reflect.Map, reflect.Struct, reflect.Array:
 		// Composite signals (SignalSlice/SignalMap) mirror the encodeScalar
 		// json fallback: round-trip the already-decoded value back through
@@ -125,9 +186,14 @@ func decodeScalarInto(dst reflect.Value, raw any) {
 		// json.Unmarshal into a non-nil map keeps pre-existing keys, so a
 		// client that removed a SignalMap key would otherwise leave the stale
 		// key alive server-side — diverging from the scalar replace contract.
-		if b, err := json.Marshal(raw); err == nil {
-			dst.Set(reflect.Zero(dst.Type()))
-			_ = json.Unmarshal(b, dst.Addr().Interface())
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return fmt.Errorf("cannot marshal value: %v", err)
+		}
+		dst.Set(reflect.Zero(dst.Type()))
+		if err := json.Unmarshal(b, dst.Addr().Interface()); err != nil {
+			return fmt.Errorf("cannot decode into %s: %v", dst.Type(), err)
 		}
 	}
+	return nil
 }
