@@ -15,7 +15,7 @@ import (
 type cspPushPage struct{}
 
 func (p *cspPushPage) PopToast(ctx *via.Ctx) error {
-	ctx.Toast("hi")
+	ctx.Notify("hi")
 	return nil
 }
 
@@ -102,7 +102,7 @@ func TestPushedScript_hasNoNonceWithoutCSP(t *testing.T) {
 type cspPushNonceViewPage struct{}
 
 func (p *cspPushNonceViewPage) PopToast(ctx *via.Ctx) error {
-	ctx.Toast("hi")
+	ctx.Notify("hi")
 	return nil
 }
 

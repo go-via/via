@@ -42,7 +42,7 @@ func (c *Home) Create(ctx *via.Ctx) error {
 		// A poll with no valid choices renders zero vote buttons and rejects
 		// every vote — a dead room. Refuse to create it.
 		if choices = core.PollChoices(c.Choices.Read(ctx)); len(choices) == 0 {
-			ctx.Toast("A poll needs at least one choice.")
+			ctx.Notify("A poll needs at least one choice.")
 			return nil
 		}
 	}

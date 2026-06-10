@@ -84,7 +84,7 @@ func (j *Join) Vote(ctx *via.Ctx) error {
 	})
 	j.Draft.Op(ctx).Clear()
 	if err == nil {
-		ctx.Toast("Vote counted ✓") // phone feedback — the tap registered
+		ctx.Notify("Vote counted ✓") // phone feedback — the tap registered
 	}
 	return err
 }
@@ -99,7 +99,7 @@ func (j *Join) Ask(ctx *via.Ctx) error {
 	_, err := j.QA.Append(ctx, core.QAEvent{Room: j.Code, Kind: "ask", ID: id, Text: t, By: j.nick(ctx)})
 	j.Draft.Op(ctx).Clear()
 	if err == nil {
-		ctx.Toast("Question posted ✓")
+		ctx.Notify("Question posted ✓")
 	}
 	return err
 }
@@ -121,7 +121,7 @@ func (j *Join) DropPin(ctx *via.Ctx) error {
 		Room: j.Code, Lng: j.Lng.Read(ctx), Lat: j.Lat.Read(ctx), By: j.nick(ctx),
 	})
 	if err == nil {
-		ctx.Toast("Pin added ✓")
+		ctx.Notify("Pin added ✓")
 	}
 	return err
 }

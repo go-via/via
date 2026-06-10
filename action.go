@@ -253,7 +253,7 @@ func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
 	if fromPanic {
 		msg = "Something went wrong"
 	}
-	ctx.Toast(msg)
+	ctx.Notify(msg)
 }
 
 // injectSignals applies signals from a request body into the bound *C's

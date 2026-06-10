@@ -40,8 +40,8 @@ Named event helpers include `Click`, `Change`, `Input`, `Submit`, `Focus`,
 - Write typed state: `c.Hits.Write(ctx, …)` or `c.Hits.Op(ctx).Add(1)`.
 - Push targeted patches: `ctx.Patch().Elements(h.Ul(h.ID("list"), …))`.
 - Push raw signals: `ctx.Patch().Signal("_picoTheme", "purple")`.
-- Show a quick toast: `ctx.Toast("saved!")` — a styled, non-blocking notice
-  that auto-dismisses (JSON-safe, zero setup).
+- Show a quick notification: `ctx.Notify("saved!")` — a styled, non-blocking
+  toast that auto-dismisses (JSON-safe, zero setup).
 - Redirect: `ctx.Redirect("/profile")`. Only http/https/relative URLs are
   honoured; `javascript:`, `data:`, protocol-relative `//`, and backslash
   variants are dropped and logged (open-redirect / XSS defence).

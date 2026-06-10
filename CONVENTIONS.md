@@ -255,9 +255,9 @@ it.
 func MustJSON(v any) string
 
 // ✅ States a non-obvious contract
-// Toast JSON-encodes message so arbitrary user text is safe inside
-// the rendered alert(...) call.
-func (ctx *Ctx) Toast(message string)
+// Notify JSON-encodes message so arbitrary user text is safe inside
+// the rendered toast snippet.
+func (ctx *Ctx) Notify(message string)
 
 // ❌ Restates the name
 // WithTitle sets the chart title.

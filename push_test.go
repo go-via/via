@@ -60,7 +60,7 @@ func TestCtx_pushHelpersToleratesNilReceiver(t *testing.T) {
 	}{
 		{"ExecScript", func() { ctx.ExecScript("x") }},
 		{"Reload", func() { ctx.Reload() }},
-		{"Toast", func() { ctx.Toast("hi") }},
+		{"Notify", func() { ctx.Notify("hi") }},
 		{"Redirect", func() { ctx.Redirect("/") }},
 	}
 	for _, c := range cases {

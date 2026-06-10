@@ -109,7 +109,7 @@ func (p *Profile) Upload(ctx *via.Ctx) error {
 		// HTML that avatarHandler would serve inline (stored XSS). Reject
 		// anything that isn't a safe raster image.
 		if !core.IsAllowedAvatarType(ct) {
-			ctx.Toast("Avatar must be a PNG, JPEG, GIF or WebP image.")
+			ctx.Notify("Avatar must be a PNG, JPEG, GIF or WebP image.")
 			http.Redirect(ctx.Writer(), ctx.Request(), "/app/profile", http.StatusSeeOther)
 			return nil
 		}
