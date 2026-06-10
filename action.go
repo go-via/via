@@ -250,7 +250,7 @@ func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
 		return
 	}
 	msg := err.Error()
-	if fromPanic {
+	if fromPanic && !a.cfg.verboseErrors {
 		msg = "Something went wrong"
 	}
 	ctx.Notify(msg)

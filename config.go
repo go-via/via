@@ -45,6 +45,7 @@ type config struct {
 	maxContexts        int
 	maxSessions        int
 	noHealth           bool
+	verboseErrors      bool
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
@@ -285,6 +286,14 @@ func WithMaxSessions(n int) Option { return func(c *config) { c.maxSessions = n 
 // and /healthz report 200 while the process is up; /readyz reports 503 once
 // Shutdown begins draining. Opt out when the app needs to own those paths.
 func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = true } }
+
+// WithVerboseErrors surfaces the real error message of a recovered action
+// panic to the browser instead of the generic "Something went wrong". The
+// typed error already reaches a custom WithActionErrorHandler and the server
+// log regardless; this only controls what the DEFAULT client notification
+// shows. Off by default — leaking raw panic text to clients is an
+// information-disclosure risk. Turn it on in development for faster feedback.
+func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
 // callback for action errors and panics. The error from a panic is wrapped
