@@ -94,6 +94,11 @@ type App struct {
 	backplaneDone     chan struct{}
 	backplaneDoneOnce sync.Once
 
+	// draining flips true at the start of Shutdown so /readyz reports
+	// not-ready and the orchestrator stops sending new traffic while the pod
+	// finishes its graceful drain.
+	draining atomic.Bool
+
 	// backplaneCtx is the parent of every backplane I/O call (Subscribe, Append,
 	// CAS, LoadSnapshot, Compact). Shutdown cancels it so a wedged backend cannot
 	// keep an in-flight call alive and block the drain — without it those calls
@@ -111,7 +116,37 @@ type App struct {
 
 // ServeHTTP makes *App an http.Handler.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if a.serveHealth(w, r) {
+		return
+	}
 	a.handler.ServeHTTP(w, r)
+}
+
+// serveHealth answers the default liveness/readiness/health probes before the
+// session + middleware chain, so a frequent k8s probe never mints a session or
+// emits an access-log line. /livez and /healthz report the process is up;
+// /readyz reports 503 once Shutdown has begun draining so traffic drains away
+// from a departing pod while liveness stays green. Returns true if it handled
+// the request. Disabled by WithoutHealthEndpoints.
+func (a *App) serveHealth(w http.ResponseWriter, r *http.Request) bool {
+	if a.cfg.noHealth || r.Method != http.MethodGet {
+		return false
+	}
+	switch r.URL.Path {
+	case "/livez", "/healthz":
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	case "/readyz":
+		if a.draining.Load() {
+			http.Error(w, "draining", http.StatusServiceUnavailable)
+			return true
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	default:
+		return false
+	}
+	return true
 }
 
 // Use installs middleware that wraps every via-served request.
