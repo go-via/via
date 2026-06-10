@@ -140,6 +140,9 @@ func (a *App) writePageDocument(w http.ResponseWriter, ctx *Ctx, body h.H) {
 		h.Meta(h.Data("init",
 			`window.addEventListener('beforeunload',(e)=>{navigator.sendBeacon('/_sse/close','`+template.JSEscapeString(ctx.id)+`');});`)),
 	)
+	if !a.cfg.noReconnect {
+		head = append(head, h.Meta(h.Data("init", reconnectInit)))
+	}
 	head = append(head, a.documentHeadIncludes...)
 
 	bodyEls := make([]h.H, 0, 1+len(a.documentFootIncludes))
