@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -197,6 +198,34 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 			_ = ref.decodeRaw(s.initRaw)
 		}
 	}
+}
+
+// validateBindings re-walks the bound signal handles after OnInit and returns
+// an error if any was orphaned — the dominant cause being a by-value child
+// reassignment in OnInit (p.Child = Card{...}), which overwrites the field with
+// an unbound copy whose wire key is empty while the runtime still references the
+// orphaned memory. bindSlot set each live handle's key to its wire key; a
+// post-OnInit key that no longer matches proves the binding was lost. Dev-only
+// (WithDevChecks) because it costs a reflective re-walk per render.
+func validateBindings(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) error {
+	elem := cmpVal.Elem()
+	for _, s := range d.signalSlots {
+		live := fieldByPath(elem, s.fieldPath).Addr().Interface()
+		// A future signalRef impl without Key() can't be verified — skip it
+		// rather than misreport, so the check never false-panics.
+		keyer, ok := live.(interface{ Key() string })
+		if !ok {
+			continue
+		}
+		if keyer.Key() != s.wireKey {
+			return fmt.Errorf("via: state binding for %q (field path %v) was lost — "+
+				"a child composition was replaced by value in OnInit "+
+				"(p.Child = T{...}), which zeroes the runtime's by-address handle "+
+				"binding. Seed state in place instead (e.g. p.Child.Field.Write(ctx, v)); "+
+				"never reassign a child struct by value", s.wireKey, s.fieldPath)
+		}
+	}
+	return nil
 }
 
 // bindScopeKeys writes the wire key into every StateSess[T] / StateApp[T]
