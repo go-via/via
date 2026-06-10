@@ -127,6 +127,21 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 		if tabID != "" {
 			a.metricsOrNoop().Counter("via.tab.unknown", "kind", "action")
 		}
+		// If the id is recoverable (well-formed and names a mounted route — a
+		// wrong-pod hit, TTL sweep, or restart), push a reload so a fresh page
+		// GET re-bootstraps the tab instead of silently dropping the click. The
+		// SSE handshake already recovers the same stale id (recoverSSE); this
+		// removes the action/SSE asymmetry. Run the descriptor's group
+		// middleware first so an auth guard vetoes recovery exactly as it
+		// vetoes the page. A forged id (no mounted route) keeps the 404.
+		if d := a.descriptorForStaleTab(tabID); d != nil {
+			reload := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				a.metricsOrNoop().Counter("via.action.recover", "mode", "reload")
+				a.streamReloadScript(w, r)
+			})
+			applyMiddleware(d.groupMW, reload).ServeHTTP(w, r)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
