@@ -401,3 +401,367 @@ func TestCompactionAdvancesWhenConsumerKeepsUp(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond,
 		"a keeping-up consumer must not pin the compaction floor at genesis")
 }
+
+// gaugeSpyMetrics records both Counter names and Gauge names so a test can
+// assert the loud-by-default observability signals (counters + the
+// via.consumer.stuck gauge) without verifying call counts.
+type gaugeSpyMetrics struct {
+	mu       sync.Mutex
+	counters []string
+	gauges   []string
+}
+
+func (m *gaugeSpyMetrics) Counter(name string, _ ...string) {
+	m.mu.Lock()
+	m.counters = append(m.counters, name)
+	m.mu.Unlock()
+}
+func (m *gaugeSpyMetrics) Gauge(name string, _ float64, _ ...string) {
+	m.mu.Lock()
+	m.gauges = append(m.gauges, name)
+	m.mu.Unlock()
+}
+func (m *gaugeSpyMetrics) Histogram(string, float64, ...string) {}
+func (m *gaugeSpyMetrics) sawCounter(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.counters {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+func (m *gaugeSpyMetrics) sawGauge(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, g := range m.gauges {
+		if g == name {
+			return true
+		}
+	}
+	return false
+}
+
+// DEFAULT (maxAttempts 0): an always-erroring handler must block forever — the
+// committed offset never advances past the poison record, via.consumer.error
+// keeps firing, and via.consumer.stuck is emitted so the floor-pin is loud
+// rather than silent. Dropping a side effect by default is the wrong default.
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_blocksForeverByDefaultOnPersistentHandlerError(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError)) // suppress the intentional stuck WARN noise
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, _ envEv, _ Offset) error {
+		return fmt.Errorf("permanent failure")
+	}, WithRetryBackoff(time.Millisecond, 5*time.Millisecond))
+
+	_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 1}))
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 2}))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return spy.sawGauge("via.consumer.stuck") },
+		2*time.Second, 10*time.Millisecond, "a blocking consumer emits the stuck gauge")
+	require.True(t, spy.sawCounter("via.consumer.error"), "each handler-error attempt emits via.consumer.error")
+
+	// Never advances past the head-of-line poison record (block-forever preserved).
+	require.Never(t, func() bool {
+		data, _, ok, _ := app.backplane.LoadSnapshot(ctx, consumerKey("rec", "k"))
+		if !ok {
+			return false
+		}
+		var off Offset
+		return json.Unmarshal(data, &off) == nil && off >= 1
+	}, 400*time.Millisecond, 50*time.Millisecond,
+		"the default consumer never commits past a record its handler keeps failing")
+	require.False(t, spy.sawCounter("via.consumer.poisoned"),
+		"the default must never poison/skip — dropping a side effect is opt-in")
+}
+
+// WithMaxAttempts(N): an always-erroring handler advances PAST the record after
+// N attempts (emitting via.consumer.poisoned) and then delivers the subsequent
+// record — proving the consumer is no longer wedged and the floor unpins.
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_poisonsAndAdvancesAfterMaxAttempts(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	var handled []int
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, ev envEv, off Offset) error {
+		if off == 1 {
+			return fmt.Errorf("permanent failure on offset 1")
+		}
+		mu.Lock()
+		handled = append(handled, ev.N)
+		mu.Unlock()
+		return nil
+	}, WithMaxAttempts(3), WithRetryBackoff(time.Millisecond, 5*time.Millisecond))
+
+	_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 1}))
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 2}))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(handled) == 1 && handled[0] == 2
+	}, 2*time.Second, 10*time.Millisecond,
+		"after N attempts the poison record is skipped and the next record is delivered")
+	require.True(t, spy.sawCounter("via.consumer.poisoned"), "skipping a poison record emits via.consumer.poisoned")
+	awaitConsumerCommitted(t, app.backplane, "rec", "k", 2)
+}
+
+// A handler that errors a few times then succeeds advances normally and the
+// per-pod attempt counter resets — so a transient failure never trips the poison
+// threshold prematurely on a LATER record.
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_resetsAttemptsAfterTransientErrorThenSucceeds(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var attemptsOn1 int32
+	var mu sync.Mutex
+	var handled []int
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	// maxAttempts 5; offset 1 fails twice then succeeds, offset 2 fails twice then
+	// succeeds. If attempts did NOT reset between records, offset 2's two failures
+	// would stack onto offset 1's and could trip the threshold.
+	h.OnEvent("rec", func(_ context.Context, ev envEv, off Offset) error {
+		if off == 1 && atomic.AddInt32(&attemptsOn1, 1) < 3 {
+			return fmt.Errorf("transient on 1")
+		}
+		mu.Lock()
+		handled = append(handled, ev.N)
+		mu.Unlock()
+		return nil
+	}, WithMaxAttempts(5), WithRetryBackoff(time.Millisecond, 5*time.Millisecond))
+
+	_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 10}))
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 20}))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(handled) == 2
+	}, 2*time.Second, 10*time.Millisecond, "both records eventually handled")
+	mu.Lock()
+	require.Equal(t, []int{10, 20}, handled, "order preserved, none skipped")
+	mu.Unlock()
+	require.False(t, spy.sawCounter("via.consumer.poisoned"),
+		"a recovered transient failure must not poison any record")
+	awaitConsumerCommitted(t, app.backplane, "rec", "k", 2)
+}
+
+// WithDeadLetter returning nil: the hook receives the correct key/offset/raw
+// data/cause, the consumer then commits past the record, and via.consumer.poisoned
+// still fires.
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_deadLetterReceivesRecordThenAdvances(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	rawData := goodEnv(t, envEv{N: 1})
+	var mu sync.Mutex
+	var gotKey string
+	var gotOff Offset
+	var gotData []byte
+	var gotCause error
+	var dlqCalls int
+
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, _ envEv, off Offset) error {
+		if off == 1 {
+			return fmt.Errorf("boom")
+		}
+		return nil
+	}, WithMaxAttempts(2), WithRetryBackoff(time.Millisecond, 5*time.Millisecond),
+		WithDeadLetter(func(_ context.Context, key string, off Offset, data []byte, cause error) error {
+			mu.Lock()
+			gotKey, gotOff, gotData, gotCause = key, off, data, cause
+			dlqCalls++
+			mu.Unlock()
+			return nil
+		}))
+
+	_, err := app.backplane.Append(ctx, "k", rawData)
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 2}))
+	require.NoError(t, err)
+
+	awaitConsumerCommitted(t, app.backplane, "rec", "k", 2)
+	mu.Lock()
+	require.Equal(t, "k", gotKey, "dead-letter hook receives the wire key")
+	require.Equal(t, Offset(1), gotOff, "dead-letter hook receives the poison offset")
+	require.Equal(t, rawData, gotData, "dead-letter hook receives the raw record bytes")
+	require.Error(t, gotCause, "dead-letter hook receives the handler error cause")
+	require.GreaterOrEqual(t, dlqCalls, 1, "the dead-letter hook is invoked")
+	mu.Unlock()
+	require.True(t, spy.sawCounter("via.consumer.poisoned"),
+		"a dead-lettered record still emits via.consumer.poisoned")
+}
+
+// WithDeadLetter returning an error: the consumer must NOT advance — a record the
+// operator opted to dead-letter is never silently lost while the sink is down.
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_deadLetterErrorKeepsRetryingWithoutAdvancing(t *testing.T) {
+	app := New(WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var dlqCalls int32
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, _ envEv, _ Offset) error {
+		return fmt.Errorf("boom")
+	}, WithMaxAttempts(2), WithRetryBackoff(time.Millisecond, 5*time.Millisecond),
+		WithDeadLetter(func(_ context.Context, _ string, _ Offset, _ []byte, _ error) error {
+			atomic.AddInt32(&dlqCalls, 1)
+			return fmt.Errorf("dlq sink unavailable")
+		}))
+
+	_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 1}))
+	require.NoError(t, err)
+
+	// The hook is retried (proving still-retrying) ...
+	require.Eventually(t, func() bool { return atomic.LoadInt32(&dlqCalls) >= 2 },
+		2*time.Second, 10*time.Millisecond, "a failing dead-letter sink is retried")
+	// ... and the offset never advances.
+	require.Never(t, func() bool {
+		data, _, ok, _ := app.backplane.LoadSnapshot(ctx, consumerKey("rec", "k"))
+		if !ok {
+			return false
+		}
+		var off Offset
+		return json.Unmarshal(data, &off) == nil && off >= 1
+	}, 400*time.Millisecond, 50*time.Millisecond,
+		"a record the operator opted to dead-letter is never dropped when the sink is down")
+}
+
+// A forward-incompatible record still BLOCKS even under WithMaxAttempts — it is a
+// rollback guard, never poison — and is never counted toward the poison
+// threshold. An undecodable record still skips with via.consumer.undecodable
+// (not poisoned).
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_forwardIncompatibleBlocksDespiteMaxAttempts(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var handled int32
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, _ envEv, _ Offset) error {
+		atomic.AddInt32(&handled, 1)
+		return nil
+	}, WithMaxAttempts(1), WithRetryBackoff(time.Millisecond, 5*time.Millisecond))
+
+	_, err := app.backplane.Append(ctx, "k", futureEnv(t, envEv{N: 1})) // newer than this binary
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return spy.sawCounter("via.consumer.forward_incompatible") },
+		2*time.Second, 10*time.Millisecond, "a forward-incompatible record emits its own metric")
+	require.Never(t, func() bool {
+		if atomic.LoadInt32(&handled) > 0 {
+			return true
+		}
+		return spy.sawCounter("via.consumer.poisoned")
+	}, 400*time.Millisecond, 50*time.Millisecond,
+		"a forward-incompatible record is never handled and never poisoned, even with WithMaxAttempts")
+	_, _, ok, _ := app.backplane.LoadSnapshot(ctx, consumerKey("rec", "k"))
+	require.False(t, ok, "the consumer must not commit past a forward-incompatible record")
+}
+
+// An undecodable record still skips + advances under WithMaxAttempts, emitting
+// via.consumer.undecodable (not via.consumer.poisoned).
+//
+//nolint:paralleltest // timing-sensitive consumer convergence; serialized to avoid load-induced flakes
+func TestOnEvent_undecodableSkipsNotPoisonedUnderMaxAttempts(t *testing.T) {
+	spy := &gaugeSpyMetrics{}
+	app := New(WithMetrics(spy), WithLogLevel(LogError))
+	server := httptest.NewServer(app)
+	t.Cleanup(server.Close)
+	defer server.Close()
+	defer app.backplane.Close()
+	ctx := context.Background()
+
+	var mu sync.Mutex
+	var ns []int
+	var h StateAppEvents[envEv, []int]
+	h.bindWireKey("k")
+	h.bindApp(app)
+	h.OnEvent("rec", func(_ context.Context, ev envEv, _ Offset) error {
+		mu.Lock()
+		ns = append(ns, ev.N)
+		mu.Unlock()
+		return nil
+	}, WithMaxAttempts(2), WithRetryBackoff(time.Millisecond, 5*time.Millisecond))
+
+	_, err := app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 1}))
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", []byte("not-a-valid-envelope")) // poison @offset 2
+	require.NoError(t, err)
+	_, err = app.backplane.Append(ctx, "k", goodEnv(t, envEv{N: 3}))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(ns) == 2
+	}, 2*time.Second, 10*time.Millisecond, "the undecodable record is skipped, the good ones handled")
+	mu.Lock()
+	require.Equal(t, []int{1, 3}, ns, "the handler never sees the undecodable record")
+	mu.Unlock()
+	require.True(t, spy.sawCounter("via.consumer.undecodable"), "a skipped poison record emits via.consumer.undecodable")
+	require.False(t, spy.sawCounter("via.consumer.poisoned"),
+		"an undecodable record is skipped via the decode path, not the poison path")
+}

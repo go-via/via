@@ -157,8 +157,45 @@ p.Orders.OnEvent("ship", func(ctx context.Context, ev orderPlaced, off via.Offse
 - Delivery is **at-least-once**; the committed offset is persisted, so a restart
   resumes instead of replaying from genesis. Derive an idempotency key from the
   offset.
-- A handler that returns an error is retried **head-of-line** — the consumer does
-  not advance past a failing event (surfaced as `via.consumer.error`).
+- A handler that returns an error is retried **head-of-line** with exponential
+  backoff + jitter — the consumer does not advance past a failing event
+  (surfaced as `via.consumer.error`). **By default it retries forever**: a
+  permanently-failing handler never drops the side effect, but it pins the
+  Compactor floor (so the log grows). The block is loud, not silent — each
+  retry emits a `via.consumer.stuck` gauge (the attempt count) and a `WARN`
+  fires once the attempts cross a threshold.
+
+A poison record (a handler that can never succeed) can wedge the consumer and
+pin the floor forever. Opt into skipping it with consumer options:
+
+```go
+p.Orders.OnEvent("ship",
+    func(ctx context.Context, ev orderPlaced, off via.Offset) error {
+        return shipper.Send(ctx, ev.OrderID)
+    },
+    via.WithMaxAttempts(10),                    // skip the record after 10 failed attempts
+    via.WithRetryBackoff(50*time.Millisecond, time.Minute), // backoff bounds (default 10ms → 30s)
+    via.WithDeadLetter(func(ctx context.Context, key string, off via.Offset, data []byte, cause error) error {
+        return dlq.Publish(ctx, key, off, data, cause) // archive the record before skipping
+    }),
+)
+```
+
+- `WithMaxAttempts(n)` — after `n` consecutive handler errors on the same record
+  the consumer treats it as **poison**: it emits `via.consumer.poisoned` and
+  advances past the record, un-wedging the consumer and unpinning the floor. The
+  **default is `0` = block forever** (above); skipping is strictly opt-in, so
+  dropping a side effect is never the default.
+- `WithRetryBackoff(base, max)` — exponential-backoff bounds (with jitter) between
+  head-of-line retries. Defaults `10ms → 30s`.
+- `WithDeadLetter(fn)` — invoked just before a record is poisoned. If it returns
+  `nil` the consumer advances past the record; if it returns an error the consumer
+  does **not** advance and keeps retrying, so a record you opted to dead-letter is
+  never silently lost while the sink is unavailable.
+- A **forward-incompatible** record (written by a newer binary) always blocks and
+  is **never** poisoned, regardless of `WithMaxAttempts` — it is a rollback guard,
+  not a bad record. An **undecodable** record is skipped via the decode path
+  (`via.consumer.undecodable`), distinct from the poison path.
 
 ## Snapshots, compaction, cold start
 
