@@ -120,6 +120,13 @@ func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
 
 	ctx, ok := a.getCtx(tabID)
 	if !ok {
+		// A well-formed tab id this pod doesn't hold is the symptom of a
+		// request routed to the wrong pod (no sticky sessions) — surface it so
+		// a non-sticky LB shows up as a metric, not just mute 404s. An empty id
+		// is a malformed probe and doesn't count.
+		if tabID != "" {
+			a.metricsOrNoop().Counter("via.tab.unknown", "kind", "action")
+		}
 		http.NotFound(w, r)
 		return
 	}

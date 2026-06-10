@@ -91,6 +91,8 @@ and emits structured events for ops dashboards:
 | `via.sse.recover` | counter | `mode` |
 | `via.ctx.live` | gauge | |
 | `via.ctx.reap` | counter | `reason` |
+| `via.session.mismatch` | counter | |
+| `via.tab.unknown` | counter | `kind` |
 
 State backplane (`StateAppEvents`, the clustered event-log path):
 
