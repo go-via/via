@@ -89,6 +89,10 @@ func (a *App) Start() {
 // http.Server's Shutdown is returned; a wedged OnDispose handler does
 // not propagate but is logged.
 func (a *App) Shutdown(ctx context.Context) error {
+	// Flip readiness first so /readyz reports not-ready and the orchestrator
+	// drains traffic away before we start tearing anything down.
+	a.draining.Store(true)
+
 	a.contextRegistryMu.Lock()
 	ctxs := make([]*Ctx, 0, len(a.contextRegistry))
 	for _, c := range a.contextRegistry {

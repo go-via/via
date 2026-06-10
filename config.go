@@ -44,6 +44,7 @@ type config struct {
 	maxUploadSize      int64
 	maxContexts        int
 	maxSessions        int
+	noHealth           bool
 	actionErrorHandler func(*Ctx, error)
 	logger             Logger
 	notFoundHandler    http.Handler
@@ -277,6 +278,13 @@ func WithMaxContexts(n int) Option { return func(c *config) { c.maxContexts = n 
 // already holds a session is unaffected. Default 0 (no cap). Tune to
 // (expected peak users × 2).
 func WithMaxSessions(n int) Option { return func(c *config) { c.maxSessions = n } }
+
+// WithoutHealthEndpoints disables via's built-in GET /livez, /healthz, and
+// /readyz probes. By default they are served before the session and middleware
+// chain (so a frequent probe never mints a session or logs a request): /livez
+// and /healthz report 200 while the process is up; /readyz reports 503 once
+// Shutdown begins draining. Opt out when the app needs to own those paths.
+func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = true } }
 
 // WithActionErrorHandler replaces the default browser-alert with a custom
 // callback for action errors and panics. The error from a panic is wrapped
