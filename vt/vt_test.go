@@ -345,6 +345,7 @@ func (r *recordTB) Logf(format string, args ...any) {
 // using WithSignal("_x", ...) is reproducing behavior that can't happen in the
 // browser. vt warns (does not fail) so the author notices at test-write time.
 func TestWithSignal_warnsOnUnderscoreLocalSignal(t *testing.T) {
+	t.Parallel()
 	app := via.New()
 	srv := vt.Serve(t, app)
 	via.Mount[tcPage](app, "/")

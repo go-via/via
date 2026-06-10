@@ -261,6 +261,7 @@ func (p *capProbePage) View(ctx *via.CtxR) h.H    { return h.Div() }
 // An over-capacity request is rejected with 503 — it must NOT run user OnInit
 // work first. The capacity gate has to precede OnInit, not follow it.
 func TestMaxContexts_doesNotRunOnInitWhenAtCapacity(t *testing.T) {
+	t.Parallel()
 	capProbeOnInitCount.Store(0)
 	app := via.New(via.WithMaxContexts(1))
 	server := vt.Serve(t, app)

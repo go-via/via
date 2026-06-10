@@ -10,6 +10,7 @@ import (
 // must drop it too — otherwise stale state the client believes is gone keeps
 // driving the action, silently diverging from what the user sees.
 func TestComposite_mapDecodeReplacesRatherThanMerges(t *testing.T) {
+	t.Parallel()
 	m := map[string]int{"stale": 1, "kept": 2}
 	// Client now only sends "kept" — "stale" was removed in the browser.
 	decodeScalarInto(reflect.ValueOf(&m).Elem(), map[string]any{"kept": float64(2)})

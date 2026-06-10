@@ -289,7 +289,7 @@ func TestRun_returnsBindErrorInsteadOfPanicking(t *testing.T) {
 	t.Parallel()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	app := via.New(via.WithAddr(ln.Addr().String())) // address already in use
 	via.Mount[simpleCounter](app, "/")
