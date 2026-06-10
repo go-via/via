@@ -433,7 +433,11 @@ func (a *App) withSession() http.Handler {
 		matched := pattern != ""
 
 		if matched {
-			_ = a.getOrCreateSession(w, r)
+			if a.getOrCreateSession(w, r) == nil {
+				a.logWarn(nil, "max sessions reached (%d); rejecting request", a.cfg.maxSessions)
+				http.Error(w, "server is at capacity", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		// Stamp the app pointer into r so middleware can resolve the
 		// session via via.RequestSession(r) (used by via/sess.Get on

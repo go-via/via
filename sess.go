@@ -180,11 +180,17 @@ func (a *App) adoptSession(sid string) *session {
 	if sess, ok := a.sessions[sid]; ok {
 		return sess
 	}
+	if a.cfg.maxSessions > 0 && len(a.sessions) >= a.cfg.maxSessions {
+		return nil // at capacity: refuse to grow the map
+	}
 	sess := &session{id: sid}
 	a.sessions[sid] = sess
 	return sess
 }
 
+// getOrCreateSession returns the request's session, minting or adopting one if
+// needed. Returns nil ONLY when WithMaxSessions is set and the cap is met for a
+// new session — a client that already holds a live session is never refused.
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
 	now := time.Now().UnixNano()
 	if c, err := r.Cookie(a.cookieName()); err == nil {
@@ -202,6 +208,9 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 		// A malformed value is never adopted; it falls through to a fresh mint.
 		if validSessionID(c.Value) {
 			sess := a.adoptSession(c.Value)
+			if sess == nil {
+				return nil // at capacity
+			}
 			sess.lastAccess.Store(now)
 			r.AddCookie(&http.Cookie{Name: a.cookieName(), Value: sess.id})
 			return sess
@@ -212,6 +221,10 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 	sess.lastAccess.Store(now)
 
 	a.sessionsMu.Lock()
+	if a.cfg.maxSessions > 0 && len(a.sessions) >= a.cfg.maxSessions {
+		a.sessionsMu.Unlock()
+		return nil // at capacity: refuse to mint, fused with the insert
+	}
 	a.sessions[sess.id] = sess
 	a.sessionsMu.Unlock()
 
