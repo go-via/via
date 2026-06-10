@@ -38,6 +38,12 @@ func (a *App) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 	ctx, ok := a.getCtx(tabID)
 	if !ok {
+		// A well-formed tab id this pod doesn't hold also signals wrong-pod
+		// routing (no sticky sessions), not only a TTL sweep / restart — count
+		// it so a non-sticky LB is observable. Empty id = malformed probe.
+		if tabID != "" {
+			a.metricsOrNoop().Counter("via.tab.unknown", "kind", "sse")
+		}
 		// Stale-but-plausible tab id (TTL sweep, process restart):
 		// re-bootstrap a fresh Ctx over this same stream instead of
 		// 404ing into Datastar's infinite retry (a frozen tab).
