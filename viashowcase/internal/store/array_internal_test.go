@@ -18,10 +18,10 @@ import (
 func TestStrArrayRoundTrip(t *testing.T) {
 	t.Parallel()
 	cases := map[string][]string{
-		"simple":          {"Pizza", "Sushi", "Tacos"},
-		"comma in choice": {"Pizza, large", "Sushi"},
-		"double quote":    {`say "hi"`},
-		"backslash":       {`a\b`},
+		"simple":                   {"Pizza", "Sushi", "Tacos"},
+		"comma in choice":          {"Pizza, large", "Sushi"},
+		"double quote":             {`say "hi"`},
+		"backslash":                {`a\b`},
 		"both quote and backslash": {`a\"b`},
 		"empty string element":     {""},
 		"unicode":                  {"日本語", "🍕"},

@@ -8,7 +8,9 @@ import (
 )
 
 // poll is a one-per-voter ballot vote; cloud is a free word submission.
-func poll(room, choice, by string) Vote  { return Vote{Room: room, Choice: choice, By: by, Single: true} }
+func poll(room, choice, by string) Vote {
+	return Vote{Room: room, Choice: choice, By: by, Single: true}
+}
 func cloud(room, choice, by string) Vote { return Vote{Room: room, Choice: choice, By: by} }
 
 // Word-cloud submissions are not deduped: the same participant contributing the
