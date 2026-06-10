@@ -9,8 +9,8 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
-	"testing"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/go-via/via"
