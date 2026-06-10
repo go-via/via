@@ -74,11 +74,13 @@ at boot rather than at request time.
 
 ## An oversized upload / POST returns 413
 
-**Cause:** `WithMaxRequestBody(n)` (default 1 MiB) caps action POST and
-SSE-close bodies.
+**Cause:** two separate caps apply. `WithMaxRequestBody(n)` (default 1 MiB)
+caps plain action POST and SSE-close bodies; `WithMaxUploadSize(n)` (default
+32 MiB) caps `multipart/form-data` bodies.
 
-**Fix:** raise the limit for routes that accept large uploads:
-`via.New(via.WithMaxRequestBody(20 << 20))`.
+**Fix:** raise the matching limit — `via.New(via.WithMaxUploadSize(64 << 20))`
+for file uploads, `WithMaxRequestBody` for large JSON actions. Use
+`WithRequestTooLarge(h)` to customise the 413 response.
 
 ## State doesn't update across tabs
 

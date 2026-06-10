@@ -55,8 +55,11 @@ Once read, typed `via.File` fields on the same action will be empty for any
 parts already advanced past.
 
 {: .note }
-`WithMaxRequestBody(n)` caps total body size (default 1 MiB); oversized
-requests return `413 Request Entity Too Large`.
+Two separate caps apply. `WithMaxRequestBody(n)` caps plain action POST and
+SSE-close bodies (default 1 MiB); `WithMaxUploadSize(n)` caps
+`multipart/form-data` bodies (default 32 MiB), since file parts inflate the
+body well past the JSON cap. Either overflow returns `413 Too Large`.
+Customise that response with `WithRequestTooLarge(h)`.
 
 See `internal/examples/upload` for a `<form>`-driven upload persisted to
 disk with a redirect-back-to-`/`.
