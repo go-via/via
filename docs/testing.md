@@ -72,9 +72,46 @@ executes. A green `vt` test is necessary, not sufficient. In particular:
   structure, and a needle can match a stale frame.
 
 For behaviour that depends on the Datastar client — local signals, key
-filters, reconnect/retry, multi-tab cookie races — verify in a real browser
-(e.g. a `chromedp`/Playwright check against the `vt.Serve` URL) in addition to
-the `vt` test.
+filters, reconnect/retry, multi-tab cookie races — verify in a real browser.
+That harness now ships in the repo (see below) and is the anchor for the
+client-side guarantees `vt` cannot reach.
+
+## Browser testing
+
+The real-browser end-to-end tests live in `internal/browsertest` and drive a
+headless **Chromium** via [`chromedp`](https://github.com/chromedp/chromedp)
+against a `vt.Serve` URL. They prove the client-side Datastar story `vt`
+cannot — signal binding, debounce, key filters, and **SSE→DOM patching** — by
+asserting against a live DOM with Datastar executing, not raw frame text.
+
+The anchor test (`TestBrowserSignalBindAndSSEPatch`) covers both halves:
+
+- a `SignalNum` bound to an `<input>` whose mirror span updates **client-side
+  only**, with no server round-trip, and
+- an `on.Click` action whose `StateTab` update is **patched back over SSE**
+  and applied to the DOM by Datastar.
+
+### Build tag — out of CI by design
+
+The tests are gated behind `//go:build browser`. The default
+`go build/vet/test ./...`, `golangci-lint`, and the `ci-check.sh` gate never
+compile or run them — under default tags the package is empty. This is
+**intentional**: GitHub Actions ("Build and Test") has no headless browser, so
+wiring these into CI would break it. The `chromedp` dependency only loads when
+the `browser` tag is set.
+
+### Running locally
+
+You need a Chromium/Chrome binary. Then:
+
+```sh
+go test -tags browser ./internal/browsertest/... -v
+```
+
+The chrome binary is resolved from `$CHROME_PATH`, falling back to common
+locations (`/usr/bin/chromium`, `/usr/bin/chromium-browser`,
+`/usr/bin/google-chrome`). If none is found the test `t.Skip`s, so a checkout
+without Chrome doesn't hard-fail even when run with `-tags browser`.
 
 ## Conventions
 
