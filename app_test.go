@@ -3,6 +3,7 @@ package via_test
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -261,4 +262,66 @@ func TestAppUse_afterStartPanics(t *testing.T) {
 	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Two plugins (or a plugin and user code) registering the same app-signal key
+// would silently clobber each other's initial value — exactly the
+// registration-time programming mistake CONVENTIONS says must panic, and the
+// twin of the route-collision check. picocss owns "_picoTheme"/"_picoDarkMode".
+func TestRegisterAppSignal_panicsOnDuplicateKey(t *testing.T) {
+	t.Parallel()
+	app := via.New()
+	app.RegisterAppSignal("dup", 1)
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "registering a duplicate app-signal key must panic")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "duplicate")
+		assert.Contains(t, msg, "dup", "panic must name the colliding key")
+	}()
+	app.RegisterAppSignal("dup", 2)
+}
+
+// Run must return a bind failure (the textbook runtime/external error) instead
+// of panicking, so callers can handle "address already in use" with log.Fatal
+// rather than a stack trace. Start stays the panic-on-error convenience wrapper.
+func TestRun_returnsBindErrorInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	app := via.New(via.WithAddr(ln.Addr().String())) // address already in use
+	via.Mount[simpleCounter](app, "/")
+	require.Error(t, app.Run(), "Run must return the bind error, not panic")
+}
+
+// Clearly-invalid (negative) option values are a registration-time programming
+// mistake and must panic at New, not silently produce a broken server (a
+// negative shutdown timeout → instant ungraceful kill; negative size caps →
+// nonsense). 0 stays valid (it means unlimited/default for these knobs).
+func TestNew_panicsOnNegativeOptionValues(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		opt  via.Option
+		want string
+	}{
+		{"shutdown timeout", via.WithShutdownTimeout(-time.Second), "WithShutdownTimeout"},
+		{"max request body", via.WithMaxRequestBody(-1), "WithMaxRequestBody"},
+		{"max upload size", via.WithMaxUploadSize(-1), "WithMaxUploadSize"},
+		{"max contexts", via.WithMaxContexts(-1), "WithMaxContexts"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			defer func() {
+				rec := recover()
+				require.NotNil(t, rec, "a negative %s must panic at New", c.name)
+				msg, _ := rec.(string)
+				assert.Contains(t, msg, c.want, "panic must name the offending option")
+			}()
+			via.New(c.opt)
+		})
+	}
 }

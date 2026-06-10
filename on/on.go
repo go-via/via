@@ -129,6 +129,9 @@ func Throttle(d string) Option { return func(s *spec.Trigger) { s.Throttle = d }
 var (
 	preventFn Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "prevent") }
 	stopFn    Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "stop") }
+	onceFn    Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "once") }
+	outsideFn Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "outside") }
+	windowFn  Option = func(s *spec.Trigger) { s.Modifiers = append(s.Modifiers, "window") }
 )
 
 // Prevent calls e.preventDefault() before invoking the action.
@@ -136,6 +139,37 @@ func Prevent() Option { return preventFn }
 
 // Stop calls e.stopPropagation() before invoking the action.
 func Stop() Option { return stopFn }
+
+// Once fires the handler at most once, then removes the listener.
+func Once() Option { return onceFn }
+
+// Outside fires only when the event originates outside the bound element —
+// the standard click-away pattern for closing menus and popovers.
+func Outside() Option { return outsideFn }
+
+// Window attaches the listener to window rather than the element, so the
+// handler fires for the event anywhere on the page (e.g. global shortcuts).
+func Window() Option { return windowFn }
+
+// Confirm gates the action behind a browser confirm() dialog: the @post
+// fires only if the user accepts. message is JSON-encoded so arbitrary
+// text is safe inside the generated JS.
+func Confirm(message string) Option {
+	// json.Marshal of a string cannot fail.
+	encoded, _ := json.Marshal(message)
+	guard := string(encoded)
+	return func(s *spec.Trigger) { s.Confirm = guard }
+}
+
+// Indicator emits a data-indicator attribute that flips sig to true while
+// an action POST from the same element is in flight and back to false when
+// it settles — drive spinners, aria-busy, or disabled state off sig. Place
+// it alongside the on.* handler on the same element:
+//
+//	h.Button(h.Text("Save"), on.Click(c.Save), on.Indicator(&c.Saving.Signal))
+func Indicator[T any](sig *via.Signal[T]) h.H {
+	return h.Data("indicator", sig.Key())
+}
 
 // SetSignal bundles a typed signal write into the same trigger as the
 // action — the signal updates client-side first, then the @post fires
@@ -296,17 +330,16 @@ func render(s *spec.Trigger) h.H {
 	// common case; skipping two strings.Builder allocations per render
 	// per binding adds up across a moderately interactive view.
 	if len(s.Pre) == 0 && len(s.Modifiers) == 0 &&
-		s.KeyFilter == "" && s.Debounce == "" && s.Throttle == "" {
+		s.KeyFilter == "" && s.Debounce == "" && s.Throttle == "" && s.Confirm == "" {
 		return bareAttr(s.Event, method)
 	}
 
 	var attr strings.Builder
 	attr.WriteString("on:")
 	attr.WriteString(s.Event)
-	if s.KeyFilter != "" {
-		attr.WriteByte('.')
-		attr.WriteString(s.KeyFilter)
-	}
+	// KeyFilter is NOT an attribute modifier: datastar v1 has no keyboard-key
+	// modifier, so `on:keydown.Enter` would fire on every keystroke. The filter
+	// is applied as an evt.key expression guard below instead.
 	for _, m := range s.Modifiers {
 		attr.WriteByte('.')
 		attr.WriteString(m)
@@ -324,6 +357,18 @@ func render(s *spec.Trigger) h.H {
 	for _, stmt := range s.Pre {
 		expr.WriteString(stmt)
 		expr.WriteByte(';')
+	}
+	if s.KeyFilter != "" {
+		// datastar exposes the DOM event as `evt`; guard the action so it only
+		// fires for the named key (e.g. evt.key==='Enter').
+		expr.WriteString("evt.key==='")
+		expr.WriteString(s.KeyFilter)
+		expr.WriteString("'&&")
+	}
+	if s.Confirm != "" {
+		expr.WriteString("confirm(")
+		expr.WriteString(s.Confirm)
+		expr.WriteString(")&&")
 	}
 	expr.WriteString("@post('/_action/")
 	expr.WriteString(method)

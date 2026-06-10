@@ -38,7 +38,7 @@ func (c *CounterPage) View(ctx *via.CtxR) h.H {
 		h.H3(h.Text(c.CounterID)),
 		h.Hr(),
 		h.H5(h.Textf("Count %d", c.Count.Read(ctx))),
-		h.P(h.Text("Step: "), c.Step.Text()),
+		h.P(h.Text("Step: "), c.Step.TextSpan()),
 		h.FieldSet(h.Role("group"),
 			h.Input(h.Type("number"), c.Step.Bind()),
 			h.Button(h.Text("Increment"), on.Click(c.Increment)),

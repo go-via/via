@@ -50,6 +50,44 @@ func TestSignal_renderingProducesExpectedAttributes(t *testing.T) {
 	}
 }
 
+type signalTextPage struct {
+	Step via.SignalNum[int] `via:"step,init=1"`
+	Name via.SignalStr      `via:"name"`
+}
+
+func (p *signalTextPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Button(p.Step.Text(), h.Text("Save")),
+		p.Name.TextSpan(),
+	)
+}
+
+func TestSignalText_attachesAsAttributeToHostElement(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[signalTextPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `<button data-text="$step"`,
+		"Text() must attach data-text to the host element, not wrap a span")
+	assert.NotContains(t, body, `<span data-text="$step"`,
+		"Text() must not force its own <span> wrapper")
+}
+
+func TestSignalTextSpan_rendersStandaloneSpan(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[signalTextPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `<span data-text="$name"></span>`,
+		"TextSpan() must render a standalone reactive span")
+}
+
 type signalShowPage struct {
 	Open via.SignalBool `via:"open"`
 }
@@ -68,6 +106,100 @@ func TestSignal_showRendersDataShowExpression(t *testing.T) {
 	body := getBody(t, server, "/")
 	assert.Contains(t, body, `data-show="$open"`,
 		"Show should produce data-show=$<key>")
+}
+
+type signalToggleHelpersPage struct {
+	Open via.SignalBool `via:"open"`
+}
+
+func (p *signalToggleHelpersPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Div(p.Open.ShowUnless(), h.Text("fallback")),
+		h.Div(p.Open.Class("active"), h.Text("card")),
+	)
+}
+
+func TestSignalShowUnless_negatesTheShowExpression(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[signalToggleHelpersPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-show="!$open"`,
+		"ShowUnless should emit the negated show expression so users avoid hand-juggling $")
+}
+
+func TestSignalClass_togglesNamedClassBySignalTruthiness(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[signalToggleHelpersPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-class-active="$open"`,
+		"Class(name) should emit data-class-<name> bound to the signal")
+}
+
+type signalMixedCaseClassPage struct {
+	Open via.SignalBool `via:"open"`
+}
+
+func (p *signalMixedCaseClassPage) View(ctx *via.CtxR) h.H {
+	return h.Div(p.Open.Class("myThing"))
+}
+
+func TestSignalClass_emitsNameVerbatimButBrowserWillLowercaseIt(t *testing.T) {
+	t.Parallel()
+	// Class(name) emits data-class-<name> verbatim. The HTML attribute name is
+	// folded to lower-case by the browser parser before Datastar reads it, so a
+	// mixed-case name resolves to a lower-cased CSS class at runtime. This test
+	// pins the emitted attribute and documents that mixed-case names are a
+	// footgun: callers must pass lower-case / kebab class names.
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[signalMixedCaseClassPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-class-myThing="$open"`,
+		"Class emits the name verbatim server-side; the browser lower-cases it to my-thing/mything at runtime")
+}
+
+type compositeDecodePage struct {
+	Items via.SignalSlice[int] `via:"items"`
+	Sum   via.SignalNum[int]   `via:"sum"`
+}
+
+func (p *compositeDecodePage) Total(ctx *via.Ctx) error {
+	s := 0
+	for _, v := range p.Items.Read(ctx) {
+		s += v
+	}
+	return p.Sum.Update(ctx, func(int) (int, error) { return s, nil })
+}
+
+func (p *compositeDecodePage) View(ctx *via.CtxR) h.H { return h.Div(p.Sum.Text()) }
+
+// TestComposite_inboundSliceSignalReachesAction pins that a client-sent slice
+// signal is injected into the composition before the action runs — the same
+// contract scalar signals already honor. Without a composite decode arm the
+// inbound []int is silently dropped and the action sums an empty slice.
+func TestComposite_inboundSliceSignalReachesAction(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[compositeDecodePage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, http.StatusOK,
+		tc.Action("Total").WithSignal("items", []int{5, 6, 7}).Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"sum":18`)
 }
 
 type fieldNameKey struct {

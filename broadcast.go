@@ -22,6 +22,23 @@ func (a *App) Broadcast(script string) int {
 	return len(ctxs)
 }
 
+// BroadcastToast shows an XSS-safe toast notification on every currently-live
+// tab — the safe form of [App.Broadcast] for the common site-wide-notice case,
+// so callers never hand-build (and mis-escape) toast JS. message is JSON-encoded,
+// so arbitrary text including markup is inert. Returns the number of tabs it
+// reached; empty message is a no-op. Like Broadcast, this is best-effort and
+// reaches only this pod's live tabs (a tab that connects later won't see it).
+func (a *App) BroadcastToast(message string) int {
+	if message == "" {
+		return 0
+	}
+	script, ok := buildToastScript(message)
+	if !ok {
+		return 0
+	}
+	return a.Broadcast(script)
+}
+
 // BroadcastSignal pushes one typed signal value to every currently-live
 // tab via its Signal[T] handle — the typed counterpart of
 // [App.BroadcastSignals] for signals bound at Mount. Returns the tab

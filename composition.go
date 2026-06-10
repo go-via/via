@@ -2,7 +2,8 @@
 //
 // A composition is a struct. Its fields declare reactive state (Signal[T],
 // StateTab[T]) and path parameters (path:"name" tag). Its methods of signature
-// func(*Ctx) error become server actions. View(*Ctx) h.H draws it.
+// func(*Ctx) error become server actions. View(*CtxR) h.H draws it (the
+// render context is read-only, so a View cannot mutate state).
 //
 //	type Counter struct {
 //	    Hits via.StateTab[int]
@@ -156,6 +157,26 @@ func buildDescriptor[C any]() *cmpDescriptor {
 	}
 
 	walkStruct(desc, typ, nil, "")
+
+	// Signal and scope (StateSess/StateApp) handles all mirror into the same
+	// data-signals namespace; two fields resolving to one wire key would
+	// silently clobber each other in the initial-signals map. That's a
+	// registration mistake — fail loud at Mount.
+	seenKeys := make(map[string]struct{}, len(desc.signalSlots)+len(desc.scopeSlots))
+	checkWireKey := func(key string) {
+		if _, dup := seenKeys[key]; dup {
+			panic(fmt.Sprintf(
+				"via.Mount(%s): duplicate signal wire key %q — two fields resolve to the same key; rename one or set a distinct `via:\"name\"` tag",
+				typ, key))
+		}
+		seenKeys[key] = struct{}{}
+	}
+	for _, s := range desc.signalSlots {
+		checkWireKey(s.wireKey)
+	}
+	for _, s := range desc.scopeSlots {
+		checkWireKey(s.wireKey)
+	}
 
 	for i := range ptrTyp.NumMethod() {
 		m := ptrTyp.Method(i)

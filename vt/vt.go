@@ -163,7 +163,17 @@ type actionFile struct {
 }
 
 // WithSignal adds a signal value to send with the action POST.
+//
+// A `_`-prefixed name is a Datastar client-only (local) signal, which a real
+// browser never POSTs to the server — sending one here reproduces behavior
+// that cannot happen in the browser, so WithSignal logs a (non-fatal) warning.
 func (a *ActionCall) WithSignal(name string, value any) *ActionCall {
+	if strings.HasPrefix(name, "_") {
+		a.client.t.Helper()
+		a.client.t.Logf("vt.WithSignal(%q): a `_`-prefixed local signal is never "+
+			"sent to the server by a real browser; this test cannot reproduce "+
+			"client-side behavior for it", name)
+	}
 	if a.signals == nil {
 		a.signals = map[string]any{}
 	}
@@ -336,7 +346,12 @@ func (c *Client) SSE() (frames <-chan string, cancel func()) {
 			}
 		}
 	}()
-	return out, func() { cancelF(); resp.Body.Close() }
+	cancel = func() { cancelF(); resp.Body.Close() }
+	// Register cleanup so the reader goroutine + connection don't leak if a
+	// test t.Fatals before reaching its `defer cancel()`. cancel is idempotent
+	// (context cancel + Body.Close both tolerate a second call).
+	c.t.Cleanup(cancel)
+	return out, cancel
 }
 
 // helpers
@@ -354,6 +369,12 @@ func tabIDFrom(html string) string {
 	}
 	return m[1]
 }
+
+// TabIDFromHTML extracts the via_tab id from a rendered page's data-signals
+// meta (the id is `<route>_<64-hex>`). The HTML escapes the JSON quotes, so
+// tests reaching for the tab id directly should use this rather than
+// hand-rolling a regex against the escaped form. Returns "" if absent.
+func TabIDFromHTML(html string) string { return tabIDFrom(html) }
 
 func sseQueryParam(tabID string) string {
 	body, _ := json.Marshal(map[string]any{"via_tab": tabID})

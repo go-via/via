@@ -1,9 +1,18 @@
 package h
 
 import (
+	"fmt"
 	"io"
 	"slices"
 )
+
+// numeric constrains [AttrNum] and the numeric attribute siblings to the
+// integer and floating-point kinds; ~int etc. admits user-defined wrappers.
+type numeric interface {
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~uintptr |
+		~float32 | ~float64
+}
 
 // attrNode is a name=value attribute carrying its pre-escaped value as
 // a string. The pointer receiver lets [H] storage skip the heap-box
@@ -104,6 +113,13 @@ func Data(name, value string) H {
 	return &dataAttrNode{suffix: name, value: htmlEscape(value)}
 }
 
+// Aria is shorthand for `aria-<name>="value"` (HTML-escaped). Use it for
+// accessibility attributes (`aria-label`, `aria-invalid`, …) instead of
+// the stringly-typed [Attr]("aria-"+name, value).
+func Aria(name, value string) H {
+	return buildAttr("aria-"+name, value)
+}
+
 // One shorthand per common HTML attribute — each emits `name="value"`
 // (HTML-escaped) via [buildAttr]. For an attribute without a shorthand use
 // [Attr]; for data-* use [Data]; for boolean attributes see [Selected],
@@ -144,6 +160,64 @@ func Max(v string) H { return buildAttr("max", v) }
 // Step emits the step attribute.
 func Step(v string) H { return buildAttr("step", v) }
 
+// Alt emits the alt attribute.
+func Alt(v string) H { return buildAttr("alt", v) }
+
+// Width emits the width attribute.
+func Width(v string) H { return buildAttr("width", v) }
+
+// Height emits the height attribute.
+func Height(v string) H { return buildAttr("height", v) }
+
+// Target emits the target attribute.
+func Target(v string) H { return buildAttr("target", v) }
+
+// Action emits the action attribute.
+func Action(v string) H { return buildAttr("action", v) }
+
+// Method emits the method attribute.
+func Method(v string) H { return buildAttr("method", v) }
+
+// AutoComplete emits the autocomplete attribute.
+func AutoComplete(v string) H { return buildAttr("autocomplete", v) }
+
+// TabIndex emits the tabindex attribute.
+func TabIndex(v string) H { return buildAttr("tabindex", v) }
+
+// ColSpan emits the colspan attribute.
+func ColSpan(v string) H { return buildAttr("colspan", v) }
+
+// RowSpan emits the rowspan attribute.
+func RowSpan(v string) H { return buildAttr("rowspan", v) }
+
+// Pattern emits the pattern attribute — a regex for native client-side input
+// validation. Pairs with [Required] for zero-round-trip constraint checks.
+func Pattern(v string) H { return buildAttr("pattern", v) }
+
+// MinLength emits the minlength attribute.
+func MinLength(n int) H { return AttrNum("minlength", n) }
+
+// MaxLength emits the maxlength attribute.
+func MaxLength(n int) H { return AttrNum("maxlength", n) }
+
+// AttrNum emits `name="<v>"` for a numeric value, sparing callers the
+// strconv/fmt conversion that string-valued [Attr] would require.
+func AttrNum[T numeric](name string, v T) H {
+	return buildAttr(name, fmt.Sprintf("%v", v))
+}
+
+// ValueNum is the numeric form of [Value] for range/number inputs.
+func ValueNum[T numeric](v T) H { return AttrNum("value", v) }
+
+// MinNum is the numeric form of [Min] for range/number inputs.
+func MinNum[T numeric](v T) H { return AttrNum("min", v) }
+
+// MaxNum is the numeric form of [Max] for range/number inputs.
+func MaxNum[T numeric](v T) H { return AttrNum("max", v) }
+
+// StepNum is the numeric form of [Step] for range/number inputs.
+func StepNum[T numeric](v T) H { return AttrNum("step", v) }
+
 // For emits the for attribute.
 func For(v string) H { return buildAttr("for", v) }
 
@@ -158,7 +232,6 @@ func Charset(v string) H { return buildAttr("charset", v) }
 
 // Style emits an inline `style="..."` attribute. For the
 // `<style>...</style>` element use [StyleEl].
-// Style emits the style attribute.
 func Style(v string) H { return buildAttr("style", v) }
 
 // Styles joins non-empty CSS declarations with `;` and emits one

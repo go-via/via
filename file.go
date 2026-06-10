@@ -1,7 +1,6 @@
 package via
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -135,12 +134,57 @@ func (ctx *Ctx) MultipartReader() (*multipart.Reader, error) {
 	return r.MultipartReader()
 }
 
-// fileSlot records the location of a via.File field in a composition
-// so the action dispatcher can populate it from a parsed multipart
-// form.
+// Files is a typed, request-scoped handle to ALL parts of a multi-file
+// upload field (an <input type=file multiple>). Use it where via.File —
+// which binds only the first part — would silently drop the rest:
+//
+//	type Page struct {
+//	    Photos via.Files `via:"photos"`
+//	}
+//
+//	func (p *Page) Upload(ctx *via.Ctx) error {
+//	    for i, f := range p.Photos.All() {
+//	        if err := f.Save(fmt.Sprintf("/uploads/%d", i)); err != nil { return err }
+//	    }
+//	    return nil
+//	}
+//
+// Same lifecycle and wire-key rules as [File].
+type Files struct {
+	headers []*multipart.FileHeader
+	key     string
+}
+
+// Len reports how many parts were uploaded for this field.
+func (fs *Files) Len() int {
+	if fs == nil {
+		return 0
+	}
+	return len(fs.headers)
+}
+
+// All returns a [File] handle for each uploaded part, in form order.
+func (fs *Files) All() []File {
+	if fs == nil {
+		return nil
+	}
+	out := make([]File, len(fs.headers))
+	for i, h := range fs.headers {
+		out[i] = File{header: h, key: fs.key}
+	}
+	return out
+}
+
+// Key returns the wire key (the multipart field name).
+func (fs *Files) Key() string { return fs.key }
+
+// fileSlot records the location of a via.File / via.Files field in a
+// composition so the action dispatcher can populate it from a parsed
+// multipart form. plural is true for via.Files (bind every part).
 type fileSlot struct {
 	fieldPath []int
 	wireKey   string
+	plural    bool
 }
 
 // isFileType reports whether t is the via.File handle.
@@ -149,6 +193,14 @@ func isFileType(t reflect.Type) bool {
 		return false
 	}
 	return t.Name() == "File" && t.PkgPath() == viaPkgPath
+}
+
+// isFilesType reports whether t is the via.Files (multi-part) handle.
+func isFilesType(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct {
+		return false
+	}
+	return t.Name() == "Files" && t.PkgPath() == viaPkgPath
 }
 
 // bindFileKeys writes the wire key into every via.File field of the
@@ -160,7 +212,12 @@ func bindFileKeys(cmpVal reflect.Value, d *cmpDescriptor) {
 	}
 	elem := cmpVal.Elem()
 	for _, s := range d.fileSlots {
-		fieldByPath(elem, s.fieldPath).Addr().Interface().(*File).key = s.wireKey
+		field := fieldByPath(elem, s.fieldPath).Addr().Interface()
+		if s.plural {
+			field.(*Files).key = s.wireKey
+		} else {
+			field.(*File).key = s.wireKey
+		}
 	}
 }
 
@@ -174,8 +231,14 @@ func bindFiles(ctx *Ctx, form *multipart.Form) {
 	}
 	elem := ctx.cmpReflect.Elem()
 	for _, s := range ctx.desc.fileSlots {
-		if hs := form.File[s.wireKey]; len(hs) > 0 {
-			fieldByPath(elem, s.fieldPath).Addr().Interface().(*File).header = hs[0]
+		hs := form.File[s.wireKey]
+		field := fieldByPath(elem, s.fieldPath).Addr().Interface()
+		if s.plural {
+			field.(*Files).headers = hs // every part; nil/empty when none uploaded
+			continue
+		}
+		if len(hs) > 0 {
+			field.(*File).header = hs[0]
 		}
 	}
 }
@@ -189,18 +252,27 @@ func clearFiles(ctx *Ctx) {
 	}
 	elem := ctx.cmpReflect.Elem()
 	for _, s := range ctx.desc.fileSlots {
-		fieldByPath(elem, s.fieldPath).Addr().Interface().(*File).header = nil
+		field := fieldByPath(elem, s.fieldPath).Addr().Interface()
+		if s.plural {
+			field.(*Files).headers = nil
+		} else {
+			field.(*File).header = nil
+		}
 	}
 }
 
 // readMultipartSignals parses the multipart form on r (already
 // MaxBytes-bounded by the caller) and writes text fields into the
-// caller-supplied dst map (JSON-decoding values that look like JSON
-// literals so booleans and numbers come out typed). Returns the form so
-// file fields can be bound. memLimit caps how much non-file content
-// goes through memory before spilling to disk — see
-// http.Request.ParseMultipartForm. dst must be non-nil and empty;
-// pre-existing keys are preserved (caller's responsibility to clear).
+// caller-supplied dst map as raw strings. Unlike the datastar JSON path
+// (where the client chooses each signal's wire type), a multipart form is
+// stringly-typed on the wire, so values are left as strings here and
+// coerced to each field's target type by decodeScalarInto at inject time —
+// JSON-coercing here was redundant (decodeScalarInto already parses
+// string→number/bool) and lossy (it turned "007" into 7 and stopped a
+// Signal[string] from holding "true"). Returns the form so file fields can
+// be bound. memLimit caps how much non-file content goes through memory
+// before spilling to disk — see http.Request.ParseMultipartForm. dst must
+// be non-nil; pre-existing keys are preserved (caller's responsibility to clear).
 func readMultipartSignals(r *http.Request, memLimit int64, dst map[string]any) (*multipart.Form, error) {
 	if err := r.ParseMultipartForm(memLimit); err != nil {
 		return nil, err
@@ -210,26 +282,7 @@ func readMultipartSignals(r *http.Request, memLimit int64, dst map[string]any) (
 		if len(vs) == 0 {
 			continue
 		}
-		dst[k] = decodeMultipartValue(vs[0])
+		dst[k] = vs[0]
 	}
 	return form, nil
-}
-
-// decodeMultipartValue converts a multipart text-field value into the
-// typed shape the rest of the pipeline expects (matching how
-// datastar.ReadSignals returns JSON values). Defers to encoding/json
-// so the type table is exactly JSON's: bool, float64, plain string;
-// Inf/NaN/non-JSON content stays as a string.
-func decodeMultipartValue(s string) any {
-	if s == "" {
-		return ""
-	}
-	var v any
-	if err := json.Unmarshal([]byte(s), &v); err == nil {
-		switch v.(type) {
-		case bool, float64:
-			return v
-		}
-	}
-	return s
 }

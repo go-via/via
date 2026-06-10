@@ -36,9 +36,12 @@ func (a *App) HTTPServer() *http.Server {
 	return srv
 }
 
-// Start binds and serves on the configured address. SIGINT/SIGTERM trigger
-// a graceful Shutdown.
-func (a *App) Start() {
+// Run binds and serves on the configured address, wiring SIGINT/SIGTERM to a
+// graceful Shutdown. It blocks until the server stops and returns the listen
+// error (nil on a graceful shutdown — http.ErrServerClosed is normalized to
+// nil). Use Run when you want to handle a bind failure (e.g. "address already
+// in use") yourself; use [App.Start] for the panic-on-error convenience.
+func (a *App) Run() error {
 	srv := a.HTTPServer()
 	a.serverMu.Lock()
 	a.server = srv
@@ -57,6 +60,15 @@ func (a *App) Start() {
 	}()
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// Start is the panic-on-error convenience wrapper over [App.Run]: a bind
+// failure becomes a panic. SIGINT/SIGTERM trigger a graceful Shutdown.
+func (a *App) Start() {
+	if err := a.Run(); err != nil {
 		panic(fmt.Sprintf("via: %v", err))
 	}
 }

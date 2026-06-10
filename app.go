@@ -157,8 +157,12 @@ func (a *App) rebuildChain() {
 // page's <meta data-signals> on render.
 func (a *App) RegisterAppSignal(key string, value any) {
 	a.appSignalsMu.Lock()
+	defer a.appSignalsMu.Unlock()
+	if _, dup := a.appSignals[key]; dup {
+		panic(fmt.Sprintf("via.RegisterAppSignal: duplicate app signal key %q — "+
+			"two plugins (or a plugin and user code) registered the same key; rename one", key))
+	}
 	a.appSignals[key] = value
-	a.appSignalsMu.Unlock()
 }
 
 // HandleFunc registers a non-via handler on the app's mux.
@@ -222,7 +226,14 @@ func (a *App) registerDescriptor(d *cmpDescriptor) {
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.renderPage(d, w, r)
 	})
-	a.mux.Handle(pattern, applyMiddleware(d.groupMW, final))
+	guarded := applyMiddleware(d.groupMW, final)
+	// Plant the logical route before group middleware runs so a guard reads it
+	// via RouteFrom — matching the action/SSE entry points where r.URL.Path is
+	// the shared /_action or /_sse rather than this page's route.
+	route := d.route
+	a.mux.Handle(pattern, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		guarded.ServeHTTP(w, requestWithRoute(r, route))
+	}))
 }
 
 // tryRegisterCtx enforces the maxContexts cap atomically with the
@@ -351,6 +362,7 @@ func New(opts ...Option) *App {
 	for _, opt := range opts {
 		opt(&a.cfg)
 	}
+	a.cfg.validate()
 	for _, plugin := range a.cfg.plugins {
 		if plugin != nil {
 			plugin.Register(a)

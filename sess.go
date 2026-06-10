@@ -187,7 +187,7 @@ func (a *App) adoptSession(sid string) *session {
 
 func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
 	now := time.Now().UnixNano()
-	if c, err := r.Cookie(sessionCookieName); err == nil {
+	if c, err := r.Cookie(a.cookieName()); err == nil {
 		a.sessionsMu.RLock()
 		sess, ok := a.sessions[c.Value]
 		a.sessionsMu.RUnlock()
@@ -203,7 +203,7 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 		if validSessionID(c.Value) {
 			sess := a.adoptSession(c.Value)
 			sess.lastAccess.Store(now)
-			r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sess.id})
+			r.AddCookie(&http.Cookie{Name: a.cookieName(), Value: sess.id})
 			return sess
 		}
 	}
@@ -219,7 +219,7 @@ func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *sessio
 	// Plant the cookie on the request too so sessionFromRequest in
 	// downstream handlers (renderPage/handleAction/handleSSE) can find
 	// the session it just created without waiting for the next round-trip.
-	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: sess.id})
+	r.AddCookie(&http.Cookie{Name: a.cookieName(), Value: sess.id})
 
 	return sess
 }
@@ -240,9 +240,18 @@ type appKey struct{}
 // POST and SSE handshake validates via_tab against the session, so a
 // cross-site form submission can't reach an action even if the cookie
 // rides along.
+// cookieName returns the configured session cookie name, defaulting to the
+// canonical sessionCookieName when WithSessionCookieName was not used.
+func (a *App) cookieName() string {
+	if a.cfg.cookieName != "" {
+		return a.cfg.cookieName
+	}
+	return sessionCookieName
+}
+
 func (a *App) sessionCookie(id string) *http.Cookie {
 	return &http.Cookie{
-		Name:     sessionCookieName,
+		Name:     a.cookieName(),
 		Value:    id,
 		Path:     "/",
 		HttpOnly: true,
@@ -256,13 +265,25 @@ func (a *App) sessionCookie(id string) *http.Cookie {
 // established by the withSession middleware on the first request, so
 // by the time SSE/action handlers run there is always a session present.
 func (a *App) sessionFromRequest(r *http.Request) *session {
-	c, err := r.Cookie(sessionCookieName)
+	c, err := r.Cookie(a.cookieName())
 	if err != nil {
 		return nil
 	}
 	a.sessionsMu.RLock()
 	defer a.sessionsMu.RUnlock()
 	return a.sessions[c.Value]
+}
+
+// touchSession bumps the bound session's lastAccess so a live SSE stream keeps
+// its session warm. The connected ctx is already pinned against the context
+// sweep (connected>0), but removeExpiredSessions keys on lastAccess, which only
+// the request path otherwise updates — without this a long-idle but still-
+// streaming tab would have its session reaped, and the next action would 403 on
+// session mismatch. Nil-safe: a ctx with no bound session is a no-op.
+func (ctx *Ctx) touchSession() {
+	if sess := ctx.session.Load(); sess != nil {
+		sess.lastAccess.Store(time.Now().UnixNano())
+	}
 }
 
 func (a *App) removeExpiredSessions() {

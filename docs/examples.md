@@ -6,7 +6,7 @@ nav_order: 3
 
 # Examples
 
-Twelve runnable example apps ship in
+Thirteen runnable example apps ship in
 [`internal/examples/`](https://github.com/go-via/via/tree/main/internal/examples).
 Each is a single `main.go` you can read in a sitting and run directly:
 
@@ -22,7 +22,7 @@ walked through step by step in the [tutorial](tutorial).
 
 | Example | What it teaches |
 |---|---|
-| [chat](https://github.com/go-via/via/tree/main/internal/examples/chat) ⭐ | A live multi-user chatroom: `StateAppSlice` fan-out delivers each message to every connected browser — no WebSocket, no JS. The [tutorial](tutorial) builds it. |
+| [chat](https://github.com/go-via/via/tree/main/internal/examples/chat) ⭐ | A live multi-user chatroom: an app-scoped event log (`StateAppEvents`) folds each `Posted` event and fans the new line out to every connected browser — no WebSocket, no JS. |
 | [counter](https://github.com/go-via/via/tree/main/internal/examples/counter) | `StateTab[int]` + `Signal[int]` + a typed action — the canonical first app. |
 | [greeter](https://github.com/go-via/via/tree/main/internal/examples/greeter) | A `Signal[string]` mutated from two distinct actions. |
 | [pathparams](https://github.com/go-via/via/tree/main/internal/examples/pathparams) | Typed `path:"id"` decoding into composition fields. |

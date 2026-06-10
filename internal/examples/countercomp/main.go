@@ -27,7 +27,7 @@ func (c *CounterCard) Inc(ctx *via.Ctx) {
 func (c *CounterCard) View(ctx *via.CtxR, onClick h.H) h.H {
 	return h.Div(
 		h.P(h.Textf("Count: %d", c.Count.Read(ctx))),
-		h.P(h.Text("Step: "), c.Step.Text()),
+		h.P(h.Text("Step: "), c.Step.TextSpan()),
 		h.Label(
 			h.Text("Update Step: "),
 			h.Input(h.Type("number"), c.Step.Bind()),

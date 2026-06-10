@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+// A live SSE stream keeps its session warm: the connected ctx is already
+// pinned against the context sweep, but the session sweep keys on lastAccess,
+// which only the request path otherwise bumps. touchSession advances it so a
+// long-idle but still-streaming tab isn't reaped underneath the live stream.
+func TestTouchSessionKeepsAStreamingTabsSessionWarm(t *testing.T) {
+	t.Parallel()
+	sess := &session{id: "s"}
+	sess.lastAccess.Store(int64(123)) // artificially stale
+	ctx := &Ctx{}
+	ctx.session.Store(sess)
+
+	ctx.touchSession()
+
+	if sess.lastAccess.Load() <= 123 {
+		t.Fatalf("touchSession must advance lastAccess; got %d", sess.lastAccess.Load())
+	}
+}
+
+func TestTouchSessionIsNilSafeWithoutABoundSession(t *testing.T) {
+	t.Parallel()
+	ctx := &Ctx{}
+	ctx.touchSession() // must not panic when no session is bound
+}
+
 // Only the exact genSecureID format (64 lowercase hex chars) may be adopted, so
 // a client cannot make a pod adopt an arbitrary attacker-chosen token or a
 // malformed value that would land odd keys in the session map / Store.

@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-via/via"
@@ -129,6 +130,29 @@ func TestMount_panicsOnMissingView(t *testing.T) {
 	via.Mount[noView](app, "/test")
 }
 
+type dupWireKeyPage struct {
+	A via.SignalNum[int] `via:"dup"`
+	B via.SignalStr      `via:"dup"`
+}
+
+func (p *dupWireKeyPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+func TestMount_panicsOnDuplicateWireKey(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec, "Mount must panic when two fields share a wire key")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "duplicate",
+			"panic must state the keys collide")
+		assert.Contains(t, msg, "dup",
+			"panic must name the offending wire key")
+	}()
+	via.Mount[dupWireKeyPage](app, "/dup")
+}
+
 type pathParamPage struct {
 	UserID int    `path:"id"`
 	Slug   string `path:"slug"`
@@ -225,4 +249,33 @@ func TestMount_panicsOnUnknownViaTagOption(t *testing.T) {
 			"panic must name the composition type")
 	}()
 	via.Mount[typoOptionPage](app, "/typo")
+}
+
+type capProbePage struct{}
+
+var capProbeOnInitCount atomic.Int64
+
+func (p *capProbePage) OnInit(ctx *via.Ctx) error { capProbeOnInitCount.Add(1); return nil }
+func (p *capProbePage) View(ctx *via.CtxR) h.H    { return h.Div() }
+
+// An over-capacity request is rejected with 503 — it must NOT run user OnInit
+// work first. The capacity gate has to precede OnInit, not follow it.
+func TestMaxContexts_doesNotRunOnInitWhenAtCapacity(t *testing.T) {
+	capProbeOnInitCount.Store(0)
+	app := via.New(via.WithMaxContexts(1))
+	server := vt.Serve(t, app)
+	via.Mount[capProbePage](app, "/")
+
+	r1, err := server.Client().Get(server.URL + "/")
+	require.NoError(t, err)
+	r1.Body.Close()
+	require.Equal(t, http.StatusOK, r1.StatusCode, "first render fills the one context slot")
+
+	r2, err := server.Client().Get(server.URL + "/")
+	require.NoError(t, err)
+	r2.Body.Close()
+	require.Equal(t, http.StatusServiceUnavailable, r2.StatusCode, "second render is over capacity")
+
+	assert.Equal(t, int64(1), capProbeOnInitCount.Load(),
+		"OnInit must not run for the over-capacity request rejected with 503")
 }

@@ -49,3 +49,25 @@ func RequestIDFrom(r *http.Request) string {
 func RequestWithID(r *http.Request, id string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), requestIDKey{}, id))
 }
+
+type routeKey struct{}
+
+// RouteFrom returns the resolved logical route of the composition serving this
+// request — the mounted pattern (e.g. "/users/{id}"), the SAME value on the
+// page GET, the action POST, and the SSE handshake. Group middleware can use
+// it to tell which page it is guarding, since on the action/SSE paths
+// r.URL.Path is the shared "/_action/{id}" or "/_sse", not the page route.
+// Returns "" outside a via composition request (e.g. a plain HandleFunc route).
+func RouteFrom(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	v, _ := r.Context().Value(routeKey{}).(string)
+	return v
+}
+
+// requestWithRoute plants the resolved route on r's context so group
+// middleware on any entry point can read it via [RouteFrom].
+func requestWithRoute(r *http.Request, route string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), routeKey{}, route))
+}

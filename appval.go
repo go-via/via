@@ -241,20 +241,34 @@ func (a *App) applySessionChange(c change) {
 //   - storeRev <= l1Rev → already applied (or newer); monotone gate makes
 //     redelivered / out-of-order Changes non-regressing (T3-SRE-1).
 func (a *App) applyChange(c change) {
+	if a.applyChangeL1(c) {
+		a.broadcastRender(nil, nil, c.Key)
+	}
+}
+
+// applyChangeL1 performs the gated L1 re-pull and reports whether L1 actually
+// advanced. The caller broadcasts only when it did — a redelivered or stale
+// hint that changes nothing must be a silent no-op, not a render storm, the
+// same contract reconcileKey and applySessionChange already honor.
+func (a *App) applyChangeL1(c change) bool {
 	vc := a.valCellFor(c.Key)
 	if vc == nil {
-		return
+		return false
 	}
 	vc.mu.Lock()
-	if c.Rev > vc.l1Rev {
-		data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), valKey(c.Key))
-		if ok && storeRev >= c.Rev && storeRev > vc.l1Rev {
-			if v, err := vc.decode(data); err == nil {
-				vc.l1 = v
-				vc.l1Rev = storeRev
-			}
-		}
+	defer vc.mu.Unlock()
+	if c.Rev <= vc.l1Rev {
+		return false
 	}
-	vc.mu.Unlock()
-	a.broadcastRender(nil, nil, c.Key)
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), valKey(c.Key))
+	if !ok || storeRev < c.Rev || storeRev <= vc.l1Rev {
+		return false
+	}
+	v, err := vc.decode(data)
+	if err != nil {
+		return false
+	}
+	vc.l1 = v
+	vc.l1Rev = storeRev
+	return true
 }

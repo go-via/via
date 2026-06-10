@@ -25,6 +25,11 @@ package via
 //   - "via.ctx.live"          gauge — current registered tab count
 //   - "via.ctx.reap"          counter, labels: reason ("ttl", "shutdown")
 //
+// Session:
+//   - "via.session.mismatch"  counter — an action/SSE handshake's bound
+//     session no longer matched the request cookie (403); usually two
+//     co-located via apps clobbering one another's session cookie
+//
 // Event-log projection (StateAppEvents projector), all labelled by key:
 //   - "via.events.epoch_reset"           counter — stream generation reset, re-folded
 //   - "via.events.forward_incompatible"  counter — record from a newer binary; key halted

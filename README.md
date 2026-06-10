@@ -135,7 +135,7 @@ The full guide and reference live at
 - [Routing & sessions](https://go-via.github.io/via/routing-sessions-middleware)
   — routing, groups, sessions, auth, the middleware stack.
 - [File uploads](https://go-via.github.io/via/file-uploads) — `via.File`.
-- [Plugins](https://go-via.github.io/via/plugins) — picocss, echarts.
+- [Plugins](https://go-via.github.io/via/plugins) — picocss, echarts, maplibre.
 - [Testing](https://go-via.github.io/via/testing) ·
   [Production & ops](https://go-via.github.io/via/production) — `vt`; config,
   metrics, security, deploys.

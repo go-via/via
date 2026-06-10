@@ -94,6 +94,102 @@ func TestOn_modifiersAppendToTrigger(t *testing.T) {
 	}
 }
 
+type triggerOptsPage struct {
+	Saving via.SignalBool `via:"saving"`
+}
+
+func (p *triggerOptsPage) Act(ctx *via.Ctx) error { return nil }
+
+func (p *triggerOptsPage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Button(h.Text("once"), on.Click(p.Act, on.Once())),
+		h.Button(h.Text("outside"), on.Click(p.Act, on.Outside())),
+		h.Button(h.Text("window"), on.Click(p.Act, on.Window())),
+		h.Button(h.Text("del"), on.Click(p.Act, on.Confirm("Delete?"))),
+		h.Button(h.Text("save"), on.Click(p.Act), on.Indicator(&p.Saving.Signal)),
+	)
+}
+
+func TestOn_lifecycleModifiersAppendToTrigger(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[triggerOptsPage](app, "/")
+
+	body := getBody(t, server, "/")
+	cases := []struct {
+		name, needle, why string
+	}{
+		{"once", "on:click.once", "Once should append .once"},
+		{"outside", "on:click.outside", "Outside should append .outside"},
+		{"window", "on:click.window", "Window should append .window"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Contains(t, body, c.needle, c.why)
+		})
+	}
+}
+
+func TestConfirm_gatesPostBehindBrowserConfirm(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[triggerOptsPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `confirm(&#34;Delete?&#34;)&amp;&amp;@post(&#39;/_action/Act&#39;)`,
+		"Confirm should short-circuit the @post behind a JSON-encoded confirm() guard")
+}
+
+func TestIndicator_bindsRequestInFlightSignalByKey(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[triggerOptsPage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body, `data-indicator="saving"`,
+		"Indicator should emit data-indicator with the signal's wire key")
+}
+
+type confirmWithPrePage struct {
+	Step via.SignalNum[int] `via:"step,init=1"`
+}
+
+func (p *confirmWithPrePage) Apply(ctx *via.Ctx) error { return nil }
+
+func (p *confirmWithPrePage) View(ctx *via.CtxR) h.H {
+	return h.Div(
+		h.Button(
+			h.Text("Apply"),
+			on.Click(p.Apply, on.SetSignal(&p.Step.Signal, 5), on.Confirm("Sure?")),
+		),
+	)
+}
+
+// TestConfirm_composesWithPreStatements locks the sequencing when a Pre
+// statement (on.SetSignal) and on.Confirm are present on the same trigger:
+// the Pre assignment must run first (terminated by ';'), then the confirm()
+// guard short-circuits the @post via '&&'. The combined expression is a
+// valid JS statement sequence: `$step=5;confirm("Sure?")&&@post(...)`.
+func TestConfirm_composesWithPreStatements(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[confirmWithPrePage](app, "/")
+
+	body := getBody(t, server, "/")
+	assert.Contains(t, body,
+		`$step=5;confirm(&#34;Sure?&#34;)&amp;&amp;@post(&#39;/_action/Apply&#39;)`,
+		"Pre assignment must run first (;), then confirm() must gate @post (&&)")
+}
+
 type keyFilterPage struct{}
 
 func (p *keyFilterPage) Send(ctx *via.Ctx) error { return nil }
@@ -102,16 +198,20 @@ func (p *keyFilterPage) View(ctx *via.CtxR) h.H {
 	return h.Div(on.Key("Enter", p.Send))
 }
 
-func TestOn_KeyAttributeIncludesNamedKey(t *testing.T) {
+func TestOn_KeyFiltersByEvtKeyExpressionNotModifier(t *testing.T) {
 	t.Parallel()
-
+	// Datastar v1 has NO keyboard-key modifier — `on:keydown.Enter` would fire
+	// on EVERY keystroke. Key filtering must be an expression guard on evt.key,
+	// which the on plugin exposes via argNames:["evt"].
 	app := via.New()
 	server := vt.Serve(t, app)
 	via.Mount[keyFilterPage](app, "/")
 
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, "on:keydown.Enter",
-		"on.Key should append .<key> to the keydown trigger")
+	assert.Contains(t, body, `data-on:keydown="evt.key===&#39;Enter&#39;&amp;&amp;@post(&#39;/_action/Send&#39;)"`,
+		"on.Key must guard the @post with evt.key===<Key>, not a (no-op) .Enter modifier")
+	assert.NotContains(t, body, "on:keydown.Enter",
+		"the .Enter attribute modifier is a no-op in datastar and must not be emitted")
 }
 
 func TestSetSignal_quotesStringValues(t *testing.T) {

@@ -301,6 +301,12 @@ func (s *statusWriter) Flush() {
 	}
 }
 
+// Unwrap exposes the wrapped writer so http.ResponseController can reach
+// optional interfaces (Hijacker, ReaderFrom, …) this wrapper doesn't itself
+// implement — without it, wrapping every request in statusWriter would
+// silently disable hijacking and the sendfile fast-path on the underlying writer.
+func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // sanitizeLog strips CR/LF from values that flow from request data into
 // log lines, preventing forged log entries (CWE-117).
 func sanitizeLog(s string) string {

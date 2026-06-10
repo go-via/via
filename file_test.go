@@ -57,6 +57,119 @@ func TestFile_typedFieldPopulatedFromMultipartUpload(t *testing.T) {
 	assert.Equal(t, body, got)
 }
 
+type multiUploadPage struct {
+	Pics via.Files     `via:"pics"`
+	Dir  via.SignalStr `via:"saveTo"`
+}
+
+func (p *multiUploadPage) Upload(ctx *via.Ctx) error {
+	dir := p.Dir.Read(ctx)
+	for i, f := range p.Pics.All() {
+		if err := f.Save(filepath.Join(dir, fmt.Sprintf("f%d.bin", i))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *multiUploadPage) View(ctx *via.CtxR) h.H { return h.Div() }
+
+// An <input type=file multiple> sends several parts under one field name.
+// via.Files must bind all of them, not silently drop everything past the first
+// (which via.File does).
+func TestFiles_bindsEveryPartOfAMultiFileField(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[multiUploadPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	dir := t.TempDir()
+
+	require.Equal(t, http.StatusOK,
+		tc.Action("Upload").
+			WithFile("pics", "a.bin", []byte("AAA")).
+			WithFile("pics", "b.bin", []byte("BBB")).
+			WithSignal("saveTo", dir).
+			Fire())
+
+	a, err := os.ReadFile(filepath.Join(dir, "f0.bin"))
+	require.NoError(t, err, "first of a multi-file field must be saved")
+	b, err := os.ReadFile(filepath.Join(dir, "f1.bin"))
+	require.NoError(t, err, "second of a multi-file field must NOT be dropped")
+	assert.ElementsMatch(t, []string{"AAA", "BBB"}, []string{string(a), string(b)})
+}
+
+// mixedUploadPage exercises via.File and via.Files on the SAME composition:
+// the walker must classify each slot by its own type (singular vs plural),
+// bind every part of the multi-file field while binding only the first of the
+// single-file field, and keep Len/Key/All consistent — including the zero-part
+// case where a Files field receives no upload (must not panic, Len()==0,
+// All()==nil, Key() still reports the wire key).
+type mixedUploadPage struct {
+	Avatar via.File  `via:"avatar"`
+	Pics   via.Files `via:"pics"`
+	Report via.StateTabStr
+}
+
+func (p *mixedUploadPage) Inspect(ctx *via.Ctx) error {
+	all := p.Pics.All()
+	names := make([]string, len(all))
+	for i := range all {
+		names[i] = all[i].Filename()
+	}
+	p.Report.Write(ctx, fmt.Sprintf(
+		"avatarKey=%s avatarName=%s avatarPresent=%t picsKey=%s picsLen=%d picsNames=%v allNil=%t",
+		p.Avatar.Key(), p.Avatar.Filename(), p.Avatar.Present(),
+		p.Pics.Key(), p.Pics.Len(), names, all == nil))
+	return nil
+}
+
+func (p *mixedUploadPage) View(ctx *via.CtxR) h.H { return h.Div(p.Report.Text(ctx)) }
+
+func TestMixedFileAndFiles_eachFieldBindsIndependently(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[mixedUploadPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	require.Equal(t, 200, tc.Action("Inspect").
+		WithFile("avatar", "me.png", []byte("A")).
+		WithFile("pics", "p0.bin", []byte("00")).
+		WithFile("pics", "p1.bin", []byte("11")).
+		Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second,
+		"avatarKey=avatar", "avatarName=me.png", "avatarPresent=true",
+		"picsKey=pics", "picsLen=2", "picsNames=[p0.bin p1.bin]", "allNil=false")
+}
+
+func TestFiles_zeroPartFieldIsNilSafe(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[mixedUploadPage](app, "/")
+
+	tc := vt.NewClient(t, server, "/")
+	frames, cancel := tc.SSEReady()
+	defer cancel()
+
+	// No "pics" part at all: Len()==0, All() yields an empty (range-safe)
+	// slice, Key() still reports the wire key (bound at Ctx construction).
+	// Must not panic.
+	require.Equal(t, 200, tc.Action("Inspect").
+		WithFile("avatar", "me.png", []byte("A")).
+		Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second,
+		"picsKey=pics", "picsLen=0", "picsNames=[]", "allNil=false")
+}
+
 type readMultipartPage struct{}
 
 func (p *readMultipartPage) Read(ctx *via.Ctx) error {
