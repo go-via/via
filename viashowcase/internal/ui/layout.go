@@ -17,10 +17,10 @@ func Shell(ctx *via.CtxR, title string, body ...h.H) h.H {
 	u, in := auth.Current(ctx)
 	return h.Main(h.Class("container"),
 		h.Header(h.Class("shell-head"),
-			h.A(h.Href("/"), h.Class("brand"), h.Attr("aria-label", "Signal home"),
-				h.Img(h.Src(assets.Wordmark), h.Attr("alt", "Signal")),
+			h.A(h.Href("/"), h.Class("brand"), h.Aria("label", "Signal home"),
+				h.Img(h.Src(assets.Wordmark), h.Alt("Signal")),
 			),
-			h.Nav(h.Attr("aria-label", "Primary"),
+			h.Nav(h.Aria("label", "Primary"),
 				h.Ul(
 					h.Li(h.A(h.Href("/"), h.Text("Home"))),
 					h.If(in, h.Li(h.A(h.Href("/app/profile"), h.Text(u.Display)))),
@@ -54,7 +54,7 @@ func themePicker() h.H {
 		opts[i] = h.Option(h.Value(t), h.Text(t))
 	}
 	return h.Select(
-		h.Attr("aria-label", "Theme"),
+		h.Aria("label", "Theme"),
 		h.Data("bind", bind(picocss.ThemeRef())),
 		// Persist the choice so it survives navigation (restored by the head script).
 		h.Data("on:change", "localStorage.setItem('signal-theme',"+picocss.ThemeRef()+")"),
@@ -76,6 +76,6 @@ func modeToggle() h.H {
 		h.DataOnClick(cycle),
 		h.Data("text", icon),
 		h.Data("attr:aria-label", label),
-		h.Attr("aria-label", "Toggle appearance"),
+		h.Aria("label", "Toggle appearance"),
 	)
 }

@@ -70,7 +70,7 @@ func newRoomCode() string {
 func (c *Home) View(ctx *via.CtxR) h.H {
 	u, in := auth.Current(ctx)
 	hero := h.Section(h.Class("hero"),
-		h.Img(h.Src(assets.Punch), h.Class("hero-mark"), h.Attr("alt", ""), h.Attr("aria-hidden", "true")),
+		h.Img(h.Src(assets.Punch), h.Class("hero-mark"), h.Alt(""), h.Aria("hidden", "true")),
 		h.H1(h.Text("Ask your room "), h.Span(h.Class("accent"), h.Text("anything."))),
 		h.P(h.Class("lead"), h.Text("Signal turns any audience into a live feed — polls, word clouds, and Q&A that update on the big screen the instant people vote. No app, no JavaScript: just a link.")),
 		h.When(!in, func() h.H {
@@ -124,10 +124,10 @@ func roomCard(r store.Room) h.H {
 		h.Footer(
 			h.Div(h.Class("share-field"),
 				h.Input(h.Type("text"), h.Attr("readonly"), h.Value(share),
-					h.Attr("aria-label", "Audience share link — click to copy"), h.Class("share"),
+					h.Aria("label", "Audience share link — click to copy"), h.Class("share"),
 					h.DataOnClick("evt.target.select(); navigator.clipboard&&navigator.clipboard.writeText(evt.target.value)"),
 				),
-				h.Button(h.Class("outline", "copy-btn"), h.Attr("aria-label", "Copy share link"),
+				h.Button(h.Class("outline", "copy-btn"), h.Aria("label", "Copy share link"),
 					h.Text("Copy"),
 					h.DataOnClick("var i=evt.target.closest('.share-field').querySelector('input');i.select();navigator.clipboard&&navigator.clipboard.writeText(i.value)"),
 				),
@@ -157,7 +157,7 @@ func (c *Home) createForm(ctx *via.CtxR) h.H {
 		h.Form(
 			h.Label(h.Text("Title"),
 				h.Input(h.Type("text"), c.Title.Bind(), h.Placeholder("e.g. Lunch vote"),
-					h.Attr("autocomplete", "off"))),
+					h.AutoComplete("off"))),
 			h.Label(h.Text("Kind"),
 				h.Select(c.Kind.Bind(),
 					h.Option(h.Value("poll"), h.Text("Poll")),

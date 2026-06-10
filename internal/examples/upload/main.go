@@ -66,15 +66,15 @@ func (p *Page) View(ctx *via.CtxR) h.H {
 			// Plain HTML form posting multipart to the action URL.
 			// No Datastar @post here — file bytes can't ride a JSON body.
 			h.Form(
-				h.Attr("method", "POST"),
-				h.Attr("action", "/_action/Upload"),
-				h.Attr("enctype", "multipart/form-data"),
+				h.Method("POST"),
+				h.Action("/_action/Upload"),
+				h.Attr("enctype", "multipart/form-data"), // no shorthand for enctype
 				h.Style("margin-top:1rem;display:flex;flex-direction:column;gap:0.5rem"),
 
 				// via_tab links the multipart POST back to the bound Ctx.
 				h.Input(h.Type("hidden"), h.Name("via_tab"), h.Value(ctx.ID())),
 
-				h.Input(h.Type("file"), h.Name("avatar"), h.Attr("required")),
+				h.Input(h.Type("file"), h.Name("avatar"), h.Required()),
 				h.Button(h.Type("submit"), h.Text("Upload")),
 			),
 

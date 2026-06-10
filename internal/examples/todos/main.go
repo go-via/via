@@ -112,7 +112,7 @@ func (t *Todos) View(ctx *via.CtxR) h.H {
 					return h.Li(
 						h.Style("list-style:none;padding:0.5rem;display:flex;align-items:center;gap:0.5rem"),
 						h.Input(h.Type("checkbox"),
-							h.If(it.Done, h.Attr("checked")),
+							h.If(it.Done, h.Checked()),
 							on.Change(t.Toggle, on.SetSignal(&t.Index.Signal, i)),
 						),
 						h.Span(
