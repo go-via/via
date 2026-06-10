@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 )
 
@@ -68,7 +67,7 @@ const (
 //
 // The backplane read is OUTSIDE ls.mu; seedFromSnapshot takes the lock.
 func (a *App) classifyGap(ls *logState, key string, cur, needCovered Offset) gapClass {
-	data, _, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	data, _, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, snapKey(key))
 	if !ok {
 		return gapBenign
 	}

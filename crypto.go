@@ -147,7 +147,7 @@ func (a *App) eventDecryptor() eventDecryptFn {
 		return nil
 	}
 	return func(subject string, token json.RawMessage) ([]byte, error) {
-		key, ok, err := ks.Key(context.Background(), subject)
+		key, ok, err := ks.Key(a.backplaneCtx, subject)
 		if err != nil {
 			return nil, err
 		}
@@ -167,7 +167,7 @@ const erasureGenKey = "erasure:gen"
 // (0 if never set). Read at cold start (to invalidate stale snapshots) and at
 // snapshot write (to stamp the checkpoint).
 func (a *App) loadErasureGen() uint64 {
-	data, _, ok, err := a.backplane.LoadSnapshot(context.Background(), erasureGenKey)
+	data, _, ok, err := a.backplane.LoadSnapshot(a.backplaneCtx, erasureGenKey)
 	if err != nil || !ok {
 		return 0
 	}

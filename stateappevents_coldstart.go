@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 )
 
@@ -12,7 +11,7 @@ import (
 // covered offset only when a bridging seed (matching codec or seeded migration)
 // was installed; otherwise a halt is latched on ls and folding stops.
 func (a *App) coldStartFrom(ls *logState, key string) Offset {
-	data, _, ok, _ := a.backplane.LoadSnapshot(context.Background(), snapKey(key))
+	data, _, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, snapKey(key))
 	if !ok {
 		return 0
 	}

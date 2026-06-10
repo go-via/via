@@ -135,6 +135,11 @@ func (a *App) Shutdown(ctx context.Context) error {
 	// FIRST (close backplaneDone) so a channel close they observe during the
 	// drain is read as "stop", not "transient disconnect → reconnect".
 	a.backplaneDoneOnce.Do(func() { close(a.backplaneDone) })
+	// Cancel the parent of every in-flight backplane call so a wedged backend's
+	// Subscribe/Append/CAS aborts instead of blocking the drain forever.
+	if a.backplaneCancel != nil {
+		a.backplaneCancel()
+	}
 	if a.backplane != nil {
 		_ = a.backplane.Close()
 	}

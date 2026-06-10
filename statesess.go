@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 
@@ -99,7 +98,7 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		return nil
 	}
 	app := ctx.app
-	bg := context.Background()
+	bg := app.backplaneCtx
 	cellKey := sessValKey(sess.id, s.wireKey)
 
 	for try := 0; try < updateMaxRetries; try++ {

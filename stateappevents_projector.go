@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"sync"
 	"time"
 )
@@ -89,7 +88,7 @@ func (a *App) startProjector(key string, ls *logState) {
 		// ErrClosed is a graceful stop — exit. Otherwise one network blip would
 		// strand the key forever.
 		for {
-			ch, err := a.backplane.Subscribe(context.Background(), key, from)
+			ch, err := a.backplane.Subscribe(a.backplaneCtx, key, from)
 			if err != nil {
 				return // ErrClosed (or unrecoverable) → stop
 			}

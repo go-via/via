@@ -126,7 +126,7 @@ func (a *App) registerConsumer(name, key string, deliver func(context.Context, [
 	cs := a.consumers[ck]
 	if cs == nil {
 		cs = &consumerState{}
-		if data, rev, ok, _ := a.backplane.LoadSnapshot(context.Background(), ck); ok {
+		if data, rev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, ck); ok {
 			var off Offset
 			if json.Unmarshal(data, &off) == nil {
 				cs.committed = off
@@ -149,7 +149,7 @@ func (a *App) startConsumer(name, key string, cs *consumerState, deliver func(co
 	go func() {
 		for {
 			from, _ := cs.snapshot()
-			subCtx, cancel := context.WithCancel(context.Background())
+			subCtx, cancel := context.WithCancel(a.backplaneCtx)
 			ch, err := a.backplane.Subscribe(subCtx, key, from)
 			if err != nil {
 				cancel()
@@ -189,9 +189,9 @@ func (a *App) commitConsumer(cs *consumerState, name, key string, off Offset) {
 		return
 	}
 	_, rev := cs.snapshot()
-	newRev, err := a.backplane.CAS(context.Background(), consumerKey(name, key), rev, b)
+	newRev, err := a.backplane.CAS(a.backplaneCtx, consumerKey(name, key), rev, b)
 	if errors.Is(err, ErrCASConflict) {
-		if data, r, ok, _ := a.backplane.LoadSnapshot(context.Background(), consumerKey(name, key)); ok {
+		if data, r, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, consumerKey(name, key)); ok {
 			var peer Offset
 			if json.Unmarshal(data, &peer) == nil {
 				cs.mu.Lock()

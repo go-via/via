@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"sync"
 )
@@ -136,7 +135,7 @@ func (a *App) reconcileSessionKey(sess *session, key string) {
 	if decode == nil {
 		return
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), sessValKey(sess.id, key))
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(sess.id, key))
 	if !ok || storeRev <= sess.loadRev(key) {
 		return
 	}
@@ -159,7 +158,7 @@ func (a *App) reconcileKey(key string) {
 	if vc == nil {
 		return
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), valKey(key))
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(key))
 	vc.mu.Lock()
 	changed := false
 	if ok && storeRev > vc.l1Rev {
@@ -179,7 +178,7 @@ func (a *App) reconcileKey(key string) {
 // Store cell to HEAD. The goroutine exits when the Subscribe channel closes
 // (backplane Close on Shutdown).
 func (a *App) startChangesTailer() {
-	ch, err := a.backplane.Subscribe(context.Background(), changesKey, 0)
+	ch, err := a.backplane.Subscribe(a.backplaneCtx, changesKey, 0)
 	if err != nil {
 		return
 	}
@@ -218,7 +217,7 @@ func (a *App) applySessionChange(c change) {
 	if decode == nil {
 		return
 	}
-	data, storeRev, dok, _ := a.backplane.LoadSnapshot(context.Background(), sessValKey(c.Sid, c.Key))
+	data, storeRev, dok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(c.Sid, c.Key))
 	if !dok || storeRev < c.Rev {
 		return // stale replica: never surface a value older than the hint promised
 	}
@@ -260,7 +259,7 @@ func (a *App) applyChangeL1(c change) bool {
 	if c.Rev <= vc.l1Rev {
 		return false
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(context.Background(), valKey(c.Key))
+	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(c.Key))
 	if !ok || storeRev < c.Rev || storeRev <= vc.l1Rev {
 		return false
 	}

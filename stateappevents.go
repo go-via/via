@@ -1,7 +1,6 @@
 package via
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -153,9 +152,9 @@ func (l *StateAppEvents[E, V]) Append(ctx *Ctx, ev E) (Offset, error) {
 	if err != nil {
 		return 0, err
 	}
-	// context.Background for now — the in-memory backplane ignores it; wiring
-	// the action's request context for cancellation is a later refinement.
-	return l.app.backplane.Append(context.Background(), l.wireKey, data)
+	// backplaneCtx is cancelled on Shutdown so a wedged backend's Append aborts
+	// with the drain rather than blocking the action goroutine forever.
+	return l.app.backplane.Append(l.app.backplaneCtx, l.wireKey, data)
 }
 
 // marshalEvent builds the wire record for one event: marshal the payload, wrap
@@ -180,7 +179,7 @@ func marshalEvent[E any](a *App, ev E) (out []byte, err error) {
 	if ks := a.cfg.keyStore; ks != nil {
 		if ds, ok := any(ev).(DataSubject); ok {
 			if subject := ds.DataSubject(); subject != "" {
-				key, err := ks.KeyFor(context.Background(), subject)
+				key, err := ks.KeyFor(a.backplaneCtx, subject)
 				if err != nil {
 					return nil, err
 				}
