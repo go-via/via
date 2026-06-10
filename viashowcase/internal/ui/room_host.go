@@ -135,8 +135,8 @@ func (p *Host) View(ctx *via.CtxR) h.H {
 				// chart, so mirror the ranked tally into a visually-hidden live region.
 				// Reading Votes here also re-renders this view as votes fold.
 				h.When(p.room.Kind != "qa", func() h.H {
-					return h.Ul(h.Class("sr-only"), h.Attr("aria-live", "polite"),
-						h.Attr("aria-label", "Live results"),
+					return h.Ul(h.Class("sr-only"), h.Aria("live", "polite"),
+						h.Aria("label", "Live results"),
 						h.Each(p.Votes.Read(ctx).For(p.Code).Ranked(), func(pr core.Pair) h.H {
 							return h.Li(h.Textf("%s: %d votes", pr.Choice, pr.Count))
 						}))
