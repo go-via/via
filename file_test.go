@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -403,4 +406,76 @@ func TestFile_saveSurfacesOpenFileError(t *testing.T) {
 	frame := vt.AwaitFrame(t, frames, 2*time.Second, "savebad=")
 	assert.Contains(t, frame, "via-missing-dir-xyz",
 		"Save must return the os.OpenFile error when the destination is unwritable")
+}
+
+var plainUploadGot atomic.Int64
+
+type plainUploadPage struct {
+	Avatar via.File `via:"avatar"`
+}
+
+// Upload mirrors the showcase avatar flow: a plain <form> POST (not a datastar
+// @post), and the handler answers with an http.Redirect 303 rather than a
+// datastar response.
+func (p *plainUploadPage) Upload(ctx *via.Ctx) error {
+	if p.Avatar.Present() {
+		b, err := p.Avatar.Bytes()
+		if err != nil {
+			return err
+		}
+		plainUploadGot.Store(int64(len(b)))
+	}
+	http.Redirect(ctx.Writer(), ctx.Request(), "/done", http.StatusSeeOther)
+	return nil
+}
+
+func (p *plainUploadPage) View(ctx *via.CtxR) h.H {
+	return h.Form(h.Method("POST"), h.Action("/_action/Upload"),
+		h.Attr("enctype", "multipart/form-data"),
+		h.Input(h.Type("hidden"), h.Name("via_tab"), h.Value(ctx.ID())),
+		h.Input(h.Type("file"), h.Name("avatar")))
+}
+
+// Reproduces the showcase avatar upload end-to-end: a real browser <form>
+// (multipart, via_tab as a form field, full-page navigation) POSTing to an
+// action whose handler returns http.Redirect(303). The action must bind the
+// file AND the 303 must reach the browser unmangled — Via must not overwrite
+// the handler's redirect with a datastar/200 action response.
+func TestUpload_plainFormPostBindsFileAndReturnsHandlerRedirect(t *testing.T) {
+	t.Parallel()
+	plainUploadGot.Store(0)
+	app := via.New(via.WithInsecureCookies())
+	server := vt.Serve(t, app)
+	via.Mount[plainUploadPage](app, "/up")
+
+	jar, _ := cookiejar.New(nil)
+	httpc := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse // capture the 303, don't follow it
+	}}
+
+	resp, err := httpc.Get(server.URL + "/up")
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	tab := vt.TabIDFromHTML(string(body))
+	require.NotEmpty(t, tab, "page must render a via_tab")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("avatar", "a.png")
+	_, _ = fw.Write([]byte("PNGDATA"))
+	_ = mw.WriteField("via_tab", tab)
+	_ = mw.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/_action/Upload", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	pr, err := httpc.Do(req)
+	require.NoError(t, err)
+	defer pr.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, pr.StatusCode,
+		"a plain-form action must return the handler's 303, not a datastar 200")
+	assert.Equal(t, "/done", pr.Header.Get("Location"), "the handler's redirect target must survive")
+	assert.Equal(t, int64(7), plainUploadGot.Load(),
+		"the avatar file must bind from the multipart form POST")
 }

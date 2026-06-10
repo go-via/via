@@ -27,7 +27,10 @@ import (
 	"github.com/go-via/viashowcase/internal/ui"
 )
 
-const maxUpload = 4 << 20 // 4 MiB avatars
+// maxUpload caps the avatar multipart body. 4 MiB rejected typical phone
+// photos (often 3–8 MiB) with a bare 413 — "upload didn't work". 10 MiB
+// comfortably fits a full-res photo; the form hint states the limit.
+const maxUpload = 10 << 20 // 10 MiB avatars
 
 func main() {
 	if err := run(); err != nil {

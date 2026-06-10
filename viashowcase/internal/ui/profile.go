@@ -158,7 +158,7 @@ func (p *Profile) View(ctx *via.CtxR) h.H {
 				h.Input(h.Type("hidden"), h.Name("via_tab"), h.Value(ctx.ID())),
 				h.Label(h.Text("Choose an image"),
 					h.Input(h.Type("file"), h.Name("avatar"), h.Attr("accept", "image/*"), h.Required()),
-					h.Small(h.Class("hint"), h.Text("Square images look best. PNG, JPG, GIF or WebP."))),
+					h.Small(h.Class("hint"), h.Text("Square images look best. PNG, JPG, GIF or WebP, up to 10 MB."))),
 				h.Button(h.Type("submit"), h.Text("Upload avatar")),
 			),
 		),
