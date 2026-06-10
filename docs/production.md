@@ -65,7 +65,9 @@ behaviour. Common production knobs:
 - **CSP:** `mw.CSP()` emits a strict header with a per-request nonce
   reachable via `ctx.CSPNonce()`.
 - **Body limits:** `WithMaxRequestBody(n)` (default 1 MiB) caps action POST
-  and SSE-close bodies; oversized requests return 413.
+  and SSE-close bodies; `WithMaxUploadSize(n)` (default 32 MiB) caps
+  `multipart/form-data` bodies. Either overflow returns 413; customise it
+  with `WithRequestTooLarge(h)`.
 - **Open redirects:** `ctx.Redirect` rejects `javascript:`/`data:`/
   protocol-relative/backslash and whitespace-only URLs.
 - **Panic sanitization:** action panics surface as `"Something went wrong"`

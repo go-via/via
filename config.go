@@ -291,7 +291,9 @@ func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHa
 // turn the default bare "request too large" 413 into a friendly response (e.g.
 // redirect a too-large file upload back to its form with a flash message).
 // h receives the raw request; without this option the framework writes a plain
-// 413.
+// 413. This covers action POSTs only: an oversize SSE-close body always gets
+// the bare 413, since that payload is Datastar's internal reconnect frame, not
+// a user-facing submit.
 func WithRequestTooLarge(h http.Handler) Option {
 	return func(c *config) { c.tooLargeHandler = h }
 }
