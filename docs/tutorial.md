@@ -14,9 +14,13 @@ JS — a **live multi-user chatroom**. In Via it falls out of one app-scoped
 field: a line typed in any browser appears instantly in every other connected
 browser. No WebSocket, no `Broadcast` call, no hand-written JavaScript.
 
-The finished app is
+We build it here with the simplest shape that works — one app-scoped slice.
+The shipped
 [`internal/examples/chat`](https://github.com/go-via/via/tree/main/internal/examples/chat)
-— about 60 lines.
+(about 60 lines) reaches the same result with the event-sourced
+`StateAppEvents` shape, a better fit for a high-churn feed — see
+[Distributed state](distributed-state). Same idea either way; start with the
+slice.
 
 1. TOC
 {:toc}

@@ -54,8 +54,9 @@ func (p *Page) View(ctx *via.CtxR) h.H {
 
 Via is the only framework — in any language — that expresses the
 client/server reactive split as a Go type. `Signal[T]` is a client signal,
-mirrored to a fine-grained Alien Signals graph in the browser via Datastar.
-`StateTab[T]`, `StateSess[T]`, `StateApp[T]` are server-only. Whether a piece
+mirrored into the browser by Datastar — the runtime Via uses to keep the page
+reactive and update it in place. `StateTab[T]`, `StateSess[T]`, `StateApp[T]` are
+server-only. Whether a piece
 of UI state round-trips or doesn't is a choice made at the field declaration,
 checked by the compiler, not by a convention you can grep for. Transport is
 SSE only — one stream per tab — so there are no WebSockets to wrestle with a
@@ -77,7 +78,7 @@ correct shape.
 
 ```go
 type Page struct {
-    // Client-owned. Lives in the browser's Alien Signals graph.
+    // Client-owned. Lives in the browser, driven by Datastar.
     // Bind to <input>; mutate without a round-trip.
     Theme via.Signal[string] `via:"theme,init=auto"`
 
@@ -97,7 +98,7 @@ covered in [Reactive state](reactive-state).
    ┌──────────────────────────┐                       ┌──────────────────────────┐
    │  Browser                 │  ◀──── SSE patches ── │  Server (Go)             │
    │                          │     + signal deltas   │                          │
-   │  Alien Signals graph     │                       │  Compositions            │
+   │  Datastar runtime        │                       │  Compositions            │
    │   Signal[T] nodes        │                       │   StateTab[T]            │
    │   data-* subscriptions   │                       │   StateSess[T]           │
    │                          │                       │   StateApp[T]            │

@@ -81,7 +81,7 @@ go run ./internal/examples/counterscope   # open in two browsers
 
 ![Two browsers, two scopes — StateTab is per-tab, StateApp is shared across every session.](docs/counter-scope.gif)
 
-For state shared across users, see the live chatroom — one app-scoped slice
+For state shared across users, see the live chatroom — one app-scoped field
 that fans every message out to every connected tab:
 [`internal/examples/chat`](internal/examples/chat/main.go) ·
 [tutorial](https://go-via.github.io/via/tutorial).
@@ -104,8 +104,9 @@ typed `Op(ctx)` verbs (`Add`, `Toggle`, `Append`, …).
 
 ## What Via is — and is not
 
-- **Is:** server-rendered pages with typed end-to-end state, a fine-grained
-  reactive client runtime (Datastar / Alien Signals), and no build step —
+- **Is:** server-rendered pages with typed end-to-end state, a reactive
+  browser runtime (Datastar — it keeps the page reactive and updates it in
+  place), and no build step —
   best for internal tools, dashboards, and line-of-business apps you'd
   otherwise build with LiveView, Hotwire, or htmx + hand-written JS.
 - **Is not** an SPA framework — the browser receives HTML, not a JSON bundle.

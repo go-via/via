@@ -15,7 +15,7 @@ typed fields, actions as methods, and a `View`. Mounted at a route with
 [Compositions](compositions).
 
 **Signal (`Signal[T]`)** — client-owned reactive state, mirrored into the
-browser's Alien Signals graph. Bind it to inputs and view helpers; it reacts
+browser by Datastar. Bind it to inputs and view helpers; it reacts
 client-side with no round-trip.
 
 **State (`StateTab[T]` / `StateSess[T]` / `StateApp[T]`)** — server-owned
@@ -23,12 +23,11 @@ reactive state at per-tab, per-session, and global scope respectively. Lives
 only in Go; changes flow to the client through a re-render. See
 [Reactive state](reactive-state).
 
-**Alien Signals graph** — the fine-grained client-side reactivity engine
-Datastar runs in the browser. `Signal[T]` values are nodes in it; `data-*`
-attributes are subscriptions.
-
-**Datastar** — the client runtime Via targets. Via emits the `data-*`
-attributes and SSE patches that drive it; you don't write Datastar by hand.
+**Datastar** — the browser runtime Via targets; it keeps the page reactive and
+updates it in place (a morph, not a full reload). `Signal[T]` values
+live as client signals it manages, and `data-*` attributes are their
+subscriptions. Via emits the `data-*` attributes and SSE patches that drive it;
+you don't write Datastar by hand.
 
 **Action** — a composition method (`func(*via.Ctx) error` or
 `func(*via.Ctx)`) bound to a DOM event with the `on` package. Runs

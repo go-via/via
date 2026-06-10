@@ -23,8 +23,9 @@ field's type — not a convention.
 | `via.StateSess[T]` | per-session | server only |
 | `via.StateApp[T]` | global | server only |
 
-- `Signal[T]` is mirrored into the browser's Alien Signals graph. Bind it
-  to inputs and view helpers; it reacts client-side with no round-trip.
+- `Signal[T]` is mirrored into the browser by Datastar, the runtime that keeps
+  the page reactive and updates it in place. Bind it to inputs and view
+  helpers; it reacts client-side with no round-trip.
 - `StateTab[T]` / `StateSess[T]` / `StateApp[T]` live only in Go. They
   change through actions, and a re-render re-emits the value over SSE.
 

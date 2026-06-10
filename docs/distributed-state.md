@@ -12,7 +12,8 @@ nav_order: 4
 {:toc}
 
 By default a Via app is single-process: `StateApp[T]` / `StateSess[T]` live in
-the pod that serves the tab, and horizontal scaling needs sticky sessions. The
+the pod that serves the tab, and horizontal scaling needs
+[sticky sessions](production#horizontal-scaling--affinity). The
 **backplane** lifts that limit. Wire one in and shared state converges across
 every pod *and* survives a restart — the typed API from
 [Reactive state](reactive-state) does not change.

@@ -19,7 +19,7 @@ import (
 
 // gaugeSpy captures Gauge(name,value,labels...) calls so the fold-divergence
 // canary can be asserted: the (key, offset, digest) triple a pod emits after
-// each fold is the cheap cross-pod divergence signal (council T1-SRE-7).
+// each fold is the cheap cross-pod divergence signal.
 type gaugeSpy struct {
 	mu     sync.Mutex
 	gauges []gaugeSample
@@ -200,8 +200,8 @@ func (c countingSnapshots) LoadSnapshot(ctx context.Context, key string) ([]byte
 // n records, WITHOUT closing the backplane itself — a transient connection drop
 // (the JetStream OrderedConsumer dies, the stream survives). The underlying
 // stream is intact, so a runtime that re-subscribes from its cursor must resume
-// gap-free. It models the mid-Subscribe-disconnect fault the council's keystone
-// requires (reconnect-rehydrate, #3/#7).
+// gap-free. It models the mid-Subscribe-disconnect fault the
+// reconnect-rehydrate path requires (#3/#7).
 type dropAfter struct {
 	Backplane
 	n int
@@ -285,8 +285,8 @@ func goodEnvBytes(n int) []byte {
 // reducer is impure (reads time, a package global, a map iteration order, an
 // RNG) two pods replaying the same log diverge, and a snapshot crystallizes the
 // divergence permanently. WithFoldVerify is same-process and can't catch a
-// reducer that reads cross-process state. These two tests are the gates the
-// council mandated (T1-TEST-1): a fuzz that folding the SAME bytes is
+// reducer that reads cross-process state. These two tests are the
+// determinism gates: a fuzz that folding the SAME bytes is
 // deterministic + never panics, and a SUBPROCESS replay that two independent
 // processes fold a fixed log to the identical digest.
 // replayFixedLogDigest folds a fixed, deterministic event sequence through the
