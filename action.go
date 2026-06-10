@@ -232,7 +232,12 @@ func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
 	}()
 
 	ctx.lastSignals = sigs
-	injectSignals(ctx, sigs)
+	if err := injectSignals(ctx, sigs); err != nil {
+		// Strict decode rejected a client value — surface the error and skip
+		// the handler so corrupt input never reaches it.
+		a.dispatchActionError(ctx, err, false)
+		return
+	}
 	if form != nil {
 		bindFiles(ctx, form)
 		defer clearFiles(ctx)
@@ -258,14 +263,21 @@ func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
 
 // injectSignals applies signals from a request body into the bound *C's
 // Signal[T] fields by wire key.
-func injectSignals(ctx *Ctx, sigs map[string]any) {
+func injectSignals(ctx *Ctx, sigs map[string]any) error {
+	strict := ctx.app != nil && ctx.app.cfg.strictDecode
 	for slot, ref := range ctx.signalRefs {
 		s := ctx.desc.signalSlots[slot]
 		if s.kind != kindSignal {
 			continue
 		}
 		if v, ok := sigs[s.wireKey]; ok {
-			ref.decodeRaw(v)
+			// decodeRaw still applies a best-effort value; the returned error is
+			// surfaced only under WithStrictDecode, where a lossy decode must
+			// reject the action rather than act on corrupt input.
+			if err := ref.decodeRaw(v); err != nil && strict {
+				return fmt.Errorf("via: signal %q: %w", s.wireKey, err)
+			}
 		}
 	}
+	return nil
 }

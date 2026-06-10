@@ -107,8 +107,8 @@ func (s *StateTab[T]) encode() ([]byte, error) {
 	return encodeScalar(reflect.ValueOf(s.val))
 }
 
-func (s *StateTab[T]) decodeRaw(raw any) {
-	decodeScalarInto(reflect.ValueOf(&s.val).Elem(), raw)
+func (s *StateTab[T]) decodeRaw(raw any) error {
+	return decodeScalarChecked(reflect.ValueOf(&s.val).Elem(), raw)
 }
 
 // stateTabMarker tags StateTab[T] (and types that embed it). See
