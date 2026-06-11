@@ -20,9 +20,10 @@ every pod *and* survives a restart — the typed API from
 
 {: .warning }
 The backplane is in **preview** on the way to 1.0. It is **eventually
-consistent**: no global ordering across keys, no cross-key transactions, and
-cross-tab [`Broadcast`](production#cross-tab-broadcast) stays pod-local. Treat
-single-process as the supported topology until it ships.
+consistent**: no global ordering across keys and no cross-key transactions.
+With a backplane wired, cross-tab [`Broadcast`](production#cross-tab-broadcast)
+fans out to every pod (ephemeral, best-effort); without one it is pod-local.
+Treat single-process as the supported topology until the backplane ships.
 
 ## The two patterns
 
@@ -218,8 +219,11 @@ log never truncates a slow peer.
 - **No global ordering.** Events are totally ordered *per key*, not across keys.
 - **Not strongly consistent.** Reads can lag the latest append by a reconcile
   hop. Don't gate a safety-critical invariant on it.
-- **Broadcast stays pod-local.** `Broadcast` / `BroadcastSignals` reach only the
-  tabs on the calling pod.
+- **Broadcast is pod-local without a backplane.** `Broadcast` /
+  `BroadcastSignals` reach only the calling pod's tabs unless `WithBackplane` is
+  wired, in which case they ride the shared feed to every pod (ephemeral and
+  best-effort — no replay, no convergence). The returned count is always just
+  the calling pod's live-tab count.
 - **Tabs and sessions are still in-memory.** The backplane converges *state*; a
   process restart still re-bootstraps live tabs — see
   [Restart and tab survivability](production#restart-and-tab-survivability).
