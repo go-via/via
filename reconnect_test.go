@@ -32,6 +32,8 @@ func TestReconnect_scriptInjectedByDefault(t *testing.T) {
 		"it must react to Datastar's retries-failed (the stream is dead)")
 	assert.Contains(t, strings.ToLower(html), "reload",
 		"on retries-failed it must reload to re-bootstrap the stream")
+	assert.Contains(t, html, "datastar-patch-signals",
+		"it must clear on an incoming SSE patch — the only reliable reconnect signal")
 }
 
 // The reconnect manager must also publish connection status as a

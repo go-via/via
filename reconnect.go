@@ -13,6 +13,12 @@ package via
 //     frozen forever). Reload to re-bootstrap a fresh stream + session, after a
 //     jittered delay so a fleet of tabs doesn't stampede the new pod at once.
 //
+// It also clears the banner on any incoming SSE patch (datastar-patch-elements
+// / datastar-patch-signals): a long-lived SSE stream fires 'retrying' on a drop
+// but emits NO 'started'/'finished' on a successful resume, so an arrived patch
+// (the reconnect re-bootstrap, or via's periodic heartbeat) is the only
+// reliable "stream is alive again" signal. Without it the banner stays stuck.
+//
 // It also publishes connection status as a data-via-connection attribute on the
 // <html> element — "online", "connecting", or "offline" — so an app can style
 // its OWN connection UI in CSS (e.g. html[data-via-connection="offline"] .banner
@@ -34,9 +40,16 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`background:#b45309;color:#fff';(document.body||document.documentElement).appendChild(b)}` +
 	`b.textContent=m;b.style.display='block'}` +
 	`function hide(){if(b)b.style.display='none'}` +
+	`function ok(){conn('online');hide()}` +
+	// An incoming SSE patch (the re-bootstrap on reconnect, or via's periodic
+	// heartbeat) is the only reliable "stream is alive again" signal: a
+	// long-lived SSE @get fires 'retrying' on a drop but NO 'started'/'finished'
+	// on a successful resume, so clearing on those alone leaves the banner stuck.
+	`document.addEventListener('datastar-patch-elements',ok);` +
+	`document.addEventListener('datastar-patch-signals',ok);` +
 	`document.addEventListener('datastar-fetch',function(e){var t=e.detail&&e.detail.type;` +
 	`if(t==='retrying'){conn('connecting');show('Reconnecting...')}` +
-	`else if(t==='started'||t==='finished'){conn('online');hide()}` +
+	`else if(t==='started'||t==='finished'){ok()}` +
 	`else if(t==='retries-failed'){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
 	`if(n>=3){show('Connection lost. Please refresh the page.');return}` +
 	`show('Connection lost - reconnecting...');try{sessionStorage.setItem(K,n+1)}catch(_){}` +

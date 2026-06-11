@@ -49,7 +49,7 @@ func TestBrowserReconnectManager(t *testing.T) {
 
 	var installed bool
 	var bannerRetry, bannerFailed, reloadCount string
-	var connInitial, connRetry, connFailed string
+	var connInitial, connRetry, connAfterPatch, connFailed string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(srv.URL+"/"),
 		chromedp.WaitVisible("#root", chromedp.ByID),
@@ -67,6 +67,13 @@ func TestBrowserReconnectManager(t *testing.T) {
 		chromedp.Evaluate(`document.getElementById('via-reconnect-banner').textContent`, &bannerRetry),
 		chromedp.Evaluate(`document.documentElement.getAttribute('data-via-connection')`, &connRetry),
 
+		// (2b) An incoming SSE patch (reconnect re-bootstrap / heartbeat) must
+		// clear the banner and mark online — a real reconnect emits patch events
+		// but NOT started/finished, so this is the only reliable recovery signal.
+		chromedp.Evaluate(`document.dispatchEvent(new CustomEvent('datastar-patch-signals',{detail:{}}))`, nil),
+		waitJSTrue(`getComputedStyle(document.getElementById('via-reconnect-banner')).display==='none'`),
+		chromedp.Evaluate(`document.documentElement.getAttribute('data-via-connection')`, &connAfterPatch),
+
 		// (3) retries-failed arms the bounded reload AND marks the connection offline.
 		// Read the counter immediately, before the jittered reload timer fires.
 		chromedp.Evaluate(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed'}}))`, nil),
@@ -81,9 +88,9 @@ func TestBrowserReconnectManager(t *testing.T) {
 	if !installed {
 		t.Fatal("reconnect manager did not install — Datastar did not evaluate the injected data-init")
 	}
-	if connInitial != "online" || connRetry != "connecting" || connFailed != "offline" {
-		t.Fatalf("data-via-connection lifecycle = %q/%q/%q, want online/connecting/offline",
-			connInitial, connRetry, connFailed)
+	if connInitial != "online" || connRetry != "connecting" || connAfterPatch != "online" || connFailed != "offline" {
+		t.Fatalf("data-via-connection lifecycle = %q/%q/%q/%q, want online/connecting/online/offline",
+			connInitial, connRetry, connAfterPatch, connFailed)
 	}
 	if bannerRetry != "Reconnecting..." {
 		t.Fatalf("retrying banner = %q, want %q", bannerRetry, "Reconnecting...")
