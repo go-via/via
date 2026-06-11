@@ -13,12 +13,21 @@ package via
 //     frozen forever). Reload to re-bootstrap a fresh stream + session, after a
 //     jittered delay so a fleet of tabs doesn't stampede the new pod at once.
 //
+// It also publishes connection status as a data-via-connection attribute on the
+// <html> element — "online", "connecting", or "offline" — so an app can style
+// its OWN connection UI in CSS (e.g. html[data-via-connection="offline"] .banner
+// {display:block}) without depending on via's built-in banner. A DOM attribute,
+// not a Datastar signal, because Datastar exposes no supported way to merge a
+// signal from outside its own fetch lifecycle.
+//
 // A sessionStorage counter bounds reloads to 3 per failure episode so a server
 // that stays down can't pin the tab in a reload loop; a successful load clears
 // it after the page has been stable for a few seconds. It is a single IIFE so a
 // double injection (e.g. a re-bootstrap) is a no-op via the window guard.
 const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`var K='__via_rc_reloads',b;` +
+	`function conn(s){document.documentElement.setAttribute('data-via-connection',s)}` +
+	`conn('online');` +
 	`function show(m){if(!b){b=document.createElement('div');b.id='via-reconnect-banner';` +
 	`b.setAttribute('role','status');b.style.cssText='position:fixed;top:0;left:0;right:0;` +
 	`z-index:2147483647;padding:.5rem 1rem;text-align:center;font:14px system-ui,sans-serif;` +
@@ -26,9 +35,9 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`b.textContent=m;b.style.display='block'}` +
 	`function hide(){if(b)b.style.display='none'}` +
 	`document.addEventListener('datastar-fetch',function(e){var t=e.detail&&e.detail.type;` +
-	`if(t==='retrying'){show('Reconnecting...')}` +
-	`else if(t==='started'||t==='finished'){hide()}` +
-	`else if(t==='retries-failed'){var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
+	`if(t==='retrying'){conn('connecting');show('Reconnecting...')}` +
+	`else if(t==='started'||t==='finished'){conn('online');hide()}` +
+	`else if(t==='retries-failed'){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
 	`if(n>=3){show('Connection lost. Please refresh the page.');return}` +
 	`show('Connection lost - reconnecting...');try{sessionStorage.setItem(K,n+1)}catch(_){}` +
 	`setTimeout(function(){location.reload()},500+Math.floor(Math.random()*1500))}});` +

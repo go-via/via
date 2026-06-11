@@ -34,6 +34,25 @@ func TestReconnect_scriptInjectedByDefault(t *testing.T) {
 		"on retries-failed it must reload to re-bootstrap the stream")
 }
 
+// The reconnect manager must also publish connection status as a
+// data-via-connection attribute on <html>, so an app can style its own
+// connection UI in CSS without via's built-in banner.
+func TestReconnect_publishesConnectionStatus(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[reconnectPage](app, "/")
+
+	html := vt.NewClient(t, server, "/").HTML()
+	assert.Contains(t, html, "data-via-connection",
+		"the page must publish connection status as a root attribute")
+	assert.Contains(t, html, "offline",
+		"the manager must mark the connection offline when retries fail")
+	assert.Contains(t, html, "connecting",
+		"the manager must mark the connection connecting while retrying")
+}
+
 // Apps that want to own reconnect behavior can opt out entirely.
 func TestReconnect_optOutRemovesScript(t *testing.T) {
 	t.Parallel()
