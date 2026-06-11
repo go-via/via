@@ -230,6 +230,19 @@ For session survivability, persist the `sess.Put`-stored payload (e.g. a JWT
 or opaque token) to a database keyed by the `via_session` cookie value, and
 rehydrate inside an `OnInit` hook.
 
+### Rolling deploys and event versioning
+
+`StateAppEvents` is roll-forward-only. During a rolling deploy two binaries read
+the same log: the new one writes events at a new envelope version, and the old
+one **halts** that key's projector rather than mis-fold an event it doesn't
+understand (`via.events.forward_incompatible`). That's a deliberate guard, not a
+bug — but it means you don't roll *back* past a new event version. To evolve an
+event's shape safely, add a new version with `via.RegisterEvent` + an upcaster
+so every binary can decode old and new records, deploy that everywhere, and only
+then start writing the new shape. A projector that halts on
+`via.events.forward_incompatible` clears once the lagging binary is rolled
+forward.
+
 ## Performance
 
 Benchmarks: `bench_test.go` (full request → SSE turn) and

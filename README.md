@@ -113,9 +113,11 @@ typed `Op(ctx)` verbs (`Add`, `Toggle`, `Append`, …).
   best for internal tools, dashboards, and line-of-business apps you'd
   otherwise build with LiveView, Hotwire, or htmx + hand-written JS.
 - **Is not** an SPA framework — the browser receives HTML, not a JSON bundle.
-- **Single-process by default** — `StateApp[T]` and `Broadcast` are per-pod;
-  horizontal scaling needs sticky sessions. Cross-instance state convergence
-  (`WithBackplane`) is in preview; `Broadcast` stays pod-local.
+- **Single-process by default** — without a backplane `StateApp[T]` and
+  `Broadcast` are per-pod and horizontal scaling needs sticky sessions.
+  `WithBackplane` (in preview) converges `StateApp` state across pods and fans
+  `Broadcast` out to every pod's tabs; both inherit the backplane's pre-1.0
+  status.
 - **Is not** offline-first or stable yet — drop the SSE stream and the tab
   freezes until the client reconnects (transient drops retry automatically; a
   clean-close deploy may fall back to a reload), and APIs can still shift pre-1.0.
