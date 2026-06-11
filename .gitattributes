@@ -1,0 +1,6 @@
+# apidiff baselines are gob-encoded binary blobs (golang.org/x/exp/cmd/apidiff
+# -w). They are not human-readable; treat as binary so git skips bogus text
+# diffs. A baseline changing in a PR is the review signal that the public API
+# moved — the readable change is the accompanying source diff. See
+# docs/stability.md and api/regen.sh.
+api/*.api binary

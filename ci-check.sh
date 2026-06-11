@@ -9,6 +9,7 @@ cd "$ROOT"
 # Pinned tool versions. Bump deliberately; @latest in CI breaks reproducibility.
 GOLANGCI_VERSION="${GOLANGCI_VERSION:-v2.12.2}"
 GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.1.4}"
+APIDIFF_VERSION="${APIDIFF_VERSION:-v0.0.0-20260603202125-055de637280b}"
 
 # Allocation thresholds for bench gates. Bumped if intentional regressions
 # land in a feature commit; tightened when a perf commit lands. Keep
@@ -84,6 +85,48 @@ if [ -d "internal/examples" ]; then
 else
   echo "NOTE: internal/examples not found, skipping example builds"
 fi
+
+echo "== CI: API compatibility =="
+# Mechanically enforce the public stability contract (docs/stability.md):
+# fail on any INCOMPATIBLE change to an exported, importable package vs
+# its committed golden baseline under api/. Compatible (additive) changes
+# do NOT fail — they are landed freely.
+#
+# apidiff is whole-package: it cannot subset stable-Core from EXPERIMENTAL
+# symbols. So this gate is a "no silent public break" detector. An
+# intentional public change is landed by regenerating the baseline
+# (./api/regen.sh), which surfaces it in the PR diff; the Core-vs-
+# experimental call is made there in review against docs/stability.md.
+#
+# NOTE: apidiff exits 0 even when it reports incompatible changes, so we
+# parse its output and fail closed on the "Incompatible changes:" header.
+if ! command -v apidiff >/dev/null 2>&1; then
+  go install "golang.org/x/exp/cmd/apidiff@${APIDIFF_VERSION}"
+fi
+api_failed=0
+for baseline in api/*.api; do
+  case "$(basename "$baseline")" in
+    via.api) pkg="github.com/go-via/via" ;;
+    h.api) pkg="github.com/go-via/via/h" ;;
+    on.api) pkg="github.com/go-via/via/on" ;;
+    sess.api) pkg="github.com/go-via/via/sess" ;;
+    mw.api) pkg="github.com/go-via/via/mw" ;;
+    *) echo "ERROR: no package mapping for baseline $baseline"; exit 1 ;;
+  esac
+  out=$(apidiff "$baseline" "$pkg" 2>&1)
+  if echo "$out" | grep -q '^Incompatible changes:'; then
+    echo "ERROR: INCOMPATIBLE API change in $pkg vs $baseline:"
+    echo "$out"
+    echo "If intentional, run ./api/regen.sh and review the diff against docs/stability.md."
+    api_failed=1
+  else
+    echo "OK: $pkg API compatible with $baseline"
+  fi
+done
+if [ "$api_failed" -ne 0 ]; then
+  exit 1
+fi
+echo "OK: public API compatible with committed baselines"
 
 echo "== CI: Run tests =="
 go test -race ./... 2>&1 | grep -v '\[no test files\]'
