@@ -139,8 +139,8 @@ func TestSignalClass_togglesNamedClassBySignalTruthiness(t *testing.T) {
 	via.Mount[signalToggleHelpersPage](app, "/")
 
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-class-active="$open"`,
-		"Class(name) should emit data-class-<name> bound to the signal")
+	assert.Contains(t, body, `data-class:active="$open"`,
+		"Class(name) should emit data-class:<name> bound to the signal")
 }
 
 type signalMixedCaseClassPage struct {
@@ -153,7 +153,7 @@ func (p *signalMixedCaseClassPage) View(ctx *via.CtxR) h.H {
 
 func TestSignalClass_emitsNameVerbatimButBrowserWillLowercaseIt(t *testing.T) {
 	t.Parallel()
-	// Class(name) emits data-class-<name> verbatim. The HTML attribute name is
+	// Class(name) emits data-class:<name> verbatim. The HTML attribute name is
 	// folded to lower-case by the browser parser before Datastar reads it, so a
 	// mixed-case name resolves to a lower-cased CSS class at runtime. This test
 	// pins the emitted attribute and documents that mixed-case names are a
@@ -163,7 +163,7 @@ func TestSignalClass_emitsNameVerbatimButBrowserWillLowercaseIt(t *testing.T) {
 	via.Mount[signalMixedCaseClassPage](app, "/")
 
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-class-myThing="$open"`,
+	assert.Contains(t, body, `data-class:myThing="$open"`,
 		"Class emits the name verbatim server-side; the browser lower-cases it to my-thing/mything at runtime")
 }
 
@@ -248,8 +248,8 @@ func TestSignal_Attr_rendersDataAttrSyntax(t *testing.T) {
 	server := vt.Serve(t, app)
 	via.Mount[attrStylePage](app, "/")
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-attr-disabled="$disabled"`,
-		"Signal.Attr(name) should emit Datastar's data-attr-<name>=\"$key\"")
+	assert.Contains(t, body, `data-attr:disabled="$disabled"`,
+		"Signal.Attr(name) should emit Datastar's data-attr:<name>=\"$key\"")
 }
 
 func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
@@ -258,8 +258,8 @@ func TestSignal_Style_rendersDataStyleSyntax(t *testing.T) {
 	server := vt.Serve(t, app)
 	via.Mount[attrStylePage](app, "/")
 	body := getBody(t, server, "/")
-	assert.Contains(t, body, `data-style-color="$hue"`,
-		"Signal.Style(prop) should emit Datastar's data-style-<prop>=\"$key\"")
+	assert.Contains(t, body, `data-style:color="$hue"`,
+		"Signal.Style(prop) should emit Datastar's data-style:<prop>=\"$key\"")
 }
 
 type boolInitPage struct {

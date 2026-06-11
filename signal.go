@@ -113,7 +113,7 @@ func (s *Signal[T]) ShowUnless() h.H {
 }
 
 // Class toggles the named CSS class on the host element by this signal's
-// truthiness, emitting Datastar's data-class-<name> attribute.
+// truthiness, emitting Datastar's data-class:<name> attribute.
 //
 // name must be lower-case (or kebab-case). HTML attribute names are folded to
 // lower-case by the browser parser, so a mixed-case name like "myThing"
@@ -121,10 +121,10 @@ func (s *Signal[T]) ShowUnless() h.H {
 // hyphen. For a camelCase class name use Datastar's object form via
 // h.DataClass with an explicit expression instead.
 func (s *Signal[T]) Class(name string) h.H {
-	return h.Data("class-"+name, s.dollar)
+	return h.Data("class:"+name, s.dollar)
 }
 
-// Attr returns a data-attr-<name> attribute that mirrors this signal's
+// Attr returns a data-attr:<name> attribute that mirrors this signal's
 // truthiness onto the host element's HTML attribute. Truthy → attribute
 // present (boolean form, e.g. `disabled`); falsy → attribute absent.
 // For string-valued attributes, the attribute value tracks the signal.
@@ -132,16 +132,16 @@ func (s *Signal[T]) Class(name string) h.H {
 //	h.Button(c.Saving.Attr("disabled"), h.Text("Save"))
 //	h.A(c.Target.Attr("href"), h.Text("Open"))
 func (s *Signal[T]) Attr(name string) h.H {
-	return h.Data("attr-"+name, s.dollar)
+	return h.Data("attr:"+name, s.dollar)
 }
 
-// Style returns a data-style-<prop> attribute that drives an inline CSS
+// Style returns a data-style:<prop> attribute that drives an inline CSS
 // property from this signal's stringified value. Pairs naturally with
 // `Signal[string]` carrying a colour, length, etc.
 //
 //	h.Div(c.Hue.Style("background-color"))
 func (s *Signal[T]) Style(prop string) h.H {
-	return h.Data("style-"+prop, s.dollar)
+	return h.Data("style:"+prop, s.dollar)
 }
 
 // Key returns the wire key (qualified field path). Useful in tests.
