@@ -15,11 +15,14 @@ GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.1.4}"
 # generous-but-not-loose so noise doesn't fail CI.
 #
 # Current floors (steady state on the bench page in bench_test.go):
-#   CounterRender              ~164 allocs/op  (post-gomponents-free h pkg)
+#   CounterRender              ~181 allocs/op  (the always-injected client
+#                                               reconnect manager + its
+#                                               connection-status hook add a
+#                                               data-init blob to every head)
 #   CounterAction              ~129 allocs/op
 #   CounterActionWithLogger    ~129 allocs/op  (logger path must stay flat
 #                                               vs CounterAction)
-RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-180}
+RENDER_ALLOC_MAX=${RENDER_ALLOC_MAX:-185}
 ACTION_ALLOC_MAX=${ACTION_ALLOC_MAX:-149}
 LOGGER_ACTION_ALLOC_MAX=${LOGGER_ACTION_ALLOC_MAX:-149}
 

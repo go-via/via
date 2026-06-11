@@ -49,6 +49,7 @@ func TestBrowserReconnectManager(t *testing.T) {
 
 	var installed bool
 	var bannerRetry, bannerFailed, reloadCount string
+	var connInitial, connRetry, connFailed string
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(srv.URL+"/"),
 		chromedp.WaitVisible("#root", chromedp.ByID),
@@ -56,17 +57,22 @@ func TestBrowserReconnectManager(t *testing.T) {
 		// (1) Datastar evaluated the injected data-init IIFE.
 		waitJSTrue(`window.__viaRC===1`),
 		chromedp.Evaluate(`window.__viaRC===1`, &installed),
+		// Connection status starts online.
+		waitJSTrue(`document.documentElement.getAttribute('data-via-connection')==='online'`),
+		chromedp.Evaluate(`document.documentElement.getAttribute('data-via-connection')`, &connInitial),
 
-		// (2) A retrying event shows the visible reconnect banner.
+		// (2) A retrying event shows the banner AND marks the connection connecting.
 		chromedp.Evaluate(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}))`, nil),
 		waitJSTrue(`!!document.getElementById('via-reconnect-banner') && getComputedStyle(document.getElementById('via-reconnect-banner')).display!=='none'`),
 		chromedp.Evaluate(`document.getElementById('via-reconnect-banner').textContent`, &bannerRetry),
+		chromedp.Evaluate(`document.documentElement.getAttribute('data-via-connection')`, &connRetry),
 
-		// (3) retries-failed arms the bounded reload (counter set, banner updated).
+		// (3) retries-failed arms the bounded reload AND marks the connection offline.
 		// Read the counter immediately, before the jittered reload timer fires.
 		chromedp.Evaluate(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed'}}))`, nil),
 		chromedp.Evaluate(`sessionStorage.getItem('__via_rc_reloads')`, &reloadCount),
 		chromedp.Evaluate(`document.getElementById('via-reconnect-banner').textContent`, &bannerFailed),
+		chromedp.Evaluate(`document.documentElement.getAttribute('data-via-connection')`, &connFailed),
 	)
 	if err != nil {
 		t.Fatalf("chromedp run: %v", err)
@@ -74,6 +80,10 @@ func TestBrowserReconnectManager(t *testing.T) {
 
 	if !installed {
 		t.Fatal("reconnect manager did not install — Datastar did not evaluate the injected data-init")
+	}
+	if connInitial != "online" || connRetry != "connecting" || connFailed != "offline" {
+		t.Fatalf("data-via-connection lifecycle = %q/%q/%q, want online/connecting/offline",
+			connInitial, connRetry, connFailed)
 	}
 	if bannerRetry != "Reconnecting..." {
 		t.Fatalf("retrying banner = %q, want %q", bannerRetry, "Reconnecting...")

@@ -205,6 +205,23 @@ recovers on its own:
   `retries-failed`, reloads the page (jittered, and bounded to a few attempts
   so a down server can't pin a reload loop) to re-bootstrap a fresh stream and
   session. Disable it with `WithoutSSEReconnect()` to supply your own.
+- **Connection status for your own UI:** the same reconnect manager publishes a
+  `data-via-connection` attribute on `<html>` — `online`, `connecting`, or
+  `offline` — so you can style your own indicator in CSS without via's banner:
+
+  ```css
+  html[data-via-connection="offline"]   .app { opacity: .5; pointer-events: none }
+  html[data-via-connection="connecting"] #net-dot { background: orange }
+  ```
+
+  (It's a DOM attribute, not a reactive signal — Datastar exposes no supported
+  way to merge a signal from outside its own fetch lifecycle.)
+- **Pending state per action** is already built in — there's no server
+  round-trip needed to disable a button while its action is in flight. Add
+  [`on.Indicator`](https://pkg.go.dev/github.com/go-via/via/on#Indicator)
+  alongside the handler; Datastar flips the bound signal true for the request's
+  duration so you can drive a spinner, `aria-busy`, or a disabled attribute off
+  it client-side.
 - Sessions are also in-memory; logged-in users re-auth unless you back the
   session store with something durable. `OnInit` runs again on every
   re-bootstrap, so session-backed rehydration (below) applies there too.
