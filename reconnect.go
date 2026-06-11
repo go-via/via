@@ -35,7 +35,7 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`function conn(s){document.documentElement.setAttribute('data-via-connection',s)}` +
 	`conn('online');` +
 	`function show(m){if(!b){b=document.createElement('div');b.id='via-reconnect-banner';` +
-	`b.setAttribute('role','status');b.style.cssText='position:fixed;top:0;left:0;right:0;` +
+	`b.setAttribute('role','status');b.setAttribute('aria-live','polite');b.style.cssText='position:fixed;top:0;left:0;right:0;` +
 	`z-index:2147483647;padding:.5rem 1rem;text-align:center;font:14px system-ui,sans-serif;` +
 	`background:#b45309;color:#fff';(document.body||document.documentElement).appendChild(b)}` +
 	`b.textContent=m;b.style.display='block'}` +
