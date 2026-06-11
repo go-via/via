@@ -122,7 +122,16 @@ type readCtx interface {
 }
 
 func (ctx *Ctx) rctx() *Ctx { return ctx }
-func (r *CtxR) rctx() *Ctx  { return r.ctx }
+
+// rctx guards a nil receiver so a hand-constructed typed-nil *CtxR passed to a
+// Read returns the zero value (every Read nil-checks the result) rather than
+// panicking here — consistent with CtxR's other accessors that already guard.
+func (r *CtxR) rctx() *Ctx {
+	if r == nil {
+		return nil
+	}
+	return r.ctx
+}
 
 // ID returns the tab id (the wire key for via_tab). Mirrors Ctx.ID.
 func (r *CtxR) ID() string {
