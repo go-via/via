@@ -86,6 +86,13 @@ type App struct {
 	stopSweep     chan struct{}
 	stopSweepOnce sync.Once
 
+	// bgWG tracks every long-lived background goroutine the app spawns — the
+	// projector, consumer, changes/broadcast tailers, and the TTL sweepers.
+	// Shutdown waits on it (bounded by the shutdown ctx) AFTER cancelling the
+	// backplane context and closing stopSweep, so a graceful drain does not
+	// return while those goroutines are still touching app state.
+	bgWG sync.WaitGroup
+
 	// backplaneDone is closed at the START of Shutdown, BEFORE backplane.Close,
 	// so the projector/consumer tailers can tell a graceful stop (exit) from a
 	// transient mid-stream disconnect (re-subscribe from the cursor and
@@ -449,12 +456,15 @@ func New(opts ...Option) *App {
 	if a.cfg.sessionTTL > 0 || a.cfg.contextTTL > 0 || a.cfg.reconcileInterval > 0 {
 		a.stopSweep = make(chan struct{})
 		if a.cfg.sessionTTL > 0 {
+			a.bgWG.Add(1)
 			go a.runSweep(a.cfg.sessionTTL/2, time.Millisecond, a.removeExpiredSessions)
 		}
 		if a.cfg.contextTTL > 0 {
+			a.bgWG.Add(1)
 			go a.runSweep(a.cfg.contextTTL/2, time.Second, a.removeExpiredContexts)
 		}
 		if a.cfg.reconcileInterval > 0 {
+			a.bgWG.Add(1)
 			go a.runSweep(a.cfg.reconcileInterval, a.cfg.reconcileInterval, a.reconcileValues)
 		}
 	}

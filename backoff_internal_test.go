@@ -1,6 +1,7 @@
 package via
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -43,7 +44,24 @@ func TestCasSleep_staysWithinCeiling(t *testing.T) {
 	// casSleep must never block longer than the cap — bound the worst case so
 	// a contended Update can't stall an action for an unbounded time.
 	start := time.Now()
-	casSleep(99)
+	casSleep(context.Background(), 99)
 	assert.Less(t, time.Since(start), casBackoffCap+50*time.Millisecond,
 		"a single backoff sleep stays bounded by the cap (plus scheduler slack)")
+}
+
+// A contended Update backs off between CAS retries; if the app is shutting down
+// mid-retry that backoff must abort the instant the backplane context is
+// cancelled rather than adding up to the cap to the drain. casSleep selects on
+// ctx.Done so the worst case under cancellation is ~scheduler slack, not the
+// jittered ceiling.
+func TestCasSleep_returnsPromptlyWhenCtxCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before the call
+
+	start := time.Now()
+	casSleep(ctx, 99)
+	assert.Less(t, time.Since(start), 5*time.Millisecond,
+		"an already-cancelled context must short-circuit the backoff sleep, not wait out the ceiling")
 }

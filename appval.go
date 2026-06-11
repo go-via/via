@@ -135,7 +135,10 @@ func (a *App) reconcileSessionKey(sess *session, key string) {
 	if decode == nil {
 		return
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(sess.id, key))
+	data, storeRev, ok, err := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(sess.id, key))
+	if err != nil {
+		a.logWarn(nil, "via: backplane LoadSnapshot failed reconciling session key %q: %v", key, err)
+	}
 	if !ok || storeRev <= sess.loadRev(key) {
 		return
 	}
@@ -158,7 +161,10 @@ func (a *App) reconcileKey(key string) {
 	if vc == nil {
 		return
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(key))
+	data, storeRev, ok, err := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(key))
+	if err != nil {
+		a.logWarn(nil, "via: backplane LoadSnapshot failed reconciling key %q: %v", key, err)
+	}
 	vc.mu.Lock()
 	changed := false
 	if ok && storeRev > vc.l1Rev {
@@ -180,18 +186,29 @@ func (a *App) reconcileKey(key string) {
 func (a *App) startChangesTailer() {
 	ch, err := a.backplane.Subscribe(a.backplaneCtx, changesKey, 0)
 	if err != nil {
+		a.logWarn(nil, "via: backplane subscribe failed for changes tailer: %v", err)
 		return
 	}
+	a.bgWG.Add(1)
 	go func() {
-		for rec := range ch {
-			var c change
-			if json.Unmarshal(rec.Data, &c) != nil {
-				continue
-			}
-			if c.Sid == "" {
-				a.applyChange(c) // app-scoped value
-			} else {
-				a.applySessionChange(c) // session-scoped value
+		defer a.bgWG.Done()
+		for {
+			select {
+			case rec, ok := <-ch:
+				if !ok {
+					return
+				}
+				var c change
+				if json.Unmarshal(rec.Data, &c) != nil {
+					continue
+				}
+				if c.Sid == "" {
+					a.applyChange(c) // app-scoped value
+				} else {
+					a.applySessionChange(c) // session-scoped value
+				}
+			case <-a.backplaneDone:
+				return // graceful stop: don't wait for a slow backend to close ch
 			}
 		}
 	}()
@@ -217,7 +234,10 @@ func (a *App) applySessionChange(c change) {
 	if decode == nil {
 		return
 	}
-	data, storeRev, dok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(c.Sid, c.Key))
+	data, storeRev, dok, err := a.backplane.LoadSnapshot(a.backplaneCtx, sessValKey(c.Sid, c.Key))
+	if err != nil {
+		a.logWarn(nil, "via: backplane LoadSnapshot failed applying session change for key %q: %v", c.Key, err)
+	}
 	if !dok || storeRev < c.Rev {
 		return // stale replica: never surface a value older than the hint promised
 	}
@@ -259,7 +279,10 @@ func (a *App) applyChangeL1(c change) bool {
 	if c.Rev <= vc.l1Rev {
 		return false
 	}
-	data, storeRev, ok, _ := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(c.Key))
+	data, storeRev, ok, err := a.backplane.LoadSnapshot(a.backplaneCtx, valKey(c.Key))
+	if err != nil {
+		a.logWarn(nil, "via: backplane LoadSnapshot failed applying change for key %q: %v", c.Key, err)
+	}
 	if !ok || storeRev < c.Rev || storeRev <= vc.l1Rev {
 		return false
 	}

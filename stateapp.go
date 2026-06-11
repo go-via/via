@@ -116,8 +116,8 @@ func (a *StateApp[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		}
 		newRev, err := app.backplane.CAS(bg, valKey(a.wireKey), rev, enc)
 		if errors.Is(err, ErrCASConflict) {
-			casSleep(try) // jittered backoff so contenders don't spin in lockstep
-			continue      // someone else wrote; reload and re-run fn
+			casSleep(bg, try) // jittered backoff so contenders don't spin in lockstep
+			continue          // someone else wrote; reload and re-run fn
 		}
 		if err != nil {
 			return err

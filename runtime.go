@@ -287,6 +287,7 @@ func enqueueScript(ctx *Ctx, s string) {
 // and context expirers — the only thing that varies is the cadence and
 // the per-tick action. interval ≤ 0 falls back to the supplied default.
 func (a *App) runSweep(interval, fallback time.Duration, sweep func()) {
+	defer a.bgWG.Done()
 	if interval <= 0 {
 		interval = fallback
 	}

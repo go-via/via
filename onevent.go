@@ -257,18 +257,34 @@ func (a *App) registerConsumer(name, key string, cfg consumerConfig, deliver fun
 // exits when the backplane closes (Subscribe returns ErrClosed or the channel
 // closes).
 func (a *App) startConsumer(name, key string, cs *consumerState, cfg consumerConfig, deliver func(context.Context, []byte, Offset) (deliverOutcome, error)) {
+	a.bgWG.Add(1)
 	go func() {
+		defer a.bgWG.Done()
 		for {
 			from, _ := cs.snapshot()
 			subCtx, cancel := context.WithCancel(a.backplaneCtx)
 			ch, err := a.backplane.Subscribe(subCtx, key, from)
 			if err != nil {
 				cancel()
+				a.logWarn(nil, "via: backplane subscribe failed for consumer %q key %q: %v", name, key, err)
 				return // backplane closed
 			}
 			retry := false
 		consume:
-			for rec := range ch {
+			for {
+				var rec Record
+				var ok bool
+				// Wake on backplaneDone so teardown is prompt even against a
+				// backend that does not close the channel on ctx cancel.
+				select {
+				case rec, ok = <-ch:
+					if !ok {
+						break consume // channel closed: transient disconnect or graceful stop
+					}
+				case <-a.backplaneDone:
+					cancel()
+					return // graceful stop: don't wait for a slow backend to close ch
+				}
 				if committed, _ := cs.snapshot(); rec.Offset <= committed {
 					continue // already handled (a peer advanced the shared offset)
 				}

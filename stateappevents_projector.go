@@ -80,7 +80,9 @@ func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, err
 // Shutdown).
 func (a *App) startProjector(key string, ls *logState) {
 	from := a.coldStartFrom(ls, key)
+	a.bgWG.Add(1)
 	go func() {
+		defer a.bgWG.Done()
 		// Reconnect loop: each Subscribe tails until its channel closes. A close
 		// while the app is still running is a TRANSIENT disconnect (the backend
 		// dropped the consumer, the stream survives) — re-subscribe from the
@@ -90,16 +92,30 @@ func (a *App) startProjector(key string, ls *logState) {
 		for {
 			ch, err := a.backplane.Subscribe(a.backplaneCtx, key, from)
 			if err != nil {
+				a.logWarn(nil, "via: backplane subscribe failed for projector key %q: %v", key, err)
 				return // ErrClosed (or unrecoverable) → stop
 			}
-			// Keep ranging the channel even once halted, so the backplane's
-			// Subscribe sender never blocks (no goroutine leak); just stop folding.
-			for rec := range ch {
-				if a.applyRecord(ls, key, rec) {
-					// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
-					a.broadcastRender(nil, nil, key)
-					a.emitFoldDigest(ls, key)
-					a.maybeSnapshot(ls, key)
+			// Range the channel, but also wake on backplaneDone so teardown is
+			// prompt even against a backend that does not close the channel on
+			// ctx cancel. On a graceful stop we exit immediately; the inmemory
+			// backend still closes ch so its sender never blocks.
+			halted := false
+			for {
+				select {
+				case rec, ok := <-ch:
+					if !ok {
+						halted = true
+					} else if a.applyRecord(ls, key, rec) {
+						// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
+						a.broadcastRender(nil, nil, key)
+						a.emitFoldDigest(ls, key)
+						a.maybeSnapshot(ls, key)
+					}
+				case <-a.backplaneDone:
+					return // graceful stop: don't wait for a slow backend to close ch
+				}
+				if halted {
+					break
 				}
 			}
 			if a.shuttingDown() {
