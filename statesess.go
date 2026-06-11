@@ -120,7 +120,7 @@ func (s *StateSess[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
 		}
 		newRev, err := app.backplane.CAS(bg, cellKey, rev, enc)
 		if errors.Is(err, ErrCASConflict) {
-			casSleep(try) // jittered backoff so contenders don't spin in lockstep
+			casSleep(bg, try) // jittered backoff so contenders don't spin in lockstep
 			continue
 		}
 		if err != nil {

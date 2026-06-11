@@ -100,7 +100,9 @@ func (a *App) BroadcastSignals(values map[string]any) int {
 func (a *App) dispatchBroadcast(rec broadcastRecord) int {
 	if a.cfg.backplane != nil {
 		if b, err := json.Marshal(rec); err == nil {
-			_, _ = a.backplane.Append(a.backplaneCtx, broadcastKey, b)
+			if _, err := a.backplane.Append(a.backplaneCtx, broadcastKey, b); err != nil {
+				a.logWarn(nil, "via: backplane Append failed dispatching broadcast: %v", err)
+			}
 		}
 		return len(a.snapshotContexts())
 	}
@@ -134,19 +136,31 @@ func (a *App) startBroadcastTailer() {
 	bg := a.backplaneCtx
 	head, _, err := a.backplane.Head(bg, broadcastKey)
 	if err != nil {
+		a.logWarn(nil, "via: backplane Head failed starting broadcast tailer: %v", err)
 		return
 	}
 	ch, err := a.backplane.Subscribe(bg, broadcastKey, head)
 	if err != nil {
+		a.logWarn(nil, "via: backplane subscribe failed for broadcast tailer: %v", err)
 		return
 	}
+	a.bgWG.Add(1)
 	go func() {
-		for rec := range ch {
-			var r broadcastRecord
-			if json.Unmarshal(rec.Data, &r) != nil {
-				continue
+		defer a.bgWG.Done()
+		for {
+			select {
+			case rec, ok := <-ch:
+				if !ok {
+					return
+				}
+				var r broadcastRecord
+				if json.Unmarshal(rec.Data, &r) != nil {
+					continue
+				}
+				a.applyBroadcast(r)
+			case <-a.backplaneDone:
+				return // graceful stop: don't wait for a slow backend to close ch
 			}
-			a.applyBroadcast(r)
 		}
 	}()
 }

@@ -145,7 +145,27 @@ func (a *App) Shutdown(ctx context.Context) error {
 		a.backplaneCancel()
 	}
 	if a.backplane != nil {
-		_ = a.backplane.Close()
+		if err := a.backplane.Close(); err != nil {
+			a.logWarn(nil, "via: backplane Close failed during shutdown: %v", err)
+		}
+	}
+
+	// Wait for every long-lived background goroutine (projector, consumer,
+	// changes/broadcast tailers, TTL sweepers) to observe the stop and exit, so
+	// Shutdown does not return while they still touch app state. The cancel +
+	// Close + stopSweep close above MUST precede this wait or it would deadlock.
+	// The wait is bounded by ctx: a goroutine wedged on a backend that ignores
+	// cancellation cannot hang the drain past its deadline — a leaked goroutine
+	// is strictly better than a hung shutdown.
+	bgDone := make(chan struct{})
+	go func() {
+		a.bgWG.Wait()
+		close(bgDone)
+	}()
+	select {
+	case <-bgDone:
+	case <-ctx.Done():
+		a.logWarn(nil, "via: shutdown deadline reached before background goroutines drained: %v", ctx.Err())
 	}
 
 	return srvErr

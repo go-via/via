@@ -1,6 +1,7 @@
 package via
 
 import (
+	"context"
 	"math/rand/v2"
 	"time"
 )
@@ -33,11 +34,18 @@ func casBackoffCeiling(attempt int) time.Duration {
 }
 
 // casSleep waits a jittered duration in [0, ceiling) before the next CAS retry,
-// so concurrent retriers de-correlate instead of colliding in lockstep.
-func casSleep(attempt int) {
+// so concurrent retriers de-correlate instead of colliding in lockstep. It
+// returns early if ctx is cancelled — a contended Update mid-retry must not add
+// up to the ceiling to a shutdown drain.
+func casSleep(ctx context.Context, attempt int) {
 	ceiling := casBackoffCeiling(attempt)
 	if ceiling <= 0 {
 		return
 	}
-	time.Sleep(time.Duration(rand.Int64N(int64(ceiling))))
+	t := time.NewTimer(time.Duration(rand.Int64N(int64(ceiling))))
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }

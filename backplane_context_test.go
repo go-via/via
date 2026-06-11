@@ -2,6 +2,8 @@ package via_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -102,6 +104,97 @@ func TestShutdownCancelsInflightBackplaneContext(t *testing.T) {
 		"Shutdown must cancel the context handed to in-flight EventLog.Subscribe")
 	assert.ErrorIs(t, snap.Err(), context.Canceled,
 		"Shutdown must cancel the context handed to in-flight Store.LoadSnapshot")
+}
+
+// blockingSubBackplane wraps a real in-memory backplane but hands out a
+// Subscribe channel that never closes on its own — it only unblocks the reader
+// when the call's context is cancelled. This models a backend that does NOT
+// promptly close the channel on shutdown, the case a naive `for rec := range ch`
+// projector would hang on. The runtime must (a) wake the loop on ctx.Done and
+// (b) bound the Shutdown wait so a stuck goroutine can never wedge the drain.
+type blockingSubBackplane struct {
+	via.Backplane
+}
+
+func (b *blockingSubBackplane) Subscribe(ctx context.Context, _ string, _ via.Offset) (<-chan via.Record, error) {
+	ch := make(chan via.Record)
+	go func() {
+		<-ctx.Done()
+		// Deliberately do NOT close(ch): a `range ch` would block forever here.
+	}()
+	return ch, nil
+}
+
+// A backend whose Subscribe channel never closes must not be able to wedge
+// Shutdown: the projector loop wakes on its context being cancelled and exits,
+// and Shutdown's wait for background goroutines is bounded by the shutdown ctx
+// regardless. Either property alone keeps the drain prompt; this asserts the
+// observable contract — Shutdown returns well within its deadline.
+func TestShutdownDoesNotHangOnNonClosingSubscribe(t *testing.T) {
+	t.Parallel()
+
+	bp := &blockingSubBackplane{Backplane: via.InMemory()}
+	app := via.New(via.WithBackplane(bp))
+	server := vt.Serve(t, app)
+	via.Mount[bpCtxPage](app, "/")
+	_ = vt.NewClient(t, server, "/") // spawns the per-key projector
+
+	// Give the projector a moment to enter its Subscribe range loop.
+	time.Sleep(50 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_ = app.Shutdown(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Shutdown hung on a non-closing Subscribe channel; the bounded wait did not fire")
+	}
+	require.NoError(t, ctx.Err(),
+		"Shutdown must return before its own deadline, proving the wait is prompt not merely bounded")
+}
+
+// subscribeErrBackplane fails every Subscribe so the projector's
+// subscribe-failure branch fires. Other calls delegate to a real in-memory
+// backplane so the page still mounts.
+type subscribeErrBackplane struct {
+	via.Backplane
+}
+
+func (b *subscribeErrBackplane) Subscribe(context.Context, string, via.Offset) (<-chan via.Record, error) {
+	return nil, errors.New("boom: subscribe rejected")
+}
+
+// A dropped backplane error used to vanish silently, so an operator saw state
+// divergence with no cause in the logs. The runtime must WARN-log a Subscribe
+// failure (with a stable, greppable prefix) before the goroutine returns.
+func TestProjectorLogsSubscribeFailure(t *testing.T) {
+	t.Parallel()
+
+	logger := &captureLogger{}
+	bp := &subscribeErrBackplane{Backplane: via.InMemory()}
+	app := via.New(via.WithBackplane(bp), via.WithLogger(logger), via.WithLogLevel(via.LogWarn))
+	server := vt.Serve(t, app)
+	via.Mount[bpCtxPage](app, "/")
+	_ = vt.NewClient(t, server, "/") // spawns the projector → Subscribe fails
+
+	require.Eventually(t, func() bool {
+		for _, r := range logger.snapshot() {
+			if r.level == via.LogWarn && strings.Contains(r.msg, "via: backplane subscribe failed") {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 5*time.Millisecond,
+		"a swallowed Subscribe error must surface as a greppable WARN, not vanish")
+
+	require.NoError(t, app.Shutdown(context.Background()))
 }
 
 type bpWritePage struct {
