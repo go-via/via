@@ -37,7 +37,7 @@ func TestLocal_rendersClientOnlySignalHelpers(t *testing.T) {
 		{"toggle flips the local signal", `data-on:click="$_open=!$_open"`},
 		{"show binds to $_open", `data-show="$_open"`},
 		{"show-unless negates", `data-show="!$_open"`},
-		{"class toggles by truthiness", `data-class-active="$_open"`},
+		{"class toggles by truthiness", `data-class:active="$_open"`},
 		{"text binds value", `data-text="$_open"`},
 		{"bind uses bare _name", `data-bind="_open"`},
 	}

@@ -63,7 +63,7 @@ func (l LocalSignal) ShowUnless() h.H { return h.Data("show", "!"+l.dollar) }
 
 // Class toggles the named CSS class by the signal's truthiness. See
 // [Signal.Class] for the lower-case attribute-name caveat.
-func (l LocalSignal) Class(name string) h.H { return h.Data("class-"+name, l.dollar) }
+func (l LocalSignal) Class(name string) h.H { return h.Data("class:"+name, l.dollar) }
 
 // Toggle returns an on:click attribute that flips a boolean local signal —
 // the canonical client-only toggle with no server round-trip.
