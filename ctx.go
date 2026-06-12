@@ -52,6 +52,14 @@ type Ctx struct {
 	// Signal[T] fields. Reset at request entry.
 	lastSignals map[string]any
 
+	// pushedSignals records the last value the server pushed per ad-hoc
+	// signal key (ctx.Patch().Signal/Signals — broadcasts included). A
+	// reconnect resync re-ships these so a push written to a dying
+	// connection isn't silently lost; keys the server never pushed are
+	// absent, so client-local signal state is never clobbered. Guarded
+	// by queue.mu, like the queue it shadows.
+	pushedSignals map[string]any
+
 	cspNonce string // lazily generated per-request CSP nonce
 	docNonce string // page document's CSP nonce, captured at render for the push path
 
