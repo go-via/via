@@ -1,6 +1,7 @@
 package via
 
 import (
+	"context"
 	"encoding/json"
 )
 
@@ -128,41 +129,28 @@ func (a *App) applyBroadcast(rec broadcastRecord) int {
 }
 
 // startBroadcastTailer tails the shared broadcast feed and applies each record
-// to this pod's live tabs. It subscribes from the current HEAD so a pod that
-// joins later never replays notices issued before it booted — broadcast is
-// ephemeral, not convergent. The goroutine exits when the Subscribe channel
-// closes (backplane Close on Shutdown). Only started when clustered.
+// to this pod's live tabs. Runs on tailLoop, so a boot-time Head/Subscribe
+// failure is retried rather than fatal and a transient drop re-subscribes.
+// Every (re)connect re-Heads: broadcast is ephemeral, not convergent, so a
+// pod never replays notices issued before it booted, and frames missed during
+// a reconnect gap are skipped — resuming from the current head is correct.
+// Only started when clustered.
 func (a *App) startBroadcastTailer() {
-	bg := a.backplaneCtx
-	head, _, err := a.backplane.Head(bg, broadcastKey)
-	if err != nil {
-		a.logWarn(nil, "via: backplane Head failed starting broadcast tailer: %v", err)
-		return
-	}
-	ch, err := a.backplane.Subscribe(bg, broadcastKey, head)
-	if err != nil {
-		a.logWarn(nil, "via: backplane subscribe failed for broadcast tailer: %v", err)
-		return
-	}
-	a.bgWG.Add(1)
-	go func() {
-		defer a.bgWG.Done()
-		for {
-			select {
-			case rec, ok := <-ch:
-				if !ok {
-					return
-				}
-				var r broadcastRecord
-				if json.Unmarshal(rec.Data, &r) != nil {
-					continue
-				}
-				a.applyBroadcast(r)
-			case <-a.backplaneDone:
-				return // graceful stop: don't wait for a slow backend to close ch
+	a.startTailer(tailer{
+		feed: "broadcast",
+		key:  broadcastKey,
+		resumeFrom: func(ctx context.Context) (Offset, error) {
+			head, _, err := a.backplane.Head(ctx, broadcastKey)
+			return head, err
+		},
+		onRecord: func(rec Record) {
+			var r broadcastRecord
+			if json.Unmarshal(rec.Data, &r) != nil {
+				return
 			}
-		}
-	}()
+			a.applyBroadcast(r)
+		},
+	})
 }
 
 // broadcastRender forces a view re-render on every live *Ctx whose

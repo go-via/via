@@ -1,5 +1,7 @@
 package via
 
+import "fmt"
+
 // Number is the constraint for SignalNum / StateTabNum / StateSessNum /
 // StateAppNum. Covers every Go-built-in integer and floating-point kind.
 // Underlying-type approximation (~int etc.) lets users wrap these in
@@ -48,9 +50,9 @@ func (o *NumOps[T]) Zero() {
 	_ = o.update(func(T) (T, error) { var z T; return z, nil })
 }
 
-// Min clamps the lower bound: new = max(cur, lo). After this call the
-// value is at least lo.
-func (o *NumOps[T]) Min(lo T) {
+// AtLeast raises the value to lo when it is below; in-range values are
+// untouched. After this call the value is at least lo.
+func (o *NumOps[T]) AtLeast(lo T) {
 	_ = o.update(func(cur T) (T, error) {
 		if cur < lo {
 			return lo, nil
@@ -59,10 +61,30 @@ func (o *NumOps[T]) Min(lo T) {
 	})
 }
 
-// Max clamps the upper bound: new = min(cur, hi). After this call the
-// value is at most hi.
-func (o *NumOps[T]) Max(hi T) {
+// AtMost lowers the value to hi when it is above; in-range values are
+// untouched. After this call the value is at most hi.
+func (o *NumOps[T]) AtMost(hi T) {
 	_ = o.update(func(cur T) (T, error) {
+		if cur > hi {
+			return hi, nil
+		}
+		return cur, nil
+	})
+}
+
+// Clamp confines the value to [lo, hi]: values below lo are raised to
+// lo, values above hi are lowered to hi, in-range values are untouched.
+// Inverted bounds (lo > hi) are a programming mistake — Clamp panics
+// rather than silently swapping or picking one bound.
+func (o *NumOps[T]) Clamp(lo, hi T) {
+	if lo > hi {
+		panic(fmt.Sprintf(
+			"via: Clamp called with inverted bounds (lo %v > hi %v)", lo, hi))
+	}
+	_ = o.update(func(cur T) (T, error) {
+		if cur < lo {
+			return lo, nil
+		}
 		if cur > hi {
 			return hi, nil
 		}

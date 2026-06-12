@@ -54,6 +54,14 @@ func (p *Patch) Signals(values map[string]any) {
 		q.signals = make(map[string]any, len(values))
 	}
 	maps.Copy(q.signals, values)
+	// Mirror into the resync tracker: the queue empties on a successful
+	// drain, but a frame drained onto a dying socket may never reach the
+	// client — the tracker keeps the last pushed value per key so a
+	// reconnect resync can re-ship it (see resyncSignals in sse.go).
+	if p.ctx.pushedSignals == nil {
+		p.ctx.pushedSignals = make(map[string]any, len(values))
+	}
+	maps.Copy(p.ctx.pushedSignals, values)
 	q.mu.Unlock()
 	q.notify()
 }

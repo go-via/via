@@ -6,6 +6,18 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
+# --browser runs ONLY the real-browser suite and exits. vtbrowser is its
+# own module, so the default `go test ./...` below never reaches it; CI
+# runs this in a dedicated job with Chromium installed, and
+# VIA_BROWSER_REQUIRED=1 turns the no-browser skip into a hard failure
+# so CI cannot silently skip the suite.
+if [ "${1:-}" = "--browser" ]; then
+  echo "== CI: Browser tests (vtbrowser) =="
+  (cd vtbrowser && VIA_BROWSER_REQUIRED=1 go test -race ./...)
+  echo "SUCCESS: browser tests passed."
+  exit 0
+fi
+
 # Pinned tool versions. Bump deliberately; @latest in CI breaks reproducibility.
 GOLANGCI_VERSION="${GOLANGCI_VERSION:-v2.12.2}"
 GOVULNCHECK_VERSION="${GOVULNCHECK_VERSION:-v1.1.4}"

@@ -137,15 +137,26 @@
 //   - Call(ctx, method, args…) invokes any Map method the typed API misses.
 //   - WithMapOption(key, value) sets any constructor option not covered.
 //
-// # Self-hosting, versions, and CSP
+// # Asset delivery, self-hosting, and CSP
 //
-//	maplibre.Plugin(maplibre.WithVersion("5.24.0")) // pin a CDN version (v5 only)
+// The MapLibre JS + CSS ship embedded in the binary (vendored from the pinned
+// v5 release), served at content-hashed /via/assets/maplibre/ paths with
+// immutable cache headers — registration does no network I/O and pages
+// reference no third-party origin by default.
+//
 //	maplibre.Plugin(maplibre.WithSource("/static/maplibre-gl.js"),
 //	    maplibre.WithStylesheet("/static/maplibre-gl.css")) // self-host
-//	maplibre.Plugin(maplibre.WithCSPBuild()) // inline worker for strict worker-src
+//	maplibre.Plugin(maplibre.WithCSPBuild()) // same-origin worker for strict worker-src
+//	maplibre.Plugin(                          // CDN opt-in, SRI mandatory
+//	    maplibre.WithCDN("https://cdn.example.com/maplibre-gl.js", "sha384-…"),
+//	    maplibre.WithCDNStylesheet("https://cdn.example.com/maplibre-gl.css", "sha384-…"))
 //
-// Pin a v5 release — v6 is ESM-only and drops the maplibregl global the script
-// include relies on. The CSS is required: without it markers, popups, and
-// controls render unstyled. The default style is MapLibre's no-key demo style,
-// intended for demos and CI, not production; supply your own via WithStyle.
+// The WithCDN options require a well-formed integrity hash for the exact build
+// at that URL; the emitted tags carry integrity + crossorigin="anonymous".
+// Running a different MapLibre version means supplying its URLs and hashes via
+// the CDN options (pin a v5 release — v6 is ESM-only and drops the maplibregl
+// global the script include relies on); a bare WithVersion bump panics. The
+// CSS is required: without it markers, popups, and controls render unstyled.
+// The default style is MapLibre's no-key demo style, intended for demos and
+// CI, not production; supply your own via WithStyle.
 package maplibre

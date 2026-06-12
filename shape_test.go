@@ -65,12 +65,12 @@ func (p *shapePage) NumMul(ctx *via.Ctx) error {
 	p.TabN.Op(ctx).Mul(3)
 	return nil
 }
-func (p *shapePage) NumMin(ctx *via.Ctx) error {
-	p.TabN.Op(ctx).Min(10)
+func (p *shapePage) NumAtLeast(ctx *via.Ctx) error {
+	p.TabN.Op(ctx).AtLeast(10)
 	return nil
 }
-func (p *shapePage) NumMax(ctx *via.Ctx) error {
-	p.TabN.Op(ctx).Max(100)
+func (p *shapePage) NumAtMost(ctx *via.Ctx) error {
+	p.TabN.Op(ctx).AtMost(100)
 	return nil
 }
 func (p *shapePage) NumZero(ctx *via.Ctx) error {
@@ -185,11 +185,11 @@ func TestShape_NumOps(t *testing.T) {
 	require.Equal(t, http.StatusOK, tc.Action("NumMul").Fire()) // 6*3=18
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">18</span>`)
 
-	require.Equal(t, http.StatusOK, tc.Action("NumMax").Fire())  // min(18, 100)=18, no-op
-	require.Equal(t, http.StatusOK, tc.Action("NumZero").Fire()) // 0
+	require.Equal(t, http.StatusOK, tc.Action("NumAtMost").Fire()) // 18 ≤ 100, no-op
+	require.Equal(t, http.StatusOK, tc.Action("NumZero").Fire())   // 0
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">0</span>`)
 
-	require.Equal(t, http.StatusOK, tc.Action("NumMin").Fire()) // max(0, 10)=10
+	require.Equal(t, http.StatusOK, tc.Action("NumAtLeast").Fire()) // 0 raised to 10
 	vt.AwaitFrame(t, frames, 2*time.Second, `<span id="tabn">10</span>`)
 
 	require.Equal(t, http.StatusOK, tc.Action("NumSub").Fire()) // 10-3=7

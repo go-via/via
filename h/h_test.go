@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func render(t *testing.T, n h.H) string {
@@ -260,11 +261,19 @@ func TestFragment_emptyRendersNothing(t *testing.T) {
 	assert.Equal(t, "<div></div>", got)
 }
 
-func TestFragment_attrInsideGroupBubblesToParent(t *testing.T) {
+func TestFragment_panicsOnAttributeArgument(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Div(h.Fragment(h.ID("x"), h.Text("body"))))
-	assert.Equal(t, `<div id="x">body</div>`, got,
-		"attribute inside a Fragment must still land in the parent's open tag")
+	defer func() {
+		rec := recover()
+		require.NotNil(t, rec,
+			"Fragment with an attribute argument must panic at construction")
+		msg, _ := rec.(string)
+		assert.Contains(t, msg, "argument 2 is an attribute",
+			"panic must point at the offending argument position")
+		assert.Contains(t, msg, `id="x"`,
+			"panic must echo the offending attribute for triage")
+	}()
+	h.Fragment(h.P(h.T("kept")), h.ID("x"))
 }
 
 func TestDataInit_bareLiteralPercentIsNotMangled(t *testing.T) {
@@ -423,14 +432,12 @@ func TestNewVoidTag_returnsReusableConstructor(t *testing.T) {
 	assert.Equal(t, `<x-input name="field">`, got)
 }
 
-func TestFragment_topLevelSkipsAttributeFragments(t *testing.T) {
+func TestWith_topLevelGroupSkipsAttributeExtras(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Fragment(
-		h.ID("dropped"),
-		h.P(h.T("kept")),
-		h.Class("also-dropped"),
-	))
-	assert.Equal(t, "<p>kept</p>", got,
-		"attribute fragments rendered at the top level must be skipped — "+
-			"they would otherwise emit invalid HTML outside any element")
+	// With's non-element fallback builds a group directly, so it is the
+	// remaining way an attribute can reach a top-level group render.
+	got := render(t, h.With(h.T("kept"), h.ID("dropped")))
+	assert.Equal(t, "kept", got,
+		"attributes in a top-level group have no element to land in and "+
+			"would emit invalid HTML — they must be skipped")
 }

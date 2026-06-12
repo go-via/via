@@ -5,7 +5,9 @@ import (
 	"errors"
 	"html"
 	"io"
+	"maps"
 	"net/http"
+	"reflect"
 	"strings"
 	"time"
 
@@ -107,10 +109,11 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot
 	// Latch-and-branch on connection history. A re-bootstrap (boot != nil)
 	// seeds the fresh tab wholesale: signals first (incl. the new via_tab,
 	// so data-* bindings in the incoming elements resolve), then the full
-	// view replacing the stale container. A plain reconnect re-ships only
-	// the view — never signals, which would clobber live client-side
-	// signal state — so a client that drifted while disconnected (e.g. a
-	// trimmed queue, a missed frame) converges back to server truth.
+	// view replacing the stale container. A plain reconnect re-ships the
+	// server-pushed signals (only those — re-seeding anything else would
+	// clobber live client-side signal state) and then the view, so a
+	// client that drifted while disconnected (e.g. a trimmed queue, a
+	// missed frame) converges back to server truth.
 	if reconnect := ctx.everConnected.Swap(true); boot != nil {
 		setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 		if err := sse.PatchSignals(boot.signals); err != nil {
@@ -126,6 +129,24 @@ func runSSEStream(a *App, ctx *Ctx, w http.ResponseWriter, r *http.Request, boot
 		}
 	} else if reconnect {
 		m.Counter("via.sse.resync")
+		// Pending-signal patch FIRST, view fragment second — mirroring the
+		// re-bootstrap order above — so data-* bindings in the incoming
+		// elements read the refreshed values. The patch coalesces
+		// (last-value-wins per key) everything still queued with every
+		// signal the server ever pushed on this ctx: a push drained onto a
+		// dying socket is otherwise lost, silently desyncing the client
+		// from what the server believes it pushed.
+		if pending := resyncSignals(ctx); len(pending) > 0 {
+			out, err := json.Marshal(pending)
+			if err != nil {
+				a.logErr(ctx, "resync: json.Marshal signals: %v", err)
+			} else {
+				setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
+				if err := sse.PatchSignals(out); err != nil {
+					return
+				}
+			}
+		}
 		if frag := a.renderFragment(ctx); frag != "" {
 			setSSEWriteDeadline(w, a.cfg.sseWriteTimeout)
 			if err := sse.PatchElements(frag); err != nil {
@@ -232,23 +253,27 @@ func hasPending(q *patchQueue) bool {
 		len(q.signals) > 0 || q.scripts.Len() > 0
 }
 
+// drainQueue flushes the patch queue to the stream. The queue is
+// snapshotted under lock WITHOUT clearing; entries are removed only after
+// every write succeeded (compare-and-clear, so patches enqueued mid-write
+// survive in the queue). On a write error the queue is left intact, so the
+// frames are redelivered by the next reconnect's drain instead of dying
+// with the connection — at-least-once delivery, never frame loss.
 func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.ResponseWriter, writeTimeout time.Duration) error {
-	setSSEWriteDeadline(w, writeTimeout)
 	q := ctx.queue
 	q.mu.Lock()
+	autoElems := q.autoElements
+	userElems := q.elements
+	// Clone: producers merge into q.signals in place, so marshalling the
+	// live map after the unlock would race with them.
+	signals := maps.Clone(q.signals)
+	scripts := q.scripts.String()
+	redirect := q.redirect
+	q.mu.Unlock()
 	// Auto render first, explicit patches after: the morph applies
 	// same-id patches last-wins, so the user's targeted override beats
 	// the auto render of the same element.
-	elems := q.autoElements + q.elements
-	signals := q.signals
-	scripts := q.scripts.String()
-	redirect := q.redirect
-	q.autoElements = ""
-	q.elements = ""
-	q.signals = nil
-	q.scripts.Reset()
-	q.redirect = ""
-	q.mu.Unlock()
+	elems := autoElems + userElems
 
 	// Re-arm the write deadline before EACH network write: a single deadline
 	// set at entry would span the sum of up to four sequential writes, so a
@@ -257,7 +282,13 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 	nonceOpts := ctx.scriptNonceOpts()
 	if redirect != "" {
 		setSSEWriteDeadline(w, writeTimeout)
-		return sse.Redirect(redirect, nonceOpts...)
+		if err := sse.Redirect(redirect, nonceOpts...); err != nil {
+			return err
+		}
+		// The browser is navigating away: the rest of the snapshot is
+		// deliberately dropped with the redirect, as it always was.
+		clearDrained(q, autoElems, userElems, signals, scripts, redirect)
+		return nil
 	}
 	if elems != "" {
 		setSSEWriteDeadline(w, writeTimeout)
@@ -269,19 +300,27 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 		out, err := json.Marshal(signals)
 		if err != nil {
 			// User pushed an unmarshalable value via PatchSignal(s) /
-			// BroadcastSignals (e.g. a channel or func in the map). Log
-			// and skip the signal frame rather than emit malformed JSON.
+			// BroadcastSignals (e.g. a channel or func in the map). Log and
+			// drop the poison batch outright — value-compared clearing can't
+			// remove a func (DeepEqual on funcs is always false), and keeping
+			// it would wedge every later drain and resync into the same
+			// failure.
 			if ctx.app != nil {
 				ctx.app.logErr(ctx, "drainQueue: json.Marshal signals: %v", err)
 			}
+			q.mu.Lock()
+			for k := range signals {
+				delete(q.signals, k)
+				delete(ctx.pushedSignals, k)
+			}
+			q.mu.Unlock()
+			signals = nil
 		} else {
 			setSSEWriteDeadline(w, writeTimeout)
 			if err := sse.PatchSignals(out); err != nil {
-				recycleSignalsMap(q, signals)
 				return err
 			}
 		}
-		recycleSignalsMap(q, signals)
 	}
 	if scripts != "" {
 		setSSEWriteDeadline(w, writeTimeout)
@@ -289,7 +328,53 @@ func drainQueue(sse *datastar.ServerSentEventGenerator, ctx *Ctx, w http.Respons
 			return err
 		}
 	}
+	clearDrained(q, autoElems, userElems, signals, scripts, redirect)
 	return nil
+}
+
+// clearDrained removes from the queue exactly what the drained snapshot
+// shipped. Element/script content is consumed by prefix (producers only
+// append between drains) and signals per key by value, so anything
+// enqueued while the writes were in flight survives for the next drain.
+func clearDrained(q *patchQueue, autoElems, userElems string, signals map[string]any, scripts, redirect string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	// autoElements is replaced (not appended) by flushDirty: clear only
+	// when no newer render landed mid-write.
+	if q.autoElements == autoElems {
+		q.autoElements = ""
+	}
+	q.elements = strings.TrimPrefix(q.elements, userElems)
+	for k, v := range signals {
+		if cur, ok := q.signals[k]; ok && reflect.DeepEqual(cur, v) {
+			delete(q.signals, k)
+		}
+	}
+	if cur := q.scripts.String(); strings.HasPrefix(cur, scripts) {
+		q.scripts.Reset()
+		q.scripts.WriteString(cur[len(scripts):])
+	}
+	if q.redirect == redirect {
+		q.redirect = ""
+	}
+}
+
+// resyncSignals builds the reconnect resync's coalesced signal patch:
+// every server-pushed signal's last value overlaid with whatever is still
+// queued, last-value-wins per key. Returns nil when there is nothing to
+// re-ship, so a push-free reconnect stays a view-only resync.
+func resyncSignals(ctx *Ctx) map[string]any {
+	q := ctx.queue
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	n := len(ctx.pushedSignals) + len(q.signals)
+	if n == 0 {
+		return nil
+	}
+	merged := make(map[string]any, n)
+	maps.Copy(merged, ctx.pushedSignals)
+	maps.Copy(merged, q.signals)
+	return merged
 }
 
 // scriptNonceOpts threads the page document's captured CSP nonce onto the
@@ -307,23 +392,6 @@ func (ctx *Ctx) scriptNonceOpts() []datastar.ExecuteScriptOption {
 	return []datastar.ExecuteScriptOption{
 		datastar.WithExecuteScriptAttributes(`nonce="` + html.EscapeString(n) + `"`),
 	}
-}
-
-// recycleSignalsMap returns m to the queue for reuse if no producer
-// has installed a fresh map between drain and now. Clearing-and-
-// recycling avoids reallocating the map on every flush in
-// signal-heavy real-time flows. Cap at a modest size so a single
-// outlier flush doesn't pin a huge map alive.
-func recycleSignalsMap(q *patchQueue, m map[string]any) {
-	if len(m) > 256 {
-		return
-	}
-	clear(m)
-	q.mu.Lock()
-	if q.signals == nil {
-		q.signals = m
-	}
-	q.mu.Unlock()
 }
 
 func (a *App) handleSSEClose(w http.ResponseWriter, r *http.Request) {

@@ -48,8 +48,9 @@ h.Switch(key, h.Case(k1, n1), h.Default[K](fallback))
 h.Fragment(nodeA, nodeB)   // group nodes without a wrapper element
 ```
 
-`Fragment` is transparent to its parent element: attributes inside a
-fragment still land in the parent's open tag.
+`Fragment` takes content nodes only. Passing an attribute (`h.ID`,
+`h.Class`, `on.*`, …) panics at construction — a fragment has no opening
+tag to receive it; attach attributes to their element directly.
 
 ## Static pre-render
 

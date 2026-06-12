@@ -1,6 +1,7 @@
 package via
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 )
@@ -181,37 +182,30 @@ func (a *App) reconcileKey(key string) {
 }
 
 // startChangesTailer tails the shared changes feed and reconciles each named
-// Store cell to HEAD. The goroutine exits when the Subscribe channel closes
-// (backplane Close on Shutdown).
+// Store cell to HEAD. Runs on tailLoop: a reconnect resumes from the
+// last-applied hint offset — the feed is stateful, so a gap could strand a
+// peer until the reconcile sweep (or forever, with the sweep disabled).
 func (a *App) startChangesTailer() {
-	ch, err := a.backplane.Subscribe(a.backplaneCtx, changesKey, 0)
-	if err != nil {
-		a.logWarn(nil, "via: backplane subscribe failed for changes tailer: %v", err)
-		return
-	}
-	a.bgWG.Add(1)
-	go func() {
-		defer a.bgWG.Done()
-		for {
-			select {
-			case rec, ok := <-ch:
-				if !ok {
-					return
-				}
-				var c change
-				if json.Unmarshal(rec.Data, &c) != nil {
-					continue
-				}
-				if c.Sid == "" {
-					a.applyChange(c) // app-scoped value
-				} else {
-					a.applySessionChange(c) // session-scoped value
-				}
-			case <-a.backplaneDone:
-				return // graceful stop: don't wait for a slow backend to close ch
+	// cursor is read (resumeFrom) and written (onRecord) only on the tailLoop
+	// goroutine — see the tailer contract — so it needs no lock.
+	var cursor Offset
+	a.startTailer(tailer{
+		feed:       "changes",
+		key:        changesKey,
+		resumeFrom: func(context.Context) (Offset, error) { return cursor, nil },
+		onRecord: func(rec Record) {
+			cursor = rec.Offset
+			var c change
+			if json.Unmarshal(rec.Data, &c) != nil {
+				return
 			}
-		}
-	}()
+			if c.Sid == "" {
+				a.applyChange(c) // app-scoped value
+			} else {
+				a.applySessionChange(c) // session-scoped value
+			}
+		},
+	})
 }
 
 // applySessionChange reconciles a session-scoped value cell after a hint.

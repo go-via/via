@@ -312,8 +312,8 @@ func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = tru
 // WithoutDevChecks disables via's by-default runtime binding check. That check
 // runs once per composition descriptor (the cost amortizes to ~zero across
 // renders): after OnInit it verifies no bound state handle was orphaned by
-// replacing a child composition by value (p.Child = T{...}), which silently
-// zeroes the runtime's by-address binding and leaves the page rendering once
+// reassigning a child composition (p.Child = &T{...}), which silently
+// orphans the runtime's by-address binding and leaves the page rendering once
 // then going dead. It's on by default because that footgun is silent and
 // expensive to debug; opt out only if it ever false-positives in your build.
 //

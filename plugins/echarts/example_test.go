@@ -43,8 +43,8 @@ func Example() {
 	via.Mount[quickstartPage](app, "/")
 }
 
-// Self-host echarts.min.js — for air-gapped, offline, or strict-CSP
-// deployments where the default jsDelivr CDN can't be used.
+// Self-host echarts.min.js from your own static route instead of the
+// embedded build — e.g. to serve a custom or patched bundle.
 func ExamplePlugin_selfHosted() {
 	_ = echarts.Plugin(echarts.WithSource("/static/echarts.min.js"))
 }

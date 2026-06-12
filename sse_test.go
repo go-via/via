@@ -3,6 +3,7 @@ package via_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -181,4 +182,209 @@ func TestSSE_connectedTabSurvivesContextTTLWithoutHeartbeat(t *testing.T) {
 	require.Equal(t, http.StatusOK, tc.Action("Bump").Fire(),
 		"a connected tab must not be TTL-swept while its SSE stream is live")
 	vt.AwaitFrame(t, frames, 2*time.Second, ">1<")
+}
+
+type resyncPushPage struct {
+	Q via.Signal[int]
+}
+
+func (p *resyncPushPage) PushList(ctx *via.Ctx) error {
+	ctx.Patch().Elements(h.Ul(h.ID("results"), h.Li(h.Text("first"))))
+	return nil
+}
+
+func (p *resyncPushPage) PushNotice(ctx *via.Ctx) error {
+	ctx.Patch().Signal("_notice", "maintenance")
+	return nil
+}
+
+func (p *resyncPushPage) PushNoticeUpdate(ctx *via.Ctx) error {
+	ctx.Patch().Signal("_notice", "all-clear")
+	return nil
+}
+
+func (p *resyncPushPage) PushAll(ctx *via.Ctx) error {
+	ctx.Patch().Elements(h.Ul(h.ID("results"), h.Li(h.Text("first"))))
+	ctx.Patch().Signal("_notice", "maintenance")
+	ctx.ExecScript("console.log('queued-script')")
+	return nil
+}
+
+func (p *resyncPushPage) View(ctx *via.CtxR) h.H {
+	return h.Div(h.ID("root"), h.Text("hello"))
+}
+
+// failingSSEWriter is a minimal http.ResponseWriter whose failAt-th Write
+// (and every Write after) errors, simulating a peer that vanished mid-drain.
+// A stub is acceptable here: the network socket is a true system boundary
+// and an in-process httptest connection cannot be made to fail a server
+// write deterministically. It implements http.Flusher because datastar's
+// NewSSE panics when the response writer can't flush.
+type failingSSEWriter struct {
+	header http.Header
+	failAt int // 1-based index of the first failing Write call
+	calls  int
+}
+
+func (f *failingSSEWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = make(http.Header)
+	}
+	return f.header
+}
+
+func (f *failingSSEWriter) WriteHeader(int) {}
+
+func (f *failingSSEWriter) Write(p []byte) (int, error) {
+	f.calls++
+	if f.calls >= f.failAt {
+		return 0, errors.New("peer vanished")
+	}
+	return len(p), nil
+}
+
+func (f *failingSSEWriter) Flush() {}
+
+// openPage GETs path with a jar-carrying client and returns the tab id, so
+// follow-up requests on the same jar share the page's session.
+func openPage(t *testing.T, httpc *http.Client, serverURL, path string) string {
+	t.Helper()
+	resp, err := httpc.Get(serverURL + path)
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	tab := vt.TabIDFromHTML(string(body))
+	require.NotEmpty(t, tab, "rendered page must carry a via_tab id")
+	return tab
+}
+
+func fireAction(t *testing.T, httpc *http.Client, serverURL, tabID, action string) {
+	t.Helper()
+	resp, err := httpc.Post(serverURL+"/_action/"+action, "application/json",
+		strings.NewReader(`{"via_tab":"`+tabID+`"}`))
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// connectFailingSSE drives a full SSE handshake for tabID against a writer
+// whose failAt-th Write errors, then returns once the server-side stream
+// goroutine has exited.
+func connectFailingSSE(t *testing.T, app *via.App, httpc *http.Client, serverURL, tabID string, failAt int) {
+	t.Helper()
+	u, err := url.Parse(serverURL)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet,
+		serverURL+"/_sse?datastar="+url.QueryEscape(`{"via_tab":"`+tabID+`"}`), nil)
+	require.NoError(t, err)
+	for _, c := range httpc.Jar.Cookies(u) {
+		req.AddCookie(c)
+	}
+	app.ServeHTTP(&failingSSEWriter{failAt: failAt}, req)
+}
+
+func TestSSE_redeliversQueuedFrameAfterFailedWrite(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[resyncPushPage](app, "/rq")
+
+	httpc := jarClient(t)
+	tabID := openPage(t, httpc, server.URL, "/rq")
+	// No SSE stream is open yet, so the pushed element patch sits in the
+	// tab's queue waiting for the first connect to drain it.
+	fireAction(t, httpc, server.URL, tabID, "PushList")
+
+	connectFailingSSE(t, app, httpc, server.URL, tabID, 1)
+
+	status, frames, cancel := openRawSSE(t, httpc, server.URL, tabID, "")
+	defer cancel()
+	require.Equal(t, http.StatusOK, status)
+	vt.AwaitFrame(t, frames, 2*time.Second, `id="results"`, "first")
+}
+
+func TestSSE_retainsQueuedFramesWhenWriteFails(t *testing.T) {
+	t.Parallel()
+
+	// A drain writes elements, then signals, then scripts — one Write each.
+	tests := []struct {
+		name   string
+		failAt int
+	}{
+		{"first frame write fails", 1},
+		{"mid-drain write fails", 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			app := via.New()
+			server := vt.Serve(t, app)
+			via.Mount[resyncPushPage](app, "/rk")
+
+			httpc := jarClient(t)
+			tabID := openPage(t, httpc, server.URL, "/rk")
+			fireAction(t, httpc, server.URL, tabID, "PushAll")
+
+			connectFailingSSE(t, app, httpc, server.URL, tabID, tt.failAt)
+
+			status, frames, cancel := openRawSSE(t, httpc, server.URL, tabID, "")
+			defer cancel()
+			require.Equal(t, http.StatusOK, status)
+			vt.AwaitFrame(t, frames, 2*time.Second,
+				`id="results"`, `"_notice":"maintenance"`, "queued-script")
+		})
+	}
+}
+
+func TestSSE_reshipsServerPushedSignalsOnReconnect(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[resyncPushPage](app, "/rs")
+
+	tc := vt.NewClient(t, server, "/rs")
+	frames, cancel := tc.SSEReady()
+	require.Equal(t, http.StatusOK, tc.Action("PushNotice").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"_notice":"maintenance"`)
+	require.Equal(t, http.StatusOK, tc.Action("PushNoticeUpdate").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"_notice":"all-clear"`)
+	// Both pushes were fully delivered (queue is empty) before the drop —
+	// the client may still have missed them on the dying socket.
+	cancel()
+
+	frames2, cancel2 := tc.SSE()
+	defer cancel2()
+	body := vt.AwaitFrame(t, frames2, 2*time.Second,
+		`"_notice":"all-clear"`, "datastar-patch-elements")
+	assert.NotContains(t, body, "maintenance",
+		"the resync patch must coalesce last-value-wins per signal key")
+	assert.Less(t,
+		strings.Index(body, `"_notice"`), strings.Index(body, "datastar-patch-elements"),
+		"the coalesced signal patch must precede the view fragment so the morphed elements' bindings resolve")
+}
+
+func TestSSE_doesNotClobberClientOnlySignalsOnResync(t *testing.T) {
+	t.Parallel()
+
+	app := via.New()
+	server := vt.Serve(t, app)
+	via.Mount[resyncPushPage](app, "/rc")
+
+	tc := vt.NewClient(t, server, "/rc")
+	frames, cancel := tc.SSEReady()
+	require.Equal(t, http.StatusOK, tc.Action("PushNotice").Fire())
+	vt.AwaitFrame(t, frames, 2*time.Second, `"_notice":"maintenance"`)
+	cancel()
+
+	frames2, cancel2 := tc.SSE()
+	defer cancel2()
+	body := vt.AwaitFrame(t, frames2, 2*time.Second,
+		`"_notice":"maintenance"`, "datastar-patch-elements")
+	assert.NotContains(t, body, `"q"`,
+		"a signal the server never pushed must not be re-seeded on resync")
+	assert.NotContains(t, body, "via_tab",
+		"resync must never re-seed via_tab")
 }

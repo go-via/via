@@ -171,6 +171,31 @@ func TestCSP_nonceIsBase64URLAndFreshPerRequest(t *testing.T) {
 	assert.NotEqual(t, n, nonceOf(), "each request must get a fresh nonce")
 }
 
+func TestCSP_defaultPolicyIncludesUnsafeEval(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	mw.CSP()(rec, httptest.NewRequest("GET", "/", nil),
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	assert.Regexp(t,
+		`script-src 'self' 'nonce-[A-Za-z0-9_-]+' 'unsafe-eval'`,
+		rec.Header().Get("Content-Security-Policy"),
+		"the bundled Datastar runtime compiles data-* expressions via "+
+			"Function(), which CSP gates behind 'unsafe-eval' in script-src")
+}
+
+func TestCSP_setsFrameAncestorsSelf(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	mw.CSP()(rec, httptest.NewRequest("GET", "/", nil),
+		http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	assert.Contains(t, rec.Header().Get("Content-Security-Policy"),
+		"frame-ancestors 'self'")
+}
+
 func TestCSP_extraDirectivesAppended(t *testing.T) {
 	t.Parallel()
 
