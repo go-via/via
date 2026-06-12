@@ -71,3 +71,33 @@ jobs:
       - name: Run CI checks
         if: steps.changes.outputs.code == 'true'
         run: bash ./ci-check.sh
+
+  browser-test:
+    name: Browser Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+          cache: true
+
+      - name: Install Chromium
+        # ubuntu-latest runners ship Google Chrome preinstalled; install
+        # Chromium only when no browser is present so the job stays fast
+        # on hosted runners but still works on bare self-hosted ones.
+        run: |
+          if ! command -v google-chrome >/dev/null 2>&1 \
+            && ! command -v chromium >/dev/null 2>&1 \
+            && ! command -v chromium-browser >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y chromium-browser
+          fi
+
+      - name: Run browser checks
+        # ci-check.sh sets VIA_BROWSER_REQUIRED=1 for this run, so a
+        # missing browser fails the job instead of silently skipping.
+        run: bash ./ci-check.sh --browser
