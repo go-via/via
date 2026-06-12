@@ -26,6 +26,36 @@ lock-guarded against concurrent appends after the server starts.
 Plugin packages expose `Plugin(...)` as the canonical constructor (never
 `New(...)`) so `via.WithPlugins(...)` call sites stay uniform.
 
+## Asset delivery
+
+The bundled plugins **embed their pinned client builds** with `go:embed` and
+serve them from a content-hashed, immutably-cached same-origin path. Plugin
+registration does **zero network I/O** — there is no boot-time CDN fetch, no
+third-party origin in the page, and an air-gapped or offline deploy works out
+of the box. The embedded version is fixed; `WithVersion(v)` only guards the
+pin (restating the embedded version is a no-op; any other version panics,
+because there is no embedded asset or SRI hash to back it).
+
+Two opt-outs, on the `echarts` and `maplibre` plugins (Pico ships only the
+embedded build):
+
+- **`WithSource(url)`** — serve the script from a **same-origin** path you
+  host yourself (a custom build or internal mirror). Cross-origin URLs are
+  rejected; use `WithCDN` for those.
+- **`WithCDN(url, integrity)`** — load from a CDN. The `integrity` SRI hash
+  (`sha256-`/`sha384-`/`sha512-` + base64 digest of that exact body) is
+  **mandatory** — the emitted `<script>` carries it plus
+  `crossorigin="anonymous"`, so a tampered response is refused by the
+  browser. There is no way to opt out of SRI; a version bump means supplying
+  the new build's hash. MapLibre also has `WithCDNStylesheet(url, integrity)`.
+
+```go
+echarts.Plugin(echarts.WithCDN(
+    "https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js",
+    "sha384-…",
+))
+```
+
 ## Bundled plugins
 
 ### picocss
