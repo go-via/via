@@ -344,9 +344,7 @@ func clearDrained(q *patchQueue, autoElems, userElems string, signals map[string
 	if q.autoElements == autoElems {
 		q.autoElements = ""
 	}
-	if strings.HasPrefix(q.elements, userElems) {
-		q.elements = q.elements[len(userElems):]
-	}
+	q.elements = strings.TrimPrefix(q.elements, userElems)
 	for k, v := range signals {
 		if cur, ok := q.signals[k]; ok && reflect.DeepEqual(cur, v) {
 			delete(q.signals, k)

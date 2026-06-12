@@ -104,7 +104,6 @@ func (a *App) tailLoop(t tailer) {
 			}
 			continue
 		}
-		attempt = 0
 		m.Gauge("via.backplane.tailer_up", 1, "feed", t.feed)
 		if connected {
 			m.Counter("via.backplane.tailer_reconnect", "feed", t.feed)

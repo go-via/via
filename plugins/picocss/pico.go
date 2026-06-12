@@ -41,9 +41,8 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// pinnedVersion is the vendored Pico CSS release; refresh_assets.sh must
-// be re-run (and the embedded files re-vendored) whenever it changes.
-const pinnedVersion = "2.1.1"
+// Vendored Pico CSS release: 2.1.1. refresh_assets.sh must be re-run (and
+// the embedded files re-vendored) whenever it changes.
 
 const (
 	pluginPathPrefix = "/_plugins/picocss/"

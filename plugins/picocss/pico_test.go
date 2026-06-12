@@ -46,7 +46,7 @@ func (rt refusingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return nil, http.ErrUseLastResponse
 }
 
-func TestPicoPlugin_registersWithoutNetwork(t *testing.T) {
+func TestPicoPlugin_registersWithoutNetwork(t *testing.T) { //nolint:paralleltest // mutates global http.DefaultTransport
 	// Mutates http.DefaultTransport, so this test must not be parallel.
 	orig := http.DefaultTransport
 	http.DefaultTransport = refusingTransport{t: t}
