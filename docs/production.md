@@ -52,6 +52,28 @@ behaviour. Common production knobs:
 - `WithMaxRequestBody(n)`, `WithSessionTTL(d)`, `WithContextTTL(d)`
 - `WithSSEHeartbeat(d)`, `WithReadHeaderTimeout(d)`, `WithIdleTimeout(d)`
 - `WithActionErrorHandler(fn)`, `WithNotFound(h)`, `WithHTTPServer(hook)`
+- `WithMaxSessions(n)` — bound the live session map (a sibling of
+  `WithMaxContexts`); a flood of fresh visitors can't grow it without limit
+- `WithMaxUploadSize(n)` / `WithRequestTooLarge(h)` — see Security defaults
+- Diagnostic knobs (`EXPERIMENTAL:`): `WithStrictDecode()` rejects lossy
+  client-signal decodes instead of silently coercing; `WithVerboseErrors()`
+  surfaces the real panic message to the client (dev only — leaks internals);
+  dev-only composition checks (by-value child-clobber detection) are **on by
+  default** and disabled in production with `WithoutDevChecks()`
+
+## Health & readiness probes
+
+Via serves `GET /livez`, `/healthz`, and `/readyz` by default — **before** the
+session and middleware chain, so a frequent probe never mints a session or
+logs a request:
+
+- `/livez`, `/healthz` — `200` while the process is up (liveness).
+- `/readyz` — `200` normally; flips to `503` the moment `Shutdown` begins
+  draining, so a load balancer pulls the pod out of rotation *before* its
+  in-flight SSE streams are torn down on deploy.
+
+Disable all three with `WithoutHealthEndpoints()` (e.g. to serve your own at
+those paths).
 
 ## Security defaults
 
@@ -155,8 +177,13 @@ app.LiveTabs()
 ```
 
 `Broadcast` queues a JS snippet on every live tab; `BroadcastSignals` queues
-a signal patch. Both return the tab count they reached and deliver via the
-existing patch queue + SSE drain — no extra wiring. Single-process only.
+a signal patch. Both return **this pod's** reached-tab count and deliver via
+the existing patch queue + SSE drain — no extra wiring. With a
+[backplane](distributed-state) wired (`WithBackplane`), the whole
+`Broadcast*` family — `Broadcast`, `BroadcastNotify`, `BroadcastSignals`,
+`BroadcastSignal[T]` — fans out to live tabs on **every pod**; without one it
+stays pod-local. (The cross-pod path is `EXPERIMENTAL:` — see
+[API stability](stability); the single-pod behavior is stable.)
 
 ## Horizontal scaling & affinity
 

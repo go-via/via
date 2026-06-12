@@ -14,7 +14,7 @@ Entry format:
 
 Entries are grouped newest-first under the release that ships them.
 
-## Unreleased
+## v0.7.0
 
 ### `NumOps.Min` / `NumOps.Max` removed — use `AtLeast` / `AtMost` / `Clamp`
 

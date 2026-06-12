@@ -72,46 +72,63 @@ executes. A green `vt` test is necessary, not sufficient. In particular:
   structure, and a needle can match a stale frame.
 
 For behaviour that depends on the Datastar client — local signals, key
-filters, reconnect/retry, multi-tab cookie races — verify in a real browser.
-That harness now ships in the repo (see below) and is the anchor for the
-client-side guarantees `vt` cannot reach.
+filters, reconnect/retry, multi-tab cookie races — verify in a real browser
+with the `vtbrowser` harness (below), the anchor for the client-side
+guarantees `vt` cannot reach.
 
-## Browser testing
+## Browser testing (`vtbrowser`)
 
-The real-browser end-to-end tests live in `internal/browsertest` and drive a
-headless **Chromium** via [`chromedp`](https://github.com/chromedp/chromedp)
-against a `vt.Serve` URL. They prove the client-side Datastar story `vt`
-cannot — signal binding, debounce, key filters, and **SSE→DOM patching** — by
-asserting against a live DOM with Datastar executing, not raw frame text.
+The `vtbrowser` harness drives a via `App` in a real headless
+**Chrome/Chromium** via [`chromedp`](https://github.com/chromedp/chromedp),
+asserting against a live DOM with Datastar executing — not raw frame text. It
+covers what the DOM-less `vt` harness structurally cannot: Datastar
+expression evaluation, **SSE→DOM morph patching**, focus preservation across
+a patch, the reconnect-banner lifecycle, and behaviour under `mw.CSP()`.
 
-The anchor test (`TestBrowserSignalBindAndSSEPatch`) covers both halves:
+It lives in **its own Go module** (`vtbrowser/`, separate `go.mod`) so the
+heavyweight `chromedp` dependency never touches the core module's graph.
 
-- a `SignalNum` bound to an `<input>` whose mirror span updates **client-side
-  only**, with no server round-trip, and
-- an `on.Click` action whose `StateTab` update is **patched back over SSE**
-  and applied to the DOM by Datastar.
+```go
+import "github.com/go-via/via/vtbrowser"
 
-### Build tag — out of CI by design
+func TestClick(t *testing.T) {
+    app := via.New(via.WithInsecureCookies()) // httptest serves plain http
+    via.Mount[Counter](app, "/")
+    s := vtbrowser.Open(t, app) // starts httptest server + headless browser
 
-The tests are gated behind `//go:build browser`. The default
-`go build/vet/test ./...`, `golangci-lint`, and the `ci-check.sh` gate never
-compile or run them — under default tags the package is empty. This is
-**intentional**: GitHub Actions ("Build and Test") has no headless browser, so
-wiring these into CI would break it. The `chromedp` dependency only loads when
-the `browser` tag is set.
+    s.WaitText("#count", "0")
+    s.Click("#inc")
+    s.WaitText("#count", "1")
+    assert.Empty(t, s.ConsoleErrors()) // a clean DOM with a broken console is not a pass
+}
+```
+
+Session helpers: `Click`, `Type`, `WaitText` (polls — absorbs SSE latency
+without sleeps), `Eval` (escape hatch for focus/attr/value asserts),
+`SetOffline` (CDP network emulation for outage tests), `Server()` (the
+underlying `*httptest.Server`, e.g. `CloseClientConnections()` to drop a live
+SSE stream), and `ConsoleErrors()` (every `console.error` + uncaught
+exception — every test asserts it's empty).
+
+### Skips without a browser; CI cannot
+
+`Open` resolves a browser binary on `PATH` (`chrome`, `chromium`,
+`chromium-browser`, `google-chrome`, `headless-shell`). With none found it
+**skips**, so a checkout without Chrome stays green — *unless*
+`VIA_BROWSER_REQUIRED=1`, which turns the skip into a hard failure so CI
+cannot silently pass an unrun suite.
 
 ### Running locally
 
-You need a Chromium/Chrome binary. Then:
-
 ```sh
-go test -tags browser ./internal/browsertest/... -v
+cd vtbrowser && go test -race ./...
+# or, the way CI runs it (skip becomes failure):
+./ci-check.sh --browser
 ```
 
-The chrome binary is resolved from `$CHROME_PATH`, falling back to common
-locations (`/usr/bin/chromium`, `/usr/bin/chromium-browser`,
-`/usr/bin/google-chrome`). If none is found the test `t.Skip`s, so a checkout
-without Chrome doesn't hard-fail even when run with `-tags browser`.
+CI runs `vtbrowser` in a dedicated job with Chromium installed; the default
+`go test ./...` over the core module never reaches it (it's a separate
+module).
 
 ## Conventions
 

@@ -47,6 +47,49 @@ func (c *editor) View(ctx *via.CtxR) h.H {
 // cookie must ride it for the SSE stream to authorise.
 func newApp() *via.App { return via.New(via.WithInsecureCookies()) }
 
+// bindPage drives the three reactive binding helpers off signals that start
+// truthy via init tags, so the bindings must take effect on first paint.
+type bindPage struct {
+	On  via.SignalBool     `via:"on,init=true"`
+	Hue via.Signal[string] `via:"hue,init=tomato"`
+}
+
+func (p *bindPage) View(ctx *via.CtxR) h.H {
+	return h.Main(h.ID("root"),
+		h.Button(h.ID("target"), h.Text("x"), p.On.Attr("disabled"), p.On.Class("active")),
+		h.Span(h.ID("styled"), p.Hue.Style("color"), h.Text("hue")),
+	)
+}
+
+// Signal.Attr/Class/Style emit Datastar attribute bindings. The DOM-less vt
+// harness only sees the rendered attribute string, so a wrong attribute syntax
+// (e.g. the hyphen form data-attr-disabled, which Datastar silently ignores)
+// renders fine yet does nothing. This drives the bindings in a real browser and
+// asserts they ACTUALLY apply — the regression guard for the colon-syntax fix.
+func TestBrowser_signalAttrClassStyleApply(t *testing.T) {
+	app := newApp()
+	via.Mount[bindPage](app, "/")
+	s := vtbrowser.Open(t, app)
+
+	// Datastar applies the bindings on ready; poll until the attr binding lands.
+	disabled := func() bool {
+		var v bool
+		s.Eval(`document.getElementById('target').hasAttribute('disabled')`, &v)
+		return v
+	}
+	require.Eventually(t, disabled, 15*time.Second, 50*time.Millisecond,
+		`Signal.Attr("disabled") never applied — Datastar ignored the binding`)
+
+	var hasActive bool
+	var color string
+	s.Eval(`document.getElementById('target').classList.contains('active')`, &hasActive)
+	s.Eval(`getComputedStyle(document.getElementById('styled')).color`, &color)
+	assert.True(t, hasActive, `Signal.Class("active") did not apply`)
+	assert.Equal(t, "rgb(255, 99, 71)", color, // tomato
+		`Signal.Style("color") did not apply`)
+	assert.Empty(t, s.ConsoleErrors())
+}
+
 func TestBrowser_clickIncrementsCounter(t *testing.T) {
 	app := newApp()
 	via.Mount[counter](app, "/")
