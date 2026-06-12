@@ -89,7 +89,7 @@ import "github.com/go-via/via/mw"
 
 app := via.New()
 mw.Defaults(app)                // RequestID + AccessLog + Recover
-app.Use(mw.CSP())               // strict CSP with per-request nonce
+app.Use(mw.CSP())               // CSP with per-request nonce
 app.Use(requireAuth)            // your own
 ```
 
@@ -102,7 +102,9 @@ Factories under `via/mw`:
   (CWE-117).
 - `mw.Recover(app)` — panic → 500 + error log (same CR/LF scrub); the
   goroutine survives.
-- `mw.CSP(extra…)` — strict CSP header + nonce on `r.Context`.
+- `mw.CSP(extra…)` — CSP header + nonce on `r.Context`; includes
+  `'unsafe-eval'`, which the bundled runtime requires (see
+  [production](production)).
 - `mw.HSTS(opts…)` — Strict-Transport-Security for HTTPS deploys.
 - `mw.RedirectHTTPS()` — 301 plain HTTP → https; trusts `X-Forwarded-Proto`
   (use behind a TLS-terminating proxy).

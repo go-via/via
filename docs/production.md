@@ -62,8 +62,18 @@ behaviour. Common production knobs:
   256-bit, and `Secure` by default; `WithInsecureCookies()` drops `Secure`
   for a local http:// dev loop. After auth-state changes call
   `sess.Rotate(ctx)` (session-fixation defence).
-- **CSP:** `mw.CSP()` emits a strict header with a per-request nonce
-  reachable via `ctx.CSPNonce()`.
+- **CSP:** `mw.CSP()` emits `default-src 'self'; script-src 'self'
+  'nonce-X' 'unsafe-eval'; object-src 'none'; base-uri 'self';
+  frame-ancestors 'self'`, with the per-request nonce reachable via
+  `ctx.CSPNonce()`. The `'unsafe-eval'` keyword is required: Via's
+  bundled Datastar runtime compiles every `data-*` expression and
+  event handler with `Function()`, which CSP gates behind it. In this
+  policy it only authorizes eval inside script the policy already
+  admitted (same-origin files and nonce-carrying tags) — inline
+  injection stays nonce-gated. A policy without `'unsafe-eval'` makes
+  every click throw `EvalError`; clicks under the default policy are
+  proven in a real browser.
+  <!-- proof: TestBrowser_clickFiresUnderDefaultCSPPolicy -->
 - **Body limits:** `WithMaxRequestBody(n)` (default 1 MiB) caps action POST
   and SSE-close bodies; `WithMaxUploadSize(n)` (default 32 MiB) caps
   `multipart/form-data` bodies. Either overflow returns 413; customise it

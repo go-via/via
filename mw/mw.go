@@ -119,9 +119,19 @@ func Recover(a *via.App) via.Middleware {
 }
 
 // CSP returns a [via.Middleware] that generates a fresh nonce per
-// request, sets a strict Content-Security-Policy header that allows
-// only same-origin scripts plus that nonce, and threads the nonce
-// through r.Context so [via.Ctx.CSPNonce] returns the matching value.
+// request, sets a Content-Security-Policy header that allows only
+// same-origin scripts plus that nonce, and threads the nonce through
+// r.Context so [via.Ctx.CSPNonce] returns the matching value.
+//
+// The policy includes 'unsafe-eval' because Via's bundled Datastar
+// runtime compiles every data-* expression and event handler with
+// Function() at runtime, which CSP gates behind that keyword. In this
+// policy 'unsafe-eval' only authorizes eval/Function inside script the
+// policy has already admitted — same-origin files and nonce-carrying
+// tags. It does not re-enable inline script injection: inline tags
+// without the per-request nonce stay blocked. Omitting the keyword is
+// not a hardening option today; it makes every handler throw
+// EvalError on first use (see docs/troubleshooting.md).
 //
 // Wire it up as the very first middleware so the header lands on
 // every response, including 404s and SSE handshakes:
@@ -133,7 +143,8 @@ func Recover(a *via.App) via.Middleware {
 //	app.Use(mw.CSP("img-src 'self' data:"))
 //
 // The default policy is `default-src 'self'; script-src 'self'
-// 'nonce-XYZ'; object-src 'none'; base-uri 'self'`.
+// 'nonce-XYZ' 'unsafe-eval'; object-src 'none'; base-uri 'self';
+// frame-ancestors 'self'`.
 func CSP(extra ...string) via.Middleware {
 	tail := ""
 	for _, d := range extra {
@@ -142,8 +153,8 @@ func CSP(extra ...string) via.Middleware {
 	return func(w http.ResponseWriter, r *http.Request, next http.Handler) {
 		n := randID()
 		w.Header().Set("Content-Security-Policy",
-			"default-src 'self'; script-src 'self' 'nonce-"+n+"'; "+
-				"object-src 'none'; base-uri 'self'"+tail)
+			"default-src 'self'; script-src 'self' 'nonce-"+n+"' 'unsafe-eval'; "+
+				"object-src 'none'; base-uri 'self'; frame-ancestors 'self'"+tail)
 
 		next.ServeHTTP(w, via.RequestWithCSPNonce(r, n))
 	}

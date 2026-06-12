@@ -27,6 +27,20 @@ app := via.New(via.WithInsecureCookies())
 
 Never ship `WithInsecureCookies()` to production — it drops the `Secure` flag.
 
+## `EvalError: Refused to evaluate a string as JavaScript`
+
+**Cause:** a Content-Security-Policy whose `script-src` lacks
+`'unsafe-eval'`. Via's bundled Datastar runtime compiles every
+`data-*` expression and event handler with `Function()`, which CSP
+gates behind that keyword — without it every click and binding throws
+this error.
+
+**Fix:** use `mw.CSP()`, whose default policy includes
+`'unsafe-eval'`, or add the keyword to your own policy's
+`script-src`. The keyword is bounded here: it authorizes eval only
+inside script the policy already admitted (same-origin files and
+nonce-carrying tags); inline script injection stays nonce-gated.
+
 ## The tab shows stale state / resets after a redeploy
 
 **Cause:** a tab's state lives in memory on the server and does not survive a
