@@ -36,7 +36,8 @@ symbol's contract.
 ## Composition
 
 - `h.Fragment(items...)` — bundle many nodes into one `h.H`. Pass a
-  slice with `items...`.
+  slice with `items...`. Content nodes only: an attribute argument
+  panics at construction (a fragment has no tag to receive it).
 - `h.With(base, more...)` — return a copy of `base` extended with
   `more`. Non-destructive; supports chaining without variadic
   signatures.

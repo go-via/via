@@ -79,10 +79,19 @@ func walkStruct(d *cmpDescriptor, typ reflect.Type, indexPath []int, pathPrefix 
 			})
 		case roleChild:
 			child := f.Type
-			if child.Kind() == reflect.Pointer {
-				child = child.Elem()
+			if child.Kind() != reflect.Pointer {
+				// A by-value child binds its handles at the field's address; any
+				// later struct reassignment (p.Child = T{...}) silently orphans
+				// that binding and client updates go dead. Reject the shape at
+				// Mount so the class is unrepresentable.
+				panic(fmt.Sprintf(
+					"via.Mount(%s): child composition field %s.%s is held by value — "+
+						"the runtime binds reactive handles by address, and a by-value "+
+						"child silently loses those bindings when the struct is "+
+						"reassigned; declare the child as a pointer: `%s *%s`",
+					d.typ, typ.Name(), f.Name, f.Name, child.Name()))
 			}
-			walkStruct(d, child, fieldPath, qualify(pathPrefix, f.Name))
+			walkStruct(d, child.Elem(), fieldPath, qualify(pathPrefix, f.Name))
 		}
 	}
 }

@@ -61,7 +61,8 @@ func (e *element) Render(w io.Writer) error {
 
 // renderAttrs walks the children once and emits every attribute node.
 // Groups are descended recursively so attributes nested inside Each /
-// Fragment still surface in the opening tag.
+// With-built groups still surface in the opening tag (Fragment rejects
+// attribute arguments at construction).
 func renderAttrs(w io.Writer, children []H) error {
 	for _, c := range children {
 		if c == nil {

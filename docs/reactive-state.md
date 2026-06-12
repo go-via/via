@@ -81,7 +81,7 @@ or non-bucket `T` (structs, interfaces).
 
 | Field type | Common verbs |
 |---|---|
-| `via.StateTabNum[int]` | `Add(n) / Sub(n) / Inc() / Dec() / Zero() / Min(lo) / Max(hi)` |
+| `via.StateTabNum[int]` | `Add(n) / Sub(n) / Inc() / Dec() / Zero() / AtLeast(lo) / AtMost(hi) / Clamp(lo, hi)` |
 | `via.SignalBool` | `Toggle() / True() / False()` |
 | `via.StateSessStr` | `Append(s) / Prepend(s) / Clear()` |
 | `via.SignalSlice[T]` | `Append(v) / Prepend(v) / Pop() / Shift() / Take(n) / Drop(n) / Filter(pred) / Empty()` |

@@ -201,10 +201,11 @@ func bindSlots(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) {
 }
 
 // validateBindings re-walks the bound signal handles after OnInit and returns
-// an error if any was orphaned — the dominant cause being a by-value child
-// reassignment in OnInit (p.Child = Card{...}), which overwrites the field with
-// an unbound copy whose wire key is empty while the runtime still references the
-// orphaned memory. bindSlot set each live handle's key to its wire key; a
+// an error if any was orphaned — the dominant cause being a child-pointer
+// reassignment in OnInit (p.Child = &Card{...}), which swaps in an unbound
+// struct whose wire key is empty while the runtime still references the
+// orphaned memory. (By-value children, the other variant of this class, are
+// rejected at Mount.) bindSlot set each live handle's key to its wire key; a
 // post-OnInit key that no longer matches proves the binding was lost. Dev-only
 // (WithDevChecks) because it costs a reflective re-walk per render.
 func validateBindings(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) error {
@@ -219,10 +220,10 @@ func validateBindings(ctx *Ctx, cmpVal reflect.Value, d *cmpDescriptor) error {
 		}
 		if keyer.Key() != s.wireKey {
 			return fmt.Errorf("via: state binding for %q (field path %v) was lost — "+
-				"a child composition was replaced by value in OnInit "+
-				"(p.Child = T{...}), which zeroes the runtime's by-address handle "+
+				"a child composition was reassigned in OnInit "+
+				"(p.Child = &T{...}), which orphans the runtime's by-address handle "+
 				"binding. Seed state in place instead (e.g. p.Child.Field.Write(ctx, v)); "+
-				"never reassign a child struct by value", s.wireKey, s.fieldPath)
+				"never reassign a child struct", s.wireKey, s.fieldPath)
 		}
 	}
 	return nil

@@ -18,9 +18,11 @@ single-composition case. This page is about putting compositions
 
 ## Nesting
 
-A child composition is an exported struct field whose pointer type has a
-`View` method. `Mount` discovers it by reflection and folds its state into
-the page — you never register a child separately.
+A child composition is an exported pointer field to a struct that has a
+`View` method. `Mount` discovers it by reflection, allocates it, and folds
+its state into the page — you never register a child separately. The
+pointer is mandatory: the runtime binds each handle by address, so `Mount`
+panics on a child held by value.
 
 ```go
 type CounterCard struct {
@@ -29,8 +31,8 @@ type CounterCard struct {
 }
 
 type Page struct {
-    A CounterCard
-    B CounterCard
+    A *CounterCard
+    B *CounterCard
 }
 ```
 
@@ -103,13 +105,13 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 ```
 
 {: .warning }
-Seed state in place; never replace a child by value
-(`p.A = CounterCard{…}`). The runtime binds each handle's slot and wire key
-*by address*, before `OnInit` runs — assigning a fresh struct silently
-zeroes that binding. The seeded value still paints once, which makes the bug
-look harmless, but client bindings (`Text`, `Bind`, `Show`, `Attr`) go dead
-and later updates mis-route. Set fields individually and seed handles with
-`.Write(ctx, …)`.
+Seed state in place; never reassign a child
+(`p.A = &CounterCard{…}`). The runtime binds each handle's slot and wire key
+*by address*, before `OnInit` runs — swapping in a fresh struct silently
+orphans that binding. The seeded value still paints once, which makes the
+bug look harmless, but client bindings (`Text`, `Bind`, `Show`, `Attr`) go
+dead and later updates mis-route. The default dev check fails such a render
+loudly. Set fields individually and seed handles with `.Write(ctx, …)`.
 
 ## Events (child → parent)
 

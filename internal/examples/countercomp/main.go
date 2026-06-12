@@ -36,9 +36,13 @@ func (c *CounterCard) View(ctx *via.CtxR, onClick h.H) h.H {
 	)
 }
 
+// Children are declared as pointers — Mount rejects by-value children
+// because their handle bindings break if the struct is ever reassigned.
+// The runtime allocates each child when it binds the tree, so the nil
+// pointers need no seeding.
 type Page struct {
-	A CounterCard
-	B CounterCard
+	A *CounterCard
+	B *CounterCard
 }
 
 func (p *Page) IncA(ctx *via.Ctx) { p.A.Inc(ctx) }

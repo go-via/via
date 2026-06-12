@@ -2,8 +2,10 @@ package h
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"iter"
+	"strings"
 )
 
 // group is the multi-node container. It implements [H] so it can stand
@@ -34,11 +36,32 @@ func (g group) Render(w io.Writer) error {
 //	return Fragment(H2(T("title")), Hr())
 //	return Fragment(items...)
 //
+// Attribute arguments (ID, Class, on.*, …) panic at construction: a
+// fragment has no opening tag to put them in, so they were previously
+// dropped without a trace — a programming mistake better caught where
+// the bad call is written.
+//
 // The returned node aliases items — there is no defensive copy.
 // Callers must not mutate items after handing it to Fragment.
 func Fragment(items ...H) H {
 	if len(items) == 0 {
 		return nil
+	}
+	for i, it := range items {
+		a, ok := it.(attribute)
+		if !ok {
+			continue
+		}
+		// Render the offending attribute into the panic so the message
+		// names it — the argument index alone is weak triage for
+		// Fragment(items...) call sites.
+		var buf bytes.Buffer
+		_ = a.Render(&buf)
+		panic(fmt.Sprintf(
+			"h.Fragment: argument %d is an attribute (%s) — a fragment has "+
+				"no opening tag to receive it, so it would be silently "+
+				"dropped; attach the attribute to the enclosing element "+
+				"instead", i+1, strings.TrimSpace(buf.String())))
 	}
 	return group(items)
 }
@@ -261,11 +284,11 @@ func Static(n H) H {
 //	h.With(Card(myBody), on.Click(open))
 //
 // When base is not an *element (text, group, attribute, raw
-// fragment, …) With falls back to a Fragment so the result still
+// fragment, …) With falls back to a plain group so the result still
 // renders the base followed by more. In that fallback path, attribute
-// children bubble to the wrapping element via Fragment semantics (the
-// renderer skips attribute fragments at the group top level and the
-// parent element consumes them); they do not attach to base itself.
+// children bubble to the wrapping element via group semantics (the
+// renderer skips attributes at the group top level and the parent
+// element consumes them); they do not attach to base itself.
 func With(base H, more ...H) H {
 	if len(more) == 0 {
 		return base
