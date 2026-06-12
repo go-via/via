@@ -47,6 +47,15 @@ package via
 //   - "via.snapshot.unbridgeable"  counter, labels: key — compacted snapshot, no migration; halted
 //   - "via.snapshot.erasure_halt"  counter, labels: key — compacted snapshot invalidated by erasure; halted
 //
+// Backplane tailers (the shared changes and broadcast feeds, plus each
+// StateAppEvents projector), labelled by feed — "changes", "broadcast", or
+// "projector:<key>":
+//   - "via.backplane.tailer_reconnect"  counter — a tailer re-established its
+//     subscription after a transient disconnect or failed subscribe attempt
+//     (emitted once the fresh subscription is live)
+//   - "via.backplane.tailer_up"         gauge 0/1 — whether the tailer
+//     currently holds a live subscription
+//
 // Side-effect consumers (OnEvent), all labelled by name, key:
 //   - "via.consumer.forward_incompatible"  counter — record from a newer binary
 //   - "via.consumer.erased"                counter — erased payload, skipped

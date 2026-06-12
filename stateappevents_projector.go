@@ -1,14 +1,9 @@
 package via
 
 import (
+	"context"
 	"sync"
-	"time"
 )
-
-// reconnectBackoff paces a projector's re-subscribe after a transient
-// disconnect, so a backend that is briefly unavailable cannot spin the
-// reconnect loop hot.
-const reconnectBackoff = 10 * time.Millisecond
 
 // logState is the per-(pod,key) projector state for one StateAppEvents key: the
 // cached projection plus the type-erased fold captured from the typed handle at
@@ -75,58 +70,37 @@ func (a *App) registerLog(key string, seed any, fold func(any, []byte) (any, err
 
 // startProjector tails the backplane for key and folds every record into the
 // cached projection in offset order, then fans a re-render out to this pod's
-// subscribed tabs. It is the SOLE fold path (T1-SRE-2): Append never folds. The
-// goroutine exits when the Subscribe channel closes (backplane Close on
-// Shutdown).
+// subscribed tabs. It is the SOLE fold path (T1-SRE-2): Append never folds.
+// Runs on tailLoop (the loop was extracted from here): a transient disconnect
+// re-subscribes strictly after what was folded, so the stateful projection is
+// gap-free across blips.
 func (a *App) startProjector(key string, ls *logState) {
 	from := a.coldStartFrom(ls, key)
-	a.bgWG.Add(1)
-	go func() {
-		defer a.bgWG.Done()
-		// Reconnect loop: each Subscribe tails until its channel closes. A close
-		// while the app is still running is a TRANSIENT disconnect (the backend
-		// dropped the consumer, the stream survives) — re-subscribe from the
-		// cursor and rehydrate. A close during Shutdown (backplaneDone) or an
-		// ErrClosed is a graceful stop — exit. Otherwise one network blip would
-		// strand the key forever.
-		for {
-			ch, err := a.backplane.Subscribe(a.backplaneCtx, key, from)
-			if err != nil {
-				a.logWarn(nil, "via: backplane subscribe failed for projector key %q: %v", key, err)
-				return // ErrClosed (or unrecoverable) → stop
-			}
-			// Range the channel, but also wake on backplaneDone so teardown is
-			// prompt even against a backend that does not close the channel on
-			// ctx cancel. On a graceful stop we exit immediately; the inmemory
-			// backend still closes ch so its sender never blocks.
-			halted := false
-			for {
-				select {
-				case rec, ok := <-ch:
-					if !ok {
-						halted = true
-					} else if a.applyRecord(ls, key, rec) {
-						// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
-						a.broadcastRender(nil, nil, key)
-						a.emitFoldDigest(ls, key)
-						a.maybeSnapshot(ls, key)
-					}
-				case <-a.backplaneDone:
-					return // graceful stop: don't wait for a slow backend to close ch
-				}
-				if halted {
-					break
-				}
-			}
-			if a.shuttingDown() {
-				return
+	first := true
+	a.startTailer(tailer{
+		feed: "projector:" + key,
+		key:  key,
+		// The first connect resumes at the cold-start seed (the snapshot's
+		// covered offset, which can sit past the cursor on a halted key);
+		// every reconnect resumes at the fold cursor.
+		resumeFrom: func(context.Context) (Offset, error) {
+			if first {
+				first = false
+				return from, nil
 			}
 			ls.mu.RLock()
-			from = ls.cursor // resume strictly after what we have folded
-			ls.mu.RUnlock()
-			time.Sleep(reconnectBackoff)
-		}
-	}()
+			defer ls.mu.RUnlock()
+			return ls.cursor, nil
+		},
+		onRecord: func(rec Record) {
+			if a.applyRecord(ls, key, rec) {
+				// skip=nil: the projector holds no action ctx. sess=nil: app-wide.
+				a.broadcastRender(nil, nil, key)
+				a.emitFoldDigest(ls, key)
+				a.maybeSnapshot(ls, key)
+			}
+		},
+	})
 }
 
 // shuttingDown reports whether Shutdown has begun (backplaneDone closed), so a
