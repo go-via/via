@@ -80,13 +80,22 @@
 //   - Resize / Clear / Dispose: layout recompute, blank canvas, full
 //     teardown (call Dispose on SPA unmount to avoid leaks).
 //
-// # Self-hosting and version pinning
+// # Asset delivery
 //
-//	echarts.Plugin(echarts.WithSource("/static/echarts.min.js"))
-//	echarts.Plugin(echarts.WithVersion("5.4.3"))  // pin a CDN version
+// The echarts build ships embedded in the binary (vendored from the
+// pinned release), served at a content-hashed /via/assets/echarts/
+// path with immutable cache headers — registration does no network I/O
+// and pages reference no third-party origin by default.
 //
-// WithSource overrides WithVersion entirely (the full URL is taken
-// from the source option).
+//	echarts.Plugin(echarts.WithSource("/static/echarts.min.js")) // self-host
+//	echarts.Plugin(echarts.WithCDN(                              // CDN opt-in
+//	    "https://cdn.jsdelivr.net/npm/echarts@6.0.0/dist/echarts.min.js",
+//	    "sha384-…")) // SRI integrity is mandatory
+//
+// WithCDN requires a well-formed integrity hash for the exact build at
+// that URL; the emitted tag carries integrity + crossorigin="anonymous".
+// Running a different echarts version means supplying its URL and hash
+// via WithCDN (or self-hosting it) — a bare WithVersion bump panics.
 //
 // # Linking charts on a dashboard
 //

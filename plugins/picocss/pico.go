@@ -1,5 +1,10 @@
 // Package picocss provides a PicoCSS plugin for the Via engine.
 //
+// The theme CSS ships embedded in the binary (vendored from the pinned
+// Pico release), so registration does no network I/O and apps boot
+// offline. Assets are served at content-hashed /via/assets/picocss/
+// paths with immutable cache headers.
+//
 // Quick start:
 //
 //	app := via.New(via.WithPlugins(
@@ -23,39 +28,28 @@
 //	)
 package picocss
 
+//go:generate sh refresh_assets.sh
+
 import (
-	"bytes"
-	"compress/gzip"
+	"encoding/json"
 	"fmt"
-	"hash/crc32"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 )
 
-const (
-	cdnVersion = "2.1.1"
-	cdnBase    = "https://cdn.jsdelivr.net/npm/@picocss/pico@" + cdnVersion + "/css/"
-)
-
-const (
-	cdnThemeURL          = cdnBase + "pico.%s.min.css"
-	cdnClasslessThemeURL = cdnBase + "pico.classless.%s.min.css"
-	cdnColorClassesURL   = cdnBase + "pico.colors.min.css"
-)
+// pinnedVersion is the vendored Pico CSS release; refresh_assets.sh must
+// be re-run (and the embedded files re-vendored) whenever it changes.
+const pinnedVersion = "2.1.1"
 
 const (
 	pluginPathPrefix = "/_plugins/picocss/"
 	themePath        = pluginPathPrefix + "theme/"
 	colorClassesPath = pluginPathPrefix + "color-classes"
 )
-
-const maxCSSBodySize = 512 * 1024
 
 // PicoTheme is a Pico CSS color theme name.
 type PicoTheme string
@@ -96,7 +90,7 @@ func (t PicoTheme) String() string { return string(t) }
 
 // PicoOption configures the plugin. Functional-options shape: each option
 // is a closure that mutates the plugin's option struct, applied in order
-// by Plugin.
+// by Plugin. Conflicting or duplicate options panic at registration.
 type PicoOption func(*plugin)
 
 type pluginOptions struct {
@@ -105,19 +99,23 @@ type pluginOptions struct {
 	classless    bool
 	colorClasses bool
 	darkMode     string // "system" | "dark" | "light"
+
+	themesSet       bool
+	defaultThemeSet bool
+	darkModeSet     bool
 }
 
 type plugin struct {
-	opts                pluginOptions
-	themeCSS            map[PicoTheme][]byte
-	themeCSSGzip        map[PicoTheme][]byte
-	themeETags          map[PicoTheme]string
-	colorClassesCSS     []byte
-	colorClassesCSSGzip []byte
-	colorClassesETag    string
+	opts              pluginOptions
+	themeAssets       map[PicoTheme]*asset
+	colorClassesAsset *asset
+	assetsByName      map[string]*asset
 }
 
-// Plugin builds a PicoCSS plugin. Defaults: PicoThemeAmber, system dark mode.
+// Plugin builds a PicoCSS plugin. Defaults: PicoThemeAmber, system dark
+// mode. All CSS is loaded from the embedded vendored release — Plugin
+// and Register never touch the network. Invalid or conflicting options
+// panic here, at registration time.
 func Plugin(opts ...PicoOption) via.Plugin {
 	p := &plugin{
 		opts: pluginOptions{
@@ -125,29 +123,86 @@ func Plugin(opts ...PicoOption) via.Plugin {
 			defaultTheme: PicoThemeAmber,
 			darkMode:     "system",
 		},
-		themeCSS:     make(map[PicoTheme][]byte),
-		themeCSSGzip: make(map[PicoTheme][]byte),
-		themeETags:   make(map[PicoTheme]string),
 	}
 	for _, opt := range opts {
 		opt(p)
 	}
-	p.opts.themes = dedup(p.opts.themes)
-	if len(p.opts.themes) == 0 {
-		p.opts.themes = []PicoTheme{PicoThemeAmber}
+	// A lone WithDefaultTheme implies that theme is wanted; requiring a
+	// redundant WithThemes([theme]) would be hostile for the common
+	// single-theme app.
+	if p.opts.defaultThemeSet && !p.opts.themesSet {
+		p.opts.themes = []PicoTheme{p.opts.defaultTheme}
+	}
+	if !p.opts.defaultThemeSet {
+		p.opts.defaultTheme = p.opts.themes[0]
 	}
 	if !slices.Contains(p.opts.themes, p.opts.defaultTheme) {
-		p.opts.defaultTheme = p.opts.themes[0]
+		panic(fmt.Sprintf(
+			"picocss: default theme %q is not in WithThemes(%v) — the initial stylesheet would never load",
+			p.opts.defaultTheme, p.opts.themes))
+	}
+
+	p.themeAssets = make(map[PicoTheme]*asset, len(p.opts.themes))
+	p.assetsByName = make(map[string]*asset, len(p.opts.themes)+1)
+	for _, theme := range p.opts.themes {
+		a := newAsset(p.themeFile(theme))
+		p.themeAssets[theme] = a
+		p.assetsByName[a.name] = a
+	}
+	if p.opts.colorClasses {
+		p.colorClassesAsset = newAsset("pico.colors.min.css")
+		p.assetsByName[p.colorClassesAsset.name] = p.colorClassesAsset
 	}
 	return p
 }
 
-// WithThemes sets which themes are available. Defaults to [PicoThemeAmber].
-func WithThemes(themes []PicoTheme) PicoOption { return func(p *plugin) { p.opts.themes = themes } }
+func (p *plugin) themeFile(theme PicoTheme) string {
+	if p.opts.classless {
+		return fmt.Sprintf("pico.classless.%s.min.css", theme)
+	}
+	return fmt.Sprintf("pico.%s.min.css", theme)
+}
 
-// WithDefaultTheme sets the initial theme on page load.
+// WithThemes sets which themes are available. Defaults to
+// [PicoThemeAmber]. Panics on an empty list, an unknown theme, a
+// duplicate entry, or when set twice.
+func WithThemes(themes []PicoTheme) PicoOption {
+	return func(p *plugin) {
+		if p.opts.themesSet {
+			panic("picocss: WithThemes set twice — pass one combined theme list")
+		}
+		if len(themes) == 0 {
+			panic("picocss: WithThemes: theme list cannot be empty")
+		}
+		seen := make(map[PicoTheme]bool, len(themes))
+		for _, theme := range themes {
+			if !slices.Contains(AllPicoThemes, theme) {
+				panic(fmt.Sprintf("picocss: unknown theme %q — no embedded asset for it", theme))
+			}
+			if seen[theme] {
+				panic(fmt.Sprintf("picocss: duplicate theme %q in WithThemes", theme))
+			}
+			seen[theme] = true
+		}
+		p.opts.themes = themes
+		p.opts.themesSet = true
+	}
+}
+
+// WithDefaultTheme sets the initial theme on page load. Panics on an
+// unknown theme or when set twice; Plugin panics when the default is
+// not among the WithThemes list.
 func WithDefaultTheme(theme PicoTheme) PicoOption {
-	return func(p *plugin) { p.opts.defaultTheme = theme }
+	return func(p *plugin) {
+		if p.opts.defaultThemeSet {
+			panic("picocss: WithDefaultTheme set twice — conflicting defaults")
+		}
+		if !slices.Contains(AllPicoThemes, theme) {
+			panic(fmt.Sprintf("picocss: unknown theme %q — no embedded asset for it", theme))
+		}
+		p.opts.defaultTheme = theme
+		p.opts.defaultThemeSet = true
+	}
 }
 
 // WithClassless enables classless Pico CSS mode.
@@ -156,147 +211,79 @@ func WithClassless() PicoOption { return func(p *plugin) { p.opts.classless = tr
 // WithColorClasses enables pico-color-* utility classes.
 func WithColorClasses() PicoOption { return func(p *plugin) { p.opts.colorClasses = true } }
 
-// WithDarkMode forces dark mode.
-func WithDarkMode() PicoOption { return func(p *plugin) { p.opts.darkMode = "dark" } }
-
-// WithLightMode forces light mode.
-func WithLightMode() PicoOption { return func(p *plugin) { p.opts.darkMode = "light" } }
-
-// Helpers
-
-func dedup(themes []PicoTheme) []PicoTheme {
-	seen := make(map[PicoTheme]bool, len(themes))
-	out := make([]PicoTheme, 0, len(themes))
-	for _, t := range themes {
-		if !seen[t] {
-			seen[t] = true
-			out = append(out, t)
+// WithDarkMode forces dark mode. Panics when combined with
+// WithLightMode.
+func WithDarkMode() PicoOption {
+	return func(p *plugin) {
+		if p.opts.darkModeSet {
+			panic("picocss: conflicting dark/light mode options")
 		}
+		p.opts.darkMode = "dark"
+		p.opts.darkModeSet = true
 	}
-	return out
 }
 
-// fetchHTTPClient bounds the CSS-CDN fetch so a slow upstream can't
-// hang via.New() indefinitely. 10s is generous for a static CSS asset
-// over reasonable network conditions; bigger means the CDN is sick and
-// we want the plugin Register to fail fast.
-var fetchHTTPClient = &http.Client{Timeout: 10 * time.Second}
-
-func fetchCSS(url string) ([]byte, error) {
-	resp, err := fetchHTTPClient.Get(url) //nolint:gosec
-	if err != nil {
-		return nil, err
+// WithLightMode forces light mode. Panics when combined with
+// WithDarkMode.
+func WithLightMode() PicoOption {
+	return func(p *plugin) {
+		if p.opts.darkModeSet {
+			panic("picocss: conflicting dark/light mode options")
+		}
+		p.opts.darkMode = "light"
+		p.opts.darkModeSet = true
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("pico: fetch %s: status %d", url, resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxCSSBodySize))
-}
-
-func crc32Hex(b []byte) string { return fmt.Sprintf("%08x", crc32.ChecksumIEEE(b)) }
-
-func gzipBytes(b []byte) []byte {
-	var buf bytes.Buffer
-	w := gzip.NewWriter(&buf)
-	_, _ = w.Write(b)
-	_ = w.Close()
-	return buf.Bytes()
-}
-
-func acceptsGzip(r *http.Request) bool {
-	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
 const darkModeBindExpr = `$_picoDarkMode==='system'` +
 	`?(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')` +
 	`:$_picoDarkMode`
 
-type fetchResult struct {
-	theme PicoTheme
-	css   []byte
-	err   error
-}
-
-func (p *plugin) fetchThemes() error {
-	baseURL := cdnThemeURL
-	if p.opts.classless {
-		baseURL = cdnClasslessThemeURL
-	}
-	ch := make(chan fetchResult, len(p.opts.themes))
-	for _, theme := range p.opts.themes {
-		go func() {
-			css, err := fetchCSS(fmt.Sprintf(baseURL, theme))
-			ch <- fetchResult{theme: theme, css: css, err: err}
-		}()
-	}
-	for range p.opts.themes {
-		r := <-ch
-		if r.err != nil {
-			return r.err
-		}
-		p.themeCSS[r.theme] = r.css
-		p.themeETags[r.theme] = crc32Hex(r.css)
-		p.themeCSSGzip[r.theme] = gzipBytes(r.css)
-	}
-	if p.opts.colorClasses {
-		css, err := fetchCSS(cdnColorClassesURL)
-		if err != nil {
-			return err
-		}
-		p.colorClassesCSS = css
-		p.colorClassesETag = crc32Hex(css)
-		p.colorClassesCSSGzip = gzipBytes(css)
-	}
-	return nil
-}
-
-func (p *plugin) servePluginAssets(w http.ResponseWriter, r *http.Request) {
+func (p *plugin) serveLegacyAssets(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	if strings.HasPrefix(path, themePath) {
 		themeStr := strings.TrimPrefix(path, themePath)
 		themeStr = strings.TrimPrefix(themeStr, "classless/")
-		theme := PicoTheme(themeStr)
-		css, ok := p.themeCSS[theme]
+		a, ok := p.themeAssets[PicoTheme(themeStr)]
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
-		writeCSSAsset(w, r, css, p.themeCSSGzip[theme], p.themeETags[theme])
+		writeCSSAsset(w, r, a)
 		return
 	}
 	if path == colorClassesPath && p.opts.colorClasses {
-		writeCSSAsset(w, r, p.colorClassesCSS, p.colorClassesCSSGzip, p.colorClassesETag)
+		writeCSSAsset(w, r, p.colorClassesAsset)
 		return
 	}
 	http.NotFound(w, r)
 }
 
-// writeCSSAsset serves a CSS asset with encoding-correct caching: a
-// Vary: Accept-Encoding header so shared caches key per encoding, and a
-// representation-specific ETag (the gzip variant is suffixed) so a cross-
-// encoding If-None-Match can't 304 the wrong body. baseETag is the validator
-// for the identity representation.
-func writeCSSAsset(w http.ResponseWriter, r *http.Request, identity, gz []byte, baseETag string) {
+// writeCSSAsset serves a CSS asset at a name-addressed (non-hashed) URL
+// with encoding-correct caching: a Vary: Accept-Encoding header so
+// shared caches key per encoding, and a representation-specific ETag
+// (the gzip variant is suffixed) so a cross-encoding If-None-Match
+// can't 304 the wrong body.
+func writeCSSAsset(w http.ResponseWriter, r *http.Request, a *asset) {
 	w.Header().Set("Vary", "Accept-Encoding")
 	gzip := acceptsGzip(r)
-	etag := baseETag
+	etag := a.hash
 	if gzip {
-		etag = baseETag + "-gz"
+		etag = a.hash + "-gz"
 	}
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Type", "text/css")
+	w.Header().Set("Content-Type", a.contentType)
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Header().Set("ETag", etag)
 	if gzip {
 		w.Header().Set("Content-Encoding", "gzip")
-		_, _ = w.Write(gz)
-	} else {
-		_, _ = w.Write(identity)
+		_, _ = w.Write(a.gz)
+		return
 	}
+	_, _ = w.Write(a.body)
 }
 
 const (
@@ -317,27 +304,30 @@ func ThemeRef() string { return "$" + themeSignalID }
 func DarkModeRef() string { return "$" + darkModeSignalID }
 
 func (p *plugin) Register(v *via.App) {
-	if err := p.fetchThemes(); err != nil {
-		panic("pico: failed to fetch themes: " + err.Error())
-	}
-
 	v.RegisterAppSignal(darkModeSignalID, p.opts.darkMode)
 	v.RegisterAppSignal(themeSignalID, string(p.opts.defaultTheme))
 
 	v.AppendAttrToHTML(h.Data("attr:data-theme", darkModeBindExpr))
 
-	themePrefix := themePath
-	if p.opts.classless {
-		themePrefix = themePath + "classless/"
+	// Theme URLs are content-hashed, so the client maps theme name to
+	// URL instead of concatenating a stable prefix.
+	urls := make(map[string]string, len(p.themeAssets))
+	for theme, a := range p.themeAssets {
+		urls[string(theme)] = a.path()
+	}
+	urlsJSON, err := json.Marshal(urls)
+	if err != nil {
+		panic(fmt.Sprintf("picocss: encode theme URL map: %v", err))
 	}
 
 	v.AppendToHead(h.Link(
 		h.Rel("stylesheet"),
 		h.ID("_picoThemeLink"),
-		h.Data("attr:href", fmt.Sprintf("'%s'+$_picoTheme", themePrefix)),
+		h.Data("attr:href", fmt.Sprintf("(%s)[$_picoTheme]", urlsJSON)),
 	))
 
 	v.AppendToHead(h.Script(h.Raw(fmt.Sprintf(`(function(){`+
+		`var u=%s;`+
 		`var m=document.querySelector('meta[data-signals]');`+
 		`if(!m)return;`+
 		`try{var s=JSON.parse(m.getAttribute('data-signals'));`+
@@ -346,18 +336,19 @@ func (p *plugin) Register(v *via.App) {
 		`else if(dm==='system')document.documentElement.setAttribute('data-theme',`+
 		`window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');`+
 		`var t=s._picoTheme;`+
-		`if(t)document.getElementById('_picoThemeLink').setAttribute('href','%s'+t);`+
-		`}catch(e){}})();`, themePrefix))))
+		`if(t&&u[t])document.getElementById('_picoThemeLink').setAttribute('href',u[t]);`+
+		`}catch(e){}})();`, urlsJSON))))
 
 	if p.opts.colorClasses {
 		v.AppendToHead(h.Link(
 			h.Rel("stylesheet"),
-			h.Href(colorClassesPath),
+			h.Href(p.colorClassesAsset.path()),
 		))
 	}
 
-	v.HandleFunc("GET "+themePath, p.servePluginAssets)
+	v.HandleFunc("GET "+assetPathPrefix, p.serveHashedAsset)
+	v.HandleFunc("GET "+themePath, p.serveLegacyAssets)
 	if p.opts.colorClasses {
-		v.HandleFunc("GET "+colorClassesPath, p.servePluginAssets)
+		v.HandleFunc("GET "+colorClassesPath, p.serveLegacyAssets)
 	}
 }
