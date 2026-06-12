@@ -103,18 +103,13 @@ func TestBrowser_reconnectBannerClearsOnResume(t *testing.T) {
 		"reconnect banner must appear after the SSE stream drops")
 
 	s.SetOffline(false)
-	// The bundled datastar build dispatches incoming SSE patches only as
-	// `datastar-fetch` CustomEvents (detail.type), never as the document-
-	// level `datastar-patch-elements`/`datastar-patch-signals` events the
-	// reconnect manager listens for, and a resumed SSE stream emits no
-	// `started`/`finished` — so the banner does NOT clear passively. An
-	// action fetch does emit `started`, which is the one clearing path
-	// that works today; the click below therefore both proves the stream
-	// resumed end-to-end (patch reaches the DOM) and triggers the clear.
-	s.Click("#inc")
-	s.WaitText("#hits", "1")
+	// No interaction past this point: the resumed stream's re-bootstrap
+	// patch must clear the banner on its own. A stuck banner overlays the
+	// page and swallows clicks, so passive clearing is the contract.
 	require.Eventually(t, func() bool { return !bannerVisible() },
 		15*time.Second, 100*time.Millisecond,
-		"reconnect banner must clear once connectivity provably resumes")
+		"reconnect banner must clear passively once the stream resumes")
+	s.Click("#inc")
+	s.WaitText("#hits", "1")
 	assert.Empty(t, s.ConsoleErrors())
 }

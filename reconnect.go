@@ -44,12 +44,15 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	// An incoming SSE patch (the re-bootstrap on reconnect, or via's periodic
 	// heartbeat) is the only reliable "stream is alive again" signal: a
 	// long-lived SSE @get fires 'retrying' on a drop but NO 'started'/'finished'
-	// on a successful resume, so clearing on those alone leaves the banner stuck.
-	`document.addEventListener('datastar-patch-elements',ok);` +
-	`document.addEventListener('datastar-patch-signals',ok);` +
+	// on a successful resume. The bundled Datastar surfaces incoming patches
+	// solely as 'datastar-fetch' events whose detail.type is the patch kind —
+	// it never dispatches document-level 'datastar-patch-*' events — so the
+	// patch kinds must be matched here or the banner sticks forever and its
+	// full-width overlay swallows clicks (proven by
+	// TestBrowser_reconnectBannerClearsOnResume).
 	`document.addEventListener('datastar-fetch',function(e){var t=e.detail&&e.detail.type;` +
 	`if(t==='retrying'){conn('connecting');show('Reconnecting...')}` +
-	`else if(t==='started'||t==='finished'){ok()}` +
+	`else if(t==='started'||t==='finished'||t==='datastar-patch-elements'||t==='datastar-patch-signals'){ok()}` +
 	`else if(t==='retries-failed'){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
 	`if(n>=3){show('Connection lost. Please refresh the page.');return}` +
 	`show('Connection lost - reconnecting...');try{sessionStorage.setItem(K,n+1)}catch(_){}` +
