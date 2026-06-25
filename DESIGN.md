@@ -1,8 +1,17 @@
 # via — reimagined core
 
-Branch: `experiment/bare-core`. A from-scratch reimagining: bare essentials —
-a thin layer over `net/http` that adds **effortless composition** and
-**Datastar sugar**. Builds on today's Go (1.24+), no experiment flags.
+Shipping as the parallel module `github.com/go-via/via/v2`. A from-scratch
+reimagining: bare essentials — a thin layer over `net/http` that adds
+**effortless composition** and **Datastar sugar**. Builds on today's Go (1.24+),
+no experiment flags.
+
+> Status: slice 1 (the stateless counter) is built and hardened — origin floor,
+> nonce'd CSP, body cap, panic-recover, compile-time `View` constraint,
+> attribute-name allowlist. Everything below describing islands / SSE /
+> `State` / `Stream` / `If` / `Each` / `Embed` is the ratified design, not yet
+> code. See `ROADMAP.md` for the sequenced slices and the four keystone
+> mechanisms (structural-key descent, pre-connect `State`, same-type `Embed`
+> id, browser tier) that gate them.
 
 ## Principles
 
@@ -77,18 +86,24 @@ internally. No keys, no tags, no reflection.
 The stateless default's state is `Signal`/`Local` (client-resident). Reach for
 `State[T]` + `Live` when state must be server-authoritative or pushed.
 
-Each handle **is an `h.H`** — dropping it in the tree displays its value, with
-the render strategy chosen by its type:
+A handle reaches the DOM through an explicit method — `c.Count.Display()` to
+show its value, `c.Name.Bind()` for a two-way input. The render strategy follows
+the handle type:
 
-- `Signal[T]` → emits a static `<span data-text="$s0">…</span>`. Skeleton is
-  sent once; value changes are tiny `{s0: …}` signal patches applied
+- `Signal[T].Display()` → emits a static `<span data-text="$s0">…</span>`.
+  Skeleton is sent once; value changes are tiny `{s0: …}` signal patches applied
   client-side. The server never re-renders it.
-- `State[T]` → emits the literal server value; on change, that fragment is
-  element-patched (server re-renders, Datastar morphs by id).
+- `State[T].Display()` → emits the literal server value; on change, that
+  fragment is element-patched (server re-renders, Datastar morphs by id).
 
-Variants are explicit methods (`c.Name.Bind()` two-way input, `c.Count.Display()`
-when you want it spelled out). Mutation is always through the handle with `ctx`:
-`c.Count.Add(ctx, 1)`.
+`.Display()` is the permanent spelling: the bare `h.H1(c.Count)` form is
+unreachable without reflection or a `&` at the call site (the sealed `h.H` tree
+plus the per-request by-value copy give the handle no addressable identity in a
+pure `View`), so the design commits to the explicit method. Mutation is always
+through the handle with `ctx`: `c.Count.Op(ctx).Add(1)`.
+
+> Slice-1 status: the shipped method is `.Node()`; the rename to `.Display()`
+> and the `Op(ctx)` mutator land with the reactive-handles slice.
 
 ## Compositions
 
@@ -102,7 +117,7 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.Count.Add(ctx, 1) }
 func (c *Counter) Dec(ctx *via.Ctx) { c.Count.Add(ctx, -1) }
 func (c *Counter) View() h.H {
     return h.Div(
-        h.H1(c.Count),                            // handle is an h.H — display
+        h.H1(c.Count.Display()),                  // explicit display method
         h.Button(via.OnClick(c.Dec), h.Str("−")), // literal text via h.Str (escaped)
         h.Button(via.OnClick(c.Inc), h.Str("+")),
     )
@@ -126,43 +141,65 @@ are all `h.H`. Element constructors are typed `...h.H` (compile-safe). Literal
 text is wrapped with `h.Str` — generic over the `string`/number union, escaped,
 emitted as **static** content; handles and attrs are already `h.H` and need no
 wrapper; attributes hoist into the tag. A `View` builds a tree of **static**
-structural nodes (`h.Div`, `h.Button`, `h.Str("−")`) interleaved with **dynamic slots** — the
-only varying points. via compiles the static skeleton once and replays it,
-resolving slots per render; the static 95% is precomputed bytes, not a tree
-walked each time. A pure, `ctx`-free `View` with stable structure is what makes
-this caching sound.
+structural nodes (`h.Div`, `h.Button`, `h.Str("−")`) interleaved with **dynamic
+slots** — the only varying points. The performance model is honest: a
+value-only `View` is cheap because each `Signal[T]` renders as a one-time
+signal-bound span the server never re-renders, and static chrome can be banked
+with `h.Static`; a `View` with dynamic shape (`If`/`Each`/`State`) is walked per
+render by design. A pure, `ctx`-free `View` with stable structure is what makes
+the static caching sound.
 
 Slot kinds:
 
-- **Display** — a handle dropped in the tree (`h.H1(c.Count)`); strategy by
-  handle type (see above).
+- **Display** — a handle's `.Display()` dropped in the tree
+  (`h.H1(c.Count.Display())`); strategy by handle type (see above).
 - **Event** — `via.OnClick(c.Inc)` (and friends). Method value, no string.
 - **Bind** — `c.Name.Bind()` two-way input binding.
 - **Conditional** — `via.If(c.LoggedIn, h.Str("welcome"))`. Explicit, *not* native `if`, so
-  the skeleton stays static and cacheable.
+  the skeleton stays static and the structural key is reserved whether the
+  condition is true or false (see `ROADMAP.md` K1).
 - **List** — `via.Each(c.Items, c.Row)` where `c.Row` is `func(Item) h.H` (a
-  method value, also `ctx`-free). Diffing via stable ids + Datastar morph.
+  method value, also `ctx`-free) and each item carries a stable key folded into
+  its structural id. Diffing via Datastar morph.
 
 ## Actions
 
 Wired with **method values**, never strings or closures. `via.OnClick(c.Inc)`
 appends the method to a per-render action table and emits
-`data-on-click="@post('/_via/a/<id>')"`; the POST dispatches by index. Re-renders
-rebuild the table; ids stay consistent with the DOM they were emitted into.
+`data-on:click="@post('/_via/a/<id>')"` — Datastar v1's **colon** key syntax.
+The old dash form (`data-on-click`) parses as a nonexistent plugin and is
+silently dropped, so the click is dead in the browser while every server test
+passes; the colon form is the one true spelling. The POST dispatches by id.
+Re-renders rebuild the table; ids stay consistent with the DOM they were emitted
+into.
 
-- Stateless page action: POST renders the fragment from request signals + deps,
-  responds with the patch. No connection.
-- Live island action: mutates server `State`, pushed over the island's SSE.
+The action endpoint enforces an origin floor (same-origin or an explicitly
+trusted origin), a request-body cap, and a panic recover, and the page and patch
+responses ship a nonce'd CSP — see slice 1.
+
+- Stateless page action: POST runs the action on a fresh per-request instance,
+  re-renders, and the response classifies itself by comparing the post-action
+  render to the pre-action one:
+  - render changed → **element-patch** (`text/html`, morphed into `#root`);
+  - render identical → **`204 No Content`** — the action changed nothing the
+    View reads, so there is nothing to send. This is inferred from the rendered
+    output (not from via-handle writes, which can't see a mutated dependency),
+    so a pure side-effect action costs no wasted patch and needs no annotation.
+  No connection.
+- Live island action: mutates server `State`, pushed over the tab's SSE.
 
 ## Live islands — lifecycle
 
-- **First paint:** the page server-renders the island's initial `View`
-  (zero-value/constructor state) so there is no empty flash. The container
-  carries `data-on-load="@get('/_via/sse/<island>')"`.
-- **Connect:** the SSE opens → via builds the island's per-tab state, runs
-  `OnConnect`, starts its streams, and patches the live view in.
-- **One SSE per island.** Each island has its own connection and lifecycle.
-  (Multiplexing onto one socket is a later optimization, not the model.)
+- **First paint:** the page server-renders each island's initial `View`
+  (constructor/zero-value state) so there is no empty flash. The page `<head>`
+  carries a single `data-init="@get('/_via/sse')"` that opens **one** stream for
+  the tab. (`data-on-load` on a div is dead in Datastar v1 — the on-plugin does
+  a literal `addEventListener('load')` and a div never fires load.)
+- **Connect:** the SSE opens → via builds each island's per-tab state, runs
+  `OnConnect`, starts its streams, and patches the live views in.
+- **One multiplexed SSE per tab.** A page with N islands shares ONE connection
+  (the HTTP/1.1 ~6-connection cap is a correctness ceiling, not a tunable);
+  per-island *lifecycle* is preserved, only the transport is shared.
 - **Disconnect:** `OnDispose` fires; streams stop; producers are torn down.
 - **Reconnect:** **grace-window resume** — a brief reconnection keeps the
   island's server state; after the window, the island rebuilds from its
@@ -192,6 +229,20 @@ func (c *Chat) View() h.H                          { /* renders c.Log */ }
 
 ## Out of core (cut from old via)
 
-sessions, `StateApp`/event-sourcing, backplane/NATS, cross-pod `Broadcast`,
-plugins, file uploads, metrics. Apps that need shared data bring their own and
-pipe it into an island via `Subscribe`.
+`StateApp`/event-sourcing, backplane/NATS, cross-pod `Broadcast`, plugins, file
+uploads, metrics. Apps that need durable or cross-pod shared data bring their
+own bus/DB and pipe it into an island via `Subscribe`.
+
+Table-stakes return as **blessed, no-reflection sub-packages**, never as core
+bloat:
+
+- `via/topic` — an in-process `Topic[T]` fan-out broker for the multi-user
+  case (chat, presence). The broker is a sub-package so core keeps its "owns no
+  shared state" invariant CI-testable; the island seam (`ctx.Subscribe`,
+  `ctx.Tick`, `ctx.OnDispose`) stays in core. Durability/replay/multipod are out
+  — put a real bus *behind* the `Topic`.
+- `via/sess` — sessions, with the `via_tab` id doubling as the CSRF token.
+- `via/router` — typed path params and guarded middleware groups.
+
+Core also keeps a render-only `RenderState[T]` for server-authoritative,
+never-client-tamperable values on a non-live page (e.g. a login error).

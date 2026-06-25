@@ -29,8 +29,15 @@ type Attr interface {
 // during a render pass. The via package supplies the implementation; h only
 // depends on this interface.
 type Binder interface {
-	// SignalSlot returns the next "s0","s1",… and advances.
-	SignalSlot() string
+	// SignalName allocates the next first-use signal name ("s0","s1",…). A
+	// handle calls it once, then caches and reuses the name across renders, so a
+	// signal's identity is the handle, not its render position — a signal bound
+	// to an input and displayed elsewhere share one name.
+	SignalName() string
+	// DeclareSignal records that slot participates in this render with the given
+	// initial value, for the page-level data-signals declaration. Idempotent
+	// within a render.
+	DeclareSignal(slot string, initial any)
 	// SignalInit returns the hydrated value for a slot, if the request carried one.
 	SignalInit(slot string) (any, bool)
 	// ActionSlot registers a handler and returns its positional id "0","1",….
@@ -84,6 +91,10 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 			buf.WriteString("&#34;")
 		case '\'':
 			buf.WriteString("&#39;")
+		case '\r':
+			// A bare CR is an SSE line terminator: left raw it would split a
+			// datastar-patch-elements frame mid-payload. Neutralise it.
+			buf.WriteString("&#13;")
 		default:
 			buf.WriteByte(s[i])
 		}
@@ -177,6 +188,30 @@ func Input(kids ...H) H { return element{tag: "input", kids: kids} }
 // Body builds a <body>.
 func Body(kids ...H) H { return element{tag: "body", kids: kids} }
 
+// P builds a <p>.
+func P(kids ...H) H { return element{tag: "p", kids: kids} }
+
+// H2 builds an <h2>.
+func H2(kids ...H) H { return element{tag: "h2", kids: kids} }
+
+// Label builds a <label>.
+func Label(kids ...H) H { return element{tag: "label", kids: kids} }
+
+// Form builds a <form>.
+func Form(kids ...H) H { return element{tag: "form", kids: kids} }
+
+// Ul builds a <ul>.
+func Ul(kids ...H) H { return element{tag: "ul", kids: kids} }
+
+// Ol builds an <ol>.
+func Ol(kids ...H) H { return element{tag: "ol", kids: kids} }
+
+// Li builds a <li>.
+func Li(kids ...H) H { return element{tag: "li", kids: kids} }
+
+// B builds a <b>.
+func B(kids ...H) H { return element{tag: "b", kids: kids} }
+
 // Stringish constrains the value types Str accepts, avoiding any.
 type Stringish interface {
 	~string | ~int | ~int8 | ~int16 | ~int32 | ~int64 |
@@ -204,8 +239,42 @@ func (a rawAttr) render(r *Renderer) {
 
 func (a rawAttr) isAttr() {}
 
-// RawAttr builds a name="val" attribute; val is HTML-escaped at render.
-func RawAttr(name, val string) Attr { return rawAttr{name: name, val: val} }
+// validAttrName reports whether name is a safe HTML attribute name: a leading
+// ASCII letter, then ASCII letters, digits, or hyphens. Only attribute values
+// are escaped at render — an unvalidated name composed from caller data could
+// graft a second attribute or close the tag, so the name is allowlisted here.
+func validAttrName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
 
-// Data builds a data-<name>="val" attribute; val is HTML-escaped at render.
-func Data(name, val string) Attr { return rawAttr{name: "data-" + name, val: val} }
+// RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
+// must match [A-Za-z][A-Za-z0-9-]* — an invalid name panics, since a name is a
+// programming-time construction and an injectable one defeats the safe-HTML
+// guarantee.
+func RawAttr(name, val string) Attr {
+	if !validAttrName(name) {
+		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+	}
+	return rawAttr{name: name, val: val}
+}
+
+// Data builds a data-<name>="val" attribute; val is HTML-escaped at render. The
+// suffix is held to the same allowlist as RawAttr ("data-" is a fixed prefix).
+func Data(name, val string) Attr {
+	if !validAttrName(name) {
+		panic(fmt.Sprintf("h: invalid data-* attribute suffix %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+	}
+	return rawAttr{name: "data-" + name, val: val}
+}
