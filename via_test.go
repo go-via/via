@@ -1,15 +1,23 @@
 package via_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
-	"github.com/go-via/via"
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/v2"
+	"github.com/go-via/via/v2/h"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // store is the in-server state the counter tracks — a plain app dependency.
@@ -55,39 +63,37 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 		rdr = strings.NewReader(body)
 	}
 	req, err := http.NewRequest(method, srv.URL+path, rdr)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
+	require.NoError(t, err, "build request")
+	// Simulate a same-origin browser fetch so the action endpoint's origin floor
+	// admits the request; tests that exercise the floor itself build their own
+	// requests (see post() in security_test.go).
+	if method == http.MethodPost {
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
 	resp, err := srv.Client().Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
+	require.NoError(t, err, "request failed")
 	t.Cleanup(func() { resp.Body.Close() })
 	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
+	require.NoError(t, err, "read body")
 	return resp, string(b)
 }
 
 // The GET page must ship the server-rendered skeleton — the current value baked
 // into HTML, both wired buttons, the morph-target #root, and the client script.
-func TestPageShipsServerRenderedSkeleton(t *testing.T) {
+func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
+	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodGet, "/", "")
 
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
-		t.Errorf("page Content-Type = %q, want text/html", ct)
-	}
+	ct := resp.Header.Get("Content-Type")
+	assert.True(t, strings.HasPrefix(ct, "text/html"), "page Content-Type = %q, want text/html", ct)
 	for _, want := range []string{
 		`<div id="root"`,
 		`<h1>0</h1>`,                         // value rendered server-side, not a signal
 		`data-on:click="@post('/_via/a/0')"`, // Dec, declared first
 		`data-on:click="@post('/_via/a/1')"`, // Inc, declared second
-		`<script type="module" src="/_via/datastar.js">`,
+		`src="/_via/datastar.js">`,           // module script tag (now nonce'd between attrs)
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("page missing %q\n---page---\n%s", want, body)
-		}
+		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
 }
 
@@ -96,73 +102,238 @@ func TestPageShipsServerRenderedSkeleton(t *testing.T) {
 // "on-click" and silently dropped — the button renders, no listener attaches,
 // and the click is dead in the browser while every server-side test still
 // passes. Assert the dash form never ships so that regression can't reappear.
-func TestEventBindingUsesDatastarColonSyntaxNotDeadDashForm(t *testing.T) {
+func TestEventBinding_usesDatastarColonSyntaxNotDeadDashForm(t *testing.T) {
+	t.Parallel()
 	_, body := do(t, newCounter(t), http.MethodGet, "/", "")
 
-	if !strings.Contains(body, `data-on:click="@post(`) {
-		t.Errorf("page is missing the v1 colon event binding data-on:click\n---page---\n%s", body)
-	}
-	if strings.Contains(body, "data-on-click") {
-		t.Errorf("page ships the dead v0.x dash form data-on-click (silently ignored by Datastar v1.0.2)\n---page---\n%s", body)
-	}
+	assert.Contains(t, body, `data-on:click="@post(`, "page is missing the v1 colon event binding data-on:click")
+	assert.NotContains(t, body, "data-on-click", "page ships the dead v0.x dash form data-on-click (silently ignored by Datastar v1.0.2)")
 }
 
 // An action must mutate the server-side dependency and return the re-rendered
 // fragment as a text/html element-patch reflecting the NEW value — and the state
 // must persist across requests (it lives in the store, not the request).
-func TestActionElementPatchesAndPersists(t *testing.T) {
+func TestAction_elementPatchesAndPersists(t *testing.T) {
+	t.Parallel()
 	srv := newCounter(t)
 
 	resp, body := do(t, srv, http.MethodPost, "/_via/a/1", "{}") // Inc: 0 -> 1
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
-		t.Errorf("Content-Type = %q, want text/html (element-patch)", ct)
-	}
+	ct := resp.Header.Get("Content-Type")
+	assert.True(t, strings.HasPrefix(ct, "text/html"), "Content-Type = %q, want text/html (element-patch)", ct)
 	for _, want := range []string{`<div id="root"`, `<h1>1</h1>`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("patch missing %q\n---patch---\n%s", want, body)
-		}
+		assert.Contains(t, body, want, "patch missing fragment")
 	}
 
-	if _, body := do(t, srv, http.MethodPost, "/_via/a/1", "{}"); !strings.Contains(body, `<h1>2</h1>`) {
-		t.Errorf("second Inc did not persist to 2\n%s", body) // 1 -> 2
-	}
-	if _, body := do(t, srv, http.MethodPost, "/_via/a/0", "{}"); !strings.Contains(body, `<h1>1</h1>`) {
-		t.Errorf("Dec did not bring state back to 1\n%s", body) // 2 -> 1
-	}
+	_, body = do(t, srv, http.MethodPost, "/_via/a/1", "{}") // 1 -> 2
+	assert.Contains(t, body, `<h1>2</h1>`, "second Inc did not persist to 2")
+	_, body = do(t, srv, http.MethodPost, "/_via/a/0", "{}") // 2 -> 1
+	assert.Contains(t, body, `<h1>1</h1>`, "Dec did not bring state back to 1")
 }
 
 // An action index with no registered handler must be rejected with 410 Gone, so
 // a stale client learns the action is gone rather than silently no-op.
-func TestOutOfRangeActionIsGone(t *testing.T) {
+func TestOutOfRangeAction_isGone(t *testing.T) {
+	t.Parallel()
 	resp, _ := do(t, newCounter(t), http.MethodPost, "/_via/a/99", "{}")
-	if resp.StatusCode != http.StatusGone {
-		t.Errorf("status = %d, want 410 Gone", resp.StatusCode)
-	}
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
 }
 
 // Positional dispatch is only sound against the render shape the client was
 // served. The server-state counter renders no signals, so a request carrying a
 // signal the View never declares is a mismatch and must be rejected with 410
 // rather than dispatched against a slot table that does not line up.
-func TestRenderShapeMismatchIsRejected(t *testing.T) {
+func TestRenderShapeMismatch_isRejected(t *testing.T) {
+	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodPost, "/_via/a/1", `{"s0":1}`)
-	if resp.StatusCode != http.StatusGone {
-		t.Errorf("status = %d, want 410 Gone (render-shape mismatch)\nbody: %s", resp.StatusCode, body)
-	}
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone (render-shape mismatch)\nbody: %s", body)
+}
+
+// A request whose signal-key set is the same SIZE as the rendered shape but a
+// different key is still a render-shape mismatch and must 410, not be dispatched
+// against a slot table that does not line up.
+func TestRenderShapeMismatch_sameLengthDifferentKeyIsRejected(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(boundForm{}))
+	resp, _ := post(t, srv, "/_via/a/0", `{"sX":"1"}`, sameOrigin())
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "one declared signal vs one foreign key must 410")
 }
 
 // The vendored Datastar client must be served from the embedded asset with a JS
 // content-type, or the module script tag on the page 404s and nothing hydrates.
-func TestEmbeddedDatastarClientIsServedAsJS(t *testing.T) {
+func TestEmbeddedDatastarClient_isServedAsJS(t *testing.T) {
+	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodGet, "/_via/datastar.js", "")
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "want 200")
+	ct := resp.Header.Get("Content-Type")
+	assert.True(t, strings.HasPrefix(ct, "text/javascript"), "Content-Type = %q, want text/javascript", ct)
+	assert.NotEmpty(t, body, "served datastar.js was empty")
+}
+
+// Slice 1's action response is a full element-patch (text/html morphed into
+// #root); it must never emit an application/json signal-patch. The dead
+// dirty/markDirty signal-patch leg was deleted, and this guard stops a second,
+// untested wire contract from silently returning.
+func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {
+	t.Parallel()
+	resp, body := do(t, newCounter(t), http.MethodPost, "/_via/a/1", "{}")
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	ct := resp.Header.Get("Content-Type")
+	assert.Truef(t, strings.HasPrefix(ct, "text/html"), "action must respond text/html, got %q", ct)
+	assert.NotContains(t, ct, "application/json")
+	assert.Contains(t, body, `<div id="root"`, "element-patch must carry the #root morph target")
+}
+
+// noopComp's action is a pure side effect that changes nothing the View reads —
+// the kind of action that logs, enqueues a job, or marks something the UI has
+// already reflected.
+type noopComp struct{}
+
+func (n *noopComp) Ping(*via.Ctx) {}
+func (n *noopComp) View() h.H {
+	return h.Div(h.Button(via.OnClick(n.Ping), h.Str("ping")))
+}
+
+// An action that leaves the rendered View identical must return 204 No Content,
+// not re-send an identical #root the browser would morph onto itself. The
+// runtime infers this by comparing the pre- and post-action renders — no author
+// annotation (no NoContent call) required.
+func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
+	t.Parallel()
+	resp, body := post(t, serve(t, via.Register(noopComp{})), "/_via/a/0", "{}", sameOrigin())
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+	assert.Empty(t, body)
+}
+
+// formComp uses OnSubmit on a form.
+type formComp struct{ q via.Signal[string] }
+
+func (c *formComp) Go(ctx *via.Ctx) {}
+func (c *formComp) View() h.H {
+	return h.Form(via.OnSubmit(c.Go), h.Input(c.q.Bind()))
+}
+
+// OnSubmit wires a form submit to a POST action with Datastar's colon event
+// syntax. Datastar auto-prevents a form's default submit, so no modifier is
+// needed.
+func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
+	assert.Contains(t, body, `data-on:submit="@post('/_via/a/0')"`)
+	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
+}
+
+// viaCallNames are the via entry points whose arguments must be named method
+// values or by-value compositions — never an address-of or a closure.
+var viaCallNames = map[string]bool{
+	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
+	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
+}
+
+// The framework's headline promise is that user code never writes '&' and never
+// passes a closure at a via call site (Register/Embed/On*). A violation that
+// compiles silently erodes the design, so this asserts it structurally over the
+// example sources — the canonical user-facing call sites. It is an interim
+// guard; the type-level closure ban is tracked as follow-up (see DESIGN.md).
+func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
+	t.Parallel()
+	files := exampleGoFiles(t)
+	require.NotEmpty(t, files, "expected example sources to lint")
+
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, file, nil, 0)
+			require.NoError(t, err)
+
+			ast.Inspect(f, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || !isViaCall(call) {
+					return true
+				}
+				for _, arg := range call.Args {
+					switch a := arg.(type) {
+					case *ast.FuncLit:
+						assert.Failf(t, "closure at via call site",
+							"%s: pass a named method value, not a func literal", fset.Position(a.Pos()))
+					case *ast.UnaryExpr:
+						if a.Op == token.AND {
+							assert.Failf(t, "address-of at via call site",
+								"%s: via takes compositions by value — drop the '&'", fset.Position(a.Pos()))
+						}
+					}
+				}
+				return true
+			})
+		})
 	}
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/javascript") {
-		t.Errorf("Content-Type = %q, want text/javascript", ct)
+}
+
+func isViaCall(call *ast.CallExpr) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
 	}
-	if len(body) == 0 {
-		t.Error("served datastar.js was empty")
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "via" && viaCallNames[sel.Sel.Name]
+}
+
+// via's headline guarantee is reflection-free wiring: the composition is bound
+// by generics + interface assertions + positional/handle identity, never by
+// reflecting over its fields, method names, or struct tags (which is what the
+// old reflect-based framework did). This locks that — no via source file may
+// import "reflect". (Signal values decode through encoding/json, which reflects
+// internally; that is data decoding, not wiring, and is out of this guard.)
+func TestCore_importsNoReflectPackage(t *testing.T) {
+	t.Parallel()
+	files := coreGoFiles(t)
+	require.NotEmpty(t, files, "expected core sources to scan")
+	for _, file := range files {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, file, nil, parser.ImportsOnly)
+			require.NoError(t, err)
+			for _, imp := range f.Imports {
+				assert.NotEqualf(t, `"reflect"`, imp.Path.Value,
+					"%s imports reflect — via wiring must be reflection-free", file)
+			}
+		})
 	}
+}
+
+// coreGoFiles lists the non-test Go sources of the core packages (the root via
+// package and the h DSL), excluding examples.
+func coreGoFiles(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, dir := range []string{".", "h", "topic"} {
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		for _, e := range entries {
+			n := e.Name()
+			if !e.IsDir() && strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+				files = append(files, filepath.Join(dir, n))
+			}
+		}
+	}
+	return files
+}
+
+func exampleGoFiles(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	err := filepath.WalkDir("example", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
+			files = append(files, p)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	return files
 }
