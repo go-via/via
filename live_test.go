@@ -538,3 +538,91 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	awaitLine(t, lb, "hello-room") // the OTHER tab receives it — fan-out
 	awaitLine(t, la, "hello-room") // and the sender does too
 }
+
+// liveReqEchoer is a live island whose action copies a header off the request
+// that triggered it into State.
+type liveReqEchoer struct{ echo via.State[string] }
+
+func (e *liveReqEchoer) Grab(ctx *via.Ctx)            { e.echo.Set(ctx, ctx.Request().Header.Get("X-Echo")) }
+func (e *liveReqEchoer) OnConnect(ctx *via.Ctx) error { return nil }
+func (e *liveReqEchoer) View() h.H {
+	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.OnClick(e.Grab), h.Str("x")))
+}
+
+// A live action runs on the island goroutine, yet it must still see the request
+// that TRIGGERED it — the action POST. That POST carried X-Echo; the connect
+// request never did, so the value surfacing over the SSE proves the triggering
+// action request is threaded through (not the connect request).
+func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(liveReqEchoer{}))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	resp, _ := post(t, srv, "/_via/a/0", "{}", map[string]string{
+		"Sec-Fetch-Site": "same-origin",
+		"X-Via-Tab":      tab,
+		"X-Echo":         "from-the-action-post",
+	})
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+	awaitLine(t, lines, "echo: from-the-action-post")
+}
+
+// connReqEchoer reads the connect request in OnConnect and a no-op tick forces a
+// push so the read value is observable on the stream.
+type connReqEchoer struct{ host via.State[string] }
+
+func (e *connReqEchoer) OnConnect(ctx *via.Ctx) error {
+	e.host.Set(ctx, ctx.Request().Host)
+	ctx.Tick(20*time.Millisecond, e.push)
+	return nil
+}
+func (e *connReqEchoer) push(ctx *via.Ctx) {}
+func (e *connReqEchoer) View() h.H {
+	return h.Div(h.P(h.Str("host: "), e.host.Display()))
+}
+
+// OnConnect must see the SSE connect request, so an island can authorize or
+// inspect the connection at open time (the same request ticks and subscriptions
+// then run under). The request Host is the server's own address; a pushed frame
+// must reflect it.
+func TestOnConnect_seesTheConnectRequest(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(connReqEchoer{}))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitLine(t, lines, "host: 127.0.0.1")
+}
+
+// tickReqEchoer reads the connect request from inside a TICK body, not OnConnect.
+type tickReqEchoer struct{ host via.State[string] }
+
+func (e *tickReqEchoer) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(20*time.Millisecond, e.tick)
+	return nil
+}
+func (e *tickReqEchoer) tick(ctx *via.Ctx) { e.host.Set(ctx, ctx.Request().Host) }
+func (e *tickReqEchoer) View() h.H {
+	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
+}
+
+// Ticks (and subscriptions) run under the island ctx, so a tick body reading
+// ctx.Request() must see the connection's connect request — there is no
+// triggering request for a timer, and the connection's is the honest answer.
+// This locks that inherited contract, distinct from a handler that triggered an
+// action.
+func TestTick_seesTheConnectRequest(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(tickReqEchoer{}))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitLine(t, lines, "tick-host: 127.0.0.1")
+}

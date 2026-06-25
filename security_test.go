@@ -1,9 +1,7 @@
 package via_test
 
 import (
-	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,33 +9,7 @@ import (
 	"github.com/go-via/via/v2/h"
 	"github.com/go-via/via/v2/vt"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func readAll(t *testing.T, resp *http.Response) string {
-	t.Helper()
-	b, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	return string(b)
-}
-
-// post issues a POST to the action endpoint with exactly the given headers and
-// no defaults, so each test pins precisely the origin signal it intends to send
-// (the shared do() helper injects same-origin, which would mask these checks).
-func post(t *testing.T, srv *httptest.Server, path, body string, headers map[string]string) (*http.Response, string) {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
-	require.NoError(t, err)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	t.Cleanup(func() { resp.Body.Close() })
-	return resp, readAll(t, resp)
-}
-
-func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
 
 // panicComp's action panics, to prove a buggy handler returns 500 and does not
 // crash the server.
@@ -53,12 +25,12 @@ func (p *panicComp) View() h.H {
 // the counter (CSRF).
 func TestAction_rejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 	t.Parallel()
-	srv := newCounter(t)
+	app := vt.Serve(t, via.Register(counter{count: &store{}}))
 
-	resp, _ := post(t, srv, "/_via/a/1", "{}", map[string]string{"Sec-Fetch-Site": "cross-site"})
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	status, _ := app.Action(1).SecFetch("cross-site").Fire()
+	assert.Equal(t, http.StatusForbidden, status)
 
-	_, body := do(t, srv, http.MethodGet, "/", "")
+	_, body := app.Get("/")
 	assert.Contains(t, body, "<h1>0</h1>", "cross-site POST must not have mutated the store")
 }
 
@@ -66,8 +38,8 @@ func TestAction_rejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 // the classic CSRF confusion, so a same-site action request must be rejected.
 func TestAction_rejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	resp, _ := post(t, newCounter(t), "/_via/a/1", "{}", map[string]string{"Sec-Fetch-Site": "same-site"})
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).SecFetch("same-site").Fire()
+	assert.Equal(t, http.StatusForbidden, status)
 }
 
 // A request that carries no origin signal at all (no Sec-Fetch-Site, no Origin)
@@ -75,17 +47,17 @@ func TestAction_rejectsSameSiteOrigin(t *testing.T) {
 // than silently trust it.
 func TestAction_failsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	resp, _ := post(t, newCounter(t), "/_via/a/1", "{}", nil)
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).NoOrigin().Fire()
+	assert.Equal(t, http.StatusForbidden, status)
 }
 
 // A legitimate same-origin browser fetch (proven via a matching Origin header
 // when Sec-Fetch-Site is absent) must be allowed and must mutate state.
 func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 	t.Parallel()
-	srv := newCounter(t)
-	resp, body := post(t, srv, "/_via/a/1", "{}", map[string]string{"Origin": srv.URL})
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	app := vt.Serve(t, via.Register(counter{count: &store{}}))
+	status, body := app.Action(1).Origin(app.URL()).Fire()
+	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
@@ -94,24 +66,24 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
 	big := `{"s0":"` + strings.Repeat("a", 2<<20) + `"}`
-	resp, _ := post(t, newCounter(t), "/_via/a/1", big, sameOrigin())
-	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body(big).Fire()
+	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }
 
 // A malformed (non-empty, invalid-JSON) body must fail loudly with 400, not
 // silently bind an empty signal set and misroute the action.
 func TestAction_rejectsMalformedBody(t *testing.T) {
 	t.Parallel()
-	resp, _ := post(t, newCounter(t), "/_via/a/1", "{not valid json", sameOrigin())
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body("{not valid json").Fire()
+	assert.Equal(t, http.StatusBadRequest, status)
 }
 
 // An empty body is the common stateless-action case and must be treated as "no
 // signals", not as a malformed-body 400.
 func TestAction_treatsEmptyBodyAsNoSignals(t *testing.T) {
 	t.Parallel()
-	resp, body := post(t, newCounter(t), "/_via/a/1", "", sameOrigin())
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	status, body := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body("").Fire()
+	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
@@ -119,22 +91,22 @@ func TestAction_treatsEmptyBodyAsNoSignals(t *testing.T) {
 // keeps serving subsequent requests (no crash, no wedged connection).
 func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(panicComp{}))
+	app := vt.Serve(t, via.Register(panicComp{}))
 
-	resp, _ := post(t, srv, "/_via/a/0", "{}", sameOrigin())
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	status, _ := app.Action(0).Fire()
+	assert.Equal(t, http.StatusInternalServerError, status)
 
-	resp2, _ := do(t, srv, http.MethodGet, "/", "")
-	assert.Equal(t, http.StatusOK, resp2.StatusCode, "server must keep serving after a panicking action")
+	status2, _ := app.Get("/")
+	assert.Equal(t, http.StatusOK, status2, "server must keep serving after a panicking action")
 }
 
 // WithInsecureOrigin is the documented escape hatch for non-browser/dev clients
 // that cannot send origin headers; it must actually bypass the floor.
 func TestWithInsecureOrigin_allowsCrossSiteForNonBrowserClients(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(counter{count: &store{}}, via.WithInsecureOrigin()))
-	resp, body := post(t, srv, "/_via/a/1", "{}", map[string]string{"Sec-Fetch-Site": "cross-site"})
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithInsecureOrigin()))
+	status, body := app.Action(1).SecFetch("cross-site").Fire()
+	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
@@ -143,10 +115,9 @@ func TestWithInsecureOrigin_allowsCrossSiteForNonBrowserClients(t *testing.T) {
 func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {
 	t.Parallel()
 	const trusted = "https://trusted.example"
-	srv := serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin(trusted)))
-	resp, body := post(t, srv, "/_via/a/1", "{}",
-		map[string]string{"Origin": trusted, "Sec-Fetch-Site": "cross-site"})
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin(trusted)))
+	status, body := app.Action(1).Origin(trusted).SecFetch("cross-site").Fire()
+	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 

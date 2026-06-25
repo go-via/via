@@ -1,11 +1,11 @@
 package via_test
 
 import (
-	"net/http"
 	"testing"
 
 	"github.com/go-via/via/v2"
 	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/v2/vt"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,19 +31,18 @@ func (c *listComp) View() h.H {
 // row method that returns <li> lands directly inside the <ul>.
 func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(listComp{items: []string{"a", "b", "c"}}))
-	_, body := do(t, srv, http.MethodGet, "/", "")
+	_, body := vt.Serve(t, via.Register(listComp{items: []string{"a", "b", "c"}})).Get("/")
 	assert.Contains(t, body, "<ul><li>a</li><li>b</li><li>c</li></ul>")
 }
 
 // If/When render their content only when the condition holds.
 func TestIfAndWhen_renderContentOnlyWhenTrue(t *testing.T) {
 	t.Parallel()
-	_, on := do(t, serve(t, via.Register(listComp{show: true})), http.MethodGet, "/", "")
+	_, on := vt.Serve(t, via.Register(listComp{show: true})).Get("/")
 	assert.Contains(t, on, "shown", "If(true) must render its node")
 	assert.Contains(t, on, "lazybuilt", "When(true) must render the built node")
 
-	_, off := do(t, serve(t, via.Register(listComp{show: false})), http.MethodGet, "/", "")
+	_, off := vt.Serve(t, via.Register(listComp{show: false})).Get("/")
 	assert.NotContains(t, off, "shown", "If(false) must render nothing")
 	assert.NotContains(t, off, "lazybuilt", "When(false) must render nothing")
 }
