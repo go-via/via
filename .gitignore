@@ -50,3 +50,6 @@ go.work.sum
 # Nested example/showcase build outputs (root-level ones are caught by /* above).
 /viashowcase/showcase
 /internal/examples/chatcluster/chatcluster
+
+# Research clones (not part of the project)
+/.research/
