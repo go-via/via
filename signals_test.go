@@ -2,24 +2,15 @@ package via_test
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"regexp"
 	"testing"
 
 	"github.com/go-via/via/v2"
 	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/v2/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// serve mounts root behind one httptest server, exercising signals through the
-// public via.Register surface (no white-box reach into writeSignalsAttr).
-func serve(t *testing.T, handler http.Handler) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	return srv
-}
 
 // attrValue extracts the value of a named HTML attribute from a rendered body.
 func attrValue(t *testing.T, body, name string) string {
@@ -39,7 +30,7 @@ func (c *numComp) View() h.H { return h.Div(c.n.Display()) }
 // verbatim — if the common case regressed, the client would hydrate nothing.
 func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(numComp{})), http.MethodGet, "/", "")
+	_, body := vt.Serve(t, via.Register(numComp{})).Get("/")
 
 	assert.Contains(t, body, `data-signals='{"s0":0}'`, "numeric signal declaration missing/malformed")
 }
@@ -67,7 +58,7 @@ func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	// Echo the breakout payload back as the s0 value; the request shape (one
 	// signal slot, s0) matches what the GET page declares, so dispatch proceeds.
 	payload := `{"s0":"' data-on-load='alert(document.cookie)"}`
-	_, body := do(t, serve(t, via.Register(nameComp{})), http.MethodPost, "/_via/a/0", payload)
+	_, body := vt.Serve(t, via.Register(nameComp{})).Action(0).Body(payload).Fire()
 
 	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the response — attribute breakout possible")
 	assert.Contains(t, body, "&#39;", "apostrophe was not entity-encoded")
@@ -92,7 +83,7 @@ func (g *greeting) View() h.H {
 // for hydration.
 func TestSignal_bindAndDisplayShareOneWireName(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(greeting{})), http.MethodGet, "/", "")
+	_, body := vt.Serve(t, via.Register(greeting{})).Get("/")
 
 	bindSlot := attrValue(t, body, "data-bind")
 	assert.NotEmpty(t, bindSlot, "input data-bind must not be empty")
@@ -115,7 +106,7 @@ func (d *displayFirst) View() h.H {
 
 func TestSignal_sharedNameIsOrderIndependent(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(displayFirst{})), http.MethodGet, "/", "")
+	_, body := vt.Serve(t, via.Register(displayFirst{})).Get("/")
 	textExpr := attrValue(t, body, "data-text")
 	bindSlot := attrValue(t, body, "data-bind")
 	assert.Equal(t, "$"+bindSlot, textExpr, "display and bind must share one name regardless of source order")
@@ -141,13 +132,13 @@ func (f *boundForm) View() h.H {
 
 func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(boundForm{}))
+	app := vt.Serve(t, via.Register(boundForm{}))
 
-	_, page := do(t, srv, http.MethodGet, "/", "")
+	_, page := app.Get("/")
 	getSlot := attrValue(t, page, "data-bind")
 
-	resp, frag := post(t, srv, "/_via/a/0", `{"`+getSlot+`":"Ada"}`, sameOrigin())
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	status, frag := app.Action(0).Body(`{"` + getSlot + `":"Ada"}`).Fire()
+	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, getSlot, attrValue(t, frag, "data-bind"), "wire name must be stable across the POST")
 	assert.Contains(t, frag, "Ada", "response must reflect the value the client typed, not a zero reset")
 }
@@ -175,7 +166,7 @@ func (c *localComp) View() h.H {
 // displayable — but it exposes no server Get/Set (no server doorway).
 func TestLocal_isClientOnlyUnderscoreSignal(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(localComp{})), http.MethodGet, "/", "")
+	_, body := vt.Serve(t, via.Register(localComp{})).Get("/")
 	assert.Contains(t, body, `data-bind="_s`, "Local binds an underscore-prefixed (client-only) signal")
 	assert.Contains(t, body, `data-text="$_s`, "Local displays the same underscore signal")
 	assert.Contains(t, body, `data-signals='{"_s`, "Local is declared so the client owns it")

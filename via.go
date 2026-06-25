@@ -44,7 +44,22 @@ type Ctx struct {
 	disposers []func()                   // live-island teardown, run on disconnect
 	island    bool                       // true while rendering a live island
 	dirty     map[string]any             // signals an action Set this pass (→ signal-patch)
+	req       *http.Request              // the request that triggered this handler (nil during a pure render)
 }
+
+// Request returns the HTTP request that triggered this handler, for advanced
+// request-native wiring (auth headers, cookies, RemoteAddr, query). It is set
+// in a stateless action (the action POST), in OnConnect and the ticks and
+// subscriptions that run under it (the SSE connect request), and in a live
+// action (the action POST that triggered it).
+//
+// Read-only: the body is already consumed into the request's signals, and for a
+// live action — which runs on the island goroutine after the POST has acked —
+// the request's Context may already be done. Read headers, cookies, URL,
+// RemoteAddr, TLS. On a live island the connect request is retained for the
+// connection's lifetime (ticks and subscriptions read it). Returns nil if no
+// request is in scope (e.g. a bare render).
+func (c *Ctx) Request() *http.Request { return c.req }
 
 // newCtx builds a Ctx with the given hydration map (may be nil for a GET page).
 func newCtx(in map[string]json.RawMessage) *Ctx {
@@ -254,6 +269,7 @@ func Register[T any, PT interface {
 			pv := PT(&inst)
 			live, _ := any(pv).(Live)
 			island := newCtx(nil)
+			island.req = req // the connect request; OnConnect + its ticks/subs read it
 			if err := live.OnConnect(island); err != nil {
 				// OnConnect may have registered disposers (a Subscribe paired with
 				// OnDispose(sub.Stop)) before failing — run them so the
@@ -359,6 +375,7 @@ func Register[T any, PT interface {
 			}
 			dispatched := lc.Dispatch(func(*Ctx) {
 				bind, _ := renderRoot(lc.inst, in, true, false)
+				bind.req = req // the action POST that triggered this live action
 				if n >= 0 && n < len(bind.actions) {
 					bind.actions[n]()
 				}
@@ -403,6 +420,7 @@ func Register[T any, PT interface {
 			http.Error(w, "no such action", http.StatusGone)
 			return
 		}
+		bind.req = req // the action POST that triggered this action
 		bind.actions[n]()
 
 		// Re-render the now-mutated instance (no re-hydration, so it reflects

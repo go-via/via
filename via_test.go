@@ -78,6 +78,43 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 	return resp, string(b)
 }
 
+// serve mounts a handler behind one httptest server, registered for cleanup.
+// The raw-httptest helpers below back the tests that assert on response headers
+// or SSE frame structure (csp, theme, live, and via's own Content-Type checks),
+// which the vt harness deliberately does not expose; the behavior-only tests
+// (signals, compose, security, state) drive vt instead.
+func serve(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// post issues a POST to the action endpoint with exactly the given headers and
+// no defaults, so a test pins precisely the origin signal it intends to send
+// (do() injects same-origin, which would mask the origin floor).
+func post(t *testing.T, srv *httptest.Server, path, body string, headers map[string]string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+	require.NoError(t, err)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp, readAll(t, resp)
+}
+
+func readAll(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
+
 // The GET page must ship the server-rendered skeleton — the current value baked
 // into HTML, both wired buttons, the morph-target #root, and the client script.
 func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
@@ -222,6 +259,28 @@ func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
 	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-on:submit="@post('/_via/a/0')"`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
+}
+
+// reqEchoer is a stateless component whose action copies a header off the
+// triggering request into a rendered field.
+type reqEchoer struct{ echo string }
+
+func (r *reqEchoer) Grab(ctx *via.Ctx) { r.echo = ctx.Request().Header.Get("X-Echo") }
+func (r *reqEchoer) View() h.H {
+	return h.Div(h.Button(via.OnClick(r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
+}
+
+// An action must be able to read the HTTP request that triggered it — auth
+// headers, cookies, client info — through ctx.Request(); without it there is no
+// way to do request-native wiring from a handler. The value the action pulls out
+// of the request must reach the re-rendered response.
+func TestAction_canReadTheTriggeringRequest(t *testing.T) {
+	t.Parallel()
+	_, body := post(t, serve(t, via.Register(reqEchoer{})), "/_via/a/0", "{}", map[string]string{
+		"Sec-Fetch-Site": "same-origin",
+		"X-Echo":         "hello-from-header",
+	})
+	assert.Contains(t, body, "hello-from-header", "the action must see the triggering request via ctx.Request()")
 }
 
 // viaCallNames are the via entry points whose arguments must be named method
