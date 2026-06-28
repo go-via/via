@@ -9,6 +9,7 @@ package via
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -248,6 +249,7 @@ func Register[T any, PT interface {
 		w.Write([]byte("<!doctype html><html><head><meta charset=\"utf-8\">" +
 			"<script type=\"module\" nonce=\"" + nonce + "\" src=\"/_via/datastar.js\"></script>" +
 			themeStyle(cfg.theme, nonce) +
+			reconnectScript(isLive && !cfg.noReconnect, nonce) +
 			bodyOpen))
 		w.Write(body)
 		w.Write([]byte("</body></html>"))
@@ -255,8 +257,7 @@ func Register[T any, PT interface {
 
 	if isLive {
 		mux.HandleFunc("GET /_via/sse", func(w http.ResponseWriter, req *http.Request) {
-			fl, ok := w.(http.Flusher)
-			if !ok {
+			if _, ok := w.(http.Flusher); !ok {
 				http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 				return
 			}
@@ -280,9 +281,20 @@ func Register[T any, PT interface {
 				http.Error(w, "connect failed", http.StatusInternalServerError)
 				return
 			}
+			// A half-open peer never cancels req.Context(); a failed frame write
+			// is the only signal it's gone. Derive a cancelable context so a write
+			// failure (or the per-frame deadline) tears the island down here.
+			streamCtx, cancel := context.WithCancel(req.Context())
+			defer cancel()
+			stream := &sseStream{
+				w:       w,
+				rc:      http.NewResponseController(w),
+				timeout: cfg.sseWriteTimeout,
+				cancel:  cancel,
+			}
+
 			writeSSEHeaders(w)
 			w.WriteHeader(http.StatusOK)
-			fl.Flush()
 
 			// Register this connection so a POST action routes to ITS island, and
 			// hand the client its tab id as the _viatab local signal (echoed back
@@ -296,20 +308,26 @@ func Register[T any, PT interface {
 			reg.put(id, &liveConn{
 				inst:  pv,
 				pulse: pulse,
-				done:  req.Context().Done(),
+				// streamCtx, not req.Context(): a write-error teardown cancels it, so
+				// a POST racing a just-dropped tab gets a clean 410 instead of blocking.
+				done: streamCtx.Done(),
 				// Written on the island goroutine (the dispatched fn runs there),
 				// the same goroutine as the element push — so the two never race.
-				pushSignals: func(j string) { writeSignalsFrame(w, j); fl.Flush() },
+				pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 			})
 			defer reg.del(id)
-			writeSignalsFrame(w, `{"_viatab":"`+id+`"}`)
-			fl.Flush()
+			stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
 
-			runLiveStream(req.Context(), island, pulse, func() {
+			interval := cfg.sseHeartbeat
+			if interval <= 0 {
+				interval = defaultHeartbeat
+			}
+			runLiveStream(streamCtx, island, pulse, func() {
 				_, body := renderRoot(pv, nil, true, false) // push omits data-signals
-				writePatchFrame(w, body)
-				fl.Flush()
-			})
+				stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+			}, func() {
+				stream.frame(writeKeepaliveFrame)
+			}, interval)
 		})
 	}
 

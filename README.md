@@ -116,6 +116,13 @@ examples, the whole live stack verified in real headless browsers
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `via.Subscribe` / `ctx.OnDispose` — one publish
   fans out to every connected island.
+- **Resilience floor + reconnect**: a server-side keepalive comment frame
+  (`WithSSEHeartbeat`) and a per-frame write deadline (`WithSSEWriteTimeout`,
+  default 10s) ride the island's single goroutine; a failed frame write tears the
+  island down (runs disposers, stops ticks) so a half-open peer — gone without a
+  FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
+  a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
+  Datastar gives up; opt out with `WithoutSSEReconnect()`.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
@@ -124,8 +131,10 @@ and the composer clears on send without clobbering a concurrent draft.
 
 Deferred (correctly out of 1.0 scope): `Embed` + the structural-key cursor (only
 needed for *action-bearing* dynamic shape — lists whose rows carry their own
-actions), `via/sess`+`via/router`, and the multi-island per-tab SSE multiplex.
-The SSE stream is uncapped (single-pod/internal scope — front it with a
+actions), `via/sess`+`via/router`, the multi-island per-tab SSE multiplex, and
+at-least-once redelivery (a push onto a dropping socket fails the write and tears
+down rather than being buffered for replay). The SSE GET stream is also uncapped
+and origin-unchecked (single-pod/internal scope — front it with a
 connection-limiting proxy). See [`DESIGN.md`](./DESIGN.md) and
 [`ROADMAP.md`](./ROADMAP.md).
 
