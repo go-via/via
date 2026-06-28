@@ -286,6 +286,7 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
+	"OnClickArg": true, "NewChild": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
@@ -393,4 +394,88 @@ func exampleGoFiles(t *testing.T) []string {
 	})
 	require.NoError(t, err)
 	return files
+}
+
+// --- value-carrying actions (OnClickArg) ---
+
+type todoItem struct {
+	ID   int
+	Text string
+}
+
+type todoBox struct{ items []todoItem }
+
+func (b *todoBox) remove(id int) {
+	out := b.items[:0]
+	for _, it := range b.items {
+		if it.ID != id {
+			out = append(out, it)
+		}
+	}
+	b.items = out
+}
+
+// todoList is a stateless list whose rows each carry a delete action bound to the
+// row's id — the per-row-action case. Del receives the id as a typed parameter.
+type todoList struct{ box *todoBox }
+
+func (l *todoList) Del(ctx *via.Ctx, id int) { l.box.remove(id) }
+func (l *todoList) row(t todoItem) h.H {
+	return h.Li(h.Str(t.Text), h.Button(via.OnClickArg(l.Del, t.ID), h.Str("x")))
+}
+func (l *todoList) View() h.H { return h.Ul(via.Each(l.box.items, l.row)) }
+
+func newTodoList() *todoBox {
+	return &todoBox{items: []todoItem{{1, "alpha"}, {2, "bravo"}, {3, "gamma"}}}
+}
+
+// A row's action binding must carry the row's own value, so the click self-
+// describes which datum it acts on — no closure, no stable-slot scheme.
+func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Register(todoList{box: newTodoList()})), http.MethodGet, "/", "")
+	assert.Contains(t, body, `@post('/_via/a/1?a=2')`, "the bravo row's button must carry its id (2) as the action arg")
+}
+
+// The handler must receive the carried value as a typed parameter and act on it:
+// deleting the row whose value rode with the click.
+func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	resp, body := do(t, srv, http.MethodPost, "/_via/a/1?a=2", "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the row whose value was sent must be deleted")
+	assert.Contains(t, body, "alpha")
+	assert.Contains(t, body, "gamma")
+}
+
+// The VALUE, not the action slot, identifies the row: posting to a different
+// row's slot but with bravo's value still deletes bravo — so a renumbered list
+// can't misroute, because identity rides with the click.
+func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	resp, body := do(t, srv, http.MethodPost, "/_via/a/0?a=2", "{}") // slot 0 (alpha), but arg=2 (bravo)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
+	assert.Contains(t, body, "alpha")
+}
+
+// todoBoard embeds the todo list as a STATELESS island — per-row value-actions
+// must work there too, not only at the root.
+type todoBoard struct{ List via.Child[todoList] }
+
+func (b *todoBoard) View() h.H { return h.Div(b.List.Embed()) }
+
+// A value-carrying action inside a stateless embedded island must still deliver
+// its value: the island action path has to expose the request to the slot.
+func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
+	t.Parallel()
+	board := todoBoard{List: via.NewChild(todoList{box: newTodoList()})}
+	srv := serve(t, via.Register(board))
+
+	resp, body := do(t, srv, http.MethodPost, "/_via/a/0/1?a=2", "{}") // island 0, bravo's slot, arg=2
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the island row's value-action did not fire")
+	assert.Contains(t, body, "alpha")
 }

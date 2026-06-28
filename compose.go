@@ -11,10 +11,12 @@ import "github.com/go-via/via/v2/h"
 // appended. For reorder/delete identity, give each row a stable id in the row
 // method (h.RawAttr("id", …)) so the morph matches by id.
 //
-// Action-index note: positional action ids stay stable as long as the rows
-// carry no actions (the dominant list case). A list whose rows carry their own
-// actions needs the structural-path cursor (see ROADMAP) so a growing list does
-// not renumber a sibling action — that is deferred until a use case needs it.
+// Per-row actions: a row whose button acts on that row uses OnClickArg, which
+// carries the row's own key (e.g. item.ID) with the click — so a grow/shrink/
+// reorder of the list can't misroute, the value (not the positional slot)
+// identifies the row. See example/poll. (Per-row *signals* — a Bind() per row —
+// are a separate, rarer case still on positional slots; keyed signal slots for
+// reordering inputs remain future work, see ROADMAP.)
 func Each[T any](items []T, row func(T) h.H) h.H {
 	return h.Dyn(func(r *h.Renderer) {
 		for _, item := range items {

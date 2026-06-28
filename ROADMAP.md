@@ -31,8 +31,15 @@ What is built on this branch, and where implementation refined the plan:
   goroutine, each re-rendering and patching only its own `#via-i{n}`; actions
   route by island id + the `via_tab` handshake; signals are slot-scoped
   (`i{n}_s{k}`) and declared per-container; `via.NewChild` seeds deps. Sessions
-  (`via/sess`) shipped separately. Still pending: name-stable
-  lists-*of*-islands (the structural-key cursor, part of slice 5).
+  (`via/sess`) shipped separately.
+- **Per-row list actions: DONE on `feat/v2-bare-core`** (`example/poll`).
+  `via.OnClickArg(fn, value)` carries the row's own datum with the click; the
+  handler receives it as a typed param (`func(*Ctx, T)`). Identity rides with the
+  event, so a grow/shrink/**reorder** of the list can't misroute — the value, not
+  the positional slot, picks the row. No reflection, no identifier strings, no
+  stable-id scheme; the feared structural cursor wasn't needed for actions. Still
+  pending (the narrow remainder of slice 5): per-row *signals/inputs* in a
+  reordering list, and keyed lists-*of*-islands.
 
   Follow-up (tracked): the cap's 503 is returned on the same `/_via/sse` the
   reconnect manager retries. Against a persistently-full server, a rejected
@@ -93,11 +100,11 @@ What is built on this branch, and where implementation refined the plan:
   `Each[T](items, row)` renders each row in place (append-only morph; add a row
   `id` for keyed reorder/delete), `If(cond, node)` eager, `When(cond, build)`
   lazy. `h.Ul`/`Ol`/`Li`/`B` added. Lint extended (`When`/`Each` reject a closure
-  arg; a method-value row/build passes). DEFERRED (not needed by the chat, which
-  has display-only rows + one trailing action so the flat action counter stays
-  stable): `Embed` (multi-island composition) and the K1 structural-path cursor
-  (only needed for *action-bearing* dynamic shape — a list whose rows carry their
-  own actions). Documented in compose.go.
+  arg; a method-value row/build passes). SINCE DONE: `Embed`/`Child[C]`
+  (multi-island composition) and per-row list actions via `OnClickArg` (the
+  value-carrying click replaced the need for the K1 structural cursor for
+  *actions*). The cursor remains only for per-row *signals* in a reordering list.
+  Documented in compose.go.
 - **Slice 9 (ergonomics sugar): DONE.** `List[E]` (embeds `State[[]E]`, adds
   `Append`) for a growing log; `Local[T]` (client-only underscore signal, no
   server `Get`/`Set` doorway, `Bind`/`Display`); `OnSubmit`/`OnInput`/`OnChange`

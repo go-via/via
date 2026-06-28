@@ -139,17 +139,23 @@ examples, the whole live stack verified in real headless browsers
   (`#via-i{n}`), its actions route by island id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. `via.NewChild(child)` seeds a
   child's dependencies (a shared `*Topic`, a store) at registration.
+- **Per-row list actions** (`example/poll`): a row's button carries the row's own
+  datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
+  typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
+  that grows, shrinks, and **reorders** never misroutes: the value (not the
+  positional slot) picks the row. Still a named method value — no `&`, no closure.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
 
-Deferred (correctly out of 1.0 scope): the structural-key cursor (only needed for
-*action-bearing* dynamic shape — lists whose rows carry their own actions;
-embedding fixed children via `via.Child[C]` is done, lists-of-islands is not),
-`via/router`, and at-least-once redelivery (a push onto a dropping socket fails
-the write and tears down rather than being buffered for replay). The SSE GET stream now applies the
+Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
+dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
+lists *of* live islands (per-row actions are done via `OnClickArg`; fixed
+embeds via `via.Child[C]` are done); `via/router`; and at-least-once redelivery
+(a push onto a dropping socket fails the write and tears down rather than being
+buffered for replay). The SSE GET stream now applies the
 same origin floor as the action POST and is capped at a configurable number of
 concurrent connections (`WithMaxSSEConnections`, default 10,000; over the cap
 returns 503). See [`DESIGN.md`](./DESIGN.md) and [`ROADMAP.md`](./ROADMAP.md).
