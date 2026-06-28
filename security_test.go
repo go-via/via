@@ -15,13 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// sseStatus opens GET /_via/sse with exactly the given headers and returns the
-// status, cancelling immediately so a 200 stream's island goroutine tears down.
+// sseStatus opens the SSE stream (POST /_via/sse) with exactly the given headers
+// and returns the status, cancelling immediately so a 200 stream's island
+// goroutine tears down.
 func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) int {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -32,10 +33,10 @@ func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) in
 	return resp.StatusCode
 }
 
-// The SSE GET opens a long-lived server resource (an island goroutine + timers)
-// and renders the app's HTML; like the action POST it must fail closed to any
-// request that can't prove a same-origin source, so a cross-origin page can't
-// open or hold streams against the server.
+// The SSE connect opens a long-lived server resource (an island goroutine +
+// timers) and renders the app's HTML; like the action POST it must fail closed
+// to any request that can't prove a same-origin source, so a cross-origin page
+// can't open or hold streams against the server.
 func TestSSE_rejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(quietIsland{}))
