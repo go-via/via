@@ -14,6 +14,11 @@ type config struct {
 	sseHeartbeat    time.Duration
 	sseWriteTimeout time.Duration
 	maxSSEConn      int
+	sessions        bool
+	sessionKey      []byte
+	sessionTTL      time.Duration
+	sessionCookie   string
+	sessionSecure   bool
 }
 
 // defaultMaxSSEConn caps concurrent live SSE streams per Register so a client
@@ -90,4 +95,47 @@ func WithSSEWriteTimeout(d time.Duration) Option {
 // 10,000; a non-positive n floors to the default (the cap is never disabled).
 func WithMaxSSEConnections(n int) Option {
 	return func(c *config) { c.maxSSEConn = n }
+}
+
+// WithSessionTTL enables sessions and sets how long a session may sit idle
+// before it expires (default 24h). Each access slides the window; an idle
+// session past the TTL no longer resolves.
+func WithSessionTTL(d time.Duration) Option {
+	return func(c *config) {
+		c.sessions = true
+		c.sessionTTL = d
+	}
+}
+
+// WithSessionCookieName enables sessions and overrides the session cookie name
+// (default "via_session"). Set a distinct name per app when two via apps share a
+// host, so their session cookies don't clobber each other.
+func WithSessionCookieName(name string) Option {
+	return func(c *config) {
+		c.sessions = true
+		c.sessionCookie = name
+	}
+}
+
+// WithSecureCookies enables sessions and forces the Secure flag on the session
+// cookie even when via can't see TLS on the request. By default Secure is set
+// only when the request arrived over TLS (req.TLS != nil), which keeps plain
+// http://localhost dev working; behind a TLS-terminating proxy req.TLS is nil
+// even though the user is on https, so set this to keep the cookie https-only.
+func WithSecureCookies() Option {
+	return func(c *config) {
+		c.sessions = true
+		c.sessionSecure = true
+	}
+}
+
+// WithSessionKey enables sessions and sets the HMAC key that signs the session
+// cookie id. Without it (but with another session option) via generates a random
+// per-process key and logs a warning — fine for dev, but cookies won't survive a
+// restart or span processes, so set a stable key in production.
+func WithSessionKey(key []byte) Option {
+	return func(c *config) {
+		c.sessions = true
+		c.sessionKey = key
+	}
 }

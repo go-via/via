@@ -47,6 +47,9 @@ type Ctx struct {
 	island    bool                       // true while rendering a live island
 	dirty     map[string]any             // signals an action Set this pass (→ signal-patch)
 	req       *http.Request              // the request that triggered this handler (nil during a pure render)
+	sessions  *sessionManager            // per-Register session manager, nil when sessions are disabled
+	sessW     http.ResponseWriter        // response writer for issuing the session cookie; nil in a live action
+	session   *Session                   // resolved session handle, cached per Ctx
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -226,6 +229,10 @@ func Register[T any, PT interface {
 		maxLive = defaultMaxSSEConn
 	}
 	var liveCount atomic.Int64 // concurrent live SSE streams, capped at maxLive
+	var sessions *sessionManager
+	if cfg.sessions {
+		sessions = newSessionManager(cfg)
+	}
 	mux := http.NewServeMux()
 
 	// A composition that implements OnConnect is a live island: the page carries
@@ -294,6 +301,8 @@ func Register[T any, PT interface {
 			live, _ := any(pv).(Live)
 			island := newCtx(nil)
 			island.req = req // the connect request; OnConnect + its ticks/subs read it
+			island.sessions = sessions
+			island.sessW = w // OnConnect runs before the stream headers flush, so it can issue the cookie
 			if err := live.OnConnect(island); err != nil {
 				// OnConnect may have registered disposers (a Subscribe paired with
 				// OnDispose(sub.Stop)) before failing — run them so the
@@ -417,6 +426,9 @@ func Register[T any, PT interface {
 			dispatched := lc.Dispatch(func(*Ctx) {
 				bind, _ := renderRoot(lc.inst, in, true, false)
 				bind.req = req // the action POST that triggered this live action
+				// Store-only: a live action runs after its 204, so it can read/write an
+				// already-established session but cannot issue a cookie (sessW stays nil).
+				bind.sessions = sessions
 				if n >= 0 && n < len(bind.actions) {
 					bind.actions[n]()
 				}
@@ -462,6 +474,8 @@ func Register[T any, PT interface {
 			return
 		}
 		bind.req = req // the action POST that triggered this action
+		bind.sessions = sessions
+		bind.sessW = w // a stateless action has an open response, so it can issue the session cookie
 		bind.actions[n]()
 
 		// Re-render the now-mutated instance (no re-hydration, so it reflects

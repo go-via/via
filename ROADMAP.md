@@ -35,6 +35,17 @@ What is built on this branch, and where implementation refined the plan:
   always serves) → re-arms SSE → 503, a reload-storm rather than a clean "server
   busy" UX. Mitigation deferred: a 503-specific longer backoff in the reconnect
   manager, or a degraded static page served when over the cap.
+- **Sessions (`via/sess`, store-only): DONE on `feat/v2-bare-core`.** Opt-in
+  typed per-browser store — `sess.Put[T]`/`Get[T]`/`Clear[T]`/`Rotate`, keyed by
+  Go type via a typed-nil sentinel (`(*T)(nil)`, no reflect), reached through an
+  `internal/sessbridge` so the untyped KV stays off via's public surface. Backed
+  by a signed-HMAC cookie (`WithSessionKey`, auto-gen + warn if unset) issued
+  lazily on the first write only where a response is open (stateless action /
+  OnConnect — a live action mutates but can't create); in-memory store with idle
+  TTL (`WithSessionTTL`), custom name (`WithSessionCookieName`), HttpOnly +
+  SameSite=Lax + Secure-on-TLS. Cookieless stays the default for apps that don't
+  opt in. Deferred to the backplane work: a background sweep for never-reaccessed
+  sessions, and the reactive cross-tab `StateSess[T]`.
 - **Slice 5 (`State[T]`): DONE and BROWSER-VERIFIED.** Server-authoritative,
   per-connection island state: `Get`/`Set` plus a `Display()` that renders the
   literal escaped value and is element-patched (morphed) on change. The K2
