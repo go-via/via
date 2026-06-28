@@ -341,8 +341,9 @@ func Register[T any, PT interface {
 		w.Write(datastarJS)
 	})
 
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, req *http.Request) {
 		inst := root
+		runOnInit(PT(&inst), w, req, sessions) // per-request hook before the ctx-free View
 		// Render the real instance (deps injected) — the parent is the island only
 		// when it is itself live; multiplex children carry their own island flag.
 		ctx, body := renderRoot(PT(&inst), nil, rootLive, true)
