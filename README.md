@@ -145,6 +145,19 @@ examples, the whole live stack verified in real headless browsers
   that grows, shrinks, and **reorders** never misroutes: the value (not the
   positional slot) picks the row. Still a named method value — no `&`, no closure.
 
+- **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
+  `via.Mount(r, "/path", Page{}, guards...)` serves a whole app behind one
+  handler, each page's actions namespaced under its mount. `OnInit(*Ctx)` is the
+  per-request hook that loads session/path data into a stateless page before its
+  ctx-free `View`. `via.PostForm(handler, …)` renders a **native** form whose
+  submit runs server-side and `via.Redirect(ctx, "/…")` issues a 303 — the
+  server-rendered auth flow the bundled Datastar (no script execution) can't do.
+  `via.Param[int](ctx, 0)` reads the positional `{}` segment of `"/thread/{}"`;
+  `via.RequireSession[User]("/login")` is a guard *value* (no closure) that
+  bounces anonymous visitors. `via.OnUpload(handler, …)` + `via.File` handle the
+  avatar — the one form that posts real multipart, handed to the app as an
+  `io.Reader` it stores however it likes. The forum proves the five compose.
+
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
