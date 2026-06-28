@@ -30,7 +30,7 @@ func (b *beater) View() h.H {
 
 // duo embeds two live beaters; it does NOT itself implement OnConnect — it is a
 // multiplex parent whose live children share one SSE stream.
-type duo struct{ A, B via.Island[beater] }
+type duo struct{ A, B via.Child[beater] }
 
 func (d *duo) View() h.H { return h.Div(d.A.Embed(), d.B.Embed()) }
 
@@ -63,8 +63,8 @@ func (f *failerIsland) OnConnect(ctx *via.Ctx) error { return errors.New("connec
 func (f *failerIsland) View() h.H                    { return h.Div(h.Str("x")) }
 
 type failPair struct {
-	A via.Island[disposerIsland]
-	B via.Island[failerIsland]
+	A via.Child[disposerIsland]
+	B via.Child[failerIsland]
 }
 
 func (p *failPair) View() h.H { return h.Div(p.A.Embed(), p.B.Embed()) }
@@ -75,7 +75,7 @@ func (p *failPair) View() h.H { return h.Div(p.A.Embed(), p.B.Embed()) }
 func TestMux_onConnectFailureDisposesConnectedSiblings(t *testing.T) {
 	t.Parallel()
 	done := make(chan struct{})
-	handler := via.Register(failPair{A: via.NewIsland(disposerIsland{disposed: done})})
+	handler := via.Register(failPair{A: via.NewChild(disposerIsland{disposed: done})})
 	req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 
@@ -94,7 +94,7 @@ type namer struct{ name via.Signal[string] }
 
 func (n *namer) View() h.H { return h.Div(n.name.Bind(), h.Span(n.name.Display())) }
 
-type pair struct{ X, Y via.Island[namer] }
+type pair struct{ X, Y via.Child[namer] }
 
 func (p *pair) View() h.H { return h.Div(p.X.Embed(), p.Y.Embed()) }
 
@@ -125,7 +125,7 @@ func (n *liveNamer) View() h.H {
 	return h.Div(n.draft.Bind(), h.P(h.Str("beats="), n.beats.Display()))
 }
 
-type solo struct{ X via.Island[liveNamer] }
+type solo struct{ X via.Child[liveNamer] }
 
 func (s *solo) View() h.H { return h.Div(s.X.Embed()) }
 
@@ -161,7 +161,7 @@ type toggleIsland struct{ open via.Local[bool] }
 
 func (i *toggleIsland) View() h.H { return h.Div(i.open.Bind()) }
 
-type togglePage struct{ T via.Island[toggleIsland] }
+type togglePage struct{ T via.Child[toggleIsland] }
 
 func (p *togglePage) View() h.H { return h.Div(p.T.Embed()) }
 
@@ -171,19 +171,19 @@ type greeter struct{ who string }
 
 func (g *greeter) View() h.H { return h.Div(h.P(h.Str("hi "), h.Str(g.who))) }
 
-type greetPage struct{ G via.Island[greeter] }
+type greetPage struct{ G via.Child[greeter] }
 
 func (p *greetPage) View() h.H { return h.Div(p.G.Embed()) }
 
 // An island child must be able to receive injected data, not only its zero
-// value — via.NewIsland seeds it by value (no '&'), and the per-connection copy
+// value — via.NewChild seeds it by value (no '&'), and the per-connection copy
 // keeps it isolated. Without seeding, a real island (chat needing a *Room) is
 // impossible.
 func TestEmbed_newIslandSeedsTheChild(t *testing.T) {
 	t.Parallel()
-	app := via.Register(greetPage{G: via.NewIsland(greeter{who: "alice"})})
+	app := via.Register(greetPage{G: via.NewChild(greeter{who: "alice"})})
 	_, body := do(t, serve(t, app), http.MethodGet, "/", "")
-	assert.Contains(t, body, "hi alice", "via.NewIsland must seed the embedded child")
+	assert.Contains(t, body, "hi alice", "via.NewChild must seed the embedded child")
 }
 
 // liveClicker is a LIVE island with State + an action (dep-free, so a zero-value
@@ -197,7 +197,7 @@ func (c *liveClicker) View() h.H {
 }
 
 // panel embeds two live clickers.
-type panel struct{ A, B via.Island[liveClicker] }
+type panel struct{ A, B via.Child[liveClicker] }
 
 func (p *panel) View() h.H { return h.Div(p.A.Embed(), p.B.Embed()) }
 
@@ -281,7 +281,7 @@ func (k *kid) View() h.H {
 }
 
 // board embeds two kids as sibling islands.
-type board struct{ A, B via.Island[kid] }
+type board struct{ A, B via.Child[kid] }
 
 func (b *board) View() h.H { return h.Div(b.A.Embed(), b.B.Embed()) }
 
