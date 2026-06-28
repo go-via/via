@@ -131,22 +131,23 @@ Rule:
 Reasoning: Callers should work with behavior, not struct internals.
 Composition handles like `Signal[T]` / `State[T]` are *exported* because
 users declare them as struct fields (`Step via.Signal[int]`), but their
-internals are bound by the runtime via reflection — exposing fields
-would let callers desync the wire key, slot index, and stored value.
+wire identity is assigned by the runtime at render time — the `Binder`
+hands each handle a stable wire name on first render, which becomes the
+handle's identity. Exposing fields would let a caller desync that name
+from the stored value, or forge one.
 
-Rule: For types whose zero value is meaningful via reflection-driven
-binding (Signal, StateTab, StateSess, StateApp), keep all stored state
-in unexported fields. The type name is exported; the contents aren't.
+Rule: For handle types whose binding is established by the runtime
+(`Signal`, `Local`, `State`, `List`), keep all stored state in unexported
+fields. The type name is exported; the contents aren't.
 
 ```go
-// ✅ Exported type, unexported fields — runtime binds via reflection
+// ✅ Exported type, unexported fields — runtime assigns the wire name at render
 type Signal[T any] struct {
-    val    T
-    slot   uint16
-    key    string
+    slot string // stable wire name, assigned lazily on first render
+    val  T
 }
 
-// ❌ Exported fields — caller can desync internal state
+// ❌ Exported fields — caller can desync the wire name from the value
 type Signal[T any] struct { ID string; Val T }
 ```
 
@@ -276,12 +277,12 @@ otherwise require the reader to reconstruct non-obvious reasoning:
 
 ```go
 // ✅ Non-obvious invariant
-// underscore prefix keeps the name a valid JS identifier; dots are not allowed.
-return fmt.Sprintf("echart_%d", c.seq)
+// underscore ⇒ Datastar keeps it client-only (never POSTs an _-prefixed signal).
+l.slot = "_" + b.SignalName()
 
 // ❌ Obvious from context
 // increment the counter
-chartCounter.Add(1)
+counter.Add(1)
 ```
 
 ### Tests
