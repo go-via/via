@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -60,6 +61,7 @@ type Ctx struct {
 	declare   bool                       // whether this render declares page-level data-signals (first paint, not a push)
 	base      string                     // mount path prefix for action POSTs ("" for the single-page root)
 	forms     []func(*Ctx)               // positional native-form handlers (PostForm)
+	uploads   []func(*Ctx, File)         // positional multipart-upload handlers (OnUpload)
 	redirect  string                     // pending Redirect target, applied after a form handler returns
 	params    []string                   // positional path-param segments ({} in the mount pattern)
 }
@@ -216,6 +218,54 @@ func RequireSession[T any](loginPath string) Guard {
 		}
 		return loginPath, false
 	}
+}
+
+// File is an uploaded multipart file handed to an OnUpload handler: an io.Reader
+// the app drains, plus its metadata. The framework owns no storage — the app
+// reads the File and persists it wherever it likes.
+type File interface {
+	io.Reader
+	Name() string        // the client's filename
+	Size() int64         // size in bytes
+	ContentType() string // the part's declared Content-Type
+}
+
+type uploadedFile struct {
+	multipart.File
+	hdr *multipart.FileHeader
+}
+
+func (f uploadedFile) Name() string        { return f.hdr.Filename }
+func (f uploadedFile) Size() int64         { return f.hdr.Size }
+func (f uploadedFile) ContentType() string { return f.hdr.Header.Get("Content-Type") }
+
+// OnUpload renders a native multipart <form> whose submit uploads a file — the
+// file analogue of PostForm/OnClickArg. handler receives the first uploaded file
+// part as a via.File (and may read text fields via ctx.Request().FormValue and
+// via.Redirect). A file needs a real multipart submit, so this is the one form
+// that steps outside the Datastar @post JSON model. handler is a named method
+// value; children are the form contents (a file <input>, a button). No '&', no
+// closure.
+func OnUpload(handler func(*Ctx, File), children ...h.H) h.H {
+	return h.Dyn(func(r *h.Renderer) {
+		ctx, ok := r.Binder().(*Ctx)
+		if !ok {
+			return
+		}
+		idx := ctx.uploadSlot(handler)
+		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` + ctx.base + `/_via/upload/` + idx + `">`)
+		for _, c := range children {
+			r.Render(c)
+		}
+		r.WriteString(`</form>`)
+	})
+}
+
+// uploadSlot registers a multipart-upload handler and returns its positional id.
+func (c *Ctx) uploadSlot(fn func(*Ctx, File)) string {
+	idx := len(c.uploads)
+	c.uploads = append(c.uploads, fn)
+	return strconv.Itoa(idx)
 }
 
 // Redirect navigates the browser to path after the current form handler returns

@@ -10,6 +10,11 @@ import (
 // exhaustion; 1 MiB is far above any legitimate signal payload.
 const maxActionBody = 1 << 20
 
+// maxUploadBytes caps a multipart upload body (OnUpload). Larger than the action
+// cap since files are the payload, but still bounded so an upload can't exhaust
+// memory/disk.
+const maxUploadBytes = 8 << 20
+
 // originAllowed reports whether req may invoke a state-changing action. The
 // floor, in order: a WithInsecureOrigin bypass; a WithTrustedOrigin allowlist
 // (which wins over the browser's site label, so cross-origin embedding works);

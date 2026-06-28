@@ -100,6 +100,88 @@ func Mount[T any, PT interface {
 		}
 		formAction[T, PT](w, req, root, r.cfg, r.sessions, concreteBase(patternBase, req, names), params)
 	})
+	r.mux.HandleFunc("POST "+patternBase+"/_via/upload/{n}", func(w http.ResponseWriter, req *http.Request) {
+		params := paramsOf(req, names)
+		if runGuards(w, req, r.sessions, params, guards) {
+			return
+		}
+		uploadAction[T, PT](w, req, root, r.cfg, r.sessions, concreteBase(patternBase, req, names), params)
+	})
+}
+
+// uploadAction handles a multipart upload (OnUpload): parse the multipart body
+// under a size cap, hand the first file part to the positional handler, then
+// 303-redirect or re-render. Mirrors formAction; the one form that steps outside
+// the Datastar JSON model.
+func uploadAction[T any, PT interface {
+	*T
+	viewer
+}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("via: upload handler panic: %v\n%s", rec, debug.Stack())
+			http.Error(w, "upload failed", http.StatusInternalServerError)
+		}
+	}()
+	if !originAllowed(req, cfg) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	req.Body = http.MaxBytesReader(w, req.Body, maxUploadBytes)
+	if err := req.ParseMultipartForm(maxActionBody); err != nil { // maxActionBody kept in RAM, rest spills to temp
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "upload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "malformed upload", http.StatusBadRequest)
+		return
+	}
+	defer req.MultipartForm.RemoveAll() // drop any spilled temp files
+	inst := root
+	runOnInit(PT(&inst), w, req, sessions, params)
+	bind, _ := renderRootBase(PT(&inst), nil, false, true, base) // populate the uploads table
+	n, err := strconv.Atoi(req.PathValue("n"))
+	if err != nil || n < 0 || n >= len(bind.uploads) {
+		http.Error(w, "no such upload", http.StatusGone)
+		return
+	}
+	file, ok := firstFile(req)
+	if !ok {
+		http.Error(w, "no file in upload", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	bind.req = req
+	bind.sessions = sessions
+	bind.sessW = w
+	bind.params = params
+	bind.uploads[n](bind, file)
+	if bind.redirect != "" {
+		http.Redirect(w, req, bind.redirect, http.StatusSeeOther)
+		return
+	}
+	_, body := renderRootBase(PT(&inst), nil, false, true, base)
+	writeHTMLPage(w, cfg, body)
+}
+
+// firstFile opens the first uploaded file part (OnUpload delivers a single file;
+// its <input name> is app-land, so the part is taken positionally, not by name).
+func firstFile(req *http.Request) (uploadedFile, bool) {
+	if req.MultipartForm == nil {
+		return uploadedFile{}, false
+	}
+	for _, headers := range req.MultipartForm.File {
+		if len(headers) == 0 {
+			continue
+		}
+		f, err := headers[0].Open()
+		if err != nil {
+			return uploadedFile{}, false
+		}
+		return uploadedFile{File: f, hdr: headers[0]}, true
+	}
+	return uploadedFile{}, false
 }
 
 // parsePattern turns a mount path into a ServeMux base and the names of its
