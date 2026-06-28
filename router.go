@@ -10,6 +10,27 @@ import (
 	"strings"
 )
 
+// Initer is an optional per-request hook on a page: OnInit runs with a Ctx
+// BEFORE the (ctx-free) View, so a stateless page can load request/session data
+// (the logged-in user, a query value) into its fields for rendering. It is the
+// stateless analogue of OnConnect for live islands, detected by interface
+// assertion — never reflection.
+type Initer interface{ OnInit(*Ctx) }
+
+// runOnInit calls v.OnInit with a request-scoped Ctx if v implements Initer.
+// sessW is the open response, so OnInit may also set the session cookie.
+func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager) {
+	ic, ok := v.(Initer)
+	if !ok {
+		return
+	}
+	ctx := newCtx(nil)
+	ctx.req = req
+	ctx.sessions = sessions
+	ctx.sessW = w
+	ic.OnInit(ctx)
+}
+
 // Router serves several via pages, each Mounted at its own path, behind one
 // http.Handler — the multi-page story. Sessions are configured on the router
 // (one cookie for the whole app) and shared across mounts; each page's actions
@@ -53,8 +74,9 @@ func Mount[T any, PT interface {
 	if path == "/" {
 		getPattern = "/{$}"
 	}
-	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, _ *http.Request) {
+	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		inst := root
+		runOnInit(PT(&inst), w, req, r.sessions) // load session/request data into fields first
 		_, body := renderRootBase(PT(&inst), nil, false, true, base)
 		writeHTMLPage(w, r.cfg, body)
 	})
@@ -112,6 +134,7 @@ func dispatchStateless[T any, PT interface {
 	viewer
 }](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, in map[string]json.RawMessage) {
 	inst := root
+	runOnInit(PT(&inst), w, req, sessions) // load session/request data before the action + re-render
 	bind, before := renderRootBase(PT(&inst), in, false, true, base)
 	if !shapeMatches(bind.order, in) {
 		http.Error(w, "render-shape mismatch", http.StatusGone)

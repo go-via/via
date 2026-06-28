@@ -1,12 +1,71 @@
 package via_test
 
 import (
+	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"strings"
 	"testing"
 
 	"github.com/go-via/via/v2"
+	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/v2/sess"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// acct is a session-stored value; profilePage loads it in OnInit so its ctx-free
+// View can render the logged-in user.
+type acct struct{ Name string }
+
+type profilePage struct{ greeting string }
+
+func (p *profilePage) OnInit(ctx *via.Ctx) {
+	if a, ok := sess.Get[acct](ctx); ok {
+		p.greeting = "hi " + a.Name
+	}
+}
+func (p *profilePage) SignIn(ctx *via.Ctx) { sess.Put(ctx, acct{Name: "alice"}) }
+func (p *profilePage) View() h.H {
+	return h.Div(h.P(h.Str(p.greeting)), h.Button(via.OnClick(p.SignIn), h.Str("in")))
+}
+
+func jarGet(t *testing.T, c *http.Client, url string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return string(b)
+}
+
+func jarPost(t *testing.T, c *http.Client, url string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+}
+
+// OnInit runs per request before the (ctx-free) View, so a page can load
+// session data into its fields and render it. Without it, a stateless page could
+// never show "the logged-in user" — View has no ctx to read the session from.
+func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/p", profilePage{})
+	srv := serve(t, r)
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+
+	assert.NotContains(t, jarGet(t, c, srv.URL+"/p"), "hi alice", "no session yet")
+	jarPost(t, c, srv.URL+"/p/_via/a/0") // SignIn → sets the session cookie
+	assert.Contains(t, jarGet(t, c, srv.URL+"/p"), "hi alice",
+		"OnInit must load the session before the ctx-free View renders")
+}
 
 // A router serves several pages at their own paths; each page's actions are
 // namespaced under its mount path, so two pages can both declare action 1
