@@ -59,6 +59,8 @@ type Ctx struct {
 	push      func()                     // re-render THIS island and frame it on the stream (set per live unit)
 	declare   bool                       // whether this render declares page-level data-signals (first paint, not a push)
 	base      string                     // mount path prefix for action POSTs ("" for the single-page root)
+	forms     []func(*Ctx)               // positional native-form handlers (PostForm)
+	redirect  string                     // pending Redirect target, applied after a form handler returns
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -145,6 +147,44 @@ func (c *Ctx) SignalInit(slot string) (any, bool) {
 func (c *Ctx) ActionSlot(fn func()) string {
 	idx := len(c.actions)
 	c.actions = append(c.actions, fn)
+	return strconv.Itoa(idx)
+}
+
+// PostForm renders a native <form method="post"> whose submit runs handler on
+// the server — the server-rendered flow for sign-up/in and anything that ends in
+// a Redirect. Unlike OnSubmit (a Datastar @post that element-patches in place),
+// this is a real browser navigation: handler reads form fields via
+// ctx.Request().FormValue and may via.Redirect. handler is a named method value;
+// children are the form contents (inputs, button). No '&', no closure.
+func PostForm(handler func(*Ctx), children ...h.H) h.H {
+	return h.Dyn(func(r *h.Renderer) {
+		ctx, ok := r.Binder().(*Ctx)
+		if !ok {
+			return
+		}
+		idx := ctx.formSlot(handler)
+		r.WriteString(`<form method="post" action="` + ctx.base + `/_via/f/` + idx + `">`)
+		for _, c := range children {
+			r.Render(c)
+		}
+		r.WriteString(`</form>`)
+	})
+}
+
+// Redirect navigates the browser to path after the current form handler returns
+// (a 303 See Other). Use it from a PostForm handler — e.g. after sign-in.
+// Datastar @post actions cannot redirect (the bundled client has no
+// execute-script); native forms + Redirect are the navigation path.
+func Redirect(ctx *Ctx, path string) {
+	if ctx != nil {
+		ctx.redirect = path
+	}
+}
+
+// formSlot registers a native-form handler and returns its positional id.
+func (c *Ctx) formSlot(fn func(*Ctx)) string {
+	idx := len(c.forms)
+	c.forms = append(c.forms, fn)
 	return strconv.Itoa(idx)
 }
 
