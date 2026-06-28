@@ -180,13 +180,14 @@ var tabRE = regexp.MustCompile(`"_viatab":"([^"]+)"`)
 func (a *App) Connect() *Conn {
 	a.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.srv.URL+"/_via/sse", strings.NewReader("{}"))
 	if err != nil {
 		cancel()
 		a.t.Fatalf("vt.Connect: build request: %v", err)
 	}
-	// A real same-origin browser SSE fetch sends this; the stream's origin floor
-	// requires it (or a trusted Origin), so mimic the browser here.
+	// The stream connect is a POST carrying the page signals as a body. A real
+	// same-origin browser fetch sends Sec-Fetch-Site; the origin floor requires
+	// it (or a trusted Origin), so mimic the browser here.
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {

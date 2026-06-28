@@ -373,7 +373,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // close the stream so the island tears down
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := http.DefaultClient.Do(req)

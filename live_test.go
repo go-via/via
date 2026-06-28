@@ -20,6 +20,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The SSE stream is bootstrapped with @post (not @get) so the connect can carry
+// the page's signals as a body — the channel multiplexing needs.
+func TestLive_pageBootstrapsTheStreamViaPost(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, newPulse(t), http.MethodGet, "/", "")
+	assert.Contains(t, body, `@post('/_via/sse')`, "live page must bootstrap the stream via @post")
+	assert.NotContains(t, body, `@get('/_via/sse')`, "the old @get bootstrap must be gone")
+}
+
+// The SSE endpoint is POST-only now; a GET must be rejected (405) rather than
+// silently opening a stream the bootstrap no longer uses.
+func TestLive_sseEndpointRejectsGet(t *testing.T) {
+	t.Parallel()
+	srv := newPulse(t)
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "GET /_via/sse must be 405; the stream is POST")
+}
+
+// A stateless app (no live root, no live islands) has no stream: a POST to the
+// SSE endpoint must 404 rather than open an empty stream.
+func TestSSE_statelessAppHasNoLiveStream(t *testing.T) {
+	t.Parallel()
+	srv := newCounter(t)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a stateless app must not serve the SSE stream")
+}
+
 // A live stream must emit a periodic keepalive even on an island with no ticks:
 // a successful write proves the peer is still there, and a FAILED write is the
 // only in-band way to notice a silently-dropped (half-open) peer so the island
@@ -71,7 +108,7 @@ func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
 	handler := via.Register(disposeProbe{disposed: done}, via.WithSSEHeartbeat(15*time.Millisecond))
 	// httptest.NewRequest's context is never cancelled, so the ONLY thing that
 	// can end the stream here is the failed keepalive write — isolating that path.
-	req := httptest.NewRequest(http.MethodGet, "/_via/sse", nil)
+	req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // past the origin floor, as a real browser would
 
 	go handler.ServeHTTP(&halfOpenFlusher{}, req)
@@ -140,7 +177,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
@@ -195,7 +232,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 func openStream(t *testing.T, srv *httptest.Server) (<-chan string, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
@@ -284,7 +321,7 @@ func TestLive_streamOpensWithNoTicks(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
@@ -304,7 +341,7 @@ func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	assert.Contains(t, body, `<div id="root"`)
 	assert.Contains(t, body, "beats: 0",
 		"State must render its zero value at first paint (before OnConnect) without panicking")
-	assert.Contains(t, body, `data-init="@get('/_via/sse')"`, "page must bootstrap the SSE stream")
+	assert.Contains(t, body, `data-init="@post('/_via/sse')"`, "page must bootstrap the SSE stream")
 }
 
 // The SSE endpoint must stream Datastar element-patch frames: text/event-stream,
@@ -316,7 +353,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
@@ -478,7 +515,7 @@ func (e errorString) Error() string { return string(e) }
 func TestLive_disposersRunWhenOnConnectFails(t *testing.T) {
 	t.Parallel()
 	done := make(chan struct{})
-	resp, _ := do(t, serve(t, via.Register(failConnect{disposed: done})), http.MethodGet, "/_via/sse", "")
+	resp, _ := do(t, serve(t, via.Register(failConnect{disposed: done})), http.MethodPost, "/_via/sse", "")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	select {
 	case <-done:

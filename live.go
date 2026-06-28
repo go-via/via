@@ -24,7 +24,7 @@ type tickReg struct {
 
 // subStarter spawns one subscription's reader goroutine, bridging an external
 // channel into the island's single pulse loop. via builds these in Subscribe.
-type subStarter func(reqCtx context.Context, pulse chan<- func(*Ctx))
+type subStarter func(reqCtx context.Context, pulse chan<- func())
 
 // Tick schedules fn to run every d for the life of the island's connection. fn
 // is a named method value (e.g. c.beat); after each run via re-renders the
@@ -47,7 +47,7 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // c.OnMessage). Valid only inside OnConnect; pair it with OnDispose to stop the
 // source.
 func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
-	ctx.subs = append(ctx.subs, func(reqCtx context.Context, pulse chan<- func(*Ctx)) {
+	ctx.subs = append(ctx.subs, func(reqCtx context.Context, pulse chan<- func()) {
 		go func() {
 			for {
 				select {
@@ -57,8 +57,11 @@ func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
 					if !ok {
 						return
 					}
+					// The enqueued unit mutates THIS island (ctx) and pushes only
+					// THIS island's container — so on a multiplex page a fan-out to
+					// one island never re-renders a sibling.
 					select {
-					case pulse <- func(ic *Ctx) { handler(ic, v) }:
+					case pulse <- func() { handler(ctx, v); ctx.push() }:
 					case <-reqCtx.Done():
 						return
 					}
@@ -156,23 +159,30 @@ func (s *sseStream) frame(write func(io.Writer)) {
 	}
 }
 
-// runLiveStream drives the island on a single goroutine. Ticks, subscriptions,
-// dispatched actions (from the POST handler via liveConn.Dispatch), AND the
-// keepalive all feed through this one goroutine — so every island mutation,
-// render, and stream write is serialized, no lock. It always loops (even with no
-// ticks/subs) so an interactive-only island still receives dispatched actions
-// and beats; disposers run on exit (client disconnect or a failed write).
-func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), push, keepalive func(), interval time.Duration) {
+// runLiveStream drives one or more islands on a single goroutine. Every island's
+// ticks, subscriptions, dispatched actions (via liveConn.Dispatch), AND the
+// keepalive feed through this one goroutine — so all mutation, render, and stream
+// writes are serialized, no lock. Each pulse unit is self-contained: it mutates
+// its island and pushes only that island's container (via ctx.push), so a
+// multiplex page's islands stay independent. It always loops (even with no
+// ticks/subs) so an interactive-only island still receives dispatched actions and
+// beats; every island's disposers run on exit (client disconnect or a failed
+// write).
+func runLiveStream(reqCtx context.Context, islands []*Ctx, pulse chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
-		for _, d := range island.disposers {
-			d()
+		for _, island := range islands {
+			for _, d := range island.disposers {
+				d()
+			}
 		}
 	}()
-	for _, t := range island.ticks {
-		startTicker(reqCtx, t, pulse)
-	}
-	for _, start := range island.subs {
-		start(reqCtx, pulse)
+	for _, island := range islands {
+		for _, t := range island.ticks {
+			startTicker(reqCtx, island, t, pulse)
+		}
+		for _, start := range island.subs {
+			start(reqCtx, pulse)
+		}
 	}
 	beat := time.NewTicker(interval)
 	defer beat.Stop()
@@ -181,8 +191,7 @@ func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), p
 		case <-reqCtx.Done():
 			return
 		case fn := <-pulse:
-			fn(island)
-			push()
+			fn()
 		case <-beat.C:
 			keepalive()
 		}
@@ -192,17 +201,19 @@ func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), p
 // liveConn is a connected tab's live island, kept in the per-Register registry
 // so a POST action can be routed onto its single goroutine.
 type liveConn struct {
-	inst        viewer            // this connection's island instance (carries State[T])
-	pulse       chan func(*Ctx)   // the island's serialization channel
+	inst        viewer            // legacy single-island instance (carries State[T]); nil for a mux connection
+	pulse       chan func()       // the connection's serialization channel (shared by all its islands)
 	done        <-chan struct{}   // reqCtx.Done() — closed on disconnect
+	push        func()            // legacy: re-render the single island and frame it
 	pushSignals func(json string) // emit a patch-signals frame on this stream
+	islands     map[int]*Ctx      // mux: islandIdx → its unit Ctx (islandV + push); nil for a legacy connection
 }
 
-// Dispatch routes one action fn onto the island goroutine, where it runs
+// Dispatch routes one action unit onto the island goroutine, where it runs
 // serialized with ticks/subs/renders. It is select-guarded so a POST racing a
 // just-closed tab returns false (the caller answers 410) instead of blocking on
 // the unbuffered channel forever.
-func (c *liveConn) Dispatch(fn func(*Ctx)) bool {
+func (c *liveConn) Dispatch(fn func()) bool {
 	select {
 	case c.pulse <- fn:
 		return true
@@ -249,7 +260,7 @@ func writeSignalsFrame(w io.Writer, signalsJSON string) {
 	_, _ = io.WriteString(w, "\n\n")
 }
 
-func startTicker(reqCtx context.Context, t tickReg, pulse chan<- func(*Ctx)) {
+func startTicker(reqCtx context.Context, island *Ctx, t tickReg, pulse chan<- func()) {
 	go func() {
 		tk := time.NewTicker(t.d)
 		defer tk.Stop()
@@ -258,8 +269,10 @@ func startTicker(reqCtx context.Context, t tickReg, pulse chan<- func(*Ctx)) {
 			case <-reqCtx.Done():
 				return
 			case <-tk.C:
+				// Self-contained unit: mutate this island, then push only its
+				// container — so a tick in one island never re-renders a sibling.
 				select {
-				case pulse <- t.fn:
+				case pulse <- func() { t.fn(island); island.push() }:
 				case <-reqCtx.Done():
 					return
 				}
