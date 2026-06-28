@@ -185,6 +185,9 @@ func (a *App) Connect() *Conn {
 		cancel()
 		a.t.Fatalf("vt.Connect: build request: %v", err)
 	}
+	// A real same-origin browser SSE fetch sends this; the stream's origin floor
+	// requires it (or a trusted Origin), so mimic the browser here.
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {
 		cancel()

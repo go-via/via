@@ -72,6 +72,7 @@ func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
 	// httptest.NewRequest's context is never cancelled, so the ONLY thing that
 	// can end the stream here is the failed keepalive write — isolating that path.
 	req := httptest.NewRequest(http.MethodGet, "/_via/sse", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // past the origin floor, as a real browser would
 
 	go handler.ServeHTTP(&halfOpenFlusher{}, req)
 
@@ -141,6 +142,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -195,6 +197,7 @@ func openStream(t *testing.T, srv *httptest.Server) (<-chan string, context.Canc
 	ctx, cancel := context.WithCancel(context.Background())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -283,6 +286,7 @@ func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -314,6 +318,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()

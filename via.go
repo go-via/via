@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strconv"
+	"sync/atomic"
 
 	"github.com/go-via/via/v2/h"
 )
@@ -220,6 +221,11 @@ func Register[T any, PT interface {
 }](root T, opts ...Option) http.Handler {
 	cfg := newConfig(opts)
 	reg := newRegistry()
+	maxLive := cfg.maxSSEConn
+	if maxLive <= 0 {
+		maxLive = defaultMaxSSEConn
+	}
+	var liveCount atomic.Int64 // concurrent live SSE streams, capped at maxLive
 	mux := http.NewServeMux()
 
 	// A composition that implements OnConnect is a live island: the page carries
@@ -257,10 +263,27 @@ func Register[T any, PT interface {
 
 	if isLive {
 		mux.HandleFunc("GET /_via/sse", func(w http.ResponseWriter, req *http.Request) {
+			// Origin floor first: the stream opens a long-lived island goroutine +
+			// timers and renders the app's HTML, so reject anything that can't prove
+			// a same-origin (or explicitly trusted) source before allocating it.
+			if !originAllowed(req, cfg) {
+				http.Error(w, "forbidden origin", http.StatusForbidden)
+				return
+			}
 			if _, ok := w.(http.Flusher); !ok {
 				http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 				return
 			}
+			// Connection cap: bound concurrent streams (each holds an island
+			// goroutine + timers). Increment-then-check so the gauge can't be raced
+			// past the limit; on refusal give back the slot and 503. The admitted
+			// path's defer below decrements when the stream ends.
+			if liveCount.Add(1) > int64(maxLive) {
+				liveCount.Add(-1)
+				http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
+				return
+			}
+			defer liveCount.Add(-1)
 			defer func() {
 				if rec := recover(); rec != nil {
 					log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())

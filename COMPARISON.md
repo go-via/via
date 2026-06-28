@@ -37,7 +37,7 @@ load-bearing claims survived.
 | **Feature surface & gaps** | Routing + typed path params, Groups + middleware, HMAC sessions, multipart uploads, durable state, 3 plugins, showcase app | Single root at `/{$}`, live islands, in-process `topic.Topic`, per-request CSP+nonce, Each/If/When helpers | **main** — ships ~6 subsystems v2 entirely lacks |
 | **Security & CSRF** | Cookie + via_tab two-factor (256-bit), session Rotate (fixation defense), correct CSP nonce reuse on push — **but** CSP opt-in only, and session gate is *conditional* on a bound session | CSP + nosniff on by default, fail-closed origin floor (independent of tab secrecy), cookieless (no clobber class), 1 MiB body cap; tab id 128-bit, live-only | **tie** — v2 sounder-by-default; main more defense-in-depth *when configured* |
 | **Testing & code health** | vt harness self-tested (89%), typed `Action(p.Method)` addressing, 130 files / 21 pkgs breadth | Reflection-free *enforced* by AST tests, novel no-&/no-closure invariants, 95.4% core / 100% topic; vt harness 0% self-coverage, integer `Action(n)` brittle | **v2** — testability-per-LOC + enforced invariants; main wins breadth |
-| **Prod readiness & ecosystem** | NATS JetStream backplane + conformance suite, graceful drain, livez/healthz/readyz, 3-pod cluster (HAProxy+NATS+Postgres), reconnect IIFE, plugins | Honest frozen single-pod core; in-process topic only; uncapped + origin-*unchecked* SSE GET stream; no probes, no reconnect | **main** — deployable at horizontal scale today |
+| **Prod readiness & ecosystem** | NATS JetStream backplane + conformance suite, graceful drain, livez/healthz/readyz, 3-pod cluster (HAProxy+NATS+Postgres), reconnect IIFE, plugins | Honest frozen single-pod core; in-process topic only; SSE GET now origin-checked + connection-capped; reconnect floor present; no probes | **main** — deployable at horizontal scale today |
 
 Fact-check-driven corrections folded into the matrix: v2's positional-id 410 is
 **stateless-path only** (live path silently no-ops + re-syncs via SSE); v2 is
@@ -61,19 +61,24 @@ without breaking no-reflection / no-identifier-strings / no-closure-at-call-site
 | 5 | **Name- or structural-path action identity** so bindings survive View branching and **lists-with-actions** (today positional ids + `shapeMatches` 410 on the stateless path; live path no-ops out-of-range + re-syncs; row-level actions explicitly punted). | **L** | **Compromise risk** — name stability historically came from reflection. v2 must invent a structural-path cursor that stays reflection-free and identifier-string-free; the hardest "within guarantees" item. |
 | 6 | **Router: multi-page Mount + Groups + middleware pipeline + typed path params.** Today only `/{$}` + internal action paths; no middleware abstraction at all. | **L** | Partly — routing/middleware are reflection-free; typed path-param *binding* leaned on tags in main, needs a handle-based decode. |
 | 7 | **Cross-pod / durable backplane** — or an explicit, documented sticky-session-only scaling stance. Today multi-pod shared state is impossible (`topic` is in-process). | **L** | Yes — pluggable interface behind `topic`; orthogonal to wiring guarantees. |
-| 8 | **Cap + origin-check the SSE GET stream** before any internet-facing deploy (currently uncapped and, unlike the POST path, *not* origin-checked). | **S** | Yes — add the existing `originAllowed` floor to the GET handler + a max-connections cap. |
+| 8 | ✓ **Landed.** **Cap + origin-check the SSE GET stream** before any internet-facing deploy. | **S** | Done — the `originAllowed` floor now gates the GET, plus a per-Register concurrent-connection cap (`WithMaxSSEConnections`, default 10,000, over-cap 503). |
 | 9 | **Multipart file-upload binding** into typed component fields. | **M** | Compromise risk — main bound files via reflective struct fields; v2 needs an explicit handle API. |
 | 10 | **Plugin / asset-embedding story** (echarts/maplibre/picocss-class) + one production-shaped reference deployment. | **L** | Yes — embedding is independent of wiring guarantees. |
 | 11 | **Richer reactive/binding surface**: Computed/Effect, Show/Class/Attr/Style helpers, wider `on.*` vocab (Debounce/Throttle/Key/Confirm/Indicator), numeric Clamp/AtLeast/AtMost across scopes. | **M** | Yes — helper APIs, no reflection needed. |
 | 12 | **vt harness self-coverage + compile-safe action addressing in tests** (integer `Action(n)` is brittle; renumbering silently breaks intent with no compiler help). | **M** | Coupled to #5 — typed addressing returns once action identity is non-positional. |
 
-**Update (`feat/v2-bare-core`):** gaps #1 and #2 have landed — a keepalive
+**Update (`feat/v2-bare-core`):** gaps #1, #2, and #8 have landed — a keepalive
 comment frame, a per-frame write deadline, write-error/half-open teardown (a
 failed frame write cancels the stream so the island goroutine + timers don't
-leak), and main's reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`),
-all within v2's guarantees and covered by black-box + wire-shape tests. The next
-load-bearing items are **#8** (cap + origin-check the SSE GET, trivial) and
-**#3** (session-scoped state).
+leak), main's reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`), and
+the SSE GET now origin-checked + concurrency-capped (`WithMaxSSEConnections`,
+default 10,000, over-cap 503) — all within v2's guarantees and covered by
+black-box + wire-shape tests. Known follow-up from #8: a persistently-full server
+returns 503 on the reconnect `@get`, which Datastar retries to exhaustion →
+reload, and the page GET is uncapped so it re-serves → a reload-storm rather than
+a clean "server busy" UX; mitigation (a 503-specific backoff or a degraded
+over-cap page) is deferred. The remaining load-bearing item is **#3**
+(session-scoped state).
 
 ## 4. What v2 Got Genuinely Right (main should envy)
 
@@ -110,10 +115,8 @@ production subsystem v2 lacks. Cherry-picking *from* v2 into main is not
 worthwhile — the wins are architectural, not portable patches.
 
 **Single concrete next move:** the **resilience floor (#1) + reconnect (#2)** —
-once the gating blocker — have now landed (keepalive ticker + per-frame write
-deadline + write-error teardown on `runLiveStream`, and main's `reconnect.go`
-IIFE ported verbatim as the client floor). Sequence from here: SSE
-origin-check/cap (#8, trivial), then session-scoped state (#3) as the first real
-feature gap. Defer the action-identity rework (#5) and router (#6) until a
-concrete multi-page/lists-with-actions app forces the design — that is where the
+once the gating blocker — and **#8** (SSE GET origin-check + connection cap) have
+now landed. The next real feature gap is **session-scoped state (#3)**. Defer the
+action-identity rework (#5) and router (#6) until a concrete
+multi-page/lists-with-actions app forces the design — that is where the
 no-reflection guarantee will be genuinely tested.
