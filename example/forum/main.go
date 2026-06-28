@@ -260,6 +260,9 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx, f via.File) {
 		via.Redirect(ctx, "/profile")
 		return
 	}
+	// Demo simplification: the client-declared Content-Type is trusted as-is. A
+	// data: URL in an <img src> is not script-executable, but a real app should
+	// sniff the bytes and constrain the type before storing/serving it.
 	p.user.Avatar = "data:" + f.ContentType() + ";base64," + base64.StdEncoding.EncodeToString(data)
 	p.store.save(p.user)
 	sess.Put(ctx, p.user)
