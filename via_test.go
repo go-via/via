@@ -286,7 +286,7 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
-	"OnClickArg": true, "NewChild": true,
+	"OnClickArg": true, "NewChild": true, "PostForm": true, "Mount": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never

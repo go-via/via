@@ -67,6 +67,109 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 		"OnInit must load the session before the ctx-free View renders")
 }
 
+// loginForm is a native server-rendered form (no Datastar): Submit reads a form
+// field, logs the user in, and redirects — the canonical auth flow.
+type loginForm struct{}
+
+func (l *loginForm) Submit(ctx *via.Ctx) {
+	if name := ctx.Request().FormValue("name"); name != "" {
+		sess.Put(ctx, acct{Name: name})
+		via.Redirect(ctx, "/welcome")
+	}
+}
+func (l *loginForm) View() h.H {
+	return via.PostForm(l.Submit,
+		h.Input(h.RawAttr("name", "name")),
+		h.Button(h.Str("go")),
+	)
+}
+
+func postFormURL(t *testing.T, url, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// A native form posts to a positional form endpoint; its handler runs (reading
+// the form fields off the request), and a via.Redirect turns into a 303 — so a
+// sign-in navigates the browser, which Datastar (no execute-script) cannot do.
+func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	srv := serve(t, r)
+
+	_, page := do(t, srv, http.MethodGet, "/login", "")
+	assert.Contains(t, page, `<form method="post" action="/login/_via/f/0">`,
+		"PostForm must render a native form posting to the form endpoint")
+
+	resp := postFormURL(t, srv.URL+"/login/_via/f/0", "name=alice")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "via.Redirect must 303")
+	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
+	assert.Contains(t, resp.Header.Get("Set-Cookie"), "via_session",
+		"the sign-in session cookie must ride the 303 so the redirect lands authenticated")
+}
+
+// A form POST is state-changing, so it must fail closed to a cross-site origin
+// (CSRF), exactly like the action endpoint.
+func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/login", loginForm{})
+	srv := serve(t, r)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/login/_via/f/0", strings.NewReader("name=alice"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
+// An out-of-range form index fails closed (410), so a stale client re-bootstraps.
+func TestRouter_postFormOutOfRangeIsGone(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/login", loginForm{})
+	srv := serve(t, r)
+
+	resp := postFormURL(t, srv.URL+"/login/_via/f/9", "name=alice")
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
+}
+
+// The form body is capped (memory-exhaustion parity with the JSON action path):
+// an oversize body is rejected, not buffered whole.
+func TestRouter_postFormCapsBody(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/login", loginForm{})
+	srv := serve(t, r)
+
+	resp := postFormURL(t, srv.URL+"/login/_via/f/0", "name="+strings.Repeat("x", 2<<20))
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+// A form handler that does not redirect re-renders the page (so it can show
+// validation errors etc.).
+func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	srv := serve(t, r)
+
+	resp := postFormURL(t, srv.URL+"/login/_via/f/0", "name=") // empty → no redirect
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	b, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(b), `<form method="post"`, "no-redirect form post must re-render the page")
+}
+
 // A router serves several pages at their own paths; each page's actions are
 // namespaced under its mount path, so two pages can both declare action 1
 // without colliding, and an action on one page never touches the other.

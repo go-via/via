@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"runtime/debug"
@@ -83,6 +84,59 @@ func Mount[T any, PT interface {
 	r.mux.HandleFunc("POST "+base+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
 		statelessAction[T, PT](w, req, root, r.cfg, r.sessions, base)
 	})
+	r.mux.HandleFunc("POST "+base+"/_via/f/{n}", func(w http.ResponseWriter, req *http.Request) {
+		formAction[T, PT](w, req, root, r.cfg, r.sessions, base)
+	})
+}
+
+// formAction handles a native form POST (PostForm): parse the form, run the
+// positional handler, then 303-redirect to a pending Redirect target, or
+// re-render the page (so a handler can show validation errors). Server-rendered
+// navigation — no Datastar.
+func formAction[T any, PT interface {
+	*T
+	viewer
+}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("via: form handler panic: %v\n%s", rec, debug.Stack())
+			http.Error(w, "form failed", http.StatusInternalServerError)
+		}
+	}()
+	if !originAllowed(req, cfg) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	// Cap the form body for memory-exhaustion parity with the JSON action path —
+	// ParseForm otherwise buffers a urlencoded body without limit.
+	req.Body = http.MaxBytesReader(w, req.Body, maxActionBody)
+	if err := req.ParseForm(); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "malformed form", http.StatusBadRequest)
+		return
+	}
+	inst := root
+	runOnInit(PT(&inst), w, req, sessions)
+	bind, _ := renderRootBase(PT(&inst), nil, false, true, base) // populate the forms table
+	n, err := strconv.Atoi(req.PathValue("n"))
+	if err != nil || n < 0 || n >= len(bind.forms) {
+		http.Error(w, "no such form", http.StatusGone)
+		return
+	}
+	bind.req = req
+	bind.sessions = sessions
+	bind.sessW = w
+	bind.forms[n](bind)
+	if bind.redirect != "" {
+		http.Redirect(w, req, bind.redirect, http.StatusSeeOther)
+		return
+	}
+	_, body := renderRootBase(PT(&inst), nil, false, true, base)
+	writeHTMLPage(w, cfg, body)
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under a
