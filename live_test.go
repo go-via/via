@@ -2,7 +2,9 @@ package via_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -13,9 +15,84 @@ import (
 	"github.com/go-via/via/v2"
 	"github.com/go-via/via/v2/h"
 	"github.com/go-via/via/v2/topic"
+	"github.com/go-via/via/v2/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// A live stream must emit a periodic keepalive even on an island with no ticks:
+// a successful write proves the peer is still there, and a FAILED write is the
+// only in-band way to notice a silently-dropped (half-open) peer so the island
+// goroutine and its timers don't leak. It must be an SSE comment frame, not a
+// signal/element patch, so it never mutates client state.
+func TestKeepalive_quietStreamStillBeatsSoHalfOpenPeersAreDetected(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(15*time.Millisecond)))
+	conn := app.Connect()
+
+	line := conn.Await(": keepalive")
+	assert.True(t, strings.HasPrefix(strings.TrimSpace(line), ":"),
+		"keepalive must be an SSE comment frame (starts with ':'), not a data/event line")
+
+	// A second beat proves the keepalive is periodic, not a one-shot frame on
+	// connect — only a recurring write can detect a peer that vanishes later.
+	conn.Await(": keepalive")
+}
+
+// halfOpenFlusher lets the connect handshake succeed but fails the keepalive
+// write, standing in for a peer that vanished mid-session without a FIN (a
+// broken pipe surfacing on the next write). Failing the keepalive specifically —
+// not the first frame — exercises the realistic half-open moment: the stream was
+// healthy, then a later write is the first to notice the peer is gone.
+type halfOpenFlusher struct{ hdr http.Header }
+
+func (f *halfOpenFlusher) Header() http.Header {
+	if f.hdr == nil {
+		f.hdr = http.Header{}
+	}
+	return f.hdr
+}
+func (f *halfOpenFlusher) WriteHeader(int) {}
+func (f *halfOpenFlusher) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(": keepalive")) {
+		return 0, errors.New("broken pipe")
+	}
+	return len(p), nil
+}
+func (f *halfOpenFlusher) Flush() {}
+
+// A half-open peer (gone without a FIN) never cancels the request context, so a
+// failed frame write is the only in-band signal that it's gone. The stream must
+// react to it by tearing the island down — running disposers, stopping ticks —
+// not by looping its single goroutine against a dead socket forever.
+func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
+	t.Parallel()
+	done := make(chan struct{})
+	handler := via.Register(disposeProbe{disposed: done}, via.WithSSEHeartbeat(15*time.Millisecond))
+	// httptest.NewRequest's context is never cancelled, so the ONLY thing that
+	// can end the stream here is the failed keepalive write — isolating that path.
+	req := httptest.NewRequest(http.MethodGet, "/_via/sse", nil)
+
+	go handler.ServeHTTP(&halfOpenFlusher{}, req)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a failed keepalive write must tear the island down (run disposers); it leaked instead")
+	}
+}
+
+// The per-frame write deadline guards against a stalled peer pinning the single
+// goroutine — but it must not kill a healthy, merely-slow client. A normal
+// stream with a write timeout configured must still deliver its frames.
+func TestLive_perFrameWriteDeadlineDoesNotBreakAHealthyStream(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(quietIsland{},
+		via.WithSSEHeartbeat(15*time.Millisecond), via.WithSSEWriteTimeout(2*time.Second)))
+	conn := app.Connect()
+
+	conn.Await(": keepalive")
+}
 
 // pulse is a live island: implementing OnConnect opts it into a server-push SSE
 // stream. A server-side ticker increments a beat count; via re-renders and

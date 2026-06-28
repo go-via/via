@@ -84,13 +84,85 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "\n")
 }
 
+// defaultHeartbeat is the keepalive cadence when WithSSEHeartbeat is unset or
+// non-positive. A failed keepalive write is the only in-band way to detect a
+// half-open peer, so the keepalive is never disabled — a non-positive value
+// floors to this.
+const defaultHeartbeat = 25 * time.Second
+
+// writeKeepaliveFrame writes one SSE comment frame. A comment (a line starting
+// with ':') is ignored by the client — it mutates no signal and patches no
+// element — so it keeps the connection warm and proves liveness without
+// touching client state. Its real job is the write itself: a failure on a
+// vanished (half-open) peer is what lets the stream tear down instead of leaking.
+func writeKeepaliveFrame(w io.Writer) {
+	_, _ = io.WriteString(w, ": keepalive\n\n")
+}
+
+// errWriter records the first write error so a frame's many small writes can be
+// checked once, after the whole frame is emitted.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
+	}
+	n, err := e.w.Write(p)
+	if err != nil {
+		e.err = err
+	}
+	return n, err
+}
+
+// sseStream serializes every write to one live connection and tears the stream
+// down on the FIRST write or flush failure. A half-open peer (vanished without a
+// FIN) never cancels the request context, so a failed frame write is the only
+// in-band signal it's gone: on failure sseStream cancels the stream's context,
+// which stops the island goroutine, its tickers, and its subscriptions and runs
+// disposers — instead of leaking them against a dead socket. A per-frame write
+// deadline (timeout) keeps a stalled-but-alive peer from pinning the single
+// goroutine forever; timeout <= 0 disables it. All calls run on the island
+// goroutine, so it needs no lock.
+type sseStream struct {
+	w       io.Writer
+	rc      *http.ResponseController
+	timeout time.Duration
+	cancel  context.CancelFunc
+	failed  bool
+}
+
+// frame emits one SSE event through write, flushes it, and on any write/flush
+// error cancels the stream so the island tears down. Once failed it is a no-op,
+// so a write racing a just-torn-down stream can't re-trigger teardown.
+func (s *sseStream) frame(write func(io.Writer)) {
+	if s.failed {
+		return
+	}
+	if s.timeout > 0 {
+		_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
+	}
+	ew := &errWriter{w: s.w}
+	write(ew)
+	err := ew.err
+	if err == nil {
+		err = s.rc.Flush()
+	}
+	if err != nil {
+		s.failed = true
+		s.cancel()
+	}
+}
+
 // runLiveStream drives the island on a single goroutine. Ticks, subscriptions,
-// AND dispatched actions (from the POST handler via liveConn.Dispatch) all feed
-// the one pulse channel — created by the caller and shared with the registry —
-// so every island mutation + render is serialized, no lock. It always loops
-// (even with no ticks/subs) so an interactive-only island still receives
-// dispatched actions; disposers run on exit (client disconnect).
-func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), push func()) {
+// dispatched actions (from the POST handler via liveConn.Dispatch), AND the
+// keepalive all feed through this one goroutine — so every island mutation,
+// render, and stream write is serialized, no lock. It always loops (even with no
+// ticks/subs) so an interactive-only island still receives dispatched actions
+// and beats; disposers run on exit (client disconnect or a failed write).
+func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), push, keepalive func(), interval time.Duration) {
 	defer func() {
 		for _, d := range island.disposers {
 			d()
@@ -102,6 +174,8 @@ func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), p
 	for _, start := range island.subs {
 		start(reqCtx, pulse)
 	}
+	beat := time.NewTicker(interval)
+	defer beat.Stop()
 	for {
 		select {
 		case <-reqCtx.Done():
@@ -109,6 +183,8 @@ func runLiveStream(reqCtx context.Context, island *Ctx, pulse chan func(*Ctx), p
 		case fn := <-pulse:
 			fn(island)
 			push()
+		case <-beat.C:
+			keepalive()
 		}
 	}
 }

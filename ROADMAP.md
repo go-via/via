@@ -17,11 +17,15 @@ What is built on this branch, and where implementation refined the plan:
   that Datastar morphs into the page. **K4 satisfied**: `vtbrowser/` is a
   separate module (chromedp kept out of core's deps) with a `-tags browser` test
   that drives headless Chromium and asserts the DOM morphs on server push
-  (beats 0→7). Still pending in slice 4+: the multi-island per-tab SSE multiplex
-  (today one island = one stream), `OnDispose`/`Subscribe`, reconnect floor, and
-  capping/authenticating the stream (the `via_tab` handshake lands with
-  `via/sess`, slice 9). The SSE GET is currently uncapped + origin-unchecked —
-  acceptable for a read stream with no state mutation, flagged as a known limit.
+  (beats 0→7). **Reconnect floor + resilience: DONE on `feat/v2-bare-core`** — a
+  keepalive comment frame (`WithSSEHeartbeat`), a per-frame write deadline
+  (`WithSSEWriteTimeout`), write-error/half-open teardown (a failed frame write
+  cancels the stream so the island goroutine + timers don't leak), and main's
+  reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`). Still pending in
+  slice 4+: the multi-island per-tab SSE multiplex (today one island = one
+  stream) and capping/authenticating the stream (the `via_tab` handshake lands
+  with `via/sess`, slice 9). The SSE GET is currently uncapped + origin-unchecked
+  — acceptable for a read stream with no state mutation, flagged as a known limit.
 - **Slice 5 (`State[T]`): DONE and BROWSER-VERIFIED.** Server-authoritative,
   per-connection island state: `Get`/`Set` plus a `Display()` that renders the
   literal escaped value and is element-patched (morphed) on change. The K2
@@ -186,9 +190,11 @@ Format: decision → resolution → why.
 - **out-of-core-cut-list** → confirm the big cuts; return `via/sess`,
   `via/router`, and `RenderState[T]` → sessions/routing are table-stakes
   encoding a security model you must not fork per app.
-- **reconnect-strategy** → port reconnect.go IIFE verbatim as the floor;
-  island re-arm gated on a chromedp test → Datastar does not re-arm a clean
-  close, so a graceful deploy freezes every tab without the floor.
+- **reconnect-strategy** (✓ DONE on `feat/v2-bare-core`) → ported reconnect.go
+  IIFE verbatim as the floor (reload-to-re-bootstrap on `retries-failed`);
+  real-browser re-arm behavior still to be gated on a chromedp test → Datastar
+  does not re-arm a clean close, so a graceful deploy freezes every tab without
+  the floor.
 
 ### Corrected / made concrete (this Chair's revision)
 

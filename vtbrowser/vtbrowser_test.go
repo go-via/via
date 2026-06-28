@@ -182,6 +182,65 @@ func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
+// The reconnect manager is a nonce'd inline IIFE — wire-shape tests prove it
+// ships, but only a real browser proves it PARSES and RUNS under the strict CSP,
+// attaches its datastar-fetch listener, and drives the banner + status DOM. A
+// dropped stream must surface the "Reconnecting…" banner and flip the status
+// attribute; the resume must clear both. The drop is faked with a synthetic
+// 'retrying' datastar-fetch event (it carries no patch payload, so Datastar's
+// own document listener ignores it) and asserted synchronously. The resume is
+// NOT faked — a synthetic patch event would make Datastar try to apply a
+// payload-less patch and throw — so it rides a REAL server push: the ticker's
+// next element-patch, which is exactly the signal Datastar emits on a live
+// stream resume (no started/finished, only an incoming patch).
+func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
+	s := vtbrowser.Open(t, via.Register(liveTicker{}))
+
+	var booted bool
+	s.Eval(`window.__viaRC===1 && document.documentElement.getAttribute('data-via-connection')==='online'`, &booted)
+	if !booted {
+		t.Fatal("reconnect manager did not boot online — the nonce'd IIFE was dropped by the CSP or failed to run")
+	}
+
+	var status string
+	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
+		`document.documentElement.getAttribute('data-via-connection')`, &status)
+	if status != "connecting" {
+		t.Fatalf("a dropped stream did not flip the status to connecting: %q", status)
+	}
+	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "Reconnecting") {
+		t.Fatalf("a dropped stream did not surface the reconnect banner: %q", got)
+	}
+
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
+		`(document.getElementById('via-reconnect-banner')||{style:{}}).style.display==='none'`,
+		"a real server-push patch cleared the banner and restored online")
+	s.RequireCleanConsole()
+}
+
+// When Datastar gives up (retries-failed), the manager goes offline and, past
+// its reload-loop cap, shows a terminal "please refresh" notice instead of
+// scheduling another reload — the guard that stops a permanently-down server
+// from pinning a tab in a reload loop. Pre-arming the counter at the cap keeps
+// the test deterministic (no real page reload) while exercising that branch.
+func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
+	s := vtbrowser.Open(t, via.Register(clicker{}))
+
+	var armed bool
+	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
+
+	var status string
+	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed'}}));`+
+		`document.documentElement.getAttribute('data-via-connection')`, &status)
+	if status != "offline" {
+		t.Fatalf("a give-up did not flip the status to offline: %q", status)
+	}
+	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "refresh") {
+		t.Fatalf("at the reload cap the manager must advise a manual refresh: %q", got)
+	}
+	s.RequireCleanConsole()
+}
+
 // A fan-out push must NOT clobber what another user is typing: while A composes
 // (not yet sent), B sends; A must receive B's line AND keep its own draft. The
 // element push omits data-signals precisely so a morph never overwrites a

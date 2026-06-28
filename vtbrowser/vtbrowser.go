@@ -211,6 +211,27 @@ func (s *Session) Eval(js string, out any) {
 	s.eval(js, out)
 }
 
+// WaitEvalTrue polls a JavaScript boolean expression until it evaluates true,
+// failing after defaultTimeout. For DOM facts the textContent-based Wait*
+// helpers can't express — an attribute's value, an element's display style.
+func (s *Session) WaitEvalTrue(js, desc string) {
+	s.t.Helper()
+	deadline := time.After(defaultTimeout)
+	for {
+		var ok bool
+		s.eval(js, &ok)
+		if ok {
+			return
+		}
+		select {
+		case <-deadline:
+			s.t.Fatalf("vtbrowser: expr never became true (%s) within %v: %s", desc, defaultTimeout, js)
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
 // Sleep settles for d. Prefer the Wait* helpers, which poll the DOM and so
 // absorb latency without a fixed delay; reach for Sleep only when there is no
 // observable signal to wait on — e.g. letting the SSE stream connect before a
