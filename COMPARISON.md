@@ -13,18 +13,19 @@ lint-provable wiring substrate: reflection-free generics binding (CI-enforced
 over core files), a single-goroutine live-island model that kills whole race
 classes by construction, secure-by-default CSP + a fail-closed origin floor, and
 95%+ core coverage at a ~1:1 test ratio. What it fundamentally trades away is
-**scope**: no session/app-scoped or cross-pod state, no router/groups, no
-middleware, no file uploads, no plugins. Of the two gaps once flagged here as
-load-bearing and non-negotiable — **server/client reconnect + half-open
-detection** and **session-scoped state** — the first has since **landed** on
-`feat/v2-bare-core` (a keepalive comment frame + per-frame write deadline +
-write-error/half-open teardown, plus main's reconnect IIFE ported verbatim). The
-trade is worth making *as a rebuild of the foundation*, because main's
-expressiveness rests on reflective machinery (PC-trampoline `-fm` parsing guarded
-by a boot canary) that v2 has shown is unnecessary. The remaining load-bearing
-gap before v2 can host a real authed app is **session-scoped state**; at-least-
-once delivery and cross-pod fan-out are still absent but not on the critical path
-for a single-pod app. Confidence: high — every dimension was fact-checked and the
+**scope**: no app-scoped or cross-pod state, no router/groups, no middleware, no
+file uploads, no plugins. Both gaps once flagged here as load-bearing and
+non-negotiable — **server/client reconnect + half-open detection** and
+**session-scoped state** — have since **landed** on `feat/v2-bare-core`: the
+resilience floor + reconnect (keepalive + per-frame write deadline +
+write-error/half-open teardown + main's reconnect IIFE), and an opt-in `via/sess`
+(typed per-browser store, signed-HMAC cookie, `Rotate` fixation defense, idle
+TTL) that keeps the cookieless default for apps that don't use it. The trade is
+worth making *as a rebuild of the foundation*, because main's expressiveness
+rests on reflective machinery (PC-trampoline `-fm` parsing guarded by a boot
+canary) that v2 has shown is unnecessary. What's still absent — at-least-once
+delivery, cross-pod fan-out, router/middleware — is off the critical path for a
+single-pod authed app. Confidence: high — every dimension was fact-checked and the
 load-bearing claims survived.
 
 ## 2. Comparison Matrix
@@ -34,7 +35,7 @@ load-bearing claims survived.
 | **Wiring & architecture** | Reflection-built descriptor; name-stable action identity survives View restructuring & lists; nested composition tree; declarative tag-driven inputs (path/query/file/scopes) | Reflection-free generics + positional action ids; compile-time binding errors; no composition tree; single root viewer | **tie** — v2 safer/simpler; main more expressive at scale |
 | **Reactive & state model** | 4-quadrant taxonomy; cross-pod StateSess/StateApp via CAS backplane; fine-grained read-tracked fan-out; rejectable `Update(fn) error` | 4-type model (Signal/Local/State/List); single-goroutine island mutation; principled signal-patch vs element-patch split; per-connection only, last-write-wins | **main** — only main does shared/persistent/cross-pod reactive state |
 | **Live / SSE / resilience** | Keepalive half-open detection, at-least-once drain queue, server re-bootstrap + client reconnect banner, write deadlines, real cross-pod fan-out | One SSE stream per tab, lock-free pulse channel, clean 410 on closed tab, correct multi-line framing; **now** a keepalive comment frame + per-frame write deadline + write-error teardown (half-open detection) + main's reconnect IIFE ported — but still no at-least-once redelivery and no cross-pod fan-out | **main** — narrowing; v2 has the resilience floor + reconnect now, main still leads on redelivery + real cross-pod fan-out |
-| **Feature surface & gaps** | Routing + typed path params, Groups + middleware, HMAC sessions, multipart uploads, durable state, 3 plugins, showcase app | Single root at `/{$}`, live islands, in-process `topic.Topic`, per-request CSP+nonce, Each/If/When helpers | **main** — ships ~6 subsystems v2 entirely lacks |
+| **Feature surface & gaps** | Routing + typed path params, Groups + middleware, HMAC sessions, multipart uploads, durable state, 3 plugins, showcase app | Single root at `/{$}`, live islands, in-process `topic.Topic`, per-request CSP+nonce, Each/If/When helpers, opt-in `via/sess` (typed store + signed cookie + Rotate + TTL) | **main** — still ships router/middleware/uploads/plugins v2 lacks |
 | **Security & CSRF** | Cookie + via_tab two-factor (256-bit), session Rotate (fixation defense), correct CSP nonce reuse on push — **but** CSP opt-in only, and session gate is *conditional* on a bound session | CSP + nosniff on by default, fail-closed origin floor (independent of tab secrecy), cookieless (no clobber class), 1 MiB body cap; tab id 128-bit, live-only | **tie** — v2 sounder-by-default; main more defense-in-depth *when configured* |
 | **Testing & code health** | vt harness self-tested (89%), typed `Action(p.Method)` addressing, 130 files / 21 pkgs breadth | Reflection-free *enforced* by AST tests, novel no-&/no-closure invariants, 95.4% core / 100% topic; vt harness 0% self-coverage, integer `Action(n)` brittle | **v2** — testability-per-LOC + enforced invariants; main wins breadth |
 | **Prod readiness & ecosystem** | NATS JetStream backplane + conformance suite, graceful drain, livez/healthz/readyz, 3-pod cluster (HAProxy+NATS+Postgres), reconnect IIFE, plugins | Honest frozen single-pod core; in-process topic only; SSE GET now origin-checked + connection-capped; reconnect floor present; no probes | **main** — deployable at horizontal scale today |
@@ -56,7 +57,7 @@ without breaking no-reflection / no-identifier-strings / no-closure-at-call-site
 |---|---|---|---|
 | 1 | ✓ **Landed.** **Resilience floor: keepalive/heartbeat + write deadlines** so a dead peer doesn't leak the island goroutine + ticker, and a stalled client can't pin the single goroutine. | **S** | Yes — pure server-loop plumbing, no wiring impact. |
 | 2 | ✓ **Landed.** **Server reconnect/re-bootstrap + client reconnect banner.** main's `reconnect.go` IIFE ported verbatim; covers Datastar's clean-close no-retry freeze. | **M** | Yes — client IIFE + per-(re)connect _viatab handshake; no reflection/identifier-string needed. |
-| 3 | **Session-scoped state** (signed cookie + typed per-user store, `Rotate`-equivalent for fixation defense). Single largest gap for any authed app; cookieless currently pushes this entirely onto app authors. | **L** | Mostly — store/cookie need no reflection. Tension: scoped state historically rode struct-tag declaration; v2 must express scope via handles/generics, not `via:"..."` tags. |
+| 3 | ✓ **Landed.** **Session-scoped state** — opt-in `via/sess`: signed-HMAC cookie + typed per-browser store, `Rotate` fixation defense, idle TTL, cookieless by default. | **L** | Done, no reflect — the struct-tag tension was sidestepped: values are keyed by Go type via a typed-nil sentinel `(*T)(nil)`, not `via:"..."` tags. |
 | 4 | **At-least-once (or buffered) delivery** so a push onto a dropping socket isn't silently lost (v2 currently discards the write error too). | **M** | Yes — a per-connection redelivery queue, server-internal. |
 | 5 | **Name- or structural-path action identity** so bindings survive View branching and **lists-with-actions** (today positional ids + `shapeMatches` 410 on the stateless path; live path no-ops out-of-range + re-syncs; row-level actions explicitly punted). | **L** | **Compromise risk** — name stability historically came from reflection. v2 must invent a structural-path cursor that stays reflection-free and identifier-string-free; the hardest "within guarantees" item. |
 | 6 | **Router: multi-page Mount + Groups + middleware pipeline + typed path params.** Today only `/{$}` + internal action paths; no middleware abstraction at all. | **L** | Partly — routing/middleware are reflection-free; typed path-param *binding* leaned on tags in main, needs a handle-based decode. |
@@ -77,8 +78,12 @@ black-box + wire-shape tests. Known follow-up from #8: a persistently-full serve
 returns 503 on the reconnect `@get`, which Datastar retries to exhaustion →
 reload, and the page GET is uncapped so it re-serves → a reload-storm rather than
 a clean "server busy" UX; mitigation (a 503-specific backoff or a degraded
-over-cap page) is deferred. The remaining load-bearing item is **#3**
-(session-scoped state).
+over-cap page) is deferred. **#3 (session-scoped state)** has since landed too —
+opt-in `via/sess` (typed per-browser store, signed-HMAC cookie, `Rotate`, idle
+TTL), reflection-free via a typed-nil type key. With #1, #2, #3, #8 done, no
+load-bearing gap remains for a single-pod authed app; the open items
+(router/middleware #6, action-identity #5, cross-pod #7) are feature breadth, not
+blockers.
 
 ## 4. What v2 Got Genuinely Right (main should envy)
 
@@ -114,9 +119,10 @@ secure-by-default) is achievable and superior; main retains every load-bearing
 production subsystem v2 lacks. Cherry-picking *from* v2 into main is not
 worthwhile — the wins are architectural, not portable patches.
 
-**Single concrete next move:** the **resilience floor (#1) + reconnect (#2)** —
-once the gating blocker — and **#8** (SSE GET origin-check + connection cap) have
-now landed. The next real feature gap is **session-scoped state (#3)**. Defer the
-action-identity rework (#5) and router (#6) until a concrete
-multi-page/lists-with-actions app forces the design — that is where the
-no-reflection guarantee will be genuinely tested.
+**Single concrete next move:** every load-bearing gap is now closed — the
+resilience floor (#1) + reconnect (#2), the SSE GET origin-check + connection cap
+(#8), and session-scoped state (#3, opt-in `via/sess`). v2 can host a real
+single-pod authed app today. The next steps are feature breadth, not blockers:
+the router/middleware (#6) and the structural-key action identity (#5), which
+should wait for a concrete multi-page/lists-with-actions app to force the
+design — that is where the no-reflection guarantee will be genuinely tested.
