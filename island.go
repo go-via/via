@@ -9,7 +9,7 @@ import (
 )
 
 // anyLiveIsland reports whether a completed render discovered an embedded
-// Island[C] child that is a live island (implements OnConnect) — so the page
+// Child[C] child that is a live island (implements OnConnect) — so the page
 // knows to bootstrap the SSE stream. Read off the real render's Ctx, never a
 // zero probe (whose injected deps would be nil), keeping detection panic-safe.
 func anyLiveIsland(ctx *Ctx) bool {
@@ -31,35 +31,35 @@ func renderIslandPatch(idx int, v viewer) []byte {
 	return b.Bytes()
 }
 
-// Island is a value-field handle that embeds a child composition C as an
-// independent live region (an "island") within a parent's View. Like Signal[T]
-// and State[T] it is declared as a struct field and bound by the runtime, never
-// reflected over:
+// Child is a value-field handle that embeds a sub-composition C within a
+// parent's View. The child may be plain (just structure + actions) or live (it
+// implements OnConnect) — when live it becomes an independent region patched
+// over the parent's one SSE stream; when not, its actions re-render it in place.
+// Liveness is an interface assertion on C, never a separate type. Like Signal[T]
+// and State[T] it is a struct field bound by the runtime, never reflected over:
 //
-//	type Page struct{ Chat via.Island[ChatRoom]; Ticker via.Island[Clock] }
+//	type Page struct{ Chat via.Child[ChatRoom]; Ticker via.Child[Clock] }
 //	func (p *Page) View() h.H { return h.Div(p.Chat.Embed(), p.Ticker.Embed()) }
 //
-// Because Island is a value field, via's per-connection copy of the parent
-// copies the child with it, so each connection (and, for a stateless page, each
-// request) gets an isolated child instance and its own State — no '&', no shared
-// pointer. The child's View/OnConnect are found by interface assertion, not
-// reflection.
-type Island[C any] struct{ child C }
+// Because Child is a value field, via's per-connection copy of the parent copies
+// the child with it, so each connection (and, for a stateless page, each request)
+// gets an isolated child instance and its own State — no '&', no shared pointer.
+type Child[C any] struct{ child C }
 
-// NewIsland seeds an embedded island's child by value — use it to inject the
+// NewChild seeds an embedded child by value — use it to inject the
 // child's dependencies (a shared *Room, a store) at registration, e.g.
-// via.Register(Page{Chat: via.NewIsland(ChatRoom{room: room})}). The seed is
+// via.Register(Page{Chat: via.NewChild(ChatRoom{room: room})}). The seed is
 // taken by value (no '&'); via's per-connection copy of the parent copies the
 // child with it, so value-typed state stays isolated while pointer deps (the
-// shared room) are intentionally shared. A zero Island[C] is still valid — use
-// NewIsland only when the child needs seeding.
-func NewIsland[C any](child C) Island[C] { return Island[C]{child: child} }
+// shared room) are intentionally shared. A zero Child[C] is still valid — use
+// NewChild only when the child needs seeding.
+func NewChild[C any](child C) Child[C] { return Child[C]{child: child} }
 
-// Embed renders the island's child into its own positional container and binds
-// the child's actions to an island-scoped path (/_via/a/{island}/{n}), so
-// sibling islands stay independent and a push or action patches exactly one of
-// them. Pointer receiver, so p.Chat.Embed() auto-addresses the field — no '&'.
-func (i *Island[C]) Embed() h.H {
+// Embed renders the child into its own positional container and binds its
+// actions to a child-scoped path (/_via/a/{n}/{action}), so siblings stay
+// independent and a push or action patches exactly one of them. Pointer
+// receiver, so p.Chat.Embed() auto-addresses the field — no '&'.
+func (i *Child[C]) Embed() h.H {
 	return h.Dyn(func(r *h.Renderer) {
 		parent, ok := r.Binder().(*Ctx)
 		if !ok {
@@ -67,7 +67,7 @@ func (i *Island[C]) Embed() h.H {
 		}
 		v, isView := any(&i.child).(viewer)
 		if !isView {
-			panic("via: Island[C] requires C to have a View() method")
+			panic("via: Child[C] requires C to have a View() method")
 		}
 		idx := len(parent.islands)
 		child := newCtx(parent.inSignals)
