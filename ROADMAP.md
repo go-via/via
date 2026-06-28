@@ -24,10 +24,15 @@ What is built on this branch, and where implementation refined the plan:
   reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`). The SSE GET is
   now origin-checked (the same `originAllowed` floor as the action POST) and
   capped at a configurable number of concurrent streams (`WithMaxSSEConnections`,
-  default 10,000; over-cap returns 503). Still pending in slice 4+: the
-  multi-island per-tab SSE multiplex (today one island = one stream) and
-  per-connection authentication of the stream (the `via_tab` handshake lands with
-  `via/sess`, slice 9).
+  default 10,000; over-cap returns 503).
+- **Live-island multiplexing: DONE on `feat/v2-bare-core`** (`example/dashboard`).
+  `via.Child[C]` value-field handles embed fixed sub-compositions (plain or live)
+  via `p.Child.Embed()`; live children share one per-tab SSE stream on one
+  goroutine, each re-rendering and patching only its own `#via-i{n}`; actions
+  route by island id + the `via_tab` handshake; signals are slot-scoped
+  (`i{n}_s{k}`) and declared per-container; `via.NewChild` seeds deps. Sessions
+  (`via/sess`) shipped separately. Still pending: name-stable
+  lists-*of*-islands (the structural-key cursor, part of slice 5).
 
   Follow-up (tracked): the cap's 503 is returned on the same `/_via/sse` the
   reconnect manager retries. Against a persistently-full server, a rejected

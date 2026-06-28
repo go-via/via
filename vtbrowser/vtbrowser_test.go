@@ -101,6 +101,51 @@ func (c *chat) View() h.H {
 	)
 }
 
+// bClock + bCounter are two LIVE islands multiplexed on one stream: a ticking
+// clock and a click-driven counter. bDash is the shell (not itself live).
+type bClock struct{ secs via.State[int] }
+
+func (c *bClock) OnConnect(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
+func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(ctx, c.secs.Get()+1) }
+func (c *bClock) View() h.H                    { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
+
+type bCounter struct{ n via.State[int] }
+
+func (c *bCounter) OnConnect(ctx *via.Ctx) error { return nil }
+func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(ctx, c.n.Get()+1) }
+func (c *bCounter) View() h.H {
+	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.OnClick(c.Inc), h.Str("+")))
+}
+
+type bDash struct {
+	Clock   via.Child[bClock]
+	Counter via.Child[bCounter]
+}
+
+func (d *bDash) View() h.H { return h.Div(d.Clock.Embed(), d.Counter.Embed()) }
+
+// Two live islands on one page must update INDEPENDENTLY in a real browser: the
+// clock's server-push morphs only #via-i0, and a click on the counter routes
+// (via the tab handshake) to #via-i1 and morphs only that — proving Datastar
+// patches each island's container separately over the one shared SSE stream.
+func TestChild_multiplexedIslandsUpdateIndependently(t *testing.T) {
+	s := vtbrowser.Open(t, via.Register(bDash{}))
+
+	// Clock island ticks on its own (no interaction) → server-push morphs #via-i0.
+	s.WaitFor("#via-i0 p", func(text string) bool {
+		var n int
+		_, err := fmt.Sscanf(text, "uptime %d", &n)
+		return err == nil && n >= 2
+	}, "the clock island to tick past 2 (live push to #via-i0)")
+
+	// Counter island: its action must route to #via-i1 via X-Via-Tab and morph
+	// only that container, leaving the clock running.
+	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Click("#via-i1 button")
+	s.WaitTextContains("#via-i1 p", "clicks 1")
+	s.RequireCleanConsole()
+}
+
 // --- harness tests ---
 
 // Open must serve the server-rendered skeleton (including the #root morph

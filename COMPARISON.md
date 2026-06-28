@@ -32,7 +32,7 @@ load-bearing claims survived.
 
 | Dimension | main | v2 | Edge |
 |---|---|---|---|
-| **Wiring & architecture** | Reflection-built descriptor; name-stable action identity survives View restructuring & lists; nested composition tree; declarative tag-driven inputs (path/query/file/scopes) | Reflection-free generics + positional action ids; compile-time binding errors; no composition tree; single root viewer | **tie** — v2 safer/simpler; main more expressive at scale |
+| **Wiring & architecture** | Reflection-built descriptor; name-stable action identity survives View restructuring & lists; nested composition tree; declarative tag-driven inputs (path/query/file/scopes) | Reflection-free generics + positional action ids; compile-time binding errors; composition tree via `Child[C]` embeds (fixed children, plain or live, multiplexed on one SSE stream) — but positional ids, so name-stable lists-with-actions still deferred | **tie** — v2 safer/simpler; main more expressive for dynamic/keyed shape |
 | **Reactive & state model** | 4-quadrant taxonomy; cross-pod StateSess/StateApp via CAS backplane; fine-grained read-tracked fan-out; rejectable `Update(fn) error` | 4-type model (Signal/Local/State/List); single-goroutine island mutation; principled signal-patch vs element-patch split; per-connection only, last-write-wins | **main** — only main does shared/persistent/cross-pod reactive state |
 | **Live / SSE / resilience** | Keepalive half-open detection, at-least-once drain queue, server re-bootstrap + client reconnect banner, write deadlines, real cross-pod fan-out | One SSE stream per tab, lock-free pulse channel, clean 410 on closed tab, correct multi-line framing; **now** a keepalive comment frame + per-frame write deadline + write-error teardown (half-open detection) + main's reconnect IIFE ported — but still no at-least-once redelivery and no cross-pod fan-out | **main** — narrowing; v2 has the resilience floor + reconnect now, main still leads on redelivery + real cross-pod fan-out |
 | **Feature surface & gaps** | Routing + typed path params, Groups + middleware, HMAC sessions, multipart uploads, durable state, 3 plugins, showcase app | Single root at `/{$}`, live islands, in-process `topic.Topic`, per-request CSP+nonce, Each/If/When helpers, opt-in `via/sess` (typed store + signed cookie + Rotate + TTL) | **main** — still ships router/middleware/uploads/plugins v2 lacks |
@@ -80,10 +80,16 @@ reload, and the page GET is uncapped so it re-serves → a reload-storm rather t
 a clean "server busy" UX; mitigation (a 503-specific backoff or a degraded
 over-cap page) is deferred. **#3 (session-scoped state)** has since landed too —
 opt-in `via/sess` (typed per-browser store, signed-HMAC cookie, `Rotate`, idle
-TTL), reflection-free via a typed-nil type key. With #1, #2, #3, #8 done, no
-load-bearing gap remains for a single-pod authed app; the open items
-(router/middleware #6, action-identity #5, cross-pod #7) are feature breadth, not
-blockers.
+TTL), reflection-free via a typed-nil type key. **Live-island multiplexing** has
+also landed — `via.Child[C]` embeds fixed sub-compositions (plain or live) that
+share one per-tab SSE stream on one goroutine, each patching only its own
+`#via-i{n}`, with per-island action routing, slot-scoped signals, and
+`via.NewChild` for dep injection; real-browser-verified that two live islands
+update independently. That closes the "no composition tree" gap for *fixed*
+children — only name-stable lists-*of*-islands (the structural-key cursor, part
+of #5) remains. With #1, #2, #3, #8 + multiplexing done, no load-bearing gap
+remains for a single-pod authed app; the open items (router/middleware #6,
+action-identity/keyed-lists #5, cross-pod #7) are feature breadth, not blockers.
 
 ## 4. What v2 Got Genuinely Right (main should envy)
 
