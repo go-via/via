@@ -21,11 +21,20 @@ What is built on this branch, and where implementation refined the plan:
   keepalive comment frame (`WithSSEHeartbeat`), a per-frame write deadline
   (`WithSSEWriteTimeout`), write-error/half-open teardown (a failed frame write
   cancels the stream so the island goroutine + timers don't leak), and main's
-  reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`). Still pending in
-  slice 4+: the multi-island per-tab SSE multiplex (today one island = one
-  stream) and capping/authenticating the stream (the `via_tab` handshake lands
-  with `via/sess`, slice 9). The SSE GET is currently uncapped + origin-unchecked
-  — acceptable for a read stream with no state mutation, flagged as a known limit.
+  reconnect IIFE ported verbatim (opt-out `WithoutSSEReconnect`). The SSE GET is
+  now origin-checked (the same `originAllowed` floor as the action POST) and
+  capped at a configurable number of concurrent streams (`WithMaxSSEConnections`,
+  default 10,000; over-cap returns 503). Still pending in slice 4+: the
+  multi-island per-tab SSE multiplex (today one island = one stream) and
+  per-connection authentication of the stream (the `via_tab` handshake lands with
+  `via/sess`, slice 9).
+
+  Follow-up (tracked): the cap's 503 is returned on the same `/_via/sse` the
+  reconnect manager retries. Against a persistently-full server, a rejected
+  client backs off → `retries-failed` → reloads → re-fetches `/` (uncapped, so it
+  always serves) → re-arms SSE → 503, a reload-storm rather than a clean "server
+  busy" UX. Mitigation deferred: a 503-specific longer backoff in the reconnect
+  manager, or a degraded static page served when over the cap.
 - **Slice 5 (`State[T]`): DONE and BROWSER-VERIFIED.** Server-authoritative,
   per-connection island state: `Get`/`Set` plus a `Display()` that renders the
   literal escaped value and is element-patched (morphed) on change. The K2

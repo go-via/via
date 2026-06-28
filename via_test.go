@@ -64,12 +64,10 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 	}
 	req, err := http.NewRequest(method, srv.URL+path, rdr)
 	require.NoError(t, err, "build request")
-	// Simulate a same-origin browser fetch so the action endpoint's origin floor
-	// admits the request; tests that exercise the floor itself build their own
-	// requests (see post() in security_test.go).
-	if method == http.MethodPost {
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-	}
+	// Simulate a same-origin browser fetch so the origin floor (on the action
+	// POST and the SSE GET) admits the request; tests that exercise the floor
+	// itself build their own requests (see post()/sseStatus in security_test.go).
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err, "request failed")
 	t.Cleanup(func() { resp.Body.Close() })

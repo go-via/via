@@ -1,15 +1,130 @@
 package via_test
 
 import (
+	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-via/via/v2"
 	"github.com/go-via/via/v2/h"
 	"github.com/go-via/via/v2/vt"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// sseStatus opens GET /_via/sse with exactly the given headers and returns the
+// status, cancelling immediately so a 200 stream's island goroutine tears down.
+func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) int {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	return resp.StatusCode
+}
+
+// The SSE GET opens a long-lived server resource (an island goroutine + timers)
+// and renders the app's HTML; like the action POST it must fail closed to any
+// request that can't prove a same-origin source, so a cross-origin page can't
+// open or hold streams against the server.
+func TestSSE_rejectsCrossSiteOrigin(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}))
+	assert.Equal(t, http.StatusForbidden,
+		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
+}
+
+// A connect that carries no origin signal at all (no Sec-Fetch-Site, no Origin)
+// proves nothing about its source and must fail closed, exactly as the action
+// endpoint does.
+func TestSSE_failsClosedWithoutAnyOriginSignal(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}))
+	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, nil))
+}
+
+// A real same-origin browser SSE fetch sends Sec-Fetch-Site: same-origin; it
+// must connect.
+func TestSSE_allowsSameOrigin(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}))
+	assert.Equal(t, http.StatusOK,
+		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}))
+}
+
+// WithInsecureOrigin disables the floor for non-browser clients / local dev; it
+// must bypass the SSE GET floor too, or it would only half-open the door.
+func TestSSE_insecureOriginAllowsCrossSite(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}, via.WithInsecureOrigin()))
+	assert.Equal(t, http.StatusOK,
+		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
+}
+
+// A known cross-origin embedder allowlisted with WithTrustedOrigin must still be
+// able to open the stream, so the floor doesn't break a deliberate embed.
+func TestSSE_allowsTrustedCrossOrigin(t *testing.T) {
+	t.Parallel()
+	const embedder = "https://embedder.example"
+	srv := serve(t, via.Register(quietIsland{}, via.WithTrustedOrigin(embedder)))
+	assert.Equal(t, http.StatusOK,
+		sseStatus(t, srv, map[string]string{"Origin": embedder, "Sec-Fetch-Site": "cross-site"}))
+}
+
+// Each live stream holds an island goroutine + timers; left uncapped, a client
+// can open them without bound and exhaust the server. A connect past the cap
+// must be refused (503) rather than admitted, so the resource ceiling holds.
+func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+
+	_, release := openStream(t, srv) // takes the only slot; asserts it connected (200)
+	defer release()
+
+	assert.Equal(t, http.StatusServiceUnavailable, sseStatus(t, srv, sameOrigin()),
+		"a connect past the cap must be refused with 503")
+}
+
+// The cap counts CONCURRENT streams, not lifetime connects: when a stream closes
+// its slot must free so a later client can connect. A cap that never decremented
+// would wedge the app at its limit forever.
+func TestSSE_disconnectFreesACapSlot(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+
+	_, release := openStream(t, srv)
+	require.Equal(t, http.StatusServiceUnavailable, sseStatus(t, srv, sameOrigin()),
+		"precondition: the single slot is taken")
+
+	release() // disconnect frees the slot (the server observes it asynchronously)
+
+	require.Eventually(t, func() bool {
+		return sseStatus(t, srv, sameOrigin()) == http.StatusOK
+	}, 2*time.Second, 20*time.Millisecond, "a freed slot must admit a new connection")
+}
+
+// The cap is per-Register: two independently registered apps in one process must
+// not share a counter, or a busy app would throttle an unrelated one.
+func TestSSE_capIsPerRegister(t *testing.T) {
+	t.Parallel()
+	a := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+	b := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+
+	_, release := openStream(t, a) // fills A's only slot
+	defer release()
+
+	assert.Equal(t, http.StatusOK, sseStatus(t, b, sameOrigin()),
+		"a second Register must have an independent cap")
+}
 
 // panicComp's action panics, to prove a buggy handler returns 500 and does not
 // crash the server.

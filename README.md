@@ -133,10 +133,10 @@ Deferred (correctly out of 1.0 scope): `Embed` + the structural-key cursor (only
 needed for *action-bearing* dynamic shape — lists whose rows carry their own
 actions), `via/sess`+`via/router`, the multi-island per-tab SSE multiplex, and
 at-least-once redelivery (a push onto a dropping socket fails the write and tears
-down rather than being buffered for replay). The SSE GET stream is also uncapped
-and origin-unchecked (single-pod/internal scope — front it with a
-connection-limiting proxy). See [`DESIGN.md`](./DESIGN.md) and
-[`ROADMAP.md`](./ROADMAP.md).
+down rather than being buffered for replay). The SSE GET stream now applies the
+same origin floor as the action POST and is capped at a configurable number of
+concurrent connections (`WithMaxSSEConnections`, default 10,000; over the cap
+returns 503). See [`DESIGN.md`](./DESIGN.md) and [`ROADMAP.md`](./ROADMAP.md).
 
 ## Develop
 

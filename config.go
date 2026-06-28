@@ -13,7 +13,13 @@ type config struct {
 	noReconnect     bool
 	sseHeartbeat    time.Duration
 	sseWriteTimeout time.Duration
+	maxSSEConn      int
 }
+
+// defaultMaxSSEConn caps concurrent live SSE streams per Register so a client
+// can't open island goroutines without bound. WithMaxSSEConnections overrides
+// it; a non-positive override floors back to this default (the cap is never off).
+const defaultMaxSSEConn = 10_000
 
 // defaultWriteTimeout caps how long a single SSE frame write may block before
 // the stream gives up on a stalled peer. WithSSEWriteTimeout overrides it; a
@@ -24,7 +30,7 @@ const defaultWriteTimeout = 10 * time.Second
 type Option func(*config)
 
 func newConfig(opts []Option) *config {
-	c := &config{trustedOrigins: map[string]bool{}, sseWriteTimeout: defaultWriteTimeout}
+	c := &config{trustedOrigins: map[string]bool{}, sseWriteTimeout: defaultWriteTimeout, maxSSEConn: defaultMaxSSEConn}
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -77,4 +83,11 @@ func WithSSEHeartbeat(d time.Duration) Option {
 // goroutine. Default 10s; a non-positive d disables the deadline.
 func WithSSEWriteTimeout(d time.Duration) Option {
 	return func(c *config) { c.sseWriteTimeout = d }
+}
+
+// WithMaxSSEConnections caps the number of concurrent live SSE streams a single
+// Register will hold open; a connect past the cap is refused with 503. Default
+// 10,000; a non-positive n floors to the default (the cap is never disabled).
+func WithMaxSSEConnections(n int) Option {
+	return func(c *config) { c.maxSSEConn = n }
 }
