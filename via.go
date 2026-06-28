@@ -58,6 +58,7 @@ type Ctx struct {
 	rendered  []byte                     // this island's inner HTML from the discovery render (for 204 compare)
 	push      func()                     // re-render THIS island and frame it on the stream (set per live unit)
 	declare   bool                       // whether this render declares page-level data-signals (first paint, not a push)
+	base      string                     // mount path prefix for action POSTs ("" for the single-page root)
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -222,11 +223,15 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // local signal the SSE set) as the X-Via-Tab header; the island id scopes which
 // island; a stateless page omits both.
 func writeActionAttr(r *h.Renderer, ctx *Ctx, event, idx, query string) {
-	path := "/_via/a/" + idx
+	base := ""
+	if ctx != nil {
+		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{n}
+	}
+	path := base + "/_via/a/" + idx
 	opts := ""
 	switch {
 	case ctx != nil && ctx.isIsland:
-		path = "/_via/a/" + strconv.Itoa(ctx.islandIdx) + "/" + idx
+		path = base + "/_via/a/" + strconv.Itoa(ctx.islandIdx) + "/" + idx
 		if ctx.island {
 			opts = ",{headers:{'X-Via-Tab':$_viatab}}"
 		}
@@ -273,9 +278,17 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // half-typed message vanishing when someone else's message arrives). Deliberate
 // server-driven signal changes ride an explicit signal-patch instead.
 func renderRoot(v viewer, in map[string]json.RawMessage, island, declareSignals bool) (*Ctx, []byte) {
+	return renderRootBase(v, in, island, declareSignals, "")
+}
+
+// renderRootBase is renderRoot with an explicit action base path — the router
+// mounts a page under /path, so its actions must post to /path/_via/a/{n}, not
+// the root /_via/a/{n}. base is "" for the single-page Register.
+func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSignals bool, base string) (*Ctx, []byte) {
 	ctx := newCtx(in)
 	ctx.island = island
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
+	ctx.base = base
 	rr := h.NewRenderer(ctx)
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -591,51 +604,10 @@ func Register[T any, PT interface {
 			return
 		}
 
-		inst := root
-
-		// Bind pass: rendering assigns positional slot/action ids, hydrates any
-		// client signals from the request, and fills the action table. The bytes
-		// are the pre-action view (the client's current DOM, reconstructed from
-		// the request) — kept so we can tell whether the action changed anything.
-		bind, before := renderRoot(PT(&inst), in, false, true)
-
-		// Render-shape guard. Binding is positional, so a dispatched action index
-		// is only meaningful if this bind pass produced the SAME signal-slot set
-		// the client was served and echoed back. A divergence means the View
-		// branched on a value and the indices no longer line up; reject with 410
-		// so the client re-bootstraps instead of being silently misrouted.
-		if !shapeMatches(bind.order, in) {
-			http.Error(w, "render-shape mismatch", http.StatusGone)
-			return
-		}
-
-		n, err := strconv.Atoi(req.PathValue("n"))
-		if err != nil || n < 0 || n >= len(bind.actions) {
-			http.Error(w, "no such action", http.StatusGone)
-			return
-		}
-		bind.req = req // the action POST that triggered this action
-		bind.sessions = sessions
-		bind.sessW = w // a stateless action has an open response, so it can issue the session cookie
-		bind.actions[n]()
-
-		// Re-render the now-mutated instance (no re-hydration, so it reflects
-		// post-action server state). If it is byte-identical to the pre-action
-		// render, the action changed nothing the View reads — return 204 rather
-		// than re-send an identical #root the browser would morph onto itself.
-		// Comparing the rendered output (not via-handle writes) is the sound
-		// signal: it catches a change through any path — an injected dependency,
-		// a Signal, a State — and can't be fooled by mutations via never sees.
-		_, after := renderRoot(PT(&inst), nil, false, true)
-		if bytes.Equal(before, after) {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		// Element-patch: text/html that Datastar morphs into the live DOM by the
-		// #root id. It is morphed into the live document, so it ships the same
-		// hardening headers as the page.
-		writeSecurityHeaders(w, genCSPNonce())
-		w.Write(after)
+		// Stateless action: the post-decode core is shared with the router's
+		// mounted pages (dispatchStateless), so the two can't drift. Base is "" —
+		// the single-page root posts to /_via/a/{n}.
+		dispatchStateless[T, PT](w, req, root, cfg, sessions, "", in)
 	})
 
 	// Embedded-island action: /_via/a/{island}/{n} routes to one island's action
