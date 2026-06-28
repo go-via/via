@@ -61,6 +61,7 @@ type Ctx struct {
 	base      string                     // mount path prefix for action POSTs ("" for the single-page root)
 	forms     []func(*Ctx)               // positional native-form handlers (PostForm)
 	redirect  string                     // pending Redirect target, applied after a form handler returns
+	params    []string                   // positional path-param segments ({} in the mount pattern)
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -169,6 +170,52 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		}
 		r.WriteString(`</form>`)
 	})
+}
+
+// Param reads the nth positional path param — the nth anonymous {} segment in
+// the mount pattern (Mount(r, "/thread/{}", …) → Param[int](ctx, 0)). Positional,
+// like actions and signals: no identifier string. Callable from OnInit and
+// actions (which carry a Ctx); View is ctx-free and so cannot read params —
+// load them in OnInit into a field instead. Out of range or undecodable yields
+// the zero value.
+func Param[T any](ctx *Ctx, n int) T {
+	var zero T
+	if ctx == nil || n < 0 || n >= len(ctx.params) {
+		return zero
+	}
+	return decodeSegment[T](ctx.params[n])
+}
+
+// decodeSegment turns a raw URL segment into T. Strings pass through verbatim
+// (a path segment is not quoted JSON); everything else (int/float/bool) decodes
+// as JSON, which parses "42" → 42 without a reflect-driven scalar table.
+func decodeSegment[T any](seg string) T {
+	var v T
+	if sp, ok := any(&v).(*string); ok {
+		*sp = seg
+		return v
+	}
+	_ = json.Unmarshal([]byte(seg), &v)
+	return v
+}
+
+// Guard is a per-route check run before OnInit on every method (page GET,
+// action, form). Returning ok=false short-circuits the request with a 303 to
+// redirect — the closure-free "middleware" unit: a value passed to Mount, not a
+// Group(fn) that takes a closure at the call site.
+type Guard func(*Ctx) (redirect string, ok bool)
+
+// RequireSession guards a mount: if the session has no value of type T (i.e. the
+// user is not signed in), the request is redirected to loginPath. T is the same
+// type used with sess.Put/Get, keyed identically (a typed-nil pointer), so
+// RequireSession[User]("/login") gates on a sess.Put(ctx, user) elsewhere.
+func RequireSession[T any](loginPath string) Guard {
+	return func(ctx *Ctx) (string, bool) {
+		if _, ok := ctx.Session().load((*T)(nil)); ok {
+			return "", true
+		}
+		return loginPath, false
+	}
 }
 
 // Redirect navigates the browser to path after the current form handler returns
@@ -383,7 +430,7 @@ func Register[T any, PT interface {
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, req *http.Request) {
 		inst := root
-		runOnInit(PT(&inst), w, req, sessions) // per-request hook before the ctx-free View
+		runOnInit(PT(&inst), w, req, sessions, nil) // per-request hook before the ctx-free View
 		// Render the real instance (deps injected) — the parent is the island only
 		// when it is itself live; multiplex children carry their own island flag.
 		ctx, body := renderRoot(PT(&inst), nil, rootLive, true)
@@ -648,7 +695,7 @@ func Register[T any, PT interface {
 		// Stateless action: the post-decode core is shared with the router's
 		// mounted pages (dispatchStateless), so the two can't drift. Base is "" —
 		// the single-page root posts to /_via/a/{n}.
-		dispatchStateless[T, PT](w, req, root, cfg, sessions, "", in)
+		dispatchStateless[T, PT](w, req, root, cfg, sessions, "", nil, in)
 	})
 
 	// Embedded-island action: /_via/a/{island}/{n} routes to one island's action

@@ -20,7 +20,7 @@ type Initer interface{ OnInit(*Ctx) }
 
 // runOnInit calls v.OnInit with a request-scoped Ctx if v implements Initer.
 // sessW is the open response, so OnInit may also set the session cookie.
-func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager) {
+func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string) {
 	ic, ok := v.(Initer)
 	if !ok {
 		return
@@ -29,6 +29,7 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 	ctx.req = req
 	ctx.sessions = sessions
 	ctx.sessW = w
+	ctx.params = params
 	ic.OnInit(ctx)
 }
 
@@ -69,24 +70,100 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 func Mount[T any, PT interface {
 	*T
 	viewer
-}](r *Router, path string, root T) {
-	base := strings.TrimSuffix(path, "/") // "" for "/", "/profile" for "/profile"
-	getPattern := path
-	if path == "/" {
+}](r *Router, path string, root T, guards ...Guard) {
+	patternBase, names := parsePattern(path) // "" / "/profile" / "/thread/{p0}"
+	getPattern := patternBase
+	if getPattern == "" {
 		getPattern = "/{$}"
 	}
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
+		params := paramsOf(req, names)
+		if runGuards(w, req, r.sessions, params, guards) {
+			return
+		}
 		inst := root
-		runOnInit(PT(&inst), w, req, r.sessions) // load session/request data into fields first
-		_, body := renderRootBase(PT(&inst), nil, false, true, base)
+		runOnInit(PT(&inst), w, req, r.sessions, params) // load session/request data into fields first
+		_, body := renderRootBase(PT(&inst), nil, false, true, concreteBase(patternBase, req, names))
 		writeHTMLPage(w, r.cfg, body)
 	})
-	r.mux.HandleFunc("POST "+base+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
-		statelessAction[T, PT](w, req, root, r.cfg, r.sessions, base)
+	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
+		params := paramsOf(req, names)
+		if runGuards(w, req, r.sessions, params, guards) {
+			return
+		}
+		statelessAction[T, PT](w, req, root, r.cfg, r.sessions, concreteBase(patternBase, req, names), params)
 	})
-	r.mux.HandleFunc("POST "+base+"/_via/f/{n}", func(w http.ResponseWriter, req *http.Request) {
-		formAction[T, PT](w, req, root, r.cfg, r.sessions, base)
+	r.mux.HandleFunc("POST "+patternBase+"/_via/f/{n}", func(w http.ResponseWriter, req *http.Request) {
+		params := paramsOf(req, names)
+		if runGuards(w, req, r.sessions, params, guards) {
+			return
+		}
+		formAction[T, PT](w, req, root, r.cfg, r.sessions, concreteBase(patternBase, req, names), params)
 	})
+}
+
+// parsePattern turns a mount path into a ServeMux base and the names of its
+// positional params. Anonymous {} segments (no identifier string) become
+// internal named wildcards {p0},{p1},… so Go's ServeMux can capture them and so
+// the page's action/form sub-routes inherit the same wildcards. "/" → "".
+func parsePattern(path string) (base string, names []string) {
+	if path == "/" {
+		return "", nil
+	}
+	segs := strings.Split(path, "/")
+	for i, s := range segs {
+		if s == "{}" {
+			name := "p" + strconv.Itoa(len(names))
+			segs[i] = "{" + name + "}"
+			names = append(names, name)
+		}
+	}
+	return strings.TrimSuffix(strings.Join(segs, "/"), "/"), names
+}
+
+// paramsOf reads the captured path-param values in declaration order.
+func paramsOf(req *http.Request, names []string) []string {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = req.PathValue(n)
+	}
+	return out
+}
+
+// concreteBase fills the pattern base's {pN} wildcards with this request's values
+// so a mounted page's action/form URLs point at the concrete path
+// (/thread/5/_via/a/0), not the pattern (/thread/{p0}/…).
+func concreteBase(patternBase string, req *http.Request, names []string) string {
+	b := patternBase
+	for _, n := range names {
+		b = strings.Replace(b, "{"+n+"}", req.PathValue(n), 1)
+	}
+	return b
+}
+
+// runGuards runs a mount's guards before OnInit; the first guard that fails
+// short-circuits the request with a 303 to its redirect target and returns true
+// (handled). A guard sees a request-scoped Ctx (session + params), never the
+// render state.
+func runGuards(w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string, guards []Guard) bool {
+	if len(guards) == 0 {
+		return false
+	}
+	ctx := newCtx(nil)
+	ctx.req = req
+	ctx.sessions = sessions
+	ctx.sessW = w
+	ctx.params = params
+	for _, g := range guards {
+		if redirect, ok := g(ctx); !ok {
+			http.Redirect(w, req, redirect, http.StatusSeeOther)
+			return true
+		}
+	}
+	return false
 }
 
 // formAction handles a native form POST (PostForm): parse the form, run the
@@ -96,7 +173,7 @@ func Mount[T any, PT interface {
 func formAction[T any, PT interface {
 	*T
 	viewer
-}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string) {
+}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("via: form handler panic: %v\n%s", rec, debug.Stack())
@@ -120,7 +197,7 @@ func formAction[T any, PT interface {
 		return
 	}
 	inst := root
-	runOnInit(PT(&inst), w, req, sessions)
+	runOnInit(PT(&inst), w, req, sessions, params)
 	bind, _ := renderRootBase(PT(&inst), nil, false, true, base) // populate the forms table
 	n, err := strconv.Atoi(req.PathValue("n"))
 	if err != nil || n < 0 || n >= len(bind.forms) {
@@ -130,6 +207,7 @@ func formAction[T any, PT interface {
 	bind.req = req
 	bind.sessions = sessions
 	bind.sessW = w
+	bind.params = params
 	bind.forms[n](bind)
 	if bind.redirect != "" {
 		http.Redirect(w, req, bind.redirect, http.StatusSeeOther)
@@ -160,7 +238,7 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte) {
 func statelessAction[T any, PT interface {
 	*T
 	viewer
-}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string) {
+}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("via: action handler panic: %v\n%s", rec, debug.Stack())
@@ -175,7 +253,7 @@ func statelessAction[T any, PT interface {
 	if !ok {
 		return
 	}
-	dispatchStateless[T, PT](w, req, root, cfg, sessions, base, in)
+	dispatchStateless[T, PT](w, req, root, cfg, sessions, base, params, in)
 }
 
 // dispatchStateless is the post-decode core of a stateless action: bind the
@@ -186,9 +264,9 @@ func statelessAction[T any, PT interface {
 func dispatchStateless[T any, PT interface {
 	*T
 	viewer
-}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, in map[string]json.RawMessage) {
+}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string, in map[string]json.RawMessage) {
 	inst := root
-	runOnInit(PT(&inst), w, req, sessions) // load session/request data before the action + re-render
+	runOnInit(PT(&inst), w, req, sessions, params) // load session/request data before the action + re-render
 	bind, before := renderRootBase(PT(&inst), in, false, true, base)
 	if !shapeMatches(bind.order, in) {
 		http.Error(w, "render-shape mismatch", http.StatusGone)
@@ -202,6 +280,7 @@ func dispatchStateless[T any, PT interface {
 	bind.req = req
 	bind.sessions = sessions
 	bind.sessW = w
+	bind.params = params
 	bind.actions[n]()
 	_, after := renderRootBase(PT(&inst), nil, false, true, base)
 	if bytes.Equal(before, after) {

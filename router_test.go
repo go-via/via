@@ -67,6 +67,112 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 		"OnInit must load the session before the ctx-free View renders")
 }
 
+// threadPage reads a positional path param (the {} in /thread/{}) in OnInit.
+type threadPage struct{ id int }
+
+func (p *threadPage) OnInit(ctx *via.Ctx) { p.id = via.Param[int](ctx, 0) }
+func (p *threadPage) View() h.H           { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
+
+// echoPage proves a path param is readable inside an ACTION (not just OnInit) on
+// a param'd mount — the action POST URL carries the {} segment (/e/7/_via/a/0).
+type echoPage struct{ echoed int }
+
+func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = via.Param[int](ctx, 0) }
+func (p *echoPage) View() h.H {
+	return h.Div(h.Button(via.OnClick(p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
+}
+
+// secret is a guarded page: RequireSession redirects to /login when no acct is
+// in the session.
+type secret struct{}
+
+func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
+
+var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+func formPost(c *http.Client, t *testing.T, url, body string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// A positional path param binds the {} segment so the page can read it (in
+// OnInit / actions) without an identifier string — /thread/42 → Param[int](0)=42.
+func TestRouter_pathParamBindsPositionally(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/thread/{}", threadPage{})
+	srv := serve(t, r)
+
+	_, body := do(t, srv, http.MethodGet, "/thread/42", "")
+	assert.Contains(t, body, "thread 42", "Param[int](ctx,0) must read the {} segment")
+}
+
+// The path param is captured on the action sub-route too, so an action (whose
+// POST URL carries the {} segment) reads it — not just OnInit.
+func TestRouter_pathParamReadableInAction(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/e/{}", echoPage{})
+	srv := serve(t, r)
+
+	_, page := do(t, srv, http.MethodGet, "/e/7", "")
+	assert.Contains(t, page, `@post('/e/7/_via/a/0')`, "action URL must carry the concrete {} segment")
+	_, body := do(t, srv, http.MethodPost, "/e/7/_via/a/0", "{}")
+	assert.Contains(t, body, "echoed 7", "the action must read Param[int](ctx,0) from its own POST path")
+}
+
+// A guard protects the action sub-route too (not just the page GET): an
+// unauthenticated action POST is redirected before any handler runs.
+func TestRouter_guardProtectsActionPost(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/secret", secret{}, via.RequireSession[acct]("/login"))
+	srv := serve(t, r)
+
+	resp := formPost(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/secret/_via/a/0", "{}")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "guard must gate the action route, not only the page")
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+// A guarded page redirects (303) to the login path when the required session
+// value is absent.
+func TestRouter_requireSessionRedirectsWhenAbsent(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/secret", secret{}, via.RequireSession[acct]("/login"))
+	srv := serve(t, r)
+
+	c := &http.Client{CheckRedirect: noFollow}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/secret", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+// With the required session present, the guard passes and the page renders.
+func TestRouter_requireSessionAllowsWhenPresent(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/secret", secret{}, via.RequireSession[acct]("/login"))
+	srv := serve(t, r)
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, CheckRedirect: noFollow}
+	formPost(c, t, srv.URL+"/login/_via/f/0", "name=alice") // sets acct in the session
+	assert.Contains(t, jarGet(t, c, srv.URL+"/secret"), "secret area",
+		"guard must pass once the session has the required value")
+}
+
 // loginForm is a native server-rendered form (no Datastar): Submit reads a form
 // field, logs the user in, and redirects — the canonical auth flow.
 type loginForm struct{}
