@@ -58,6 +58,18 @@ What is built on this branch, and where implementation refined the plan:
   SameSite=Lax + Secure-on-TLS. Cookieless stays the default for apps that don't
   opt in. Deferred to the backplane work: a background sweep for never-reaccessed
   sessions, and the reactive cross-tab `StateSess[T]`.
+- **Router + auth + uploads: DONE on `feat/v2-bare-core` (`example/forum`).**
+  `via.NewRouter` + `via.Mount(path, page, guards…)` serves a multi-page app
+  behind one handler, each page's actions namespaced under its mount and sharing
+  one session. `OnInit(*Ctx)` loads request/session/path data before the ctx-free
+  `View`. `via.PostForm` + `via.Redirect` give the native-form 303 auth flow
+  (Datastar can't navigate); `via.Param[T](ctx, n)` reads positional `{}`
+  segments (no tags, no identifier strings); `via.RequireSession[T](loginPath)`
+  is a guard *value* run before `OnInit` on every method; `via.OnUpload` +
+  `via.File` deliver a multipart upload as a typed handler param under an 8 MiB
+  cap. Closes COMPARISON gaps #6 (router/middleware) and #9 (uploads). All POST
+  routes share the origin-floor + body-cap prelude; deferred (Low): factor that
+  prelude into one helper across statelessAction/formAction/uploadAction.
 - **Slice 5 (`State[T]`): DONE and BROWSER-VERIFIED.** Server-authoritative,
   per-connection island state: `Get`/`Set` plus a `Display()` that renders the
   literal escaped value and is element-patched (morphed) on change. The K2

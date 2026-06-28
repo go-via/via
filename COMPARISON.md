@@ -13,8 +13,9 @@ lint-provable wiring substrate: reflection-free generics binding (CI-enforced
 over core files), a single-goroutine live-island model that kills whole race
 classes by construction, secure-by-default CSP + a fail-closed origin floor, and
 95%+ core coverage at a ~1:1 test ratio. What it fundamentally trades away is
-**scope**: no app-scoped or cross-pod state, no router/groups, no middleware, no
-file uploads, no plugins. Both gaps once flagged here as load-bearing and
+**scope**: no app-scoped or cross-pod state, no plugins (the router — multi-page
+Mount + guards + positional path params + redirect — and multipart uploads have
+since landed; see `example/forum`). Both gaps once flagged here as load-bearing and
 non-negotiable — **server/client reconnect + half-open detection** and
 **session-scoped state** — have since **landed** on `feat/v2-bare-core`: the
 resilience floor + reconnect (keepalive + per-frame write deadline +
@@ -60,10 +61,10 @@ without breaking no-reflection / no-identifier-strings / no-closure-at-call-site
 | 3 | ✓ **Landed.** **Session-scoped state** — opt-in `via/sess`: signed-HMAC cookie + typed per-browser store, `Rotate` fixation defense, idle TTL, cookieless by default. | **L** | Done, no reflect — the struct-tag tension was sidestepped: values are keyed by Go type via a typed-nil sentinel `(*T)(nil)`, not `via:"..."` tags. |
 | 4 | **At-least-once (or buffered) delivery** so a push onto a dropping socket isn't silently lost (v2 currently discards the write error too). | **M** | Yes — a per-connection redelivery queue, server-internal. |
 | 5 | ✓ **Mostly landed.** Per-row **list actions** now work via `OnClickArg` — the row carries its own datum with the click, so add/remove/**reorder** can't misroute (value, not positional slot, picks the row), no reflection, no identifier strings. Remaining: per-row *signals/inputs* in a reordering list (still positional slots) and keyed lists-*of*-islands — a narrower keyed cursor. | **M** (was L) | The feared "must reflect for name stability" turned out unnecessary: the value rides with the event, so the action id needn't be stable. |
-| 6 | **Router: multi-page Mount + Groups + middleware pipeline + typed path params.** Today only `/{$}` + internal action paths; no middleware abstraction at all. | **L** | Partly — routing/middleware are reflection-free; typed path-param *binding* leaned on tags in main, needs a handle-based decode. |
+| 6 | ✓ **Landed** (`example/forum`). **Router: multi-page Mount + per-route guards + positional path params + redirect.** `via.NewRouter`/`via.Mount(path, page, guards…)`, `OnInit` per-request hook, `via.PostForm`+`via.Redirect` (native-form 303 auth flow), `via.Param[T](ctx, n)` for `{}` segments, `via.RequireSession[T]` guard *values*. | **L** | Done, no reflect — guards are values not closure-`Group`s; path params bind positionally via `Param[T]` (NO struct tags, NO identifier strings), decoded by json/string; the tag-based binding main needed was sidestepped. |
 | 7 | **Cross-pod / durable backplane** — or an explicit, documented sticky-session-only scaling stance. Today multi-pod shared state is impossible (`topic` is in-process). | **L** | Yes — pluggable interface behind `topic`; orthogonal to wiring guarantees. |
 | 8 | ✓ **Landed.** **Cap + origin-check the SSE GET stream** before any internet-facing deploy. | **S** | Done — the `originAllowed` floor now gates the GET, plus a per-Register concurrent-connection cap (`WithMaxSSEConnections`, default 10,000, over-cap 503). |
-| 9 | **Multipart file-upload binding** into typed component fields. | **M** | Compromise risk — main bound files via reflective struct fields; v2 needs an explicit handle API. |
+| 9 | ✓ **Landed** (`example/forum` avatar). **Multipart file upload.** `via.OnUpload(handler, …)` renders a native multipart form; the handler receives a `via.File` (`io.Reader` + `Name`/`Size`/`ContentType`) under an 8 MiB cap (oversize → 413), origin-floored like every POST. | **M** | No reflective field-binding — the file is delivered as a typed handler param (the `OnClickArg` shape), not bound into a `via:"..."`-tagged field; storage stays app-land. |
 | 10 | **Plugin / asset-embedding story** (echarts/maplibre/picocss-class) + one production-shaped reference deployment. | **L** | Yes — embedding is independent of wiring guarantees. |
 | 11 | **Richer reactive/binding surface**: Computed/Effect, Show/Class/Attr/Style helpers, wider `on.*` vocab (Debounce/Throttle/Key/Confirm/Indicator), numeric Clamp/AtLeast/AtMost across scopes. | **M** | Yes — helper APIs, no reflection needed. |
 | 12 | **vt harness self-coverage + compile-safe action addressing in tests** (integer `Action(n)` is brittle; renumbering silently breaks intent with no compiler help). | **M** | Coupled to #5 — typed addressing returns once action identity is non-positional. |

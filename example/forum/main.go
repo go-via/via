@@ -30,9 +30,9 @@ import (
 
 // User is the session-stored identity. Plain app data.
 type User struct {
-	ID            int
-	Email, Name   string
-	Avatar        string // a data: URL, set on upload
+	ID          int
+	Email, Name string
+	Avatar      string // a data: URL, set on upload
 }
 
 type Thread struct {
