@@ -32,7 +32,7 @@ load-bearing claims survived.
 
 | Dimension | main | v2 | Edge |
 |---|---|---|---|
-| **Wiring & architecture** | Reflection-built descriptor; name-stable action identity survives View restructuring & lists; nested composition tree; declarative tag-driven inputs (path/query/file/scopes) | Reflection-free generics + positional action ids; compile-time binding errors; composition tree via `Child[C]` embeds (fixed children, plain or live, multiplexed on one SSE stream) — but positional ids, so name-stable lists-with-actions still deferred | **tie** — v2 safer/simpler; main more expressive for dynamic/keyed shape |
+| **Wiring & architecture** | Reflection-built descriptor; name-stable action identity survives View restructuring & lists; nested composition tree; declarative tag-driven inputs (path/query/file/scopes) | Reflection-free generics + positional action ids; compile-time binding errors; composition tree via `Child[C]` embeds (fixed children, plain or live, multiplexed on one SSE stream); per-row list actions ride a value (`OnClickArg`), so they survive reorder — only per-row *signals* in a reordering list + keyed lists-of-islands still want a cursor | **tie** — v2 safer/simpler; main more expressive for dynamic/keyed shape |
 | **Reactive & state model** | 4-quadrant taxonomy; cross-pod StateSess/StateApp via CAS backplane; fine-grained read-tracked fan-out; rejectable `Update(fn) error` | 4-type model (Signal/Local/State/List); single-goroutine island mutation; principled signal-patch vs element-patch split; per-connection only, last-write-wins | **main** — only main does shared/persistent/cross-pod reactive state |
 | **Live / SSE / resilience** | Keepalive half-open detection, at-least-once drain queue, server re-bootstrap + client reconnect banner, write deadlines, real cross-pod fan-out | One SSE stream per tab, lock-free pulse channel, clean 410 on closed tab, correct multi-line framing; **now** a keepalive comment frame + per-frame write deadline + write-error teardown (half-open detection) + main's reconnect IIFE ported — but still no at-least-once redelivery and no cross-pod fan-out | **main** — narrowing; v2 has the resilience floor + reconnect now, main still leads on redelivery + real cross-pod fan-out |
 | **Feature surface & gaps** | Routing + typed path params, Groups + middleware, HMAC sessions, multipart uploads, durable state, 3 plugins, showcase app | Single root at `/{$}`, live islands, in-process `topic.Topic`, per-request CSP+nonce, Each/If/When helpers, opt-in `via/sess` (typed store + signed cookie + Rotate + TTL) | **main** — still ships router/middleware/uploads/plugins v2 lacks |
@@ -59,7 +59,7 @@ without breaking no-reflection / no-identifier-strings / no-closure-at-call-site
 | 2 | ✓ **Landed.** **Server reconnect/re-bootstrap + client reconnect banner.** main's `reconnect.go` IIFE ported verbatim; covers Datastar's clean-close no-retry freeze. | **M** | Yes — client IIFE + per-(re)connect _viatab handshake; no reflection/identifier-string needed. |
 | 3 | ✓ **Landed.** **Session-scoped state** — opt-in `via/sess`: signed-HMAC cookie + typed per-browser store, `Rotate` fixation defense, idle TTL, cookieless by default. | **L** | Done, no reflect — the struct-tag tension was sidestepped: values are keyed by Go type via a typed-nil sentinel `(*T)(nil)`, not `via:"..."` tags. |
 | 4 | **At-least-once (or buffered) delivery** so a push onto a dropping socket isn't silently lost (v2 currently discards the write error too). | **M** | Yes — a per-connection redelivery queue, server-internal. |
-| 5 | **Name- or structural-path action identity** so bindings survive View branching and **lists-with-actions** (today positional ids + `shapeMatches` 410 on the stateless path; live path no-ops out-of-range + re-syncs; row-level actions explicitly punted). | **L** | **Compromise risk** — name stability historically came from reflection. v2 must invent a structural-path cursor that stays reflection-free and identifier-string-free; the hardest "within guarantees" item. |
+| 5 | ✓ **Mostly landed.** Per-row **list actions** now work via `OnClickArg` — the row carries its own datum with the click, so add/remove/**reorder** can't misroute (value, not positional slot, picks the row), no reflection, no identifier strings. Remaining: per-row *signals/inputs* in a reordering list (still positional slots) and keyed lists-*of*-islands — a narrower keyed cursor. | **M** (was L) | The feared "must reflect for name stability" turned out unnecessary: the value rides with the event, so the action id needn't be stable. |
 | 6 | **Router: multi-page Mount + Groups + middleware pipeline + typed path params.** Today only `/{$}` + internal action paths; no middleware abstraction at all. | **L** | Partly — routing/middleware are reflection-free; typed path-param *binding* leaned on tags in main, needs a handle-based decode. |
 | 7 | **Cross-pod / durable backplane** — or an explicit, documented sticky-session-only scaling stance. Today multi-pod shared state is impossible (`topic` is in-process). | **L** | Yes — pluggable interface behind `topic`; orthogonal to wiring guarantees. |
 | 8 | ✓ **Landed.** **Cap + origin-check the SSE GET stream** before any internet-facing deploy. | **S** | Done — the `originAllowed` floor now gates the GET, plus a per-Register concurrent-connection cap (`WithMaxSSEConnections`, default 10,000, over-cap 503). |
@@ -86,8 +86,11 @@ share one per-tab SSE stream on one goroutine, each patching only its own
 `#via-i{n}`, with per-island action routing, slot-scoped signals, and
 `via.NewChild` for dep injection; real-browser-verified that two live islands
 update independently. That closes the "no composition tree" gap for *fixed*
-children — only name-stable lists-*of*-islands (the structural-key cursor, part
-of #5) remains. With #1, #2, #3, #8 + multiplexing done, no load-bearing gap
+children. Per-row **list actions** also landed — `OnClickArg` carries the row's
+datum with the click, so a reordering CRUD list (see `example/poll`) never
+misroutes without any reflection or stable-id scheme; only per-row *signals* in a
+reordering list and keyed lists-*of*-islands still want a cursor (#5, now M not
+L). With #1, #2, #3, #8 + multiplexing done, no load-bearing gap
 remains for a single-pod authed app; the open items (router/middleware #6,
 action-identity/keyed-lists #5, cross-pod #7) are feature breadth, not blockers.
 
@@ -128,7 +131,8 @@ worthwhile — the wins are architectural, not portable patches.
 **Single concrete next move:** every load-bearing gap is now closed — the
 resilience floor (#1) + reconnect (#2), the SSE GET origin-check + connection cap
 (#8), and session-scoped state (#3, opt-in `via/sess`). v2 can host a real
-single-pod authed app today. The next steps are feature breadth, not blockers:
-the router/middleware (#6) and the structural-key action identity (#5), which
-should wait for a concrete multi-page/lists-with-actions app to force the
-design — that is where the no-reflection guarantee will be genuinely tested.
+single-pod authed app today — including multiplexed live islands and reordering
+CRUD lists with per-row actions (`OnClickArg`). The next steps are feature
+breadth, not blockers: the router/middleware (#6), and the narrow keyed-cursor
+remainder of #5 (per-row signals in a reordering list, lists-of-islands), which
+should wait for a concrete app to force the design.

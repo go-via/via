@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"sync/atomic"
@@ -173,34 +174,66 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 				fn(ctx)
 			}
 		})
-		// Write the attribute raw, not via h.Data: the value is a Datastar
-		// expression whose single-quotes must survive verbatim (escaping them to
-		// &#39; breaks the @post() call). The value is fully via-generated (fixed
-		// template + the via-controlled event name + a numeric id), so no user
-		// input reaches it and there is no injection surface.
-		//
-		// Datastar v1's colon syntax (data-on:<event>). The old dash form is
-		// parsed as a nonexistent plugin and silently dropped — dead in the
-		// browser while every server-side render test passes.
-		//
-		// On a live island the POST must route to THIS connection's instance, so
-		// the action echoes the tab id (the _viatab local signal set by the SSE)
-		// as the X-Via-Tab header. Stateless pages have no tab and omit it.
-		switch {
-		case ctx != nil && ctx.isIsland && ctx.island:
-			// Live embedded island: scope to its island AND echo the tab id, so the
-			// POST routes to this island on this connection's goroutine.
-			r.WriteString(` data-on:` + event + `="@post('/_via/a/` + strconv.Itoa(ctx.islandIdx) + `/` + idx + `',{headers:{'X-Via-Tab':$_viatab}})"`)
-		case ctx != nil && ctx.isIsland:
-			// Stateless embedded island: scope to its island so a patch targets
-			// exactly this island's #via-i{n}, never a sibling.
-			r.WriteString(` data-on:` + event + `="@post('/_via/a/` + strconv.Itoa(ctx.islandIdx) + `/` + idx + `')"`)
-		case ctx != nil && ctx.island:
-			r.WriteString(` data-on:` + event + `="@post('/_via/a/` + idx + `',{headers:{'X-Via-Tab':$_viatab}})"`)
-		default:
-			r.WriteString(` data-on:` + event + `="@post('/_via/a/` + idx + `')"`)
-		}
+		writeActionAttr(r, ctx, event, idx, "")
 	})
+}
+
+// OnClickArg wires a click to an action that carries a value — the row's own
+// datum rides with the click (a query arg), so the handler receives it as a
+// typed parameter and acts on THAT item regardless of its render position. fn is
+// a named method value (e.g. l.Delete); arg is plain data (e.g. todo.ID), not an
+// identifier string. Use it for per-row actions in a list. No '&', no closure.
+func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("click", fn, arg) }
+
+// onEventArg is onEvent for a value-carrying action: it JSON-encodes arg into the
+// action's query (?a=…) so the client posts the row's datum, and the dispatched
+// slot decodes it from the request and hands it to fn. Identity rides with the
+// click, so a renumbered list can't misroute.
+func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
+	return h.DynAttr(func(r *h.Renderer) {
+		b := r.Binder()
+		ctx, _ := b.(*Ctx)
+		idx := b.ActionSlot(func() {
+			if ctx == nil || ctx.req == nil {
+				return
+			}
+			var v T
+			if raw := ctx.req.URL.Query().Get("a"); raw != "" {
+				_ = json.Unmarshal([]byte(raw), &v)
+			}
+			fn(ctx, v)
+		})
+		query := ""
+		if data, err := json.Marshal(arg); err == nil {
+			query = "?a=" + url.QueryEscape(string(data))
+		}
+		writeActionAttr(r, ctx, event, idx, query)
+	})
+}
+
+// writeActionAttr writes the data-on:<event>="@post('PATH?query'<,opts>)" binding
+// for a claimed action slot. Written raw (not via h.Data): the value is a
+// Datastar expression whose single-quotes must survive verbatim, and it is fully
+// via-generated (fixed template + the via-controlled event name + a numeric id +
+// a url-encoded arg), so no user input reaches it and there is no injection
+// surface. Datastar v1's colon syntax (data-on:<event>); the old dash form is
+// parsed as a nonexistent plugin and silently dropped. On a live island the POST
+// routes to THIS connection's instance, so it echoes the tab id (the _viatab
+// local signal the SSE set) as the X-Via-Tab header; the island id scopes which
+// island; a stateless page omits both.
+func writeActionAttr(r *h.Renderer, ctx *Ctx, event, idx, query string) {
+	path := "/_via/a/" + idx
+	opts := ""
+	switch {
+	case ctx != nil && ctx.isIsland:
+		path = "/_via/a/" + strconv.Itoa(ctx.islandIdx) + "/" + idx
+		if ctx.island {
+			opts = ",{headers:{'X-Via-Tab':$_viatab}}"
+		}
+	case ctx != nil && ctx.island:
+		opts = ",{headers:{'X-Via-Tab':$_viatab}}"
+	}
+	r.WriteString(` data-on:` + event + `="@post('` + path + query + `'` + opts + `)"`)
 }
 
 // Register builds an http.Handler serving the root component. root is taken by
@@ -691,6 +724,7 @@ func Register[T any, PT interface {
 		}
 
 		before := isl.rendered
+		isl.req = req // so a value-carrying action (OnClickArg) can read its arg from the request
 		isl.actions[n]()
 		after := renderIsland(island, isl.islandV)
 		if bytes.Equal(before, after) {
