@@ -1,7 +1,9 @@
 package via_test
 
 import (
+	"bytes"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"strings"
@@ -80,6 +82,130 @@ type echoPage struct{ echoed int }
 func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = via.Param[int](ctx, 0) }
 func (p *echoPage) View() h.H {
 	return h.Div(h.Button(via.OnClick(p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
+}
+
+// avatarPage uploads a file via a native multipart form; Save receives the file
+// as a via.File and drains it. cap records what the handler saw (the per-request
+// page copy is discarded, so a pointer captures it for the assertion).
+type capture struct {
+	name, ctype, body string
+	size              int64
+}
+type avatarPage struct{ cap *capture }
+
+func (p *avatarPage) Save(ctx *via.Ctx, f via.File) {
+	p.cap.name = f.Name()
+	p.cap.ctype = f.ContentType()
+	p.cap.size = f.Size()
+	b, _ := io.ReadAll(f)
+	p.cap.body = string(b)
+	via.Redirect(ctx, "/done")
+}
+func (p *avatarPage) View() h.H {
+	return via.OnUpload(p.Save,
+		h.Input(h.RawAttr("type", "file"), h.RawAttr("name", "avatar")),
+		h.Button(h.Str("upload")),
+	)
+}
+
+func uploadPOST(c *http.Client, t *testing.T, url, filename, content string) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("avatar", filename)
+	fw.Write([]byte(content))
+	mw.Close()
+	req, _ := http.NewRequest(http.MethodPost, url, &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+// OnUpload renders a native multipart form; its handler receives the uploaded
+// file (bytes + filename) — the file analogue of PostForm. Storage is app-land:
+// File is just an io.Reader + metadata the app drains.
+func TestRouter_onUploadDeliversFileToHandler(t *testing.T) {
+	t.Parallel()
+	cap := &capture{}
+	r := via.NewRouter()
+	via.Mount(r, "/p", avatarPage{cap: cap})
+	srv := serve(t, r)
+
+	_, page := do(t, srv, http.MethodGet, "/p", "")
+	assert.Contains(t, page, `enctype="multipart/form-data"`, "OnUpload must render a multipart form")
+	assert.Contains(t, page, `action="/p/_via/upload/0"`, "posting to the positional upload endpoint")
+
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/p/_via/upload/0", "me.png", "PNGBYTES")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "a Redirect in the handler must 303")
+	assert.Equal(t, "me.png", cap.name, "handler must receive the filename")
+	assert.Equal(t, "PNGBYTES", cap.body, "handler must receive the file bytes")
+	assert.Equal(t, int64(len("PNGBYTES")), cap.size, "File.Size must report the parsed byte count")
+	assert.Equal(t, "application/octet-stream", cap.ctype, "File.ContentType must report the part's declared type")
+}
+
+// A multipart body with no file part is a client error (the handler needs a
+// file); an out-of-range upload index fails closed so a stale client re-bootstraps.
+func TestRouter_onUploadRejectsMissingFileAndBadIndex(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
+	srv := serve(t, r)
+	c := &http.Client{CheckRedirect: noFollow}
+
+	// out-of-range upload slot → 410
+	resp := uploadPOST(c, t, srv.URL+"/p/_via/upload/9", "x.png", "data")
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
+
+	// multipart body carrying only a text field (no file) → 400
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	mw.WriteField("caption", "hi")
+	mw.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/p/_via/upload/0", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp2, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp2.StatusCode)
+}
+
+// The upload body is capped (memory/disk-exhaustion defense): an oversize upload
+// is rejected, not buffered/spilled whole.
+func TestRouter_onUploadCapsBody(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
+	srv := serve(t, r)
+
+	big := strings.Repeat("x", 9<<20) // > maxUploadBytes (8 MiB)
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/p/_via/upload/0", "big.bin", big)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+// An upload is state-changing, so a cross-site POST fails closed (CSRF), like the
+// action and form endpoints.
+func TestRouter_onUploadRejectsCrossSiteOrigin(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
+	srv := serve(t, r)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("avatar", "x.png")
+	fw.Write([]byte("data"))
+	mw.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/p/_via/upload/0", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 // secret is a guarded page: RequireSession redirects to /login when no acct is
