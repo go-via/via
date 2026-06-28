@@ -131,17 +131,25 @@ examples, the whole live stack verified in real headless browsers
   FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
   Datastar gives up; opt out with `WithoutSSEReconnect()`.
+- **Live-island multiplexing** (`example/dashboard`): embed sub-compositions with
+  `via.Child[C]` value-field handles — `p.Clock.Embed()` in the parent's `View`.
+  A child without `OnConnect` is a plain in-place component; one with `OnConnect`
+  is a live island, and all the live children on a page share the tab's *one* SSE
+  stream on one goroutine — each re-renders and patches only its own region
+  (`#via-i{n}`), its actions route by island id + the tab handshake, and its
+  signals are slot-scoped so siblings never collide. `via.NewChild(child)` seeds a
+  child's dependencies (a shared `*Topic`, a store) at registration.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
 
-Deferred (correctly out of 1.0 scope): `Embed` + the structural-key cursor (only
-needed for *action-bearing* dynamic shape — lists whose rows carry their own
-actions), `via/router`, the multi-island per-tab SSE multiplex, and
-at-least-once redelivery (a push onto a dropping socket fails the write and tears
-down rather than being buffered for replay). The SSE GET stream now applies the
+Deferred (correctly out of 1.0 scope): the structural-key cursor (only needed for
+*action-bearing* dynamic shape — lists whose rows carry their own actions;
+embedding fixed children via `via.Child[C]` is done, lists-of-islands is not),
+`via/router`, and at-least-once redelivery (a push onto a dropping socket fails
+the write and tears down rather than being buffered for replay). The SSE GET stream now applies the
 same origin floor as the action POST and is capped at a configurable number of
 concurrent connections (`WithMaxSSEConnections`, default 10,000; over the cap
 returns 503). See [`DESIGN.md`](./DESIGN.md) and [`ROADMAP.md`](./ROADMAP.md).
