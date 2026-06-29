@@ -6,6 +6,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -50,6 +51,155 @@ func jarPost(t *testing.T, c *http.Client, url string) {
 	resp, err := c.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
+}
+
+// redirectPage is a stateless page whose @post action navigates the browser via
+// via.Redirect — the case PostForm's native 303 can't cover (a Datastar @post).
+type redirectPage struct{}
+
+func (p *redirectPage) Go(ctx *via.Ctx)   { via.Redirect(ctx, "/dest") }
+func (p *redirectPage) Evil(ctx *via.Ctx) { via.Redirect(ctx, "javascript:alert(1)") }
+func (p *redirectPage) View() h.H {
+	return h.Div(h.Button(via.OnClick(p.Go)), h.Button(via.OnClick(p.Evil)))
+}
+
+// relRedirectPage redirects to a relative path (no scheme) — also valid.
+type relRedirectPage struct{}
+
+func (p *relRedirectPage) Go(ctx *via.Ctx) { via.Redirect(ctx, "threads/7") }
+func (p *relRedirectPage) View() h.H       { return h.Div(h.Button(via.OnClick(p.Go))) }
+
+var nonceRe = regexp.MustCompile(`'nonce-([^']+)'`)
+
+func cspNonce(t *testing.T, c *http.Client, url string) string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	m := nonceRe.FindStringSubmatch(resp.Header.Get("Content-Security-Policy"))
+	require.Len(t, m, 2, "CSP header must carry a script-src nonce")
+	return m[1]
+}
+
+// Once a session exists, the strict-CSP nonce is scoped to it (stable across the
+// session's requests) rather than fresh per render — so a later action response
+// can stamp an injected script with the SAME nonce the document's CSP admits.
+func TestRouter_sessionScopesCSPNonceAcrossRequests(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/x", redirectPage{})
+	srv := serve(t, r)
+
+	// No session yet → per-render nonce (two GETs differ).
+	anon, _ := cookiejar.New(nil)
+	ca := &http.Client{Jar: anon}
+	require.NotEqual(t, cspNonce(t, ca, srv.URL+"/x"), cspNonce(t, ca, srv.URL+"/x"),
+		"without a session the nonce stays fresh per render")
+
+	// After login the nonce is session-scoped → stable across requests.
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	formPost(c, t, srv.URL+"/login/_via/f/0", "name=alice")
+	assert.Equal(t, cspNonce(t, c, srv.URL+"/x"), cspNonce(t, c, srv.URL+"/x"),
+		"within a session the nonce is stable so action redirects can reuse it")
+}
+
+// A via.Redirect from a Datastar @post action sends an executable script
+// (location.assign) carrying the document's CSP nonce, so the strict CSP admits
+// it — the @post analogue of PostForm's 303.
+func TestRouter_postActionRedirectShipsNonceMatchedScript(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/x", redirectPage{})
+	srv := serve(t, r)
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	formPost(c, t, srv.URL+"/login/_via/f/0", "name=alice")
+	nonce := cspNonce(t, c, srv.URL+"/x")
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/0", strings.NewReader("{}"))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript",
+		"a @post redirect is delivered as an executable script, not an element patch")
+	assert.Contains(t, string(body), `location.assign("/dest")`)
+	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), nonce,
+		"the injected script must carry the document's CSP nonce or the browser blocks it")
+}
+
+// Redirect interpolates into location.assign('…'), so a non-http(s)/relative URL
+// (javascript:, data:, //evil) must be rejected — never shipped as a script.
+func TestRouter_postActionRedirectRejectsUnsafeURL(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/x", redirectPage{})
+	srv := serve(t, r)
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	formPost(c, t, srv.URL+"/login/_via/f/0", "name=alice")
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/1", strings.NewReader("{}")) // Evil
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
+		"an unsafe redirect URL must not be shipped as a script")
+	assert.NotContains(t, string(body), "javascript:alert", "the unsafe URL must never reach the client")
+}
+
+// Without a session there is no nonce the document's CSP would admit, so a @post
+// redirect is dropped (no script) rather than shipping one the browser blocks —
+// the cookieless / pre-session case falls back to the element patch.
+func TestRouter_postActionRedirectDroppedWithoutSession(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/x", redirectPage{})
+	srv := serve(t, r)
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/0", strings.NewReader("{}"))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
+		"no session ⇒ no admissible nonce ⇒ no redirect script")
+}
+
+// A same-origin relative path (no scheme) is a valid redirect target and is
+// json-escaped into the script intact.
+func TestRouter_postActionRedirectAllowsRelativePath(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/x", relRedirectPage{})
+	srv := serve(t, r)
+
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	formPost(c, t, srv.URL+"/login/_via/f/0", "name=alice")
+	cspNonce(t, c, srv.URL+"/x") // establish the document nonce
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/0", strings.NewReader("{}"))
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+	assert.Contains(t, string(body), `location.assign("threads/7")`, "a relative path is a valid target")
 }
 
 // OnInit runs per request before the (ctx-free) View, so a page can load

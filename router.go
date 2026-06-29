@@ -84,7 +84,7 @@ func Mount[T any, PT interface {
 		inst := root
 		runOnInit(PT(&inst), w, req, r.sessions, params) // load session/request data into fields first
 		_, body := renderRootBase(PT(&inst), nil, false, true, concreteBase(patternBase, req, names))
-		writeHTMLPage(w, r.cfg, body)
+		writeHTMLPage(w, r.cfg, body, pageNonce(req, r.sessions))
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
@@ -162,7 +162,7 @@ func uploadAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body)
+	writeHTMLPage(w, cfg, body, pageNonce(req, sessions))
 }
 
 // firstFile opens the first uploaded file part (OnUpload delivers a single file;
@@ -296,15 +296,24 @@ func formAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body)
+	writeHTMLPage(w, cfg, body, pageNonce(req, sessions))
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under a
 // nonce'd CSP, the optional theme, then the rendered body. (The single-page
 // Register adds the live bootstrap + reconnect manager; a router page is
 // stateless for now.)
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte) {
-	nonce := genCSPNonce()
+// pageNonce returns the CSP nonce for a full-document response: the stable
+// per-session nonce when a session is resolvable (so a later action's injected
+// redirect script can reuse it), else a fresh per-render nonce.
+func pageNonce(req *http.Request, sessions *sessionManager) string {
+	if n := sessions.cspNonce(req); n != "" {
+		return n
+	}
+	return genCSPNonce()
+}
+
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string) {
 	writeSecurityHeaders(w, nonce)
 	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8">` +
 		`<script type="module" nonce="` + nonce + `" src="/_via/datastar.js"></script>` +
@@ -364,6 +373,14 @@ func dispatchStateless[T any, PT interface {
 	bind.sessW = w
 	bind.params = params
 	bind.actions[n]()
+	// A via.Redirect from a @post action navigates the browser. The bundled
+	// Datastar can't redirect via a patch, but its fetch handler EXECUTES a
+	// text/javascript response — so we ship location.assign() as a script,
+	// stamped with the session's CSP nonce (the only nonce the document admits).
+	// The element patch is dropped: the page is navigating away.
+	if writeRedirectScript(w, req, sessions, bind.redirect) {
+		return
+	}
 	_, after := renderRootBase(PT(&inst), nil, false, true, base)
 	if bytes.Equal(before, after) {
 		w.WriteHeader(http.StatusNoContent)

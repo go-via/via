@@ -28,9 +28,10 @@ func init() {
 // sessionData is one browser session's value bag. Values are keyed by an opaque
 // key (via/sess uses a per-type sentinel) so distinct typed values coexist.
 type sessionData struct {
-	mu   sync.Mutex
-	vals map[any]any
-	seen time.Time // last access, for idle-TTL eviction
+	mu    sync.Mutex
+	vals  map[any]any
+	seen  time.Time // last access, for idle-TTL eviction
+	nonce string    // per-session CSP nonce, stable so action redirects can reuse it
 }
 
 // sessionStore is the per-Register in-memory session table, keyed by signed id.
@@ -72,7 +73,10 @@ func (st *sessionStore) reID(oldID string, d *sessionData) string {
 
 func (st *sessionStore) create() (string, *sessionData) {
 	id := genCSPNonce() // 128-bit URL-safe token, same generator as the tab id
-	d := &sessionData{vals: map[any]any{}, seen: time.Now()}
+	// A per-session CSP nonce (distinct from the id): the document's strict CSP
+	// uses it across the session's requests, so a later action response can stamp
+	// an injected script (a @post Redirect) with a nonce the document admits.
+	d := &sessionData{vals: map[any]any{}, seen: time.Now(), nonce: genCSPNonce()}
 	st.mu.Lock()
 	st.m[id] = d
 	st.mu.Unlock()
@@ -138,6 +142,19 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool)
 		return "", nil, false
 	}
 	return id, d, true
+}
+
+// cspNonce returns the request's session CSP nonce, or "" when there is no
+// resolvable session (a cookieless app, or before the first write) — in which
+// case the caller falls back to a fresh per-render nonce.
+func (m *sessionManager) cspNonce(req *http.Request) string {
+	if m == nil {
+		return ""
+	}
+	if _, d, ok := m.resolve(req); ok {
+		return d.nonce
+	}
+	return ""
 }
 
 // verify splits "id.sig" and constant-time-compares the recomputed signature.
