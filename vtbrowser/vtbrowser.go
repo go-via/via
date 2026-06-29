@@ -124,6 +124,14 @@ func (s *Session) navigate() {
 	)
 }
 
+// Reload re-navigates the tab to the app root — a fresh document load, so a
+// cookie set on the prior load (e.g. a session established in OnInit) is now
+// sent with the GET and the server can render against it.
+func (s *Session) Reload() {
+	s.t.Helper()
+	s.navigate()
+}
+
 // Click dispatches a real mouse click on the first node matching the CSS
 // selector, waiting for it to become visible first.
 func (s *Session) Click(selector string) {
