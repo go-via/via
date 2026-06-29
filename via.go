@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/go-via/via/v2/h"
@@ -268,14 +269,64 @@ func (c *Ctx) uploadSlot(fn func(*Ctx, File)) string {
 	return strconv.Itoa(idx)
 }
 
-// Redirect navigates the browser to path after the current form handler returns
-// (a 303 See Other). Use it from a PostForm handler — e.g. after sign-in.
-// Datastar @post actions cannot redirect (the bundled client has no
-// execute-script); native forms + Redirect are the navigation path.
+// Redirect navigates the browser to path after the current handler returns. From
+// a PostForm handler it is a 303 See Other on the native form submit. From a
+// Datastar @post action it is shipped as an executable location.assign() script
+// stamped with the session's CSP nonce — which requires an active session (the
+// nonce the document admits); without one the @post redirect is dropped (no
+// navigation), so use PostForm for pre-session flows like sign-in. path must be
+// http/https or a same-origin relative path; other schemes are rejected.
 func Redirect(ctx *Ctx, path string) {
 	if ctx != nil {
 		ctx.redirect = path
 	}
+}
+
+// writeRedirectScript ships a queued via.Redirect as an executable script when a
+// @post action requested one. It returns true (response written) only when there
+// is a redirect AND it is safe AND a session nonce is available to admit the
+// script under the strict CSP; otherwise it returns false and the caller falls
+// back to the normal element-patch response. The script carries the session's
+// CSP nonce via the datastar-script-attributes header, which the bundle copies
+// onto the <script> it creates — so the document's CSP accepts it.
+func writeRedirectScript(w http.ResponseWriter, req *http.Request, sessions *sessionManager, target string) bool {
+	if target == "" || !safeRedirectURL(target) {
+		return false
+	}
+	nonce := sessions.cspNonce(req)
+	if nonce == "" {
+		// No session ⇒ no nonce the document will admit; a script would be
+		// blocked by CSP. Fall back to the element patch (no navigation).
+		return false
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	attrs, _ := json.Marshal(map[string]string{"nonce": nonce})
+	w.Header().Set("datastar-script-attributes", string(attrs))
+	// target is JSON-encoded into the JS string literal: json.Marshal escapes
+	// quotes/backslashes/controls, closing the breakout/XSS vector for any URL
+	// that passed safeRedirectURL.
+	js, _ := json.Marshal(target)
+	w.Write([]byte("location.assign(" + string(js) + ")"))
+	return true
+}
+
+// safeRedirectURL reports whether url is safe to navigate to client-side: an
+// http/https absolute URL or a same-origin relative path. A scheme like
+// javascript:/data:/vbscript: or a protocol-relative "//" prefix is rejected —
+// the open-redirect / XSS defense, since Redirect interpolates the URL into a
+// script. Browsers strip leading control chars before resolving the scheme, so
+// trim them first to treat " javascript:" identically.
+func safeRedirectURL(url string) bool {
+	trimmed := strings.TrimLeftFunc(url, func(r rune) bool { return r <= ' ' })
+	if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, `\\`) {
+		return false
+	}
+	if i := strings.IndexAny(trimmed, ":/?#"); i >= 0 && trimmed[i] == ':' {
+		scheme := strings.ToLower(trimmed[:i])
+		return scheme == "http" || scheme == "https"
+	}
+	return true // a relative path (no scheme before the first /?#)
 }
 
 // formSlot registers a native-form handler and returns its positional id.
@@ -494,7 +545,7 @@ func Register[T any, PT interface {
 		if hasLive {
 			bodyOpen = `</head><body data-init="@post('/_via/sse')" data-signals='{"_viatab":""}'>`
 		}
-		nonce := genCSPNonce()
+		nonce := pageNonce(req, sessions) // session-scoped when a session exists, so a @post Redirect's script matches
 		writeSecurityHeaders(w, nonce)
 		w.Write([]byte("<!doctype html><html><head><meta charset=\"utf-8\">" +
 			"<script type=\"module\" nonce=\"" + nonce + "\" src=\"/_via/datastar.js\"></script>" +
