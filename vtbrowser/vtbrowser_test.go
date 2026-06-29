@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-via/via/v2"
 	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/v2/sess"
 	"github.com/go-via/via/v2/topic"
 	"github.com/go-via/via/v2/vtbrowser"
 )
@@ -311,4 +312,61 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 
 	a.RequireCleanConsole()
 	b.RequireCleanConsole()
+}
+
+// redirectViaScript is a stateless page whose @post action calls via.Redirect.
+// With sessions on, the document's CSP nonce is session-scoped, so the action's
+// text/javascript location.assign() can carry a nonce the document admits.
+// OnInit establishes the session so a reload renders against the session nonce.
+type sessMarker struct{ Ok bool }
+type redirectViaScript struct{}
+
+func (p *redirectViaScript) OnInit(ctx *via.Ctx) { sess.Put(ctx, sessMarker{Ok: true}) }
+func (p *redirectViaScript) Go(ctx *via.Ctx)     { via.Redirect(ctx, "/done") }
+func (p *redirectViaScript) View() h.H {
+	return h.Div(h.Button(via.OnClick(p.Go), h.Str("go")))
+}
+
+// A via.Redirect from a Datastar @post action must ACTUALLY navigate the browser
+// under the strict nonce'd CSP — the payoff no httptest can see. The action
+// ships location.assign("/done") as a text/javascript script stamped with the
+// session CSP nonce; the browser executes it only if that nonce matches the
+// document's. The first load creates the session (cookie); the reload renders
+// the document with the session-scoped nonce; the click must then navigate.
+func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
+	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	s := vtbrowser.Open(t, app) // load 1: OnInit creates the session, sets the cookie
+	s.Reload()                  // load 2: document now uses the session-scoped CSP nonce
+	s.Click("button")           // @post → location.assign("/done") under the matching nonce
+	s.WaitEvalTrue(`location.pathname === "/done"`,
+		"the @post redirect script executed and navigated the browser to /done")
+	s.RequireCleanConsole() // a CSP-refused script would surface as a console error
+}
+
+// Negative control proving the nonce match is load-bearing and the strict CSP
+// genuinely gates execution. WITHOUT the reload the document carries a per-render
+// nonce, so the action's session-nonce'd script does NOT match. The browser
+// still INSERTS the <script> (CSP blocks execution, not insertion) but refuses to
+// RUN it — so the redirect script is present in <head> yet the page never
+// navigates. (Chromium reports the CSP refusal via the Log domain, not the
+// console API the harness observes, so we assert on the DOM + URL, not console.)
+func TestPostActionRedirect_blockedWhenNonceDoesNotMatch(t *testing.T) {
+	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	s := vtbrowser.Open(t, app) // load 1 only: per-render document nonce; session created but NOT reloaded
+	s.Click("button")           // @post ships a script stamped with the (different) session nonce
+	s.Sleep(700 * time.Millisecond)
+
+	// The script WAS shipped (inserted into <head>) — distinguishing a CSP block
+	// from "no script sent at all".
+	var inserted bool
+	s.Eval(`[...document.querySelectorAll('head script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
+	if !inserted {
+		t.Fatal("expected the redirect <script> to be inserted into <head> (shipped by the @post)")
+	}
+	// …but it must NOT have executed: the mismatched nonce means no navigation.
+	var path string
+	s.Eval(`location.pathname`, &path)
+	if path != "/" {
+		t.Fatalf("expected the CSP to block the mismatched-nonce script (no navigation), but went to %q", path)
+	}
 }
