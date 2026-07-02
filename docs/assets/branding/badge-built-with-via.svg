@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="140" height="28" role="img" aria-label="built with via">
+<title>built with via</title>
+<clipPath id="r2"><rect width="140" height="28" rx="4" fill="#fff"></rect></clipPath>
+<g clip-path="url(#r2)">
+<rect width="87" height="28" fill="#ffbf00"></rect>
+<rect x="87" width="53" height="28" fill="#101015"></rect>
+</g>
+<text x="12" y="18.5" fill="#0b0b0f" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-weight="700" font-size="10" letter-spacing="0.9">BUILT WITH</text>
+<svg x="100" y="9.5" width="27" height="9" viewBox="5 52 294 98"><path fill="#efece4" d="M 5.18 52 L 28.58 52 L 71.70 150 L 48.30 150 Z"></path><path fill="#efece4" d="M 91.42 52 L 114.82 52 L 71.70 150 L 48.30 150 Z"></path><path fill="#efece4" d="M 232.30 52 L 255.70 52 L 212.58 150 L 189.18 150 Z"></path><path fill="#efece4" d="M 232.30 52 L 255.70 52 L 298.82 150 L 275.42 150 Z"></path><path fill="#ffbf00" d="M 162.36 52 L 184.76 52 L 141.64 150 L 119.24 150 Z"></path></svg>
+</svg>

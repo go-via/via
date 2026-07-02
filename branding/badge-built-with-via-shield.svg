@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="102" height="20" role="img" aria-label="built with: via">
+<title>built with: via</title>
+<clipPath id="r"><rect width="102" height="20" rx="3" fill="#fff"></rect></clipPath>
+<g clip-path="url(#r)">
+<rect width="74" height="20" fill="#555"></rect>
+<rect x="74" width="28" height="20" fill="#ffbf00"></rect>
+</g>
+<svg x="7" y="4.5" width="10.21" height="11" viewBox="38 45 130 140"><path fill="#ffbf00" d="M 109,45 L 119,45 L 92,97 L 168,97 L 100,185 L 91,185 L 116,142 L 38,142 Z"></path></svg>
+<g font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+<text x="22.21" y="15" fill="#010101" fill-opacity=".3">built with</text>
+<text x="22.21" y="14" fill="#fff">built with</text>
+<text x="88" y="14" fill="#0b0b0f" text-anchor="middle" font-weight="500">via</text>
+</g>
+</svg>
