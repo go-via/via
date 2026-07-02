@@ -48,6 +48,23 @@ App-icon badges carry their own background, so they need no theme variant:
 <img alt="VIA" src="branding/icon-ink-amber.svg" width="96">
 ```
 
+## Badge
+
+"Built with via" badges for READMEs. Both carry their own background, so
+they need no theme variant.
+
+For-the-badge style (amber label, ink value with the cream bolt):
+
+```html
+<img alt="built with via" src="branding/badge-built-with-via.svg" height="28">
+```
+
+Shield style (compact flat badge, amber `via` chip with the amber bolt):
+
+```html
+<img alt="built with: via" src="branding/badge-built-with-via-shield.svg" height="20">
+```
+
 ## Files
 
 | Asset | Light | Dark |
@@ -62,3 +79,5 @@ App-icon badges carry their own background, so they need no theme variant:
 | App icon · amber/ink | `icon-amber-ink.svg` | — |
 | App icon · cream/ink | `icon-cream-ink.svg` | — |
 | App icon · ink/amber outline | `icon-ink-amber-outline.svg` | — |
+| Badge · built with via | `badge-built-with-via.svg` | — |
+| Badge · built with via (shield) | `badge-built-with-via-shield.svg` | — |
