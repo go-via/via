@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 // Greeting holds a single client-resident signal. Bind() wires it to the input

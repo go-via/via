@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/h"
 )
 
 // anyLiveIsland reports whether a completed render discovered an embedded

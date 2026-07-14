@@ -1,4 +1,4 @@
-// Package vtbrowser (via test, browser) drives a registered via/v2 handler in a
+// Package vtbrowser (via test, browser) drives a registered via handler in a
 // real headless Chromium and abstracts away raw chromedp, so a browser test
 // reads at the level of the behavior it checks:
 //

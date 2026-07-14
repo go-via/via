@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/h"
 	"github.com/stretchr/testify/assert"
 )
 

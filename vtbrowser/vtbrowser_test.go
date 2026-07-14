@@ -2,7 +2,7 @@
 
 // Package vtbrowser_test exercises the vtbrowser harness in a real headless
 // Chromium (run with -tags browser; VIA_CHROME overrides the binary path).
-// Each test drives a harness method against a minimal via/v2 fixture, so the
+// Each test drives a harness method against a minimal via fixture, so the
 // suite doubles as the browser tier: proving the harness works means proving
 // Datastar's data-on:click / data-bind / SSE-morph behave under the strict
 // nonce'd CSP — the bug class no httptest can see.
@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
-	"github.com/go-via/via/v2/sess"
-	"github.com/go-via/via/v2/topic"
-	"github.com/go-via/via/v2/vtbrowser"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/sess"
+	"github.com/go-via/via/topic"
+	"github.com/go-via/via/vtbrowser"
 )
 
 // --- fixtures ---

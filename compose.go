@@ -1,6 +1,6 @@
 package via
 
-import "github.com/go-via/via/v2/h"
+import "github.com/go-via/via/h"
 
 // Each renders row(item) for every item, in order, in place — a row method that
 // returns <li> lands directly inside the surrounding <ul>, with no wrapper. row

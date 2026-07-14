@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-via/via/v2/internal/sessbridge"
+	"github.com/go-via/via/internal/sessbridge"
 )
 
 const (

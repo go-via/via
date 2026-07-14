@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-via/via/v2"
+	"github.com/go-via/via"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -1,4 +1,4 @@
-// Package vt (via test) is a black-box test harness for via/v2 compositions. It
+// Package vt (via test) is a black-box test harness for via compositions. It
 // drives a registered handler over real HTTP through via's public surface — no
 // reach into unexported state — so a test can exercise the origin floor, an
 // action, or a live SSE stream without hand-rolling request plumbing.

@@ -1,4 +1,4 @@
-module github.com/go-via/via/v2
+module github.com/go-via/via
 
 go 1.24.0
 

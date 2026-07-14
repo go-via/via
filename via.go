@@ -23,7 +23,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/h"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.

@@ -13,8 +13,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 // Option is one poll choice. Plain app data; ID is its natural key.

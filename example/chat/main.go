@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
-	"github.com/go-via/via/v2/topic"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
 )
 
 // Message is one chat line. Plain app data.

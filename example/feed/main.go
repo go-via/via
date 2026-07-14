@@ -12,9 +12,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
-	"github.com/go-via/via/v2/topic"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
 )
 
 // Feed is a live island fed by a shared Topic. last holds the most recent
