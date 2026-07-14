@@ -1,11 +1,11 @@
-module github.com/go-via/via/v2/vtbrowser
+module github.com/go-via/via/vtbrowser
 
 go 1.24.0
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
 	github.com/chromedp/chromedp v0.14.1
-	github.com/go-via/via/v2 v2.0.0
+	github.com/go-via/via v0.8.0
 )
 
 require (
@@ -17,4 +17,4 @@ require (
 	golang.org/x/sys v0.34.0 // indirect
 )
 
-replace github.com/go-via/via/v2 => ../
+replace github.com/go-via/via => ../
