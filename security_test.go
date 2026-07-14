@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
-	"github.com/go-via/via/v2/vt"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -21,9 +21,9 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
-	"github.com/go-via/via/v2/sess"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/sess"
 )
 
 // --- app-land data + store (not framework) ---

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-via/via/v2/topic"
+	"github.com/go-via/via/topic"
 	"github.com/stretchr/testify/assert"
 )
 

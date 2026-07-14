@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via/h"
 )
 
 // writeSignalsAttr writes the page-level Datastar signal declaration as a

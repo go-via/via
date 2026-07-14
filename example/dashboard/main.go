@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 // Greeting is a PLAIN child — no OnConnect, so it just renders structure. It is

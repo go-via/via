@@ -12,8 +12,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 // Store is the in-server state the counter tracks — a plain app dependency, not

@@ -10,8 +10,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 // Pulse is server-held state pushed to the browser. Beats is a State[int] — it

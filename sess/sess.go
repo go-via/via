@@ -26,8 +26,8 @@
 package sess
 
 import (
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/internal/sessbridge"
+	"github.com/go-via/via"
+	"github.com/go-via/via/internal/sessbridge"
 )
 
 // typeKey returns a stable, comparable key unique to T — a typed nil pointer,

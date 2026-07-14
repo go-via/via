@@ -1,6 +1,6 @@
 package via
 
-import "github.com/go-via/via/v2/h"
+import "github.com/go-via/via/h"
 
 // State is server-authoritative, per-connection island state. Unlike Signal it
 // never reaches the client as a signal: its value is server-rendered as literal
