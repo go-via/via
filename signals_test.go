@@ -22,7 +22,7 @@ func attrValue(t *testing.T, body, name string) string {
 
 // numComp renders a single client-resident numeric signal, so the page-level
 // data-signals declaration is non-empty (the server-state counter declares none).
-type numComp struct{ n via.Counter }
+type numComp struct{ n via.Signal[int] }
 
 func (c *numComp) View() h.H { return h.Div(c.n.Display()) }
 
@@ -42,7 +42,7 @@ type nameComp struct{ name via.Signal[string] }
 
 // Touch mutates the round-tripped value so the render changes and a patch (not a
 // 204) is returned, letting the test inspect how the value is reflected.
-func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(ctx, c.name.Get()+"!") }
+func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get()+"!") }
 func (c *nameComp) View() h.H {
 	return h.Div(h.Button(via.OnClick(c.Touch), h.Str("x")), c.name.Display())
 }
@@ -121,7 +121,7 @@ type boundForm struct{ Name via.Signal[string] }
 // Save appends to the bound value so the render changes — otherwise an action
 // that leaves the View identical returns 204 (no patch) and there is nothing to
 // assert about the response.
-func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(ctx, f.Name.Get()+"!") }
+func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(f.Name.Get()+"!") }
 func (f *boundForm) View() h.H {
 	return h.Div(
 		h.Input(f.Name.Bind()),
@@ -143,17 +143,6 @@ func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	assert.Contains(t, frag, "Ada", "response must reflect the value the client typed, not a zero reset")
 }
 
-// Counter is a numeric Signal with an Op(ctx) accessor for the verbs, keeping
-// Add/Inc/Dec off the bare Signal surface.
-func TestCounter_opAppliesNumericVerbs(t *testing.T) {
-	t.Parallel()
-	var c via.Counter
-	c.Op(nil).Add(5)
-	c.Op(nil).Inc()
-	c.Op(nil).Dec()
-	assert.Equal(t, 5, c.Get())
-}
-
 // localComp renders a client-only Local signal.
 type localComp struct{ note via.Local[string] }
 
@@ -170,4 +159,15 @@ func TestLocal_isClientOnlyUnderscoreSignal(t *testing.T) {
 	assert.Contains(t, body, `data-bind="_s`, "Local binds an underscore-prefixed (client-only) signal")
 	assert.Contains(t, body, `data-text="$_s`, "Local displays the same underscore signal")
 	assert.Contains(t, body, `data-signals='{"_s`, "Local is declared so the client owns it")
+}
+
+// TestSignal_bareSetBeforeRenderIsSafe pins the bare-mutator contract: Set(v)
+// with no ctx works before the signal was ever rendered (no bound pass yet) —
+// it updates server memory and emits no patch, without panicking. Fails if Set
+// grows a required ctx again or dereferences an unstamped binding.
+func TestSignal_bareSetBeforeRenderIsSafe(t *testing.T) {
+	t.Parallel()
+	var s via.Signal[string]
+	s.Set("hello")
+	assert.Equal(t, "hello", s.Get())
 }

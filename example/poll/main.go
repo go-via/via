@@ -82,7 +82,7 @@ func (a *PollApp) Add(ctx *via.Ctx) {
 		return
 	}
 	a.poll.add(a.Draft.Get())
-	a.Draft.Set(ctx, "") // clear the composer
+	a.Draft.Set("") // clear the composer
 }
 
 // Vote and Remove take the option's id as a typed parameter — via decodes it
@@ -115,6 +115,6 @@ func main() {
 	poll.add("Go")
 	poll.add("Rust")
 	poll.add("Zig")
-	http.Handle("/", via.Register(PollApp{poll: poll}, via.WithTheme()))
+	http.Handle("/", via.Register(PollApp{poll: poll}))
 	http.ListenAndServe(":8080", nil)
 }

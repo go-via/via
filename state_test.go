@@ -11,12 +11,12 @@ import (
 )
 
 // List[E] is server-authoritative slice state with an Append one-liner — the
-// chat log. Append/Get work without a live island for the unit (Set ignores ctx).
+// chat log. Append/Get work without a live island for the unit.
 func TestList_appendAddsElementsInOrder(t *testing.T) {
 	t.Parallel()
 	var l via.List[string]
-	l.Append(nil, "a")
-	l.Append(nil, "b")
+	l.Append("a")
+	l.Append("b")
 	assert.Equal(t, []string{"a", "b"}, l.Get())
 }
 
@@ -43,7 +43,7 @@ func TestState_isUnreadableOnAStatelessPage(t *testing.T) {
 type stateEcho struct{ msg via.State[string] }
 
 func (e *stateEcho) OnConnect(ctx *via.Ctx) error { return nil }
-func (e *stateEcho) Set(ctx *via.Ctx)             { e.msg.Set(ctx, "<b>Ada</b>") }
+func (e *stateEcho) Set(ctx *via.Ctx)             { e.msg.Set("<b>Ada</b>") }
 func (e *stateEcho) View() h.H {
 	return h.Div(
 		h.P(h.Str("msg: "), e.msg.Display()),
@@ -67,4 +67,20 @@ func TestState_rendersEscapedValueOnALiveIsland(t *testing.T) {
 	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;") // the escaped value reaches the client
 	assert.Contains(t, frame, "msg: ", "the frame must re-render the island's State")
 	assert.NotContains(t, frame, "<b>Ada", "the raw value must not survive into markup")
+}
+
+// TestState_bareSetAndAppend pins the bare-mutator contract for State and List:
+// Set(v)/Append(v) take no ctx — the value is server-owned and reaches the
+// browser on the next push, so there is nothing per-request to hand them.
+// Fails if either mutator grows a required ctx again.
+func TestState_bareSetAndAppend(t *testing.T) {
+	t.Parallel()
+	var s via.State[int]
+	s.Set(7)
+	assert.Equal(t, 7, s.Get())
+
+	var l via.List[string]
+	l.Append("a")
+	l.Append("b")
+	assert.Equal(t, []string{"a", "b"}, l.Get())
 }
