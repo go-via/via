@@ -84,17 +84,27 @@ func TestPage_scriptNonceMatchesCSPHeader(t *testing.T) {
 	assert.Equal(t, headerNonce, tagNonce, "script tag nonce must equal the CSP nonce")
 }
 
-// A nonce reused across responses is no nonce at all; each render must mint a
-// fresh one.
-func TestPage_cspNonceIsFreshPerRequest(t *testing.T) {
+// The boot CSP nonce is HMAC(key, "via/csp-nonce") — deliberately stable across
+// requests (and pods sharing the key), so a @post Redirect script minted later
+// is admitted by any document this app served. Stability here is not a nonce
+// weakness: the CSP's job on this page is blocking INJECTED inline script, and
+// an attacker who can read the page's own nonce can already inject markup —
+// escaping + the h.SafeURL allowlist are the real defense. Two boots with
+// different keys must still disagree.
+func TestPage_cspNonceIsStablePerBoot(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	r1, _ := do(t, srv, http.MethodGet, "/", "")
 	r2, _ := do(t, srv, http.MethodGet, "/", "")
-	assert.NotEqual(t,
+	assert.Equal(t,
 		scriptSrcNonce(t, r1.Header.Get("Content-Security-Policy")),
 		scriptSrcNonce(t, r2.Header.Get("Content-Security-Policy")),
-		"two renders must not share a CSP nonce")
+		"the boot nonce is stable so a later redirect script is always admitted")
+	other, _ := do(t, newCounter(t), http.MethodGet, "/", "")
+	assert.NotEqual(t,
+		scriptSrcNonce(t, r1.Header.Get("Content-Security-Policy")),
+		scriptSrcNonce(t, other.Header.Get("Content-Security-Policy")),
+		"two apps with different keys must not share a nonce")
 }
 
 // The action element-patch response is morphed into the live document, so it

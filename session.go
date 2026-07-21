@@ -30,10 +30,9 @@ func init() {
 // sessionData is one browser session's value bag. Values are keyed by an opaque
 // key (via/sess uses a per-type sentinel) so distinct typed values coexist.
 type sessionData struct {
-	mu    sync.Mutex
-	vals  map[any]any
-	seen  time.Time // last access, for idle-TTL eviction
-	nonce string    // per-session CSP nonce, stable so action redirects can reuse it
+	mu   sync.Mutex
+	vals map[any]any
+	seen time.Time // last access, for idle-TTL eviction
 }
 
 // sessionStore is the per-Register in-memory session table, keyed by signed id.
@@ -75,10 +74,7 @@ func (st *sessionStore) reID(oldID string, d *sessionData) string {
 
 func (st *sessionStore) create() (string, *sessionData) {
 	id := genCSPNonce() // 128-bit URL-safe token, same generator as the tab id
-	// A per-session CSP nonce (distinct from the id): the document's strict CSP
-	// uses it across the session's requests, so a later action response can stamp
-	// an injected script (a @post Redirect) with a nonce the document admits.
-	d := &sessionData{vals: map[any]any{}, seen: time.Now(), nonce: genCSPNonce()}
+	d := &sessionData{vals: map[any]any{}, seen: time.Now()}
 	st.mu.Lock()
 	st.m[id] = d
 	st.mu.Unlock()
@@ -93,6 +89,7 @@ type sessionManager struct {
 	key          []byte
 	cookie       string
 	ttl          time.Duration
+	nonce        string    // boot CSP nonce: HMAC(key, "via/csp-nonce") — stateless, stable across pods
 	forceSecure  bool      // WithSecureCookies: set Secure even when req.TLS is nil
 	randomKey    bool      // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
 	keyWarnOnce  sync.Once // warn about the random key at the FIRST session mint, not at boot
@@ -126,7 +123,10 @@ func newSessionManager(cfg *config) *sessionManager {
 	if name == "" {
 		name = defaultSessionCookie
 	}
-	return &sessionManager{store: newSessionStore(ttl), key: key, cookie: name, ttl: ttl, forceSecure: cfg.sessionSecure, randomKey: random}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("via/csp-nonce"))
+	nonce := base64.RawURLEncoding.EncodeToString(mac.Sum(nil)[:16])
+	return &sessionManager{store: newSessionStore(ttl), key: key, cookie: name, ttl: ttl, nonce: nonce, forceSecure: cfg.sessionSecure, randomKey: random}
 }
 
 // sign returns base64url(HMAC-SHA256(key, id)) — the signature appended to the id
@@ -168,17 +168,15 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool)
 	return id, d, true
 }
 
-// cspNonce returns the request's session CSP nonce, or "" when there is no
-// resolvable session (a cookieless app, or before the first write) — in which
-// case the caller falls back to a fresh per-render nonce.
-func (m *sessionManager) cspNonce(req *http.Request) string {
+// cspNonce returns the manager's boot CSP nonce: derived from the signing key
+// (HMAC(key, "via/csp-nonce")), so it is stateless, needs no cookie, and is
+// identical across pods sharing VIA_SESSION_KEY — a @post Redirect script is
+// admitted by a document served by any pod.
+func (m *sessionManager) cspNonce() string {
 	if m == nil {
 		return ""
 	}
-	if _, d, ok := m.resolve(req); ok {
-		return d.nonce
-	}
-	return ""
+	return m.nonce
 }
 
 // verify splits "id.sig" and constant-time-compares the recomputed signature.
