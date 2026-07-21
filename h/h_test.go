@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +38,7 @@ func (b *stubBinder) ActionSlot(func()) string {
 
 func render(t *testing.T, node h.H) string {
 	t.Helper()
-	r := h.NewRenderer(&stubBinder{})
+	r := hcore.NewRenderer(&stubBinder{})
 	r.Render(node)
 	return r.String()
 }
@@ -125,7 +126,7 @@ func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	// via's signal/action nodes reach the Binder through r.Binder(); the
 	// renderer must hand back the exact binder it was built with.
 	b := &stubBinder{}
-	r := h.NewRenderer(b)
+	r := hcore.NewRenderer(b)
 	assert.Same(t, b, r.Binder(), "Binder() did not return the injected binder")
 }
 
@@ -133,14 +134,14 @@ func TestBytes_matchesStringForZeroCopyWriting(t *testing.T) {
 	t.Parallel()
 	// via writes the rendered tree straight to the ResponseWriter via Bytes()
 	// to avoid a string copy; it must equal String().
-	r := h.NewRenderer(&stubBinder{})
+	r := hcore.NewRenderer(&stubBinder{})
 	r.Render(h.Span(h.Str("x")))
 	assert.Equal(t, r.String(), string(r.Bytes()), "Bytes() must equal String()")
 }
 
 func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	t.Parallel()
-	r := h.NewRenderer(&stubBinder{})
+	r := hcore.NewRenderer(&stubBinder{})
 	r.WriteString("<b>")  // raw, caller pre-escaped
 	r.WriteEscaped("<b>") // must be escaped
 	assert.Equal(t, "<b>&lt;b&gt;", r.String())

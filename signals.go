@@ -6,6 +6,7 @@ import (
 	"log"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // writeSignalsAttr writes the page-level Datastar signal declaration as a
@@ -81,7 +82,7 @@ func (s *Signal[T]) Set(v T) {
 // thereafter), hydrates the value from the request if present, and declares the
 // slot for this render's data-signals. Every render entry point (Display, Bind)
 // calls it, so the name is the handle's identity, shared across all of them.
-func (s *Signal[T]) bind(r *h.Renderer) {
+func (s *Signal[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
 	if s.slot == "" {
@@ -103,7 +104,7 @@ func (s *Signal[T]) bind(r *h.Renderer) {
 // site. Displaying the same signal in more than one place reuses its name, so
 // they all update together.
 func (s *Signal[T]) Display() h.H {
-	return h.Dyn(func(r *h.Renderer) {
+	return hcore.Dyn(func(r *hcore.Renderer) {
 		s.bind(r)
 		r.Render(h.Span(h.Data("text", "$"+s.slot), textHandle(s.val)))
 	})
@@ -114,7 +115,7 @@ func (s *Signal[T]) Display() h.H {
 // the binding is non-empty and shares the signal's name regardless of source
 // order or whether the signal is also Displayed.
 func (s *Signal[T]) Bind() h.Attr {
-	return h.DynAttr(func(r *h.Renderer) {
+	return hcore.DynAttr(func(r *hcore.Renderer) {
 		s.bind(r)
 		r.Render(h.Data("bind", s.slot))
 	})
@@ -123,7 +124,7 @@ func (s *Signal[T]) Bind() h.Attr {
 // textHandle renders an arbitrary value as escaped text. Internal only; it uses
 // any so it can serve any signal T without appearing on a public signature.
 func textHandle(v any) h.H {
-	return h.Dyn(func(r *h.Renderer) { r.WriteEscaped(sprint(v)) })
+	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(sprint(v)) })
 }
 
 // Local is a client-only signal: it lives in the browser, never round-trips to
@@ -136,7 +137,7 @@ type Local[T any] struct {
 	val  T
 }
 
-func (l *Local[T]) bind(r *h.Renderer) {
+func (l *Local[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	if l.slot == "" {
 		l.slot = "_" + b.SignalName() // underscore ⇒ Datastar keeps it client-only
@@ -147,7 +148,7 @@ func (l *Local[T]) bind(r *h.Renderer) {
 // Display renders the local signal's value as a text-bound span (updates in the
 // browser as the value changes, no server round-trip).
 func (l *Local[T]) Display() h.H {
-	return h.Dyn(func(r *h.Renderer) {
+	return hcore.Dyn(func(r *hcore.Renderer) {
 		l.bind(r)
 		r.Render(h.Span(h.Data("text", "$"+l.slot), textHandle(l.val)))
 	})
@@ -156,7 +157,7 @@ func (l *Local[T]) Display() h.H {
 // Bind returns a two-way data-bind attribute for an input, bound to this
 // client-only signal.
 func (l *Local[T]) Bind() h.Attr {
-	return h.DynAttr(func(r *h.Renderer) {
+	return hcore.DynAttr(func(r *hcore.Renderer) {
 		l.bind(r)
 		r.Render(h.Data("bind", l.slot))
 	})
