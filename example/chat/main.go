@@ -44,13 +44,8 @@ type Chat struct {
 }
 
 func (c *Chat) OnConnect(ctx *via.Ctx) error {
-	msgs := c.room.bus.Subscribe()
-	ctx.OnDispose(msgs.Stop)
-	via.Subscribe(ctx, msgs.C(), c.onMessage)
-
-	heads := c.room.presence.Subscribe()
-	ctx.OnDispose(heads.Stop)
-	via.Subscribe(ctx, heads.C(), c.onPresence)
+	via.Listen(ctx, c.room.bus, c.onMessage)
+	via.Listen(ctx, c.room.presence, c.onPresence)
 
 	c.room.join()              // tell everyone the head-count rose
 	ctx.OnDispose(c.room.part) // …and that it fell when this tab leaves

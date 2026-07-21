@@ -443,6 +443,39 @@ func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	awaitLine(t, l2, "latest: hello-everyone")
 }
 
+// listenFeed is feed rebuilt on via.Listen — the subscribe/pump/dispose triple
+// fused into one line.
+type listenFeed struct {
+	room *topic.Topic[string]
+	last via.State[string]
+}
+
+func (f *listenFeed) OnConnect(ctx *via.Ctx) error {
+	via.Listen(ctx, f.room, f.recv)
+	return nil
+}
+func (f *listenFeed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
+func (f *listenFeed) View() h.H {
+	return h.Div(h.P(h.Str("latest: "), f.last.Display()))
+}
+
+// via.Listen must deliver a publish to the island exactly as the manual
+// Subscribe/OnDispose/pump triple does — one line instead of three. Fails if
+// Listen stops subscribing, stops pumping into the handler, or the push stops
+// reaching the stream.
+func TestListen_publishReachesTheIsland(t *testing.T) {
+	t.Parallel()
+	room := topic.New[string]()
+	srv := httptest.NewServer(via.Register(listenFeed{room: room}))
+	t.Cleanup(srv.Close)
+
+	l1, c1 := openStream(t, srv)
+	defer c1()
+
+	room.Publish("via-listen")
+	awaitLine(t, l1, "latest: via-listen")
+}
+
 // mixedIsland registers BOTH a tick and a subscription, plus a dispose probe.
 type mixedIsland struct {
 	room     *topic.Topic[string]

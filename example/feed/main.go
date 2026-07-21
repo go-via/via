@@ -25,9 +25,7 @@ type Feed struct {
 }
 
 func (f *Feed) OnConnect(ctx *via.Ctx) error {
-	sub := f.room.Subscribe()
-	ctx.OnDispose(sub.Stop)
-	via.Subscribe(ctx, sub.C(), f.recv)
+	via.Listen(ctx, f.room, f.recv)
 	return nil
 }
 
