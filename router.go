@@ -151,7 +151,7 @@ func Mount[T any, PT interface {
 		}
 		ctx, body := renderRootBase(PT(&inst), nil, rootLive, true, concreteBase(patternBase, req, names))
 		hasLive := rootLive || anyLiveIsland(ctx)
-		writeHTMLPage(w, r.cfg, body, pageNonce(req, r.sessions), hasLive, patternBase+"/_via/sse")
+		writeHTMLPage(w, r.cfg, body, pageNonce(r.sessions), hasLive, patternBase+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
@@ -231,7 +231,7 @@ func uploadAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(req, sessions), false, "")
+	writeHTMLPage(w, cfg, body, pageNonce(sessions), false, "")
 }
 
 // firstFile opens the first uploaded file part (OnUpload delivers a single file;
@@ -366,21 +366,22 @@ func formAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(req, sessions), false, "")
+	writeHTMLPage(w, cfg, body, pageNonce(sessions), false, "")
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under a
 // nonce'd CSP, the optional theme, then the rendered body. (The single-page
 // Register adds the live bootstrap + reconnect manager; a router page is
 // stateless for now.)
-// pageNonce returns the CSP nonce for a full-document response: the stable
-// per-session nonce when a session is resolvable (so a later action's injected
-// redirect script can reuse it), else a fresh per-render nonce.
-func pageNonce(req *http.Request, sessions *sessionManager) string {
-	if n := sessions.cspNonce(req); n != "" {
+// pageNonce returns the CSP nonce for a full-document response: the manager's
+// boot nonce (stable, stateless, shared across pods) so a later action's
+// injected redirect script is always admitted; a bare render with no manager
+// gets a fresh per-render nonce.
+func pageNonce(sessions *sessionManager) string {
+	if n := sessions.cspNonce(); n != "" {
 		return n
 	}
-	return genCSPNonce()
+	return genCSPNonce() // no manager (bare render) — fresh per render
 }
 
 func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string, hasLive bool, sseURL string) {
@@ -465,7 +466,7 @@ func dispatchStateless[T any, PT interface {
 	// text/javascript response — so we ship location.assign() as a script,
 	// stamped with the session's CSP nonce (the only nonce the document admits).
 	// The element patch is dropped: the page is navigating away.
-	if writeRedirectScript(w, req, sessions, bind.redirect) {
+	if writeRedirectScript(w, sessions, bind.redirect) {
 		return
 	}
 	_, after := renderRootBase(PT(&inst), nil, false, true, base)

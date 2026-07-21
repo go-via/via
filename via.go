@@ -20,7 +20,6 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
-	"strings"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
@@ -318,49 +317,31 @@ func Redirect(ctx *Ctx, path string) {
 
 // writeRedirectScript ships a queued via.Redirect as an executable script when a
 // @post action requested one. It returns true (response written) only when there
-// is a redirect AND it is safe AND a session nonce is available to admit the
-// script under the strict CSP; otherwise it returns false and the caller falls
-// back to the normal element-patch response. The script carries the session's
-// CSP nonce via the datastar-script-attributes header, which the bundle copies
-// onto the <script> it creates — so the document's CSP accepts it.
-func writeRedirectScript(w http.ResponseWriter, req *http.Request, sessions *sessionManager, target string) bool {
-	if target == "" || !safeRedirectURL(target) {
+// is a redirect AND its target passes h.SafeURL; otherwise it returns false and
+// the caller falls back to the normal element-patch response. The script carries
+// the boot CSP nonce (HMAC of the signing key — the same nonce every document
+// this app serves is stamped with) via the datastar-script-attributes header,
+// which the bundle copies onto the <script> it creates — so the document's CSP
+// accepts it, cookieless requests and cross-pod hops included.
+func writeRedirectScript(w http.ResponseWriter, sessions *sessionManager, target string) bool {
+	if target == "" {
+		return false // no redirect queued — normal element-patch response
+	}
+	if !h.SafeURL(target) {
+		log.Printf("via: unsafe Redirect target %q dropped", target)
 		return false
 	}
-	nonce := sessions.cspNonce(req)
-	if nonce == "" {
-		// No session ⇒ no nonce the document will admit; a script would be
-		// blocked by CSP. Fall back to the element patch (no navigation).
-		return false
-	}
+	nonce := sessions.cspNonce()
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	attrs, _ := json.Marshal(map[string]string{"nonce": nonce})
 	w.Header().Set("datastar-script-attributes", string(attrs))
 	// target is JSON-encoded into the JS string literal: json.Marshal escapes
 	// quotes/backslashes/controls, closing the breakout/XSS vector for any URL
-	// that passed safeRedirectURL.
+	// that passed h.SafeURL.
 	js, _ := json.Marshal(target)
 	w.Write([]byte("location.assign(" + string(js) + ")"))
 	return true
-}
-
-// safeRedirectURL reports whether url is safe to navigate to client-side: an
-// http/https absolute URL or a same-origin relative path. A scheme like
-// javascript:/data:/vbscript: or a protocol-relative "//" prefix is rejected —
-// the open-redirect / XSS defense, since Redirect interpolates the URL into a
-// script. Browsers strip leading control chars before resolving the scheme, so
-// trim them first to treat " javascript:" identically.
-func safeRedirectURL(url string) bool {
-	trimmed := strings.TrimLeftFunc(url, func(r rune) bool { return r <= ' ' })
-	if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, `\\`) {
-		return false
-	}
-	if i := strings.IndexAny(trimmed, ":/?#"); i >= 0 && trimmed[i] == ':' {
-		scheme := strings.ToLower(trimmed[:i])
-		return scheme == "http" || scheme == "https"
-	}
-	return true // a relative path (no scheme before the first /?#)
 }
 
 // formSlot registers a native-form handler and returns its positional id.
