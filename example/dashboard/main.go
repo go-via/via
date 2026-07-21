@@ -1,10 +1,10 @@
 // Command dashboard shows live-island multiplexing: one page, one SSE stream,
 // several independent regions. The Dashboard is a static shell that embeds child
-// compositions with via.Child[C]; each child re-renders and patches only itself.
-// A child without OnConnect (Greeting) is a plain in-place component; a child
-// with OnConnect (Clock, Counter) is a live island pushed over the shared
-// stream. via.NewChild seeds a child's data (Greeting's name). Zero '&', no
-// identifier strings, no closures at any call site.
+// compositions — plain struct fields rendered with via.Embed; each child
+// re-renders and patches only itself. A child without OnConnect (Greeting) is a
+// plain in-place component; a child with OnConnect (Clock, Counter) is a live
+// island pushed over the shared stream. The parent literal seeds a child's data
+// (Greeting's name). Zero '&', no identifier strings, no closures at any call site.
 package main
 
 import (
@@ -16,7 +16,7 @@ import (
 )
 
 // Greeting is a PLAIN child — no OnConnect, so it just renders structure. It is
-// seeded with a name via via.NewChild; nothing about it streams.
+// seeded with a name at the parent's literal; nothing about it streams.
 type Greeting struct{ name string }
 
 func (g *Greeting) View() h.H {
@@ -52,24 +52,24 @@ func (c *Counter) View() h.H {
 // composition itself; its embedded children are. They all share this page's one
 // SSE stream.
 type Dashboard struct {
-	Greeting via.Child[Greeting]
-	Clock    via.Child[Clock]
-	Counter  via.Child[Counter]
+	Greeting Greeting
+	Clock    Clock
+	Counter  Counter
 }
 
 func (d *Dashboard) View() h.H {
 	return h.Div(
 		h.H1(h.Str("dashboard")),
-		d.Greeting.Embed(), // plain — rendered in place, never streams
-		d.Clock.Embed(),    // live — ticks, pushes its own region
-		d.Counter.Embed(),  // live — its + button patches only its own region
+		via.Embed(d.Greeting), // plain — rendered in place, never streams
+		via.Embed(d.Clock),    // live — ticks, pushes its own region
+		via.Embed(d.Counter),  // live — its + button patches only its own region
 	)
 }
 
 func main() {
-	// One Register, one route, one stream. NewChild seeds the greeting's name;
-	// Clock and Counter need no data, so their zero Child is fine.
-	dash := Dashboard{Greeting: via.NewChild(Greeting{name: "alice"})}
+	// One Register, one route, one stream. The parent literal seeds the
+	// greeting's name; Clock and Counter need no data, so their zero value is fine.
+	dash := Dashboard{Greeting: Greeting{name: "alice"}}
 	http.Handle("/", via.Register(dash))
 	http.ListenAndServe(":8080", nil)
 }

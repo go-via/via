@@ -1,9 +1,9 @@
-# via/v2 — reactive web UIs in pure Go
+# via — reactive web UIs in pure Go
 
-A from-scratch reimagining of [via](https://github.com/go-via/via): a thin layer
-over `net/http` that adds **effortless composition** and **Datastar sugar**, and
-nothing you have to think about. The server renders HTML; the browser is a
-rendering surface. No build step, no hand-written JS, no WebSockets.
+via is a thin layer over `net/http` that adds **effortless composition** and
+**Datastar sugar**, and nothing you have to think about. The server renders
+HTML; the browser is a rendering surface. No build step, no hand-written JS,
+no WebSockets.
 
 ```go
 package main
@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/go-via/via/v2"
-	"github.com/go-via/via/v2/h"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
 type Store struct {
@@ -70,16 +70,16 @@ fails the build if an example violates the `&`/closure rules, and the sealed
 A page is stateless request/response. A composition becomes a connection-scoped
 **live island** (its own server state, pushed over SSE) the moment it implements
 `OnConnect` — detected by interface assertion, never reflection. The same model
-spans the spectrum from a fully static page to a fully live app. (Islands/SSE
-are the next slices — see `ROADMAP.md`.)
+spans the spectrum from a fully static page to a fully live app.
 
 ## Security floor (built in)
 
 The action endpoint and rendered pages are hardened by default:
 
-- **Origin floor** on `POST` actions — same-origin (or an explicitly trusted
-  origin) only, failing closed; `WithTrustedOrigin` / `WithInsecureOrigin`
-  escape hatches.
+- **Origin floor** on `POST` actions — open by default (the per-tab id is the
+  CSRF token, and dev/non-browser clients just work); set `WithTrustedOrigin`
+  in production to enforce same-origin (plus the listed origins), failing
+  closed.
 - **Request-body cap** + strict decode (413 / 400), and a **panic recover**.
 - **`nosniff` + a nonce'd CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
@@ -90,7 +90,7 @@ The action endpoint and rendered pages are hardened by default:
 
 ## Status
 
-Built and tested — `-race`-clean, adversarially reviewed, five runnable
+Built and tested — `-race`-clean, adversarially reviewed, eight runnable
 examples, the whole live stack verified in real headless browsers
 (`vtbrowser/`, `-tags browser`):
 
@@ -101,8 +101,8 @@ examples, the whole live stack verified in real headless browsers
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side. `Local[T]` is a
-  client-only signal (never round-trips); `If`/`When`/`Each` render conditionals
-  and lists; `Counter.Op(ctx)` carries the numeric verbs.
+  client-only signal (never round-trips); `When`/`Each` render conditionals
+  and lists.
 - **Live islands + `State[T]`** (`example/pulse`): implement `OnConnect` and a
   composition becomes a live island with a per-tab SSE stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
@@ -130,15 +130,16 @@ examples, the whole live stack verified in real headless browsers
   island down (runs disposers, stops ticks) so a half-open peer — gone without a
   FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
-  Datastar gives up; opt out with `WithoutSSEReconnect()`.
-- **Live-island multiplexing** (`example/dashboard`): embed sub-compositions with
-  `via.Child[C]` value-field handles — `p.Clock.Embed()` in the parent's `View`.
-  A child without `OnConnect` is a plain in-place component; one with `OnConnect`
-  is a live island, and all the live children on a page share the tab's *one* SSE
+  Datastar gives up.
+- **Live-island multiplexing** (`example/dashboard`): embed sub-compositions as
+  plain struct fields — `via.Embed(p.Clock)` in the parent's `View`. A child
+  without `OnConnect` is a plain in-place component; one with `OnConnect` is a
+  live island, and all the live children on a page share the tab's *one* SSE
   stream on one goroutine — each re-renders and patches only its own region
   (`#via-i{n}`), its actions route by island id + the tab handshake, and its
-  signals are slot-scoped so siblings never collide. `via.NewChild(child)` seeds a
-  child's dependencies (a shared `*Topic`, a store) at registration.
+  signals are slot-scoped so siblings never collide. The parent's literal seeds a
+  child's dependencies (a shared `*Topic`, a store) at registration; generic
+  layouts (`Shell[C]{Body C}`) compose one shell with any page.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
@@ -156,7 +157,8 @@ examples, the whole live stack verified in real headless browsers
   `via.RequireSession[User]("/login")` is a guard *value* (no closure) that
   bounces anonymous visitors. `via.OnUpload(handler, …)` + `via.File` handle the
   avatar — the one form that posts real multipart, handed to the app as an
-  `io.Reader` it stores however it likes. The forum proves the five compose.
+  `io.Reader` it stores however it likes. The forum proves these compose into
+  a full multi-page app.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
@@ -166,12 +168,11 @@ and the composer clears on send without clobbering a concurrent draft.
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
 lists *of* live islands (per-row actions are done via `OnClickArg`; fixed
-embeds via `via.Child[C]` are done); `via/router`; and at-least-once redelivery
-(a push onto a dropping socket fails the write and tears down rather than being
-buffered for replay). The SSE GET stream now applies the
-same origin floor as the action POST and is capped at a configurable number of
-concurrent connections (`WithMaxSSEConnections`, default 10,000; over the cap
-returns 503). See [`DESIGN.md`](./DESIGN.md) and [`ROADMAP.md`](./ROADMAP.md).
+embeds via `via.Embed` are done); and at-least-once redelivery (a push onto
+a dropping socket fails the write and tears down rather than being buffered
+for replay). The SSE GET stream applies the same origin floor as the action
+POST and is capped at a configurable number of concurrent connections
+(`WithMaxSSEConnections`, default 10,000; over the cap returns 503).
 
 ## Develop
 

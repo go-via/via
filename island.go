@@ -9,7 +9,7 @@ import (
 )
 
 // anyLiveIsland reports whether a completed render discovered an embedded
-// Child[C] child that is a live island (implements OnConnect) — so the page
+// child that is a live island (implements OnConnect) — so the page
 // knows to bootstrap the SSE stream. Read off the real render's Ctx, never a
 // zero probe (whose injected deps would be nil), keeping detection panic-safe.
 func anyLiveIsland(ctx *Ctx) bool {
@@ -31,76 +31,79 @@ func renderIslandPatch(idx int, v viewer) []byte {
 	return b.Bytes()
 }
 
-// Child is a value-field handle that embeds a sub-composition C within a
+// Embed renders a child composition — a plain struct field of the parent,
+// seeded at the parent's literal — into its own positional container within the
 // parent's View. The child may be plain (just structure + actions) or live (it
 // implements OnConnect) — when live it becomes an independent region patched
 // over the parent's one SSE stream; when not, its actions re-render it in place.
-// Liveness is an interface assertion on C, never a separate type. Like Signal[T]
-// and State[T] it is a struct field bound by the runtime, never reflected over:
+// Liveness is an interface assertion on C, never a separate type:
 //
-//	type Page struct{ Chat via.Child[ChatRoom]; Ticker via.Child[Clock] }
-//	func (p *Page) View() h.H { return h.Div(p.Chat.Embed(), p.Ticker.Embed()) }
+//	type Page struct{ Chat ChatRoom; Ticker Clock }
+//	func (p *Page) View() h.H { return h.Div(via.Embed(p.Chat), via.Embed(p.Ticker)) }
+//	via.Register(Page{Chat: ChatRoom{room: room}})
 //
-// Because Child is a value field, via's per-connection copy of the parent copies
-// the child with it, so each connection (and, for a stateless page, each request)
-// gets an isolated child instance and its own State — no '&', no shared pointer.
-type Child[C any] struct{ child C }
+// The child is taken by value (no '&'): the field literal seeds it, and after
+// the first paint the connection's own registered instance carries its State —
+// value state stays isolated per connection while pointer deps (a shared room)
+// are intentionally shared. Embed's argument must be a field selector (p.Chat),
+// never a composite literal — a literal would re-seed on every render.
+//
+// Generic layouts fall out for free: type Shell[C any] struct{ Body C } with
+// via.Embed(s.Body) composes one layout with any page. An optional region is
+// via.When, not an empty child.
+//
+// It panics if the child has no View() method — a wrote-it-wrong error, loud at
+// the first render, never a silent blank region.
+func Embed[C any](child C) h.H {
+	v, isView := any(&child).(viewer)
+	if !isView {
+		panic("via: via.Embed(child) requires child to have a View() method")
+	}
+	return h.Dyn(func(r *h.Renderer) { embedViewer(r, v) })
+}
 
-// NewChild seeds an embedded child by value — use it to inject the
-// child's dependencies (a shared *Room, a store) at registration, e.g.
-// via.Register(Page{Chat: via.NewChild(ChatRoom{room: room})}). The seed is
-// taken by value (no '&'); via's per-connection copy of the parent copies the
-// child with it, so value-typed state stays isolated while pointer deps (the
-// shared room) are intentionally shared. A zero Child[C] is still valid — use
-// NewChild only when the child needs seeding.
-func NewChild[C any](child C) Child[C] { return Child[C]{child: child} }
+// embedViewer is the positional-island wiring behind Embed: it renders v into
+// its own container <div id="via-i{idx}">, binds
+// its signals/actions into an island-scoped Ctx (idx prefixes its slots, so
+// siblings never collide), and appends it to the parent's islands slice so a
+// push or action patches exactly this one. A non-Ctx binder is a bare render
+// with no parent to attach to, so it writes nothing.
+func embedViewer(r *h.Renderer, v viewer) {
+	parent := ctxOf(r.Binder())
+	if parent == nil {
+		return
+	}
+	idx := len(parent.islands)
+	child := newCtx(parent.inSignals)
+	child.isIsland = true
+	child.islandIdx = idx
+	child.islandV = v
+	// A live island's View reads server State[T], which is gated on the
+	// live-island flag — set it so the child renders inside its own island.
+	_, child.island = v.(Live)
+	parent.islands = append(parent.islands, child)
 
-// Embed renders the child into its own positional container and binds its
-// actions to a child-scoped path (/_via/a/{n}/{action}), so siblings stay
-// independent and a push or action patches exactly one of them. Pointer
-// receiver, so p.Chat.Embed() auto-addresses the field — no '&'.
-func (i *Child[C]) Embed() h.H {
-	return h.Dyn(func(r *h.Renderer) {
-		parent, ok := r.Binder().(*Ctx)
-		if !ok {
-			return
-		}
-		v, isView := any(&i.child).(viewer)
-		if !isView {
-			panic("via: Child[C] requires C to have a View() method")
-		}
-		idx := len(parent.islands)
-		child := newCtx(parent.inSignals)
-		child.isIsland = true
-		child.islandIdx = idx
-		child.islandV = v
-		// A live island's View reads server State[T], which is gated on the
-		// live-island flag — set it so the child renders inside its own island.
-		_, child.island = v.(Live)
-		parent.islands = append(parent.islands, child)
-
-		// Render first so the child's signal slots (order/initial) are populated,
-		// then declare them on the container — on a declaring render (first paint)
-		// only. A live push omits the declaration (renderIslandPatch), so a morph
-		// never re-merges a signal the user is editing.
-		child.rendered = renderIslandInner(child, v)
-		r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
-		if parent.declare && len(child.order) > 0 {
-			var buf bytes.Buffer
-			writeSignalsAttr(&buf, child.order, child.initial)
-			r.WriteString(buf.String())
-		}
-		r.WriteString(`>`)
-		r.WriteString(string(child.rendered))
-		r.WriteString(`</div>`)
-	})
+	// Render first so the child's signal slots (order/initial) are populated,
+	// then declare them on the container — on a declaring render (first paint)
+	// only. A live push omits the declaration (renderIslandPatch), so a morph
+	// never re-merges a signal the user is editing.
+	child.rendered = renderIslandInner(child, v)
+	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
+	if parent.declare && len(child.order) > 0 {
+		var buf bytes.Buffer
+		writeSignalsAttr(&buf, child.order, child.initial)
+		r.WriteString(buf.String())
+	}
+	r.WriteString(`>`)
+	r.WriteString(string(child.rendered))
+	r.WriteString(`</div>`)
 }
 
 // renderIslandInner renders the island's View with child as the binder, so the
 // child's actions/signals bind into its own tables. Returns the inner HTML
 // (without the container div), already escaped.
 func renderIslandInner(child *Ctx, v viewer) []byte {
-	rr := h.NewRenderer(child)
+	rr := h.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
 	return rr.Bytes()
 }
@@ -115,7 +118,7 @@ func bindIsland(idx int, v viewer, in map[string]json.RawMessage) *Ctx {
 	c.islandIdx = idx
 	c.islandV = v
 	_, c.island = v.(Live)
-	h.NewRenderer(c).Render(v.View())
+	h.NewRenderer(binderCtx{c}).Render(v.View())
 	return c
 }
 

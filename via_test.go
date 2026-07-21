@@ -20,6 +20,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The binder plumbing (signal slots, action ids) is deliberately off Ctx's
+// public surface: Ctx must NOT satisfy h.Binder — the runtime adapts it through
+// an unexported wrapper. If this fails, plumbing methods leaked back onto the
+// type every handler touches.
+func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
+	t.Parallel()
+	_, ok := any(&via.Ctx{}).(h.Binder)
+	assert.False(t, ok, "Ctx must not implement h.Binder directly")
+}
+
 // store is the in-server state the counter tracks — a plain app dependency.
 type store struct {
 	mu sync.Mutex
@@ -286,7 +296,7 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
-	"OnClickArg": true, "NewChild": true, "PostForm": true, "Mount": true,
+	"OnClickArg": true, "PostForm": true, "Mount": true,
 	"Param": true, "RequireSession": true, "OnUpload": true,
 }
 
@@ -294,7 +304,7 @@ var viaCallNames = map[string]bool{
 // passes a closure at a via call site (Register/Embed/On*). A violation that
 // compiles silently erodes the design, so this asserts it structurally over the
 // example sources — the canonical user-facing call sites. It is an interim
-// guard; the type-level closure ban is tracked as follow-up (see DESIGN.md).
+// guard; the type-level closure ban is tracked as follow-up.
 func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 	t.Parallel()
 	files := exampleGoFiles(t)
@@ -322,6 +332,13 @@ func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 							assert.Failf(t, "address-of at via call site",
 								"%s: via takes compositions by value — drop the '&'", fset.Position(a.Pos()))
 						}
+					case *ast.CompositeLit:
+						// via.Embed(p.Chat) embeds the parent's field; a literal
+						// would re-seed a fresh child on every render.
+						if isViaCallNamed(call, "Embed") {
+							assert.Failf(t, "composite literal at via.Embed call site",
+								"%s: pass the parent's field (p.Chat), not a literal", fset.Position(a.Pos()))
+						}
 					}
 				}
 				return true
@@ -337,6 +354,16 @@ func isViaCall(call *ast.CallExpr) bool {
 	}
 	pkg, ok := sel.X.(*ast.Ident)
 	return ok && pkg.Name == "via" && viaCallNames[sel.Sel.Name]
+}
+
+// isViaCallNamed reports whether call is via.<name>(...).
+func isViaCallNamed(call *ast.CallExpr, name string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "via" && sel.Sel.Name == name
 }
 
 // via's headline guarantee is reflection-free wiring: the composition is bound
@@ -464,15 +491,15 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 
 // todoBoard embeds the todo list as a STATELESS island — per-row value-actions
 // must work there too, not only at the root.
-type todoBoard struct{ List via.Child[todoList] }
+type todoBoard struct{ List todoList }
 
-func (b *todoBoard) View() h.H { return h.Div(b.List.Embed()) }
+func (b *todoBoard) View() h.H { return h.Div(via.Embed(b.List)) }
 
 // A value-carrying action inside a stateless embedded island must still deliver
 // its value: the island action path has to expose the request to the slot.
 func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	t.Parallel()
-	board := todoBoard{List: via.NewChild(todoList{box: newTodoList()})}
+	board := todoBoard{List: todoList{box: newTodoList()}}
 	srv := serve(t, via.Register(board))
 
 	resp, body := do(t, srv, http.MethodPost, "/_via/a/0/1?a=2", "{}") // island 0, bravo's slot, arg=2
