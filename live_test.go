@@ -141,7 +141,7 @@ func (p *pulse) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, p.beat)
 	return nil
 }
-func (p *pulse) beat(ctx *via.Ctx) { p.beats.Set(p.beats.Get()+1) }
+func (p *pulse) beat(ctx *via.Ctx) { p.beats.Set(p.beats.Get() + 1) }
 func (p *pulse) View() h.H {
 	return h.Div(h.H1(h.Str("pulse")), h.P(h.Str("beats: "), p.beats.Display()))
 }
@@ -459,7 +459,7 @@ func (m *mixedIsland) OnConnect(ctx *via.Ctx) error {
 	via.Subscribe(ctx, sub.C(), m.recv)
 	return nil
 }
-func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get()+1) }
+func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get() + 1) }
 func (m *mixedIsland) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
 func (m *mixedIsland) markDispose()                  { close(m.disposed) }
 func (m *mixedIsland) View() h.H {
@@ -562,7 +562,7 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 // against this connection's island instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get()+1) }
+func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))

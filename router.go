@@ -75,10 +75,7 @@ type Router struct {
 // it. Options (WithSessionKey, WithTrustedOrigin, …) configure the whole app.
 func NewRouter(opts ...Option) *Router {
 	cfg := newConfig(opts)
-	var sm *sessionManager
-	if cfg.sessions {
-		sm = newSessionManager(cfg)
-	}
+	sm := newSessionManager(cfg)
 	r := &Router{mux: http.NewServeMux(), cfg: cfg, sessions: sm}
 	r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")

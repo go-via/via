@@ -225,7 +225,7 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 type threadPage struct{ id int }
 
 func (p *threadPage) OnInit(ctx *via.Ctx) error { p.id = via.Param[int](ctx, 0); return nil }
-func (p *threadPage) View() h.H           { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
+func (p *threadPage) View() h.H                 { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
 
 // echoPage proves a path param is readable inside an ACTION (not just OnInit) on
 // a param'd mount — the action POST URL carries the {} segment (/e/7/_via/a/0).

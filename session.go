@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ func init() {
 	sessbridge.Load = func(s any, key any) (any, bool) { return s.(*Session).load(key) }
 	sessbridge.Store = func(s any, key any, value any) { s.(*Session).set(key, value) }
 	sessbridge.Delete = func(s any, key any) { s.(*Session).clear(key) }
+	sessbridge.Rotate = func(s any) string { return s.(*Session).rotate() }
 }
 
 // sessionData is one browser session's value bag. Values are keyed by an opaque
@@ -83,25 +85,38 @@ func (st *sessionStore) create() (string, *sessionData) {
 	return id, d
 }
 
-// sessionManager holds the per-Register session config + store. Nil when the app
-// did not opt into sessions.
+// sessionManager holds the per-Register session config + store. Sessions are
+// always available — every Register/NewRouter constructs one; the cookie is
+// only ever issued lazily on the first write.
 type sessionManager struct {
-	store       *sessionStore
-	key         []byte
-	cookie      string
-	ttl         time.Duration
-	forceSecure bool // WithSecureCookies: set Secure even when req.TLS is nil
+	store        *sessionStore
+	key          []byte
+	cookie       string
+	ttl          time.Duration
+	forceSecure  bool      // WithSecureCookies: set Secure even when req.TLS is nil
+	randomKey    bool      // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
+	keyWarnOnce  sync.Once // warn about the random key at the FIRST session mint, not at boot
+	mismatchOnce sync.Once // warn once about signature-mismatch cookies (the two-apps clobber)
 }
 
+// newSessionManager resolves the signing key in order: WithSessionKey →
+// VIA_SESSION_KEY env → a random per-process key. The random fallback is fine
+// for dev and warns on first use; a stable key is what makes sessions survive
+// restarts and span pods.
 func newSessionManager(cfg *config) *sessionManager {
 	key := cfg.sessionKey
+	if len(key) == 0 {
+		if env := os.Getenv("VIA_SESSION_KEY"); env != "" {
+			key = []byte(env)
+		}
+	}
+	random := false
 	if len(key) == 0 {
 		key = make([]byte, 32)
 		if _, err := rand.Read(key); err != nil {
 			panic("via: session key generation failed: " + err.Error())
 		}
-		log.Print("via: sessions enabled without WithSessionKey — using a random per-process key; " +
-			"set a stable key so sessions survive restarts and span processes")
+		random = true
 	}
 	ttl := cfg.sessionTTL
 	if ttl <= 0 {
@@ -111,7 +126,7 @@ func newSessionManager(cfg *config) *sessionManager {
 	if name == "" {
 		name = defaultSessionCookie
 	}
-	return &sessionManager{store: newSessionStore(ttl), key: key, cookie: name, ttl: ttl, forceSecure: cfg.sessionSecure}
+	return &sessionManager{store: newSessionStore(ttl), key: key, cookie: name, ttl: ttl, forceSecure: cfg.sessionSecure, randomKey: random}
 }
 
 // sign returns base64url(HMAC-SHA256(key, id)) — the signature appended to the id
@@ -135,6 +150,15 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool)
 	}
 	id, ok := m.verify(ck.Value)
 	if !ok {
+		// A cookie that fails its signature is almost always another app on the
+		// same host signing the same cookie name with a different key (two dev
+		// servers on localhost ports). Fall through to a fresh session, but say
+		// so loudly once — silence here reads as "my session randomly resets".
+		m.mismatchOnce.Do(func() {
+			log.Print("via: session cookie failed its signature check — likely another app on this host " +
+				"uses the same cookie name with a different key; issuing a fresh session " +
+				"(set WithSessionCookieName or share VIA_SESSION_KEY to stop the clobber)")
+		})
 		return "", nil, false
 	}
 	d, ok := m.store.get(id)
@@ -204,6 +228,12 @@ func (s *Session) ensure() *sessionData {
 	if s.data != nil {
 		return s.data
 	}
+	if s.mgr.randomKey {
+		s.mgr.keyWarnOnce.Do(func() {
+			log.Print("via: session minted under a random per-process key — sessions will not survive a " +
+				"restart or span pods; set WithSessionKey or the VIA_SESSION_KEY env for a stable key")
+		})
+	}
 	id, d := s.mgr.store.create()
 	s.id, s.data = id, d
 	if s.w != nil {
@@ -240,7 +270,7 @@ func (s *Session) set(key any, value any) {
 // (login, privilege elevation) so a fixed pre-auth id is invalidated. Returns
 // the new id, or "" when no response is open to carry the new cookie (a live
 // action): rotate from a stateless action or OnConnect.
-func (s *Session) Rotate() string {
+func (s *Session) rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
 	}

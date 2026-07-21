@@ -24,7 +24,7 @@ func (p *Pulse) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *Pulse) beat(ctx *via.Ctx) { p.Beats.Set(p.Beats.Get()+1) }
+func (p *Pulse) beat(ctx *via.Ctx) { p.Beats.Set(p.Beats.Get() + 1) }
 
 func (p *Pulse) View() h.H {
 	return h.Div(

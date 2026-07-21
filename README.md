@@ -116,14 +116,16 @@ examples, the whole live stack verified in real headless browsers
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `via.Subscribe` / `ctx.OnDispose` — one publish
   fans out to every connected island.
-- **Sessions** (`via/sess`, opt-in): `sess.Put[T]`/`Get[T]`/`Clear[T]` a typed
-  per-browser store keyed by Go type (no tags, no reflection — a typed-nil
-  sentinel), behind a signed-HMAC cookie issued lazily on first write;
-  `sess.Rotate` for fixation defense, idle TTL eviction. Enabled by
-  `WithSessionKey`/`WithSessionTTL`/`WithSessionCookieName`; apps that don't use
-  it stay cookieless. The cookie is `Secure` automatically over TLS (so
-  `http://localhost` dev still works); `WithSecureCookies` forces it on behind a
-  TLS-terminating proxy.
+- **Sessions** (`via/sess`, always available): `sess.Put[T]`/`Get[T]`/`Clear[T]`
+  a typed per-browser store keyed by Go type (no tags, no reflection — a
+  typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
+  write — apps that never store anything stay cookieless. `sess.Rotate` for
+  fixation defense, idle TTL eviction. The signing key resolves
+  `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
+  first use — set a stable key so sessions survive restarts and span pods).
+  `WithSessionTTL`/`WithSessionCookieName` tune it. The cookie is `Secure`
+  automatically over TLS (so `http://localhost` dev still works);
+  `WithSecureCookies` forces it on behind a TLS-terminating proxy.
 - **Resilience floor + reconnect**: a server-side keepalive comment frame
   (`WithSSEHeartbeat`) and a per-frame write deadline (`WithSSEWriteTimeout`,
   default 10s) ride the island's single goroutine; a failed frame write tears the

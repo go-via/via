@@ -442,21 +442,23 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 	assert.NotContains(t, names, "via_session", "the default cookie name must not also be set")
 }
 
-// An app that never opts into sessions must stay cookieless — the v2 default —
-// and session reads must return the zero value rather than silently sharing
-// state across unrelated visitors.
-func TestSession_plainAppStaysCookielessAndReadsEmpty(t *testing.T) {
+// Sessions are always available: a plain app (no session option) stays
+// cookieless until the first sess.Put, and from that write on the value
+// resolves — no opt-in ceremony, the cookie is the lazy consequence of the
+// first write. Fails if sessions go back behind an option gate, or if a page
+// view starts minting cookies eagerly.
+func TestSession_alwaysOnLazyCookie(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t) // no session option
 	c := jarClient(t)
 
 	resp := getPage(t, c, base)
 	for _, ck := range resp.Cookies() {
-		assert.NotEqual(t, "via_session", ck.Name, "a plain app must not issue a session cookie")
+		assert.NotEqual(t, "via_session", ck.Name, "a read-only page must not issue a session cookie")
 	}
 
-	fireAction(t, c, base, 0) // SignIn → no-op without sessions
+	fireAction(t, c, base, 0) // SignIn → Put mints the session lazily
 	_, body := fireAction(t, c, base, 1)
-	assert.NotContains(t, body, "hi alice",
-		"without sessions a stored value must not resolve")
+	assert.Contains(t, body, "hi alice",
+		"sessions are always on: a stored value must resolve without any With* option")
 }
