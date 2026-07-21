@@ -84,7 +84,15 @@ The action endpoint and rendered pages are hardened by default:
 - **`nosniff` + a nonce'd CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
   the `Function` constructor — without it every action is silently dead in the
-  browser.
+  browser. The nonce is a **boot nonce** — `HMAC(session key, "via/csp-nonce")`
+  — deliberately stable per key, so a `via.Redirect` from a `@post` action
+  ships a `location.assign()` script every document this app (or any pod
+  sharing `VIA_SESSION_KEY`) served will admit, cookieless first request
+  included. Honest posture: the CSP is a seatbelt against *injected* inline
+  script; the load-bearing defenses are output escaping, the attribute-name
+  allowlist, and the `h.SafeURL` gate on every redirect target
+  (`javascript:`/`data:`/`//` are dropped loudly, falling back to the element
+  patch).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` reject injectable names).
 
@@ -141,7 +149,10 @@ examples, the whole live stack verified in real headless browsers
   (`#via-i{n}`), its actions route by island id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. The parent's literal seeds a
   child's dependencies (a shared `*Topic`, a store) at registration; generic
-  layouts (`Shell[C]{Body C}`) compose one shell with any page.
+  layouts (`Shell[C]{Body C}`) compose one shell with any page. Ownership is
+  by value: the field literal seeds the child, each connection gets its own
+  copy (value state stays per-tab), and pointer deps are the deliberate
+  sharing channel.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
@@ -167,6 +178,15 @@ examples, the whole live stack verified in real headless browsers
 count, in ~60 lines that read like a static page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
+
+**Restarts and deploys.** Sessions and the boot CSP nonce both derive from the
+signing key, so with a stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a
+restart or a rolling deploy keeps cookies valid and redirect scripts admitted
+across pods. Live-island state is in-memory and per-connection: a deploy drops
+the stream, the client reconnect manager shows "Reconnecting…" and reloads to
+re-bootstrap — the page comes back from server truth, not from replayed frames.
+Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
+a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
 
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
