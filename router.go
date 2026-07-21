@@ -27,11 +27,23 @@ var ErrNotFound = errors.New("via: not found")
 // sessW is the open response, so OnInit may also set the session cookie.
 // A non-nil error has already been answered on w (404 for ErrNotFound, 500
 // otherwise) — the caller must stop, never render.
-func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string) error {
+func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string) (err error) {
 	ic, ok := v.(Initer)
 	if !ok {
 		return nil
 	}
+	// A Param read on a segment that doesn't decode (/thread/abc as Param[int])
+	// panics with the paramMiss sentinel — recovered here into a 404: the URL
+	// names a page that doesn't exist. Any other panic keeps propagating.
+	defer func() {
+		if rec := recover(); rec != nil {
+			if _, isMiss := rec.(paramMiss); !isMiss {
+				panic(rec)
+			}
+			http.Error(w, "not found", http.StatusNotFound)
+			err = ErrNotFound
+		}
+	}()
 	ctx := newCtx(nil)
 	ctx.req = req
 	ctx.sessions = sessions
@@ -58,6 +70,18 @@ func connectError(w http.ResponseWriter, err error) {
 	}
 	log.Printf("via: OnConnect failed: %v", err)
 	http.Error(w, "connect failed", http.StatusInternalServerError)
+}
+
+// recoverToHTTP answers a recovered panic on a request transport: the paramMiss
+// sentinel (a URL segment that doesn't decode) is an honest 404; anything else
+// is a server fault — logged with its stack, answered 500.
+func recoverToHTTP(w http.ResponseWriter, rec any, what string) {
+	if _, ok := rec.(paramMiss); ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("via: %s panic: %v\n%s", what, rec, debug.Stack())
+	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
 // Router serves several via pages, each Mounted at its own path, behind one
@@ -145,8 +169,7 @@ func uploadAction[T any, PT interface {
 }](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: upload handler panic: %v\n%s", rec, debug.Stack())
-			http.Error(w, "upload failed", http.StatusInternalServerError)
+			recoverToHTTP(w, rec, "upload")
 		}
 	}()
 	if !originAllowed(req, cfg) {
@@ -286,8 +309,7 @@ func formAction[T any, PT interface {
 }](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: form handler panic: %v\n%s", rec, debug.Stack())
-			http.Error(w, "form failed", http.StatusInternalServerError)
+			recoverToHTTP(w, rec, "form")
 		}
 	}()
 	if !originAllowed(req, cfg) {
@@ -362,8 +384,7 @@ func statelessAction[T any, PT interface {
 }](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: action handler panic: %v\n%s", rec, debug.Stack())
-			http.Error(w, "action failed", http.StatusInternalServerError)
+			recoverToHTTP(w, rec, "action")
 		}
 	}()
 	if !originAllowed(req, cfg) {

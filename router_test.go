@@ -406,6 +406,33 @@ func TestRouter_pathParamReadableInAction(t *testing.T) {
 	assert.Contains(t, body, "echoed 7", "the action must read Param[int](ctx,0) from its own POST path")
 }
 
+// A segment that cannot decode into Param's type is a bad request against a
+// real route shape — /thread/abc for Param[int] answers 404, never a silent
+// zero-value render ("thread 0" would be a lie). Fails if Param goes back to
+// swallowing the decode error.
+func TestRouter_pathParamBadSegmentIs404(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/thread/{}", threadPage{})
+	srv := serve(t, r)
+
+	resp, body := do(t, srv, http.MethodGet, "/thread/abc", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.NotContains(t, body, "thread 0", "a bad segment must never render the zero value")
+}
+
+// The same 404 contract holds when the bad segment reaches Param inside an
+// ACTION (the POST URL carries the segment).
+func TestRouter_pathParamBadSegmentInActionIs404(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/e/{}", echoPage{})
+	srv := serve(t, r)
+
+	resp, _ := do(t, srv, http.MethodPost, "/e/abc/_via/a/0", "{}")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 // A guard protects the action sub-route too (not just the page GET): an
 // unauthenticated action POST is redirected before any handler runs.
 func TestRouter_guardProtectsActionPost(t *testing.T) {

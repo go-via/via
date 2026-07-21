@@ -194,30 +194,45 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 	})
 }
 
+// paramMiss is the panic sentinel Param throws when a real request carries a
+// segment that cannot decode into the asked-for type (/thread/abc read as
+// Param[int]). The transport recovers it into a 404: the URL space simply has
+// no such page. It is a control-flow sentinel, not an error value — user code
+// never sees it.
+type paramMiss struct {
+	n   int
+	seg string
+}
+
 // Param reads the nth positional path param — the nth anonymous {} segment in
 // the mount pattern (Mount(r, "/thread/{}", …) → Param[int](ctx, 0)). Positional,
 // like actions and signals: no identifier string. Callable from OnInit and
 // actions (which carry a Ctx); View is ctx-free and so cannot read params —
-// load them in OnInit into a field instead. Out of range or undecodable yields
-// the zero value.
+// load them in OnInit into a field instead.
+//
+// A segment that cannot decode into T answers the request with 404 (the URL
+// names a page that doesn't exist — never a silent zero value). Reading an
+// index the mount pattern doesn't have is a wiring mistake and panics.
 func Param[T any](ctx *Ctx, n int) T {
-	var zero T
 	if ctx == nil || n < 0 || n >= len(ctx.params) {
-		return zero
+		panic("via: Param index out of range — the mount pattern has no {} segment " + strconv.Itoa(n))
 	}
-	return decodeSegment[T](ctx.params[n])
+	return decodeSegment[T](ctx.params[n], n)
 }
 
 // decodeSegment turns a raw URL segment into T. Strings pass through verbatim
 // (a path segment is not quoted JSON); everything else (int/float/bool) decodes
-// as JSON, which parses "42" → 42 without a reflect-driven scalar table.
-func decodeSegment[T any](seg string) T {
+// as JSON, which parses "42" → 42 without a reflect-driven scalar table. A
+// segment that does not decode panics with the paramMiss sentinel (→ 404).
+func decodeSegment[T any](seg string, n int) T {
 	var v T
 	if sp, ok := any(&v).(*string); ok {
 		*sp = seg
 		return v
 	}
-	_ = json.Unmarshal([]byte(seg), &v)
+	if err := json.Unmarshal([]byte(seg), &v); err != nil {
+		panic(paramMiss{n: n, seg: seg})
+	}
 	return v
 }
 
@@ -738,8 +753,7 @@ func Register[T any, PT interface {
 		// both run before any bytes are written, so this never double-writes.
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("via: action handler panic: %v\n%s", rec, debug.Stack())
-				http.Error(w, "action failed", http.StatusInternalServerError)
+				recoverToHTTP(w, rec, "action")
 			}
 		}()
 
@@ -822,8 +836,7 @@ func Register[T any, PT interface {
 	mux.HandleFunc("POST /_via/a/{island}/{n}", func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("via: island action panic: %v\n%s", rec, debug.Stack())
-				http.Error(w, "action failed", http.StatusInternalServerError)
+				recoverToHTTP(w, rec, "island action")
 			}
 		}()
 		if !originAllowed(req, cfg) {
