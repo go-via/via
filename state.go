@@ -1,6 +1,9 @@
 package via
 
-import "github.com/go-via/via/h"
+import (
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
+)
 
 // State is server-authoritative, per-connection island state. Unlike Signal it
 // never reaches the client as a signal: its value is server-rendered as literal
@@ -22,7 +25,7 @@ func (s *State[T]) Set(v T) { s.val = v }
 // mistake. The guard fires on "this render is not an island render", so a live
 // island's own first paint (before OnConnect) reads the constructor value fine.
 func (s *State[T]) Display() h.H {
-	return h.Dyn(func(r *h.Renderer) {
+	return hcore.Dyn(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil || !ctx.island {
 			panic("via: State[T] can only be read inside a live island's View — the composition must implement OnConnect")

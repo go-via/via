@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.
@@ -36,7 +37,7 @@ type viewer interface{ View() h.H }
 // Ctx is the per-request binder. It assigns positional slot/action ids during a
 // render pass, hydrates signals from the request, and records the per-slot
 // initial values for the page-level data-signals declaration. It implements
-// h.Binder.
+// hcore.Binder.
 type Ctx struct {
 	inSignals map[string]json.RawMessage // hydrated from the request
 	nextSig   int                        // next signal slot index
@@ -106,7 +107,7 @@ func shapeMatches(order []string, in map[string]json.RawMessage) bool {
 	return true
 }
 
-// binderCtx adapts a Ctx to h.Binder so the binder plumbing (signal slots,
+// binderCtx adapts a Ctx to hcore.Binder so the binder plumbing (signal slots,
 // action ids) stays off Ctx's public surface — handlers see a lean Ctx, the
 // renderer sees the four binder verbs.
 type binderCtx struct{ c *Ctx }
@@ -118,7 +119,7 @@ func (b binderCtx) ActionSlot(fn func()) string            { return b.c.actionSl
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
 // via's own (a bare h render).
-func ctxOf(b h.Binder) *Ctx {
+func ctxOf(b hcore.Binder) *Ctx {
 	if bc, ok := b.(binderCtx); ok {
 		return bc.c
 	}
@@ -127,7 +128,7 @@ func ctxOf(b h.Binder) *Ctx {
 
 // signalName allocates the next first-use signal name ("s0","s1",…). A handle
 // calls it once and caches the result, so a signal's identity is the handle,
-// not its render position. h.Binder.
+// not its render position. hcore.Binder.
 func (c *Ctx) signalName() string {
 	name := "s" + strconv.Itoa(c.nextSig)
 	c.nextSig++
@@ -143,7 +144,7 @@ func (c *Ctx) signalName() string {
 // declareSignal records that slot participates in this render with the given
 // initial value, for the page-level data-signals declaration. Idempotent within
 // a render: the first declaration fixes the order, later ones (e.g. a Bind and a
-// Display of the same signal) only refresh the value. h.Binder.
+// Display of the same signal) only refresh the value. hcore.Binder.
 func (c *Ctx) declareSignal(slot string, initial any) {
 	if _, seen := c.initial[slot]; !seen {
 		c.order = append(c.order, slot)
@@ -152,7 +153,7 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 }
 
 // signalInit returns the hydrated raw value for a slot, if the request carried
-// one. The bool reports presence. h.Binder.
+// one. The bool reports presence. hcore.Binder.
 func (c *Ctx) signalInit(slot string) (any, bool) {
 	if c.inSignals == nil {
 		return nil, false
@@ -165,7 +166,7 @@ func (c *Ctx) signalInit(slot string) (any, bool) {
 }
 
 // actionSlot registers a handler and returns its positional id "0","1",….
-// h.Binder.
+// hcore.Binder.
 func (c *Ctx) actionSlot(fn func()) string {
 	idx := len(c.actions)
 	c.actions = append(c.actions, fn)
@@ -179,7 +180,7 @@ func (c *Ctx) actionSlot(fn func()) string {
 // ctx.Request().FormValue and may via.Redirect. handler is a named method value;
 // children are the form contents (inputs, button). No '&', no closure.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
-	return h.Dyn(func(r *h.Renderer) {
+	return hcore.Dyn(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
 			return
@@ -281,7 +282,7 @@ func (f uploadedFile) ContentType() string { return f.hdr.Header.Get("Content-Ty
 // value; children are the form contents (a file <input>, a button). No '&', no
 // closure.
 func OnUpload(handler func(*Ctx, File), children ...h.H) h.H {
-	return h.Dyn(func(r *h.Renderer) {
+	return hcore.Dyn(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
 			return
@@ -386,7 +387,7 @@ func OnChange(fn func(*Ctx)) h.Attr { return onEvent("change", fn) }
 // onEvent emits the Datastar event binding for a named method value. At render
 // it claims a positional action id and writes data-on:<event>="@post('/_via/a/N')".
 func onEvent(event string, fn func(*Ctx)) h.Attr {
-	return h.DynAttr(func(r *h.Renderer) {
+	return hcore.DynAttr(func(r *hcore.Renderer) {
 		b := r.Binder()
 		ctx := ctxOf(b)
 		// The action table stores a func(); it closes over the live ctx so
@@ -424,7 +425,7 @@ func OnSubmitArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("sub
 // slot decodes it from the request and hands it to fn. Identity rides with the
 // click, so a renumbered list can't misroute.
 func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
-	return h.DynAttr(func(r *h.Renderer) {
+	return hcore.DynAttr(func(r *hcore.Renderer) {
 		b := r.Binder()
 		ctx := ctxOf(b)
 		idx := b.ActionSlot(func() {
@@ -455,7 +456,7 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // routes to THIS connection's instance, so it echoes the tab id (the _viatab
 // local signal the SSE set) as the X-Via-Tab header; the island id scopes which
 // island; a stateless page omits both.
-func writeActionAttr(r *h.Renderer, ctx *Ctx, event, idx, query string) {
+func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 	base := ""
 	if ctx != nil {
 		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{n}
@@ -522,7 +523,7 @@ func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSign
 	ctx.island = island
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.base = base
-	rr := h.NewRenderer(binderCtx{ctx})
+	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)

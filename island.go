@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // anyLiveIsland reports whether a completed render discovered an embedded
@@ -59,7 +60,7 @@ func Embed[C any](child C) h.H {
 	if !isView {
 		panic("via: via.Embed(child) requires child to have a View() method")
 	}
-	return h.Dyn(func(r *h.Renderer) { embedViewer(r, v) })
+	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, v) })
 }
 
 // embedViewer is the positional-island wiring behind Embed: it renders v into
@@ -68,7 +69,7 @@ func Embed[C any](child C) h.H {
 // siblings never collide), and appends it to the parent's islands slice so a
 // push or action patches exactly this one. A non-Ctx binder is a bare render
 // with no parent to attach to, so it writes nothing.
-func embedViewer(r *h.Renderer, v viewer) {
+func embedViewer(r *hcore.Renderer, v viewer) {
 	parent := ctxOf(r.Binder())
 	if parent == nil {
 		return
@@ -103,7 +104,7 @@ func embedViewer(r *h.Renderer, v viewer) {
 // child's actions/signals bind into its own tables. Returns the inner HTML
 // (without the container div), already escaped.
 func renderIslandInner(child *Ctx, v viewer) []byte {
-	rr := h.NewRenderer(binderCtx{child})
+	rr := hcore.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
 	return rr.Bytes()
 }
@@ -118,7 +119,7 @@ func bindIsland(idx int, v viewer, in map[string]json.RawMessage) *Ctx {
 	c.islandIdx = idx
 	c.islandV = v
 	_, c.island = v.(Live)
-	h.NewRenderer(binderCtx{c}).Render(v.View())
+	hcore.NewRenderer(binderCtx{c}).Render(v.View())
 	return c
 }
 

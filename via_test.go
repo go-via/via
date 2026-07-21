@@ -20,14 +20,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The binder plumbing (signal slots, action ids) is deliberately off Ctx's
-// public surface: Ctx must NOT satisfy h.Binder — the runtime adapts it through
-// an unexported wrapper. If this fails, plumbing methods leaked back onto the
-// type every handler touches.
+// The binder plumbing (signal slots, action ids, the renderer itself) is
+// deliberately off the h package's public surface: h is elements + attrs +
+// Str only, the via core reaches the plumbing through internal/hcore. If this
+// fails, plumbing leaked back onto the package every user of h sees.
 func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
 	t.Parallel()
-	_, ok := any(&via.Ctx{}).(h.Binder)
-	assert.False(t, ok, "Ctx must not implement h.Binder directly")
+	banned := map[string]bool{
+		"Dyn": true, "DynAttr": true, "NewRenderer": true, "Renderer": true, "Binder": true,
+	}
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, "h", nil, 0)
+	require.NoError(t, err)
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, decl := range f.Decls {
+				var name string
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					if d.Recv == nil {
+						name = d.Name.Name
+					}
+				case *ast.GenDecl:
+					for _, spec := range d.Specs {
+						if ts, ok := spec.(*ast.TypeSpec); ok {
+							name = ts.Name.Name
+						}
+					}
+				}
+				if name != "" && banned[name] {
+					t.Fatalf("h package must not export %q — it belongs to internal/hcore", name)
+				}
+			}
+		}
+	}
 }
 
 // store is the in-server state the counter tracks — a plain app dependency.
