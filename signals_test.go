@@ -1,8 +1,11 @@
 package via_test
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/go-via/via"
@@ -42,7 +45,7 @@ type nameComp struct{ name via.Signal[string] }
 
 // Touch mutates the round-tripped value so the render changes and a patch (not a
 // 204) is returned, letting the test inspect how the value is reflected.
-func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get()+"!") }
+func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get() + "!") }
 func (c *nameComp) View() h.H {
 	return h.Div(h.Button(via.OnClick(c.Touch), h.Str("x")), c.name.Display())
 }
@@ -121,7 +124,7 @@ type boundForm struct{ Name via.Signal[string] }
 // Save appends to the bound value so the render changes — otherwise an action
 // that leaves the View identical returns 204 (no patch) and there is nothing to
 // assert about the response.
-func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(f.Name.Get()+"!") }
+func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(f.Name.Get() + "!") }
 func (f *boundForm) View() h.H {
 	return h.Div(
 		h.Input(f.Name.Bind()),
@@ -170,4 +173,22 @@ func TestSignal_bareSetBeforeRenderIsSafe(t *testing.T) {
 	var s via.Signal[string]
 	s.Set("hello")
 	assert.Equal(t, "hello", s.Get())
+}
+
+// A Set on a signal the View never rendered updates server memory but can emit
+// no patch — that silence must be loud: exactly one warning per signal, not
+// zero (a mystery) and not one per call (noise). Sequential: it captures the
+// global log output.
+func TestSignal_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	var s via.Signal[int]
+	s.Set(1)
+	s.Set(2)
+	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
+		"exactly one warning per unrendered signal")
+	assert.Equal(t, 2, s.Get(), "the value still updates server memory")
 }

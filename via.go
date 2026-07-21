@@ -408,6 +408,18 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 // identifier string. Use it for per-row actions in a list. No '&', no closure.
 func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("click", fn, arg) }
 
+// OnChangeArg is OnClickArg for the change event — a select or checkbox whose
+// handler needs the row's render-time identity.
+func OnChangeArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("change", fn, arg) }
+
+// OnSubmitArg is OnClickArg for the submit event — a per-row inline form whose
+// handler needs the row's render-time identity.
+//
+// There is deliberately no OnInputArg: an Arg is render-time identity (which
+// row), while an input's payload is bound data — that's a Signal. Wanting a
+// per-keystroke identity usually means the identity should be a Signal too.
+func OnSubmitArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("submit", fn, arg) }
+
 // onEventArg is onEvent for a value-carrying action: it JSON-encodes arg into the
 // action's query (?a=…) so the client posts the row's datum, and the dispatched
 // slot decodes it from the request and hands it to fn. Identity rides with the
