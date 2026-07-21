@@ -9,6 +9,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 )
 
 // Initer is an optional per-request hook on a page: OnInit runs with a Ctx
@@ -90,9 +91,12 @@ func recoverToHTTP(w http.ResponseWriter, rec any, what string) {
 // are namespaced under its mount path so two pages can both declare action 1
 // without colliding.
 type Router struct {
-	mux      *http.ServeMux
-	cfg      *config
-	sessions *sessionManager
+	mux       *http.ServeMux
+	cfg       *config
+	sessions  *sessionManager
+	reg       *registry     // live connections (tab id → island goroutine), app-wide
+	liveCount *atomic.Int64 // concurrent live SSE streams, capped at maxLive
+	maxLive   int
 }
 
 // NewRouter builds an empty router. Mount pages onto it (via.Mount), then serve
@@ -100,7 +104,12 @@ type Router struct {
 func NewRouter(opts ...Option) *Router {
 	cfg := newConfig(opts)
 	sm := newSessionManager(cfg)
-	r := &Router{mux: http.NewServeMux(), cfg: cfg, sessions: sm}
+	maxLive := cfg.maxSSEConn
+	if maxLive <= 0 {
+		maxLive = defaultMaxSSEConn
+	}
+	r := &Router{mux: http.NewServeMux(), cfg: cfg, sessions: sm,
+		reg: newRegistry(), liveCount: &atomic.Int64{}, maxLive: maxLive}
 	r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -124,6 +133,13 @@ func Mount[T any, PT interface {
 	if getPattern == "" {
 		getPattern = "/{$}"
 	}
+	// A composition that implements OnConnect is itself a live island. One that
+	// does not, but whose View embeds live children, is a multiplex parent —
+	// decided per render on the REAL instance (never the zero probe, whose
+	// injected deps would be nil), so detection stays reflection-free and safe.
+	var probe T
+	_, rootLive := any(PT(&probe)).(Live)
+
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
 		if runGuards(w, req, r.sessions, params, guards) {
@@ -133,16 +149,18 @@ func Mount[T any, PT interface {
 		if runOnInit(PT(&inst), w, req, r.sessions, params) != nil { // load session/request data into fields first
 			return
 		}
-		_, body := renderRootBase(PT(&inst), nil, false, true, concreteBase(patternBase, req, names))
-		writeHTMLPage(w, r.cfg, body, pageNonce(req, r.sessions))
+		ctx, body := renderRootBase(PT(&inst), nil, rootLive, true, concreteBase(patternBase, req, names))
+		hasLive := rootLive || anyLiveIsland(ctx)
+		writeHTMLPage(w, r.cfg, body, pageNonce(req, r.sessions), hasLive, patternBase+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
 		if runGuards(w, req, r.sessions, params, guards) {
 			return
 		}
-		statelessAction[T, PT](w, req, root, r.cfg, r.sessions, concreteBase(patternBase, req, names), params)
+		statelessAction[T, PT](w, req, root, r, rootLive, concreteBase(patternBase, req, names), params)
 	})
+	mountLive[T, PT](r, patternBase, root, rootLive)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/f/{n}", func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
 		if runGuards(w, req, r.sessions, params, guards) {
@@ -213,7 +231,7 @@ func uploadAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(req, sessions))
+	writeHTMLPage(w, cfg, body, pageNonce(req, sessions), false, "")
 }
 
 // firstFile opens the first uploaded file part (OnUpload delivers a single file;
@@ -348,7 +366,7 @@ func formAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(req, sessions))
+	writeHTMLPage(w, cfg, body, pageNonce(req, sessions), false, "")
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under a
@@ -365,11 +383,20 @@ func pageNonce(req *http.Request, sessions *sessionManager) string {
 	return genCSPNonce()
 }
 
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string) {
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string, hasLive bool, sseURL string) {
 	writeSecurityHeaders(w, nonce)
+	// A live page bootstraps the SSE stream on init and pre-declares the
+	// _viatab local signal so $_viatab is always defined: the patch-signals
+	// frame fills it with the real tab id; a click before the stream connects
+	// sends an empty id and gets a graceful 410.
+	bodyOpen := `</head><body>`
+	if hasLive {
+		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"_viatab":""}'>`
+	}
 	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8">` +
 		`<script type="module" nonce="` + nonce + `" src="/_via/datastar.js"></script>` +
-		`</head><body>`))
+		reconnectScript(hasLive, nonce) +
+		bodyOpen))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
 }
@@ -381,7 +408,8 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string
 func statelessAction[T any, PT interface {
 	*T
 	viewer
-}](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string) {
+}](w http.ResponseWriter, req *http.Request, root T, r *Router, rootLive bool, base string, params []string) {
+	cfg, sessions := r.cfg, r.sessions
 	defer func() {
 		if rec := recover(); rec != nil {
 			recoverToHTTP(w, rec, "action")
@@ -393,6 +421,12 @@ func statelessAction[T any, PT interface {
 	}
 	in, ok := decodeActionBody(w, req)
 	if !ok {
+		return
+	}
+	// A live root's action routes to its connection's island goroutine and the
+	// SSE push carries the result; everything else is the stateless pipeline.
+	if rootLive {
+		tryLiveAction(w, req, r.reg, sessions, base, in)
 		return
 	}
 	dispatchStateless[T, PT](w, req, root, cfg, sessions, base, params, in)

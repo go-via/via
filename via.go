@@ -21,7 +21,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/go-via/via/h"
 )
@@ -546,306 +545,184 @@ func Register[T any, PT interface {
 	*T
 	viewer
 }](root T, opts ...Option) http.Handler {
-	cfg := newConfig(opts)
-	reg := newRegistry()
-	maxLive := cfg.maxSSEConn
-	if maxLive <= 0 {
-		maxLive = defaultMaxSSEConn
-	}
-	var liveCount atomic.Int64 // concurrent live SSE streams, capped at maxLive
-	sessions := newSessionManager(cfg)
-	mux := http.NewServeMux()
+	r := NewRouter(opts...)
+	Mount[T, PT](r, "/", root)
+	return r
+}
 
-	// A composition that implements OnConnect is itself a live island (the legacy
-	// single-island page). A composition that does NOT, but whose View embeds
-	// Island[C] children that implement OnConnect, is a multiplex parent — its
-	// live children share one stream. rootLive is the cheap interface assertion;
-	// whether a multiplex parent has live islands is decided at GET/connect by
-	// inspecting the REAL rendered instance (never the zero probe, whose injected
-	// deps would be nil and panic), so detection stays reflection-free and safe.
-	var probe T
-	_, rootLive := any(PT(&probe)).(Live)
+// mountLive registers a mounted page's live transports: the SSE stream at
+// base/_via/sse and the embedded-island action route at
+// base/_via/a/{island}/{n}. Every mount gets them — one dispatch pipeline; a
+// page with no live content answers 404 on the stream.
+func mountLive[T any, PT interface {
+	*T
+	viewer
+}](r *Router, base string, root T, rootLive bool) {
+	cfg, sessions, reg := r.cfg, r.sessions, r.reg
+	maxLive := r.maxLive
+	liveCount := r.liveCount
+	_ = maxLive
 
-	mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Write(datastarJS)
-	})
-
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, req *http.Request) {
-		inst := root
-		runOnInit(PT(&inst), w, req, sessions, nil) // per-request hook before the ctx-free View
-		// Render the real instance (deps injected) — the parent is the island only
-		// when it is itself live; multiplex children carry their own island flag.
-		ctx, body := renderRoot(PT(&inst), nil, rootLive, true)
-		// The page is live (and bootstraps the stream) when the root is a live
-		// island or its View embedded any live island.
-		hasLive := rootLive || anyLiveIsland(ctx)
-		// Pre-declare the _viatab local signal so $_viatab is always defined: the
-		// SSE patch-signals frame fills it with the real tab id; a click before
-		// the stream connects sends an empty id and gets a graceful 410.
-		bodyOpen := "</head><body>"
-		if hasLive {
-			bodyOpen = `</head><body data-init="@post('/_via/sse')" data-signals='{"_viatab":""}'>`
+	r.mux.HandleFunc("POST "+base+"/_via/sse", func(w http.ResponseWriter, req *http.Request) {
+		// Origin floor first: the stream opens a long-lived island goroutine +
+		// timers and renders the app's HTML, so reject anything that can't prove
+		// a same-origin (or explicitly trusted) source before allocating it.
+		if !originAllowed(req, cfg) {
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
 		}
-		nonce := pageNonce(req, sessions) // session-scoped when a session exists, so a @post Redirect's script matches
-		writeSecurityHeaders(w, nonce)
-		w.Write([]byte("<!doctype html><html><head><meta charset=\"utf-8\">" +
-			"<script type=\"module\" nonce=\"" + nonce + "\" src=\"/_via/datastar.js\"></script>" +
-			reconnectScript(hasLive, nonce) +
-			bodyOpen))
-		w.Write(body)
-		w.Write([]byte("</body></html>"))
-	})
+		// The connect is a POST so it can carry the page's signals as a body
+		// (capped + decoded); the island hydrates from them. Multiplexing reads
+		// per-island state out of this on connect.
+		connectSig, ok := decodeActionBody(w, req)
+		if !ok {
+			return
+		}
+		if _, ok := w.(http.Flusher); !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		// Connection cap: bound concurrent streams (each holds an island
+		// goroutine + timers). Increment-then-check so the gauge can't be raced
+		// past the limit; on refusal give back the slot and 503. The admitted
+		// path's defer below decrements when the stream ends.
+		if liveCount.Add(1) > int64(maxLive) {
+			liveCount.Add(-1)
+			http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
+			return
+		}
+		defer liveCount.Add(-1)
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
+			}
+		}()
+		inst := root
+		pv := PT(&inst)
+		// A half-open peer never cancels req.Context(); a failed frame write
+		// is the only signal it's gone. Derive a cancelable context so a write
+		// failure (or the per-frame deadline) tears the island(s) down here.
+		streamCtx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		stream := &sseStream{
+			w:       w,
+			rc:      http.NewResponseController(w),
+			timeout: cfg.sseWriteTimeout,
+			cancel:  cancel,
+		}
+		keepalive := func() { stream.frame(writeKeepaliveFrame) }
+		interval := cfg.sseHeartbeat
+		if interval <= 0 {
+			interval = defaultHeartbeat
+		}
+		id := genCSPNonce() // per-connection tab id (echoed as X-Via-Tab on actions)
+		pulse := make(chan func())
 
-	{
-		mux.HandleFunc("POST /_via/sse", func(w http.ResponseWriter, req *http.Request) {
-			// Origin floor first: the stream opens a long-lived island goroutine +
-			// timers and renders the app's HTML, so reject anything that can't prove
-			// a same-origin (or explicitly trusted) source before allocating it.
-			if !originAllowed(req, cfg) {
-				http.Error(w, "forbidden origin", http.StatusForbidden)
-				return
-			}
-			// The connect is a POST so it can carry the page's signals as a body
-			// (capped + decoded); the island hydrates from them. Multiplexing reads
-			// per-island state out of this on connect.
-			connectSig, ok := decodeActionBody(w, req)
-			if !ok {
-				return
-			}
-			if _, ok := w.(http.Flusher); !ok {
-				http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-				return
-			}
-			// Connection cap: bound concurrent streams (each holds an island
-			// goroutine + timers). Increment-then-check so the gauge can't be raced
-			// past the limit; on refusal give back the slot and 503. The admitted
-			// path's defer below decrements when the stream ends.
-			if liveCount.Add(1) > int64(maxLive) {
-				liveCount.Add(-1)
-				http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
-				return
-			}
-			defer liveCount.Add(-1)
-			defer func() {
-				if rec := recover(); rec != nil {
-					log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
-				}
-			}()
-			inst := root
-			pv := PT(&inst)
-			// A half-open peer never cancels req.Context(); a failed frame write
-			// is the only signal it's gone. Derive a cancelable context so a write
-			// failure (or the per-frame deadline) tears the island(s) down here.
-			streamCtx, cancel := context.WithCancel(req.Context())
-			defer cancel()
-			stream := &sseStream{
-				w:       w,
-				rc:      http.NewResponseController(w),
-				timeout: cfg.sseWriteTimeout,
-				cancel:  cancel,
-			}
-			keepalive := func() { stream.frame(writeKeepaliveFrame) }
-			interval := cfg.sseHeartbeat
-			if interval <= 0 {
-				interval = defaultHeartbeat
-			}
-			id := genCSPNonce() // per-connection tab id (echoed as X-Via-Tab on actions)
-			pulse := make(chan func())
-
-			// Establish the live unit(s) and run each OnConnect once, BEFORE the
-			// stream headers flush (so OnConnect can still set the session cookie).
-			// Each unit's push closure re-renders only ITS container.
-			var units []*Ctx
-			disposeAll := func() {
-				for _, u := range units {
-					for _, d := range u.disposers {
-						d()
-					}
+		// Establish the live unit(s) and run each OnConnect once, BEFORE the
+		// stream headers flush (so OnConnect can still set the session cookie).
+		// Each unit's push closure re-renders only ITS container.
+		var units []*Ctx
+		disposeAll := func() {
+			for _, u := range units {
+				for _, d := range u.disposers {
+					d()
 				}
 			}
-			if rootLive {
-				// Legacy single island: the root composition is the island, patched
-				// at #root.
-				island := newCtx(connectSig)
-				island.req = req
-				island.sessions = sessions
-				island.sessW = w
-				island.push = func() {
-					_, body := renderRoot(pv, nil, true, false) // push omits data-signals
-					stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+		}
+		if rootLive {
+			// Legacy single island: the root composition is the island, patched
+			// at #root.
+			island := newCtx(connectSig)
+			island.req = req
+			island.sessions = sessions
+			island.sessW = w
+			island.push = func() {
+				_, body := renderRootBase(pv, nil, true, false, base) // push omits data-signals
+				stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+			}
+			lv, _ := any(pv).(Live)
+			if err := lv.OnConnect(island); err != nil {
+				for _, d := range island.disposers {
+					d()
 				}
-				lv, _ := any(pv).(Live)
-				if err := lv.OnConnect(island); err != nil {
-					for _, d := range island.disposers {
+				connectError(w, err)
+				return
+			}
+			units = append(units, island)
+			reg.put(id, &liveConn{
+				inst:        pv,
+				pulse:       pulse,
+				done:        streamCtx.Done(),
+				push:        island.push,
+				pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
+			})
+			defer reg.del(id)
+		} else {
+			// Multiplex: each embedded Island[C] that implements OnConnect is its
+			// own live unit, sharing this one stream/goroutine and patched at its
+			// own #via-i{n}.
+			bind, _ := renderRootBase(pv, connectSig, true, false, base) // discovery render
+			for i, isl := range bind.islands {
+				lv, ok := isl.islandV.(Live)
+				if !ok {
+					continue
+				}
+				uctx := newCtx(connectSig)
+				uctx.req = req
+				uctx.sessions = sessions
+				uctx.sessW = w
+				uctx.isIsland = true
+				uctx.islandIdx = i
+				idx, v := i, isl.islandV
+				uctx.islandV = v // the action handler re-binds this island's actions
+				uctx.push = func() {
+					stream.frame(func(w io.Writer) { writePatchFrame(w, renderIslandPatch(idx, v)) })
+				}
+				if err := lv.OnConnect(uctx); err != nil {
+					disposeAll()
+					for _, d := range uctx.disposers {
 						d()
 					}
 					connectError(w, err)
 					return
 				}
-				units = append(units, island)
-				reg.put(id, &liveConn{
-					inst:        pv,
-					pulse:       pulse,
-					done:        streamCtx.Done(),
-					push:        island.push,
-					pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-				})
-				defer reg.del(id)
-			} else {
-				// Multiplex: each embedded Island[C] that implements OnConnect is its
-				// own live unit, sharing this one stream/goroutine and patched at its
-				// own #via-i{n}.
-				bind, _ := renderRoot(pv, connectSig, true, false) // discovery render
-				for i, isl := range bind.islands {
-					lv, ok := isl.islandV.(Live)
-					if !ok {
-						continue
-					}
-					uctx := newCtx(connectSig)
-					uctx.req = req
-					uctx.sessions = sessions
-					uctx.sessW = w
-					uctx.isIsland = true
-					uctx.islandIdx = i
-					idx, v := i, isl.islandV
-					uctx.islandV = v // the action handler re-binds this island's actions
-					uctx.push = func() {
-						stream.frame(func(w io.Writer) { writePatchFrame(w, renderIslandPatch(idx, v)) })
-					}
-					if err := lv.OnConnect(uctx); err != nil {
-						disposeAll()
-						for _, d := range uctx.disposers {
-							d()
-						}
-						connectError(w, err)
-						return
-					}
-					units = append(units, uctx)
-				}
+				units = append(units, uctx)
 			}
+		}
 
-			// No live units: this app has no live content (a stateless page POSTing
-			// the stream endpoint), so there is nothing to stream.
-			if len(units) == 0 {
-				http.Error(w, "no live stream", http.StatusNotFound)
-				return
-			}
-
-			// Register a multiplex connection's islands so a live action POST
-			// (/_via/a/{island}/{n} + X-Via-Tab) routes to the right island on this
-			// connection's goroutine. The legacy single-island case registered itself
-			// above; here inst/push stay nil and the per-island units carry them.
-			if !rootLive {
-				islands := make(map[int]*Ctx, len(units))
-				for _, u := range units {
-					islands[u.islandIdx] = u
-				}
-				reg.put(id, &liveConn{
-					pulse:       pulse,
-					done:        streamCtx.Done(),
-					pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-					islands:     islands,
-				})
-				defer reg.del(id)
-			}
-
-			writeSSEHeaders(w)
-			w.WriteHeader(http.StatusOK)
-			stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
-
-			runLiveStream(streamCtx, units, pulse, keepalive, interval)
-		})
-	}
-
-	mux.HandleFunc("POST /_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
-		// A View or action that panics must not crash the server or wedge the
-		// connection: contain it as a 500. The action and the response render
-		// both run before any bytes are written, so this never double-writes.
-		defer func() {
-			if rec := recover(); rec != nil {
-				recoverToHTTP(w, rec, "action")
-			}
-		}()
-
-		// Origin floor: this endpoint changes server state, so reject anything
-		// that is not provably same-origin (or explicitly trusted) before doing
-		// any work. See originAllowed for the precedence.
-		if !originAllowed(req, cfg) {
-			http.Error(w, "forbidden origin", http.StatusForbidden)
+		// No live units: this app has no live content (a stateless page POSTing
+		// the stream endpoint), so there is nothing to stream.
+		if len(units) == 0 {
+			http.Error(w, "no live stream", http.StatusNotFound)
 			return
 		}
 
-		in, ok := decodeActionBody(w, req)
-		if !ok {
-			return
-		}
-
-		// Live island: route the action to THIS connection's island goroutine,
-		// found by the X-Via-Tab header (the _viatab the SSE handed it). The
-		// action runs against the connection's own instance — mutating its State —
-		// and the SSE push ships the patch, so the POST just acks 204
-		// (fire-and-forget: the action runs async on the island goroutine; the
-		// result arrives over the SSE, not on this response). The bind-shape guard
-		// does not apply here: the island re-render is the authority, not the
-		// request echo. An unknown/closed tab is 410 so a stale client
-		// re-bootstraps rather than mutating a throwaway.
-		//
-		// Contract: a live island's View must render a render-stable action set
-		// (action ids are positional). A gone/out-of-range index simply no-ops on
-		// the island; the next SSE push re-syncs the client either way.
-		if rootLive {
-			lc, ok := reg.get(req.Header.Get("X-Via-Tab"))
-			if !ok {
-				http.Error(w, "no live connection for this tab", http.StatusGone)
-				return
+		// Register a multiplex connection's islands so a live action POST
+		// (/_via/a/{island}/{n} + X-Via-Tab) routes to the right island on this
+		// connection's goroutine. The legacy single-island case registered itself
+		// above; here inst/push stay nil and the per-island units carry them.
+		if !rootLive {
+			islands := make(map[int]*Ctx, len(units))
+			for _, u := range units {
+				islands[u.islandIdx] = u
 			}
-			n, err := strconv.Atoi(req.PathValue("n"))
-			if err != nil {
-				http.Error(w, "no such action", http.StatusGone)
-				return
-			}
-			dispatched := lc.Dispatch(func() {
-				bind, _ := renderRoot(lc.inst, in, true, false)
-				bind.req = req // the action POST that triggered this live action
-				// Store-only: a live action runs after its 204, so it can read/write an
-				// already-established session but cannot issue a cookie (sessW stays nil).
-				bind.sessions = sessions
-				if n >= 0 && n < len(bind.actions) {
-					bind.actions[n]()
-				}
-				// A deliberate server-driven signal change (e.g. clearing the
-				// composer) reaches the client as a signal-patch — the element
-				// push omits data-signals, so morphs never clobber what the user
-				// is typing.
-				if len(bind.dirty) > 0 {
-					if raw, err := json.Marshal(bind.dirty); err == nil {
-						lc.pushSignals(string(raw))
-					}
-				}
-				lc.push() // re-render the island and frame the element-patch
+			reg.put(id, &liveConn{
+				pulse:       pulse,
+				done:        streamCtx.Done(),
+				pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
+				islands:     islands,
 			})
-			if !dispatched {
-				http.Error(w, "live connection closed", http.StatusGone)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-			return
+			defer reg.del(id)
 		}
 
-		// Stateless action: the post-decode core is shared with the router's
-		// mounted pages (dispatchStateless), so the two can't drift. Base is "" —
-		// the single-page root posts to /_via/a/{n}.
-		dispatchStateless[T, PT](w, req, root, cfg, sessions, "", nil, in)
+		writeSSEHeaders(w)
+		w.WriteHeader(http.StatusOK)
+		stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
+
+		runLiveStream(streamCtx, units, pulse, keepalive, interval)
 	})
 
-	// Embedded-island action: /_via/a/{island}/{n} routes to one island's action
-	// table and patches that island's #via-i{n} container, leaving its siblings
-	// untouched. The parent is re-rendered to discover the islands positionally
-	// (the same bind-pass model as the flat path), then the named island's action
-	// runs against its child instance.
-	mux.HandleFunc("POST /_via/a/{island}/{n}", func(w http.ResponseWriter, req *http.Request) {
+	r.mux.HandleFunc("POST "+base+"/_via/a/{island}/{n}", func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				recoverToHTTP(w, rec, "island action")
@@ -905,7 +782,7 @@ func Register[T any, PT interface {
 
 		// Stateless embedded island: discover positionally and re-render in place.
 		inst := root
-		bind, _ := renderRoot(PT(&inst), in, false, true) // discovery render → bind.islands
+		bind, _ := renderRootBase(PT(&inst), in, false, true, base) // discovery render → bind.islands
 		if island < 0 || island >= len(bind.islands) {
 			http.Error(w, "no such island", http.StatusGone)
 			return
@@ -939,6 +816,61 @@ func Register[T any, PT interface {
 		w.Write(after)
 		w.Write([]byte(`</div>`))
 	})
+}
 
-	return mux
+// tryLiveAction routes a live root's action POST to its connection's island
+// goroutine (found by the X-Via-Tab header) and acks 204 — the SSE push carries
+// the result. Returns true when it wrote the response (the live path applies).
+func tryLiveAction(w http.ResponseWriter, req *http.Request, reg *registry, sessions *sessionManager, base string, in map[string]json.RawMessage) {
+	// Live island: route the action to THIS connection's island goroutine,
+	// found by the X-Via-Tab header (the _viatab the SSE handed it). The
+	// action runs against the connection's own instance — mutating its State —
+	// and the SSE push ships the patch, so the POST just acks 204
+	// (fire-and-forget: the action runs async on the island goroutine; the
+	// result arrives over the SSE, not on this response). The bind-shape guard
+	// does not apply here: the island re-render is the authority, not the
+	// request echo. An unknown/closed tab is 410 so a stale client
+	// re-bootstraps rather than mutating a throwaway.
+	//
+	// Contract: a live island's View must render a render-stable action set
+	// (action ids are positional). A gone/out-of-range index simply no-ops on
+	// the island; the next SSE push re-syncs the client either way.
+	{
+		lc, ok := reg.get(req.Header.Get("X-Via-Tab"))
+		if !ok {
+			http.Error(w, "no live connection for this tab", http.StatusGone)
+			return
+		}
+		n, err := strconv.Atoi(req.PathValue("n"))
+		if err != nil {
+			http.Error(w, "no such action", http.StatusGone)
+			return
+		}
+		dispatched := lc.Dispatch(func() {
+			bind, _ := renderRootBase(lc.inst, in, true, false, base)
+			bind.req = req // the action POST that triggered this live action
+			// Store-only: a live action runs after its 204, so it can read/write an
+			// already-established session but cannot issue a cookie (sessW stays nil).
+			bind.sessions = sessions
+			if n >= 0 && n < len(bind.actions) {
+				bind.actions[n]()
+			}
+			// A deliberate server-driven signal change (e.g. clearing the
+			// composer) reaches the client as a signal-patch — the element
+			// push omits data-signals, so morphs never clobber what the user
+			// is typing.
+			if len(bind.dirty) > 0 {
+				if raw, err := json.Marshal(bind.dirty); err == nil {
+					lc.pushSignals(string(raw))
+				}
+			}
+			lc.push() // re-render the island and frame the element-patch
+		})
+		if !dispatched {
+			http.Error(w, "live connection closed", http.StatusGone)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 }

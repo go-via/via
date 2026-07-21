@@ -679,3 +679,35 @@ func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	resp, _ := do(t, serve(t, r), http.MethodPost, "/x/_via/a/0", "{}")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
+
+// Register is Mount at "/" internally — ONE dispatch pipeline. The observable
+// consequence: a single-page Register(root) serves the router-only transports
+// too (a native PostForm posts to /_via/f/0 and 303s). Fails if Register grows
+// its own separate mux again.
+func TestRegister_isMountAtRootOneDispatchPipeline(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(loginForm{}))
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/f/0", strings.NewReader("name=alice"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "Register must serve the form transport like any mount")
+	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
+}
+
+// The unified pipeline carries the live machinery too: a live island mounted on
+// a Router (not just Register) bootstraps the SSE stream from its page — the
+// body carries @post('<base>/_via/sse') and the reconnect manager. Fails if
+// Mount loses the live bootstrap detection.
+func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/live", quietIsland{})
+	_, body := do(t, serve(t, r), http.MethodGet, "/live", "")
+	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted live page must bootstrap its own SSE endpoint")
+	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted live page")
+}
