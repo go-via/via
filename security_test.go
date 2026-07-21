@@ -33,40 +33,40 @@ func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) in
 	return resp.StatusCode
 }
 
-// The SSE connect opens a long-lived server resource (an island goroutine +
-// timers) and renders the app's HTML; like the action POST it must fail closed
-// to any request that can't prove a same-origin source, so a cross-origin page
-// can't open or hold streams against the server.
-func TestSSE_rejectsCrossSiteOrigin(t *testing.T) {
+// With WithTrustedOrigin set, origin enforcement is on: the SSE connect opens a
+// long-lived server resource (an island goroutine + timers), so like the action
+// POST it must fail closed to any request that can't prove a same-origin (or
+// allowlisted) source.
+func TestSSE_enforcementRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}))
+	srv := serve(t, via.Register(quietIsland{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusForbidden,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
 
-// A connect that carries no origin signal at all (no Sec-Fetch-Site, no Origin)
-// proves nothing about its source and must fail closed, exactly as the action
-// endpoint does.
-func TestSSE_failsClosedWithoutAnyOriginSignal(t *testing.T) {
+// Under enforcement, a connect that carries no origin signal at all (no
+// Sec-Fetch-Site, no Origin) proves nothing about its source and must fail
+// closed, exactly as the action endpoint does.
+func TestSSE_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}))
+	srv := serve(t, via.Register(quietIsland{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, nil))
 }
 
-// A real same-origin browser SSE fetch sends Sec-Fetch-Site: same-origin; it
-// must connect.
-func TestSSE_allowsSameOrigin(t *testing.T) {
+// Under enforcement, a real same-origin browser SSE fetch (Sec-Fetch-Site:
+// same-origin) must still connect.
+func TestSSE_enforcementAllowsSameOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}))
+	srv := serve(t, via.Register(quietIsland{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}))
 }
 
-// WithInsecureOrigin disables the floor for non-browser clients / local dev; it
-// must bypass the SSE GET floor too, or it would only half-open the door.
-func TestSSE_insecureOriginAllowsCrossSite(t *testing.T) {
+// Without WithTrustedOrigin the endpoint is open by default (dev-friendly; the
+// per-tab id is the CSRF token): a cross-site connect must succeed.
+func TestSSE_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}, via.WithInsecureOrigin()))
+	srv := serve(t, via.Register(quietIsland{}))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
@@ -136,12 +136,12 @@ func (p *panicComp) View() h.H {
 	return h.Div(h.Button(via.OnClick(p.Boom), h.Str("x")))
 }
 
-// POST /_via/a/{n} is a state-changing endpoint; a cross-site request must be
-// rejected and must not mutate server state, or any page on the web can drive
-// the counter (CSRF).
-func TestAction_rejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
+// POST /_via/a/{n} is a state-changing endpoint; under origin enforcement
+// (WithTrustedOrigin set) a cross-site request must be rejected and must not
+// mutate server state, or any page on the web can drive the counter (CSRF).
+func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(counter{count: &store{}}))
+	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 
 	status, _ := app.Action(1).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
@@ -151,19 +151,20 @@ func TestAction_rejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 }
 
 // same-site (a sibling subdomain) is NOT same-origin; treating it as trusted is
-// the classic CSRF confusion, so a same-site action request must be rejected.
-func TestAction_rejectsSameSiteOrigin(t *testing.T) {
+// the classic CSRF confusion, so under enforcement a same-site action request
+// must be rejected.
+func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).SecFetch("same-site").Fire()
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).SecFetch("same-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
-// A request that carries no origin signal at all (no Sec-Fetch-Site, no Origin)
-// proves nothing about where it came from; the floor must fail closed rather
-// than silently trust it.
-func TestAction_failsClosedWithoutAnyOriginSignal(t *testing.T) {
+// Under enforcement, a request that carries no origin signal at all (no
+// Sec-Fetch-Site, no Origin) proves nothing about where it came from; the
+// floor must fail closed rather than silently trust it.
+func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).NoOrigin().Fire()
+	status, _ := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -216,12 +217,22 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	assert.Equal(t, http.StatusOK, status2, "server must keep serving after a panicking action")
 }
 
-// WithInsecureOrigin is the documented escape hatch for non-browser/dev clients
-// that cannot send origin headers; it must actually bypass the floor.
-func TestWithInsecureOrigin_allowsCrossSiteForNonBrowserClients(t *testing.T) {
+// Without WithTrustedOrigin the action endpoint is open by default, so
+// non-browser/dev clients that cannot send origin headers just work.
+func TestAction_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithInsecureOrigin()))
+	app := vt.Serve(t, via.Register(counter{count: &store{}}))
 	status, body := app.Action(1).SecFetch("cross-site").Fire()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "<h1>1</h1>")
+}
+
+// The default-open floor must also admit a request with NO origin signal at all
+// (no Origin, no Sec-Fetch-Site) — the plain curl / non-browser client case
+// that motivates the dev-friendly default.
+func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
+	t.Parallel()
+	status, body := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -253,7 +264,7 @@ func TestOriginFloor_matchesHostCaseAndDefaultPortInsensitively(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Register(counter{count: &store{}}))
+			app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 			status, body := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusOK, status, "a normalized same-origin request must be allowed")
 			assert.Contains(t, body, "<h1>1</h1>", "and must mutate server state")
@@ -272,7 +283,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Register(counter{count: &store{}}))
+			app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 			status, _ := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusForbidden, status)
 		})
@@ -286,7 +297,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 // to their own https document.)
 func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	t.Parallel()
-	app := vt.ServeTLS(t, via.Register(counter{count: &store{}}))
+	app := vt.ServeTLS(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 
 	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Fire()
 	assert.Equal(t, http.StatusForbidden, down, "http Origin on a TLS request is a scheme downgrade")

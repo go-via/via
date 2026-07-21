@@ -15,14 +15,15 @@ const maxActionBody = 1 << 20
 // memory/disk.
 const maxUploadBytes = 8 << 20
 
-// originAllowed reports whether req may invoke a state-changing action. The
-// floor, in order: a WithInsecureOrigin bypass; a WithTrustedOrigin allowlist
-// (which wins over the browser's site label, so cross-origin embedding works);
-// the browser's Sec-Fetch-Site (only same-origin/none pass); then, absent that,
-// an Origin whose host matches the request Host. A request that proves nothing
-// about its source fails closed.
+// originAllowed reports whether req may invoke a state-changing action. By
+// default every origin is admitted (dev-friendly; the per-tab id is the CSRF
+// token). Setting WithTrustedOrigin turns enforcement on: the allowlist wins
+// over the browser's site label (so cross-origin embedding works); then the
+// browser's Sec-Fetch-Site (only same-origin/none pass); then, absent that, an
+// Origin whose host matches the request Host. Under enforcement, a request
+// that proves nothing about its source fails closed.
 func originAllowed(req *http.Request, cfg *config) bool {
-	if cfg.insecureOrigin {
+	if len(cfg.trustedOrigins) == 0 {
 		return true
 	}
 	origin := req.Header.Get("Origin")
