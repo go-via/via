@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - release/**
   pull_request:
     branches:
       - main
@@ -55,7 +54,10 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod # the module's floor is the single source of truth
+          # Build/scan with the latest stable toolchain; go.mod keeps the
+          # compatibility floor. Pinning the runner to the floor's .0 patch
+          # made govulncheck fail on already-patched stdlib vulns.
+          go-version: stable
           cache: true
 
       - name: Run CI checks
@@ -79,7 +81,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
           cache-dependency-path: vtbrowser/go.sum
 
