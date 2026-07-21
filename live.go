@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/go-via/via/topic"
 )
 
 // Live marks a composition as a connection-scoped live island: implementing
@@ -46,6 +48,17 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // the no-'&'/named-method-value ergonomics are unchanged (handler is e.g.
 // c.OnMessage). Valid only inside OnConnect; pair it with OnDispose to stop the
 // source.
+// Listen wires an island to a Topic in one line: it subscribes, pumps every
+// published value into handler on the island's own goroutine (then pushes this
+// island's re-render), and stops the subscription on disconnect. It fuses the
+// Subscribe/OnDispose(sub.Stop)/pump triple — reach for Subscribe only when
+// the source is a raw channel rather than a Topic.
+func Listen[T any](ctx *Ctx, t *topic.Topic[T], handler func(*Ctx, T)) {
+	sub := t.Subscribe()
+	ctx.OnDispose(sub.Stop)
+	Subscribe(ctx, sub.C(), handler)
+}
+
 func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
 	ctx.subs = append(ctx.subs, func(reqCtx context.Context, pulse chan<- func()) {
 		go func() {
