@@ -97,7 +97,7 @@ func TestNonVoidElements_alwaysEmitClosingTag(t *testing.T) {
 		{h.Span(), "<span></span>"},
 		{h.H1(), "<h1></h1>"},
 		{h.Button(), "<button></button>"},
-		{h.Body(), "<body></body>"},
+		{h.Main(), "<main></main>"},
 		{h.El("section"), "<section></section>"},
 	} {
 		assert.Equal(t, tc.want, render(t, tc.node))
@@ -106,8 +106,8 @@ func TestNonVoidElements_alwaysEmitClosingTag(t *testing.T) {
 
 func TestNestedElements_renderRecursively(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Body(h.Div(h.H1(h.Str("hi")))))
-	assert.Equal(t, "<body><div><h1>hi</h1></div></body>", got)
+	got := render(t, h.Main(h.Div(h.H1(h.Str("hi")))))
+	assert.Equal(t, "<main><div><h1>hi</h1></div></main>", got)
 }
 
 func TestMultipleAttributes_keepSourceOrder(t *testing.T) {
@@ -144,4 +144,40 @@ func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	r.WriteString("<b>")  // raw, caller pre-escaped
 	r.WriteEscaped("<b>") // must be escaped
 	assert.Equal(t, "<b>&lt;b&gt;", r.String())
+}
+
+// The full-vocabulary sweep: one constructor per HTML5 tag h ships, each must
+// render its own tag; void elements must self-close (no closing tag). Fails if
+// a constructor maps to the wrong tag or a void grows a body.
+func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		node h.H
+		want string
+	}{
+		{h.A(), "<a></a>"}, {h.Table(), "<table></table>"}, {h.Tr(), "<tr></tr>"},
+		{h.Td(), "<td></td>"}, {h.Nav(), "<nav></nav>"}, {h.Section(), "<section></section>"},
+		{h.Article(), "<article></article>"}, {h.Textarea(), "<textarea></textarea>"},
+		{h.Select(), "<select></select>"}, {h.Option(), "<option></option>"},
+		{h.H6(), "<h6></h6>"}, {h.Video(), "<video></video>"}, {h.Canvas(), "<canvas></canvas>"},
+		{h.Img(), "<img>"}, {h.Br(), "<br>"}, {h.Hr(), "<hr>"}, {h.Wbr(), "<wbr>"},
+		{h.Source(), "<source>"}, {h.Track(), "<track>"}, {h.Embed(), "<embed>"},
+		{h.Col(), "<col>"}, {h.Area(), "<area>"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, render(t, c.node))
+	}
+}
+
+// Typed URL attributes go through safeURL: http/https/relative pass verbatim;
+// javascript:, data:, protocol-relative (//) are neutralized to "#" — never
+// shipped. Fails if the gate opens or a good URL is mangled.
+func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, render(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
+	assert.Contains(t, render(t, h.A(h.Href("https://example.com/x"))), `href="https://example.com/x"`)
+	assert.Contains(t, render(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
+	assert.Contains(t, render(t, h.Img(h.Src("data:text/html,x"))), `src="#"`)
+	assert.Contains(t, render(t, h.A(h.Href("//evil.example/x"))), `href="#"`)
+	assert.Contains(t, render(t, h.Form(h.Action("/login"))), `action="/login"`)
 }
