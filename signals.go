@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 
 	"github.com/go-via/via/h"
 )
@@ -43,9 +44,10 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial map[string]any)
 // a Datastar text-bound span. T must be JSON-round-trippable; slice 1 exercises
 // int and string.
 type Signal[T any] struct {
-	slot  string // stable wire name, assigned lazily on first render
-	val   T
-	bound *Ctx // stamped at bind; the pass whose dirty map ships the patch
+	slot   string // stable wire name, assigned lazily on first render
+	val    T
+	bound  *Ctx // stamped at bind; the pass whose dirty map ships the patch
+	warned bool // the never-rendered Set warning fired (once per signal)
 }
 
 // Get returns the current value.
@@ -63,6 +65,15 @@ func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound != nil && s.slot != "" {
 		s.bound.dirty[s.slot] = v
+		return
+	}
+	// No render has bound this signal: the write lands in server memory but no
+	// patch can reach the client. Silent, that reads as "Set does nothing" —
+	// warn once per signal.
+	if !s.warned {
+		s.warned = true
+		log.Print("via: Signal.Set on a signal the View never rendered — the value updates server memory " +
+			"but no patch reaches the client; Bind or Display the signal in the View")
 	}
 }
 

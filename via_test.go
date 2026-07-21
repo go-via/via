@@ -507,3 +507,37 @@ func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	assert.NotContains(t, body, "bravo", "the island row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
 }
+
+// argVocab exercises the full Arg-event vocabulary on one composition: a select
+// whose change and a form whose submit carry a render-time value, exactly like
+// OnClickArg. There is deliberately NO OnInputArg — an input's payload is a
+// Signal (bound data), while an Arg is render-time identity; per-keystroke
+// identity is a design smell via refuses to encourage.
+type argVocab struct{ got string }
+
+func (a *argVocab) Pick(ctx *via.Ctx, v string)   { a.got = "pick:" + v }
+func (a *argVocab) Submit(ctx *via.Ctx, v string) { a.got = "submit:" + v }
+func (a *argVocab) View() h.H {
+	return h.Div(
+		h.El("select", via.OnChangeArg(a.Pick, "colors")),
+		h.Button(via.OnSubmitArg(a.Submit, "checkout")),
+		h.P(h.Str(a.got)),
+	)
+}
+
+// OnChangeArg and OnSubmitArg must render their event bindings carrying the
+// value, and route it back into the typed handler — the same contract
+// OnClickArg pins. Fails if either variant is dropped or stops carrying ?a=.
+func TestActionArg_changeAndSubmitVariantsCarryTheValue(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(argVocab{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	assert.Contains(t, page, `data-on:change`, "OnChangeArg must bind the change event")
+	assert.Contains(t, page, `data-on:submit`, "OnSubmitArg must bind the submit event")
+	assert.Contains(t, page, `?a=%22colors%22`, "the change binding must carry its arg")
+
+	_, body := do(t, srv, http.MethodPost, "/_via/a/0?a=%22colors%22", "{}")
+	assert.Contains(t, body, "pick:colors", "OnChangeArg's handler must receive the typed value")
+	_, body = do(t, srv, http.MethodPost, "/_via/a/1?a=%22checkout%22", "{}")
+	assert.Contains(t, body, "submit:checkout", "OnSubmitArg's handler must receive the typed value")
+}
