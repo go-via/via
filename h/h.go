@@ -103,12 +103,9 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 
 // voidElements are HTML void elements: they self-close and carry no body.
 var voidElements = map[string]bool{
-	"input": true,
-	"br":    true,
-	"hr":    true,
-	"img":   true,
-	"meta":  true,
-	"link":  true,
+	"area": true, "br": true, "col": true, "embed": true, "hr": true,
+	"img": true, "input": true, "link": true, "meta": true, "source": true,
+	"track": true, "wbr": true,
 }
 
 // element is the concrete node type for all tags.
@@ -169,48 +166,6 @@ func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 
 // El builds a generic element with the given tag and children.
 func El(tag string, kids ...H) H { return element{tag: tag, kids: kids} }
-
-// Div builds a <div>.
-func Div(kids ...H) H { return element{tag: "div", kids: kids} }
-
-// Span builds a <span>.
-func Span(kids ...H) H { return element{tag: "span", kids: kids} }
-
-// H1 builds an <h1>.
-func H1(kids ...H) H { return element{tag: "h1", kids: kids} }
-
-// Button builds a <button>.
-func Button(kids ...H) H { return element{tag: "button", kids: kids} }
-
-// Input builds an <input> (a void element).
-func Input(kids ...H) H { return element{tag: "input", kids: kids} }
-
-// Body builds a <body>.
-func Body(kids ...H) H { return element{tag: "body", kids: kids} }
-
-// P builds a <p>.
-func P(kids ...H) H { return element{tag: "p", kids: kids} }
-
-// H2 builds an <h2>.
-func H2(kids ...H) H { return element{tag: "h2", kids: kids} }
-
-// Label builds a <label>.
-func Label(kids ...H) H { return element{tag: "label", kids: kids} }
-
-// Form builds a <form>.
-func Form(kids ...H) H { return element{tag: "form", kids: kids} }
-
-// Ul builds a <ul>.
-func Ul(kids ...H) H { return element{tag: "ul", kids: kids} }
-
-// Ol builds an <ol>.
-func Ol(kids ...H) H { return element{tag: "ol", kids: kids} }
-
-// Li builds a <li>.
-func Li(kids ...H) H { return element{tag: "li", kids: kids} }
-
-// B builds a <b>.
-func B(kids ...H) H { return element{tag: "b", kids: kids} }
 
 // Stringish constrains the value types Str accepts, avoiding any.
 type Stringish interface {
