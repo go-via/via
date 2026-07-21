@@ -77,5 +77,5 @@ func Rotate(ctx *via.Ctx) string {
 	if ctx == nil {
 		return ""
 	}
-	return ctx.Session().Rotate()
+	return sessbridge.Rotate(ctx.Session())
 }

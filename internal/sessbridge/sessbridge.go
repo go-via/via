@@ -13,4 +13,6 @@ var (
 	Store func(s any, key any, value any)
 	// Delete removes the value under key on a *via.Session.
 	Delete func(s any, key any)
+	// Rotate re-issues the session id on a *via.Session (fixation defense).
+	Rotate func(s any) string
 )
