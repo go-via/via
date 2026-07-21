@@ -14,7 +14,7 @@ func (s *State[T]) Get() T { return s.val }
 
 // Set assigns the value on the island instance. The change reaches the browser
 // on the next push — a Tick re-render, an action response, or a stream flush.
-func (s *State[T]) Set(_ *Ctx, v T) { s.val = v }
+func (s *State[T]) Set(v T) { s.val = v }
 
 // Display renders the current value as literal, escaped server text. It panics
 // if rendered outside a live island: server-only state is meaningless on a
@@ -23,8 +23,8 @@ func (s *State[T]) Set(_ *Ctx, v T) { s.val = v }
 // island's own first paint (before OnConnect) reads the constructor value fine.
 func (s *State[T]) Display() h.H {
 	return h.Dyn(func(r *h.Renderer) {
-		ctx, ok := r.Binder().(*Ctx)
-		if !ok || !ctx.island {
+		ctx := ctxOf(r.Binder())
+		if ctx == nil || !ctx.island {
 			panic("via: State[T] can only be read inside a live island's View — the composition must implement OnConnect")
 		}
 		r.WriteEscaped(sprint(s.val))
@@ -38,4 +38,4 @@ func (s *State[T]) Display() h.H {
 type List[E any] struct{ State[[]E] }
 
 // Append adds v to the end of the list on the per-(tab,island) instance.
-func (l *List[E]) Append(ctx *Ctx, v E) { l.Set(ctx, append(l.Get(), v)) }
+func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }

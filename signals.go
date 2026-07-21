@@ -43,8 +43,9 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial map[string]any)
 // a Datastar text-bound span. T must be JSON-round-trippable; slice 1 exercises
 // int and string.
 type Signal[T any] struct {
-	slot string // stable wire name, assigned lazily on first render
-	val  T
+	slot  string // stable wire name, assigned lazily on first render
+	val   T
+	bound *Ctx // stamped at bind; the pass whose dirty map ships the patch
 }
 
 // Get returns the current value.
@@ -55,13 +56,13 @@ func (s *Signal[T]) Get() T { return s.val }
 // server — a stateless action's element-patch also reflects it on re-render).
 //
 // Contract: the change reaches the client only for a signal the View actually
-// renders (via Bind or Display) — the wire name is assigned at render, so a
-// Set on a signal the View never renders updates server memory but emits no
-// patch. Bind/Display the signals an action mutates.
-func (s *Signal[T]) Set(ctx *Ctx, v T) {
+// renders (via Bind or Display) — the wire name and the request binding are
+// assigned at render, so a Set on a signal the View never renders updates
+// server memory but emits no patch. Bind/Display the signals an action mutates.
+func (s *Signal[T]) Set(v T) {
 	s.val = v
-	if ctx != nil && s.slot != "" {
-		ctx.dirty[s.slot] = v
+	if s.bound != nil && s.slot != "" {
+		s.bound.dirty[s.slot] = v
 	}
 }
 
@@ -71,6 +72,7 @@ func (s *Signal[T]) Set(ctx *Ctx, v T) {
 // calls it, so the name is the handle's identity, shared across all of them.
 func (s *Signal[T]) bind(r *h.Renderer) {
 	b := r.Binder()
+	s.bound = ctxOf(b)
 	if s.slot == "" {
 		s.slot = b.SignalName()
 	}
@@ -148,26 +150,3 @@ func (l *Local[T]) Bind() h.Attr {
 		r.Render(h.Data("bind", l.slot))
 	})
 }
-
-// Counter is a numeric Signal[int] with an Op(ctx) accessor for the arithmetic
-// verbs, keeping Add/Inc/Dec off the bare Signal surface (one doorway). Embedding
-// Signal[int] gives it Get/Set/Display/Bind.
-type Counter struct{ Signal[int] }
-
-// Op returns the arithmetic verbs bound to this counter and ctx:
-// c.Count.Op(ctx).Inc().
-func (c *Counter) Op(ctx *Ctx) counterOps { return counterOps{s: &c.Signal, ctx: ctx} }
-
-type counterOps struct {
-	s   *Signal[int]
-	ctx *Ctx
-}
-
-// Add adds d to the counter.
-func (o counterOps) Add(d int) { o.s.Set(o.ctx, o.s.Get()+d) }
-
-// Inc adds 1.
-func (o counterOps) Inc() { o.Add(1) }
-
-// Dec subtracts 1.
-func (o counterOps) Dec() { o.Add(-1) }

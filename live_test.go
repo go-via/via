@@ -141,7 +141,7 @@ func (p *pulse) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, p.beat)
 	return nil
 }
-func (p *pulse) beat(ctx *via.Ctx) { p.beats.Set(ctx, p.beats.Get()+1) }
+func (p *pulse) beat(ctx *via.Ctx) { p.beats.Set(p.beats.Get()+1) }
 func (p *pulse) View() h.H {
 	return h.Div(h.H1(h.Str("pulse")), h.P(h.Str("beats: "), p.beats.Display()))
 }
@@ -407,7 +407,7 @@ func (f *feed) OnConnect(ctx *via.Ctx) error {
 	via.Subscribe(ctx, sub.C(), f.recv)
 	return nil
 }
-func (f *feed) recv(ctx *via.Ctx, msg string) { f.last.Set(ctx, msg) }
+func (f *feed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
 func (f *feed) View() h.H {
 	return h.Div(h.H1(h.Str("feed")), h.P(h.Str("latest: "), f.last.Display()))
 }
@@ -459,8 +459,8 @@ func (m *mixedIsland) OnConnect(ctx *via.Ctx) error {
 	via.Subscribe(ctx, sub.C(), m.recv)
 	return nil
 }
-func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(ctx, m.beats.Get()+1) }
-func (m *mixedIsland) recv(ctx *via.Ctx, msg string) { m.last.Set(ctx, msg) }
+func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get()+1) }
+func (m *mixedIsland) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
 func (m *mixedIsland) markDispose()                  { close(m.disposed) }
 func (m *mixedIsland) View() h.H {
 	return h.Div(
@@ -548,7 +548,7 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 // against this connection's island instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(ctx, c.count.Get()+1) }
+func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get()+1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
@@ -605,10 +605,10 @@ func (c *chatIsland) OnConnect(ctx *via.Ctx) error {
 	via.Subscribe(ctx, sub.C(), c.recv)
 	return nil
 }
-func (c *chatIsland) recv(ctx *via.Ctx, m string) { c.Log.Append(ctx, m) }
+func (c *chatIsland) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
 func (c *chatIsland) Send(ctx *via.Ctx) {
 	c.room.bus.Publish(c.Draft.Get())
-	c.Draft.Set(ctx, "")
+	c.Draft.Set("")
 }
 func (c *chatIsland) row(m string) h.H { return h.Li(h.Str(m)) }
 func (c *chatIsland) View() h.H {
@@ -662,7 +662,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 // that triggered it into State.
 type liveReqEchoer struct{ echo via.State[string] }
 
-func (e *liveReqEchoer) Grab(ctx *via.Ctx)            { e.echo.Set(ctx, ctx.Request().Header.Get("X-Echo")) }
+func (e *liveReqEchoer) Grab(ctx *via.Ctx)            { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
 func (e *liveReqEchoer) OnConnect(ctx *via.Ctx) error { return nil }
 func (e *liveReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.OnClick(e.Grab), h.Str("x")))
@@ -696,7 +696,7 @@ func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 type connReqEchoer struct{ host via.State[string] }
 
 func (e *connReqEchoer) OnConnect(ctx *via.Ctx) error {
-	e.host.Set(ctx, ctx.Request().Host)
+	e.host.Set(ctx.Request().Host)
 	ctx.Tick(20*time.Millisecond, e.push)
 	return nil
 }
@@ -726,7 +726,7 @@ func (e *tickReqEchoer) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, e.tick)
 	return nil
 }
-func (e *tickReqEchoer) tick(ctx *via.Ctx) { e.host.Set(ctx, ctx.Request().Host) }
+func (e *tickReqEchoer) tick(ctx *via.Ctx) { e.host.Set(ctx.Request().Host) }
 func (e *tickReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
 }

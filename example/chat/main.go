@@ -57,8 +57,8 @@ func (c *Chat) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (c *Chat) onMessage(ctx *via.Ctx, m Message) { c.Log.Append(ctx, m) }
-func (c *Chat) onPresence(ctx *via.Ctx, n int)    { c.Online.Set(ctx, n) }
+func (c *Chat) onMessage(ctx *via.Ctx, m Message) { c.Log.Append(m) }
+func (c *Chat) onPresence(ctx *via.Ctx, n int)    { c.Online.Set(n) }
 
 // Send publishes the drafted line to everyone and clears the composer.
 func (c *Chat) Send(ctx *via.Ctx) {
@@ -66,7 +66,7 @@ func (c *Chat) Send(ctx *via.Ctx) {
 		return
 	}
 	c.room.bus.Publish(Message{Who: c.Who.Get(), Text: c.Draft.Get()})
-	c.Draft.Set(ctx, "")
+	c.Draft.Set("")
 }
 
 func (c *Chat) row(m Message) h.H {
@@ -87,6 +87,6 @@ func (c *Chat) View() h.H {
 
 func main() {
 	room := NewRoom()
-	http.Handle("/", via.Register(Chat{room: room}, via.WithTheme()))
+	http.Handle("/", via.Register(Chat{room: room}))
 	http.ListenAndServe(":8080", nil)
 }

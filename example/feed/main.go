@@ -31,7 +31,7 @@ func (f *Feed) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 
-func (f *Feed) recv(ctx *via.Ctx, msg string) { f.last.Set(ctx, msg) }
+func (f *Feed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
 
 func (f *Feed) View() h.H {
 	return h.Div(

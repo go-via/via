@@ -32,14 +32,14 @@ func (p *liveTicker) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(80*time.Millisecond, p.tick)
 	return nil
 }
-func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(ctx, p.n.Get()+1) }
+func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get()+1) }
 func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Display())) }
 
 // clicker is a live island whose action mutates its own State — the vehicle for
 // testing Click and the $_viatab → X-Via-Tab round-trip.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(ctx, c.count.Get()+1) }
+func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get()+1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
@@ -81,14 +81,14 @@ func (c *chat) OnConnect(ctx *via.Ctx) error {
 	ctx.OnDispose(c.room.part)
 	return nil
 }
-func (c *chat) onMsg(ctx *via.Ctx, m string) { c.Log.Append(ctx, m) }
-func (c *chat) onPres(ctx *via.Ctx, n int)   { c.Online.Set(ctx, n) }
+func (c *chat) onMsg(ctx *via.Ctx, m string) { c.Log.Append(m) }
+func (c *chat) onPres(ctx *via.Ctx, n int)   { c.Online.Set(n) }
 func (c *chat) Send(ctx *via.Ctx) {
 	if c.Draft.Get() == "" {
 		return
 	}
 	c.room.bus.Publish(c.Draft.Get())
-	c.Draft.Set(ctx, "")
+	c.Draft.Set("")
 }
 func (c *chat) line(m string) h.H { return h.Li(h.Str(m)) }
 func (c *chat) View() h.H {
@@ -107,13 +107,13 @@ func (c *chat) View() h.H {
 type bClock struct{ secs via.State[int] }
 
 func (c *bClock) OnConnect(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
-func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(ctx, c.secs.Get()+1) }
+func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get()+1) }
 func (c *bClock) View() h.H                    { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
 
 type bCounter struct{ n via.State[int] }
 
 func (c *bCounter) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(ctx, c.n.Get()+1) }
+func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get()+1) }
 func (c *bCounter) View() h.H {
 	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.OnClick(c.Inc), h.Str("+")))
 }
