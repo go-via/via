@@ -13,6 +13,9 @@ v0.8 is a rebuild, not an incremental release: the v1 surface (plugins,
 `Session.Rotate`, the old composition types) is replaced wholesale by the
 core below. Treat migration as a re-read of the README, not a diff.
 
+- **`via/sess` merged into the root package**: `sess.Put`/`Get`/`Clear`/`Rotate`
+  are now `via.SessPut`/`SessGet`/`SessClear`/`SessRotate`; the `sess`
+  subpackage and its `internal/sessbridge` shim are gone.
 - **Bare mutators**: `Signal.Set(v)`, `State.Set(v)`, `List.Append(v)` — no
   `ctx` argument. State is bare; ctx is for the request.
 - **Composition is `via.Embed`**: child compositions are plain struct fields
@@ -32,7 +35,7 @@ core below. Treat migration as a re-read of the README, not a diff.
   `internal/hcore`.
 - **One doorway each**: conditionals are `via.When` (no `If`), growing lists
   are `via.List[E]` (`State[[]E]` + `Append`), session rotation is
-  `sess.Rotate`. Themes are your CSS, not options; the SSE reconnect manager
+  `via.SessRotate`. Themes are your CSS, not options; the SSE reconnect manager
   is always on.
 
 ### Added

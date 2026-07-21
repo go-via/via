@@ -23,7 +23,6 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/sess"
 )
 
 // --- app-land data + store (not framework) ---
@@ -187,8 +186,8 @@ func (s *SignUp) Submit(ctx *via.Ctx) {
 		s.err = err.Error() // no Redirect → the page re-renders with the error
 		return
 	}
-	sess.Put(ctx, u)
-	sess.Rotate(ctx) // fixation defense: new session id on privilege change
+	via.SessPut(ctx, u)
+	via.SessRotate(ctx) // fixation defense: new session id on privilege change
 	via.Redirect(ctx, "/forum")
 }
 
@@ -219,8 +218,8 @@ func (l *Login) Submit(ctx *via.Ctx) {
 		l.err = "wrong email or password"
 		return
 	}
-	sess.Put(ctx, u)
-	sess.Rotate(ctx)
+	via.SessPut(ctx, u)
+	via.SessRotate(ctx)
 	via.Redirect(ctx, "/forum")
 }
 
@@ -243,12 +242,12 @@ type Profile struct {
 	user  User // loaded per request in OnInit
 }
 
-func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = sess.Get[User](ctx); return nil }
+func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = via.SessGet[User](ctx); return nil }
 
 func (p *Profile) SaveName(ctx *via.Ctx) {
 	p.user.Name = ctx.Request().FormValue("name")
 	p.store.save(p.user)
-	sess.Put(ctx, p.user)
+	via.SessPut(ctx, p.user)
 	via.Redirect(ctx, "/profile")
 }
 
@@ -265,7 +264,7 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx, f via.File) {
 	// sniff the bytes and constrain the type before storing/serving it.
 	p.user.Avatar = "data:" + f.ContentType() + ";base64," + base64.StdEncoding.EncodeToString(data)
 	p.store.save(p.user)
-	sess.Put(ctx, p.user)
+	via.SessPut(ctx, p.user)
 	via.Redirect(ctx, "/profile")
 }
 
@@ -301,7 +300,7 @@ type Forum struct {
 func (f *Forum) OnInit(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
 
 func (f *Forum) New(ctx *via.Ctx) {
-	u, _ := sess.Get[User](ctx)
+	u, _ := via.SessGet[User](ctx)
 	f.store.newThread(u.Name, ctx.Request().FormValue("title"))
 	via.Redirect(ctx, "/forum")
 }
@@ -337,7 +336,7 @@ func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *ThreadPage) Send(ctx *via.Ctx) {
-	u, _ := sess.Get[User](ctx)
+	u, _ := via.SessGet[User](ctx)
 	p.store.reply(p.id, u.Name, ctx.Request().FormValue("body"))
 	via.Redirect(ctx, "/thread/"+strconv.Itoa(p.id))
 }
