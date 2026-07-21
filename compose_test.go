@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-via/via"
@@ -9,20 +10,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// listComp exercises the composition primitives: a keyed-ish list via Each, an
-// eager If, and a lazy When. row/lazy are named method values (no closures at
-// the via call site — the guarantee lint must stay green).
+// listComp exercises the composition primitives: a keyed-ish list via Each and
+// a lazy When. row/lazy are named method values (no closures at the via call
+// site — the guarantee lint must stay green). Via copies the root per request,
+// so lazy's call count lives in a package-level atomic, not a struct field.
 type listComp struct {
 	items []string
 	show  bool
 }
 
+var lazyBuildCalls atomic.Int32
+
 func (c *listComp) row(s string) h.H { return h.Li(h.Str(s)) }
-func (c *listComp) lazy() h.H        { return h.Str("lazybuilt") }
+func (c *listComp) lazy() h.H        { lazyBuildCalls.Add(1); return h.Str("lazybuilt") }
 func (c *listComp) View() h.H {
 	return h.Div(
 		h.Ul(via.Each(c.items, c.row)),
-		via.If(c.show, h.Str("shown")),
 		via.When(c.show, c.lazy),
 	)
 }
@@ -35,14 +38,16 @@ func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 	assert.Contains(t, body, "<ul><li>a</li><li>b</li><li>c</li></ul>")
 }
 
-// If/When render their content only when the condition holds.
-func TestIfAndWhen_renderContentOnlyWhenTrue(t *testing.T) {
-	t.Parallel()
+// When renders its content only when the condition holds, and never calls
+// build on the false path (laziness is the contract — a false-path call would
+// evaluate a branch that may only be valid when the condition is true).
+// Sequential, not Parallel: it reads the shared lazyBuildCalls counter.
+func TestWhen_rendersOnlyWhenTrueAndIsLazy(t *testing.T) {
 	_, on := vt.Serve(t, via.Register(listComp{show: true})).Get("/")
-	assert.Contains(t, on, "shown", "If(true) must render its node")
 	assert.Contains(t, on, "lazybuilt", "When(true) must render the built node")
 
-	_, off := vt.Serve(t, via.Register(listComp{show: false})).Get("/")
-	assert.NotContains(t, off, "shown", "If(false) must render nothing")
-	assert.NotContains(t, off, "lazybuilt", "When(false) must render nothing")
+	before := lazyBuildCalls.Load()
+	_, body := vt.Serve(t, via.Register(listComp{show: false})).Get("/")
+	assert.NotContains(t, body, "lazybuilt", "When(false) must render nothing")
+	assert.Equal(t, before, lazyBuildCalls.Load(), "When(false) must not call build")
 }
