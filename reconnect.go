@@ -1,7 +1,7 @@
 package via
 
 // reconnectInit is the client-side reconnect manager injected into every live
-// page as a nonce'd inline script (unless WithoutSSEReconnect). It watches the
+// page as a nonce'd inline script. It watches the
 // global `datastar-fetch` lifecycle events Datastar dispatches for its SSE
 // fetch:
 //
@@ -54,7 +54,7 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`if(t==='retrying'){conn('connecting');show('Reconnecting...')}` +
 	`else if(t==='started'||t==='finished'||t==='datastar-patch-elements'||t==='datastar-patch-signals'){ok()}` +
 	`else if(t==='retries-failed'){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
-	`if(n>=3){show('Connection lost. Please refresh the page.');return}` +
+	`if(n>=2){show('Connection lost. Please refresh the page.');return}` +
 	`show('Connection lost - reconnecting...');try{sessionStorage.setItem(K,n+1)}catch(_){}` +
 	`setTimeout(function(){location.reload()},500+Math.floor(Math.random()*1500))}});` +
 	`addEventListener('load',function(){setTimeout(function(){try{sessionStorage.removeItem(K)}catch(_){}},5000)})})()`

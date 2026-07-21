@@ -107,10 +107,29 @@ func shapeMatches(order []string, in map[string]json.RawMessage) bool {
 	return true
 }
 
-// SignalName allocates the next first-use signal name ("s0","s1",…). A handle
+// binderCtx adapts a Ctx to h.Binder so the binder plumbing (signal slots,
+// action ids) stays off Ctx's public surface — handlers see a lean Ctx, the
+// renderer sees the four binder verbs.
+type binderCtx struct{ c *Ctx }
+
+func (b binderCtx) SignalName() string                    { return b.c.signalName() }
+func (b binderCtx) DeclareSignal(slot string, initial any) { b.c.declareSignal(slot, initial) }
+func (b binderCtx) SignalInit(slot string) (any, bool)    { return b.c.signalInit(slot) }
+func (b binderCtx) ActionSlot(fn func()) string           { return b.c.actionSlot(fn) }
+
+// ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
+// via's own (a bare h render).
+func ctxOf(b h.Binder) *Ctx {
+	if bc, ok := b.(binderCtx); ok {
+		return bc.c
+	}
+	return nil
+}
+
+// signalName allocates the next first-use signal name ("s0","s1",…). A handle
 // calls it once and caches the result, so a signal's identity is the handle,
 // not its render position. h.Binder.
-func (c *Ctx) SignalName() string {
+func (c *Ctx) signalName() string {
 	name := "s" + strconv.Itoa(c.nextSig)
 	c.nextSig++
 	// An embedded island binds in its own Ctx, so two islands would both mint
@@ -122,20 +141,20 @@ func (c *Ctx) SignalName() string {
 	return name
 }
 
-// DeclareSignal records that slot participates in this render with the given
+// declareSignal records that slot participates in this render with the given
 // initial value, for the page-level data-signals declaration. Idempotent within
 // a render: the first declaration fixes the order, later ones (e.g. a Bind and a
 // Display of the same signal) only refresh the value. h.Binder.
-func (c *Ctx) DeclareSignal(slot string, initial any) {
+func (c *Ctx) declareSignal(slot string, initial any) {
 	if _, seen := c.initial[slot]; !seen {
 		c.order = append(c.order, slot)
 	}
 	c.initial[slot] = initial
 }
 
-// SignalInit returns the hydrated raw value for a slot, if the request carried
+// signalInit returns the hydrated raw value for a slot, if the request carried
 // one. The bool reports presence. h.Binder.
-func (c *Ctx) SignalInit(slot string) (any, bool) {
+func (c *Ctx) signalInit(slot string) (any, bool) {
 	if c.inSignals == nil {
 		return nil, false
 	}
@@ -146,9 +165,9 @@ func (c *Ctx) SignalInit(slot string) (any, bool) {
 	return raw, true
 }
 
-// ActionSlot registers a handler and returns its positional id "0","1",….
+// actionSlot registers a handler and returns its positional id "0","1",….
 // h.Binder.
-func (c *Ctx) ActionSlot(fn func()) string {
+func (c *Ctx) actionSlot(fn func()) string {
 	idx := len(c.actions)
 	c.actions = append(c.actions, fn)
 	return strconv.Itoa(idx)
@@ -162,8 +181,8 @@ func (c *Ctx) ActionSlot(fn func()) string {
 // children are the form contents (inputs, button). No '&', no closure.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
 	return h.Dyn(func(r *h.Renderer) {
-		ctx, ok := r.Binder().(*Ctx)
-		if !ok {
+		ctx := ctxOf(r.Binder())
+		if ctx == nil {
 			return
 		}
 		idx := ctx.formSlot(handler)
@@ -249,8 +268,8 @@ func (f uploadedFile) ContentType() string { return f.hdr.Header.Get("Content-Ty
 // closure.
 func OnUpload(handler func(*Ctx, File), children ...h.H) h.H {
 	return h.Dyn(func(r *h.Renderer) {
-		ctx, ok := r.Binder().(*Ctx)
-		if !ok {
+		ctx := ctxOf(r.Binder())
+		if ctx == nil {
 			return
 		}
 		idx := ctx.uploadSlot(handler)
@@ -355,7 +374,7 @@ func OnChange(fn func(*Ctx)) h.Attr { return onEvent("change", fn) }
 func onEvent(event string, fn func(*Ctx)) h.Attr {
 	return h.DynAttr(func(r *h.Renderer) {
 		b := r.Binder()
-		ctx, _ := b.(*Ctx)
+		ctx := ctxOf(b)
 		// The action table stores a func(); it closes over the live ctx so
 		// dispatch runs fn against the request Ctx.
 		idx := b.ActionSlot(func() {
@@ -381,7 +400,7 @@ func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("clic
 func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 	return h.DynAttr(func(r *h.Renderer) {
 		b := r.Binder()
-		ctx, _ := b.(*Ctx)
+		ctx := ctxOf(b)
 		idx := b.ActionSlot(func() {
 			if ctx == nil || ctx.req == nil {
 				return
@@ -477,7 +496,7 @@ func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSign
 	ctx.island = island
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.base = base
-	rr := h.NewRenderer(ctx)
+	rr := h.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
@@ -549,8 +568,7 @@ func Register[T any, PT interface {
 		writeSecurityHeaders(w, nonce)
 		w.Write([]byte("<!doctype html><html><head><meta charset=\"utf-8\">" +
 			"<script type=\"module\" nonce=\"" + nonce + "\" src=\"/_via/datastar.js\"></script>" +
-			themeStyle(cfg.theme, nonce) +
-			reconnectScript(hasLive && !cfg.noReconnect, nonce) +
+			reconnectScript(hasLive, nonce) +
 			bodyOpen))
 		w.Write(body)
 		w.Write([]byte("</body></html>"))
@@ -639,7 +657,7 @@ func Register[T any, PT interface {
 					for _, d := range island.disposers {
 						d()
 					}
-					http.Error(w, "connect failed", http.StatusInternalServerError)
+					connectError(w, err)
 					return
 				}
 				units = append(units, island)
@@ -677,7 +695,7 @@ func Register[T any, PT interface {
 						for _, d := range uctx.disposers {
 							d()
 						}
-						http.Error(w, "connect failed", http.StatusInternalServerError)
+						connectError(w, err)
 						return
 					}
 					units = append(units, uctx)

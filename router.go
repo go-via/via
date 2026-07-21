@@ -16,21 +16,48 @@ import (
 // (the logged-in user, a query value) into its fields for rendering. It is the
 // stateless analogue of OnConnect for live islands, detected by interface
 // assertion — never reflection.
-type Initer interface{ OnInit(*Ctx) }
+type Initer interface{ OnInit(*Ctx) error }
+
+// ErrNotFound is the sentinel an OnInit (or OnConnect) returns when the data
+// the page needs no longer exists — the world changed, the request is honest,
+// so the answer is a 404, not a 500. Wrap it freely; errors.Is matches.
+var ErrNotFound = errors.New("via: not found")
 
 // runOnInit calls v.OnInit with a request-scoped Ctx if v implements Initer.
 // sessW is the open response, so OnInit may also set the session cookie.
-func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string) {
+// A non-nil error has already been answered on w (404 for ErrNotFound, 500
+// otherwise) — the caller must stop, never render.
+func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager, params []string) error {
 	ic, ok := v.(Initer)
 	if !ok {
-		return
+		return nil
 	}
 	ctx := newCtx(nil)
 	ctx.req = req
 	ctx.sessions = sessions
 	ctx.sessW = w
 	ctx.params = params
-	ic.OnInit(ctx)
+	if err := ic.OnInit(ctx); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			log.Printf("via: OnInit failed: %v", err)
+			http.Error(w, "init failed", http.StatusInternalServerError)
+		}
+		return err
+	}
+	return nil
+}
+
+// connectError answers a failed OnConnect: ErrNotFound → 404 (the island's
+// data is gone — an honest miss), anything else → 500 (a server fault, logged).
+func connectError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("via: OnConnect failed: %v", err)
+	http.Error(w, "connect failed", http.StatusInternalServerError)
 }
 
 // Router serves several via pages, each Mounted at its own path, behind one
@@ -45,7 +72,7 @@ type Router struct {
 }
 
 // NewRouter builds an empty router. Mount pages onto it (via.Mount), then serve
-// it. Options (WithTheme, WithSessionKey, …) configure the whole app.
+// it. Options (WithSessionKey, WithTrustedOrigin, …) configure the whole app.
 func NewRouter(opts ...Option) *Router {
 	cfg := newConfig(opts)
 	var sm *sessionManager
@@ -82,7 +109,9 @@ func Mount[T any, PT interface {
 			return
 		}
 		inst := root
-		runOnInit(PT(&inst), w, req, r.sessions, params) // load session/request data into fields first
+		if runOnInit(PT(&inst), w, req, r.sessions, params) != nil { // load session/request data into fields first
+			return
+		}
 		_, body := renderRootBase(PT(&inst), nil, false, true, concreteBase(patternBase, req, names))
 		writeHTMLPage(w, r.cfg, body, pageNonce(req, r.sessions))
 	})
@@ -139,7 +168,9 @@ func uploadAction[T any, PT interface {
 	}
 	defer req.MultipartForm.RemoveAll() // drop any spilled temp files
 	inst := root
-	runOnInit(PT(&inst), w, req, sessions, params)
+	if runOnInit(PT(&inst), w, req, sessions, params) != nil {
+		return
+	}
 	bind, _ := renderRootBase(PT(&inst), nil, false, true, base) // populate the uploads table
 	n, err := strconv.Atoi(req.PathValue("n"))
 	if err != nil || n < 0 || n >= len(bind.uploads) {
@@ -279,7 +310,9 @@ func formAction[T any, PT interface {
 		return
 	}
 	inst := root
-	runOnInit(PT(&inst), w, req, sessions, params)
+	if runOnInit(PT(&inst), w, req, sessions, params) != nil {
+		return
+	}
 	bind, _ := renderRootBase(PT(&inst), nil, false, true, base) // populate the forms table
 	n, err := strconv.Atoi(req.PathValue("n"))
 	if err != nil || n < 0 || n >= len(bind.forms) {
@@ -317,7 +350,7 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string
 	writeSecurityHeaders(w, nonce)
 	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8">` +
 		`<script type="module" nonce="` + nonce + `" src="/_via/datastar.js"></script>` +
-		themeStyle(cfg.theme, nonce) + `</head><body>`))
+		`</head><body>`))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
 }
@@ -357,7 +390,9 @@ func dispatchStateless[T any, PT interface {
 	viewer
 }](w http.ResponseWriter, req *http.Request, root T, cfg *config, sessions *sessionManager, base string, params []string, in map[string]json.RawMessage) {
 	inst := root
-	runOnInit(PT(&inst), w, req, sessions, params) // load session/request data before the action + re-render
+	if runOnInit(PT(&inst), w, req, sessions, params) != nil { // load session/request data before the action + re-render
+		return
+	}
 	bind, before := renderRootBase(PT(&inst), in, false, true, base)
 	if !shapeMatches(bind.order, in) {
 		http.Error(w, "render-shape mismatch", http.StatusGone)

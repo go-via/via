@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -23,10 +24,11 @@ type acct struct{ Name string }
 
 type profilePage struct{ greeting string }
 
-func (p *profilePage) OnInit(ctx *via.Ctx) {
+func (p *profilePage) OnInit(ctx *via.Ctx) error {
 	if a, ok := sess.Get[acct](ctx); ok {
 		p.greeting = "hi " + a.Name
 	}
+	return nil
 }
 func (p *profilePage) SignIn(ctx *via.Ctx) { sess.Put(ctx, acct{Name: "alice"}) }
 func (p *profilePage) View() h.H {
@@ -222,7 +224,7 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 // threadPage reads a positional path param (the {} in /thread/{}) in OnInit.
 type threadPage struct{ id int }
 
-func (p *threadPage) OnInit(ctx *via.Ctx) { p.id = via.Param[int](ctx, 0) }
+func (p *threadPage) OnInit(ctx *via.Ctx) error { p.id = via.Param[int](ctx, 0); return nil }
 func (p *threadPage) View() h.H           { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
 
 // echoPage proves a path param is readable inside an ACTION (not just OnInit) on
@@ -336,11 +338,12 @@ func TestRouter_onUploadCapsBody(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
-// An upload is state-changing, so a cross-site POST fails closed (CSRF), like the
-// action and form endpoints.
+// An upload is state-changing, so under origin enforcement (WithTrustedOrigin
+// set) a cross-site POST fails closed (CSRF), like the action and form
+// endpoints.
 func TestRouter_onUploadRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter()
+	r := via.NewRouter(via.WithTrustedOrigin("https://embedder.example"))
 	via.Mount(r, "/p", avatarPage{cap: &capture{}})
 	srv := serve(t, r)
 
@@ -498,11 +501,12 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 		"the sign-in session cookie must ride the 303 so the redirect lands authenticated")
 }
 
-// A form POST is state-changing, so it must fail closed to a cross-site origin
-// (CSRF), exactly like the action endpoint.
+// A form POST is state-changing, so under origin enforcement (WithTrustedOrigin
+// set) it must fail closed to a cross-site origin (CSRF), exactly like the
+// action endpoint.
 func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter()
+	r := via.NewRouter(via.WithTrustedOrigin("https://embedder.example"))
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -603,4 +607,48 @@ func TestRouter_mountedActionElementPatches(t *testing.T) {
 	resp, body := do(t, srv, http.MethodPost, "/a/_via/a/1", "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, `<h1>1</h1>`, "mounted action must element-patch the new value")
+}
+
+// failInitPage's OnInit fails: with via.ErrNotFound for /missing (a
+// world-changed miss → 404) and a plain error otherwise (a server fault → 500).
+type failInitPage struct{ kind string }
+
+func (p *failInitPage) OnInit(ctx *via.Ctx) error {
+	if p.kind == "missing" {
+		return via.ErrNotFound
+	}
+	return errors.New("db down")
+}
+func (p *failInitPage) View() h.H { return h.P(h.Str("never")) }
+
+// OnInit returning via.ErrNotFound must answer 404 and never render the View —
+// the page's data is gone, and pretending otherwise would paint a lie. Fails if
+// the sentinel stops mapping to 404 or the render proceeds past a failed init.
+func TestRouter_onInitErrNotFoundIs404(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/x", failInitPage{kind: "missing"})
+	resp, body := do(t, serve(t, r), http.MethodGet, "/x", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.NotContains(t, body, "never", "a failed OnInit must not render the View")
+}
+
+// Any other OnInit error is the app's fault → 500, View never renders.
+func TestRouter_onInitErrorIs500(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/x", failInitPage{kind: "boom"})
+	resp, body := do(t, serve(t, r), http.MethodGet, "/x", "")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.NotContains(t, body, "never")
+}
+
+// The same contract holds on the action path: a failed OnInit blocks the
+// action from running at all.
+func TestRouter_onInitErrorBlocksAction(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/x", failInitPage{kind: "missing"})
+	resp, _ := do(t, serve(t, r), http.MethodPost, "/x/_via/a/0", "{}")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
