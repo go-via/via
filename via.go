@@ -243,8 +243,8 @@ type Guard func(*Ctx) (redirect string, ok bool)
 
 // RequireSession guards a mount: if the session has no value of type T (i.e. the
 // user is not signed in), the request is redirected to loginPath. T is the same
-// type used with sess.Put/Get, keyed identically (a typed-nil pointer), so
-// RequireSession[User]("/login") gates on a sess.Put(ctx, user) elsewhere.
+// type used with SessPut/SessGet, keyed identically (a typed-nil pointer), so
+// RequireSession[User]("/login") gates on a SessPut(ctx, user) elsewhere.
 func RequireSession[T any](loginPath string) Guard {
 	return func(ctx *Ctx) (string, bool) {
 		if _, ok := ctx.Session().load((*T)(nil)); ok {

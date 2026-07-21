@@ -1,4 +1,4 @@
-package sess_test
+package via_test
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/sess"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,14 +28,14 @@ type member struct{ Name string }
 // action and let the re-render surface it.
 type loginComp struct{ greeting string }
 
-func (c *loginComp) SignIn(ctx *via.Ctx) { sess.Put(ctx, member{Name: "alice"}) }
+func (c *loginComp) SignIn(ctx *via.Ctx) { via.SessPut(ctx, member{Name: "alice"}) }
 func (c *loginComp) Greet(ctx *via.Ctx) {
-	if m, ok := sess.Get[member](ctx); ok {
+	if m, ok := via.SessGet[member](ctx); ok {
 		c.greeting = "hi " + m.Name
 	}
 }
-func (c *loginComp) SignOut(ctx *via.Ctx) { sess.Clear[member](ctx) }
-func (c *loginComp) Refresh(ctx *via.Ctx) { sess.Rotate(ctx) }
+func (c *loginComp) SignOut(ctx *via.Ctx) { via.SessClear[member](ctx) }
+func (c *loginComp) Refresh(ctx *via.Ctx) { via.SessRotate(ctx) }
 func (c *loginComp) View() h.H {
 	return h.Div(
 		h.P(h.Str(c.greeting)),
@@ -54,12 +53,12 @@ type tally struct{ N int }
 type counterComp struct{ shown int }
 
 func (c *counterComp) Bump(ctx *via.Ctx) {
-	t, _ := sess.Get[tally](ctx)
+	t, _ := via.SessGet[tally](ctx)
 	t.N++
-	sess.Put(ctx, t)
+	via.SessPut(ctx, t)
 }
 func (c *counterComp) Show(ctx *via.Ctx) {
-	t, _ := sess.Get[tally](ctx)
+	t, _ := via.SessGet[tally](ctx)
 	c.shown = t.N
 }
 func (c *counterComp) View() h.H {
@@ -360,7 +359,7 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 // there (a live action runs after its 204 and can't set a cookie).
 type liveSess struct{}
 
-func (c *liveSess) OnConnect(ctx *via.Ctx) error { sess.Put(ctx, member{Name: "bob"}); return nil }
+func (c *liveSess) OnConnect(ctx *via.Ctx) error { via.SessPut(ctx, member{Name: "bob"}); return nil }
 func (c *liveSess) View() h.H                    { return h.Div(h.Str("live")) }
 
 // A live app's OnConnect must be able to establish the session: the cookie is
@@ -385,7 +384,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 		names = append(names, ck.Name)
 	}
 	assert.Contains(t, names, "via_session",
-		"OnConnect's sess.Put did not establish the session cookie on the SSE connect")
+		"OnConnect's via.SessPut did not establish the session cookie on the SSE connect")
 }
 
 // tamperID swaps the first character of the cookie's id part, leaving the
@@ -443,7 +442,7 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 }
 
 // Sessions are always available: a plain app (no session option) stays
-// cookieless until the first sess.Put, and from that write on the value
+// cookieless until the first via.SessPut, and from that write on the value
 // resolves — no opt-in ceremony, the cookie is the lazy consequence of the
 // first write. Fails if sessions go back behind an option gate, or if a page
 // view starts minting cookies eagerly.

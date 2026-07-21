@@ -124,10 +124,10 @@ examples, the whole live stack verified in real headless browsers
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `via.Subscribe` / `ctx.OnDispose` — one publish
   fans out to every connected island.
-- **Sessions** (`via/sess`, always available): `sess.Put[T]`/`Get[T]`/`Clear[T]`
+- **Sessions** (always available): `via.SessPut[T]`/`SessGet[T]`/`SessClear[T]`
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
-  write — apps that never store anything stay cookieless. `sess.Rotate` for
+  write — apps that never store anything stay cookieless. `via.SessRotate` for
   fixation defense, idle TTL eviction. The signing key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
   first use — set a stable key so sessions survive restarts and span pods).

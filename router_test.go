@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/sess"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,12 +24,12 @@ type acct struct{ Name string }
 type profilePage struct{ greeting string }
 
 func (p *profilePage) OnInit(ctx *via.Ctx) error {
-	if a, ok := sess.Get[acct](ctx); ok {
+	if a, ok := via.SessGet[acct](ctx); ok {
 		p.greeting = "hi " + a.Name
 	}
 	return nil
 }
-func (p *profilePage) SignIn(ctx *via.Ctx) { sess.Put(ctx, acct{Name: "alice"}) }
+func (p *profilePage) SignIn(ctx *via.Ctx) { via.SessPut(ctx, acct{Name: "alice"}) }
 func (p *profilePage) View() h.H {
 	return h.Div(h.P(h.Str(p.greeting)), h.Button(via.OnClick(p.SignIn), h.Str("in")))
 }
@@ -460,7 +459,7 @@ type loginForm struct{}
 
 func (l *loginForm) Submit(ctx *via.Ctx) {
 	if name := ctx.Request().FormValue("name"); name != "" {
-		sess.Put(ctx, acct{Name: name})
+		via.SessPut(ctx, acct{Name: name})
 		via.Redirect(ctx, "/welcome")
 	}
 }
