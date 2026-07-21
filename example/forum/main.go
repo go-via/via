@@ -243,7 +243,7 @@ type Profile struct {
 	user  User // loaded per request in OnInit
 }
 
-func (p *Profile) OnInit(ctx *via.Ctx) { p.user, _ = sess.Get[User](ctx) }
+func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = sess.Get[User](ctx); return nil }
 
 func (p *Profile) SaveName(ctx *via.Ctx) {
 	p.user.Name = ctx.Request().FormValue("name")
@@ -298,7 +298,7 @@ type Forum struct {
 	threads []Thread
 }
 
-func (f *Forum) OnInit(ctx *via.Ctx) { f.threads = f.store.allThreads() }
+func (f *Forum) OnInit(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
 
 func (f *Forum) New(ctx *via.Ctx) {
 	u, _ := sess.Get[User](ctx)
@@ -330,9 +330,10 @@ type ThreadPage struct {
 	posts []Post
 }
 
-func (p *ThreadPage) OnInit(ctx *via.Ctx) {
+func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
 	p.id = via.Param[int](ctx, 0)
 	p.title, p.posts = p.store.thread(p.id)
+	return nil
 }
 
 func (p *ThreadPage) Send(ctx *via.Ctx) {

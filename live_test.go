@@ -524,6 +524,20 @@ func TestLive_disposersRunWhenOnConnectFails(t *testing.T) {
 	}
 }
 
+// notFoundConnect's OnConnect returns via.ErrNotFound — the live analogue of a
+// page whose data vanished. The connect must answer 404, not 500: the world
+// changed, the request is honest. Fails if the sentinel stops mapping to 404.
+type notFoundConnect struct{}
+
+func (f *notFoundConnect) OnConnect(ctx *via.Ctx) error { return via.ErrNotFound }
+func (f *notFoundConnect) View() h.H                    { return h.Div(h.Str("x")) }
+
+func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
+	t.Parallel()
+	resp, _ := do(t, serve(t, via.Register(notFoundConnect{})), http.MethodPost, "/_via/sse", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
 // On disconnect the island's OnDispose must run, so subscriptions and producers
 // are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {

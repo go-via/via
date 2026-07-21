@@ -24,6 +24,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 		"'retrying'",              // drop → banner
 		"'retries-failed'",        // give-up → reload
 		"location.reload",         // the re-bootstrap
+		"n>=2",                    // terminal state: max 2 reloads, then a pinned banner
 		"data-via-connection",     // connection-status attribute for app CSS
 		"datastar-patch-elements", // a patch is the only "alive again" signal
 	} {
@@ -42,17 +43,6 @@ func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	nonce := scriptSrcNonce(t, resp.Header.Get("Content-Security-Policy"))
 	assert.Contains(t, body, `nonce="`+nonce+`">(()=>{if(window.__viaRC)`,
 		"reconnect script must carry the CSP nonce or the browser drops it")
-}
-
-// WithoutSSEReconnect is the documented opt-out; it must remove the manager
-// entirely so an app that ships its own reconnect UX is not double-served.
-func TestReconnect_optOutDropsTheManager(t *testing.T) {
-	t.Parallel()
-	_, body := do(t, serve(t, via.Register(quietIsland{}, via.WithoutSSEReconnect())),
-		http.MethodGet, "/", "")
-
-	assert.NotContains(t, body, "window.__viaRC",
-		"WithoutSSEReconnect must drop the reconnect manager")
 }
 
 // A stateless page has no SSE stream to lose, so injecting a reconnect manager

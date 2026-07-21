@@ -321,7 +321,7 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 type sessMarker struct{ Ok bool }
 type redirectViaScript struct{}
 
-func (p *redirectViaScript) OnInit(ctx *via.Ctx) { sess.Put(ctx, sessMarker{Ok: true}) }
+func (p *redirectViaScript) OnInit(ctx *via.Ctx) error { sess.Put(ctx, sessMarker{Ok: true}); return nil }
 func (p *redirectViaScript) Go(ctx *via.Ctx)     { via.Redirect(ctx, "/done") }
 func (p *redirectViaScript) View() h.H {
 	return h.Div(h.Button(via.OnClick(p.Go), h.Str("go")))

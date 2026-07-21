@@ -148,9 +148,10 @@ examples, the whole live stack verified in real headless browsers
 
 - **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
   `via.Mount(r, "/path", Page{}, guards...)` serves a whole app behind one
-  handler, each page's actions namespaced under its mount. `OnInit(*Ctx)` is the
-  per-request hook that loads session/path data into a stateless page before its
-  ctx-free `View`. `via.PostForm(handler, …)` renders a **native** form whose
+  handler, each page's actions namespaced under its mount. `OnInit(*Ctx) error`
+  is the per-request hook that loads session/path data into a stateless page
+  before its ctx-free `View` — return `via.ErrNotFound` for a vanished record
+  (404); any other error answers 500, and the View never renders a lie. `via.PostForm(handler, …)` renders a **native** form whose
   submit runs server-side and `via.Redirect(ctx, "/…")` issues a 303 — the
   server-rendered auth flow the bundled Datastar (no script execution) can't do.
   `via.Param[int](ctx, 0)` reads the positional `{}` segment of `"/thread/{}"`;
