@@ -119,11 +119,11 @@ func (c *bCounter) View() h.H {
 }
 
 type bDash struct {
-	Clock   via.Child[bClock]
-	Counter via.Child[bCounter]
+	Clock   bClock
+	Counter bCounter
 }
 
-func (d *bDash) View() h.H { return h.Div(d.Clock.Embed(), d.Counter.Embed()) }
+func (d *bDash) View() h.H { return h.Div(via.Embed(d.Clock), via.Embed(d.Counter)) }
 
 // Two live islands on one page must update INDEPENDENTLY in a real browser: the
 // clock's server-push morphs only #via-i0, and a click on the counter routes
