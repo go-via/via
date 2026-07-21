@@ -23,7 +23,7 @@ type beater struct {
 }
 
 func (b *beater) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, b.tick); return nil }
-func (b *beater) tick(ctx *via.Ctx)            { b.n.Set(b.n.Get()+1) }
+func (b *beater) tick(ctx *via.Ctx)            { b.n.Set(b.n.Get() + 1) }
 func (b *beater) View() h.H {
 	return h.Div(h.P(h.Str(b.label+"="), b.n.Display()))
 }
@@ -120,7 +120,7 @@ type liveNamer struct {
 }
 
 func (n *liveNamer) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, n.tick); return nil }
-func (n *liveNamer) tick(ctx *via.Ctx)            { n.beats.Set(n.beats.Get()+1) }
+func (n *liveNamer) tick(ctx *via.Ctx)            { n.beats.Set(n.beats.Get() + 1) }
 func (n *liveNamer) View() h.H {
 	return h.Div(n.draft.Bind(), h.P(h.Str("beats="), n.beats.Display()))
 }
@@ -191,7 +191,7 @@ func TestEmbed_newIslandSeedsTheChild(t *testing.T) {
 type liveClicker struct{ n via.State[int] }
 
 func (c *liveClicker) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *liveClicker) Bump(ctx *via.Ctx)            { c.n.Set(c.n.Get()+1) }
+func (c *liveClicker) Bump(ctx *via.Ctx)            { c.n.Set(c.n.Get() + 1) }
 func (c *liveClicker) View() h.H {
 	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
 }

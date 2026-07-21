@@ -50,7 +50,7 @@ type Ctx struct {
 	island    bool                       // true while rendering a live island
 	dirty     map[string]any             // signals an action Set this pass (→ signal-patch)
 	req       *http.Request              // the request that triggered this handler (nil during a pure render)
-	sessions  *sessionManager            // per-Register session manager, nil when sessions are disabled
+	sessions  *sessionManager            // per-Register session manager (always constructed; cookie is lazy)
 	sessW     http.ResponseWriter        // response writer for issuing the session cookie; nil in a live action
 	session   *Session                   // resolved session handle, cached per Ctx
 	islands   []*Ctx                     // embedded child islands, in positional order (parent binder only)
@@ -112,10 +112,10 @@ func shapeMatches(order []string, in map[string]json.RawMessage) bool {
 // renderer sees the four binder verbs.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) SignalName() string                    { return b.c.signalName() }
+func (b binderCtx) SignalName() string                     { return b.c.signalName() }
 func (b binderCtx) DeclareSignal(slot string, initial any) { b.c.declareSignal(slot, initial) }
-func (b binderCtx) SignalInit(slot string) (any, bool)    { return b.c.signalInit(slot) }
-func (b binderCtx) ActionSlot(fn func()) string           { return b.c.actionSlot(fn) }
+func (b binderCtx) SignalInit(slot string) (any, bool)     { return b.c.signalInit(slot) }
+func (b binderCtx) ActionSlot(fn func()) string            { return b.c.actionSlot(fn) }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
 // via's own (a bare h render).
@@ -526,10 +526,7 @@ func Register[T any, PT interface {
 		maxLive = defaultMaxSSEConn
 	}
 	var liveCount atomic.Int64 // concurrent live SSE streams, capped at maxLive
-	var sessions *sessionManager
-	if cfg.sessions {
-		sessions = newSessionManager(cfg)
-	}
+	sessions := newSessionManager(cfg)
 	mux := http.NewServeMux()
 
 	// A composition that implements OnConnect is itself a live island (the legacy

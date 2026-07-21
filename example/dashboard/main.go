@@ -28,7 +28,7 @@ func (g *Greeting) View() h.H {
 type Clock struct{ secs via.State[int] }
 
 func (c *Clock) OnConnect(ctx *via.Ctx) error { ctx.Tick(time.Second, c.beat); return nil }
-func (c *Clock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get()+1) }
+func (c *Clock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get() + 1) }
 func (c *Clock) View() h.H {
 	return h.Div(h.H2(h.Str("uptime")), h.P(c.secs.Display(), h.Str("s")))
 }
@@ -39,7 +39,7 @@ func (c *Clock) View() h.H {
 type Counter struct{ n via.State[int] }
 
 func (c *Counter) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *Counter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get()+1) }
+func (c *Counter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
 func (c *Counter) View() h.H {
 	return h.Div(
 		h.H2(h.Str("clicks")),
