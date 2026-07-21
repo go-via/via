@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/sess"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vtbrowser"
 )
@@ -32,14 +31,14 @@ func (p *liveTicker) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(80*time.Millisecond, p.tick)
 	return nil
 }
-func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get()+1) }
+func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Display())) }
 
 // clicker is a live island whose action mutates its own State — the vehicle for
 // testing Click and the $_viatab → X-Via-Tab round-trip.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get()+1) }
+func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
@@ -107,13 +106,13 @@ func (c *chat) View() h.H {
 type bClock struct{ secs via.State[int] }
 
 func (c *bClock) OnConnect(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
-func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get()+1) }
+func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get() + 1) }
 func (c *bClock) View() h.H                    { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
 
 type bCounter struct{ n via.State[int] }
 
 func (c *bCounter) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get()+1) }
+func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
 func (c *bCounter) View() h.H {
 	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.OnClick(c.Inc), h.Str("+")))
 }
@@ -314,59 +313,52 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
-// redirectViaScript is a stateless page whose @post action calls via.Redirect.
-// With sessions on, the document's CSP nonce is session-scoped, so the action's
-// text/javascript location.assign() can carry a nonce the document admits.
-// OnInit establishes the session so a reload renders against the session nonce.
-type sessMarker struct{ Ok bool }
+// redirectViaScript is a stateless page whose @post actions call via.Redirect.
+// The document's CSP nonce is the boot nonce — HMAC of the signing key — so the
+// action's text/javascript location.assign() is admitted on the very first
+// load: no session, no cookie, no reload.
 type redirectViaScript struct{}
 
-func (p *redirectViaScript) OnInit(ctx *via.Ctx) error { sess.Put(ctx, sessMarker{Ok: true}); return nil }
-func (p *redirectViaScript) Go(ctx *via.Ctx)     { via.Redirect(ctx, "/done") }
+func (p *redirectViaScript) Go(ctx *via.Ctx)   { via.Redirect(ctx, "/done") }
+func (p *redirectViaScript) Evil(ctx *via.Ctx) { via.Redirect(ctx, "javascript:alert(1)") }
 func (p *redirectViaScript) View() h.H {
-	return h.Div(h.Button(via.OnClick(p.Go), h.Str("go")))
+	return h.Div(
+		h.Button(h.RawAttr("id", "go"), via.OnClick(p.Go), h.Str("go")),
+		h.Button(h.RawAttr("id", "evil"), via.OnClick(p.Evil), h.Str("evil")),
+	)
 }
 
 // A via.Redirect from a Datastar @post action must ACTUALLY navigate the browser
 // under the strict nonce'd CSP — the payoff no httptest can see. The action
 // ships location.assign("/done") as a text/javascript script stamped with the
-// session CSP nonce; the browser executes it only if that nonce matches the
-// document's. The first load creates the session (cookie); the reload renders
-// the document with the session-scoped nonce; the click must then navigate.
+// boot CSP nonce, which every document this app serves already carries — so the
+// very first load's click must navigate.
 func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	s := vtbrowser.Open(t, app) // load 1: OnInit creates the session, sets the cookie
-	s.Reload()                  // load 2: document now uses the session-scoped CSP nonce
-	s.Click("button")           // @post → location.assign("/done") under the matching nonce
+	s := vtbrowser.Open(t, app)
+	s.Click("#go") // @post → location.assign("/done") under the matching boot nonce
 	s.WaitEvalTrue(`location.pathname === "/done"`,
 		"the @post redirect script executed and navigated the browser to /done")
 	s.RequireCleanConsole() // a CSP-refused script would surface as a console error
 }
 
-// Negative control proving the nonce match is load-bearing and the strict CSP
-// genuinely gates execution. WITHOUT the reload the document carries a per-render
-// nonce, so the action's session-nonce'd script does NOT match. The browser
-// still INSERTS the <script> (CSP blocks execution, not insertion) but refuses to
-// RUN it — so the redirect script is present in <head> yet the page never
-// navigates. (Chromium reports the CSP refusal via the Log domain, not the
-// console API the harness observes, so we assert on the DOM + URL, not console.)
-func TestPostActionRedirect_blockedWhenNonceDoesNotMatch(t *testing.T) {
+// Negative control: an unsafe Redirect target (javascript:) is dropped
+// server-side by the h.SafeURL gate — no script is shipped at all, so the page
+// never navigates and the payload never reaches the document.
+func TestPostActionRedirect_unsafeTargetIsDropped(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	s := vtbrowser.Open(t, app) // load 1 only: per-render document nonce; session created but NOT reloaded
-	s.Click("button")           // @post ships a script stamped with the (different) session nonce
+	s := vtbrowser.Open(t, app)
+	s.Click("#evil") // @post whose Redirect target fails h.SafeURL
 	s.Sleep(700 * time.Millisecond)
 
-	// The script WAS shipped (inserted into <head>) — distinguishing a CSP block
-	// from "no script sent at all".
 	var inserted bool
 	s.Eval(`[...document.querySelectorAll('head script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
-	if !inserted {
-		t.Fatal("expected the redirect <script> to be inserted into <head> (shipped by the @post)")
+	if inserted {
+		t.Fatal("an unsafe redirect target must be dropped server-side — no script may ship")
 	}
-	// …but it must NOT have executed: the mismatched nonce means no navigation.
 	var path string
 	s.Eval(`location.pathname`, &path)
 	if path != "/" {
-		t.Fatalf("expected the CSP to block the mismatched-nonce script (no navigation), but went to %q", path)
+		t.Fatalf("expected no navigation for a dropped unsafe redirect, but went to %q", path)
 	}
 }
