@@ -113,3 +113,41 @@ func TestEmbed_allowsNestedPlainChild(t *testing.T) {
 	assert.Contains(t, body, "HOST", "the island renders")
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
+
+// livePage is a LIVE root (implements OnConnect) whose View embeds a LIVE
+// island — the other unsupported combination: a live root takes the legacy
+// whole-page stream, so the embedded island would never be wired.
+type livePage struct{ Inner beater }
+
+func (p *livePage) View() h.H                { return h.Div(via.Embed(p.Inner)) }
+func (p *livePage) OnConnect(*via.Ctx) error { return nil }
+
+// A live page embedding a live island panics at the first render: the legacy
+// whole-page stream never discovers embedded islands, and its pushes would
+// clobber the child's container. Fails if the guard is dropped or its message
+// drifts.
+func TestEmbed_panicsOnLiveIslandInLivePage(t *testing.T) {
+	t.Parallel()
+	handler := via.Register(livePage{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	require.PanicsWithValue(t,
+		"via: a live page cannot embed live islands — drop the page's OnConnect and let the islands stream, or fold the live child into the page itself",
+		func() { handler.ServeHTTP(httptest.NewRecorder(), req) },
+	)
+}
+
+// The guard is about LIVE children only: a live page may still embed a plain
+// (stateless) child — the whole-page push re-renders it in place, which is its
+// normal semantics. Fails if the guard over-reaches to all embeds.
+type livePlainPage struct{ Inner banner }
+
+func (p *livePlainPage) View() h.H                { return h.Div(h.H1(h.Str("LIVEPAGE")), via.Embed(p.Inner)) }
+func (p *livePlainPage) OnConnect(*via.Ctx) error { return nil }
+
+func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Register(livePlainPage{})), http.MethodGet, "/", "")
+
+	assert.Contains(t, body, "LIVEPAGE", "the live page renders")
+	assert.Contains(t, body, "BANNER", "the plain child renders in place")
+}

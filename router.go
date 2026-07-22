@@ -150,6 +150,13 @@ func Mount[T any, PT interface {
 			return
 		}
 		ctx, body := renderRootBase(PT(&inst), nil, rootLive, true, concreteBase(patternBase, req, names))
+		// A live root takes the legacy whole-page stream: no island discovery
+		// runs, so a live child embedded under it would render once and never
+		// stream — and its whole-page pushes would clobber the child's container
+		// anyway. Refuse the combination loudly instead of serving a dead region.
+		if rootLive && anyLiveIsland(ctx) {
+			panic("via: a live page cannot embed live islands — drop the page's OnConnect and let the islands stream, or fold the live child into the page itself")
+		}
 		hasLive := rootLive || anyLiveIsland(ctx)
 		writeHTMLPage(w, r.cfg, body, pageNonce(r.sessions), hasLive, patternBase+"/_via/sse")
 	})
