@@ -53,8 +53,10 @@ func renderIslandPatch(idx int, v viewer) []byte {
 // via.Embed(s.Body) composes one layout with any page. An optional region is
 // via.When, not an empty child.
 //
-// It panics if the child has no View() method — a wrote-it-wrong error, loud at
-// the first render, never a silent blank region.
+// It panics if the child has no View() method, and if a live child is embedded
+// inside another island — islands are discovered flat, so a nested live island
+// would render once and never stream. Both are wrote-it-wrong errors, loud at
+// the first render, never a silent blank or dead region.
 func Embed[C any](child C) h.H {
 	v, isView := any(&child).(viewer)
 	if !isView {
@@ -74,6 +76,14 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	if parent == nil {
 		return
 	}
+	_, live := v.(Live)
+	// Islands are discovered flat (the connect walk never descends into an
+	// island's own embeds), so a live child nested inside another island would
+	// get no stream wiring — no ticks, no pushes, orphaned signals. Refuse it
+	// loudly instead of rendering a dead region.
+	if live && parent.isIsland {
+		panic("via: nested live islands are unsupported — embed the live child in the page's View, not inside another island")
+	}
 	idx := len(parent.islands)
 	child := newCtx(parent.inSignals)
 	child.isIsland = true
@@ -81,7 +91,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	child.islandV = v
 	// A live island's View reads server State[T], which is gated on the
 	// live-island flag — set it so the child renders inside its own island.
-	_, child.island = v.(Live)
+	child.island = live
 	parent.islands = append(parent.islands, child)
 
 	// Render first so the child's signal slots (order/initial) are populated,

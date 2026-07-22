@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -68,4 +69,47 @@ func TestEmbed_panicsWithoutView(t *testing.T) {
 		"via: via.Embed(child) requires child to have a View() method",
 		func() { via.Embed(struct{ X int }{}) },
 	)
+}
+
+// nestHost is an island (itself embedded by a page) whose View tries to embed
+// a LIVE child — the unsupported nesting the guard must refuse.
+type nestHost struct{ Inner beater }
+
+func (n *nestHost) View() h.H { return h.Div(via.Embed(n.Inner)) }
+
+type nestPage struct{ Host nestHost }
+
+func (p *nestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
+
+// A live island embedded inside another island panics at the first render.
+// Island discovery is flat: a nested live child would get no stream wiring —
+// no ticks, no pushes, orphaned signals — so via refuses it loudly instead of
+// rendering a dead region. Fails if the guard is dropped or its message drifts.
+func TestEmbed_panicsOnNestedLiveIsland(t *testing.T) {
+	t.Parallel()
+	handler := via.Register(nestPage{})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	require.PanicsWithValue(t,
+		"via: nested live islands are unsupported — embed the live child in the page's View, not inside another island",
+		func() { handler.ServeHTTP(httptest.NewRecorder(), req) },
+	)
+}
+
+// The guard is about LIVE children only: a plain (stateless) child embedded
+// inside an island still renders in place. Fails if the guard over-reaches to
+// all nesting.
+type plainNestHost struct{ Inner banner }
+
+func (n *plainNestHost) View() h.H { return h.Div(h.H2(h.Str("HOST")), via.Embed(n.Inner)) }
+
+type plainNestPage struct{ Host plainNestHost }
+
+func (p *plainNestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
+
+func TestEmbed_allowsNestedPlainChild(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Register(plainNestPage{})), http.MethodGet, "/", "")
+
+	assert.Contains(t, body, "HOST", "the island renders")
+	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
