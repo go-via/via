@@ -102,7 +102,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(&buf, child.order, child.initial)
+		writeSignalsAttr(&buf, child.order, child.initial, parent.declareOnly)
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)

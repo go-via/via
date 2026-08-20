@@ -453,7 +453,7 @@ func dispatchStateless[T any, PT interface {
 	if runOnInit(PT(&inst), w, req, sessions, params) != nil { // load session/request data before the action + re-render
 		return
 	}
-	bind, before := renderRootBase(PT(&inst), in, false, true, base)
+	bind, before := renderRootPatch(PT(&inst), in, base, nil)
 	if !shapeMatches(bind.order, in) {
 		http.Error(w, "render-shape mismatch", http.StatusGone)
 		return
@@ -476,7 +476,7 @@ func dispatchStateless[T any, PT interface {
 	if writeRedirectScript(w, sessions, bind.redirect) {
 		return
 	}
-	_, after := renderRootBase(PT(&inst), nil, false, true, base)
+	_, after := renderRootPatch(PT(&inst), nil, base, bind.dirtyAll())
 	if bytes.Equal(before, after) {
 		w.WriteHeader(http.StatusNoContent)
 		return
