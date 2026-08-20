@@ -147,7 +147,7 @@ func TestMux_liveIslandSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	assert.NotContains(t, line, "data-signals", "a live push must not re-declare island signals")
 }
 
-// A Local[T] inside an island keeps its leading-underscore (client-only) marker
+// A SignalClientOnly[T] inside an island keeps its leading-underscore (client-only) marker
 // in front of the island prefix — `_i0_s0` — so Datastar still never POSTs it.
 func TestEmbed_localSignalInIslandStaysClientOnly(t *testing.T) {
 	t.Parallel()
@@ -157,7 +157,7 @@ func TestEmbed_localSignalInIslandStaysClientOnly(t *testing.T) {
 }
 
 // togglePage embeds an island whose only signal is a client-only Local.
-type toggleIsland struct{ open via.Local[bool] }
+type toggleIsland struct{ open via.SignalClientOnly[bool] }
 
 func (i *toggleIsland) View() h.H { return h.Div(i.open.Bind()) }
 

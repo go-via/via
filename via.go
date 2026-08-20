@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"runtime/debug"
 	"strconv"
+	"strings"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
@@ -95,15 +96,20 @@ func newCtx(in map[string]json.RawMessage) *Ctx {
 // reproduces the same slot set the GET page declared; any divergence means the
 // View branched on a value and the action/slot indices no longer line up.
 func shapeMatches(order []string, in map[string]json.RawMessage) bool {
-	if len(order) != len(in) {
-		return false
-	}
+	want := 0
 	for _, slot := range order {
+		// A client-only slot is underscore-prefixed and Datastar never POSTs it,
+		// so its absence from the body is correct, not a shape change. Counting
+		// it would 410 every action on any View holding a SignalClientOnly.
+		if strings.HasPrefix(slot, "_") {
+			continue
+		}
+		want++
 		if _, ok := in[slot]; !ok {
 			return false
 		}
 	}
-	return true
+	return want == len(in)
 }
 
 // binderCtx adapts a Ctx to hcore.Binder so the binder plumbing (signal slots,

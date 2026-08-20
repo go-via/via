@@ -108,7 +108,7 @@ examples, the whole live stack verified in real headless browsers
   when the render changed, `204` when it didn't.
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
-  greeting updates live as you type, entirely client-side. `Local[T]` is a
+  greeting updates live as you type, entirely client-side. `SignalClientOnly[T]` is a
   client-only signal (never round-trips); `When`/`Each` render conditionals
   and lists.
 - **Live islands + `State[T]`** (`example/pulse`): implement `OnConnect` and a

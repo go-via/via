@@ -147,7 +147,7 @@ func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 }
 
 // localComp renders a client-only Local signal.
-type localComp struct{ note via.Local[string] }
+type localComp struct{ note via.SignalClientOnly[string] }
 
 func (c *localComp) View() h.H {
 	return h.Div(h.Input(c.note.Bind()), c.note.Display())
@@ -191,4 +191,61 @@ func TestSignal_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
 		"exactly one warning per unrendered signal")
 	assert.Equal(t, 2, s.Get(), "the value still updates server memory")
+}
+
+// searchBox pins the one direction a client-only signal moves under server
+// control: the client owns Query and never POSTs it back, but an action can
+// still write it. Fill must change the value to something different from the
+// zero it started at — an action that leaves the render identical is a correct
+// 204, and would prove nothing about Set.
+type searchBox struct{ Query via.SignalClientOnly[string] }
+
+func (s *searchBox) Fill(ctx *via.Ctx)  { s.Query.Set("ada") }
+func (s *searchBox) Clear(ctx *via.Ctx) { s.Query.Set("") }
+func (s *searchBox) View() h.H {
+	return h.Div(
+		h.Input(s.Query.Bind()),
+		h.Button(via.OnClick(s.Fill), h.Str("fill")),
+		h.Button(via.OnClick(s.Clear), h.Str("clear")),
+	)
+}
+
+// Two things must hold at once for a client-only signal to be useful. Its slot
+// is underscore-prefixed, so Datastar never POSTs it — which means the action
+// body arrives WITHOUT that slot, and the render-shape guard must not read the
+// absence as a mismatch and 410 (it did, for every action on any View holding
+// one, until shapeMatches learned to skip underscore slots). And a server-side
+// Set must still reach the browser: on a stateless page it rides the re-render's
+// data-signals rather than a patch-signals frame.
+func TestSignalClientOnly_serverSetReachesTheClientSignal(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(searchBox{}))
+
+	_, page := app.Get("/")
+	slot := attrValue(t, page, "data-bind")
+	assert.True(t, strings.HasPrefix(slot, "_"),
+		"a client-only slot must be underscore-prefixed so Datastar never POSTs it, got %q", slot)
+
+	status, frag := app.Action(0).Fire() // Fill → "ada"
+	assert.Equal(t, http.StatusOK, status,
+		"the action must not 410: an absent underscore slot is not a shape mismatch")
+	assert.Contains(t, frag, `"`+slot+`":"ada"`,
+		"the new value must reach the client under the slot the page declared")
+}
+
+// Set before any render has bound the signal has no slot to patch, so it cannot
+// reach the client. That silence must be loud exactly once — mirroring
+// Signal.Set — and it must never panic on the unstamped binding. Sequential: it
+// captures the global log output.
+func TestSignalClientOnly_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	var l via.SignalClientOnly[int]
+	l.Set(1)
+	l.Set(2)
+	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
+		"exactly one warning per unrendered client-only signal")
 }

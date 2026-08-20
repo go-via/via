@@ -41,13 +41,6 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 // (e.g. sub.Stop). Valid only inside OnConnect.
 func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 
-// Subscribe drives a live island from an external channel: each value runs
-// handler on the island's single goroutine (serialized with Tick, so island
-// state is mutated race-free) and then via re-renders and pushes. It is a free
-// function, not a Ctx method, because Go methods cannot have type parameters;
-// the no-'&'/named-method-value ergonomics are unchanged (handler is e.g.
-// c.OnMessage). Valid only inside OnConnect; pair it with OnDispose to stop the
-// source.
 // Listen wires an island to a Topic in one line: it subscribes, pumps every
 // published value into handler on the island's own goroutine (then pushes this
 // island's re-render), and stops the subscription on disconnect. It fuses the
@@ -59,6 +52,13 @@ func Listen[T any](ctx *Ctx, t *topic.Topic[T], handler func(*Ctx, T)) {
 	Subscribe(ctx, sub.C(), handler)
 }
 
+// Subscribe drives a live island from an external channel: each value runs
+// handler on the island's single goroutine (serialized with Tick, so island
+// state is mutated race-free) and then via re-renders and pushes. It is a free
+// function, not a Ctx method, because Go methods cannot have type parameters;
+// the no-'&'/named-method-value ergonomics are unchanged (handler is e.g.
+// c.OnMessage). Valid only inside OnConnect; pair it with OnDispose to stop the
+// source. Prefer Listen when the source is a Topic rather than a raw channel.
 func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
 	ctx.subs = append(ctx.subs, func(reqCtx context.Context, pulse chan<- func()) {
 		go func() {

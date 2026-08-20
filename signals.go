@@ -127,27 +127,61 @@ func textHandle(v any) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(sprint(v)) })
 }
 
-// Local is a client-only signal: it lives in the browser, never round-trips to
-// the server (its wire name is underscore-prefixed, which Datastar never POSTs),
-// and it exposes no server Get/Set by construction. Use it for optimistic UI —
-// a toggle, show/hide, an input mirror — where the server never needs the value.
-// Two-way bind it with Bind() and show it with Display().
-type Local[T any] struct {
-	slot string
-	val  T
+// SignalClientOnly is a signal the client owns. The distinction from Signal is
+// DIRECTION, not location: its wire name is underscore-prefixed, and Datastar
+// never POSTs an underscore-prefixed signal, so the value can never travel back
+// to the server. That asymmetry is why there is no Get and never will be —
+// nothing carries the value here. The server writes it one-way with Set.
+//
+// Reach for it whenever the server does not need to read the value: a toggle,
+// show/hide, a tab switcher, an input mirror, a character counter. On a page with
+// no live island this is the only state type that reacts at all, and it does so
+// with zero round-trips — bind with Bind, show with Display.
+type SignalClientOnly[T any] struct {
+	slot   string
+	val    T
+	bound  *Ctx // stamped at bind; the pass whose dirty map ships the patch
+	warned bool
 }
 
-func (l *Local[T]) bind(r *hcore.Renderer) {
+func (l *SignalClientOnly[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
+	l.bound = ctxOf(b)
 	if l.slot == "" {
 		l.slot = "_" + b.SignalName() // underscore ⇒ Datastar keeps it client-only
 	}
 	b.DeclareSignal(l.slot, l.val)
 }
 
-// Display renders the local signal's value as a text-bound span (updates in the
-// browser as the value changes, no server round-trip).
-func (l *Local[T]) Display() h.H {
+// Set writes a new value from the server — the one direction that works. Call
+// it from an action to clear a search box, reset a wizard step, or drive any
+// client-only value the server has a reason to change; it is an ordinary thing to
+// do, not an escape hatch. The value ships as a Datastar patch-signals frame on
+// the same flush that carries Signal.Set, so the browser reacts with no
+// round-trip and without re-rendering any element. Works in a live island and in
+// a plain action alike.
+//
+// It is spelled Set to match Signal and State — the asymmetry is already stated
+// by the Get that is not here. Note what it does not buy you: after Set the
+// server knows only what it last wrote, never what the client currently holds.
+func (l *SignalClientOnly[T]) Set(v T) {
+	l.val = v
+	if l.bound != nil && l.bound.dirty != nil {
+		l.bound.dirty[l.slot] = v
+		return
+	}
+	// No render has bound this signal: there is no slot to patch, so the write
+	// cannot reach the client. Silent, that reads as "Set does nothing".
+	if !l.warned {
+		l.warned = true
+		log.Print("via: SignalClientOnly.Set on a signal the View never rendered — " +
+			"no patch reaches the client; Bind or Display the signal in the View")
+	}
+}
+
+// Display renders the client-only signal's value as a text-bound span (updates in
+// the browser as the value changes, no server round-trip).
+func (l *SignalClientOnly[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		l.bind(r)
 		r.Render(h.Span(h.Data("text", "$"+l.slot), textHandle(l.val)))
@@ -156,7 +190,7 @@ func (l *Local[T]) Display() h.H {
 
 // Bind returns a two-way data-bind attribute for an input, bound to this
 // client-only signal.
-func (l *Local[T]) Bind() h.Attr {
+func (l *SignalClientOnly[T]) Bind() h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		l.bind(r)
 		r.Render(h.Data("bind", l.slot))
