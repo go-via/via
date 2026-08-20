@@ -23,10 +23,23 @@ import (
 // single-quoted context. Double quotes are left intact: they are legal inside a
 // single-quoted attribute, keep the JSON readable, and the browser hands the
 // decoded value to Datastar either way.
-func writeSignalsAttr(buf *bytes.Buffer, order []string, initial map[string]any) {
+// only restricts which slots are declared. nil declares every slot — the GET
+// first paint, seeding the whole client store. A non-nil only declares just the
+// slots it names: that is how a stateless action patch ships the signals it
+// wrote without overwriting the ones it did not, so a value the user is mid-edit
+// survives the morph. If the restriction leaves nothing, no attribute is written.
+func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any) {
 	sig := make(map[string]any, len(order))
 	for _, slot := range order {
+		if only != nil {
+			if _, ok := only[slot]; !ok {
+				continue
+			}
+		}
 		sig[slot] = initial[slot]
+	}
+	if len(sig) == 0 && only != nil {
+		return
 	}
 	raw, _ := json.Marshal(sig)
 
@@ -54,9 +67,13 @@ type Signal[T any] struct {
 // Get returns the current value.
 func (s *Signal[T]) Get() T { return s.val }
 
-// Set assigns the value and records it as dirty so a live action's dispatch can
-// push a signal-patch (the authoritative way to change a client signal from the
-// server — a stateless action's element-patch also reflects it on re-render).
+// Set assigns the value and records it as dirty, which is what carries the change
+// to the client. There are two channels and they follow one rule: only the
+// signals an action actually wrote are ever declared, so a signal the user is
+// mid-edit is never overwritten behind them. A live action pushes a
+// patch-signals frame and its element patch carries no declaration at all; a
+// stateless action has no second frame, so its element patch carries a
+// data-signals attribute restricted to the dirty slots.
 //
 // Contract: the change reaches the client only for a signal the View actually
 // renders (via Bind or Display) — the wire name and the request binding are
@@ -156,13 +173,16 @@ func (l *SignalClientOnly[T]) bind(r *hcore.Renderer) {
 // Set writes a new value from the server — the one direction that works. Call
 // it from an action to clear a search box, reset a wizard step, or drive any
 // client-only value the server has a reason to change; it is an ordinary thing to
-// do, not an escape hatch. The value ships as a Datastar patch-signals frame on
-// the same flush that carries Signal.Set, so the browser reacts with no
-// round-trip and without re-rendering any element. Works in a live island and in
-// a plain action alike.
+// do, not an escape hatch. The value rides the same flush that carries
+// Signal.Set — a patch-signals frame in a live island, a restricted data-signals
+// attribute on a stateless action's element patch — so the browser reacts
+// without a further round-trip. Works in a live island and in a plain action
+// alike.
 //
 // It is spelled Set to match Signal and State — the asymmetry is already stated
-// by the Get that is not here. Note what it does not buy you: after Set the
+// by the Get that is not here. Only the slots an action wrote are declared, so a
+// Set never disturbs a sibling signal the user is mid-edit; see Signal.Set for
+// the two channels. Note what it does not buy you: after Set the
 // server knows only what it last wrote, never what the client currently holds.
 func (l *SignalClientOnly[T]) Set(v T) {
 	l.val = v

@@ -39,32 +39,33 @@ type viewer interface{ View() h.H }
 // initial values for the page-level data-signals declaration. It implements
 // hcore.Binder.
 type Ctx struct {
-	inSignals map[string]json.RawMessage // hydrated from the request
-	nextSig   int                        // next signal slot index
-	order     []string                   // slots in assignment order
-	initial   map[string]any             // per-slot value seen at render time
-	actions   []func()                   // positional action table
-	ticks     []tickReg                  // live-island timer registrations
-	subs      []subStarter               // live-island external subscriptions
-	disposers []func()                   // live-island teardown, run on disconnect
-	island    bool                       // true while rendering a live island
-	dirty     map[string]any             // signals an action Set this pass (→ signal-patch)
-	req       *http.Request              // the request that triggered this handler (nil during a pure render)
-	sessions  *sessionManager            // per-Register session manager (always constructed; cookie is lazy)
-	sessW     http.ResponseWriter        // response writer for issuing the session cookie; nil in a live action
-	session   *Session                   // resolved session handle, cached per Ctx
-	islands   []*Ctx                     // embedded child islands, in positional order (parent binder only)
-	isIsland  bool                       // true when this Ctx binds an embedded island's child View
-	islandIdx int                        // this island's positional index, used in its action path
-	islandV   viewer                     // the island's child viewer, for re-rendering on action
-	rendered  []byte                     // this island's inner HTML from the discovery render (for 204 compare)
-	push      func()                     // re-render THIS island and frame it on the stream (set per live unit)
-	declare   bool                       // whether this render declares page-level data-signals (first paint, not a push)
-	base      string                     // mount path prefix for action POSTs ("" for the single-page root)
-	forms     []func(*Ctx)               // positional native-form handlers (PostForm)
-	uploads   []func(*Ctx, File)         // positional multipart-upload handlers (OnUpload)
-	redirect  string                     // pending Redirect target, applied after a form handler returns
-	params    []string                   // positional path-param segments ({} in the mount pattern)
+	inSignals   map[string]json.RawMessage // hydrated from the request
+	nextSig     int                        // next signal slot index
+	order       []string                   // slots in assignment order
+	initial     map[string]any             // per-slot value seen at render time
+	actions     []func()                   // positional action table
+	ticks       []tickReg                  // live-island timer registrations
+	subs        []subStarter               // live-island external subscriptions
+	disposers   []func()                   // live-island teardown, run on disconnect
+	island      bool                       // true while rendering a live island
+	dirty       map[string]any             // signals an action Set this pass (→ signal-patch)
+	declareOnly map[string]any             // when non-nil, declare only these slots (stateless action patch)
+	req         *http.Request              // the request that triggered this handler (nil during a pure render)
+	sessions    *sessionManager            // per-Register session manager (always constructed; cookie is lazy)
+	sessW       http.ResponseWriter        // response writer for issuing the session cookie; nil in a live action
+	session     *Session                   // resolved session handle, cached per Ctx
+	islands     []*Ctx                     // embedded child islands, in positional order (parent binder only)
+	isIsland    bool                       // true when this Ctx binds an embedded island's child View
+	islandIdx   int                        // this island's positional index, used in its action path
+	islandV     viewer                     // the island's child viewer, for re-rendering on action
+	rendered    []byte                     // this island's inner HTML from the discovery render (for 204 compare)
+	push        func()                     // re-render THIS island and frame it on the stream (set per live unit)
+	declare     bool                       // whether this render declares page-level data-signals (first paint, not a push)
+	base        string                     // mount path prefix for action POSTs ("" for the single-page root)
+	forms       []func(*Ctx)               // positional native-form handlers (PostForm)
+	uploads     []func(*Ctx, File)         // positional multipart-upload handlers (OnUpload)
+	redirect    string                     // pending Redirect target, applied after a form handler returns
+	params      []string                   // positional path-param segments ({} in the mount pattern)
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -110,6 +111,26 @@ func shapeMatches(order []string, in map[string]json.RawMessage) bool {
 		}
 	}
 	return want == len(in)
+}
+
+// dirtyAll gathers every signal this pass wrote, across the whole page. A Set
+// inside an embedded island lands on that island's own binder, not the root's,
+// so the root dirty map alone would miss it and the patch would silently drop
+// the island's write.
+func (c *Ctx) dirtyAll() map[string]any {
+	if len(c.islands) == 0 {
+		return c.dirty
+	}
+	all := make(map[string]any, len(c.dirty))
+	for k, v := range c.dirty {
+		all[k] = v
+	}
+	for _, isl := range c.islands {
+		for k, v := range isl.dirtyAll() {
+			all[k] = v
+		}
+	}
+	return all
 }
 
 // binderCtx adapts a Ctx to hcore.Binder so the binder plumbing (signal slots,
@@ -506,16 +527,38 @@ func renderRoot(v viewer, in map[string]json.RawMessage, island, declareSignals 
 // mounts a page under /path, so its actions must post to /path/_via/a/{n}, not
 // the root /_via/a/{n}. base is "" for the single-page Register.
 func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSignals bool, base string) (*Ctx, []byte) {
+	return renderRootCore(v, in, island, declareSignals, base, nil)
+}
+
+// renderRootPatch renders a stateless action's element-patch response. A
+// stateless action answers with plain HTML, not an SSE stream, so the
+// data-signals attribute is its only channel for a server-side Set — but
+// re-declaring every slot on every action would overwrite the client's whole
+// store, clobbering a value the user is mid-edit. That is the same hazard a live
+// push avoids by omitting the attribute; here the attribute stays, restricted to
+// only, the slots the action actually wrote. A nil only declares nothing.
+func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any) (*Ctx, []byte) {
+	if only == nil {
+		only = map[string]any{} // nil would read as "declare everything"
+	}
+	return renderRootCore(v, in, false, true, base, only)
+}
+
+// renderRootCore is the shared body: only is threaded to writeSignalsAttr (and
+// to embedded islands via ctx.declareOnly) so one render path serves the full
+// first paint, the declaration-free live push, and the restricted action patch.
+func renderRootCore(v viewer, in map[string]json.RawMessage, island, declareSignals bool, base string, only map[string]any) (*Ctx, []byte) {
 	ctx := newCtx(in)
 	ctx.island = island
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
+	ctx.declareOnly = only
 	ctx.base = base
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
 	if declareSignals {
-		writeSignalsAttr(&b, ctx.order, ctx.initial)
+		writeSignalsAttr(&b, ctx.order, ctx.initial, only)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())

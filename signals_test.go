@@ -249,3 +249,36 @@ func TestSignalClientOnly_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
 		"exactly one warning per unrendered client-only signal")
 }
+
+// twoClientSignals writes one client-only signal and leaves the other alone —
+// the second stands in for an input the user is mid-edit.
+type twoClientSignals struct {
+	Written via.SignalClientOnly[string]
+	Left    via.SignalClientOnly[string]
+}
+
+func (t *twoClientSignals) Fill(ctx *via.Ctx) { t.Written.Set("ada") }
+
+func (t *twoClientSignals) View() h.H {
+	return h.Div(
+		h.Input(t.Written.Bind()),
+		h.Input(t.Left.Bind()),
+		h.Button(via.OnClick(t.Fill), h.Str("fill")),
+	)
+}
+
+// A stateless action's element patch declares ONLY the signals the action wrote.
+// Re-declaring every slot would overwrite the whole client store on every
+// action, so a value the user was mid-edit vanished on the next click.
+func TestStatelessAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(twoClientSignals{}))
+	_, page := app.Get("/")
+	assert.Contains(t, page, `"_s0":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"_s1":""`, "the GET first paint declares every slot")
+
+	status, frag := app.Action(0).Fire()
+	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
+	assert.Contains(t, frag, `"_s0":"ada"`, "the written signal is declared")
+	assert.NotContains(t, frag, "_s1\":", "the untouched signal must not be re-declared")
+}
