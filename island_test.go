@@ -88,6 +88,38 @@ func TestMux_onConnectFailureDisposesConnectedSiblings(t *testing.T) {
 	}
 }
 
+// panickerIsland's OnConnect panics instead of returning an error.
+type panickerIsland struct{}
+
+func (p *panickerIsland) OnConnect(ctx *via.Ctx) error { panic("connect boom") }
+func (p *panickerIsland) View() h.H                    { return h.Div(h.Str("x")) }
+
+type panicPair struct {
+	A disposerIsland
+	B panickerIsland
+}
+
+func (p *panicPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+
+// If one island's OnConnect panics, the islands connected before it must still
+// have their disposers run — otherwise a multiplex page leaks the subscriptions
+// of the siblings that already connected.
+func TestMux_onConnectPanicDisposesConnectedSiblings(t *testing.T) {
+	t.Parallel()
+	done := make(chan struct{})
+	handler := via.Register(panicPair{A: disposerIsland{disposed: done}})
+	req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+	go handler.ServeHTTP(&halfOpenFlusher{}, req)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a panicked island connect did not dispose the already-connected sibling")
+	}
+}
+
 // namer has a client Signal — two of them as sibling islands must not collide on
 // the same slot name.
 type namer struct{ name via.Signal[string] }

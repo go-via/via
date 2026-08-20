@@ -666,12 +666,29 @@ func mountLive[T any, PT interface {
 				uctx.push = func() {
 					stream.frame(func(w io.Writer) { writePatchFrame(w, renderIslandPatch(idx, v)) })
 				}
-				if err := lv.OnConnect(uctx); err != nil {
-					disposeAll()
-					for _, d := range uctx.disposers {
-						d()
+				var onConnectFailed bool
+				func() {
+					defer func() {
+						if rec := recover(); rec != nil {
+							disposeAll()
+							for _, d := range uctx.disposers {
+								d()
+							}
+							log.Printf("via: OnConnect panic: %v\n%s", rec, debug.Stack())
+							onConnectFailed = true
+						}
+					}()
+					if err := lv.OnConnect(uctx); err != nil {
+						disposeAll()
+						for _, d := range uctx.disposers {
+							d()
+						}
+						connectError(w, err)
+						onConnectFailed = true
+						return
 					}
-					connectError(w, err)
+				}()
+				if onConnectFailed {
 					return
 				}
 				units = append(units, uctx)
