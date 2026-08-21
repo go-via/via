@@ -342,15 +342,22 @@ func Redirect(ctx *Ctx, path string) {
 	}
 }
 
+// redirectInit is the client half of a @post Redirect. It is a CONSTANT so the
+// CSP can admit it by hash (see cspHeader): the target travels as a data
+// attribute on the script element rather than interpolated into the source, so
+// every redirect ships byte-identical script text. document.currentScript is the
+// element Datastar just inserted; the querySelector is a fallback for the case
+// where currentScript is unset.
+const redirectInit = `(()=>{var s=document.currentScript||document.querySelector('script[data-via-to]');if(s&&s.dataset.viaTo)location.assign(s.dataset.viaTo)})()`
+
 // writeRedirectScript ships a queued via.Redirect as an executable script when a
 // @post action requested one. It returns true (response written) only when there
 // is a redirect AND its target passes h.SafeURL; otherwise it returns false and
-// the caller falls back to the normal element-patch response. The script carries
-// the boot CSP nonce (HMAC of the signing key — the same nonce every document
-// this app serves is stamped with) via the datastar-script-attributes header,
-// which the bundle copies onto the <script> it creates — so the document's CSP
-// accepts it, cookieless requests and cross-pod hops included.
-func writeRedirectScript(w http.ResponseWriter, sessions *sessionManager, target string) bool {
+// the caller falls back to the normal element-patch response. The target is
+// passed as data-via-to through the datastar-script-attributes header, which the
+// bundle copies onto the <script> it creates: the script source stays constant so
+// its CSP hash matches, and the document accepts it whichever pod served it.
+func writeRedirectScript(w http.ResponseWriter, target string) bool {
 	if target == "" {
 		return false // no redirect queued — normal element-patch response
 	}
@@ -358,16 +365,14 @@ func writeRedirectScript(w http.ResponseWriter, sessions *sessionManager, target
 		log.Printf("via: unsafe Redirect target %q dropped", target)
 		return false
 	}
-	nonce := sessions.cspNonce()
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	attrs, _ := json.Marshal(map[string]string{"nonce": nonce})
+	// The target rides as an attribute VALUE that Datastar sets with the DOM API,
+	// so it is never parsed as HTML or as JS source — there is no string literal
+	// left to break out of. json.Marshal handles the header's own encoding.
+	attrs, _ := json.Marshal(map[string]string{"data-via-to": target})
 	w.Header().Set("datastar-script-attributes", string(attrs))
-	// target is JSON-encoded into the JS string literal: json.Marshal escapes
-	// quotes/backslashes/controls, closing the breakout/XSS vector for any URL
-	// that passed h.SafeURL.
-	js, _ := json.Marshal(target)
-	w.Write([]byte("location.assign(" + string(js) + ")"))
+	w.Write([]byte(redirectInit))
 	return true
 }
 
@@ -646,7 +651,7 @@ func mountLive[T any, PT interface {
 		if interval <= 0 {
 			interval = defaultHeartbeat
 		}
-		id := genCSPNonce() // per-connection tab id (echoed as X-Via-Tab on actions)
+		id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
 		pulse := make(chan func())
 
 		// Establish the live unit(s) and run each OnConnect once, BEFORE the
@@ -859,7 +864,7 @@ func mountLive[T any, PT interface {
 		}
 		// Element-patch scoped to this island's container, so the morph replaces
 		// only #via-i{island} and never disturbs a sibling island.
-		writeSecurityHeaders(w, genCSPNonce())
+		writeSecurityHeaders(w)
 		w.Write([]byte(`<div id="via-i` + strconv.Itoa(island) + `">`))
 		w.Write(after)
 		w.Write([]byte(`</div>`))

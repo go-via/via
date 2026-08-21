@@ -158,7 +158,7 @@ func Mount[T any, PT interface {
 			panic("via: a live page cannot embed live islands — drop the page's OnConnect and let the islands stream, or fold the live child into the page itself")
 		}
 		hasLive := rootLive || anyLiveIsland(ctx)
-		writeHTMLPage(w, r.cfg, body, pageNonce(r.sessions), hasLive, patternBase+"/_via/sse")
+		writeHTMLPage(w, r.cfg, body, hasLive, patternBase+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{n}", func(w http.ResponseWriter, req *http.Request) {
 		params := paramsOf(req, names)
@@ -238,7 +238,7 @@ func uploadAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(sessions), false, "")
+	writeHTMLPage(w, cfg, body, false, "")
 }
 
 // firstFile opens the first uploaded file part (OnUpload delivers a single file;
@@ -373,26 +373,15 @@ func formAction[T any, PT interface {
 		return
 	}
 	_, body := renderRootBase(PT(&inst), nil, false, true, base)
-	writeHTMLPage(w, cfg, body, pageNonce(sessions), false, "")
+	writeHTMLPage(w, cfg, body, false, "")
 }
 
-// writeHTMLPage writes a page's full HTML document — the datastar module under a
-// nonce'd CSP, the optional theme, then the rendered body. (The single-page
-// Register adds the live bootstrap + reconnect manager; a router page is
-// stateless for now.)
-// pageNonce returns the CSP nonce for a full-document response: the manager's
-// boot nonce (stable, stateless, shared across pods) so a later action's
-// injected redirect script is always admitted; a bare render with no manager
-// gets a fresh per-render nonce.
-func pageNonce(sessions *sessionManager) string {
-	if n := sessions.cspNonce(); n != "" {
-		return n
-	}
-	return genCSPNonce() // no manager (bare render) — fresh per render
-}
-
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string, hasLive bool, sseURL string) {
-	writeSecurityHeaders(w, nonce)
+// writeHTMLPage writes a page's full HTML document — the datastar module under
+// the strict CSP, then the rendered body. A live page also gets the SSE
+// bootstrap and the reconnect manager. via's inline scripts are admitted by
+// hash, so no per-response token has to be threaded through here.
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
+	writeSecurityHeaders(w)
 	// A live page bootstraps the SSE stream on init and pre-declares the
 	// _viatab local signal so $_viatab is always defined: the patch-signals
 	// frame fills it with the real tab id; a click before the stream connects
@@ -402,8 +391,8 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, nonce string
 		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"_viatab":""}'>`
 	}
 	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8">` +
-		`<script type="module" nonce="` + nonce + `" src="/_via/datastar.js"></script>` +
-		reconnectScript(hasLive, nonce) +
+		`<script type="module" src="/_via/datastar.js"></script>` +
+		reconnectScript(hasLive) +
 		bodyOpen))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
@@ -470,10 +459,10 @@ func dispatchStateless[T any, PT interface {
 	bind.actions[n]()
 	// A via.Redirect from a @post action navigates the browser. The bundled
 	// Datastar can't redirect via a patch, but its fetch handler EXECUTES a
-	// text/javascript response — so we ship location.assign() as a script,
-	// stamped with the session's CSP nonce (the only nonce the document admits).
-	// The element patch is dropped: the page is navigating away.
-	if writeRedirectScript(w, sessions, bind.redirect) {
+	// text/javascript response — so we ship a constant location.assign() script
+	// the document's CSP admits by hash. The element patch is dropped: the page
+	// is navigating away.
+	if writeRedirectScript(w, bind.redirect) {
 		return
 	}
 	_, after := renderRootPatch(PT(&inst), nil, base, bind.dirtyAll())
@@ -481,6 +470,6 @@ func dispatchStateless[T any, PT interface {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writeSecurityHeaders(w, genCSPNonce())
+	writeSecurityHeaders(w)
 	w.Write(after)
 }

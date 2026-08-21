@@ -7,7 +7,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -70,55 +69,56 @@ type relRedirectPage struct{}
 func (p *relRedirectPage) Go(ctx *via.Ctx) { via.Redirect(ctx, "threads/7") }
 func (p *relRedirectPage) View() h.H       { return h.Div(h.Button(via.OnClick(p.Go))) }
 
-var nonceRe = regexp.MustCompile(`'nonce-([^']+)'`)
-
-func cspNonce(t *testing.T, c *http.Client, url string) string {
+// cspOf fetches a page and returns the Content-Security-Policy it served.
+func cspOf(t *testing.T, c *http.Client, url string) string {
 	t.Helper()
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := c.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
-	m := nonceRe.FindStringSubmatch(resp.Header.Get("Content-Security-Policy"))
-	require.Len(t, m, 2, "CSP header must carry a script-src nonce")
-	return m[1]
+	csp := resp.Header.Get("Content-Security-Policy")
+	require.Contains(t, csp, "'sha256-", "CSP must admit via's inline scripts by hash")
+	return csp
 }
 
-// The strict-CSP nonce is minted once at boot — HMAC(session key,
-// "via/csp-nonce") — so it is stateless: stable across requests, cookieless
-// clients, restarts and pods sharing the key. A @post Redirect's script can
-// therefore ALWAYS be stamped with a nonce the document admits.
-func TestRouter_bootNonceIsStableAndStateless(t *testing.T) {
+// A @post Redirect's script must be admitted by a document that may have been
+// served by another pod. Hashing gets there without any shared secret: the
+// policy depends on no cookie, no session, and no signing key, so pods with
+// DIFFERENT keys serve byte-identical policies. The old boot nonce only worked
+// when every pod shared VIA_SESSION_KEY — mismatched keys broke the redirect.
+func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
-	// No cookies, no session — the nonce is still stable across requests.
+	// No cookies, no session — the policy is still stable across requests.
 	c := &http.Client{}
-	n1 := cspNonce(t, c, srv.URL+"/x")
-	assert.Equal(t, n1, cspNonce(t, c, srv.URL+"/x"),
-		"the boot nonce must be stable across requests without any session")
+	csp1 := cspOf(t, c, srv.URL+"/x")
+	assert.Equal(t, csp1, cspOf(t, c, srv.URL+"/x"),
+		"the policy must be stable across requests without any session")
 
-	// A second app booted from the SAME key derives the SAME nonce (pods).
-	r2 := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	// A second app booted from a DIFFERENT key serves the same policy.
+	r2 := via.NewRouter(via.WithSessionKey([]byte("a-different-key-also-32-bytes-ok")))
 	via.Mount(r2, "/x", redirectPage{})
 	srv2 := serve(t, r2)
-	assert.Equal(t, n1, cspNonce(t, c, srv2.URL+"/x"),
-		"two pods sharing VIA_SESSION_KEY must derive the same boot nonce")
+	assert.Equal(t, csp1, cspOf(t, c, srv2.URL+"/x"),
+		"a hash-based policy needs no shared key: pods with different keys agree")
 }
 
 // A via.Redirect from a Datastar @post action sends an executable script
-// (location.assign) carrying the document's CSP nonce, so the strict CSP admits
-// it — the @post analogue of PostForm's 303.
-func TestRouter_postActionRedirectShipsNonceMatchedScript(t *testing.T) {
+// (location.assign) that the document's strict CSP admits by hash — the @post
+// analogue of PostForm's 303. The script SOURCE is constant and the target rides
+// as a data attribute, which is what keeps the digest stable across targets.
+func TestRouter_postActionRedirectShipsHashAdmittedScript(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
 	c := &http.Client{}
-	nonce := cspNonce(t, c, srv.URL+"/x")
+	csp := cspOf(t, c, srv.URL+"/x")
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/0", strings.NewReader("{}"))
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -129,9 +129,14 @@ func TestRouter_postActionRedirectShipsNonceMatchedScript(t *testing.T) {
 
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript",
 		"a @post redirect is delivered as an executable script, not an element patch")
-	assert.Contains(t, string(body), `location.assign("/dest")`)
-	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), nonce,
-		"the injected script must carry the document's CSP nonce or the browser blocks it")
+	assert.Contains(t, string(body), "location.assign(s.dataset.viaTo)",
+		"the script reads its target from the element, so its source never varies")
+	assert.NotContains(t, string(body), "/dest",
+		"interpolating the target would change the bytes and break the hash")
+	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"/dest"`,
+		"the target rides as a data attribute Datastar copies onto the script it creates")
+	assert.Contains(t, csp, hashSource(string(body)),
+		"the document's policy must admit the exact bytes the action shipped")
 }
 
 // Redirect interpolates into location.assign('…'), so a non-http(s)/relative URL
@@ -166,7 +171,7 @@ func TestRouter_postActionRedirectAllowsRelativePath(t *testing.T) {
 	srv := serve(t, r)
 
 	c := &http.Client{}
-	cspNonce(t, c, srv.URL+"/x") // sanity: the page carries the boot nonce
+	cspOf(t, c, srv.URL+"/x") // sanity: the page carries a hash-based policy
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/x/_via/a/0", strings.NewReader("{}"))
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -175,7 +180,9 @@ func TestRouter_postActionRedirectAllowsRelativePath(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
-	assert.Contains(t, string(body), `location.assign("threads/7")`, "a relative path is a valid target")
+	assert.Contains(t, string(body), "location.assign(s.dataset.viaTo)")
+	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"threads/7"`,
+		"a relative path is a valid target and travels as the data attribute")
 }
 
 // OnInit runs per request before the (ctx-free) View, so a page can load

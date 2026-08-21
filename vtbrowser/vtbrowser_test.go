@@ -329,10 +329,10 @@ func (p *redirectViaScript) View() h.H {
 }
 
 // A via.Redirect from a Datastar @post action must ACTUALLY navigate the browser
-// under the strict nonce'd CSP — the payoff no httptest can see. The action
-// ships location.assign("/done") as a text/javascript script stamped with the
-// boot CSP nonce, which every document this app serves already carries — so the
-// very first load's click must navigate.
+// under the strict CSP — the payoff no httptest can see. The action ships a
+// constant location.assign(s.dataset.viaTo) script whose sha256 every document
+// this app serves already admits, with the target riding as a data attribute
+// Datastar copies onto the script — so the very first load's click must navigate.
 func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
