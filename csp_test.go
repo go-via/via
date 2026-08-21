@@ -1,6 +1,8 @@
 package via_test
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,28 +11,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// scriptSrcNonce extracts the nonce from a CSP's script-src 'nonce-...' token.
-func scriptSrcNonce(t *testing.T, csp string) string {
-	t.Helper()
-	const marker = "'nonce-"
-	i := strings.Index(csp, marker)
-	require.GreaterOrEqual(t, i, 0, "CSP must carry a script-src nonce: %q", csp)
-	rest := csp[i+len(marker):]
-	j := strings.IndexByte(rest, '\'')
-	require.GreaterOrEqual(t, j, 0, "unterminated nonce in CSP: %q", csp)
-	return rest[:j]
+// hashSource returns the CSP source expression that admits js as an inline
+// script — the same digest the browser computes. CSP hashes are STANDARD base64,
+// not the URL-safe alphabet via uses for tokens.
+func hashSource(js string) string {
+	sum := sha256.Sum256([]byte(js))
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
-// scriptTagNonce extracts the nonce="..." attribute from the module script tag.
-func scriptTagNonce(t *testing.T, body string) string {
+// inlineScripts returns the text content of every inline <script> in a page. A
+// script with a src is not inline: it is governed by 'self', not by a hash.
+func inlineScripts(t *testing.T, body string) []string {
 	t.Helper()
-	const marker = `nonce="`
-	i := strings.Index(body, marker)
-	require.GreaterOrEqual(t, i, 0, "page script tag must carry a nonce attribute")
-	rest := body[i+len(marker):]
-	j := strings.IndexByte(rest, '"')
-	require.GreaterOrEqual(t, j, 0)
-	return rest[:j]
+	var out []string
+	rest := body
+	for {
+		i := strings.Index(rest, "<script")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		open := strings.IndexByte(rest, '>')
+		require.GreaterOrEqual(t, open, 0, "unterminated <script tag")
+		tag, after := rest[:open+1], rest[open+1:]
+		end := strings.Index(after, "</script>")
+		require.GreaterOrEqual(t, end, 0, "unterminated script element")
+		if !strings.Contains(tag, " src=") {
+			out = append(out, after[:end])
+		}
+		rest = after[end:]
+	}
 }
 
 // The served document must set the default hardening headers it ships without
@@ -56,7 +66,8 @@ func TestPage_shipsStrictCSPDirectives(t *testing.T) {
 		"object-src 'none'",
 		"base-uri 'self'",
 		"frame-ancestors 'self'",
-		"script-src 'self' 'nonce-",
+		"script-src 'self' 'unsafe-eval' 'sha256-",
+		"style-src 'self';",
 	} {
 		assert.Contains(t, csp, want)
 	}
@@ -73,38 +84,36 @@ func TestPage_cspAllowsDatastarFunctionEval(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "'unsafe-eval'")
 }
 
-// The browser only loads the client module if its nonce matches the policy's;
-// a mismatch means nothing hydrates. They must be emitted from one value.
-func TestPage_scriptNonceMatchesCSPHeader(t *testing.T) {
+// via admits its own inline scripts by SHA-256 hash, which makes the emitted
+// bytes load-bearing: a single stray space between the policy's digest and the
+// script's text and the browser silently drops the script. Nothing else in the
+// suite would notice — the server-side render still looks perfect. So compute
+// the digest of every inline script the page actually served and require the
+// policy to admit it.
+func TestPage_everyInlineScriptIsAdmittedByItsHash(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodGet, "/", "")
-	headerNonce := scriptSrcNonce(t, resp.Header.Get("Content-Security-Policy"))
-	tagNonce := scriptTagNonce(t, body)
-	assert.NotEmpty(t, headerNonce)
-	assert.Equal(t, headerNonce, tagNonce, "script tag nonce must equal the CSP nonce")
+	csp := resp.Header.Get("Content-Security-Policy")
+	scripts := inlineScripts(t, body)
+	for _, js := range scripts {
+		assert.Contains(t, csp, hashSource(js),
+			"an inline script the page served is not admitted by its own policy")
+	}
 }
 
-// The boot CSP nonce is HMAC(key, "via/csp-nonce") — deliberately stable across
-// requests (and pods sharing the key), so a @post Redirect script minted later
-// is admitted by any document this app served. Stability here is not a nonce
-// weakness: the CSP's job on this page is blocking INJECTED inline script, and
-// an attacker who can read the page's own nonce can already inject markup —
-// escaping + the h.SafeURL allowlist are the real defense. Two boots with
-// different keys must still disagree.
-func TestPage_cspNonceIsStablePerBoot(t *testing.T) {
+// There must be no nonce left to steal. via previously derived a boot nonce from
+// the signing key so an action's injected redirect script would be admitted by a
+// document any pod served — but that made one constant token authorise arbitrary
+// inline script for the process's whole life, readable with a single curl. A
+// hash carries the same cross-pod property with nothing bearer-shaped in it:
+// publishing it authorises exactly the bytes via already ships.
+func TestPage_cspCarriesNoNonce(t *testing.T) {
 	t.Parallel()
-	srv := newCounter(t)
-	r1, _ := do(t, srv, http.MethodGet, "/", "")
-	r2, _ := do(t, srv, http.MethodGet, "/", "")
-	assert.Equal(t,
-		scriptSrcNonce(t, r1.Header.Get("Content-Security-Policy")),
-		scriptSrcNonce(t, r2.Header.Get("Content-Security-Policy")),
-		"the boot nonce is stable so a later redirect script is always admitted")
-	other, _ := do(t, newCounter(t), http.MethodGet, "/", "")
-	assert.NotEqual(t,
-		scriptSrcNonce(t, r1.Header.Get("Content-Security-Policy")),
-		scriptSrcNonce(t, other.Header.Get("Content-Security-Policy")),
-		"two apps with different keys must not share a nonce")
+	resp, body := do(t, newCounter(t), http.MethodGet, "/", "")
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.NotContains(t, csp, "'nonce-", "a hash-based policy must mint no nonce")
+	assert.NotContains(t, body, "nonce=", "no script tag may carry a nonce attribute")
+	assert.Contains(t, csp, "'sha256-", "via's inline scripts are admitted by hash")
 }
 
 // The action element-patch response is morphed into the live document, so it

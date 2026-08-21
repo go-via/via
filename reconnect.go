@@ -59,13 +59,16 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`setTimeout(function(){location.reload()},500+Math.floor(Math.random()*1500))}});` +
 	`addEventListener('load',function(){setTimeout(function(){try{sessionStorage.removeItem(K)}catch(_){}},5000)})})()`
 
-// reconnectScript renders the reconnect manager as a nonce'd inline <script> for
-// the page <head>, or "" when off. The nonce admits it under the strict CSP;
-// without it the browser silently drops the script and the tab freezes on a drop
-// exactly when the manager was meant to recover it.
-func reconnectScript(on bool, nonce string) string {
+// reconnectScript renders the reconnect manager as an inline <script> for the
+// page <head>, or "" when off. The strict CSP admits it by SHA-256 hash of
+// reconnectInit (see cspHeader), so editing reconnectInit re-derives the hash
+// automatically — but the emitted script's text content must stay BYTE-IDENTICAL
+// to reconnectInit. Add so much as a newline around it and the browser silently
+// drops the script, and the tab freezes on a drop exactly when this manager was
+// meant to recover it.
+func reconnectScript(on bool) string {
 	if !on {
 		return ""
 	}
-	return `<script nonce="` + nonce + `">` + reconnectInit + `</script>`
+	return `<script>` + reconnectInit + `</script>`
 }

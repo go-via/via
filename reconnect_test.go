@@ -32,17 +32,25 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	}
 }
 
-// The reconnect manager is an inline script; a strict CSP blocks inline scripts
-// unless they carry the page nonce. If it ships without the nonce it is silently
+// The reconnect manager is an inline script and a strict CSP blocks inline
+// scripts it does not explicitly admit. If it ships unadmitted it is silently
 // dropped and the tab freezes on a drop exactly when the manager was meant to
-// save it. Assert the script tag carries the policy's nonce.
+// save it. It is admitted by the SHA-256 of its own bytes, so assert the served
+// tag is bare (no nonce) and that the policy carries its exact digest — that is
+// what catches a stray byte added around the script.
 func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, serve(t, via.Register(quietIsland{})), http.MethodGet, "/", "")
 
-	nonce := scriptSrcNonce(t, resp.Header.Get("Content-Security-Policy"))
-	assert.Contains(t, body, `nonce="`+nonce+`">(()=>{if(window.__viaRC)`,
-		"reconnect script must carry the CSP nonce or the browser drops it")
+	assert.Contains(t, body, `<script>(()=>{if(window.__viaRC)`,
+		"the reconnect script ships bare — its hash, not a nonce, admits it")
+	csp := resp.Header.Get("Content-Security-Policy")
+	for _, js := range inlineScripts(t, body) {
+		if strings.Contains(js, "__viaRC") {
+			assert.Contains(t, csp, hashSource(js),
+				"the reconnect script's digest must be in the policy or the browser drops it")
+		}
+	}
 }
 
 // A stateless page has no SSE stream to lose, so injecting a reconnect manager

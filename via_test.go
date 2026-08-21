@@ -162,7 +162,7 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 		`<h1>0</h1>`,                         // value rendered server-side, not a signal
 		`data-on:click="@post('/_via/a/0')"`, // Dec, declared first
 		`data-on:click="@post('/_via/a/1')"`, // Inc, declared second
-		`src="/_via/datastar.js">`,           // module script tag (now nonce'd between attrs)
+		`src="/_via/datastar.js">`,           // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
