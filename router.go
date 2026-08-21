@@ -381,7 +381,7 @@ func formAction[T any, PT interface {
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token has to be threaded through here.
 func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
-	writeSecurityHeaders(w)
+	writeHeadersWithCSP(w, cfg.csp)
 	// A live page bootstraps the SSE stream on init and pre-declares the
 	// _viatab local signal so $_viatab is always defined: the patch-signals
 	// frame fills it with the real tab id; a click before the stream connects
@@ -390,10 +390,13 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool
 	if hasLive {
 		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"_viatab":""}'>`
 	}
-	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8">` +
-		`<script type="module" src="/_via/datastar.js"></script>` +
+	var head strings.Builder
+	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
+	cfg.head.render(&head)
+	head.WriteString(`<script type="module" src="/_via/datastar.js"></script>` +
 		reconnectScript(hasLive) +
-		bodyOpen))
+		bodyOpen)
+	w.Write([]byte(head.String()))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"strings"
 )
 
 // randomToken returns a 16-byte (128-bit, the OWASP recommendation) URL-safe
@@ -19,11 +20,12 @@ func randomToken() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
-// scriptHash returns the CSP source expression that admits exactly js as an
-// inline script. CSP hash sources are STANDARD base64 (padded), not the URL-safe
-// alphabet used elsewhere in via — the browser rejects a mismatch silently.
-func scriptHash(js string) string {
-	sum := sha256.Sum256([]byte(js))
+// sha256Source returns the CSP source expression that admits exactly src as an
+// inline script or stylesheet. CSP hash sources are STANDARD base64 (padded),
+// not the URL-safe alphabet used elsewhere in via — the browser rejects a
+// mismatch silently.
+func sha256Source(src string) string {
+	sum := sha256.Sum256([]byte(src))
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
@@ -49,19 +51,43 @@ func scriptHash(js string) string {
 // constructor, which CSP gates behind 'unsafe-eval'. Drop it and every action
 // binding is silently dead in the browser while every server-side test passes.
 //
-// style-src carries no inline allowance: via emits no <style> element and no
-// style attribute (the reconnect banner sets .style via the CSSOM, which CSP
-// does not gate). Adding either means adding its hash here.
-var cspHeader = "default-src 'self'; " +
-	"script-src 'self' 'unsafe-eval' " + scriptHash(reconnectInit) + " " + scriptHash(redirectInit) + "; " +
-	"style-src 'self'; " +
-	"object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+// style-src carries no inline allowance by default: via itself emits no <style>
+// element and no style attribute (the reconnect banner sets .style via the
+// CSSOM, which CSP does not gate). A Head's InlineStyle adds its own hash.
+var cspHeader = buildCSP(Head{})
+
+// buildCSP returns the policy for an app serving head. Everything off-origin the
+// document needs is derived from the Head, so the policy is exactly as wide as
+// what the app declared and no wider — and it stays a pure function of the
+// config, so every pod serving that config serves byte-identical bytes.
+func buildCSP(head Head) string {
+	script := "script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit)
+	for _, o := range head.scriptOrigins() {
+		script += " " + o
+	}
+	style := "style-src 'self'"
+	for _, o := range head.styleOrigins() {
+		style += " " + o
+	}
+	if head.InlineStyle != "" {
+		style += " " + sha256Source(head.InlineStyle)
+	}
+	csp := "default-src 'self'; " + script + "; " + style + "; "
+	if fonts := head.fontOrigins(); len(fonts) > 0 {
+		csp += "font-src 'self' " + strings.Join(fonts, " ") + "; "
+	}
+	return csp + "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+}
 
 // writeSecurityHeaders sets the HTML content type and the default hardening
-// headers (nosniff + the strict CSP) on an HTML response.
-func writeSecurityHeaders(w http.ResponseWriter) {
+// headers (nosniff + the strict CSP) on an HTML response. Element-patch
+// fragments use the default policy: a fragment carries no document of its own,
+// so its header is inert — only the page's policy governs what runs.
+func writeSecurityHeaders(w http.ResponseWriter) { writeHeadersWithCSP(w, cspHeader) }
+
+func writeHeadersWithCSP(w http.ResponseWriter, csp string) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Security-Policy", cspHeader)
+	hdr.Set("Content-Security-Policy", csp)
 }
