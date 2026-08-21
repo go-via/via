@@ -16,6 +16,8 @@ type config struct {
 	sessionTTL      time.Duration
 	sessionCookie   string
 	sessionSecure   bool
+	head            Head
+	csp             string
 }
 
 // defaultMaxSSEConn caps concurrent live SSE streams per Register so a client
@@ -36,6 +38,8 @@ func newConfig(opts []Option) *config {
 	for _, opt := range opts {
 		opt(c)
 	}
+	c.head.validate()
+	c.csp = buildCSP(c.head)
 	return c
 }
 
