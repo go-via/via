@@ -5,11 +5,13 @@
 // Each test drives a harness method against a minimal via fixture, so the
 // suite doubles as the browser tier: proving the harness works means proving
 // Datastar's data-on:click / data-bind / SSE-morph behave under the strict
-// nonce'd CSP — the bug class no httptest can see.
+// CSP — the bug class no httptest can see.
 package vtbrowser_test
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -336,7 +338,7 @@ func (p *redirectViaScript) View() h.H {
 func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
-	s.Click("#go") // @post → location.assign("/done") under the matching boot nonce
+	s.Click("#go") // @post → location.assign(s.dataset.viaTo), admitted by hash
 	s.WaitEvalTrue(`location.pathname === "/done"`,
 		"the @post redirect script executed and navigated the browser to /done")
 	s.RequireCleanConsole() // a CSP-refused script would surface as a console error
@@ -361,4 +363,65 @@ func TestPostActionRedirect_unsafeTargetIsDropped(t *testing.T) {
 	if path != "/" {
 		t.Fatalf("expected no navigation for a dropped unsafe redirect, but went to %q", path)
 	}
+}
+
+// --- WithDocumentHead under the derived CSP ---
+
+// styledPage is the vehicle for the head tests: one element whose colour comes
+// only from a stylesheet, so "did the sheet load" is directly observable.
+type styledPage struct{}
+
+func (styledPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
+
+// cdn serves one off-origin stylesheet. A second httptest server is a genuinely
+// different origin (different port), so this exercises the real cross-origin
+// path without reaching the network.
+func cdn(t testing.TB, css string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		w.Write([]byte(css))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color === "rgb(255, 0, 0)"`
+
+// The payoff of deriving style-src from the Head: an off-origin stylesheet the
+// app declared in Links must actually load and apply. No httptest can see this
+// — the server ships the same bytes whether or not the browser fetches them.
+func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
+	origin := cdn(t, "#styled{color:red}")
+	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
+		Links: []via.HeadLink{{Rel: "stylesheet", Href: origin + "/app.css"}},
+	}))
+	s := vtbrowser.Open(t, app)
+	s.WaitEvalTrue(styledIsRed, "the declared off-origin stylesheet loaded and applied under the derived CSP")
+	s.RequireCleanConsole() // a CSP-blocked sheet surfaces as a console error
+}
+
+// The other half of the same claim: the policy is exactly as wide as what was
+// declared. An @import inside InlineStyle points at an origin via never sees —
+// it is inside the CSS — so style-src does not cover it and the browser blocks
+// it. This is the documented limitation, pinned so it cannot silently become a
+// hole: if the derivation ever widened to a wildcard, this test would go green
+// for the wrong reason and the assertion below would start failing.
+func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
+	origin := cdn(t, "#styled{color:red}")
+	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
+		InlineStyle: `@import url("` + origin + `/app.css");`,
+	}))
+	s := vtbrowser.Open(t, app)
+	s.Sleep(700 * time.Millisecond) // give the (refused) fetch time to happen
+
+	var red bool
+	s.Eval(styledIsRed, &red)
+	if red {
+		t.Fatal("an origin the Head never declared must not be admitted by style-src")
+	}
+	// No console assertion: a refused @import is reported as a browser ISSUE,
+	// not through the console API, so it never reaches ConsoleErrors. The style
+	// simply not applying is the whole of the evidence — and RequireCleanConsole
+	// would be wrong here either way, since a block is the expected outcome.
 }
