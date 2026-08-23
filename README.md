@@ -90,7 +90,7 @@ The action endpoint and rendered pages are hardened by default:
   sharing `VIA_SESSION_KEY`) served will admit, cookieless first request
   included. Honest posture: the CSP is a seatbelt against *injected* inline
   script; the load-bearing defenses are output escaping, the attribute-name
-  allowlist, and the `h.SafeURL` gate on every redirect target
+  allowlist, and the same URL gate on every redirect target
   (`javascript:`/`data:`/`//` are dropped loudly, falling back to the element
   patch).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /

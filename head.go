@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // Head describes the document shell — everything between <head> and the body
@@ -113,7 +113,7 @@ func (hd Head) validate() {
 		if l.Href == "" {
 			panic("via: WithDocumentHead: HeadLink " + quote(l.Rel) + " needs an Href")
 		}
-		if !h.SafeURL(l.Href) {
+		if !hcore.SafeURL(l.Href) {
 			panic("via: WithDocumentHead: HeadLink Href " + quote(l.Href) + " is not a safe URL")
 		}
 	}
@@ -121,7 +121,7 @@ func (hd Head) validate() {
 		if s.Src == "" {
 			panic("via: WithDocumentHead: HeadScript needs a Src (inline script is not expressible: the CSP admits it only by hash)")
 		}
-		if !h.SafeURL(s.Src) {
+		if !hcore.SafeURL(s.Src) {
 			panic("via: WithDocumentHead: HeadScript Src " + quote(s.Src) + " is not a safe URL")
 		}
 	}
