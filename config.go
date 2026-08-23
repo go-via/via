@@ -1,6 +1,10 @@
 package via
 
-import "time"
+import (
+	"log"
+	"sync"
+	"time"
+)
 
 // config holds Register's optional settings. The zero set is the dev-friendly
 // default: the action endpoint accepts requests from any origin. Production
@@ -40,8 +44,21 @@ func newConfig(opts []Option) *config {
 	}
 	c.head.validate()
 	c.csp = buildCSP(c.head)
+	if len(c.trustedOrigins) == 0 {
+		originWarnOnce.Do(func() {
+			log.Print("via: action endpoint accepts requests from any origin — the per-tab id is still " +
+				"the CSRF token, but cross-origin enforcement is OFF until WithTrustedOrigin names one")
+		})
+	}
 	return c
 }
+
+// originWarnOnce keeps the open-floor notice to one line per process. The floor
+// is open by DEFAULT, so the quiet state is the permissive one: WithTrustedOrigin
+// reads as "allow this origin" and says nothing about also switching enforcement
+// on, which means an app that never calls it looks configured rather than open.
+// This is the line that tells you which mode you are actually in.
+var originWarnOnce sync.Once
 
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
 // allowlists an exact origin (scheme://host[:port], as the browser sends it in
