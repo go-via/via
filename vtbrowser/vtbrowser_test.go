@@ -345,12 +345,12 @@ func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
 }
 
 // Negative control: an unsafe Redirect target (javascript:) is dropped
-// server-side by the h.SafeURL gate — no script is shipped at all, so the page
+// server-side by the shared URL gate — no script is shipped at all, so the page
 // never navigates and the payload never reaches the document.
 func TestPostActionRedirect_unsafeTargetIsDropped(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
-	s.Click("#evil") // @post whose Redirect target fails h.SafeURL
+	s.Click("#evil") // @post whose Redirect target fails the URL gate
 	s.Sleep(700 * time.Millisecond)
 
 	var inserted bool

@@ -36,6 +36,14 @@ v0.8 is a rebuild, not an incremental release: the v1 surface (plugins,
 `Session.Rotate`, the old composition types) is replaced wholesale by the
 core below. Treat migration as a re-read of the README, not a diff.
 
+- **`h.SafeURL` is gone.** The URL policy — http/https/relative admitted,
+  `javascript:`/`data:`/protocol-relative refused — moved to
+  `internal/hcore`, where `h`'s typed attributes and via's `Redirect` gate
+  share one implementation. It was exported only to cross a package boundary,
+  and it carried a second copy of the three checks: two gates that agreed
+  today is how one of them later admits a `javascript:` target the other
+  refuses. Nothing outside via needed it; the typed `h.Href`/`h.Src`/
+  `h.Action` attributes and `via.Redirect` enforce the policy for you.
 - **`via/sess` merged into the root package**: `sess.Put`/`Get`/`Clear`/`Rotate`
   are now `via.SessPut`/`SessGet`/`SessClear`/`SessRotate`; the `sess`
   subpackage and its `internal/sessbridge` shim are gone.
@@ -91,7 +99,7 @@ core below. Treat migration as a re-read of the README, not a diff.
   `location.assign()` script that every document this app serves admits by
   its sha256 — no shared key, so pods agree even with different keys. The
   target rides as a `data-via-to` attribute Datastar copies onto the script.
-  Targets are gated by `h.SafeURL`; unsafe ones are dropped loudly with an
+  Targets are gated by the shared URL policy; unsafe ones are dropped loudly with an
   element-patch fallback. Browser-verified under the strict CSP.
 - **`WithDocumentHead(via.Head{...})`**: the document shell — title, lang,
   meta, links, external scripts, one inline style, extra font origins. A typed

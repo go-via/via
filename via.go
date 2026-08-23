@@ -352,7 +352,7 @@ const redirectInit = `(()=>{var s=document.currentScript||document.querySelector
 
 // writeRedirectScript ships a queued via.Redirect as an executable script when a
 // @post action requested one. It returns true (response written) only when there
-// is a redirect AND its target passes h.SafeURL; otherwise it returns false and
+// is a redirect AND its target passes hcore.SafeURL; otherwise it returns false and
 // the caller falls back to the normal element-patch response. The target is
 // passed as data-via-to through the datastar-script-attributes header, which the
 // bundle copies onto the <script> it creates: the script source stays constant so
@@ -361,7 +361,7 @@ func writeRedirectScript(w http.ResponseWriter, target string) bool {
 	if target == "" {
 		return false // no redirect queued — normal element-patch response
 	}
-	if !h.SafeURL(target) {
+	if !hcore.SafeURL(target) {
 		log.Printf("via: unsafe Redirect target %q dropped", target)
 		return false
 	}
