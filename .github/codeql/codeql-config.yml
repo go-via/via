@@ -1,0 +1,23 @@
+name: via CodeQL config
+
+# The full `security-and-quality` suite runs; only queries whose findings on
+# THIS tree are false positives are excluded, each with its reason inline so
+# additions stay deliberate rather than cargo-culted.
+#
+# v1 carried three further exclusions — go/log-injection,
+# go/unhandled-writable-file-close and go/allocation-size-overflow — each
+# justified by a specific v1 file (log.go's stripCRLF, mw/mw.go's sanitizeLog,
+# file.go's Save). None of those files exist in the v2 core, so the exclusions
+# were dropped rather than carried over: a suppression whose rationale points at
+# deleted code is just a blind spot. Re-add one only when a real finding on real
+# v2 code turns out to be a false positive.
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  # via sets the session cookie's Secure flag from the request (req.TLS != nil)
+  # or explicitly via WithSecureCookies, because a TLS-terminating proxy leaves
+  # req.TLS nil on a genuinely https request. CodeQL sees only that the field is
+  # not unconditionally true.
+  - exclude:
+      id: go/cookie-secure-not-set
