@@ -63,6 +63,12 @@ core below. Treat migration as a re-read of the README, not a diff.
 
 ### Added
 
+- **`List[E]` slice edits**: `Len`, `At`, `Insert`, `Remove`, `Replace`,
+  `Truncate`, `Clear` join `Append`. Removal was always possible through the
+  inherited `Set` (`l.Set(slices.Delete(l.Get(), i, i+1))`); these spell the
+  intent at the call site. Index arguments follow slice rules — out of range
+  panics rather than silently doing nothing. Rows that can be removed or
+  reordered need a stable `id` so the morph matches by identity, not position.
 - **Full HTML5 vocabulary in `h`** (~105 constructors), minus the page-shell
   and footgun tags (`html`, `head`, `script`, `template`, …) — those stay
   via's. Typed `h.Href`/`h.Src`/`h.Action` attributes gate their URL through
