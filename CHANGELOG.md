@@ -58,12 +58,19 @@ core below. Treat migration as a re-read of the README, not a diff.
   input's payload is a `Signal`).
 - **Native forms + uploads**: `via.PostForm` (server-side submit + 303),
   `via.OnUpload` + `via.File` for multipart.
-- **Redirect via boot CSP nonce**: a `@post` action's `via.Redirect` ships a
-  `location.assign()` script stamped with `HMAC(key, "via/csp-nonce")` — a
-  stateless nonce every document this app (or any pod sharing the key)
-  serves already admits. Targets are gated by `h.SafeURL`; unsafe ones are
-  dropped loudly with an element-patch fallback. Browser-verified under the
-  strict CSP.
+- **Redirect from a `@post` action**: `via.Redirect` ships a constant
+  `location.assign()` script that every document this app serves admits by
+  its sha256 — no shared key, so pods agree even with different keys. The
+  target rides as a `data-via-to` attribute Datastar copies onto the script.
+  Targets are gated by `h.SafeURL`; unsafe ones are dropped loudly with an
+  element-patch fallback. Browser-verified under the strict CSP.
+- **`WithDocumentHead(via.Head{...})`**: the document shell — title, lang,
+  meta, links, external scripts, one inline style, extra font origins. A typed
+  struct rather than an `h.H`, because the head is also the app's origin
+  declaration: `script-src`, `style-src` and `font-src` are derived from it,
+  so a declared host works under the strict CSP and an undeclared one stays
+  blocked. `InlineStyle` is admitted by its own sha256. Malformed heads panic
+  at `Register`; the zero `Head` serves what via served without the option.
 - **Resilience floor**: SSE keepalive comment frames (`WithSSEHeartbeat`),
   per-frame write deadlines (`WithSSEWriteTimeout`), half-open teardown, a
   client reconnect manager with a "Reconnecting…" banner and a capped
