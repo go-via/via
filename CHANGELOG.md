@@ -6,6 +6,29 @@ The rebuilt "bare core" replaces the v1 tree. Module path is now
 `github.com/go-via/via` (no `/v2` suffix); v1 history is merged, the tree is
 the v2 core.
 
+### Security defaults changed
+
+Read this even if you read nothing else. Two defaults moved in the permissive
+direction relative to v1, deliberately, and neither announces itself at
+runtime unless you look:
+
+- **The origin floor is OPEN by default.** v1 enforced; v0.8 accepts an action
+  from any origin until `WithTrustedOrigin` names one, at which point
+  enforcement switches on for the whole endpoint. The reasoning: the per-tab id
+  is the CSRF token and does the load-bearing work, and local development over
+  plain http has to work with no configuration. The consequence: **a production
+  deployment that never calls `WithTrustedOrigin` is running with cross-origin
+  enforcement off.** The option name says what it allows, not that it also flips
+  enforcement, so via now logs one line at startup when the floor is open. Set
+  the option in production.
+- **Sessions are always on**, lazily — the cookie is issued on first write. If
+  no key is configured, via mints a random per-process one and warns once:
+  sessions then do not survive a restart or span pods. Set `WithSessionKey` or
+  `VIA_SESSION_KEY`.
+
+`WithInsecureOrigin` is gone, because there is no longer a secure default to
+opt out of.
+
 ### Breaking
 
 v0.8 is a rebuild, not an incremental release: the v1 surface (plugins,

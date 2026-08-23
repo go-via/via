@@ -221,6 +221,22 @@ action mutates the store, via re-renders the fragment and patches it into the
 DOM. Reach for `State[T]` and `Signal[T]` when you need per-tab server state or
 a client-owned input value — not as the default container for everything.
 
+## Security defaults moved
+
+Two defaults are more permissive than v1's, and they are the entries most
+likely to matter in production. The CHANGELOG has the full reasoning; the short
+form:
+
+- **The origin floor is open by default.** v1 enforced; v0.8 accepts an action
+  from any origin until `WithTrustedOrigin` names one, which switches
+  enforcement on for the whole endpoint. `WithInsecureOrigin` is gone — there is
+  no secure default left to opt out of. The per-tab id is still the CSRF token,
+  but if you deployed v1 without thinking about origins, **v0.8 needs you to
+  think about them.** via logs one line at startup when the floor is open.
+- **Sessions are always on** and mint a random per-process key if you configure
+  none, warning once. Set `WithSessionKey` or `VIA_SESSION_KEY` or sessions will
+  not survive a restart.
+
 ## Known rough edges in v0.8
 
 Stated plainly so you can decide whether to wait:
@@ -243,4 +259,11 @@ answer:
 go get github.com/go-via/via@v0.7.0
 ```
 
-v1 will not receive features. Security fixes will be considered on request.
+v1 is frozen. It will not receive features, and there is no commitment to
+backport security fixes — as of this release its `golang.org/x/crypto` is behind
+and is not being bumped. Pinning v1 means taking on its dependency maintenance
+yourself; the affected code is the auth example rather than the library, but
+check that against your own build before relying on it.
+
+If you need a specific fix on v1, open an issue and ask. That is a request, not
+a support guarantee.
