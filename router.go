@@ -102,12 +102,8 @@ type Router struct {
 func NewRouter(opts ...Option) *Router {
 	cfg := newConfig(opts)
 	sm := newSessionManager(cfg)
-	maxLive := cfg.maxSSEConn
-	if maxLive <= 0 {
-		maxLive = defaultMaxSSEConn
-	}
 	r := &Router{mux: http.NewServeMux(), cfg: cfg, sessions: sm,
-		reg: newRegistry(), liveCount: &atomic.Int64{}, maxLive: maxLive}
+		reg: newRegistry(), liveCount: &atomic.Int64{}, maxLive: maxSSEConn}
 	r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/javascript")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

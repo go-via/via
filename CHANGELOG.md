@@ -138,10 +138,10 @@ as a re-read of the README, not a diff.
   so a declared host works under the strict CSP and an undeclared one stays
   blocked. `InlineStyle` is admitted by its own sha256. Malformed heads panic
   at `Register`; the zero `Head` serves what via served without the option.
-- **Resilience floor**: SSE keepalive comment frames (`WithSSEHeartbeat`),
-  per-frame write deadlines (`WithSSEWriteTimeout`), half-open teardown, a
-  client reconnect manager with a "Reconnecting…" banner and a capped
-  reload-to-re-bootstrap (2), `WithMaxSSEConnections` (503 over the cap).
+- **Resilience floor**: SSE keepalive comment frames (fixed 25s), per-frame
+  write deadlines (fixed 10s), half-open teardown, a client reconnect manager
+  with a "Reconnecting…" banner and a capped reload-to-re-bootstrap (2), a
+  fixed 10,000-connection cap (503 over it).
 - **`vt.App.Client()`**: the harness's `*http.Client`, wired to reach its
   in-memory server. A test that hand-rolls a request past the `Get`/`Action`/
   `Connect` builders must send it through this, not `http.DefaultClient` —
@@ -202,13 +202,10 @@ as a re-read of the README, not a diff.
   ownership the header gets.
 - **An action POST against a live unit no longer waits on that unit's own
   SSE push.** A stalled reader could block the write behind an action for up
-  to the write timeout — or forever, since `WithSSEWriteTimeout` could be
-  disabled — while the connection's single goroutine, and every net/http
-  goroutine dispatched behind it, sat parked. The action now answers as soon
-  as it has run; the push ships as a later, independent unit on the same
-  connection. **`WithSSEWriteTimeout` now panics on a non-positive duration**
-  instead of disabling the deadline — the deadline is what bounds this wait,
-  so it can no longer be turned off.
+  to the (fixed, non-disableable) write timeout, while the connection's
+  single goroutine, and every net/http goroutine dispatched behind it, sat
+  parked. The action now answers as soon as it has run; the push ships as a
+  later, independent unit on the same connection.
 - Signal warnings: `Set` on a signal the View never rendered warns once
   instead of silently doing nothing.
 - Session-cookie signature mismatch (two apps clobbering one cookie name)

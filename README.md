@@ -133,8 +133,8 @@ examples, the whole live stack verified in real headless browsers
   automatically over TLS (so `http://localhost` dev still works);
   `WithSecureCookies` forces it on behind a TLS-terminating proxy.
 - **Resilience floor + reconnect**: a server-side keepalive comment frame
-  (`WithSSEHeartbeat`) and a per-frame write deadline (`WithSSEWriteTimeout`,
-  default 10s) ride the island's single goroutine; a failed frame write tears the
+  (fixed 25s) and a per-frame write deadline (fixed 10s) ride the island's
+  single goroutine; a failed frame write tears the
   island down (runs disposers, stops ticks) so a half-open peer — gone without a
   FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
@@ -207,8 +207,8 @@ calling `Embed` at all — v0.8 refuses both at render instead); and
 at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
 for replay). The SSE GET stream applies the same origin floor as the action
-POST and is capped at a configurable number of concurrent connections
-(`WithMaxSSEConnections`, default 10,000; over the cap returns 503).
+POST and is capped at a fixed number of concurrent connections (10,000; over
+the cap returns 503).
 
 ## Develop
 

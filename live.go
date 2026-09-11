@@ -90,11 +90,6 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-// defaultHeartbeat is the keepalive cadence when WithSSEHeartbeat is unset or
-// non-positive. A failed keepalive write is the only in-band way to detect a
-// half-open peer, so the keepalive is never disabled — a non-positive value
-// floors to this.
-const defaultHeartbeat = 25 * time.Second
 
 // writeKeepaliveFrame writes one SSE comment frame. A comment (a line starting
 // with ':') is ignored by the client — it mutates no signal and patches no
