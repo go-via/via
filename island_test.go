@@ -233,17 +233,10 @@ func TestMux_liveIslandActionRoutesToItsIslandAndPushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(panel{}))
 		conn := app.Connect()
-		page := fetchPage(t, app, "/")
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, 1, 0), strings.NewReader("{}"))
-		require.NoError(t, err)
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("Datastar-Request", "true")
-		req.Header.Set("X-Via-Tab", conn.TabID()) // route to THIS connection's island (url id 1)
-		resp, err := app.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "a live mux action acks 204; the result rides the SSE")
+		// URL id 1 addresses this island; Live routes it to THIS connection's tab.
+		status, _ := app.IslandAction(1, 0).Live(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
 
 		line := conn.Await("c=1")
 		assert.Contains(t, line, "via-i0", "the action's push must target its own island container")
@@ -255,18 +248,10 @@ func TestMux_liveIslandActionRoutesToItsIslandAndPushes(t *testing.T) {
 func TestMux_liveIslandActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(panel{}))
-		app.Connect() // establish the app, but use a bogus tab below
-		page := fetchPage(t, app, "/")
+		conn := app.Connect() // establish the app, but use a bogus tab below
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, 1, 0), strings.NewReader("{}"))
-		require.NoError(t, err)
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-		req.Header.Set("Datastar-Request", "true")
-		req.Header.Set("X-Via-Tab", "bogus-tab-id")
-		resp, err := app.Client().Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		assert.Equal(t, http.StatusGone, resp.StatusCode)
+		status, _ := app.IslandAction(1, 0).Live(conn).Tab("bogus-tab-id").Fire()
+		assert.Equal(t, http.StatusGone, status)
 	})
 }
 
