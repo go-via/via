@@ -114,9 +114,13 @@ func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
 
-A live island may be embedded inside another live island, or under a live
-page, at any depth — each streams and patches independently over the page's
-one connection.
+A live island may be embedded directly by a plain (non-live) root, or by a
+further plain `via.Embed` under one — each streams and patches independently
+over the page's one connection. **Known limitation:** a live island cannot be
+embedded inside another live composition, and a live island's own `View`
+cannot itself call `via.Embed` — either panics at render. Nested live
+composition (a dynamic set of live children keyed by identity) is a deferred
+feature; plain (non-live) composition still nests to any depth.
 
 ### 4. Fan-out is scoped, not global
 

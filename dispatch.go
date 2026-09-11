@@ -86,8 +86,7 @@ func (c *liveConn) unit(island int) *Ctx {
 }
 
 // unitAddr is c's own dispatch address in /_via/a/{island}/{n} — 0 for the
-// root, islandIdx+1 for an embedded unit at any depth. Also the parent half
-// of a nested unit's childSlots identity.
+// root, islandIdx+1 for an embedded unit at any depth.
 func unitAddr(c *Ctx) int {
 	if c != nil && c.isIsland {
 		return c.islandIdx + 1
@@ -358,7 +357,7 @@ func (m *mount) rerenderStateless(island int, rootBefore []byte, inst viewer, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderIslandBind(u.islandIdx, u.islandV, base, nil)
+	afterCtx, afterInner := renderIslandBind(u.islandIdx, u.islandV, base)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
 	}

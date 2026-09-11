@@ -221,43 +221,17 @@ type liveConn struct {
 	pulse       chan func()       // the connection's serialization channel (shared by all its units)
 	done        <-chan struct{}   // reqCtx.Done() — closed on disconnect
 	pushSignals func(json string) // emit a patch-signals frame on this stream
-	mu          sync.Mutex        // guards units/childSlots: replace runs on the island goroutine, unit/childAt are read from the dispatching request's own goroutine
+	mu          sync.Mutex        // guards units: replace runs on the island goroutine, unit is read from the dispatching request's own goroutine
 	units       map[int]*Ctx      // dispatch address (0=root, islandIdx+1=embedded) → current unit Ctx, at any embedding depth
-	childSlots  map[childKey]*Ctx // (parent's dispatch address, embed ordinal) → current descendant unit Ctx
 }
 
-// childKey identifies one Embed call site within its parent's render — the
-// ordinal is stable across renders because a live parent's View calls Embed
-// in the same order every time (the same render-stable contract actions
-// already carry).
-type childKey struct {
-	parent  int
-	ordinal int
-}
-
-// childAt returns the unit currently registered for the ordinal'th Embed
-// call under the unit at dispatch address parent, if any — the reuse hook
-// that keeps a live descendant's server state (and container id) stable
-// across its own parent's re-renders, instead of the fresh by-value copy
-// Embed would otherwise seed.
-func (c *liveConn) childAt(parent, ordinal int) (*Ctx, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	u, ok := c.childSlots[childKey{parent, ordinal}]
-	return u, ok
-}
-
-// replace registers u as the current bind for its own dispatch address, and,
-// when u is itself embedded, for its parent+ordinal slot too, so the next
-// Embed of that slot (a live ancestor's own re-render) finds this render's
-// instance instead of reseeding a fresh copy.
+// replace registers u as the current bind for its own dispatch address —
+// the next action against it, or a full-page re-render's Embed reusing its
+// already-connected instance, targets this render's actions/hydrators table.
 func (c *liveConn) replace(u *Ctx) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.units[unitAddr(u)] = u
-	if u.isIsland {
-		c.childSlots[childKey{u.parentUnit, u.ordinal}] = u
-	}
 }
 
 // run posts fn onto the island goroutine, where it runs serialized with

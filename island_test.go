@@ -4,10 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"regexp"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -402,136 +399,6 @@ func TestEmbed_unknownIslandOrActionIsGone(t *testing.T) {
 	}
 }
 
-// reuseA is a live island whose Act bumps a shared, test-visible counter — the
-// vehicle for proving an action's URL still names ITS OWN island after its
-// live parent re-renders.
-type reuseA struct {
-	n    via.State[int]
-	hits *atomic.Int64
-}
-
-func (a *reuseA) OnConnect(*via.Ctx) error { return nil }
-func (a *reuseA) Act(*via.Ctx)             { a.hits.Add(1); a.n.Set(a.n.Get() + 1) }
-func (a *reuseA) View() h.H {
-	return h.Div(h.P(h.Str("A")), h.Button(via.OnClick(a.Act), h.Str("a")))
-}
-
-// reuseP is a PLAIN (non-live) island embedded after a live sibling.
-type reuseP struct{ hits *atomic.Int64 }
-
-func (p *reuseP) Act(*via.Ctx) { p.hits.Add(1) }
-func (p *reuseP) View() h.H {
-	return h.Div(h.P(h.Str("P")), h.Button(via.OnClick(p.Act), h.Str("p")))
-}
-
-// reuseRoot is itself live (it ticks), so every beat re-renders it and calls
-// Embed(A) then Embed(P) again — A is a live descendant the reuse path finds
-// and re-registers; P is a fresh by-value re-seed every time.
-type reuseRoot struct {
-	A     reuseA
-	P     reuseP
-	beats via.State[int]
-}
-
-func (r *reuseRoot) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, r.beat); return nil }
-func (r *reuseRoot) beat(*via.Ctx)                { r.beats.Set(r.beats.Get() + 1) }
-func (r *reuseRoot) View() h.H {
-	return h.Div(h.P(h.Str("beats="), r.beats.Display()), via.Embed(r.A), via.Embed(r.P))
-}
-
-// A live parent's own re-render must still advance its page-wide island index
-// once per Embed call on the REUSE path, exactly as the fresh-seed path does —
-// otherwise a later sibling (P) is renumbered onto an EARLIER live
-// descendant's already-claimed index: both containers end up "via-i0", and
-// P's own rendered button carries A's OWN dispatch address. An attacker who
-// reads the page-wide $_viatab signal (visible to any script on a live page)
-// can then attach it to that address and run A's action under P's label —
-// exactly the misroute this guards, so the check fires the URL WITH the tab
-// header, the attack's own shape, not a plain click.
-func TestMux_liveDescendantReuseAdvancesLaterSiblingsIndex(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var aHits, pHits atomic.Int64
-		app := vt.Serve(t, via.Register(reuseRoot{A: reuseA{hits: &aHits}, P: reuseP{hits: &pHits}}))
-		conn := app.Connect()
-
-		line := conn.Await("beats=1") // the root's first tick-driven re-render
-		assert.NotContains(t, line, `id="via-i0"><p>P`, "P must not collide onto A's container id")
-
-		pURL := actionURLRe(t, line, 2, 0) // P's own address, distinct from A's (url id 1)
-		status, _ := app.Action(0).Raw(pURL).Tab(conn.TabID()).Fire()
-		assert.Equal(t, http.StatusGone, status, "P is not a live unit; its address must not resolve to A's")
-		assert.Zero(t, aHits.Load(), "P's URL must never run A's action")
-	})
-}
-
-// actionURLRe extracts the currently-live action URL for {island}/{n} out of
-// an SSE push line (vt.Action.Fire only reads off a GET page, not a push).
-func actionURLRe(t *testing.T, line string, island, n int) string {
-	t.Helper()
-	pat := `_via/a/` + strconv.Itoa(island) + `/` + strconv.Itoa(n) + `\?v=[^'"\\]+`
-	m := regexp.MustCompile(pat).FindString(line)
-	require.NotEmptyf(t, m, "action %d/%d not found in push line:\n%s", island, n, line)
-	return "/" + m
-}
-
-// nestQ is a plain island embedded before a live sibling (occupies url id 1).
-type nestQ struct{ hits *atomic.Int64 }
-
-func (q *nestQ) Act(*via.Ctx) { q.hits.Add(1) }
-func (q *nestQ) View() h.H    { return h.Div(h.P(h.Str("Q")), h.Button(via.OnClick(q.Act), h.Str("q"))) }
-
-// nestC is a plain island nested INSIDE a live island (nestL below).
-type nestC struct{ hits *atomic.Int64 }
-
-func (c *nestC) Act(*via.Ctx) { c.hits.Add(1) }
-func (c *nestC) View() h.H    { return h.Div(h.P(h.Str("C")), h.Button(via.OnClick(c.Act), h.Str("c"))) }
-
-// nestL is live and embeds nestC — so C's page-wide index (assigned during
-// first paint by the ONE shared pass) is L's own index + 1, not 0.
-type nestL struct {
-	C     nestC
-	beats via.State[int]
-}
-
-func (l *nestL) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, l.beat); return nil }
-func (l *nestL) beat(*via.Ctx)                { l.beats.Set(l.beats.Get() + 1) }
-func (l *nestL) View() h.H {
-	return h.Div(h.P(h.Str("lb="), l.beats.Display()), via.Embed(l.C))
-}
-
-type nestRoot struct {
-	Q nestQ
-	L nestL
-}
-
-func (r *nestRoot) View() h.H { return h.Div(via.Embed(r.Q), via.Embed(r.L)) }
-
-// L's own push re-renders ONLY L (a standalone renderIslandBind, not the whole
-// page), so its local index allocator must pick up numbering where the
-// page-wide first-paint pass left off (L's own index + 1) — not restart at 0,
-// which would renumber C onto Q's already-claimed url id (both containers end
-// up "via-i0") and misroute a click on C's button into Q's handler. C itself
-// is a plain island nested two levels deep and stays unreachable by stateless
-// dispatch either way (dispatchStateless's unit lookup is one level only) —
-// the fix's job is failing safe (410, Q's action never runs), not making a
-// nested plain child independently addressable.
-func TestMux_nestedPlainChildOfLiveIslandKeepsFirstPaintIndex(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var qHits, cHits atomic.Int64
-		app := vt.Serve(t, via.Register(nestRoot{Q: nestQ{hits: &qHits}, L: nestL{C: nestC{hits: &cHits}}}))
-		conn := app.Connect()
-
-		line := conn.Await("lb=1") // L's first tick-driven push
-		assert.NotContains(t, line, `id="via-i0"`, "C must not collide onto Q's container id")
-		cURL := actionURLRe(t, line, 3, 0) // C's own address, distinct from Q's (url id 1)
-
-		status, _ := app.Action(0).Raw(cURL).Fire() // C is plain: no live connection, dispatches stateless
-		assert.Equal(t, http.StatusGone, status)
-		assert.Zero(t, qHits.Load(), "C's URL must never run Q's action")
-		assert.Zero(t, cHits.Load())
-	})
-}
-
 // Verify the scoped action path is genuinely distinct per island (regression
 // guard against a flat shared index leaking across islands).
 func TestEmbed_siblingIslandsDoNotShareAnActionIndexSpace(t *testing.T) {
@@ -541,65 +408,6 @@ func TestEmbed_siblingIslandsDoNotShareAnActionIndexSpace(t *testing.T) {
 	// page-global flat index.
 	assert.True(t, strings.Contains(body, `/_via/a/1/0`) && strings.Contains(body, `/_via/a/2/0`),
 		"each island must own a /{island}/{n} table, not a flat page index")
-}
-
-// swapA and swapB are two DIFFERENTLY TYPED live islands with distinguishable
-// output — the vehicle for proving childSlots reuse checks identity, not just
-// ordinal position.
-type swapA struct{}
-
-func (a *swapA) OnConnect(*via.Ctx) error { return nil }
-func (a *swapA) View() h.H                { return h.Div(h.Str("AAA")) }
-
-type swapB struct{}
-
-func (b *swapB) OnConnect(*via.Ctx) error { return nil }
-func (b *swapB) View() h.H                { return h.Div(h.Str("BBB")) }
-
-// swapRoot is a live root whose Flip toggles Hide, which via.When guards
-// swapA behind (zero-value Hide=false, so swapA shows on the very first
-// render — GET and connect alike, with no OnConnect needed to reach it);
-// swapB is unconditional. Flipping Hide to true drops swapA's Embed call
-// entirely, shifting swapB down onto swapA's OLD childSlots ordinal (0) —
-// the exact case Embed's own godoc recommends via.When for.
-type swapRoot struct {
-	Hide via.State[bool]
-	A    swapA
-	B    swapB
-}
-
-func (r *swapRoot) OnConnect(ctx *via.Ctx) error { return nil }
-func (r *swapRoot) Flip(ctx *via.Ctx)            { r.Hide.Set(!r.Hide.Get()) }
-func (r *swapRoot) embedA() h.H                  { return via.Embed(r.A) }
-func (r *swapRoot) View() h.H {
-	return h.Div(
-		via.When(!r.Hide.Get(), r.embedA),
-		via.Embed(r.B),
-		h.Button(via.OnClick(r.Flip)),
-	)
-}
-
-// A When-guarded Embed disappearing must never render its sibling's container
-// with the vanished occupant's stale content — childSlots is keyed by
-// (parent, ordinal), and swapA's disappearance shifts swapB down onto swapA's
-// old ordinal, so an islandIdx match alone (both land on idx 0) can't tell
-// the two apart. The reuse check must also confirm the occupant's concrete
-// type still matches what's being embedded.
-func TestEmbed_whenFlipDoesNotSwapSiblingIdentity(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(swapRoot{}))
-		conn := app.Connect()
-		page := fetchPage(t, app, "/")
-		assert.Contains(t, page, `id="via-i0"><div>AAA</div>`)
-		assert.Contains(t, page, `id="via-i1"><div>BBB</div>`)
-
-		status, _ := app.Action(0).Tab(conn.TabID()).Fire() // Flip: Hide -> true
-		require.Equal(t, http.StatusNoContent, status)
-
-		line := conn.Await(`id="via-i0"><div>BBB</div>`)
-		assert.NotContains(t, line, `id="via-i0"><div>AAA</div>`,
-			"swapB's container must show swapB's own content, not swapA's stale reused instance")
-	})
 }
 
 // banner is a plain (stateless) composition embedded by a layout.
@@ -699,58 +507,46 @@ func TestEmbed_allowsNestedPlainChild(t *testing.T) {
 }
 
 // livePage is a LIVE root (implements OnConnect) whose View embeds a LIVE
-// island — both stream over the page's one connection.
+// island — nested live composition, refused at render.
 type livePage struct{ Inner beater }
 
 func (p *livePage) View() h.H                { return h.Div(via.Embed(p.Inner)) }
 func (p *livePage) OnConnect(*via.Ctx) error { return nil }
 
-// A live page embedding a live island: the child gets its own container and
-// pushes independently of the page over the shared connection.
-func TestEmbed_liveChildInsideLivePageStreamsIndependently(t *testing.T) {
+// A live root embedding a live child is nested live composition, cut from
+// v0.8 (deferred alongside keyed live islands) — it must abort the render
+// with a 500, not serve a page that silently misroutes an action, exactly
+// like the State-off-a-live-page guard.
+func TestEmbed_liveChildInsideLivePageIsRefused(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(livePage{Inner: beater{label: "hb"}}))
-	conn := app.Connect()
-
-	conn.Await(`id="via-i0"`) // the embedded live child pushes its own container
-	conn.Await("hb=")         // and renders its own server state independently of the page
+	status, _ := app.Get("/")
+	assert.Equal(t, http.StatusInternalServerError, status,
+		"embedding a live child inside a live parent must abort the render with a 500")
 }
 
-// tickingParentWithLiveChild is a LIVE root that ticks its OWN state — so it
-// re-renders (and re-embeds its child) on every beat — and embeds a live
-// child whose own state is independent.
-type tickingParentWithLiveChild struct {
-	Child liveClicker
-	beats via.State[int]
-}
+// nestedLiveIsland is itself a live island (embedded from a plain root) whose
+// own View calls Embed again — the other nested-composition shape A1 cuts:
+// an embedded live unit's own independent re-render never re-walks a parent,
+// so it has nothing to keep a further Embed's addressing stable against.
+type nestedLiveIsland struct{ Child banner }
 
-func (p *tickingParentWithLiveChild) OnConnect(ctx *via.Ctx) error {
-	ctx.Tick(15*time.Millisecond, p.beat)
-	return nil
-}
-func (p *tickingParentWithLiveChild) beat(ctx *via.Ctx) { p.beats.Set(p.beats.Get() + 1) }
-func (p *tickingParentWithLiveChild) View() h.H {
-	return h.Div(h.P(h.Str("beats="), p.beats.Display()), via.Embed(p.Child))
-}
+func (n *nestedLiveIsland) OnConnect(*via.Ctx) error { return nil }
+func (n *nestedLiveIsland) View() h.H                { return h.Div(via.Embed(n.Child)) }
 
-// Embed takes the child by value: without reusing the connected child's own
-// instance, every one of the parent's own re-renders would re-seed a fresh
-// (zeroed) copy from the parent's field, silently resetting the child's
-// state. This is the by-value staleness hazard B1 must close.
-func TestEmbed_liveParentPushKeepsLiveChildState(t *testing.T) {
+type nestedLiveHost struct{ Inner nestedLiveIsland }
+
+func (h2 *nestedLiveHost) View() h.H { return h.Div(via.Embed(h2.Inner)) }
+
+// An embedded live island calling Embed inside its own View must also abort
+// the render — regardless of whether the further-embedded child is itself
+// live or plain.
+func TestEmbed_liveIslandEmbeddingFurtherChildrenIsRefused(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(tickingParentWithLiveChild{}))
-	conn := app.Connect()
-	conn.Await(`id="via-i0"`)
-
-	code, _ := app.IslandAction(1, 0).Tab(conn.TabID()).Fire() // bump the child once
-	require.Equal(t, http.StatusNoContent, code)
-	conn.Await("c=1") // the child's own push already reflects the bump
-
-	// The parent's own tick re-renders (and re-embeds) the child on every
-	// beat; the child's state must still read 1 in that frame.
-	line := conn.Await("beats=")
-	assert.Contains(t, line, "c=1", "the parent's own push must not clobber the child's server state")
+	app := vt.Serve(t, via.Register(nestedLiveHost{}))
+	status, _ := app.Get("/")
+	assert.Equal(t, http.StatusInternalServerError, status,
+		"a live island's own View calling Embed must abort the render with a 500")
 }
 
 // The guard is about LIVE children only: a live page may still embed a plain
@@ -767,4 +563,49 @@ func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
 
 	assert.Contains(t, body, "LIVEPAGE", "the live page renders")
 	assert.Contains(t, body, "BANNER", "the plain child renders in place")
+}
+
+// flipChild's own action count depends on a pointer shared with its parent —
+// a legitimate cross-instance dependency (Embed's own godoc: "pointer deps
+// are intentionally shared"), used here purely to flip the CHILD's shape
+// independently of the root between the root's GET and its later action.
+type flipChild struct{ extra *bool }
+
+func (c *flipChild) Bump(*via.Ctx)  {}
+func (c *flipChild) Extra(*via.Ctx) {}
+func (c *flipChild) View() h.H {
+	if *c.extra {
+		return h.Div(h.Button(via.OnClick(c.Bump)), h.Button(via.OnClick(c.Extra)))
+	}
+	return h.Div(h.Button(via.OnClick(c.Bump)))
+}
+
+// flipRoot has its own dispatchable action (island 0) and embeds flipChild —
+// the vehicle for proving the root's OWN digest survives a child-only shape
+// change, now that shapeDigest no longer folds a child's shape into it.
+type flipRoot struct {
+	Child flipChild
+	hits  int
+}
+
+func (r *flipRoot) Act(*via.Ctx) { r.hits++ }
+func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.OnClick(r.Act)), via.Embed(r.Child)) }
+
+// A child's shape changing between a page's GET and a later click on the
+// PARENT's own button must not 410 that click — shapeDigest folding the
+// child's own shape into the parent's was the A6 bug: the parent's digest
+// would only ever refresh on the parent's OWN next push, so a child-only
+// shape drift left the parent's already-rendered URL permanently stale.
+func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
+	t.Parallel()
+	extra := false
+	srv := serve(t, via.Register(flipRoot{Child: flipChild{extra: &extra}}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	rootAction := actionURL(t, page, 0, 0)
+
+	extra = true // the child's OWN shape now differs from what the GET rendered
+
+	resp, _ := do(t, srv, http.MethodPost, rootAction, "{}")
+	assert.NotEqual(t, http.StatusGone, resp.StatusCode,
+		"a child-only shape change must not stale the parent's own already-rendered action")
 }

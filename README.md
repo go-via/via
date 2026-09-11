@@ -151,7 +151,12 @@ examples, the whole live stack verified in real headless browsers
   layouts (`Shell[C]{Body C}`) compose one shell with any page. Ownership is
   by value: the field literal seeds the child, each connection gets its own
   copy (value state stays per-tab), and pointer deps are the deliberate
-  sharing channel.
+  sharing channel. **Known limitation:** a live island cannot itself embed a
+  further live island — nesting is one level deep (the root, or a live child
+  directly under a plain root, or through further plain `via.Embed`s); it
+  panics at render, loud and early, rather than misroute an action. Plain
+  (non-live) composition still nests to any depth. Nested live composition
+  (a dynamic set of live children keyed by identity) is a deferred feature.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
@@ -197,7 +202,10 @@ submit shows the browser's own error page.
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
 lists *of* live islands (per-row actions are done via `OnClickArg`; fixed
-embeds via `via.Embed` are done); and at-least-once redelivery (a push onto
+embeds via `via.Embed` are done); nested live composition (a live island
+embedding a further live island, or an embedded live island's own `View`
+calling `Embed` at all — v0.8 refuses both at render instead); and
+at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
 for replay). The SSE GET stream applies the same origin floor as the action
 POST and is capped at a configurable number of concurrent connections

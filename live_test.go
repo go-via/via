@@ -1281,7 +1281,7 @@ func (r *racyTicker) View() h.H {
 	return h.Div(r.n.Display(), h.Button(via.OnClick(r.Bump)))
 }
 
-// liveConn.mu guards units/childSlots: a background tick's push runs replace
+// liveConn.mu guards units: a background tick's push runs replace
 // on the island goroutine while a concurrent action POST reads the same maps
 // via unit() on the dispatching request's own goroutine. This test runs both
 // in real (not synctest-serialized) time and depth so -race — or the Go
