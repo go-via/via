@@ -39,12 +39,12 @@ var datastarJS []byte
 // viewer is the (pointer) contract a root must satisfy: a pure, ctx-free View.
 type viewer interface{ View() h.H }
 
-// PtrViewer is the constraint every Register/Mount call site needs — one named
+// ptrViewer is the constraint every Register/Mount call site needs — one named
 // alias instead of the same anonymous interface repeated at each generic entry
 // point. Exported (rather than kept package-private) so `go doc` renders it
 // as `*T; // Has unexported methods` at Register/Mount's signature — an
 // unexported alias showed up as a bare, unresolvable name instead.
-type PtrViewer[T any] = interface {
+type ptrViewer[T any] = interface {
 	*T
 	viewer
 }
@@ -569,7 +569,7 @@ func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only 
 // the call site. The PT constraint makes a missing or mistyped View() a
 // compile error rather than a first-request 500 — Register(Counter{}) still
 // infers T=Counter, PT=*Counter with zero type arguments.
-func Register[T any, PT PtrViewer[T]](root T, opts ...Option) http.Handler {
+func Register[T any, PT ptrViewer[T]](root T, opts ...Option) http.Handler {
 	r := NewRouter(opts...)
 	r.Mount[T, PT]("/", root)
 	return r

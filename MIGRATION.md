@@ -18,7 +18,7 @@ with `via.On*`, replace `h.Text` with `h.Str`, keep your typed attributes —
 `h.Class`, `h.Type`, `h.Style`, `h.Min`, … all still exist, plus 40+ more —
 and reach for `h.RawAttr` only when no typed helper covers the attribute you
 need; every `via.X(ctx, …)` is now `ctx.X(…)` — `Param`,
-`Redirect`, `Listen`, `Subscribe`, `Session.Put`/`Get`/`Clear`/`Rotate` are
+`Redirect`, `Listen`, `Session.Put`/`Get`/`Clear`/`Rotate` are
 all `Ctx`/`Session` methods now, not free functions (and `via.Mount(r, …)`
 is `r.Mount(…)`, a `Router` method). Expect the compiler to find the rest.
 Then read shift 1, because that is the one that will actually change your

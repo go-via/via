@@ -121,7 +121,7 @@ examples, the whole live stack verified in real headless browsers
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
-  `via/topic.Topic[T]` broker + `ctx.Subscribe` / `ctx.OnDispose` — one publish
+  `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose` — one publish
   fans out to every connected island.
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a

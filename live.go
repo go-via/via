@@ -25,7 +25,7 @@ type tickReg struct {
 }
 
 // subStarter spawns one subscription's reader goroutine, bridging an external
-// channel into the island's single pulse loop. via builds these in Subscribe.
+// channel into the island's single pulse loop. via builds these in Listen.
 type subStarter func(reqCtx context.Context, pulse chan<- func())
 
 // Tick schedules fn to run every d for the life of the island's connection. fn
@@ -42,24 +42,16 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 
 // Listen wires an island to a Topic in one line: it subscribes, pumps every
-// published value into handler on the island's own goroutine (then pushes this
-// island's re-render), and stops the subscription on disconnect. It fuses the
-// Subscribe/OnDispose(sub.Stop)/pump triple — reach for Subscribe only when
-// the source is a raw channel rather than a Topic.
+// published value into handler on the island's own goroutine (serialized with
+// Tick, so island state is mutated race-free), pushes this island's
+// re-render, and stops the subscription on disconnect. Valid only inside
+// OnConnect.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	sub := t.Subscribe()
 	c.OnDispose(sub.Stop)
-	c.Subscribe(sub.C(), handler)
-}
-
-// Subscribe drives a live island from an external channel: each value runs
-// handler on the island's single goroutine (serialized with Tick, so island
-// state is mutated race-free) and then via re-renders and pushes. Valid only
-// inside OnConnect; pair it with OnDispose to stop the source. Prefer Listen
-// when the source is a Topic rather than a raw channel.
-func (c *Ctx) Subscribe[T any](ch <-chan T, handler func(*Ctx, T)) {
 	c.subs = append(c.subs, func(reqCtx context.Context, pulse chan<- func()) {
 		go func() {
+			ch := sub.C()
 			for {
 				select {
 				case <-reqCtx.Done():
