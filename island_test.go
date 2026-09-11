@@ -190,24 +190,6 @@ func TestMux_liveIslandSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	})
 }
 
-// A SignalClientOnly[T] inside an island keeps its leading-underscore (client-only) marker
-// in front of the island prefix — `_i0_s0` — so Datastar still never POSTs it.
-func TestEmbed_localSignalInIslandStaysClientOnly(t *testing.T) {
-	t.Parallel()
-	_, body := do(t, serve(t, via.Register(togglePage{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-bind="_i0_s0"`,
-		"a Local in an island keeps its leading underscore before the island prefix")
-}
-
-// togglePage embeds an island whose only signal is a client-only Local.
-type toggleIsland struct{ open via.SignalClientOnly[bool] }
-
-func (i *toggleIsland) View() h.H { return h.Div(i.open.Bind()) }
-
-type togglePage struct{ T toggleIsland }
-
-func (p *togglePage) View() h.H { return h.Div(via.Embed(p.T)) }
-
 // greeter renders a seeded field — the vehicle for proving an island child can
 // receive constructor data (a dep) rather than only its zero value.
 type greeter struct{ who string }

@@ -107,9 +107,8 @@ examples, the whole live stack verified in real headless browsers
   element-patch when the render changed, `204` when it didn't.
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
-  greeting updates live as you type, entirely client-side. `SignalClientOnly[T]` is a
-  client-only signal (never round-trips); `When`/`Each` render conditionals
-  and lists.
+  greeting updates live as you type, entirely client-side; `When`/`Each`
+  render conditionals and lists.
 - **Live islands + `State[T]`** (`example/pulse`): implement `OnConnect` and a
   composition becomes a live island with a per-tab SSE stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
