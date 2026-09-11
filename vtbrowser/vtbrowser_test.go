@@ -311,54 +311,35 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
-// redirectViaScript is a stateless page whose @post actions call via.Redirect.
-// The document's CSP nonce is the boot nonce — HMAC of the signing key — so the
-// action's text/javascript location.assign() is admitted on the very first
-// load: no session, no cookie, no reload.
+// redirectViaScript is a stateless page whose @post action calls via.Redirect
+// — which can no longer navigate the browser (only PostForm and OnInit can).
 type redirectViaScript struct{}
 
-func (p *redirectViaScript) Go(ctx *via.Ctx)   { ctx.Redirect("/done") }
-func (p *redirectViaScript) Evil(ctx *via.Ctx) { ctx.Redirect("javascript:alert(1)") }
+func (p *redirectViaScript) Go(ctx *via.Ctx) { ctx.Redirect("/done") }
 func (p *redirectViaScript) View() h.H {
-	return h.Div(
-		h.Button(h.RawAttr("id", "go"), via.OnClick(p.Go), h.Str("go")),
-		h.Button(h.RawAttr("id", "evil"), via.OnClick(p.Evil), h.Str("evil")),
-	)
+	return h.Div(h.Button(h.RawAttr("id", "go"), via.OnClick(p.Go), h.Str("go")))
 }
 
-// A via.Redirect from a Datastar @post action must ACTUALLY navigate the browser
-// under the strict CSP — the payoff no httptest can see. The action ships a
-// constant location.assign(s.dataset.viaTo) script whose sha256 every document
-// this app serves already admits, with the target riding as a data attribute
-// Datastar copies onto the script — so the very first load's click must navigate.
-func TestPostActionRedirect_navigatesUnderStrictCSP(t *testing.T) {
+// A via.Redirect from a Datastar @post action must NOT navigate the browser —
+// the payoff no httptest can see is that no script is ever inserted into the
+// live document, under the real CSP.
+func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
 	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
-	s.Click("#go") // @post → location.assign(s.dataset.viaTo), admitted by hash
-	s.WaitEvalTrue(`location.pathname === "/done"`,
-		"the @post redirect script executed and navigated the browser to /done")
-	s.RequireCleanConsole() // a CSP-refused script would surface as a console error
-}
-
-// Negative control: an unsafe Redirect target (javascript:) is dropped
-// server-side by the shared URL gate — no script is shipped at all, so the page
-// never navigates and the payload never reaches the document.
-func TestPostActionRedirect_unsafeTargetIsDropped(t *testing.T) {
-	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	s := vtbrowser.Open(t, app)
-	s.Click("#evil") // @post whose Redirect target fails the URL gate
+	s.Click("#go")
 	s.Sleep(700 * time.Millisecond)
 
 	var inserted bool
 	s.Eval(`[...document.querySelectorAll('head script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
 	if inserted {
-		t.Fatal("an unsafe redirect target must be dropped server-side — no script may ship")
+		t.Fatal("a @post Redirect must not ship a navigation script")
 	}
 	var path string
 	s.Eval(`location.pathname`, &path)
 	if path != "/" {
-		t.Fatalf("expected no navigation for a dropped unsafe redirect, but went to %q", path)
+		t.Fatalf("expected no navigation for a @post Redirect, but went to %q", path)
 	}
+	s.RequireCleanConsole()
 }
 
 // --- WithDocumentHead under the derived CSP ---

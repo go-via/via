@@ -30,16 +30,16 @@ func fetchPage(t *testing.T, app *vt.App, path string) string {
 	return string(b)
 }
 
-// liveRedirector is a live root whose action queues a Redirect — before A2 a
-// live action's Redirect was silently dropped (fire-and-forget, no response
-// to carry it on).
+// liveRedirector is a live root whose action queues a Redirect — which a
+// @post action can no longer act on; the action must still answer normally
+// rather than hang or crash.
 type liveRedirector struct{}
 
 func (c *liveRedirector) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *liveRedirector) Go(ctx *via.Ctx)              { ctx.Redirect("/dest") }
 func (c *liveRedirector) View() h.H                    { return h.Div(h.Button(via.OnClick(c.Go))) }
 
-func TestDispatch_redirectFromLiveActionShipsScript(t *testing.T) {
+func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(liveRedirector{}))
 		conn := app.Connect()
@@ -54,9 +54,10 @@ func TestDispatch_redirectFromLiveActionShipsScript(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript",
-			"a live action's Redirect must ship an executable script, not a silent 204")
-		assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"/dest"`)
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode,
+			"a live action's Redirect can no longer navigate; it answers its normal 204")
+		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
+		assert.Empty(t, resp.Header.Get("datastar-script-attributes"))
 	})
 }
 
@@ -71,7 +72,7 @@ type islandRedirectorParent struct{ I islandRedirector }
 
 func (p *islandRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_redirectFromStatelessIslandActionShipsScript(t *testing.T) {
+func TestDispatch_redirectFromStatelessIslandActionDoesNotShipAScript(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(islandRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -84,9 +85,9 @@ func TestDispatch_redirectFromStatelessIslandActionShipsScript(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript",
-		"a stateless island's Redirect must ship an executable script, not a silent 204")
-	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"/dest"`)
+	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
+		"a stateless island's Redirect can no longer navigate; no script ships")
+	assert.Empty(t, resp.Header.Get("datastar-script-attributes"))
 }
 
 // sigIsland's signals are only Bound (never Displayed), so Setting one never

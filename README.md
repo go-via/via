@@ -84,14 +84,13 @@ The action endpoint and rendered pages are hardened by default:
 - **`nosniff` + a hash-admitted CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
   the `Function` constructor — without it every action is silently dead in the
-  browser. Every inline script via emits (the reconnect manager, a
-  `via.Redirect`'s `location.assign()`) is library-controlled, so it's
-  admitted by its own SHA-256 hash — no nonce, no per-key state, nothing for
-  an injected `<script>` to borrow. Honest posture: the CSP is a seatbelt
-  against *injected* inline script; the load-bearing defenses are output
-  escaping, the attribute-name allowlist, and the same URL gate on every
-  redirect target (`javascript:`/`data:`/`//` are dropped loudly, falling
-  back to the element patch).
+  browser. The one inline script via emits (the reconnect manager) is
+  library-controlled, so it's admitted by its own SHA-256 hash — no nonce, no
+  per-key state, nothing for an injected `<script>` to borrow. Honest posture:
+  the CSP is a seatbelt against *injected* inline script; the load-bearing
+  defenses are output escaping, the attribute-name allowlist, and the same URL
+  gate on every `Redirect` target (`javascript:`/`data:`/`//` are dropped
+  loudly, falling back to the element patch).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` and the typed helpers reject injectable names).
 
@@ -185,8 +184,8 @@ and the composer clears on send without clobbering a concurrent draft.
 **Restarts and deploys.** Sessions derive from the signing key, so with a
 stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a restart or a rolling
 deploy keeps cookies valid across pods. The CSP is a pure function of the
-Head, so redirect scripts stay admitted regardless. Live-island state is
-in-memory and per-connection: a deploy drops
+Head, so pods with different keys still serve identical policies. Live-island
+state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /

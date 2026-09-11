@@ -371,25 +371,24 @@ func (m *mount) rerenderStateless(island int, rootBefore []byte, inst viewer, bi
 }
 
 // respond is dispatch's one response policy for every action POST — root,
-// island, live, or native form. A queued Redirect always wins, admitted only
-// when hcore.SafeURL clears it (SafeURL also gates a guard's redirect target
-// in runGuards, and rendered link/script/href/src URLs in head.go and
-// h/url.go — one policy, five call sites): a 303 for a native form submit,
-// an executable script (admitted by the document's CSP hash) for anything
-// else. Otherwise
-// renderNative (a full-page re-render, native-form-only) or renderPatch (an
-// element-patch, or nil for "unchanged"/"the live push already carried it")
-// decides the body.
+// island, live, or native form. A queued Redirect wins on a native form
+// submit (a 303, admitted only when hcore.SafeURL clears the target — SafeURL
+// also gates OnInit's redirect in runOnInit, and rendered link/script/href/src
+// URLs in head.go and h/url.go — one policy, four call sites). A Redirect from
+// a Datastar @post action cannot navigate the page; it is logged and dropped.
+// Otherwise renderNative (a full-page re-render, native-form-only) or
+// renderPatch (an element-patch, or nil for "unchanged"/"the live push
+// already carried it") decides the body.
 func respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect string, renderNative func(), renderPatch func() []byte) {
 	if redirect != "" {
-		if !hcore.SafeURL(redirect) {
+		switch {
+		case !hcore.SafeURL(redirect):
 			log.Printf("via: unsafe Redirect target %q dropped", redirect)
-		} else if mode == modeNative {
+		case mode == modeNative:
 			http.Redirect(w, req, redirect, http.StatusSeeOther)
 			return
-		} else {
-			writeRedirectScript(w, redirect)
-			return
+		default:
+			log.Printf("via: Redirect from a @post action is not supported; use PostForm or a link")
 		}
 	}
 	if mode == modeNative {
