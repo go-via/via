@@ -97,11 +97,8 @@ as a re-read of the README, not a diff.
   emits no attribute at all — something `RawAttr` could not express.
   `RawAttr` and `Data` stay for everything else.
 
-- **`List[E]` slice edits**: `Len`, `At`, `Insert`, `Remove`, `Replace`,
-  `Truncate`, `Clear` join `Append`. Removal was always possible through the
-  inherited `Set` (`l.Set(slices.Delete(l.Get(), i, i+1))`); these spell the
-  intent at the call site. Index arguments follow slice rules — out of range
-  panics rather than silently doing nothing. Rows that can be removed or
+- **`List[E]` gets `Remove`** alongside `Append`: it panics on an out-of-range
+  index rather than silently doing nothing. Rows that can be removed or
   reordered need a stable `id` so the morph matches by identity, not position.
 - **`List.Each(row)`**: sugar over `via.Each(l.Get(), row)`.
 - **Full HTML5 vocabulary in `h`** (~105 constructors), minus the page-shell
