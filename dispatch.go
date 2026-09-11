@@ -45,6 +45,7 @@ type actionResult struct {
 	panicked bool
 	body     []byte
 	pushWork func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
+	gone     string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
 }
 
 // mount bundles a page's per-request wiring — built once in Router.Mount and
@@ -75,9 +76,10 @@ func (bind *Ctx) unit(island int) *Ctx {
 }
 
 // unit returns the connected live unit for island id (0 = root), at any
-// embedding depth, nil when this connection has none. Called from the
-// dispatching request's own goroutine while replace runs on the island
-// goroutine, so it takes the same lock.
+// embedding depth, nil when this connection has none. Called on the island
+// goroutine itself (see dispatchLive) so the lookup is atomic with the
+// dispatch it guards; it still takes the same lock replace does since a
+// future caller reading it from elsewhere shouldn't have to remember to add one.
 func (c *liveConn) unit(island int) *Ctx {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -184,20 +186,28 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 // well as the connection closing, so a stalled peer elsewhere on the stream
 // can't park this POST's goroutine forever (see liveConn.run).
 func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island, n int, in map[string]json.RawMessage, digest, base string) {
-	u := lc.unit(island)
-	if u == nil {
-		http.Error(w, "no such island", http.StatusGone)
-		return
-	}
-	if u.shapeDigest() != digest {
-		http.Error(w, "stale page", http.StatusGone)
-		return
-	}
-	if n < 0 || n >= len(u.actions) {
-		http.Error(w, "no such action", http.StatusGone)
-		return
-	}
 	res, ok := lc.run(req.Context(), func() actionResult {
+		// u is looked up here, on the island goroutine, rather than by the
+		// dispatching request's own goroutine before this closure was posted —
+		// a concurrent push (a tick, another action, Listen fan-out) replaces
+		// lc.units between the two, so a unit read earlier could already be
+		// stale by the time it runs. A stale unit here is more than an address
+		// mismatch: Signal.bind stamps the signal's dirty sink at render time,
+		// so acting against a unit older than the signal's current binding
+		// would attribute the write to a Ctx nothing downstream ever reads —
+		// silently dropping the patch. Reading it here makes it current by
+		// construction: nothing else touches lc.units between this line and
+		// the dispatch it guards, both on this same serialized goroutine.
+		u := lc.unit(island)
+		if u == nil {
+			return actionResult{gone: "no such island"}
+		}
+		if u.shapeDigest() != digest {
+			return actionResult{gone: "stale page"}
+		}
+		if n < 0 || n >= len(u.actions) {
+			return actionResult{gone: "no such action"}
+		}
 		result := liveRunAction(w, req, m.sessions, lc, u, in, n)
 		if mode == modeNative && !result.panicked {
 			// A native <form> submit is a real navigation: the browser replaces
@@ -217,6 +227,10 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 	})
 	if !ok {
 		http.Error(w, "live connection closed", http.StatusGone)
+		return
+	}
+	if res.gone != "" {
+		http.Error(w, res.gone, http.StatusGone)
 		return
 	}
 	if res.panicked {

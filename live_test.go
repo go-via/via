@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1309,4 +1310,94 @@ func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 	require.NotNil(t, rec, "Param for an undeclared name must still panic")
 	assert.Contains(t, fmt.Sprint(rec), "the mount pattern has no {id} segment",
 		"a Tick's Ctx must carry the connect request, not nil")
+}
+
+// racyDirtySignal is a live counter with nothing else going on — every Inc
+// dispatch's own push (dispatchLive's pushWork replaces lc.units[0] after
+// every action, mutating or not) is the race: many concurrent Incs each read
+// the connection's current unit and each replace it, so one dispatch's read
+// can land on a unit a concurrent dispatch's push is about to make stale.
+type racyDirtySignal struct{ n via.Signal[int] }
+
+func (r *racyDirtySignal) OnConnect(ctx *via.Ctx) error { return nil }
+func (r *racyDirtySignal) Inc(ctx *via.Ctx)             { r.n.Set(r.n.Get() + 1) }
+func (r *racyDirtySignal) View() h.H {
+	return h.Div(r.n.Display(), h.Button(via.OnClick(r.Inc), h.Str("inc")))
+}
+
+// TestLiveAction_signalPatchSurvivesARacingPush proves every Inc dispatch that
+// acks also ships its value over the SSE stream's signals-patch, even under a
+// storm of concurrent Incs on the same connection. Before the fix
+// (dispatchLive looking up its unit before handing off to the island
+// goroutine instead of inside it), a concurrent push could replace the unit
+// in between, and some values in 1..total never arrived.
+func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(racyDirtySignal{}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 0, 0)
+
+	var seen sync.Map // values (int) observed in an "s0" signals-patch frame
+	re := regexp.MustCompile(`"s0":(\d+)`)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for line := range lines {
+			if m := re.FindStringSubmatch(line); m != nil {
+				if v, err := strconv.Atoi(m[1]); err == nil {
+					seen.Store(v, struct{}{})
+				}
+			}
+		}
+	}()
+
+	const goroutines, perGoroutine = 8, 100
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perGoroutine {
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Datastar-Request", "true")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				req.Header.Set("X-Via-Tab", tab)
+				resp, err := srv.Client().Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	total := goroutines * perGoroutine
+	missing := func() []int {
+		var m []int
+		for i := 1; i <= total; i++ {
+			if _, ok := seen.Load(i); !ok {
+				m = append(m, i)
+			}
+		}
+		return m
+	}
+	deadline := time.After(3 * time.Second)
+	for len(missing()) > 0 {
+		select {
+		case <-deadline:
+			require.Empty(t, missing(), "signal patches for some Inc dispatches never reached the client")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	<-done
 }
