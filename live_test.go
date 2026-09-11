@@ -764,23 +764,14 @@ func (c *clicker) View() h.H {
 
 func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(clicker{}))
+		app := vt.Serve(t, via.Register(clicker{}))
+		conn := app.Connect()
+		require.NotEmpty(t, conn.TabID(), "the SSE must hand the client its tab id")
 
-		lines, cancel := openStream(t, srv)
-		defer cancel()
+		status, _ := app.Action(0).Live(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
 
-		tab := awaitTabID(t, lines)
-		require.NotEmpty(t, tab, "the SSE must hand the client its tab id")
-
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		// Simulate Datastar's @post(...,{headers:{'X-Via-Tab':$_viatab}}).
-		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
-			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tab,
-		})
-		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "a live action acks 204; the patch ships over the SSE")
-
-		awaitLine(t, lines, "count: 1") // the mutation reaches THIS connection
+		conn.Await("count: 1") // the mutation reaches THIS connection
 	})
 }
 
@@ -884,21 +875,23 @@ func (e *liveReqEchoer) View() h.H {
 // action request is threaded through (not the connect request).
 func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(liveReqEchoer{}))
+		app := vt.Serve(t, via.Register(liveReqEchoer{}))
+		conn := app.Connect()
 
-		lines, cancel := openStream(t, srv)
-		defer cancel()
-		tab := awaitTabID(t, lines)
-
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
-			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tab,
-			"X-Echo":         "from-the-action-post",
-		})
+		// X-Echo has no vt.Action builder method, so this posts by hand — but
+		// the URL and tab still come off the connection, not a separate GET.
+		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL(0, 0), strings.NewReader("{}"))
+		require.NoError(t, err)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Datastar-Request", "true")
+		req.Header.Set("X-Via-Tab", conn.TabID())
+		req.Header.Set("X-Echo", "from-the-action-post")
+		resp, err := app.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
-		awaitLine(t, lines, "echo: from-the-action-post")
+		conn.Await("echo: from-the-action-post")
 	})
 }
 
@@ -984,25 +977,18 @@ func (p *pathTicker) View() h.H {
 
 func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(pathTicker{}))
+		app := vt.Serve(t, via.Register(pathTicker{}))
+		conn := app.Connect()
+		conn.Await("path: /_via/sse") // the first tick sees the connect request
 
-		lines, cancel := openStream(t, srv)
-		defer cancel()
-		tab := awaitTabID(t, lines)
-		awaitLine(t, lines, "path: /_via/sse") // the first tick sees the connect request
-
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
-			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tab,
-		})
-		require.Equal(t, http.StatusNoContent, resp.StatusCode)
-		awaitLine(t, lines, "n: 1") // the action landed
+		status, _ := app.Action(0).Live(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+		conn.Await("n: 1") // the action landed
 
 		synctest.Wait()
 		time.Sleep(20 * time.Millisecond)
 		synctest.Wait()
-		awaitLine(t, lines, "path: /_via/sse") // a tick AFTER the action must still see the connect request
+		conn.Await("path: /_via/sse") // a tick AFTER the action must still see the connect request
 	})
 }
 
@@ -1149,22 +1135,13 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 // page") and never reach the index-range check this guards.
 func TestLive_outOfRangeActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(clicker{}))
+		app := vt.Serve(t, via.Register(clicker{}))
+		conn := app.Connect()
+		require.NotEmpty(t, conn.TabID())
 
-		lines, cancel := openStream(t, srv)
-		defer cancel()
-
-		tab := awaitTabID(t, lines)
-		require.NotEmpty(t, tab)
-
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		url := swapActionIndex(t, actionURL(t, page, 0, 0), "99")
-
-		resp, _ := post(t, srv, url, "{}", map[string]string{
-			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tab,
-		})
-		assert.Equal(t, http.StatusGone, resp.StatusCode)
+		url := swapActionIndex(t, conn.ActionURL(0, 0), "99")
+		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+		assert.Equal(t, http.StatusGone, status)
 	})
 }
 
