@@ -125,12 +125,11 @@ as a re-read of the README, not a diff.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
   multipart, so a file `<input>` just works — read it with stdlib's
   `ctx.Request().FormFile(name)`; no separate upload verb or type.
-- **Redirect from a `@post` action**: `via.Redirect` ships a constant
-  `location.assign()` script that every document this app serves admits by
-  its sha256 — no shared key, so pods agree even with different keys. The
-  target rides as a `data-via-to` attribute Datastar copies onto the script.
-  Targets are gated by the shared URL policy; unsafe ones are dropped loudly with an
-  element-patch fallback. Browser-verified under the strict CSP.
+- **`ctx.Redirect`**: a PostForm/OnInit facility (303). Targets are gated by
+  the shared URL policy; unsafe ones are dropped loudly with an element-patch
+  fallback. A Redirect queued from a Datastar `@post` action cannot navigate
+  the page — it is logged and dropped; use a `PostForm` handler or an
+  `<a href>` instead.
 - **`WithDocumentHead(via.Head{...})`**: the document shell — title, lang,
   meta, links, external scripts, one inline style, extra font origins. A typed
   struct rather than an `h.H`, because the head is also the app's origin

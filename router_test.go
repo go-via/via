@@ -54,8 +54,8 @@ func jarPost(t *testing.T, c *http.Client, url string) {
 	resp.Body.Close()
 }
 
-// redirectPage is a stateless page whose @post action navigates the browser via
-// via.Redirect — the case PostForm's native 303 can't cover (a Datastar @post).
+// redirectPage is a stateless page whose @post action calls via.Redirect — a
+// case that can no longer navigate the browser (only PostForm and OnInit can).
 type redirectPage struct{}
 
 func (p *redirectPage) Go(ctx *via.Ctx)   { ctx.Redirect("/dest") }
@@ -63,12 +63,6 @@ func (p *redirectPage) Evil(ctx *via.Ctx) { ctx.Redirect("javascript:alert(1)") 
 func (p *redirectPage) View() h.H {
 	return h.Div(h.Button(via.OnClick(p.Go)), h.Button(via.OnClick(p.Evil)))
 }
-
-// relRedirectPage redirects to a relative path (no scheme) — also valid.
-type relRedirectPage struct{}
-
-func (p *relRedirectPage) Go(ctx *via.Ctx) { ctx.Redirect("threads/7") }
-func (p *relRedirectPage) View() h.H       { return h.Div(h.Button(via.OnClick(p.Go))) }
 
 // cspOf fetches a page and returns the Content-Security-Policy it served.
 func cspOf(t *testing.T, c *http.Client, url string) string {
@@ -108,43 +102,11 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 		"a hash-based policy needs no shared key: pods with different keys agree")
 }
 
-// A via.Redirect from a Datastar @post action sends an executable script
-// (location.assign) that the document's strict CSP admits by hash — the @post
-// analogue of PostForm's 303. The script SOURCE is constant and the target rides
-// as a data attribute, which is what keeps the digest stable across targets.
-func TestRouter_postActionRedirectShipsHashAdmittedScript(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/x", redirectPage{})
-	srv := serve(t, r)
-
-	c := &http.Client{}
-	csp := cspOf(t, c, srv.URL+"/x")
-	_, page := do(t, srv, http.MethodGet, "/x", "")
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, 0), strings.NewReader("{}"))
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript",
-		"a @post redirect is delivered as an executable script, not an element patch")
-	assert.Contains(t, string(body), "location.assign(s.dataset.viaTo)",
-		"the script reads its target from the element, so its source never varies")
-	assert.NotContains(t, string(body), "/dest",
-		"interpolating the target would change the bytes and break the hash")
-	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"/dest"`,
-		"the target rides as a data attribute Datastar copies onto the script it creates")
-	assert.Contains(t, csp, hashSource(string(body)),
-		"the document's policy must admit the exact bytes the action shipped")
-}
-
-// Redirect interpolates into location.assign('…'), so a non-http(s)/relative URL
-// (javascript:, data:, //evil) must be rejected — never shipped as a script.
-func TestRouter_postActionRedirectRejectsUnsafeURL(t *testing.T) {
+// A via.Redirect from a Datastar @post action cannot navigate the page — only
+// PostForm and OnInit can. It must not ship a script (or any other trace of
+// the target); the action just answers its normal element-patch/204 contract,
+// for a safe target as much as an unsafe one.
+func TestRouter_postActionRedirectDoesNotShipAScript(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/x", redirectPage{})
@@ -153,43 +115,21 @@ func TestRouter_postActionRedirectRejectsUnsafeURL(t *testing.T) {
 	c := &http.Client{}
 	_, page := do(t, srv, http.MethodGet, "/x", "")
 
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, 1), strings.NewReader("{}")) // Evil
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
-		"an unsafe redirect URL must not be shipped as a script")
-	assert.NotContains(t, string(body), "javascript:alert", "the unsafe URL must never reach the client")
-	assert.Empty(t, resp.Header.Get("datastar-script-attributes"),
-		"a rejected redirect falls back to an element patch — no script attributes header")
-}
+	for i, target := range []string{"/dest", "javascript:alert(1)"} { // Go, Evil
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, i), strings.NewReader("{}"))
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Datastar-Request", "true")
+		resp, err := c.Do(req)
+		require.NoError(t, err)
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
 
-// A same-origin relative path (no scheme) is a valid redirect target and is
-// json-escaped into the script intact.
-func TestRouter_postActionRedirectAllowsRelativePath(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/x", relRedirectPage{})
-	srv := serve(t, r)
-
-	c := &http.Client{}
-	cspOf(t, c, srv.URL+"/x") // sanity: the page carries a hash-based policy
-	_, page := do(t, srv, http.MethodGet, "/x", "")
-
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, 0), strings.NewReader("{}"))
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
-	assert.Contains(t, string(body), "location.assign(s.dataset.viaTo)")
-	assert.Contains(t, resp.Header.Get("datastar-script-attributes"), `"data-via-to":"threads/7"`,
-		"a relative path is a valid target and travels as the data attribute")
+		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
+			"a @post Redirect must not be delivered as an executable script")
+		assert.Empty(t, resp.Header.Get("datastar-script-attributes"),
+			"no script attributes header for a target %q that cannot navigate", target)
+		assert.NotContains(t, string(body), target, "the redirect target must never reach the client")
+	}
 }
 
 // OnInit runs per request before the (ctx-free) View, so a page can load

@@ -62,7 +62,7 @@ var cspHeader = buildCSP(Head{})
 // config, so every pod serving that config serves byte-identical bytes.
 func buildCSP(head Head) string {
 	var script strings.Builder
-	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit))
+	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit))
 	for _, o := range head.scriptOrigins() {
 		script.WriteString(" " + o)
 	}

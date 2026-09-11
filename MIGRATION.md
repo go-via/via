@@ -142,10 +142,10 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 island's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
-`ctx.Redirect` now navigates from every handler kind — a `@post` action, a
-`PostForm` submit, a live action, and an embedded island's action all queue it
-the same way. Earlier builds silently dropped it from a live or island
-action; there is no longer a kind of handler where it is a no-op.
+`ctx.Redirect` is a `PostForm`/`OnInit` facility (a 303 before the View ever
+renders, or on a native form submit). A Redirect queued from a Datastar
+`@post` action cannot navigate the page — it is logged and dropped; move it
+to a `PostForm` handler or an `<a href>`.
 
 ## Mapping table
 

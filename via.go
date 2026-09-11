@@ -338,36 +338,15 @@ func RequireSession[T any](loginPath string) Guard {
 	}
 }
 
-// Redirect navigates the browser to path after the current handler returns. From
-// a PostForm handler it is a 303 See Other on the native form submit. From a
-// Datastar @post action it is shipped as an executable location.assign() script,
-// admitted by the document CSP via the sha256 hash of a constant script; no
-// session is required. path must be http/https or a same-origin relative path;
-// other schemes are rejected.
+// Redirect navigates the browser to path after the current handler returns.
+// It is a PostForm/OnInit facility: from a PostForm handler it is a 303 See
+// Other on the native form submit; from OnInit it 303s before the View ever
+// renders. path must be http/https or a same-origin relative path; other
+// schemes are rejected. A Redirect set from a Datastar @post action is logged
+// and dropped — a live click cannot navigate; use an `<a href>` or a
+// PostForm handler instead.
 func (c *Ctx) Redirect(path string) {
 	c.redirect = path
-}
-
-// redirectInit is the client half of a @post Redirect. It is a CONSTANT so the
-// CSP can admit it by hash (see cspHeader): the target travels as a data
-// attribute on the script element rather than interpolated into the source, so
-// every redirect ships byte-identical script text. document.currentScript is the
-// element Datastar just inserted; the querySelector is a fallback for the case
-// where currentScript is unset.
-const redirectInit = `(()=>{var s=document.currentScript||document.querySelector('script[data-via-to]');if(s&&s.dataset.viaTo)location.assign(s.dataset.viaTo)})()`
-
-// writeRedirectScript ships a queued via.Redirect as an executable script — the
-// document's CSP admits it by the sha256 hash of its constant source. respond
-// has already validated target with hcore.SafeURL before calling this. The
-// target rides as an attribute VALUE that Datastar sets with the DOM API, so
-// it is never parsed as HTML or as JS source — there is no string literal
-// left to break out of. json.Marshal handles the header's own encoding.
-func writeRedirectScript(w http.ResponseWriter, target string) {
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	attrs, _ := json.Marshal(map[string]string{"data-via-to": target})
-	w.Header().Set("datastar-script-attributes", string(attrs))
-	w.Write([]byte(redirectInit))
 }
 
 // OnClick wires a click to a POST action. fn is a named method value (e.g.
