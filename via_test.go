@@ -397,7 +397,7 @@ var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnChange": true,
 	"OnClickArg": true, "PostForm": true, "Mount": true,
-	"Param": true, "RequireSession": true,
+	"Param": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never

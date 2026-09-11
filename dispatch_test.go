@@ -120,7 +120,8 @@ func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
 }
 
-// guardedIsland is embedded behind a RequireSession guard on its mount.
+// guardedIsland is embedded under a parent whose own OnInit session-gates
+// the whole mount, replacing the removed guard mechanism.
 type guardedIsland struct{}
 
 func (g *guardedIsland) Ping(ctx *via.Ctx) {}
@@ -128,12 +129,18 @@ func (g *guardedIsland) View() h.H         { return h.Div(h.Button(via.OnClick(g
 
 type guardedParent struct{ I guardedIsland }
 
+func (p *guardedParent) OnInit(ctx *via.Ctx) error {
+	if _, ok := ctx.Session().Get[acct](); !ok {
+		ctx.Redirect("/login")
+	}
+	return nil
+}
 func (p *guardedParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_islandActionRunsGuards(t *testing.T) {
+func TestDispatch_islandActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/g", guardedParent{}, via.RequireSession[acct]("/login"))
+	r.Mount("/g", guardedParent{})
 	srv := serve(t, r)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/1/0", strings.NewReader("{}"))
@@ -144,7 +151,7 @@ func TestDispatch_islandActionRunsGuards(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the guard must gate the island action route")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the parent's OnInit Redirect must gate the island action route")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
