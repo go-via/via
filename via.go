@@ -378,9 +378,6 @@ func OnClick(fn func(*Ctx)) h.Attr { return onEvent("click", fn) }
 // form's default submit, so no prevent modifier is needed.
 func OnSubmit(fn func(*Ctx)) h.Attr { return onEvent("submit", fn) }
 
-// OnInput wires an input event (fires on every keystroke) to a POST action.
-func OnInput(fn func(*Ctx)) h.Attr { return onEvent("input", fn) }
-
 // OnChange wires a change event (fires on commit/blur) to a POST action.
 func OnChange(fn func(*Ctx)) h.Attr { return onEvent("change", fn) }
 
@@ -407,18 +404,6 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 // a named method value (e.g. l.Delete); arg is plain data (e.g. todo.ID), not an
 // identifier string. Use it for per-row actions in a list. No '&', no closure.
 func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("click", fn, arg) }
-
-// OnChangeArg is OnClickArg for the change event — a select or checkbox whose
-// handler needs the row's render-time identity.
-func OnChangeArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("change", fn, arg) }
-
-// OnSubmitArg is OnClickArg for the submit event — a per-row inline form whose
-// handler needs the row's render-time identity.
-//
-// There is deliberately no OnInputArg: an Arg is render-time identity (which
-// row), while an input's payload is bound data — that's a Signal. Wanting a
-// per-keystroke identity usually means the identity should be a Signal too.
-func OnSubmitArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("submit", fn, arg) }
 
 // onEventArg is onEvent for a value-carrying action: it JSON-encodes arg into the
 // action's query (?a=…) so the client posts the row's datum, and the dispatched
