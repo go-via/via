@@ -395,7 +395,7 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 // values or by-value compositions — never an address-of or a closure.
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "When": true, "Each": true,
-	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
+	"OnClick": true, "OnSubmit": true, "OnChange": true,
 	"OnClickArg": true, "PostForm": true, "Mount": true,
 	"Param": true, "RequireSession": true,
 }
@@ -614,36 +614,26 @@ func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	assert.Contains(t, body, "alpha")
 }
 
-// argVocab exercises the full Arg-event vocabulary on one composition: a select
-// whose change and a form whose submit carry a render-time value, exactly like
-// OnClickArg. There is deliberately NO OnInputArg — an input's payload is a
-// Signal (bound data), while an Arg is render-time identity; per-keystroke
-// identity is a design smell via refuses to encourage.
-type argVocab struct{ got string }
+// changePicker exercises OnChange: a select whose commit posts an action,
+// with no value carried (that's OnClickArg's job, tested elsewhere).
+type changePicker struct{ got string }
 
-func (a *argVocab) Pick(ctx *via.Ctx, v string)   { a.got = "pick:" + v }
-func (a *argVocab) Submit(ctx *via.Ctx, v string) { a.got = "submit:" + v }
-func (a *argVocab) View() h.H {
+func (a *changePicker) Pick(ctx *via.Ctx) { a.got = "picked" }
+func (a *changePicker) View() h.H {
 	return h.Div(
-		h.El("select", via.OnChangeArg(a.Pick, "colors")),
-		h.Button(via.OnSubmitArg(a.Submit, "checkout")),
+		h.El("select", via.OnChange(a.Pick)),
 		h.P(h.Str(a.got)),
 	)
 }
 
-// OnChangeArg and OnSubmitArg must render their event bindings carrying the
-// value, and route it back into the typed handler — the same contract
-// OnClickArg pins. Fails if either variant is dropped or stops carrying ?a=.
-func TestActionArg_changeAndSubmitVariantsCarryTheValue(t *testing.T) {
+// OnChange must render its event binding and route the commit back into the
+// handler. Fails if the change event stops firing or stops reaching Pick.
+func TestOnChange_firesHandlerOnCommit(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(argVocab{}))
+	srv := serve(t, via.Register(changePicker{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `data-on:change`, "OnChangeArg must bind the change event")
-	assert.Contains(t, page, `data-on:submit`, "OnSubmitArg must bind the submit event")
-	assert.Contains(t, page, `?a=%22colors%22`, "the change binding must carry its arg")
+	assert.Contains(t, page, `data-on:change`, "OnChange must bind the change event")
 
 	_, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
-	assert.Contains(t, body, "pick:colors", "OnChangeArg's handler must receive the typed value")
-	_, body = do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
-	assert.Contains(t, body, "submit:checkout", "OnSubmitArg's handler must receive the typed value")
+	assert.Contains(t, body, "picked", "OnChange's handler did not run")
 }

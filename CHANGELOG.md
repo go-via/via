@@ -123,9 +123,8 @@ as a re-read of the README, not a diff.
   the mount pattern doesn't have panics at request time (a wiring mistake).
 - **`ctx.Listen[T](topic, handler)`**: subscribe + pump + auto-dispose
   in one line.
-- **Arg events**: `via.OnClickArg` / `OnChangeArg` / `OnSubmitArg` carry a
-  typed render-time datum with the event (no `OnInputArg` by design — an
-  input's payload is a `Signal`).
+- **Arg events**: `via.OnClickArg` carries a typed render-time datum with the
+  event — a per-row action without an `&` at the call site.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
   multipart, so a file `<input>` just works — read it with stdlib's
   `ctx.Request().FormFile(name)`; no separate upload verb or type.
