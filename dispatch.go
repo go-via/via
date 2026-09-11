@@ -266,19 +266,22 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 			hydrate(raw)
 		}
 	}
-	unit.req = req
-	unit.sessions = sessions
-	unit.sessW = w
-	unit.redirect = ""
+	// A fresh Ctx per dispatch, not unit itself: unit is the render-time Ctx a
+	// Tick or Listen handler holds onto for the life of the connection, so
+	// writing req/sessW/redirect onto it here would rewrite what that handler
+	// sees. Everything the action mutates through method values (Signal.Set,
+	// State.Set) still lands on unit, because those handles were bound to it
+	// at render time — only req/session/redirect plumbing moves to rc.
+	rc := &Ctx{req: req, sessions: sessions, sessW: w}
 	unit.dirty = map[string]any{}
-	unit.actions[n]()
+	unit.actions[n](rc)
 
 	// A deliberate server-driven signal change (e.g. clearing the composer)
 	// reaches the client as a signal-patch — the element push omits
 	// data-signals, so a morph never clobbers what the user is typing.
 	dirty, push := unit.dirty, unit.push
 	return actionResult{
-		redirect: unit.redirect,
+		redirect: rc.redirect,
 		pushWork: func() {
 			if len(dirty) > 0 {
 				if raw, err := json.Marshal(dirty); err == nil {
@@ -325,7 +328,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 	u.req = req
 	u.sessions = m.sessions
 	u.sessW = w
-	u.actions[n]()
+	u.actions[n](u) // no long-lived handler holds this render's Ctx (stateless), so u is its own dispatch Ctx
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {

@@ -957,6 +957,54 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 	})
 }
 
+// pathTicker's Tick reads ctx.Request().URL.Path — a live action's own POST
+// (to /_via/a/0/0) must never be visible from there: before S8, dispatch
+// wrote req/sessW/redirect directly onto the render-time Ctx a Tick holds for
+// the life of the connection, so firing an action left every later tick
+// reading the ACTION's request instead of the connect one.
+type pathTicker struct {
+	path via.State[string]
+	n    via.State[int]
+}
+
+func (p *pathTicker) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(20*time.Millisecond, p.tick)
+	return nil
+}
+func (p *pathTicker) tick(ctx *via.Ctx) { p.path.Set(ctx.Request().URL.Path) }
+func (p *pathTicker) Bump(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *pathTicker) View() h.H {
+	return h.Div(
+		h.P(h.Str("path: "), p.path.Display()),
+		h.P(h.Str("n: "), p.n.Display()),
+		h.Button(via.OnClick(p.Bump)),
+	)
+}
+
+func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(pathTicker{}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		tab := awaitTabID(t, lines)
+		awaitLine(t, lines, "path: /_via/sse") // the first tick sees the connect request
+
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tab,
+		})
+		require.Equal(t, http.StatusNoContent, resp.StatusCode)
+		awaitLine(t, lines, "n: 1") // the action landed
+
+		synctest.Wait()
+		time.Sleep(20 * time.Millisecond)
+		synctest.Wait()
+		awaitLine(t, lines, "path: /_via/sse") // a tick AFTER the action must still see the connect request
+	})
+}
+
 // An OnInit Redirect must gate the SSE connect itself, beyond the page GET
 // and the action route — before A3 the stream handler ran OnInit at all, so
 // a session check left a live page's push channel open to anyone who knew
