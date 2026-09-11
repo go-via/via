@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 
 	"github.com/go-via/via/h"
@@ -150,7 +151,7 @@ func (s *Signal[T]) Bind() h.Attr {
 // textHandle renders an arbitrary value as escaped text. Internal only; it uses
 // any so it can serve any signal T without appearing on a public signature.
 func textHandle(v any) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(sprint(v)) })
+	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }
 
 // SignalClientOnly is a signal the client owns. The distinction from Signal is

@@ -271,10 +271,23 @@ func (c *liveConn) replace(u *Ctx) {
 // deadline fires while the island goroutine is busy with something else
 // entirely, returns ok=false (the caller answers 410) instead of blocking
 // forever.
+//
+// res.pushWork (the dirty-signals + element push) runs AFTER result is sent,
+// still on this same island goroutine: the waiting POST is free to proceed
+// the instant result is sent (result is buffered, so the send itself never
+// blocks), while pushWork stays serialized with every other pulse item in the
+// exact order its mutation ran — a detached goroutine doing this instead would
+// race other actions' detached goroutines and could push out of order.
 func (c *liveConn) run(reqCtx context.Context, fn func() actionResult) (actionResult, bool) {
 	result := make(chan actionResult, 1)
 	select {
-	case c.pulse <- func() { result <- fn() }:
+	case c.pulse <- func() {
+		res := fn()
+		result <- res
+		if res.pushWork != nil {
+			res.pushWork()
+		}
+	}:
 	case <-c.done:
 		return actionResult{}, false
 	case <-reqCtx.Done():

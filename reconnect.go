@@ -1,7 +1,7 @@
 package via
 
 // reconnectInit is the client-side reconnect manager injected into every live
-// page as a nonce'd inline script. It watches the
+// page as a hash-admitted inline script (see csp.go). It watches the
 // global `datastar-fetch` lifecycle events Datastar dispatches for its SSE
 // fetch:
 //
@@ -44,7 +44,7 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`function ok(){conn('online');hide()}` +
 	// An incoming SSE patch (the re-bootstrap on reconnect, or via's periodic
 	// keepalive-driven re-handshake) is the only reliable "stream is alive
-	// again" signal: a long-lived SSE @get fires 'retrying' on a drop but NO
+	// again" signal: a long-lived SSE @post fires 'retrying' on a drop but NO
 	// 'started'/'finished' on a successful resume. The bundled Datastar surfaces
 	// incoming patches solely as 'datastar-fetch' events whose detail.type is the
 	// patch kind — it never dispatches document-level 'datastar-patch-*' events —

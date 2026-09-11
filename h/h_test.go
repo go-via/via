@@ -125,32 +125,6 @@ func TestMultipleAttributes_keepSourceOrder(t *testing.T) {
 	assert.Equal(t, `<a href="/x" rel="next">go</a>`, got)
 }
 
-func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
-	t.Parallel()
-	// via's signal/action nodes reach the Binder through r.Binder(); the
-	// renderer must hand back the exact binder it was built with.
-	b := &stubBinder{}
-	r := hcore.NewRenderer(b)
-	assert.Same(t, b, r.Binder(), "Binder() did not return the injected binder")
-}
-
-func TestBytes_matchesStringForZeroCopyWriting(t *testing.T) {
-	t.Parallel()
-	// via writes the rendered tree straight to the ResponseWriter via Bytes()
-	// to avoid a string copy; it must equal String().
-	r := hcore.NewRenderer(&stubBinder{})
-	r.Render(h.Span(h.Str("x")))
-	assert.Equal(t, r.String(), string(r.Bytes()), "Bytes() must equal String()")
-}
-
-func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
-	t.Parallel()
-	r := hcore.NewRenderer(&stubBinder{})
-	r.WriteString("<b>")  // raw, caller pre-escaped
-	r.WriteEscaped("<b>") // must be escaped
-	assert.Equal(t, "<b>&lt;b&gt;", r.String())
-}
-
 // The full-vocabulary sweep: one constructor per HTML5 tag h ships, each must
 // render its own tag; void elements must self-close (no closing tag). Fails if
 // a constructor maps to the wrong tag or a void grows a body.

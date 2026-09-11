@@ -151,7 +151,7 @@ func (r *Router) Mount[T any, PT PtrViewer[T]](path string, root T, guards ...Gu
 		if runOnInit(inst, w, req, r.sessions) != nil { // load session/request data into fields first
 			return
 		}
-		ctx, body := renderRootBase(inst, nil, true, concreteBase(patternBase, req, names), nil)
+		ctx, body := renderRootBase(inst, nil, true, concreteBase(patternBase, req, names), nil, nil)
 		ctx.islandV = inst // the root is a unit like any embedded island, when it is Live
 		units := liveUnits(ctx)
 		writeHTMLPage(w, r.cfg, body, len(units) > 0, patternBase+"/_via/sse")

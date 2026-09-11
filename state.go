@@ -1,6 +1,7 @@
 package via
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/go-via/via/h"
@@ -32,7 +33,7 @@ func (s *State[T]) Display() h.H {
 		if ctx == nil || !ctx.island {
 			panic("via: State[T] can only be read inside a live island's View — the composition must implement OnConnect")
 		}
-		r.WriteEscaped(sprint(s.val))
+		r.WriteEscaped(fmt.Sprint(s.val))
 	})
 }
 
