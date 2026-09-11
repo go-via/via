@@ -695,14 +695,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	stream := &sseStream{
 		w:       w,
 		rc:      http.NewResponseController(w),
-		timeout: m.cfg.sseWriteTimeout,
+		timeout: sseWriteTimeout,
 		cancel:  cancel,
 	}
 	keepalive := func() { stream.frame(writeKeepaliveFrame) }
-	interval := m.cfg.sseHeartbeat
-	if interval <= 0 {
-		interval = defaultHeartbeat
-	}
 	id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
 	pulse := make(chan func())
 
@@ -761,5 +757,5 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
 
-	runLiveStream(streamCtx, units, pulse, keepalive, interval)
+	runLiveStream(streamCtx, units, pulse, keepalive, sseHeartbeat)
 }

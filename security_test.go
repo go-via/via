@@ -85,8 +85,11 @@ func TestSSE_allowsTrustedCrossOrigin(t *testing.T) {
 // can open them without bound and exhaust the server. A connect past the cap
 // must be refused (503) rather than admitted, so the resource ceiling holds.
 func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
-	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+	// Not t.Parallel(): SetMaxSSEConnForTest mutates package state shared with
+	// any concurrently-Registering test.
+	restore := via.SetMaxSSEConnForTest(1)
+	srv := serve(t, via.Register(quietIsland{}))
+	restore()
 
 	_, release := openStream(t, srv) // takes the only slot; asserts it connected (200)
 	defer release()
@@ -99,8 +102,9 @@ func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
 // its slot must free so a later client can connect. A cap that never decremented
 // would wedge the app at its limit forever.
 func TestSSE_disconnectFreesACapSlot(t *testing.T) {
-	t.Parallel()
-	srv := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+	restore := via.SetMaxSSEConnForTest(1)
+	srv := serve(t, via.Register(quietIsland{}))
+	restore()
 
 	_, release := openStream(t, srv)
 	require.Equal(t, http.StatusServiceUnavailable, sseStatus(t, srv, sameOrigin()),
@@ -116,9 +120,10 @@ func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 // The cap is per-Register: two independently registered apps in one process must
 // not share a counter, or a busy app would throttle an unrelated one.
 func TestSSE_capIsPerRegister(t *testing.T) {
-	t.Parallel()
-	a := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
-	b := serve(t, via.Register(quietIsland{}, via.WithMaxSSEConnections(1)))
+	restore := via.SetMaxSSEConnForTest(1)
+	a := serve(t, via.Register(quietIsland{}))
+	b := serve(t, via.Register(quietIsland{}))
+	restore()
 
 	_, release := openStream(t, a) // fills A's only slot
 	defer release()

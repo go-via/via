@@ -191,6 +191,10 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 - **`via.OnUpload` and `via.File`**. `via.PostForm` is now always multipart, so
   a file `<input>` just works — read it with stdlib's
   `ctx.Request().FormFile(name)`.
+- **The SSE knobs are constants**: keepalive cadence (25s), per-frame write
+  deadline (10s), and the concurrent-connection cap (10,000) are fixed;
+  `WithSessionCookieName` is the only SSE/session option that remains. Open an
+  issue if a deployment needs one of these tunable.
 
 ## Worked example: the counter, both ways
 

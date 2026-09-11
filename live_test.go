@@ -67,9 +67,8 @@ func TestSSE_statelessAppHasNoLiveStream(t *testing.T) {
 // write is the only in-band way to notice a silently-dropped (half-open) peer
 // so the island goroutine and its timers don't leak. It must be an SSE
 // comment frame, not a signal/element patch, so it never mutates client
-// state. This runs at the real production cadence (no WithSSEHeartbeat
-// override) — synctest makes the 25s wait free in wall time, and proves the
-// documented default rather than a shortened stand-in for it.
+// state. This runs at the fixed 25s cadence — synctest makes the wait free in
+// wall time.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(quietIsland{}))
@@ -104,96 +103,6 @@ func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 		assert.True(t, strings.HasPrefix(strings.TrimSpace(line), ":"),
 			"a second keepalive must fire a full cadence after the first — the beat must recur, not fire once")
 	})
-}
-
-// WithSSEHeartbeat must actually change the cadence, not just be accepted and
-// ignored: a 5s override must fire well before the 25s default would.
-func TestLive_heartbeatOverrideChangesCadence(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(5*time.Second)))
-		conn := app.Connect()
-
-		time.Sleep(4 * time.Second)
-		synctest.Wait()
-		for {
-			line, ok := conn.Peek()
-			if !ok {
-				break
-			}
-			require.NotContains(t, line, "keepalive", "keepalive must not fire before the overridden 5s cadence")
-		}
-
-		time.Sleep(time.Second) // cross the 5s mark
-		conn.Await(": keepalive")
-	})
-}
-
-// WithSSEHeartbeat(d) for a non-positive d must NOT disable the keepalive — it
-// floors to the 25s default, since a failed keepalive write is the only
-// in-band way to notice a half-open peer.
-func TestLive_heartbeatNonPositiveFallsBackToDefault(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(-1*time.Second)))
-		conn := app.Connect()
-
-		time.Sleep(24 * time.Second)
-		synctest.Wait()
-		for {
-			line, ok := conn.Peek()
-			if !ok {
-				break
-			}
-			require.NotContains(t, line, "keepalive", "a non-positive override must floor to 25s, not fire earlier")
-		}
-
-		time.Sleep(time.Second) // cross the 25s mark
-		conn.Await(": keepalive")
-	})
-}
-
-// WithSSEWriteTimeout must actually change the per-frame write deadline: a 3s
-// override on a stalled peer must tear the island down well before the 10s
-// default would.
-func TestLive_writeTimeoutOverrideShortensDeadline(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		done := make(chan struct{})
-		handler := via.Register(disposeProbe{disposed: done}, via.WithSSEWriteTimeout(3*time.Second))
-		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
-
-		go handler.ServeHTTP(&stalledPeer{}, req)
-
-		// The default 25s keepalive drives the first (only) write; the 3s
-		// override sets its deadline then. One second later it must still be
-		// alive — the deadline has not elapsed yet.
-		time.Sleep(25*time.Second + time.Second)
-		synctest.Wait()
-		select {
-		case <-done:
-			require.Fail(t, "the island was disposed before the overridden 3s write deadline elapsed")
-		default:
-		}
-
-		// Crossing the 3s deadline (well short of the 10s default) must tear it
-		// down.
-		time.Sleep(3 * time.Second)
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "a 3s WithSSEWriteTimeout override must tear the stalled peer down after 3s, not the 10s default")
-		}
-	})
-}
-
-// A non-positive WithSSEWriteTimeout would let a stalled peer's write pin an
-// action POST behind it forever (see liveConn.run), so it panics instead of
-// disabling the deadline.
-func TestLive_writeTimeoutNonPositivePanics(t *testing.T) {
-	t.Parallel()
-	for _, d := range []time.Duration{0, -1 * time.Second} {
-		assert.Panics(t, func() { via.WithSSEWriteTimeout(d) }, "d=%s", d)
-	}
 }
 
 // stalledPeer models a peer whose receive side has stalled: the connect-time
@@ -259,26 +168,6 @@ func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 		default:
 			require.Fail(t, "a stalled peer must be torn down once its write deadline elapses")
 		}
-	})
-}
-
-// The per-frame write deadline guards against a stalled peer pinning the
-// island goroutine — but it must not kill a healthy, merely-slow client. A
-// normal stream with a write timeout configured must still deliver its
-// keepalive frames, across more than one cadence.
-func TestLive_perFrameWriteDeadlineDoesNotBreakAHealthyStream(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(quietIsland{},
-			via.WithSSEHeartbeat(15*time.Second), via.WithSSEWriteTimeout(2*time.Second)))
-		conn := app.Connect()
-
-		time.Sleep(15 * time.Second)
-		synctest.Wait()
-		conn.Await(": keepalive")
-
-		time.Sleep(15 * time.Second)
-		synctest.Wait()
-		conn.Await(": keepalive")
 	})
 }
 
