@@ -130,13 +130,15 @@ as a re-read of the README, not a diff.
   fallback. A Redirect queued from a Datastar `@post` action cannot navigate
   the page — it is logged and dropped; use a `PostForm` handler or an
   `<a href>` instead.
-- **`WithDocumentHead(via.Head{...})`**: the document shell — title, lang,
-  meta, links, external scripts, one inline style, extra font origins. A typed
-  struct rather than an `h.H`, because the head is also the app's origin
-  declaration: `script-src`, `style-src` and `font-src` are derived from it,
-  so a declared host works under the strict CSP and an undeclared one stays
-  blocked. `InlineStyle` is admitted by its own sha256. Malformed heads panic
-  at `Register`; the zero `Head` serves what via served without the option.
+- **`WithDocumentHead(via.Head{...})`**: the document shell — `Title`, `Lang`,
+  `Raw` head markup (emitted verbatim after via's own `<meta charset>`), one
+  inline style, and `ScriptOrigins`/`StyleOrigins`/`FontOrigins` — the app's
+  own origin declaration for whatever `Raw` references, one list per
+  directive so a stylesheet CDN isn't also script-trusted. `script-src`,
+  `style-src` and `font-src` are derived from those lists, so a declared host
+  works under the strict CSP and an undeclared one stays blocked.
+  `InlineStyle` is admitted by its own sha256. Malformed heads panic at
+  `Register`; the zero `Head` serves what via served without the option.
 - **Resilience floor**: SSE keepalive comment frames (fixed 25s), per-frame
   write deadlines (fixed 10s), half-open teardown, a client reconnect manager
   with a "Reconnecting…" banner and a capped reload-to-re-bootstrap (2), a

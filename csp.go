@@ -63,20 +63,20 @@ var cspHeader = buildCSP(Head{})
 func buildCSP(head Head) string {
 	var script strings.Builder
 	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit))
-	for _, o := range head.scriptOrigins() {
+	for _, o := range head.ScriptOrigins {
 		script.WriteString(" " + o)
 	}
 	var style strings.Builder
 	style.WriteString("style-src 'self'")
-	for _, o := range head.styleOrigins() {
+	for _, o := range head.StyleOrigins {
 		style.WriteString(" " + o)
 	}
 	if head.InlineStyle != "" {
 		style.WriteString(" " + sha256Source(head.InlineStyle))
 	}
 	csp := "default-src 'self'; " + script.String() + "; " + style.String() + "; "
-	if fonts := head.fontOrigins(); len(fonts) > 0 {
-		csp += "font-src 'self' " + strings.Join(fonts, " ") + "; "
+	if len(head.FontOrigins) > 0 {
+		csp += "font-src 'self' " + strings.Join(head.FontOrigins, " ") + "; "
 	}
 	return csp + "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 }

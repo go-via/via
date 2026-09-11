@@ -365,13 +365,14 @@ func cdn(t testing.TB, css string) string {
 
 const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color === "rgb(255, 0, 0)"`
 
-// The payoff of deriving style-src from the Head: an off-origin stylesheet the
-// app declared in Links must actually load and apply. No httptest can see this
-// — the server ships the same bytes whether or not the browser fetches them.
+// The payoff of declaring StyleOrigins: an off-origin stylesheet the app
+// references in Raw must actually load and apply. No httptest can see this —
+// the server ships the same bytes whether or not the browser fetches them.
 func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
-		Links: []via.HeadLink{{Rel: "stylesheet", Href: origin + "/app.css"}},
+		Raw:          `<link rel="stylesheet" href="` + origin + `/app.css">`,
+		StyleOrigins: []string{origin},
 	}))
 	s := vtbrowser.Open(t, app)
 	s.WaitEvalTrue(styledIsRed, "the declared off-origin stylesheet loaded and applied under the derived CSP")
@@ -379,11 +380,11 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 }
 
 // The other half of the same claim: the policy is exactly as wide as what was
-// declared. An @import inside InlineStyle points at an origin via never sees —
-// it is inside the CSS — so style-src does not cover it and the browser blocks
-// it. This is the documented limitation, pinned so it cannot silently become a
-// hole: if the derivation ever widened to a wildcard, this test would go green
-// for the wrong reason and the assertion below would start failing.
+// declared. An @import inside InlineStyle points at an origin the Head never
+// named in StyleOrigins, so style-src does not cover it and the browser
+// blocks it. This is the documented limitation, pinned so it cannot silently
+// become a hole: if StyleOrigins ever widened to a wildcard, this test would
+// go green for the wrong reason and the assertion below would start failing.
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
