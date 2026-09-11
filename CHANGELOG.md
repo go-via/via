@@ -105,7 +105,7 @@ as a re-read of the README, not a diff.
   and footgun tags (`html`, `head`, `script`, `template`, …) — those stay
   via's. Typed `h.Href`/`h.Src`/`h.Action` attributes gate their URL through
   a `javascript:`/`data:` allowlist and neutralize to `#` loudly.
-- **Router**: `via.NewRouter` + `r.Mount("/path", Page{}, guards...)`
+- **Router**: `via.NewRouter` + `r.Mount("/path", Page{})`
   serves a multi-page app behind one handler; `via.Register` is now literally
   `Mount` at `/` — one dispatch pipeline. Mounted pages carry the full live
   stack (SSE, live actions, islands). Every action — a `@post` event
@@ -223,9 +223,9 @@ as a re-read of the README, not a diff.
   island-action response rebuilt the container with no `data-signals`
   attribute at all, so a Set that changed only a bound (not displayed) signal
   vanished — server memory updated, browser never told.
-- **Guards and `OnInit` now run on an embedded island's action**, not only
-  the page GET and the root's own action — the island-action route used to
-  bypass both entirely.
+- **`OnInit` now runs on an embedded island's action**, not only the page GET
+  and the root's own action — the island-action route used to bypass it
+  entirely.
 - **A stateless island's action re-render under a parametrised mount
   (`r.Mount("/thread/{}", …)`) now carries the concrete path**, not an empty
   action base — an embedded island never inherited its parent's mount prefix
@@ -233,9 +233,9 @@ as a re-read of the README, not a diff.
 - **A live push under a parametrised mount now carries the concrete path**,
   not the literal `{p0}` pattern wildcard — the SSE connect closed over the
   mount's pattern instead of resolving it per connection.
-- **`RequireSession` (and every guard) now protects a mounted page's SSE
-  stream, and its `OnInit` now runs before the connect render** — the stream
-  route ran neither, so a guarded live page's push channel was reachable by
+- **`OnInit` now runs before the connect render, and its Redirect is
+  honoured, on a mounted page's SSE stream too** — the stream route ran
+  neither, so a session-gated live page's push channel was reachable by
   anyone who knew the URL.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.

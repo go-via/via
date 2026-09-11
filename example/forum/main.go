@@ -3,9 +3,9 @@
 // once: via.NewRouter + r.Mount (multi-page), OnInit (per-request page data),
 // PostForm + Redirect (the server-rendered auth flow Datastar can't do, and the
 // avatar upload — PostForm is always multipart, so a file input just needs
-// ctx.Request().FormFile), ctx.Param[int] (the /thread/{id} segment), and
-// RequireSession guards (protected pages). It is the integration proof that the
-// features compose. All app state is a plain in-memory store — the framework
+// ctx.Request().FormFile), ctx.Param[int] (the /thread/{id} segment), and an
+// OnInit session check + Redirect (protected pages). It is the integration
+// proof that the features compose. All app state is a plain in-memory store — the framework
 // owns no storage. Zero '&', no closures at via call sites: lists render
 // through method values.
 package main
@@ -233,14 +233,22 @@ func (l *Login) View() h.H {
 	)
 }
 
-// --- /profile (guarded) ---
+// --- /profile (session-gated in OnInit) ---
 
 type Profile struct {
 	store *Store
 	user  User // loaded per request in OnInit
 }
 
-func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = ctx.Session().Get[User](); return nil }
+func (p *Profile) OnInit(ctx *via.Ctx) error {
+	user, ok := ctx.Session().Get[User]()
+	if !ok {
+		ctx.Redirect("/login")
+		return nil
+	}
+	p.user = user
+	return nil
+}
 
 func (p *Profile) SaveName(ctx *via.Ctx) {
 	p.user.Name = ctx.Request().FormValue("name")
@@ -289,14 +297,21 @@ func (p *Profile) View() h.H {
 	)
 }
 
-// --- /forum (guarded) ---
+// --- /forum (session-gated in OnInit) ---
 
 type Forum struct {
 	store   *Store
 	threads []Thread
 }
 
-func (f *Forum) OnInit(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
+func (f *Forum) OnInit(ctx *via.Ctx) error {
+	if _, ok := ctx.Session().Get[User](); !ok {
+		ctx.Redirect("/login")
+		return nil
+	}
+	f.threads = f.store.allThreads()
+	return nil
+}
 
 func (f *Forum) New(ctx *via.Ctx) {
 	u, _ := ctx.Session().Get[User]()
@@ -319,7 +334,7 @@ func (f *Forum) View() h.H {
 	)
 }
 
-// --- /thread/{id} (guarded; reads the {id} segment via Param) ---
+// --- /thread/{id} (session-gated in OnInit; reads the {id} segment via Param) ---
 
 type ThreadPage struct {
 	store *Store
@@ -329,6 +344,10 @@ type ThreadPage struct {
 }
 
 func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
+	if _, ok := ctx.Session().Get[User](); !ok {
+		ctx.Redirect("/login")
+		return nil
+	}
 	p.id = ctx.Param[int]("id")
 	p.title, p.posts = p.store.thread(p.id)
 	return nil
@@ -364,12 +383,11 @@ func main() {
 	app.Mount("/signup", SignUp{store: store})
 	app.Mount("/login", Login{store: store})
 
-	guard := via.RequireSession[User]("/login") // a value, not a closure
-	app.Mount("/profile", Profile{store: store}, guard)
-	app.Mount("/forum", Forum{store: store}, guard)
-	app.Mount("/thread/{id}", ThreadPage{store: store}, guard)
+	app.Mount("/profile", Profile{store: store})
+	app.Mount("/forum", Forum{store: store})
+	app.Mount("/thread/{id}", ThreadPage{store: store})
 
-	// "/" lands on the forum (the guard bounces an anonymous visitor to /login).
+	// "/" lands on the forum (its OnInit bounces an anonymous visitor to /login).
 	root := http.NewServeMux()
 	root.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/forum", http.StatusSeeOther)

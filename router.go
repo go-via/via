@@ -23,10 +23,18 @@ type Initer interface{ OnInit(*Ctx) error }
 // so the answer is a 404, not a 500. Wrap it freely; errors.Is matches.
 var ErrNotFound = errors.New("via: not found")
 
+// errRedirected is runOnInit's internal signal that it already answered the
+// request with a 303 from a Redirect the OnInit hook queued — the caller
+// must stop, same as any other non-nil return.
+var errRedirected = errors.New("via: redirected")
+
 // runOnInit calls v.OnInit with a request-scoped Ctx if v implements Initer.
-// sessW is the open response, so OnInit may also set the session cookie.
-// A non-nil error has already been answered on w (404 for ErrNotFound, 500
-// otherwise) — the caller must stop, never render.
+// sessW is the open response, so OnInit may also set the session cookie or
+// queue a Redirect (honoured here with a 303, before the View ever renders —
+// this is via's one per-request gate, replacing the removed guard
+// mechanism). A non-nil error has already been answered on w (404 for
+// ErrNotFound, 500 otherwise, 303 for a redirect) — the caller must stop,
+// never render.
 func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager) (err error) {
 	ic, ok := v.(Initer)
 	if !ok {
@@ -48,14 +56,25 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 	ctx.req = req
 	ctx.sessions = sessions
 	ctx.sessW = w
-	if err := ic.OnInit(ctx); err != nil {
-		if errors.Is(err, ErrNotFound) {
+	defer func() {
+		if err == nil && ctx.redirect != "" {
+			if !hcore.SafeURL(ctx.redirect) {
+				log.Printf("via: unsafe OnInit redirect %q dropped", ctx.redirect)
+				http.Error(w, "init failed", http.StatusInternalServerError)
+			} else {
+				http.Redirect(w, req, ctx.redirect, http.StatusSeeOther)
+			}
+			err = errRedirected
+		}
+	}()
+	if oerr := ic.OnInit(ctx); oerr != nil {
+		if errors.Is(oerr, ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
-			log.Printf("via: OnInit failed: %v", err)
+			log.Printf("via: OnInit failed: %v", oerr)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 		}
-		return err
+		return oerr
 	}
 	return nil
 }
@@ -119,7 +138,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 // {path}/_via/a/{island}/{n} (root is island 0). root is taken by value (no
 // '&'); the PT constraint makes a missing or mistyped View() a compile error,
 // exactly like Register.
-func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T, guards ...Guard) {
+func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
 	if getPattern == "" {
@@ -130,7 +149,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T, guards ...Gu
 	newInst := func() viewer { inst := root; return PT(&inst) }
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
-		guards: guards, patternBase: patternBase, names: names,
+		patternBase: patternBase, names: names,
 		liveCount: r.liveCount, maxLive: r.maxLive,
 	}
 
@@ -140,9 +159,6 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T, guards ...Gu
 				recoverToHTTP(w, rec, "render")
 			}
 		}()
-		if runGuards(w, req, r.sessions, guards) {
-			return
-		}
 		inst := newInst()
 		if runOnInit(inst, w, req, r.sessions) != nil { // load session/request data into fields first
 			return
@@ -180,32 +196,6 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 		b = strings.Replace(b, "{"+n+"}", req.PathValue(n), 1)
 	}
 	return b
-}
-
-// runGuards runs a mount's guards before OnInit; the first guard that fails
-// short-circuits the request with a 303 to its redirect target and returns true
-// (handled). A guard sees a request-scoped Ctx (session + params), never the
-// render state.
-func runGuards(w http.ResponseWriter, req *http.Request, sessions *sessionManager, guards []Guard) bool {
-	if len(guards) == 0 {
-		return false
-	}
-	ctx := newCtx(nil)
-	ctx.req = req
-	ctx.sessions = sessions
-	ctx.sessW = w
-	for _, g := range guards {
-		if redirect, ok := g(ctx); !ok {
-			if !hcore.SafeURL(redirect) {
-				log.Printf("via: unsafe guard redirect target %q dropped", redirect)
-				http.Error(w, "via: guard misconfigured", http.StatusInternalServerError)
-				return true
-			}
-			http.Redirect(w, req, redirect, http.StatusSeeOther)
-			return true
-		}
-	}
-	return false
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under

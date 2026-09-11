@@ -957,14 +957,14 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 	})
 }
 
-// A guard must gate the SSE connect itself, beyond the page GET and the
-// action route — before A3 the stream handler ran no guards at all, so
-// RequireSession left a live page's push channel open to anyone who knew the
-// URL even though the page and its actions were protected.
-func TestLive_streamRunsGuards(t *testing.T) {
+// An OnInit Redirect must gate the SSE connect itself, beyond the page GET
+// and the action route — before A3 the stream handler ran OnInit at all, so
+// a session check left a live page's push channel open to anyone who knew
+// the URL even though the page and its actions were protected.
+func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{}, via.RequireSession[acct]("/login"))
+	r.Mount("/secret", secret{})
 	srv := serve(t, r)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/sse", strings.NewReader("{}"))
@@ -975,7 +975,7 @@ func TestLive_streamRunsGuards(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode,
-		"a guard must gate the SSE connect too, not just the page and action routes")
+		"an OnInit Redirect must gate the SSE connect too, not just the page and action routes")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 

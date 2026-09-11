@@ -162,19 +162,19 @@ examples, the whole live stack verified in real headless browsers
   positional slot) picks the row. Still a named method value — no `&`, no closure.
 
 - **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
-  `r.Mount("/path", Page{}, guards...)` serves a whole app behind one
+  `r.Mount("/path", Page{})` serves a whole app behind one
   handler, each page's actions namespaced under its mount. `OnInit(*Ctx) error`
   is the per-request hook that loads session/path data into a stateless page
   before its ctx-free `View` — return `via.ErrNotFound` for a vanished record
-  (404); any other error answers 500, and the View never renders a lie. `via.PostForm(handler, …)` renders a **native**, always-multipart form whose
+  (404); any other error answers 500, and the View never renders a lie. A
+  session check + `ctx.Redirect("/login")` inside `OnInit` is the whole
+  protected-page story — no separate guard mechanism. `via.PostForm(handler, …)` renders a **native**, always-multipart form whose
   submit runs server-side and `ctx.Redirect("/…")` issues a 303 — the
   server-rendered auth flow the bundled Datastar can't do.
   The same form handles the avatar upload: a file `<input>` just works, read
   with stdlib's `ctx.Request().FormFile("avatar")`.
-  `ctx.Param[int]("id")` reads the named `{id}` segment of `"/thread/{id}"`;
-  `via.RequireSession[User]("/login")` is a guard *value* (no closure) that
-  bounces anonymous visitors. The forum proves these compose into
-  a full multi-page app.
+  `ctx.Param[int]("id")` reads the named `{id}` segment of `"/thread/{id}"`.
+  The forum proves these compose into a full multi-page app.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
 count, in ~60 lines that read like a static page. Two-browser-verified: a message

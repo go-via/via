@@ -248,10 +248,16 @@ func TestPostForm_rejectsOversizeUpload413(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
-// secret is a guarded page: RequireSession redirects to /login when no acct is
-// in the session.
+// secret is a session-gated page: its own OnInit redirects to /login when no
+// acct is in the session, replacing the removed guard mechanism.
 type secret struct{}
 
+func (s *secret) OnInit(ctx *via.Ctx) error {
+	if _, ok := ctx.Session().Get[acct](); !ok {
+		ctx.Redirect("/login")
+	}
+	return nil
+}
 func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
 
 var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -343,29 +349,39 @@ func TestRouter_paramUnknownNamePanics(t *testing.T) {
 		"Param for an undeclared name is a wiring mistake, not a 404")
 }
 
-// A guard protects the action sub-route too (not just the page GET): an
-// unauthenticated action POST is redirected before any handler runs.
-func TestRouter_guardProtectsActionPost(t *testing.T) {
+// An OnInit Redirect protects the action sub-route too (not just the page
+// GET): an unauthenticated action POST is redirected before any handler runs.
+func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{}, via.RequireSession[acct]("/login"))
+	r.Mount("/secret", secret{})
 	srv := serve(t, r)
 
-	resp := formPost(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/secret/_via/a/0/0", "{}")
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "guard must gate the action route too, not just the page")
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/a/0/0", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := (&http.Client{CheckRedirect: noFollow}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "OnInit's Redirect must gate the action route too, not just the page")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
-// unsafeGuard always fails, redirecting to a scheme SafeURL rejects — the
-// same shape as a guard authored with a mistyped or hostile target.
-func unsafeGuard(*via.Ctx) (string, bool) { return "javascript:alert(1)", false }
+// unsafeRedirectPage's OnInit always redirects to a scheme SafeURL rejects —
+// the same shape as an OnInit authored with a mistyped or hostile target.
+type unsafeRedirectPage struct{}
 
-// A guard redirect goes through the same hcore.SafeURL check as an in-app
+func (p *unsafeRedirectPage) OnInit(ctx *via.Ctx) error { ctx.Redirect("javascript:alert(1)"); return nil }
+func (p *unsafeRedirectPage) View() h.H                 { return h.Div() }
+
+// An OnInit redirect goes through the same hcore.SafeURL check as any other
 // Redirect: an unsafe target must never reach http.Redirect.
-func TestRouter_guardRedirectRejectsUnsafeTarget(t *testing.T) {
+func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/secret", secret{}, unsafeGuard)
+	r.Mount("/secret", unsafeRedirectPage{})
 	srv := serve(t, r)
 
 	c := &http.Client{CheckRedirect: noFollow}
@@ -375,15 +391,15 @@ func TestRouter_guardRedirectRejectsUnsafeTarget(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-	assert.Empty(t, resp.Header.Get("Location"), "an unsafe guard target must never reach http.Redirect")
+	assert.Empty(t, resp.Header.Get("Location"), "an unsafe OnInit redirect target must never reach http.Redirect")
 }
 
-// A guarded page redirects (303) to the login path when the required session
-// value is absent.
-func TestRouter_requireSessionRedirectsWhenAbsent(t *testing.T) {
+// A session-gated page redirects (303) to the login path when the required
+// session value is absent.
+func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{}, via.RequireSession[acct]("/login"))
+	r.Mount("/secret", secret{})
 	srv := serve(t, r)
 
 	c := &http.Client{CheckRedirect: noFollow}
@@ -396,12 +412,13 @@ func TestRouter_requireSessionRedirectsWhenAbsent(t *testing.T) {
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
-// With the required session present, the guard passes and the page renders.
-func TestRouter_requireSessionAllowsWhenPresent(t *testing.T) {
+// With the required session present, OnInit does not redirect and the page
+// renders.
+func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/login", loginForm{})
-	r.Mount("/secret", secret{}, via.RequireSession[acct]("/login"))
+	r.Mount("/secret", secret{})
 	srv := serve(t, r)
 
 	jar, _ := cookiejar.New(nil)
@@ -409,7 +426,7 @@ func TestRouter_requireSessionAllowsWhenPresent(t *testing.T) {
 	loginPage := jarGet(t, c, srv.URL+"/login")
 	postForm(c, t, srv.URL+actionURL(t, loginPage, 0, 0), "name", "alice") // sets acct in the session
 	assert.Contains(t, jarGet(t, c, srv.URL+"/secret"), "secret area",
-		"guard must pass once the session has the required value")
+		"OnInit must not redirect once the session has the required value")
 }
 
 // loginForm is a native server-rendered form (no Datastar): Submit reads a form

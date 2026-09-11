@@ -48,14 +48,13 @@ type actionResult struct {
 }
 
 // mount bundles a page's per-request wiring — built once in Router.Mount and
-// shared by its GET, action, and SSE routes so origin floor, guards, OnInit,
-// and body caps can't drift between them.
+// shared by its GET, action, and SSE routes so origin floor, OnInit, and body
+// caps can't drift between them.
 type mount struct {
 	cfg         *config
 	sessions    *sessionManager
 	reg         *registry
 	newInst     func() viewer
-	guards      []Guard
 	patternBase string
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
@@ -97,9 +96,9 @@ func unitAddr(c *Ctx) int {
 // dispatch is the single entry point for every action POST on a mount — a
 // Datastar @post, a native PostForm submit, or a live unit's action — at
 // {base}/_via/a/{island}/{n} (the root is island 0). One origin floor, one
-// guard run, one OnInit, one body decode: the six transports this replaced
-// each re-implemented these and drifted (guards and OnInit never ran on an
-// island action; a live/island action silently dropped ctx.Redirect).
+// OnInit, one body decode: the six transports this replaced each
+// re-implemented these and drifted (OnInit never ran on an island action; a
+// live/island action silently dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -108,9 +107,6 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	}()
 	if !originAllowed(req, m.cfg) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if runGuards(w, req, m.sessions, m.guards) {
 		return
 	}
 	mode := modeNative

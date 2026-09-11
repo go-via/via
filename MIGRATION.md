@@ -153,7 +153,7 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 
 | Area | v1 | v0.8 |
 | --- | --- | --- |
-| Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{}, guards...)` |
+| Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the primary hook |
 | Live island | `Connector.OnConnect` + `Disposer.Dispose` | `via.Live` — `OnConnect(*Ctx) error`; disposal is automatic |
@@ -167,6 +167,7 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 | Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put/Get[T]/Clear[T]/Rotate` |
 | Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen` |
 | Path params | — | `ctx.Param[T]("name")` |
+| Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithDocumentHead(via.Head{…})` |
 | Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
@@ -195,6 +196,36 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
   deadline (10s), and the concurrent-connection cap (10,000) are fixed;
   `WithSessionCookieName` is the only SSE/session option that remains. Open an
   issue if a deployment needs one of these tunable.
+- **`Guard`, `RequireSession`, and `Mount`'s `guards ...Guard` parameter**.
+  Put the check in `OnInit` and call `ctx.Redirect` — see the worked example
+  below. This also fixes a latent bug: a Redirect set inside `OnInit` used to
+  be silently dropped; it now issues the 303.
+
+## Worked example: protecting a page (Guard is gone)
+
+```go
+// Before
+guard := via.RequireSession[User]("/login")
+app.Mount("/profile", Profile{}, guard)
+
+// After — the check moves into the page's own OnInit
+func (p *Profile) OnInit(ctx *via.Ctx) error {
+	user, ok := ctx.Session().Get[User]()
+	if !ok {
+		ctx.Redirect("/login")
+		return nil
+	}
+	p.user = user
+	return nil
+}
+
+app.Mount("/profile", Profile{})
+```
+
+The check and the data load now live in one function instead of a shared
+value passed to every protected `Mount` call — more to type per page, but
+one less concept, and a `Redirect` set here is honoured (before, it was
+dropped if it came from anywhere but a `Guard`).
 
 ## Worked example: the counter, both ways
 

@@ -319,25 +319,6 @@ func decodeSegment[T any](seg string, name string) T {
 	return v
 }
 
-// Guard is a per-route check run before OnInit on every method (page GET,
-// action, form). Returning ok=false short-circuits the request with a 303 to
-// redirect — the closure-free "middleware" unit: a value passed to Mount, not a
-// Group(fn) that takes a closure at the call site.
-type Guard func(*Ctx) (redirect string, ok bool)
-
-// RequireSession guards a mount: if the session has no value of type T (i.e. the
-// user is not signed in), the request is redirected to loginPath. T is the same
-// type used with Session.Put/Get, keyed identically (a typed-nil pointer), so
-// RequireSession[User]("/login") gates on a ctx.Session().Put(user) elsewhere.
-func RequireSession[T any](loginPath string) Guard {
-	return func(ctx *Ctx) (string, bool) {
-		if _, ok := ctx.Session().Get[T](); ok {
-			return "", true
-		}
-		return loginPath, false
-	}
-}
-
 // Redirect navigates the browser to path after the current handler returns.
 // It is a PostForm/OnInit facility: from a PostForm handler it is a 303 See
 // Other on the native form submit; from OnInit it 303s before the View ever
@@ -621,8 +602,8 @@ func islandPush(idx int, v viewer, base string, stream *sseStream, lc *liveConn)
 }
 
 // connect is the SSE stream's entry point at {base}/_via/sse — dispatch's
-// preamble (origin floor, guards, OnInit) followed by the connect render and
-// the stream loop. Every mount gets the route; a page with no live content
+// preamble (origin floor, OnInit) followed by the connect render and the
+// stream loop. Every mount gets the route; a page with no live content
 // answers 404 on it.
 func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Origin floor first: the stream opens a long-lived island goroutine +
@@ -630,9 +611,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// a same-origin (or explicitly trusted) source before allocating it.
 	if !originAllowed(req, m.cfg) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if runGuards(w, req, m.sessions, m.guards) {
 		return
 	}
 	// The connect is a POST so it can carry the page's signals as a body
