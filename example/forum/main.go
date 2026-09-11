@@ -1,12 +1,13 @@
 // Command forum is a complete multi-page app — sign-up, sign-in, a profile with
 // avatar upload, threads, and posts — that exercises every router feature at
-// once: via.NewRouter + Mount (multi-page), OnInit (per-request page data),
-// PostForm + Redirect (the server-rendered auth flow Datastar can't do),
-// Param[int] (the /thread/{} segment), RequireSession guards (protected pages),
-// and OnUpload + File (the avatar). It is the integration proof that the five
+// once: via.NewRouter + r.Mount (multi-page), OnInit (per-request page data),
+// PostForm + Redirect (the server-rendered auth flow Datastar can't do, and the
+// avatar upload — PostForm is always multipart, so a file input just needs
+// ctx.Request().FormFile), ctx.Param[int] (the /thread/{id} segment), and
+// RequireSession guards (protected pages). It is the integration proof that the
 // features compose. All app state is a plain in-memory store — the framework
-// owns no storage. Zero '&', no closures at via call sites, no identifier
-// strings: lists render through method values, params bind positionally.
+// owns no storage. Zero '&', no closures at via call sites: lists render
+// through method values.
 package main
 
 import (
@@ -156,21 +157,14 @@ func page(title string, body ...h.H) h.H {
 }
 
 func field(name, typ, placeholder string) h.H {
-	return h.Div(h.Input(h.RawAttr("type", typ), h.RawAttr("name", name), h.RawAttr("placeholder", placeholder)))
+	return h.Div(h.Input(h.Type(typ), h.Name(name), h.Placeholder(placeholder)))
 }
 
 func valField(name, typ, val string) h.H {
-	return h.Input(h.RawAttr("type", typ), h.RawAttr("name", name), h.RawAttr("value", val))
+	return h.Input(h.Type(typ), h.Name(name), h.Value(val))
 }
 
-func link(href, text string) h.H { return h.El("a", h.RawAttr("href", href), h.Str(text)) }
-
-func note(msg string) h.H {
-	if msg == "" {
-		return h.Str("")
-	}
-	return h.El("p", h.Str(msg))
-}
+func link(href, text string) h.H { return h.A(h.Href(href), h.Str(text)) }
 
 // --- /signup ---
 
@@ -186,10 +180,12 @@ func (s *SignUp) Submit(ctx *via.Ctx) {
 		s.err = err.Error() // no Redirect → the page re-renders with the error
 		return
 	}
-	via.SessPut(ctx, u)
-	via.SessRotate(ctx) // fixation defense: new session id on privilege change
-	via.Redirect(ctx, "/forum")
+	ctx.Session().Put(u)
+	ctx.Session().Rotate() // fixation defense: new session id on privilege change
+	ctx.Redirect("/forum")
 }
+
+func (s *SignUp) errNote() h.H { return h.P(h.Str(s.err)) }
 
 func (s *SignUp) View() h.H {
 	return page("Sign up",
@@ -197,7 +193,7 @@ func (s *SignUp) View() h.H {
 			field("email", "email", "email"),
 			field("name", "text", "display name"),
 			field("password", "password", "password"),
-			note(s.err),
+			via.When(s.err != "", s.errNote),
 			h.Button(h.Str("Create account")),
 		),
 		link("/login", "Already have an account? Log in"),
@@ -218,17 +214,19 @@ func (l *Login) Submit(ctx *via.Ctx) {
 		l.err = "wrong email or password"
 		return
 	}
-	via.SessPut(ctx, u)
-	via.SessRotate(ctx)
-	via.Redirect(ctx, "/forum")
+	ctx.Session().Put(u)
+	ctx.Session().Rotate()
+	ctx.Redirect("/forum")
 }
+
+func (l *Login) errNote() h.H { return h.P(h.Str(l.err)) }
 
 func (l *Login) View() h.H {
 	return page("Log in",
 		via.PostForm(l.Submit,
 			field("email", "email", "email"),
 			field("password", "password", "password"),
-			note(l.err),
+			via.When(l.err != "", l.errNote),
 			h.Button(h.Str("Log in")),
 		),
 		link("/signup", "Need an account? Sign up"),
@@ -242,44 +240,45 @@ type Profile struct {
 	user  User // loaded per request in OnInit
 }
 
-func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = via.SessGet[User](ctx); return nil }
+func (p *Profile) OnInit(ctx *via.Ctx) error { p.user, _ = ctx.Session().Get[User](); return nil }
 
 func (p *Profile) SaveName(ctx *via.Ctx) {
 	p.user.Name = ctx.Request().FormValue("name")
 	p.store.save(p.user)
-	via.SessPut(ctx, p.user)
-	via.Redirect(ctx, "/profile")
+	ctx.Session().Put(p.user)
+	ctx.Redirect("/profile")
 }
 
-// SaveAvatar receives the uploaded file as a via.File, drains it, and stores it
-// inline as a data: URL — storage is entirely app-land.
-func (p *Profile) SaveAvatar(ctx *via.Ctx, f via.File) {
+// SaveAvatar reads the uploaded file with stdlib and stores it inline as a
+// data: URL — storage is entirely app-land.
+func (p *Profile) SaveAvatar(ctx *via.Ctx) {
+	f, hdr, err := ctx.Request().FormFile("avatar")
+	if err != nil {
+		ctx.Redirect("/profile")
+		return
+	}
+	defer f.Close()
 	data, err := io.ReadAll(f)
 	if err != nil || len(data) == 0 {
-		via.Redirect(ctx, "/profile")
+		ctx.Redirect("/profile")
 		return
 	}
 	// Demo simplification: the client-declared Content-Type is trusted as-is. A
 	// data: URL in an <img src> is not script-executable, but a real app should
 	// sniff the bytes and constrain the type before storing/serving it.
-	p.user.Avatar = "data:" + f.ContentType() + ";base64," + base64.StdEncoding.EncodeToString(data)
+	p.user.Avatar = "data:" + hdr.Header.Get("Content-Type") + ";base64," + base64.StdEncoding.EncodeToString(data)
 	p.store.save(p.user)
-	via.SessPut(ctx, p.user)
-	via.Redirect(ctx, "/profile")
+	ctx.Session().Put(p.user)
+	ctx.Redirect("/profile")
 }
 
-func (p *Profile) avatar() h.H {
-	if p.user.Avatar == "" {
-		return h.Str("")
-	}
-	return h.El("img", h.RawAttr("src", p.user.Avatar), h.RawAttr("width", "96"))
-}
+func (p *Profile) avatarImg() h.H { return h.Img(h.Src(p.user.Avatar), h.Width(96)) }
 
 func (p *Profile) View() h.H {
 	return page("Profile — "+p.user.Name,
-		p.avatar(),
-		via.OnUpload(p.SaveAvatar,
-			h.Input(h.RawAttr("type", "file"), h.RawAttr("name", "avatar")),
+		via.When(p.user.Avatar != "", p.avatarImg),
+		via.PostForm(p.SaveAvatar,
+			h.Input(h.Type("file"), h.Name("avatar")),
 			h.Button(h.Str("Upload avatar")),
 		),
 		via.PostForm(p.SaveName,
@@ -300,9 +299,9 @@ type Forum struct {
 func (f *Forum) OnInit(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
 
 func (f *Forum) New(ctx *via.Ctx) {
-	u, _ := via.SessGet[User](ctx)
+	u, _ := ctx.Session().Get[User]()
 	f.store.newThread(u.Name, ctx.Request().FormValue("title"))
-	via.Redirect(ctx, "/forum")
+	ctx.Redirect("/forum")
 }
 
 func (f *Forum) row(t Thread) h.H {
@@ -320,7 +319,7 @@ func (f *Forum) View() h.H {
 	)
 }
 
-// --- /thread/{} (guarded; reads the {} segment via Param) ---
+// --- /thread/{id} (guarded; reads the {id} segment via Param) ---
 
 type ThreadPage struct {
 	store *Store
@@ -330,19 +329,19 @@ type ThreadPage struct {
 }
 
 func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
-	p.id = via.Param[int](ctx, 0)
+	p.id = ctx.Param[int]("id")
 	p.title, p.posts = p.store.thread(p.id)
 	return nil
 }
 
 func (p *ThreadPage) Send(ctx *via.Ctx) {
-	u, _ := via.SessGet[User](ctx)
+	u, _ := ctx.Session().Get[User]()
 	p.store.reply(p.id, u.Name, ctx.Request().FormValue("body"))
-	via.Redirect(ctx, "/thread/"+strconv.Itoa(p.id))
+	ctx.Redirect("/thread/" + strconv.Itoa(p.id))
 }
 
 func (p *ThreadPage) postRow(po Post) h.H {
-	return h.Li(h.El("b", h.Str(po.Author+": ")), h.Str(po.Body))
+	return h.Li(h.B(h.Str(po.Author+": ")), h.Str(po.Body))
 }
 
 func (p *ThreadPage) View() h.H {
@@ -362,13 +361,13 @@ func main() {
 	// one per deploy in a real app (omit WithSessionKey to auto-generate).
 	app := via.NewRouter(via.WithSessionKey([]byte("forum-demo-session-signing-key!!")))
 
-	via.Mount(app, "/signup", SignUp{store: store})
-	via.Mount(app, "/login", Login{store: store})
+	app.Mount("/signup", SignUp{store: store})
+	app.Mount("/login", Login{store: store})
 
 	guard := via.RequireSession[User]("/login") // a value, not a closure
-	via.Mount(app, "/profile", Profile{store: store}, guard)
-	via.Mount(app, "/forum", Forum{store: store}, guard)
-	via.Mount(app, "/thread/{}", ThreadPage{store: store}, guard)
+	app.Mount("/profile", Profile{store: store}, guard)
+	app.Mount("/forum", Forum{store: store}, guard)
+	app.Mount("/thread/{id}", ThreadPage{store: store}, guard)
 
 	// "/" lands on the forum (the guard bounces an anonymous visitor to /login).
 	root := http.NewServeMux()

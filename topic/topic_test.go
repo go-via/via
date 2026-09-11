@@ -28,7 +28,7 @@ func TestTopic_slowSubscriberDoesNotBlockThePublisher(t *testing.T) {
 	tp.Subscribe() // never drained
 	done := make(chan struct{})
 	go func() {
-		for i := 0; i < 10000; i++ {
+		for i := range 10000 {
 			tp.Publish(i)
 		}
 		close(done)

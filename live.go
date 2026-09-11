@@ -46,21 +46,19 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // island's re-render), and stops the subscription on disconnect. It fuses the
 // Subscribe/OnDispose(sub.Stop)/pump triple — reach for Subscribe only when
 // the source is a raw channel rather than a Topic.
-func Listen[T any](ctx *Ctx, t *topic.Topic[T], handler func(*Ctx, T)) {
+func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	sub := t.Subscribe()
-	ctx.OnDispose(sub.Stop)
-	Subscribe(ctx, sub.C(), handler)
+	c.OnDispose(sub.Stop)
+	c.Subscribe(sub.C(), handler)
 }
 
 // Subscribe drives a live island from an external channel: each value runs
 // handler on the island's single goroutine (serialized with Tick, so island
-// state is mutated race-free) and then via re-renders and pushes. It is a free
-// function, not a Ctx method, because Go methods cannot have type parameters;
-// the no-'&'/named-method-value ergonomics are unchanged (handler is e.g.
-// c.OnMessage). Valid only inside OnConnect; pair it with OnDispose to stop the
-// source. Prefer Listen when the source is a Topic rather than a raw channel.
-func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
-	ctx.subs = append(ctx.subs, func(reqCtx context.Context, pulse chan<- func()) {
+// state is mutated race-free) and then via re-renders and pushes. Valid only
+// inside OnConnect; pair it with OnDispose to stop the source. Prefer Listen
+// when the source is a Topic rather than a raw channel.
+func (c *Ctx) Subscribe[T any](ch <-chan T, handler func(*Ctx, T)) {
+	c.subs = append(c.subs, func(reqCtx context.Context, pulse chan<- func()) {
 		go func() {
 			for {
 				select {
@@ -70,11 +68,11 @@ func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
 					if !ok {
 						return
 					}
-					// The enqueued unit mutates THIS island (ctx) and pushes only
+					// The enqueued unit mutates THIS island (c) and pushes only
 					// THIS island's container — so on a multiplex page a fan-out to
 					// one island never re-renders a sibling.
 					select {
-					case pulse <- func() { handler(ctx, v); ctx.push() }:
+					case pulse <- func() { handler(c, v); c.push() }:
 					case <-reqCtx.Done():
 						return
 					}
@@ -92,7 +90,7 @@ func Subscribe[T any](ctx *Ctx, ch <-chan T, handler func(*Ctx, T)) {
 // The client rejoins the multi-line payload with newlines, reconstructing it.
 func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
-	for _, line := range bytes.Split(fragment, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(fragment, []byte{'\n'}) {
 		_, _ = io.WriteString(w, "data: elements ")
 		_, _ = w.Write(line)
 		_, _ = io.WriteString(w, "\n")
@@ -140,8 +138,9 @@ func (e *errWriter) Write(p []byte) (int, error) {
 // which stops the island goroutine, its tickers, and its subscriptions and runs
 // disposers — instead of leaking them against a dead socket. A per-frame write
 // deadline (timeout) keeps a stalled-but-alive peer from pinning the single
-// goroutine forever; timeout <= 0 disables it. All calls run on the island
-// goroutine, so it needs no lock.
+// goroutine forever — timeout is always positive (WithSSEWriteTimeout
+// rejects otherwise). All calls run on the island goroutine, so it needs no
+// lock.
 type sseStream struct {
 	w       io.Writer
 	rc      *http.ResponseController
@@ -173,7 +172,7 @@ func (s *sseStream) frame(write func(io.Writer)) {
 }
 
 // runLiveStream drives one or more islands on a single goroutine. Every island's
-// ticks, subscriptions, dispatched actions (via liveConn.Dispatch), AND the
+// ticks, subscriptions, dispatched actions (via liveConn.run), AND the
 // keepalive feed through this one goroutine — so all mutation, render, and stream
 // writes are serialized, no lock. Each pulse unit is self-contained: it mutates
 // its island and pushes only that island's container (via ctx.push), so a
@@ -211,27 +210,83 @@ func runLiveStream(reqCtx context.Context, islands []*Ctx, pulse chan func(), ke
 	}
 }
 
-// liveConn is a connected tab's live island, kept in the per-Register registry
-// so a POST action can be routed onto its single goroutine.
+// liveConn is a connected tab's live units, kept in the per-Register registry
+// so a POST action can be routed onto its single goroutine. units is
+// replaced after every push with that render's bind Ctx — its actions and
+// hydrators table is what a live action needs, and it is always the render
+// the client's DOM currently reflects.
 type liveConn struct {
-	inst        viewer            // legacy single-island instance (carries State[T]); nil for a mux connection
-	pulse       chan func()       // the connection's serialization channel (shared by all its islands)
+	mount       *mount            // the mount that opened this connection — a tab id is only valid on ITS mount, never another sharing the router-wide registry
+	pageRoot    viewer            // the connection's actual top-level instance, live or not — a native-form action response re-renders the whole page from here, reusing live descendants via this liveConn (see dispatchLive)
+	pulse       chan func()       // the connection's serialization channel (shared by all its units)
 	done        <-chan struct{}   // reqCtx.Done() — closed on disconnect
-	push        func()            // legacy: re-render the single island and frame it
 	pushSignals func(json string) // emit a patch-signals frame on this stream
-	islands     map[int]*Ctx      // mux: islandIdx → its unit Ctx (islandV + push); nil for a legacy connection
+	mu          sync.Mutex        // guards units/childSlots: replace runs on the island goroutine, unit/childAt are read from the dispatching request's own goroutine
+	units       map[int]*Ctx      // dispatch address (0=root, islandIdx+1=embedded) → current unit Ctx, at any embedding depth
+	childSlots  map[childKey]*Ctx // (parent's dispatch address, embed ordinal) → current descendant unit Ctx
 }
 
-// Dispatch routes one action unit onto the island goroutine, where it runs
-// serialized with ticks/subs/renders. It is select-guarded so a POST racing a
-// just-closed tab returns false (the caller answers 410) instead of blocking on
-// the unbuffered channel forever.
-func (c *liveConn) Dispatch(fn func()) bool {
+// childKey identifies one Embed call site within its parent's render — the
+// ordinal is stable across renders because a live parent's View calls Embed
+// in the same order every time (the same render-stable contract actions
+// already carry).
+type childKey struct {
+	parent  int
+	ordinal int
+}
+
+// childAt returns the unit currently registered for the ordinal'th Embed
+// call under the unit at dispatch address parent, if any — the reuse hook
+// that keeps a live descendant's server state (and container id) stable
+// across its own parent's re-renders, instead of the fresh by-value copy
+// Embed would otherwise seed.
+func (c *liveConn) childAt(parent, ordinal int) (*Ctx, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	u, ok := c.childSlots[childKey{parent, ordinal}]
+	return u, ok
+}
+
+// replace registers u as the current bind for its own dispatch address, and,
+// when u is itself embedded, for its parent+ordinal slot too, so the next
+// Embed of that slot (a live ancestor's own re-render) finds this render's
+// instance instead of reseeding a fresh copy.
+func (c *liveConn) replace(u *Ctx) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.units[unitAddr(u)] = u
+	if u.isIsland {
+		c.childSlots[childKey{u.parentUnit, u.ordinal}] = u
+	}
+}
+
+// run posts fn onto the island goroutine, where it runs serialized with
+// ticks/subs/renders, and WAITS for its actionResult — synchronous, so a live
+// action's Redirect, session cookie, and panic all resolve on the POST that
+// triggered it. fn itself only runs the mutation (see liveRunAction); the
+// result channel is buffered so a late send (once fn is finally dequeued)
+// never blocks a goroutine that already gave up. Every wait is select-guarded
+// on both c.done (the connection closed) and reqCtx (the POST itself gave up
+// or was canceled) so a POST racing a just-closed tab, or one whose own
+// deadline fires while the island goroutine is busy with something else
+// entirely, returns ok=false (the caller answers 410) instead of blocking
+// forever.
+func (c *liveConn) run(reqCtx context.Context, fn func() actionResult) (actionResult, bool) {
+	result := make(chan actionResult, 1)
 	select {
-	case c.pulse <- fn:
-		return true
+	case c.pulse <- func() { result <- fn() }:
 	case <-c.done:
-		return false
+		return actionResult{}, false
+	case <-reqCtx.Done():
+		return actionResult{}, false
+	}
+	select {
+	case res := <-result:
+		return res, true
+	case <-c.done:
+		return actionResult{}, false
+	case <-reqCtx.Done():
+		return actionResult{}, false
 	}
 }
 

@@ -23,7 +23,7 @@ func (g *Greeting) View() h.H {
 		h.H1(h.Str("Greeting")),
 		h.Label(
 			h.Str("Your name "),
-			h.Input(g.Name.Bind(), h.RawAttr("placeholder", "type here")),
+			h.Input(g.Name.Bind(), h.Placeholder("type here")),
 		),
 		h.P(h.Str("Hello, "), g.Name.Display(), h.Str("!")),
 	)

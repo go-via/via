@@ -44,8 +44,8 @@ type Chat struct {
 }
 
 func (c *Chat) OnConnect(ctx *via.Ctx) error {
-	via.Listen(ctx, c.room.bus, c.onMessage)
-	via.Listen(ctx, c.room.presence, c.onPresence)
+	ctx.Listen(c.room.bus, c.onMessage)
+	ctx.Listen(c.room.presence, c.onPresence)
 
 	c.room.join()              // tell everyone the head-count rose
 	ctx.OnDispose(c.room.part) // …and that it fell when this tab leaves
@@ -71,10 +71,10 @@ func (c *Chat) row(m Message) h.H {
 func (c *Chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Room — "), c.Online.Display(), h.Str(" online")),
-		h.Ul(via.Each(c.Log.Get(), c.row)),
+		h.Ul(c.Log.Each(c.row)),
 		h.Form(via.OnSubmit(c.Send),
 			h.Label(h.Str("you "), h.Input(c.Who.Bind())),
-			h.Input(c.Draft.Bind(), h.RawAttr("placeholder", "message")),
+			h.Input(c.Draft.Bind(), h.Placeholder("message")),
 			h.Button(h.Str("send")),
 		),
 	)

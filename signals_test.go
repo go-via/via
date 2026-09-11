@@ -214,9 +214,9 @@ func (s *searchBox) View() h.H {
 // is underscore-prefixed, so Datastar never POSTs it — which means the action
 // body arrives WITHOUT that slot, and the render-shape guard must not read the
 // absence as a mismatch and 410 (it did, for every action on any View holding
-// one, until shapeMatches learned to skip underscore slots). And a server-side
-// Set must still reach the browser: on a stateless page it rides the re-render's
-// data-signals rather than a patch-signals frame.
+// one, until the shape-digest check learned to skip underscore slots). And a
+// server-side Set must still reach the browser: on a stateless page it rides
+// the re-render's data-signals rather than a patch-signals frame.
 func TestSignalClientOnly_serverSetReachesTheClientSignal(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(searchBox{}))

@@ -104,7 +104,7 @@ func (a *PollApp) View() h.H {
 		h.H1(h.Str("poll")),
 		h.Ul(via.Each(a.poll.ranked(), a.row)), // rows reorder by votes each render
 		h.Form(via.OnSubmit(a.Add),
-			h.Input(a.Draft.Bind(), h.RawAttr("placeholder", "new option")),
+			h.Input(a.Draft.Bind(), h.Placeholder("new option")),
 			h.Button(h.Str("add")),
 		),
 	)

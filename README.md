@@ -94,7 +94,7 @@ The action endpoint and rendered pages are hardened by default:
   (`javascript:`/`data:`/`//` are dropped loudly, falling back to the element
   patch).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
-  `h.Data` reject injectable names).
+  `h.Data` and the typed helpers reject injectable names).
 
 ## Status
 
@@ -122,12 +122,12 @@ examples, the whole live stack verified in real headless browsers
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
-  `via/topic.Topic[T]` broker + `via.Subscribe` / `ctx.OnDispose` — one publish
+  `via/topic.Topic[T]` broker + `ctx.Subscribe` / `ctx.OnDispose` — one publish
   fans out to every connected island.
-- **Sessions** (always available): `via.SessPut[T]`/`SessGet[T]`/`SessClear[T]`
+- **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
-  write — apps that never store anything stay cookieless. `via.SessRotate` for
+  write — apps that never store anything stay cookieless. `Session.Rotate` for
   fixation defense, idle TTL eviction. The signing key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
   first use — set a stable key so sessions survive restarts and span pods).
@@ -160,18 +160,18 @@ examples, the whole live stack verified in real headless browsers
   positional slot) picks the row. Still a named method value — no `&`, no closure.
 
 - **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
-  `via.Mount(r, "/path", Page{}, guards...)` serves a whole app behind one
+  `r.Mount("/path", Page{}, guards...)` serves a whole app behind one
   handler, each page's actions namespaced under its mount. `OnInit(*Ctx) error`
   is the per-request hook that loads session/path data into a stateless page
   before its ctx-free `View` — return `via.ErrNotFound` for a vanished record
-  (404); any other error answers 500, and the View never renders a lie. `via.PostForm(handler, …)` renders a **native** form whose
-  submit runs server-side and `via.Redirect(ctx, "/…")` issues a 303 — the
-  server-rendered auth flow the bundled Datastar (no script execution) can't do.
-  `via.Param[int](ctx, 0)` reads the positional `{}` segment of `"/thread/{}"`;
+  (404); any other error answers 500, and the View never renders a lie. `via.PostForm(handler, …)` renders a **native**, always-multipart form whose
+  submit runs server-side and `ctx.Redirect("/…")` issues a 303 — the
+  server-rendered auth flow the bundled Datastar can't do.
+  The same form handles the avatar upload: a file `<input>` just works, read
+  with stdlib's `ctx.Request().FormFile("avatar")`.
+  `ctx.Param[int]("id")` reads the named `{id}` segment of `"/thread/{id}"`;
   `via.RequireSession[User]("/login")` is a guard *value* (no closure) that
-  bounces anonymous visitors. `via.OnUpload(handler, …)` + `via.File` handle the
-  avatar — the one form that posts real multipart, handed to the app as an
-  `io.Reader` it stores however it likes. The forum proves these compose into
+  bounces anonymous visitors. The forum proves these compose into
   a full multi-page app.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
@@ -179,10 +179,11 @@ count, in ~60 lines that read like a static page. Two-browser-verified: a messag
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
 
-**Restarts and deploys.** Sessions and the boot CSP nonce both derive from the
-signing key, so with a stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a
-restart or a rolling deploy keeps cookies valid and redirect scripts admitted
-across pods. Live-island state is in-memory and per-connection: a deploy drops
+**Restarts and deploys.** Sessions derive from the signing key, so with a
+stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a restart or a rolling
+deploy keeps cookies valid across pods. The CSP is a pure function of the
+Head, so redirect scripts stay admitted regardless. Live-island state is
+in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
@@ -198,6 +199,8 @@ POST and is capped at a configurable number of concurrent connections
 (`WithMaxSSEConnections`, default 10,000; over the cap returns 503).
 
 ## Develop
+
+Requires Go 1.27+.
 
 ```bash
 GO='env -u GOROOT /usr/bin/go' ./ci.sh   # fmt + vet + build + test -race

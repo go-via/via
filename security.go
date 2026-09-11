@@ -10,9 +10,10 @@ import (
 // exhaustion; 1 MiB is far above any legitimate signal payload.
 const maxActionBody = 1 << 20
 
-// maxUploadBytes caps a multipart upload body (OnUpload). Larger than the action
-// cap since files are the payload, but still bounded so an upload can't exhaust
-// memory/disk.
+// maxUploadBytes caps a PostForm's multipart body — every native form, not just
+// ones with a file input, since the parser can't tell in advance. Larger than
+// the action cap since files are the payload, but still bounded so an upload
+// can't exhaust memory/disk; maxActionBody of it is kept in RAM regardless.
 const maxUploadBytes = 8 << 20
 
 // originAllowed reports whether req may invoke a state-changing action. By

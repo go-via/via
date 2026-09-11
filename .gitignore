@@ -43,6 +43,7 @@ go.work.sum
 # Agents
 .opencode
 .claude
+.nullius
 
 # Air artifacts
 *tmp/

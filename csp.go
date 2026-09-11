@@ -61,18 +61,20 @@ var cspHeader = buildCSP(Head{})
 // what the app declared and no wider — and it stays a pure function of the
 // config, so every pod serving that config serves byte-identical bytes.
 func buildCSP(head Head) string {
-	script := "script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit)
+	var script strings.Builder
+	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit))
 	for _, o := range head.scriptOrigins() {
-		script += " " + o
+		script.WriteString(" " + o)
 	}
-	style := "style-src 'self'"
+	var style strings.Builder
+	style.WriteString("style-src 'self'")
 	for _, o := range head.styleOrigins() {
-		style += " " + o
+		style.WriteString(" " + o)
 	}
 	if head.InlineStyle != "" {
-		style += " " + sha256Source(head.InlineStyle)
+		style.WriteString(" " + sha256Source(head.InlineStyle))
 	}
-	csp := "default-src 'self'; " + script + "; " + style + "; "
+	csp := "default-src 'self'; " + script.String() + "; " + style.String() + "; "
 	if fonts := head.fontOrigins(); len(fonts) > 0 {
 		csp += "font-src 'self' " + strings.Join(fonts, " ") + "; "
 	}

@@ -114,6 +114,15 @@ func (s *Signal[T]) bind(r *hcore.Renderer) {
 		}
 	}
 	b.DeclareSignal(s.slot, s.val)
+	// A live unit keeps this table from its last render rather than
+	// re-rendering before an action, so the hydration a fresh render would
+	// have done from SignalInit above must also be reachable by slot name.
+	b.Hydrator(s.slot, func(raw json.RawMessage) {
+		var v T
+		if json.Unmarshal(raw, &v) == nil {
+			s.val = v
+		}
+	})
 }
 
 // Display returns an h.H that renders the signal as a Datastar text-bound span.

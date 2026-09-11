@@ -74,10 +74,10 @@ type chat struct {
 func (c *chat) OnConnect(ctx *via.Ctx) error {
 	m := c.room.bus.Subscribe()
 	ctx.OnDispose(m.Stop)
-	via.Subscribe(ctx, m.C(), c.onMsg)
+	ctx.Subscribe(m.C(), c.onMsg)
 	p := c.room.presence.Subscribe()
 	ctx.OnDispose(p.Stop)
-	via.Subscribe(ctx, p.C(), c.onPres)
+	ctx.Subscribe(p.C(), c.onPres)
 	c.room.join()
 	ctx.OnDispose(c.room.part)
 	return nil
@@ -321,8 +321,8 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 // load: no session, no cookie, no reload.
 type redirectViaScript struct{}
 
-func (p *redirectViaScript) Go(ctx *via.Ctx)   { via.Redirect(ctx, "/done") }
-func (p *redirectViaScript) Evil(ctx *via.Ctx) { via.Redirect(ctx, "javascript:alert(1)") }
+func (p *redirectViaScript) Go(ctx *via.Ctx)   { ctx.Redirect("/done") }
+func (p *redirectViaScript) Evil(ctx *via.Ctx) { ctx.Redirect("javascript:alert(1)") }
 func (p *redirectViaScript) View() h.H {
 	return h.Div(
 		h.Button(h.RawAttr("id", "go"), via.OnClick(p.Go), h.Str("go")),

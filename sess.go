@@ -182,7 +182,19 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 
 // Session is a browser session's value bag, resolved from the signed cookie. It
 // is created lazily on the first write, and only then is the cookie issued — an
-// app that never stores anything stays cookieless. Typed access is SessPut/SessGet.
+// app that never stores anything stays cookieless.
+//
+// A session value is keyed by the Go type used to store it — one User{} per
+// session, one ShoppingCart{} per session, and so on. Pair Put with Rotate
+// after authentication state changes (login, logout, privilege elevation) to
+// invalidate any captured pre-auth session id.
+//
+// The store is in-memory and single-pod (the 1.0 scope). Expiry is enforced
+// lazily on access: a session idle past its TTL stops resolving, but a session
+// that is never accessed again is not actively swept — acceptable because a
+// session is only created on a write (typically login), so growth tracks real
+// authenticated sessions, not anonymous traffic. A background sweep / durable
+// or cross-pod store is deferred to the backplane work.
 type Session struct {
 	mgr    *sessionManager
 	id     string // current session id; "" until resolved or created
@@ -244,7 +256,7 @@ func (s *Session) set(key any, value any) {
 // (login, privilege elevation) so a fixed pre-auth id is invalidated. Returns
 // the new id, or "" when no response is open to carry the new cookie (a live
 // action): rotate from a stateless action or OnConnect.
-func (s *Session) rotate() string {
+func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
 	}
@@ -289,45 +301,28 @@ func (c *Ctx) Session() *Session {
 	return s
 }
 
-// Typed session KV. A session value is keyed by the Go type used to store it —
-// one User{} per session, one ShoppingCart{} per session, and so on. Pair with
-// [SessRotate] after authentication state changes (login, logout, privilege
-// elevation) to invalidate any captured pre-auth session id.
-//
-// The store is in-memory and single-pod (the 1.0 scope). Expiry is enforced
-// lazily on access: a session idle past its TTL stops resolving, but a session
-// that is never accessed again is not actively swept — acceptable because a
-// session is only created on a write (typically login), so growth tracks real
-// authenticated sessions, not anonymous traffic. A background sweep / durable
-// or cross-pod store is deferred to the backplane work.
-
 // typeKey returns a stable, comparable key unique to T — a typed nil pointer,
 // so distinct types never collide and the same type always matches. No reflect:
 // (*T)(nil) boxed in an interface carries T's identity for free.
 func typeKey[T any]() any { return (*T)(nil) }
 
-// SessPut stores a typed value in ctx's session, keyed by its type — use it for
-// the one-per-session value like the logged-in user. Sessions are opt-in
-// (WithSessionKey / WithSessionTTL / WithSessionCookieName) and lazy: the first
-// SessPut issues the cookie, and only where a response is open — a stateless
-// action or OnConnect. A live action runs after its 204, so it can mutate an
-// already-established session but cannot create one.
-func SessPut[T any](ctx *Ctx, v T) {
-	if ctx == nil {
-		return
-	}
-	ctx.Session().set(typeKey[T](), v)
+// Put stores a typed value in the session, keyed by its type — use it for the
+// one-per-session value like the logged-in user. Sessions are always on and
+// lazy: the first Put issues the cookie, and only where a response is open —
+// a stateless action or OnConnect. A live action runs after its 204, so it
+// can mutate an already-established session but cannot create one.
+// WithSessionKey / WithSessionTTL / WithSessionCookieName tune, but do not
+// gate, the behavior.
+func (s *Session) Put[T any](v T) {
+	s.set(typeKey[T](), v)
 }
 
-// SessGet reads the value stored with [SessPut] for type T, returning the zero
+// Get reads the value stored with [Session.Put] for type T, returning the zero
 // value and false when nothing is stored (including on an app that hasn't
 // enabled sessions).
-func SessGet[T any](ctx *Ctx) (T, bool) {
+func (s *Session) Get[T any]() (T, bool) {
 	var zero T
-	if ctx == nil {
-		return zero, false
-	}
-	raw, ok := ctx.Session().load(typeKey[T]())
+	raw, ok := s.load(typeKey[T]())
 	if !ok {
 		return zero, false
 	}
@@ -335,22 +330,8 @@ func SessGet[T any](ctx *Ctx) (T, bool) {
 	return v, ok
 }
 
-// SessClear removes the value stored under T's key — e.g. a logout dropping the
+// Clear removes the value stored under T's key — e.g. a logout dropping the
 // session-held user.
-func SessClear[T any](ctx *Ctx) {
-	if ctx == nil {
-		return
-	}
-	ctx.Session().clear(typeKey[T]())
-}
-
-// SessRotate issues a fresh session id (carrying the data over) and invalidates
-// the old one — call it right after an auth state change to defend against
-// session fixation. Returns the new id, or "" if no response is open to carry
-// the new cookie (a live action); rotate from a stateless action or OnConnect.
-func SessRotate(ctx *Ctx) string {
-	if ctx == nil {
-		return ""
-	}
-	return ctx.Session().rotate()
+func (s *Session) Clear[T any]() {
+	s.clear(typeKey[T]())
 }

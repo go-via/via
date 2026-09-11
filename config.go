@@ -30,8 +30,8 @@ type config struct {
 const defaultMaxSSEConn = 10_000
 
 // defaultWriteTimeout caps how long a single SSE frame write may block before
-// the stream gives up on a stalled peer. WithSSEWriteTimeout overrides it; a
-// non-positive override disables the deadline.
+// the stream gives up on a stalled peer. WithSSEWriteTimeout overrides it; the
+// deadline can never be disabled (see WithSSEWriteTimeout).
 const defaultWriteTimeout = 10 * time.Second
 
 // Option configures a Register call.
@@ -81,8 +81,14 @@ func WithSSEHeartbeat(d time.Duration) Option {
 
 // WithSSEWriteTimeout caps how long a single live-stream frame write may block
 // before the stream tears down, so a stalled peer can't pin the island's single
-// goroutine. Default 10s; a non-positive d disables the deadline.
+// goroutine. Default 10s. d must be positive — an action POST against a stalled
+// stream waits behind this same deadline (see liveConn.run), so disabling it
+// would let a stalled peer pin a net/http goroutine per click; it panics
+// otherwise, at Register time.
 func WithSSEWriteTimeout(d time.Duration) Option {
+	if d <= 0 {
+		panic("via: WithSSEWriteTimeout: d must be positive")
+	}
 	return func(c *config) { c.sseWriteTimeout = d }
 }
 

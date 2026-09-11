@@ -35,8 +35,8 @@ func TestState_isUnreadableOnAStatelessPage(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(statelessState{}))
 	status, _ := app.Get("/")
-	assert.NotEqual(t, http.StatusOK, status,
-		"reading State on a non-island page must abort the render, not serve a page")
+	assert.Equal(t, http.StatusInternalServerError, status,
+		"reading State on a non-island page must abort the render with a 500, not serve a page")
 }
 
 // stateEcho is a live island whose action writes a user-influenced value into
@@ -189,6 +189,25 @@ func TestList_removeReachesTheBrowser(t *testing.T) {
 	patch := c.Await("count-1")
 	assert.NotContains(t, patch, "row-drop", "the dropped row must be gone from the pushed patch")
 	assert.Contains(t, patch, "row-keep", "the surviving row must still render")
+}
+
+// eachListIsland renders via l.Each(row) — the List method that sugars over
+// via.Each(l.Get(), row) — rather than calling via.Each directly.
+type eachListIsland struct{ items via.List[string] }
+
+func (e *eachListIsland) OnConnect(ctx *via.Ctx) error { return nil }
+func (e *eachListIsland) View() h.H                    { return h.Ul(e.items.Each(e.row)) }
+func (e *eachListIsland) row(s string) h.H             { return h.Li(h.Str(s)) }
+
+// List.Each must render every element in order through the List method, not
+// just through the free via.Each function it wraps.
+func TestList_eachRendersRowsInOrder(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(eachListIsland{items: newListItems("one", "two", "three")}))
+	status, body := app.Get("/")
+	assert.Equal(t, http.StatusOK, status)
+	assert.Regexp(t, "<li>one</li>.*<li>two</li>.*<li>three</li>", body,
+		"List.Each must render rows in the list's order")
 }
 
 func newListItems(items ...string) via.List[string] {

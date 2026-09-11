@@ -13,6 +13,7 @@ package hcore
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 )
 
@@ -44,6 +45,9 @@ type Binder interface {
 	SignalInit(slot string) (any, bool)
 	// ActionSlot registers a handler and returns its positional id "0","1",….
 	ActionSlot(fn func()) string
+	// Hydrator records slot's update function, kept across renders so a live
+	// action can update the underlying value in place without a re-render.
+	Hydrator(slot string, fn func(json.RawMessage))
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
@@ -76,12 +80,13 @@ func (r *Renderer) WriteString(s string) { r.buf.WriteString(s) }
 // WriteEscaped HTML-escapes text/attribute values, then writes them.
 func (r *Renderer) WriteEscaped(s string) { writeEscaped(r.buf, s) }
 
-// writeEscaped escapes the five HTML-significant characters. It mirrors the
+// writeEscaped escapes the HTML-significant characters. It mirrors the
 // stdlib html template escaping for text and quoted-attribute contexts: <, >,
 // &, ", ' are all neutralised so neither body text nor a double-quoted
-// attribute value can break out of its context.
+// attribute value can break out of its context. NUL is neutralised too, so
+// hostile input can't forge via's internal digest-placeholder token.
 func writeEscaped(buf *bytes.Buffer, s string) {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch s[i] {
 		case '<':
 			buf.WriteString("&lt;")
@@ -97,6 +102,13 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 			// A bare CR is an SSE line terminator: left raw it would split a
 			// datastar-patch-elements frame mid-payload. Neutralise it.
 			buf.WriteString("&#13;")
+		case '\x00':
+			// via's shape-digest placeholder is NUL-delimited; leaving a
+			// literal NUL in escaped text would let hostile input collide
+			// with the token and get the digest spliced into it. HTML5
+			// parsing already replaces NUL with U+FFFD, so this matches
+			// what a browser would do anyway.
+			buf.WriteString("&#65533;")
 		default:
 			buf.WriteByte(s[i])
 		}
@@ -204,7 +216,7 @@ func validAttrName(name string) bool {
 	if name == "" {
 		return false
 	}
-	for i := 0; i < len(name); i++ {
+	for i := range len(name) {
 		c := name[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
@@ -235,3 +247,38 @@ func Data(name, val string) Attr {
 	}
 	return rawAttr{name: "data-" + name, val: val}
 }
+
+// noAttr is an Attr that renders nothing. It exists so a boolean attribute can
+// express ABSENCE: `disabled="false"` is a *disabled* control in every browser,
+// so the off state must emit no attribute at all, and rawAttr always writes
+// name="val".
+type noAttr struct{}
+
+func (noAttr) render(*Renderer) {}
+func (noAttr) isAttr()          {}
+
+// BoolAttr builds a bare HTML boolean attribute — `disabled` when on, nothing
+// at all when off. The name is held to the same allowlist as RawAttr.
+func BoolAttr(name string, on bool) Attr {
+	if !validAttrName(name) {
+		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+	}
+	if !on {
+		return noAttr{}
+	}
+	return bareAttr{name: name}
+}
+
+// bareAttr is a valueless attribute: ` disabled`, not ` disabled=""`.
+type bareAttr struct{ name string }
+
+func (a bareAttr) render(r *Renderer) {
+	r.WriteString(" ")
+	r.WriteString(a.name)
+}
+
+func (a bareAttr) isAttr() {}
+
+// NoAttr is an attribute that renders nothing, for a caller that has decided an
+// attribute should be absent rather than empty.
+func NoAttr() Attr { return noAttr{} }
