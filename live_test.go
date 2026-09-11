@@ -1401,3 +1401,93 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch is the C9
+// regression: liveRunAction's push (the dirty-signals patch, then the
+// element patch) rides back as actionResult.pushWork and runs on the
+// connection's own serialized goroutine, right after acking, in the exact
+// order its mutation committed — not on a detached goroutine racing every
+// other concurrent action's. n increments monotonically at commit time, so a
+// correct stream shows every value in 1..total in strict, gapless order;
+// reordering (the old fire-and-forget enqueue) breaks that order under
+// concurrent dispatch.
+func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(racyDirtySignal{}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 0, 0)
+
+	re := regexp.MustCompile(`"s0":(\d+)`)
+	var mu sync.Mutex
+	var seq []int
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for line := range lines {
+			if m := re.FindStringSubmatch(line); m != nil {
+				if v, err := strconv.Atoi(m[1]); err == nil {
+					mu.Lock()
+					seq = append(seq, v)
+					mu.Unlock()
+				}
+			}
+		}
+	}()
+
+	const goroutines, perGoroutine = 8, 100
+	var wg sync.WaitGroup
+	for range goroutines {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range perGoroutine {
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Datastar-Request", "true")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				req.Header.Set("X-Via-Tab", tab)
+				resp, err := srv.Client().Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	total := goroutines * perGoroutine
+	deadline := time.After(3 * time.Second)
+	for {
+		mu.Lock()
+		n := len(seq)
+		mu.Unlock()
+		if n >= total {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("only %d/%d signal patches arrived before the deadline", n, total)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	got := append([]int(nil), seq...)
+	mu.Unlock()
+	want := make([]int, total)
+	for i := range want {
+		want[i] = i + 1
+	}
+	require.Equal(t, want, got,
+		"a live connection's pushes must ship in the order their mutations committed")
+}
