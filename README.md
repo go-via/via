@@ -81,18 +81,17 @@ The action endpoint and rendered pages are hardened by default:
   in production to enforce same-origin (plus the listed origins), failing
   closed.
 - **Request-body cap** + strict decode (413 / 400), and a **panic recover**.
-- **`nosniff` + a nonce'd CSP** on the page and patch responses. The CSP
+- **`nosniff` + a hash-admitted CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
   the `Function` constructor — without it every action is silently dead in the
-  browser. The nonce is a **boot nonce** — `HMAC(session key, "via/csp-nonce")`
-  — deliberately stable per key, so a `via.Redirect` from a `@post` action
-  ships a `location.assign()` script every document this app (or any pod
-  sharing `VIA_SESSION_KEY`) served will admit, cookieless first request
-  included. Honest posture: the CSP is a seatbelt against *injected* inline
-  script; the load-bearing defenses are output escaping, the attribute-name
-  allowlist, and the same URL gate on every redirect target
-  (`javascript:`/`data:`/`//` are dropped loudly, falling back to the element
-  patch).
+  browser. Every inline script via emits (the reconnect manager, a
+  `via.Redirect`'s `location.assign()`) is library-controlled, so it's
+  admitted by its own SHA-256 hash — no nonce, no per-key state, nothing for
+  an injected `<script>` to borrow. Honest posture: the CSP is a seatbelt
+  against *injected* inline script; the load-bearing defenses are output
+  escaping, the attribute-name allowlist, and the same URL gate on every
+  redirect target (`javascript:`/`data:`/`//` are dropped loudly, falling
+  back to the element patch).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` and the typed helpers reject injectable names).
 
@@ -103,9 +102,9 @@ examples, the whole live stack verified in real headless browsers
 (`vtbrowser/`, `-tags browser`):
 
 - **Hardened stateless core** (`example/counter`): by-value `Register`, origin
-  floor, nonce'd CSP, body cap, panic-recover, compile-time `View` constraint,
-  attribute-name allowlist. An action's response self-classifies — element-patch
-  when the render changed, `204` when it didn't.
+  floor, hash-admitted CSP, body cap, panic-recover, compile-time `View`
+  constraint, attribute-name allowlist. An action's response self-classifies —
+  element-patch when the render changed, `204` when it didn't.
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side. `SignalClientOnly[T]` is a
@@ -188,6 +187,12 @@ the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
 a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
+An action URL carries its unit's shape digest as `?v=` and answers `410 Gone`
+— on both the stateless and live dispatch paths — for a stale digest (the
+`View()` shape changed since the client rendered), an out-of-range action
+index, an unknown island, or a live action with no connection for its tab.
+Datastar resolves a non-2xx response silently and moves on; a native `<form>`
+submit shows the browser's own error page.
 
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and

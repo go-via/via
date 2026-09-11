@@ -277,8 +277,9 @@ func TestMux_liveIslandActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(panel{}))
 		app.Connect() // establish the app, but use a bogus tab below
+		page := fetchPage(t, app, "/")
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+"/_via/a/1/0", strings.NewReader("{}"))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, 1, 0), strings.NewReader("{}"))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")

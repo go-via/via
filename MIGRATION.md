@@ -257,15 +257,17 @@ form:
 Stated plainly so you can decide whether to wait:
 
 - **`h.Data` and `<data>` collide** — the `data-*` helper owns the name.
-- **A live unit whose `View()` shape moves under a background tick can 410
-  its own clicks.** Every action URL carries a shape digest that the server
-  recomputes on dispatch; if a tick changes the unit's signal/action/embed
-  layout between when the client rendered and when it clicks, the digest no
-  longer matches and the click 410s. Datastar resolves a non-200 response
-  silently, so on a live page the next push carries the new digest and heals
-  it — but on a stateless page the button stays dead until reload. Keep a
-  live unit's action layout stable across ticks (change values, not shape) if
-  this matters to you.
+- **A unit whose `View()` shape moves can 410 its own clicks — on stateless
+  pages too, not just live ones.** Every action URL carries a shape digest
+  that the server recomputes on dispatch; if the unit's signal/action/embed
+  layout changes between when the client rendered and when it clicks, the
+  digest no longer matches and the click 410s. Datastar resolves a non-2xx
+  response silently, so on a live page the next push carries the new digest
+  and heals it automatically — a stateless page has no push, so its button
+  stays dead until reload. A live unit's own background tick is the most
+  common way its shape drifts unintentionally; keep a live unit's action
+  layout stable across ticks (change values, not shape) if this matters to
+  you.
 
 ## Staying on v1
 

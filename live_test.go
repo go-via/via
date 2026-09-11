@@ -938,7 +938,10 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	srv := httptest.NewServer(via.Register(clicker{}))
 	t.Cleanup(srv.Close)
 
-	resp, _ := post(t, srv, "/_via/a/0/0", "{}", map[string]string{
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 0, 0)
+
+	resp, _ := post(t, srv, url, "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
 		"X-Via-Tab":      "nonexistent",
 	})
@@ -1317,4 +1320,95 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// racyNativeForm ticks as fast as time.Ticker allows so its OnConnect-scheduled
+// push races dispatchLive's native-form re-render, which (before the fix) ran
+// renderRootBase against lc.pageRoot on the POST's own goroutine instead of
+// the island goroutine.
+type racyNativeForm struct{ n via.State[int] }
+
+func (r *racyNativeForm) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Microsecond, r.tick)
+	return nil
+}
+func (r *racyNativeForm) tick(*via.Ctx) { r.n.Set(r.n.Get() + 1) }
+func (r *racyNativeForm) Save(*via.Ctx) {}
+func (r *racyNativeForm) View() h.H {
+	return h.Div(r.n.Display(), via.PostForm(r.Save, h.Button(h.Str("save"))))
+}
+
+// A native <form> submit on a live page re-renders lc.pageRoot in full
+// (dispatchLive's modeNative branch) so the browser gets a whole document, not
+// a patch. That render must run on the island's own serialized goroutine like
+// every other read/write of live state — otherwise it races a concurrent tick.
+// This runs in real (not synctest-serialized) time and concurrency so -race
+// catches a regression; it asserts nothing about outcomes because the
+// property under test is the absence of a race.
+func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(racyNativeForm{}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 0, 0)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Content-Type", ctype)
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				resp, err := srv.Client().Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// paramInTick calls ctx.Param from a Tick handler to prove the connection's
+// bind carries a real request throughout its life (set once at OnConnect),
+// not just during the dispatched action that started the connection.
+type paramInTick struct{ panics chan any }
+
+func (p *paramInTick) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, p.check)
+	return nil
+}
+func (p *paramInTick) check(ctx *via.Ctx) {
+	defer func() { p.panics <- recover() }()
+	ctx.Param[int]("id") // this mount declares no {id} segment
+}
+func (p *paramInTick) View() h.H { return h.Div() }
+
+// Param must not nil-dereference the request from a Tick handler: the
+// connection's Ctx keeps the request it was connected with for its whole
+// life, so Param answers the same "no such segment" panic a request-bound
+// call would, not a raw nil-pointer crash.
+func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
+	t.Parallel()
+	panics := make(chan any, 1)
+	srv := liveServer(t, via.Register(paramInTick{panics: panics}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitTabID(t, lines)
+
+	rec := <-panics
+	require.NotNil(t, rec, "Param for an undeclared name must still panic")
+	assert.Contains(t, fmt.Sprint(rec), "the mount pattern has no {id} segment",
+		"a Tick's Ctx must carry the connect request, not nil")
 }

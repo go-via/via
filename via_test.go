@@ -231,7 +231,11 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 // a stale client learns the action is gone rather than silently no-op.
 func TestOutOfRangeAction_isGone(t *testing.T) {
 	t.Parallel()
-	resp, _ := do(t, newCounter(t), http.MethodPost, "/_via/a/0/99", "{}")
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := swapActionIndex(t, actionURL(t, page, 0, 0), "99")
+
+	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
 }
 

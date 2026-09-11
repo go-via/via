@@ -36,10 +36,15 @@ const tabFormField = "_viatab"
 // actionResult is what running a positional action produced. panicked is set
 // only on the live path: it happens on the connection's own goroutine, so it
 // must be carried back across the channel to the POST that triggered it
-// rather than answered where it occurred.
+// rather than answered where it occurred. body carries a native-form live
+// dispatch's whole-page re-render — it must be produced on the same
+// goroutine as the mutation (see dispatchLive) because it reads the live
+// tree the island goroutine concurrently ticks.
 type actionResult struct {
 	redirect string
 	panicked bool
+	body     []byte
+	pushWork func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
 }
 
 // mount bundles a page's per-request wiring — built once in Router.Mount and
@@ -198,7 +203,22 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		return
 	}
 	res, ok := lc.run(req.Context(), func() actionResult {
-		return liveRunAction(w, req, m.sessions, lc, u, in, n)
+		result := liveRunAction(w, req, m.sessions, lc, u, in, n)
+		if mode == modeNative && !result.panicked {
+			// A native <form> submit is a real navigation: the browser replaces
+			// the whole document, so it needs a full page, not the element-patch
+			// the (still open, about-to-be-abandoned) SSE stream carries
+			// separately. lc.pageRoot is the connection's actual top-level
+			// instance — rendering through lc lets an already-connected live
+			// descendant reuse its own state instead of a fresh by-value copy
+			// (see embedViewer), exactly like a real push does. It must run
+			// here, on the island's own serialized goroutine, not back on the
+			// POST's — this render reads/mutates the same live tree a
+			// concurrent tick or push does.
+			_, body := renderRootBase(lc.pageRoot, nil, true, base, nil, lc)
+			result.body = body
+		}
+		return result
 	})
 	if !ok {
 		http.Error(w, "live connection closed", http.StatusGone)
@@ -209,16 +229,8 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		return
 	}
 	if mode == modeNative {
-		// A native <form> submit is a real navigation: the browser replaces
-		// the whole document, so it needs a full page, not the element-patch
-		// the (still open, about-to-be-abandoned) SSE stream carries
-		// separately. lc.pageRoot is the connection's actual top-level
-		// instance — rendering through lc lets an already-connected live
-		// descendant reuse its own state instead of a fresh by-value copy
-		// (see embedViewer), exactly like a real push does.
 		respond(w, req, mode, res.redirect, func() {
-			_, body := renderRootBase(lc.pageRoot, nil, true, base, lc)
-			writeHTMLPage(w, m.cfg, body, true, base+"/_via/sse")
+			writeHTMLPage(w, m.cfg, res.body, true, base+"/_via/sse")
 		}, nil)
 		return
 	}
@@ -239,13 +251,14 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 // last-resort backstop, not the primary guard.
 //
 // The re-render + SSE push (the dirty-signals patch, then the element patch)
-// is shipped as a SEPARATE pulse item instead of running inline: a stalled
-// peer can block that write for up to the write timeout, and running it here
-// would hold this response — and thus the mutation's own answer — hostage to
-// it even though the action already succeeded. The handoff goroutine below
-// only sends the closure onto the pulse channel (or gives up if the
-// connection closes first); it never runs it, so the render/write itself
-// still executes solely on the connection's one serialized goroutine.
+// rides back in res.pushWork instead of running here: liveConn.run sends the
+// mutation's result to the waiting POST FIRST, then runs pushWork — so a
+// stalled peer's write (up to the write timeout) delays only the NEXT
+// pulse item, never this response, while still running on the connection's
+// one serialized goroutine in the same order the actions themselves ran. A
+// detached goroutine doing this enqueue used to race other such goroutines
+// from concurrent actions, reordering their pushes; returning it as data
+// instead keeps everything on the one goroutine, in order.
 func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *liveConn, unit *Ctx, in map[string]json.RawMessage, n int) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -269,20 +282,17 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// reaches the client as a signal-patch — the element push omits
 	// data-signals, so a morph never clobbers what the user is typing.
 	dirty, push := unit.dirty, unit.push
-	go func() {
-		select {
-		case lc.pulse <- func() {
+	return actionResult{
+		redirect: unit.redirect,
+		pushWork: func() {
 			if len(dirty) > 0 {
 				if raw, err := json.Marshal(dirty); err == nil {
 					lc.pushSignals(string(raw))
 				}
 			}
 			push() // re-render this unit and frame the element-patch
-		}:
-		case <-lc.done:
-		}
-	}()
-	return actionResult{redirect: unit.redirect}
+		},
+	}
 }
 
 // dispatchStateless is dispatch's non-live path: bind a fresh instance, run
@@ -324,7 +334,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			_, body := renderRootBase(inst, nil, true, base, nil)
+			_, body := renderRootBase(inst, nil, true, base, nil, nil)
 			writeHTMLPage(w, m.cfg, body, false, "")
 		}, nil)
 		return

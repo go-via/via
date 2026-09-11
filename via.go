@@ -288,7 +288,11 @@ type paramMiss struct {
 // Param reads the mount pattern's named {name} segment — the same syntax
 // http.ServeMux uses (r.Mount("/thread/{id}", …) → ctx.Param[int]("id")).
 // Callable from OnInit and actions (which carry a Ctx); View is ctx-free and
-// so cannot read params — load them in OnInit into a field instead.
+// so cannot read params — load them in OnInit into a field instead. It
+// requires a request in scope: a live unit's Ctx has one throughout its
+// connection (set once at OnConnect), so Param is also safe from Tick,
+// Subscribe, and Listen handlers — but not from a bare render with no
+// request behind it at all (see Ctx.Request).
 //
 // A segment that cannot decode into T answers the request with 404 (the URL
 // names a page that doesn't exist — never a silent zero value). Naming a
@@ -501,49 +505,28 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 	return in, true
 }
 
-// renderRoot renders v into the morph target <div id="root" …>…</div> and
+// renderRootBase renders v into the morph target <div id="root" …>…</div> and
 // returns the bind Ctx (slots/actions assigned this pass) plus the bytes. Used
 // for the initial page body and for element-patch responses. in hydrates client
 // signals during the render; pass nil for no hydration (e.g. the post-action
 // response render, which must reflect mutated server state, not request echoes).
-// renderRoot renders v into the #root morph target. declareSignals controls the
-// page-level data-signals attribute: the GET first paint declares the signals so
-// the client store is seeded, but a LIVE SSE push omits it — re-declaring on
-// every push would re-merge (clobber) a client signal the user is editing (their
-// half-typed message vanishing when someone else's message arrives). Deliberate
-// server-driven signal changes ride an explicit signal-patch instead.
-func renderRoot(v viewer, in map[string]json.RawMessage, declareSignals bool) (*Ctx, []byte) {
-	return renderRootBase(v, in, declareSignals, "", nil)
-}
-
-// renderRootBase is renderRoot with an explicit action base path — the router
-// mounts a page under /path, so its actions must post to /path/_via/a/{n}, not
-// the root /_via/a/{n}. base is "" for the single-page Register. conn is the
-// live connection driving this render (nil for first paint and every
-// stateless render), so embedViewer can reuse an already-connected
-// descendant's own instance instead of a fresh by-value copy.
-func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, conn *liveConn) (*Ctx, []byte) {
-	return renderRootCore(v, in, declareSignals, base, nil, conn)
-}
-
-// renderRootPatch renders a stateless action's element-patch response. A
-// stateless action answers with plain HTML, not an SSE stream, so the
-// data-signals attribute is its only channel for a server-side Set — but
-// re-declaring every slot on every action would overwrite the client's whole
-// store, clobbering a value the user is mid-edit. That is the same hazard a live
-// push avoids by omitting the attribute; here the attribute stays, restricted to
-// only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
-	if only == nil {
-		only = map[string]any{} // nil would read as "declare everything"
-	}
-	return renderRootCore(v, in, true, base, only, conn)
-}
-
-// renderRootCore is the shared body: only is threaded to writeSignalsAttr (and
-// to embedded islands via ctx.declareOnly) so one render path serves the full
-// first paint, the declaration-free live push, and the restricted action patch.
-func renderRootCore(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
+// It renders under an explicit action base path — the router mounts a page
+// under /path, so its actions must post to /path/_via/a/{n}, not the root
+// /_via/a/{n}; base is "" for the single-page Register. declareSignals
+// controls the page-level data-signals attribute: the GET first paint
+// declares the signals so the client store is seeded, but a LIVE SSE push
+// omits it — re-declaring on every push would re-merge (clobber) a client
+// signal the user is editing (their half-typed message vanishing when
+// someone else's message arrives); deliberate server-driven signal changes
+// ride an explicit signal-patch instead. only is threaded to
+// writeSignalsAttr (and to embedded islands via ctx.declareOnly) so this one
+// render path serves the full first paint (only nil), the declaration-free
+// live push (declareSignals false), and the restricted action patch (only
+// non-nil, see renderRootPatch). conn is the live connection driving this
+// render (nil for first paint and every stateless render), so embedViewer
+// can reuse an already-connected descendant's own instance instead of a
+// fresh by-value copy.
+func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
 	ctx := newCtx(in)
 	_, ctx.island = v.(Live)     // the root is a live unit exactly when it implements OnConnect
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
@@ -566,6 +549,20 @@ func renderRootCore(v viewer, in map[string]json.RawMessage, declareSignals bool
 		out = bytes.ReplaceAll(out, []byte(ctx.digestPH), []byte(ctx.shapeDigest()))
 	}
 	return ctx, out
+}
+
+// renderRootPatch renders a stateless action's element-patch response. A
+// stateless action answers with plain HTML, not an SSE stream, so the
+// data-signals attribute is its only channel for a server-side Set — but
+// re-declaring every slot on every action would overwrite the client's whole
+// store, clobbering a value the user is mid-edit. That is the same hazard a live
+// push avoids by omitting the attribute; here the attribute stays, restricted to
+// only, the slots the action actually wrote. A nil only declares nothing.
+func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
+	if only == nil {
+		only = map[string]any{} // nil would read as "declare everything"
+	}
+	return renderRootBase(v, in, true, base, only, conn)
 }
 
 // Register builds an http.Handler serving the root composition. root is taken
@@ -640,7 +637,7 @@ func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *
 func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderRootBase(v, nil, false, base, lc) // push omits data-signals
+		bind, body := renderRootBase(v, nil, false, base, nil, lc) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
@@ -733,7 +730,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// render — the root itself (bind), when live, plus each embedded live
 	// island — so a live root and live children are found the same way; the
 	// root unit's own instance is pv, mirroring an island unit's islandV.
-	bind, _ := renderRootBase(pv, connectSig, false, base, nil)
+	bind, _ := renderRootBase(pv, connectSig, false, base, nil, nil)
 	bind.islandV = pv
 	units := liveUnits(bind)
 

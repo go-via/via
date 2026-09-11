@@ -558,8 +558,10 @@ func TestRouter_postFormOutOfRangeIsGone(t *testing.T) {
 	r := via.NewRouter()
 	r.Mount("/login", loginForm{})
 	srv := serve(t, r)
+	_, page := do(t, srv, http.MethodGet, "/login", "")
+	url := swapActionIndex(t, actionURL(t, page, 0, 0), "9")
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/login/_via/a/0/9", "name", "alice")
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+url, "name", "alice")
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
 
