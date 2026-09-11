@@ -86,39 +86,20 @@ func TestState_bareSetAndAppend(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, l.Get())
 }
 
-// The slice edits are the mirror of Append: each one is the intent spelled at
-// the call site, and each must leave the list in exactly the state the name
-// promises. Read as a whole this pins the shape of the surface, not one method.
-func TestList_slice_edits(t *testing.T) {
+// Remove is the mirror of Append: it must leave the list in exactly the state
+// the name promises, shifting the rest left.
+func TestList_remove(t *testing.T) {
 	t.Parallel()
 	var l via.List[string]
 	l.Append("a")
+	l.Append("b")
 	l.Append("c")
-	l.Insert(1, "b")
-	assert.Equal(t, []string{"a", "b", "c"}, l.Get(), "Insert shifts the rest right")
-	assert.Equal(t, 3, l.Len())
-	assert.Equal(t, "b", l.At(1))
-
-	l.Replace(1, "B")
-	assert.Equal(t, []string{"a", "B", "c"}, l.Get(), "Replace overwrites in place")
 
 	l.Remove(1)
 	assert.Equal(t, []string{"a", "c"}, l.Get(), "Remove shifts the rest left")
-
-	l.Insert(l.Len(), "d")
-	assert.Equal(t, []string{"a", "c", "d"}, l.Get(), "Insert at Len appends")
-
-	l.Truncate(2)
-	assert.Equal(t, []string{"a", "c"}, l.Get(), "Truncate keeps the first n")
-	l.Truncate(9)
-	assert.Equal(t, []string{"a", "c"}, l.Get(), "Truncate past the end is a no-op")
-
-	l.Clear()
-	assert.Empty(t, l.Get(), "Clear drops every element")
-	assert.Equal(t, 0, l.Len())
 }
 
-// A wrong index is a programming error. The list panics rather than silently
+// A wrong index is a programming error. Remove panics rather than silently
 // doing nothing, because a no-op would hide the bug behind a list that just
 // never changes — the same reason State panics off-island.
 func TestList_outOfRangeIndexPanics(t *testing.T) {
@@ -128,12 +109,7 @@ func TestList_outOfRangeIndexPanics(t *testing.T) {
 		l.Append("a")
 		return &l
 	}
-	assert.Panics(t, func() { newList().At(1) }, "At past the end")
-	assert.Panics(t, func() { newList().At(-1) }, "At below zero")
 	assert.Panics(t, func() { newList().Remove(1) }, "Remove past the end")
-	assert.Panics(t, func() { newList().Replace(1, "b") }, "Replace past the end")
-	assert.Panics(t, func() { newList().Insert(2, "b") }, "Insert past the append position")
-	assert.Panics(t, func() { newList().Truncate(-1) }, "Truncate to a negative length")
 }
 
 // Remove must not leave the removed element reachable through the backing
@@ -164,7 +140,7 @@ func (t *listIsland) View() h.H {
 		}),
 		// A marker that changes with the length, so a test can await the
 		// post-removal frame rather than matching the row it expects gone.
-		h.P(h.RawAttr("id", "count-"+strconv.Itoa(t.items.Len()))),
+		h.P(h.RawAttr("id", "count-"+strconv.Itoa(len(t.items.Get())))),
 		h.Button(via.OnClick(t.DropFirst), h.Str("drop")),
 	)
 }
