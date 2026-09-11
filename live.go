@@ -90,7 +90,6 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-
 // writeKeepaliveFrame writes one SSE comment frame. A comment (a line starting
 // with ':') is ignored by the client — it mutates no signal and patches no
 // element — so it keeps the connection warm and proves liveness without
