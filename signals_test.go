@@ -146,24 +146,6 @@ func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	assert.Contains(t, frag, "Ada", "response must reflect the value the client typed, not a zero reset")
 }
 
-// localComp renders a client-only Local signal.
-type localComp struct{ note via.SignalClientOnly[string] }
-
-func (c *localComp) View() h.H {
-	return h.Div(h.Input(c.note.Bind()), c.note.Display())
-}
-
-// Local is a client-only signal: its wire name is underscore-prefixed (Datastar
-// never POSTs it), it is declared for the client, and it is two-way bindable and
-// displayable — but it exposes no server Get/Set (no server doorway).
-func TestLocal_isClientOnlyUnderscoreSignal(t *testing.T) {
-	t.Parallel()
-	_, body := vt.Serve(t, via.Register(localComp{})).Get("/")
-	assert.Contains(t, body, `data-bind="_s`, "Local binds an underscore-prefixed (client-only) signal")
-	assert.Contains(t, body, `data-text="$_s`, "Local displays the same underscore signal")
-	assert.Contains(t, body, `data-signals='{"_s`, "Local is declared so the client owns it")
-}
-
 // TestSignal_bareSetBeforeRenderIsSafe pins the bare-mutator contract: Set(v)
 // with no ctx works before the signal was ever rendered (no bound pass yet) —
 // it updates server memory and emits no patch, without panicking. Fails if Set
@@ -193,73 +175,16 @@ func TestSignal_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
 	assert.Equal(t, 2, s.Get(), "the value still updates server memory")
 }
 
-// searchBox pins the one direction a client-only signal moves under server
-// control: the client owns Query and never POSTs it back, but an action can
-// still write it. Fill must change the value to something different from the
-// zero it started at — an action that leaves the render identical is a correct
-// 204, and would prove nothing about Set.
-type searchBox struct{ Query via.SignalClientOnly[string] }
-
-func (s *searchBox) Fill(ctx *via.Ctx)  { s.Query.Set("ada") }
-func (s *searchBox) Clear(ctx *via.Ctx) { s.Query.Set("") }
-func (s *searchBox) View() h.H {
-	return h.Div(
-		h.Input(s.Query.Bind()),
-		h.Button(via.OnClick(s.Fill), h.Str("fill")),
-		h.Button(via.OnClick(s.Clear), h.Str("clear")),
-	)
+// twoSignals writes one signal and leaves the other alone — the second stands
+// in for an input the user is mid-edit.
+type twoSignals struct {
+	Written via.Signal[string]
+	Left    via.Signal[string]
 }
 
-// Two things must hold at once for a client-only signal to be useful. Its slot
-// is underscore-prefixed, so Datastar never POSTs it — which means the action
-// body arrives WITHOUT that slot, and the render-shape guard must not read the
-// absence as a mismatch and 410 (it did, for every action on any View holding
-// one, until the shape-digest check learned to skip underscore slots). And a
-// server-side Set must still reach the browser: on a stateless page it rides
-// the re-render's data-signals rather than a patch-signals frame.
-func TestSignalClientOnly_serverSetReachesTheClientSignal(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Register(searchBox{}))
+func (t *twoSignals) Fill(ctx *via.Ctx) { t.Written.Set("ada") }
 
-	_, page := app.Get("/")
-	slot := attrValue(t, page, "data-bind")
-	assert.True(t, strings.HasPrefix(slot, "_"),
-		"a client-only slot must be underscore-prefixed so Datastar never POSTs it, got %q", slot)
-
-	status, frag := app.Action(0).Fire() // Fill → "ada"
-	assert.Equal(t, http.StatusOK, status,
-		"the action must not 410: an absent underscore slot is not a shape mismatch")
-	assert.Contains(t, frag, `"`+slot+`":"ada"`,
-		"the new value must reach the client under the slot the page declared")
-}
-
-// Set before any render has bound the signal has no slot to patch, so it cannot
-// reach the client. That silence must be loud exactly once — mirroring
-// Signal.Set — and it must never panic on the unstamped binding. Sequential: it
-// captures the global log output.
-func TestSignalClientOnly_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
-
-	var l via.SignalClientOnly[int]
-	l.Set(1)
-	l.Set(2)
-	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
-		"exactly one warning per unrendered client-only signal")
-}
-
-// twoClientSignals writes one client-only signal and leaves the other alone —
-// the second stands in for an input the user is mid-edit.
-type twoClientSignals struct {
-	Written via.SignalClientOnly[string]
-	Left    via.SignalClientOnly[string]
-}
-
-func (t *twoClientSignals) Fill(ctx *via.Ctx) { t.Written.Set("ada") }
-
-func (t *twoClientSignals) View() h.H {
+func (t *twoSignals) View() h.H {
 	return h.Div(
 		h.Input(t.Written.Bind()),
 		h.Input(t.Left.Bind()),
@@ -272,13 +197,13 @@ func (t *twoClientSignals) View() h.H {
 // action, so a value the user was mid-edit vanished on the next click.
 func TestStatelessAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(twoClientSignals{}))
+	app := vt.Serve(t, via.Register(twoSignals{}))
 	_, page := app.Get("/")
-	assert.Contains(t, page, `"_s0":""`, "the GET first paint declares every slot")
-	assert.Contains(t, page, `"_s1":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"s0":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"s1":""`, "the GET first paint declares every slot")
 
 	status, frag := app.Action(0).Fire()
 	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
-	assert.Contains(t, frag, `"_s0":"ada"`, "the written signal is declared")
-	assert.NotContains(t, frag, "_s1\":", "the untouched signal must not be re-declared")
+	assert.Contains(t, frag, `"s0":"ada"`, "the written signal is declared")
+	assert.NotContains(t, frag, "s1\":", "the untouched signal must not be re-declared")
 }

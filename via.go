@@ -1,6 +1,6 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
 // Datastar client: stateless request/response pages, SSE-backed live islands,
-// server-authoritative State/List/Signal/Local, and always-on sessions.
+// server-authoritative State/List/Signal, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
 // reflection, no closures in the public API surface, no any in element/child

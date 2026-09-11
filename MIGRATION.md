@@ -63,7 +63,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 | `StateTab[T]` | `State[T]` (live islands only) |
 | `StateSess[T]` | `ctx.Session().Get` / `.Put` |
 | `StateApp[T]` | your own dependency, injected — via does not own it |
-| `Signal[T]` | `Signal[T]` (client-owned) or `SignalClientOnly[T]` |
+| `Signal[T]` | `Signal[T]` — client-side reactivity with zero round-trips |
 | `*Num` shapes, `.Op(ctx)` | plain Go arithmetic on `Get()` |
 | `Read` / `Write` / `Update` | `Get` / `Set` |
 
