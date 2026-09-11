@@ -43,8 +43,6 @@ type Binder interface {
 	DeclareSignal(slot string, initial any)
 	// SignalInit returns the hydrated value for a slot, if the request carried one.
 	SignalInit(slot string) (any, bool)
-	// ActionSlot registers a handler and returns its positional id "0","1",….
-	ActionSlot(fn func()) string
 	// Hydrator records slot's update function, kept across renders so a live
 	// action can update the underlying value in place without a re-render.
 	Hydrator(slot string, fn func(json.RawMessage))

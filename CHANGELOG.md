@@ -190,6 +190,13 @@ as a re-read of the README, not a diff.
 
 ### Fixed
 
+- **A live action no longer rewrites the Ctx a Tick or Listen handler
+  holds; those keep the connect request.** Dispatch used to write the
+  action's own req/sessW/redirect directly onto the render-time Ctx an
+  island's Tick/Listen closures capture for the life of the connection, so
+  firing one action left every later timer or subscription callback reading
+  that action's request instead of the connection's. Each action now runs
+  against a fresh, per-dispatch Ctx instead.
 - **A native `PostForm` submit inside a live unit now runs its handler and
   answers with a full-page re-render.** A real browser form submit can't set
   the `X-Via-Tab` header (that's fetch-only), so it used to miss the

@@ -16,7 +16,6 @@ import (
 type stubBinder struct {
 	nextSig int
 	init    map[string]any
-	actions int
 }
 
 func (b *stubBinder) SignalName() string {
@@ -30,12 +29,6 @@ func (b *stubBinder) DeclareSignal(string, any) {}
 func (b *stubBinder) SignalInit(slot string) (any, bool) {
 	v, ok := b.init[slot]
 	return v, ok
-}
-
-func (b *stubBinder) ActionSlot(func()) string {
-	i := b.actions
-	b.actions++
-	return strconv.Itoa(i)
 }
 
 func (b *stubBinder) Hydrator(string, func(json.RawMessage)) {}

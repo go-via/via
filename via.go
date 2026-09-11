@@ -58,7 +58,7 @@ type Ctx struct {
 	nextSig     int                              // next signal slot index
 	order       []string                         // slots in assignment order
 	initial     map[string]any                   // per-slot value seen at render time
-	actions     []func()                         // positional action table
+	actions     []func(*Ctx)                     // positional action table; dispatch calls each with a fresh per-dispatch Ctx, never this one
 	hydrators   map[string]func(json.RawMessage) // per-slot value updater, kept from the last render so a live action can hydrate without re-rendering
 	ticks       []tickReg                        // live-island timer registrations
 	subs        []subStarter                     // live-island external subscriptions
@@ -167,7 +167,6 @@ type binderCtx struct{ c *Ctx }
 func (b binderCtx) SignalName() string                             { return b.c.signalName() }
 func (b binderCtx) DeclareSignal(slot string, initial any)         { b.c.declareSignal(slot, initial) }
 func (b binderCtx) SignalInit(slot string) (any, bool)             { return b.c.signalInit(slot) }
-func (b binderCtx) ActionSlot(fn func()) string                    { return b.c.actionSlot(fn) }
 func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage)) { b.c.hydrator(slot, fn) }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
@@ -219,8 +218,10 @@ func (c *Ctx) signalInit(slot string) (any, bool) {
 }
 
 // actionSlot registers a handler and returns its positional id "0","1",….
-// hcore.Binder.
-func (c *Ctx) actionSlot(fn func()) string {
+// Unlike SignalName/DeclareSignal/Hydrator this is not on hcore.Binder — via's
+// own OnClick/OnSubmit/OnChange/PostForm are its only callers, so it stays a
+// plain Ctx method.
+func (c *Ctx) actionSlot(fn func(*Ctx)) string {
 	idx := len(c.actions)
 	c.actions = append(c.actions, fn)
 	return strconv.Itoa(idx)
@@ -256,7 +257,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		if ctx == nil {
 			return
 		}
-		idx := ctx.actionSlot(func() { handler(ctx) })
+		idx := ctx.actionSlot(handler)
 		island := 0
 		if ctx.isIsland {
 			island = ctx.islandIdx + 1
@@ -345,15 +346,13 @@ func OnChange(fn func(*Ctx)) h.Attr { return onEvent("change", fn) }
 // it claims a positional action id and writes data-on:<event>="@post('/_via/a/N')".
 func onEvent(event string, fn func(*Ctx)) h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
-		b := r.Binder()
-		ctx := ctxOf(b)
-		// The action table stores a func(); it closes over the live ctx so
-		// dispatch runs fn against the request Ctx.
-		idx := b.ActionSlot(func() {
-			if ctx != nil {
-				fn(ctx)
-			}
-		})
+		ctx := ctxOf(r.Binder())
+		if ctx == nil {
+			return
+		}
+		// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
+		// never the one bound here at render time (see liveRunAction).
+		idx := ctx.actionSlot(fn)
 		writeActionAttr(r, ctx, event, idx, "")
 	})
 }
@@ -371,17 +370,19 @@ func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("clic
 // click, so a renumbered list can't misroute.
 func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
-		b := r.Binder()
-		ctx := ctxOf(b)
-		idx := b.ActionSlot(func() {
-			if ctx == nil || ctx.req == nil {
+		ctx := ctxOf(r.Binder())
+		if ctx == nil {
+			return
+		}
+		idx := ctx.actionSlot(func(rc *Ctx) {
+			if rc.req == nil {
 				return
 			}
 			var v T
-			if raw := ctx.req.URL.Query().Get("a"); raw != "" {
+			if raw := rc.req.URL.Query().Get("a"); raw != "" {
 				_ = json.Unmarshal([]byte(raw), &v)
 			}
-			fn(ctx, v)
+			fn(rc, v)
 		})
 		query := ""
 		if data, err := json.Marshal(arg); err == nil {
