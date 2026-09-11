@@ -163,6 +163,7 @@ type Action struct {
 	originSet   bool
 	secFetchSet bool
 	noOrigin    bool
+	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the stateless page
 }
 
 // Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
@@ -192,6 +193,16 @@ func (x *Action) SecFetch(s string) *Action {
 // Tab sets the X-Via-Tab header, routing a live action to a connection's island.
 func (x *Action) Tab(id string) *Action { x.headers["X-Via-Tab"] = id; return x }
 
+// Live routes this action against c: its X-Via-Tab header is set to c's tab
+// id, and — unless Raw overrides it — Fire reads the action's URL off c's own
+// pushed markup (see Conn.ActionURL) instead of a separate stateless GET's
+// render, which can carry a different shape digest than what this connection
+// actually has on screen.
+func (x *Action) Live(c *Conn) *Action {
+	x.conn = c
+	return x.Tab(c.tabID)
+}
+
 // NoOrigin sends no origin signal at all, exercising the fail-closed branch.
 func (x *Action) NoOrigin() *Action { x.noOrigin = true; return x }
 
@@ -202,6 +213,9 @@ func (x *Action) Body(json string) *Action { x.body = json; return x }
 func (x *Action) Fire() (int, string) {
 	x.app.t.Helper()
 	path := x.raw
+	if path == "" && x.conn != nil {
+		path = x.conn.ActionURL(x.island, x.n)
+	}
 	if path == "" {
 		m := actionURLRe(x.island, x.n).FindStringSubmatch(x.app.page())
 		if m == nil {
@@ -238,10 +252,13 @@ func (x *Action) Fire() (int, string) {
 
 // Conn is an open SSE stream to a live island, carrying its per-connection tab id.
 type Conn struct {
-	t      testing.TB
-	frames <-chan string
-	cancel context.CancelFunc
-	tabID  string
+	t        testing.TB
+	app      *App
+	frames   <-chan string
+	cancel   context.CancelFunc
+	tabID    string
+	mu       sync.Mutex
+	elements []byte // every datastar-patch-elements frame's data lines seen so far, concatenated in arrival order
 }
 
 var tabRE = regexp.MustCompile(`"_viatab":"([^"]+)"`)
@@ -272,20 +289,33 @@ func (a *App) Connect() *Conn {
 	}
 
 	frames := make(chan string, 256)
+	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel}
 	go func() {
 		defer close(frames)
 		defer resp.Body.Close()
 		sc := bufio.NewScanner(resp.Body)
+		inElements := false
 		for sc.Scan() {
+			line := sc.Text()
+			switch {
+			case strings.HasPrefix(line, "event:"):
+				inElements = strings.Contains(line, "datastar-patch-elements")
+			case line == "":
+				inElements = false
+			case inElements:
+				c.mu.Lock()
+				c.elements = append(c.elements, line...)
+				c.elements = append(c.elements, '\n')
+				c.mu.Unlock()
+			}
 			select {
-			case frames <- sc.Text():
+			case frames <- line:
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	c := &Conn{t: a.t, frames: frames, cancel: cancel}
 	a.t.Cleanup(c.Close)
 	c.tabID = c.awaitTab()
 	return c
@@ -293,6 +323,29 @@ func (a *App) Connect() *Conn {
 
 // TabID returns the connection's tab id.
 func (c *Conn) TabID() string { return c.tabID }
+
+// ActionURL returns the currently-rendered action URL for {island}/{n} — read
+// off the LATEST datastar-patch-elements frame this connection has actually
+// received, the same markup a browser's DOM would hold at this point, not a
+// separate stateless GET's render. Before any push has touched this island
+// (e.g. the very first action after Connect), nothing has been pushed yet
+// either, so this falls back to the page's own initial GET — exactly what a
+// real browser would still be showing.
+func (c *Conn) ActionURL(island, n int) string {
+	c.t.Helper()
+	re := actionURLRe(island, n)
+	c.mu.Lock()
+	buf := append([]byte(nil), c.elements...)
+	c.mu.Unlock()
+	if m := re.FindAllSubmatch(buf, -1); m != nil {
+		return string(m[len(m)-1][1])
+	}
+	m := re.FindStringSubmatch(c.app.page())
+	if m == nil {
+		c.t.Fatalf("vt.Conn.ActionURL: no action %d/%d found on the page or any pushed frame", island, n)
+	}
+	return m[1]
+}
 
 // Peek returns the next buffered frame without blocking, so a test can assert
 // something has NOT happened yet without letting time advance further to find
