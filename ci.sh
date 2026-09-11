@@ -17,6 +17,9 @@ fi
 echo "== go vet =="
 $GO vet ./...
 
+echo "== staticcheck =="
+$GO tool staticcheck ./...
+
 echo "== go build =="
 $GO build ./...
 

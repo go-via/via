@@ -153,4 +153,3 @@ func (s *Signal[T]) Bind() h.Attr {
 func textHandle(v any) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }
-

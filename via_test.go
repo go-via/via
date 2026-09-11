@@ -34,27 +34,30 @@ func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
 		"Dyn": true, "DynAttr": true, "NewRenderer": true, "Renderer": true, "Binder": true,
 	}
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, "h", nil, 0)
+	entries, err := os.ReadDir("h")
 	require.NoError(t, err)
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, decl := range f.Decls {
-				var name string
-				switch d := decl.(type) {
-				case *ast.FuncDecl:
-					if d.Recv == nil {
-						name = d.Name.Name
-					}
-				case *ast.GenDecl:
-					for _, spec := range d.Specs {
-						if ts, ok := spec.(*ast.TypeSpec); ok {
-							name = ts.Name.Name
-						}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("h", e.Name()), nil, 0)
+		require.NoError(t, err)
+		for _, decl := range f.Decls {
+			var name string
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil {
+					name = d.Name.Name
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					if ts, ok := spec.(*ast.TypeSpec); ok {
+						name = ts.Name.Name
 					}
 				}
-				if name != "" && banned[name] {
-					t.Fatalf("h package must not export %q — it belongs to internal/hcore", name)
-				}
+			}
+			if name != "" && banned[name] {
+				t.Fatalf("h package must not export %q — it belongs to internal/hcore", name)
 			}
 		}
 	}

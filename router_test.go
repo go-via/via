@@ -262,17 +262,6 @@ func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
 
 var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-func formPost(c *http.Client, t *testing.T, url, body string) *http.Response {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	t.Cleanup(func() { resp.Body.Close() })
-	return resp
-}
-
 // A named path param binds the {name} segment so the page can read it (in
 // OnInit / actions) by that name, exactly like http.ServeMux —
 // /thread/42 → Param[int]("id")=42.
@@ -373,8 +362,11 @@ func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 // the same shape as an OnInit authored with a mistyped or hostile target.
 type unsafeRedirectPage struct{}
 
-func (p *unsafeRedirectPage) OnInit(ctx *via.Ctx) error { ctx.Redirect("javascript:alert(1)"); return nil }
-func (p *unsafeRedirectPage) View() h.H                 { return h.Div() }
+func (p *unsafeRedirectPage) OnInit(ctx *via.Ctx) error {
+	ctx.Redirect("javascript:alert(1)")
+	return nil
+}
+func (p *unsafeRedirectPage) View() h.H { return h.Div() }
 
 // An OnInit redirect goes through the same hcore.SafeURL check as any other
 // Redirect: an unsafe target must never reach http.Redirect.
