@@ -77,9 +77,13 @@ as a re-read of the README, not a diff.
 
 ### Added
 
-- **A live page may embed live islands, at any depth.** Each streams and
-  patches independently over the page's one connection; a live parent's own
-  re-render no longer clobbers an embedded live child's state.
+- **A plain (non-live) page may embed live islands** as sibling struct
+  fields — each streams and patches independently over the page's one
+  connection. **Known limitation:** a live island cannot itself embed
+  another live island, and an embedded live island's own `View` cannot call
+  `via.Embed` at all — either panics at render, loud and early. Nested live
+  composition is deferred; plain (non-live) composition still nests to any
+  depth.
 - **Typed attribute helpers in `h`**: `ID`, `Class`, `Style`, `Type`, `Name`,
   `Value`, `Placeholder`, `Title`, `Alt`, `Rel`, `For`, `Target`, `Lang`,
   `Role`, `Method`, `Enctype`, `Accept`, `AutoComplete`, `Width`, `Height`,

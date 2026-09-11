@@ -2,17 +2,19 @@ package via
 
 import (
 	"bytes"
-	"fmt"
 	"strconv"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
 )
 
-// renderPass allocates flat, page-wide island indices during one discovery
-// render — shared by pointer across a whole tree of Embeds so a live
-// descendant's container id (and dispatch address) can never collide with an
-// unrelated one elsewhere on the page, regardless of nesting depth.
+// renderPass allocates flat, page-wide island indices and shape-digest
+// placeholder tokens during one root-level render — shared by pointer across
+// a whole tree of Embeds so a live descendant's container id (and dispatch
+// address) can never collide with an unrelated one elsewhere on the page. It
+// is created once per renderRootBase call and never forked: an island's own
+// standalone re-render (renderIslandBind) never calls Embed itself (see
+// Embed's godoc on nested composition), so it never needs one of its own.
 type renderPass struct {
 	n    int
 	dTok int // next shape-digest placeholder token, unique within this pass
@@ -35,14 +37,11 @@ func (p *renderPass) nextDigestToken() string {
 
 // renderIslandPatch re-renders island idx's child for an element-patch — Datastar
 // morphs it onto #via-i{idx}, leaving siblings alone. base is the mount prefix,
-// so the island's own action URLs carry it too. conn is the live connection
-// driving this render (nil for a stateless action's own re-render), so a
-// deeper live descendant embedded in this island can be found and reused
-// rather than reseeded from a fresh copy. Returns the render's bind Ctx
+// so the island's own action URLs carry it too. Returns the render's bind Ctx
 // alongside the framed bytes: a live push keeps it as the island's current unit
 // so the next action's actions/hydrators table is the one this render bound.
-func renderIslandPatch(idx int, v viewer, base string, conn *liveConn) (*Ctx, []byte) {
-	c, inner := renderIslandBind(idx, v, base, conn)
+func renderIslandPatch(idx int, v viewer, base string) (*Ctx, []byte) {
+	c, inner := renderIslandBind(idx, v, base)
 	var b bytes.Buffer
 	b.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `">`)
 	b.Write(inner)
@@ -67,22 +66,18 @@ func renderIslandPatch(idx int, v viewer, base string, conn *liveConn) (*Ctx, []
 // are intentionally shared. Embed's argument must be a field selector (p.Chat),
 // never a composite literal — a literal would re-seed on every render.
 //
-// A live composition may itself embed live children, at any depth: each
-// streams and patches independently over the page's one connection.
-//
 // Generic layouts fall out for free: type Shell[C any] struct{ Body C } with
 // via.Embed(s.Body) composes one layout with any page. An optional region is
-// via.When, not an empty child.
+// via.When, not an empty child. Plain (non-live) composition nests to any
+// depth — a layout may embed a composition that itself embeds another.
 //
-// A live parent's Embed identity is tracked by (parent, ordinal) plus the
-// child's own concrete type, so a via.When condition flipping around an
-// Embed is safe: the sibling that shifts onto the freed ordinal is never
-// mistaken for the vanished one. It CANNOT tell apart two DIFFERENT fields of
-// the SAME concrete type swapping ordinals this way (e.g. via.When(cond,
-// embedX) followed by via.Embed(otherX) of the same type X) — the reused
-// instance in that case may be either one. Guard that case behind two
-// distinct types, or keep the conditional child's ordinal fixed (e.g. always
-// call Embed and let the child itself render nothing when hidden).
+// A live island, however, may only be embedded directly by a page whose root
+// is NOT itself live (the root, or a plain wrapper reached only through
+// further plain Embeds, may hold it) — a live island can never be embedded
+// inside another live composition, nor may a live island's own View call
+// Embed at all. Nested live composition (keyed live islands addressing a
+// dynamic set of live children) is a deferred feature; violating either rule
+// panics at render, loud and early, rather than silently misrouting an action.
 //
 // It panics if the child has no View() method — a wrote-it-wrong error, loud
 // at the first render, never a silent blank or dead region.
@@ -105,35 +100,55 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	if parent == nil {
 		return
 	}
+
+	// An embedded live unit's own View calling Embed is exactly the nested
+	// composition A1 cut from v0.8: its own independent re-render (via
+	// renderIslandBind) never re-walks a parent, so it has nothing to
+	// replicate stable addressing from — the deleted childSlots/renderPass
+	// forking existed only to paper over that. Refuse it outright instead.
+	if parent.isIsland && parent.island {
+		panic("via: via.Embed: a live island's own View must not call Embed — " +
+			"nested live composition is deferred; keep a live island's View flat")
+	}
+	// A live child anywhere under a live unit (the immediate parent, or any
+	// ancestor reached only through plain Embeds) has the same problem in
+	// reverse: the live ANCESTOR's own re-render would re-seed the live
+	// child from its field literal every time, with no reuse mechanism left
+	// to preserve its state. One live unit per page: the root, or a live
+	// island embedded directly (or via plain wrappers) from a plain root.
+	_, live := v.(Live)
+	if live && (parent.island || parent.underLive) {
+		panic("via: via.Embed: a live island cannot be embedded inside another live composition — " +
+			"nested live composition is deferred; embed it directly from a plain root instead")
+	}
+
 	ordinal := len(parent.islands) // this parent's k-th Embed call this render
 
-	// pass.next() must advance exactly once per Embed call — on both the
-	// reuse and the fresh-seed path below — or a later sibling's page-wide
+	// pass.next() must advance exactly once per Embed call, on both the
+	// reuse and the fresh-seed path below, or a later sibling's page-wide
 	// index collides with (or skips) this one's.
 	idx := ordinal
 	if parent.pass != nil {
 		idx = parent.pass.next()
 	}
 
-	// A live parent's own re-render calls Embed again, seeding a fresh
-	// by-value copy from its field — reusing the already-connected child's
-	// own instance (and its islandIdx) instead is what keeps the child's
-	// state, and its container id, stable across the parent's re-renders.
-	// The reused instance is only still valid if its own islandIdx still
-	// matches this render's page-wide numbering AND it is still the same
-	// concrete type — a via.When-guarded sibling appearing/disappearing
-	// shifts every later Embed's ordinal, so islandIdx alone can land two
-	// DIFFERENT children on the same slot (see sameConcreteType). Either
-	// mismatch means the stale entry belongs to whatever now sits at idx,
-	// not to this Embed call, so fall through and re-seed instead.
+	// A native-form full-page re-render on a live connection (dispatchLive)
+	// walks the whole page again, re-invoking Embed for every live
+	// descendant it finds (directly under the root, or through plain
+	// wrappers) — reusing the connection's own already-running instance
+	// (found by its stable dispatch address, idx) is what keeps its server
+	// state intact instead of reseeding a fresh by-value copy. Addressing is
+	// stable by construction here: idx is assigned in the same deterministic
+	// order every full walk, and a live unit's own View can never itself
+	// call Embed (see above), so there is no ordinal-shifting sibling to
+	// confuse it with.
 	if parent.conn != nil {
-		if existing, ok := parent.conn.childAt(unitAddr(parent), ordinal); ok && existing.islandIdx == idx && sameConcreteType(existing.islandV, v) {
-			renderConnectedChild(r, parent, existing, ordinal)
+		if existing := parent.conn.unit(idx); existing != nil {
+			renderConnectedChild(r, parent, existing)
 			return
 		}
 	}
 
-	_, live := v.(Live)
 	child := newCtx(parent.inSignals)
 	child.isIsland = true
 	child.islandIdx = idx
@@ -142,10 +157,9 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	// A live island's View reads server State[T], which is gated on the
 	// live-island flag — set it so the child renders inside its own island.
 	child.island = live
+	child.underLive = parent.island || parent.underLive
 	child.pass = parent.pass
 	child.conn = parent.conn
-	child.parentUnit = unitAddr(parent)
-	child.ordinal = ordinal
 	parent.islands = append(parent.islands, child)
 
 	// Render first so the child's signal slots (order/initial) are populated,
@@ -164,27 +178,17 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	r.WriteString(`</div>`)
 }
 
-// sameConcreteType reports whether a and b share their dynamic type — the
-// other half of the childSlots reuse check, alongside islandIdx. %T (not
-// reflect.TypeOf — via wiring stays reflection-free) is enough: we only need
-// equality, never the type itself. It cannot tell apart two children of the
-// SAME type that swap ordinals (e.g. two via.When branches embedding the
-// same composition); see Embed's godoc for that residual constraint.
-func sameConcreteType(a, b viewer) bool {
-	return fmt.Sprintf("%T", a) == fmt.Sprintf("%T", b)
-}
-
 // renderConnectedChild re-renders an already-connected live descendant's OWN
 // instance (existing.islandV, the pointer every one of its own actions/ticks
 // has been mutating) in place of the fresh by-value copy Embed just made —
-// the fix for a live parent's re-render otherwise clobbering the child's
-// state. It reuses existing's islandIdx (so the container id and dispatch
-// address are unchanged) and re-registers the fresh bind so the next action
-// against the child runs against THIS render's actions/hydrators table.
-func renderConnectedChild(r *hcore.Renderer, parent, existing *Ctx, ordinal int) {
-	c, inner := renderIslandBind(existing.islandIdx, existing.islandV, parent.base, parent.conn)
+// the fix for a native-form full-page re-render otherwise clobbering the
+// child's state. It reuses existing's islandIdx (so the container id and
+// dispatch address are unchanged) and re-registers the fresh bind so the
+// next action against the child runs against THIS render's actions/hydrators
+// table.
+func renderConnectedChild(r *hcore.Renderer, parent, existing *Ctx) {
+	c, inner := renderIslandBind(existing.islandIdx, existing.islandV, parent.base)
 	c.push = existing.push // the push closure is fixed for the unit's whole life; carry it over
-	c.parentUnit, c.ordinal = unitAddr(parent), ordinal
 	parent.conn.replace(c)
 	parent.islands = append(parent.islands, c)
 	r.WriteString(`<div id="via-i` + strconv.Itoa(existing.islandIdx) + `">`)
@@ -195,9 +199,8 @@ func renderConnectedChild(r *hcore.Renderer, parent, existing *Ctx, ordinal int)
 // renderIslandInner renders the island's View with child as the binder, so the
 // child's actions/signals bind into its own tables, then substitutes child's
 // own shape-digest placeholder (if it wrote any action) into the finished
-// bytes — child.shapeDigest is only knowable once its whole render (including
-// any further-nested Embeds) is done. Returns the inner HTML (without the
-// container div), already escaped.
+// bytes — child.shapeDigest is only knowable once its own render is done.
+// Returns the inner HTML (without the container div), already escaped.
 func renderIslandInner(child *Ctx, v viewer) []byte {
 	rr := hcore.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
@@ -210,27 +213,17 @@ func renderIslandInner(child *Ctx, v viewer) []byte {
 
 // renderIslandBind re-renders island idx's child (no hydration, so it
 // reflects post-action state) and returns its bind Ctx alongside the inner
-// HTML. conn is threaded down so a live descendant embedded inside this
-// island is itself found and reused rather than reseeded. A stateless
-// action's response needs the Ctx too: only this render's order/initial
-// values (via writeSignalsAttr) let the response ship a Signal.Set the
-// action wrote.
-func renderIslandBind(idx int, v viewer, base string, conn *liveConn) (*Ctx, []byte) {
+// HTML. A stateless action's response needs the Ctx too: only this render's
+// order/initial values (via writeSignalsAttr) let the response ship a
+// Signal.Set the action wrote. A live island's own View can never itself
+// call Embed (see Embed's godoc), so this Ctx needs no render pass or live
+// connection of its own — there is nothing nested left to number or reuse.
+func renderIslandBind(idx int, v viewer, base string) (*Ctx, []byte) {
 	c := newCtx(nil)
 	c.isIsland = true
 	c.islandIdx = idx
 	c.islandV = v
 	c.base = base
-	// A standalone re-render of just this island (a push or a stateless
-	// action's patch) still must hand out the SAME page-wide indices its
-	// nested Embeds got at first paint — the shared pass consumed idx for
-	// this island right before descending into its own View, so its
-	// descendants' numbering picked up at idx+1. A fresh allocator starting
-	// at 0 would renumber them (colliding with whatever else sits at low
-	// indices elsewhere on the page) purely because this island happened to
-	// be re-rendered on its own.
-	c.pass = &renderPass{n: idx + 1}
-	c.conn = conn
 	_, c.island = v.(Live) // a live island's State[T] reads need the live flag
 	return c, renderIslandInner(c, v)
 }

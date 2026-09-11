@@ -79,10 +79,9 @@ type Ctx struct {
 	declare     bool                             // whether this render declares page-level data-signals (first paint, not a push)
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
-	pass        *renderPass                      // shared flat-index allocator during a fresh discovery render; nil once a descendant is reused via conn
-	conn        *liveConn                        // set during a live push render, so embedViewer can find an already-connected descendant's own instance
-	parentUnit  int                              // this island's parent's dispatch address, half of its childSlots identity
-	ordinal     int                              // this island's position among its parent's Embeds this render, the other half
+	pass        *renderPass                      // shared flat-index allocator during a root-level render; nil for an island's own standalone render
+	conn        *liveConn                        // set during a root-level render on a live connection, so embedViewer can find an already-connected descendant's own instance
+	underLive   bool                             // true when an ancestor (not necessarily the immediate parent) is a live unit — Embed refuses a live child here (see embedViewer)
 	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
 }
 
@@ -126,22 +125,21 @@ func (c *Ctx) digestPlaceholder() string {
 	return c.digestPH
 }
 
-// shapeDigest fingerprints this unit's own render shape: its signal order, its
-// own action count, and each directly embedded island's (order length, action
-// count). dispatch recomputes it fresh and 410s on any mismatch — a branched
-// View that shifted an action's index (or an Embed's ordinal) since the
+// shapeDigest fingerprints this unit's own render shape: its signal order and
+// its own action count. dispatch recomputes it fresh and 410s on any
+// mismatch — a branched View that shifted an action's index since the
 // client's copy was rendered no longer silently misroutes a click, it 410s.
+// It deliberately does not fold in embedded islands' shapes: a live island's
+// own push re-renders and reframes only itself, never its parent's already-
+// shipped URLs, so folding a child's shape in here only left the parent
+// permanently 410 the next time the child's (unrelated) shape happened to
+// change — see the v0.8 coherence notes on the child-shape-in-parent-digest
+// bug.
 func (c *Ctx) shapeDigest() string {
 	h := sha256.New()
 	io.WriteString(h, strings.Join(c.order, ","))
 	io.WriteString(h, "|")
 	io.WriteString(h, strconv.Itoa(len(c.actions)))
-	for _, isl := range c.islands {
-		io.WriteString(h, "|")
-		io.WriteString(h, strconv.Itoa(len(isl.order)))
-		io.WriteString(h, ",")
-		io.WriteString(h, strconv.Itoa(len(isl.actions)))
-	}
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))[:8]
 }
 
@@ -613,9 +611,9 @@ func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *
 	unit.sessions = sessions
 	unit.sessW = w
 	if unit.isIsland {
-		idx, v, parentUnit, ordinal := unit.islandIdx, unit.islandV, unit.parentUnit, unit.ordinal
+		idx, v := unit.islandIdx, unit.islandV
 		lc.replace(unit)
-		unit.push = islandPush(idx, v, base, parentUnit, ordinal, stream, lc)
+		unit.push = islandPush(idx, v, base, stream, lc)
 	} else {
 		v := unit.islandV
 		lc.replace(unit)
@@ -646,15 +644,12 @@ func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
 }
 
 // islandPush is rootPush for an embedded live island: it re-renders island idx
-// in place and replaces the connection's current unit for it. parentUnit and
-// ordinal are carried from the discovery render so a fresh bind still keys
-// into the same childSlots identity a live ancestor's own re-render looks up.
-func islandPush(idx int, v viewer, base string, parentUnit, ordinal int, stream *sseStream, lc *liveConn) func() {
+// in place and replaces the connection's current unit for it.
+func islandPush(idx int, v viewer, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderIslandPatch(idx, v, base, lc)
+		bind, body := renderIslandPatch(idx, v, base)
 		bind.push = push
-		bind.parentUnit, bind.ordinal = parentUnit, ordinal
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
 	}
@@ -751,7 +746,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		done:        streamCtx.Done(),
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:       map[int]*Ctx{},
-		childSlots:  map[childKey]*Ctx{},
 	}
 
 	// Run each unit's OnConnect once, BEFORE the stream headers flush (so
