@@ -123,7 +123,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 // {path}/_via/a/{island}/{n} (root is island 0). root is taken by value (no
 // '&'); the PT constraint makes a missing or mistyped View() a compile error,
 // exactly like Register.
-func (r *Router) Mount[T any, PT PtrViewer[T]](path string, root T, guards ...Guard) {
+func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T, guards ...Guard) {
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
 	if getPattern == "" {

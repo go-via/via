@@ -72,12 +72,8 @@ type chat struct {
 }
 
 func (c *chat) OnConnect(ctx *via.Ctx) error {
-	m := c.room.bus.Subscribe()
-	ctx.OnDispose(m.Stop)
-	ctx.Subscribe(m.C(), c.onMsg)
-	p := c.room.presence.Subscribe()
-	ctx.OnDispose(p.Stop)
-	ctx.Subscribe(p.C(), c.onPres)
+	ctx.Listen(c.room.bus, c.onMsg)
+	ctx.Listen(c.room.presence, c.onPres)
 	c.room.join()
 	ctx.OnDispose(c.room.part)
 	return nil

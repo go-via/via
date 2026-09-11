@@ -56,8 +56,7 @@ as a re-read of the README, not a diff.
 - **`via.Mount(r, …)` is `r.Mount(…)`**: the router owns its mounts.
 - **`via.Param[T](ctx, n)` is `ctx.Param[T](n)`; `via.Redirect(ctx, path)` is
   `ctx.Redirect(path)`**: request-scoped verbs are Ctx methods.
-- **`via.Listen`/`via.Subscribe` are Ctx methods**: `ctx.Listen(topic, handler)`,
-  `ctx.Subscribe(ch, handler)`.
+- **`via.Listen` is a Ctx method**: `ctx.Listen(topic, handler)`.
 - **`OnInit(*Ctx) error`**: the per-request hook now returns an error —
   `via.ErrNotFound` answers 404, anything else 500; the View never renders a
   lie. The same sentinel works from `OnConnect`.

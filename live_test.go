@@ -708,9 +708,7 @@ type feed struct {
 }
 
 func (f *feed) OnConnect(ctx *via.Ctx) error {
-	sub := f.room.Subscribe()
-	ctx.OnDispose(sub.Stop) // method value — deterministic teardown
-	ctx.Subscribe(sub.C(), f.recv)
+	ctx.Listen(f.room, f.recv)
 	return nil
 }
 func (f *feed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
@@ -749,39 +747,6 @@ func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	})
 }
 
-// listenFeed is feed rebuilt on via.Listen — the subscribe/pump/dispose triple
-// fused into one line.
-type listenFeed struct {
-	room *topic.Topic[string]
-	last via.State[string]
-}
-
-func (f *listenFeed) OnConnect(ctx *via.Ctx) error {
-	ctx.Listen(f.room, f.recv)
-	return nil
-}
-func (f *listenFeed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
-func (f *listenFeed) View() h.H {
-	return h.Div(h.P(h.Str("latest: "), f.last.Display()))
-}
-
-// via.Listen must deliver a publish to the island exactly as the manual
-// Subscribe/OnDispose/pump triple does — one line instead of three. Fails if
-// Listen stops subscribing, stops pumping into the handler, or the push stops
-// reaching the stream.
-func TestListen_publishReachesTheIsland(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		room := topic.New[string]()
-		srv := liveServer(t, via.Register(listenFeed{room: room}))
-
-		l1, c1 := openStream(t, srv)
-		defer c1()
-
-		room.Publish("via-listen")
-		awaitLine(t, l1, "latest: via-listen")
-	})
-}
-
 // mixedIsland registers BOTH a tick and a subscription, plus a dispose probe.
 type mixedIsland struct {
 	room     *topic.Topic[string]
@@ -792,10 +757,8 @@ type mixedIsland struct {
 
 func (m *mixedIsland) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(15*time.Millisecond, m.beat)
-	sub := m.room.Subscribe()
-	ctx.OnDispose(sub.Stop)
 	ctx.OnDispose(m.markDispose)
-	ctx.Subscribe(sub.C(), m.recv)
+	ctx.Listen(m.room, m.recv)
 	return nil
 }
 func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get() + 1) }
@@ -959,9 +922,7 @@ type chatIsland struct {
 }
 
 func (c *chatIsland) OnConnect(ctx *via.Ctx) error {
-	sub := c.room.bus.Subscribe()
-	ctx.OnDispose(sub.Stop)
-	ctx.Subscribe(sub.C(), c.recv)
+	ctx.Listen(c.room.bus, c.recv)
 	return nil
 }
 func (c *chatIsland) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }

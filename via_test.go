@@ -394,7 +394,7 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 // viaCallNames are the via entry points whose arguments must be named method
 // values or by-value compositions — never an address-of or a closure.
 var viaCallNames = map[string]bool{
-	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
+	"Register": true, "Embed": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
 	"OnClickArg": true, "PostForm": true, "Mount": true,
 	"Param": true, "RequireSession": true,
