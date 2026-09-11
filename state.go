@@ -43,13 +43,13 @@ func (s *State[T]) Display() h.H {
 //
 //	l.Append(v)        l.Insert(i, v)     l.Replace(i, v)
 //	l.Remove(i)        l.Truncate(n)      l.Clear()
-//	l.Len()            l.At(i)
+//	l.Len()            l.At(i)            l.Each(row)
 //
 // Index arguments follow slice rules: an out-of-range index panics rather than
 // silently doing nothing, because a wrong index is a programming error and a
-// no-op would hide it. Render the list with via.Each(l.Get(), row). Removing or
+// no-op would hide it. Render the list with l.Each(row). Removing or
 // reordering rows morphs by position unless each row carries a stable id, so
-// give the row a h.RawAttr("id", …) when the order can change. Like State it is
+// give the row an h.ID(…) when the order can change. Like State it is
 // valid only inside a live island.
 type List[E any] struct{ State[[]E] }
 
@@ -91,3 +91,8 @@ func (l *List[E]) Truncate(n int) {
 
 // Clear drops every element.
 func (l *List[E]) Clear() { l.Set(nil) }
+
+// Each renders row(item) for every element, in order — sugar over
+// via.Each(l.Get(), row). Same morph caveats as Each: an append-only list morphs
+// by position; give each row a stable id for reorder/delete.
+func (l *List[E]) Each(row func(E) h.H) h.H { return Each(l.Get(), row) }

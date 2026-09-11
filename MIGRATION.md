@@ -14,10 +14,15 @@ afternoon of find-and-replace.
 
 **If you only want the short version:** delete your `View(ctx)` parameter, drop
 `.Op(ctx)`, replace `Read`/`Write` with `Get`/`Set`, replace the `on` package
-with `via.On*`, replace `h.Text` with `h.Str`, replace every typed attribute
-except `Href`/`Src`/`Action` with `h.RawAttr`, and expect the compiler to find
-the rest. Then read shift 1, because that is the one that will actually change
-your design.
+with `via.On*`, replace `h.Text` with `h.Str`, keep your typed attributes —
+`h.Class`, `h.Type`, `h.Style`, `h.Min`, … all still exist, plus 40+ more —
+and reach for `h.RawAttr` only when no typed helper covers the attribute you
+need; every `via.X(ctx, …)` is now `ctx.X(…)` — `Param`,
+`Redirect`, `Listen`, `Subscribe`, `Session.Put`/`Get`/`Clear`/`Rotate` are
+all `Ctx`/`Session` methods now, not free functions (and `via.Mount(r, …)`
+is `r.Mount(…)`, a `Router` method). Expect the compiler to find the rest.
+Then read shift 1, because that is the one that will actually change your
+design.
 
 ## The four shifts
 
@@ -56,7 +61,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 | v1 | v2 |
 | --- | --- |
 | `StateTab[T]` | `State[T]` (live islands only) |
-| `StateSess[T]` | `via.SessGet` / `via.SessPut` |
+| `StateSess[T]` | `ctx.Session().Get` / `.Put` |
 | `StateApp[T]` | your own dependency, injected — via does not own it |
 | `Signal[T]` | `Signal[T]` (client-owned) or `SignalClientOnly[T]` |
 | `*Num` shapes, `.Op(ctx)` | plain Go arithmetic on `Get()` |
@@ -79,7 +84,7 @@ func (p *Page) View(ctx *via.CtxR) h.H { return h.H1(h.Text(p.name(ctx))) }
 
 // v2: OnInit loads it, View renders it
 func (p *Page) OnInit(ctx *via.Ctx) error {
-    u, err := p.users.Find(via.Param[int](ctx, 0))
+    u, err := p.users.Find(ctx.Param[int]("id"))
     if err != nil { return via.ErrNotFound }
     p.user = u
     return nil
@@ -91,7 +96,7 @@ The v1 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`; `OnInit(*Ctx) error` is the per-request hook; `via.Live` is the
 one interface, `OnConnect(*Ctx) error`, and it is what makes a composition a
-live island. There is no `Dispose` — `via.Listen` auto-disposes with the island.
+live island. There is no `Dispose` — `ctx.Listen` auto-disposes with the island.
 
 ### 3. Composition is `via.Embed`, and roots are taken by value
 
@@ -104,13 +109,14 @@ type Page struct{ Sidebar Sidebar }
 func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
 ```
 
-`via.Register` and `via.Mount` take the root **by value** (`Counter{...}`, not
+`via.Register` and `Router.Mount` take the root **by value** (`Counter{...}`, not
 `&Counter{...}`); via passes a pointer to the per-request instance, which is why
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
 
-One rule to know before you nest: a live island may not be embedded inside
-another live island, nor under a live page. The refusal is loud.
+A live island may be embedded inside another live island, or under a live
+page, at any depth — each streams and patches independently over the page's
+one connection.
 
 ### 4. Fan-out is scoped, not global
 
@@ -122,13 +128,20 @@ All removed. v2 fans out through a typed topic that islands subscribe to:
 var Posts = topic.New[Post]()          // package topic
 
 func (p *Feed) OnConnect(ctx *via.Ctx) error {
-    return via.Listen(ctx, Posts, func(post Post) { p.items.Append(post) })
+    ctx.Listen(Posts, p.onPost)
+    return nil
 }
+func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 ```
 
-`via.Listen` is subscribe + pump + auto-dispose in one line, scoped to the
+`ctx.Listen` is subscribe + pump + auto-dispose in one line, scoped to the
 island's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
+
+`ctx.Redirect` now navigates from every handler kind — a `@post` action, a
+`PostForm` submit, a live action, and an embedded island's action all queue it
+the same way. Earlier builds silently dropped it from a live or island
+action; there is no longer a kind of handler where it is a no-op.
 
 ## Mapping table
 
@@ -136,21 +149,21 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 
 | Area | v1 | v0.8 |
 | --- | --- | --- |
-| Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `via.Mount(r, "/p", Page{}, guards...)` |
+| Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{}, guards...)` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the primary hook |
 | Live island | `Connector.OnConnect` + `Disposer.Dispose` | `via.Live` — `OnConnect(*Ctx) error`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.OnClick(p.Inc)`; typed data via `via.OnClickArg` |
 | Text node | `h.Text("x")` | `h.Str("x")` — and it is generic over `Stringish` |
-| Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | `h.RawAttr("class", "…")`; only `Href`, `Src`, `Action` stay typed |
+| Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49; `h.RawAttr` covers the rest |
 | Signal rendering | `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`, `.Class()` | `Bind` remains; the rest are gone — render the value in Go |
 | Conditionals | `h.If` | `via.When` |
 | Groups | `h.Group` | pass the children directly; every element is variadic |
 | Growing lists | `StateTab[[]E]` + `Update` | `via.List[E]` with `Append` |
-| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `via.SessPut/SessGet/SessClear/SessRotate` |
-| Fan-out | `app.Broadcast*` | `topic.New[T]` + `via.Listen` |
-| Path params | — | `via.Param[T](ctx, n)` |
-| Forms | — | `via.PostForm` (303), `via.OnUpload` + `via.File` |
+| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put/Get[T]/Clear[T]/Rotate` |
+| Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen` |
+| Path params | — | `ctx.Param[T]("name")` |
+| Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithDocumentHead(via.Head{…})` |
 | Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
 | Render plumbing | `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` | **gone** — behind `internal/hcore` |
@@ -163,7 +176,6 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 - **Theme options** and `WithoutSSEReconnect`. Themes are CSS; the reconnect
   manager is always on, because an app that silently stops updating is worse
   than one that says so.
-- **`Session.Rotate`** as a method — it is `via.SessRotate(ctx)`.
 - **The `sess` subpackage** and its `internal/sessbridge` shim.
 - **The numeric shapes and `.Op(ctx)`** (shift 1).
 - **Signal rendering helpers** beyond `Bind` (shift 1's table).
@@ -172,6 +184,9 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
   `Binder`. If you were building markup dynamically through these, build it
   with the element constructors instead — `h` now has the full HTML5 vocabulary
   (~105 constructors), minus the page-shell tags via owns.
+- **`via.OnUpload` and `via.File`**. `via.PostForm` is now always multipart, so
+  a file `<input>` just works — read it with stdlib's
+  `ctx.Request().FormFile(name)`.
 
 ## Worked example: the counter, both ways
 
@@ -204,7 +219,7 @@ type Counter struct{ count *Store } // your type, not via's
 func (c *Counter) Inc(ctx *via.Ctx) { c.count.Add(1) }
 
 func (c *Counter) View() h.H {
-    return h.Main(h.RawAttr("class", "container"),
+    return h.Main(h.Class("container"),
         h.P(h.Str("Count: "), h.Str(c.count.Value())),
         h.Button(via.OnClick(c.Inc), h.Str("+")),
     )
@@ -241,13 +256,16 @@ form:
 
 Stated plainly so you can decide whether to wait:
 
-- **Attributes are stringly-typed.** v1's `h.Class`/`h.Type`/`h.Min` are gone
-  and `h.RawAttr("class", …)` is the replacement, which is a genuine step back
-  in a package whose premise is that markup should not be hand-written. Typed
-  helpers are the next ergonomic item; boolean attributes (`disabled`) have no
-  good spelling until they land.
 - **`h.Data` and `<data>` collide** — the `data-*` helper owns the name.
-- **Path params are positional** — `via.Param[T](ctx, 0)`, not by name.
+- **A live unit whose `View()` shape moves under a background tick can 410
+  its own clicks.** Every action URL carries a shape digest that the server
+  recomputes on dispatch; if a tick changes the unit's signal/action/embed
+  layout between when the client rendered and when it clicks, the digest no
+  longer matches and the click 410s. Datastar resolves a non-200 response
+  silently, so on a live page the next push carries the new digest and heals
+  it — but on a stateless page the button stays dead until reload. Keep a
+  live unit's action layout stable across ticks (change values, not shape) if
+  this matters to you.
 
 ## Staying on v1
 
@@ -267,3 +285,5 @@ check that against your own build before relying on it.
 
 If you need a specific fix on v1, open an issue and ask. That is a request, not
 a support guarantee.
+
+v0.8 builds only with Go 1.27+.

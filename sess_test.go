@@ -1,15 +1,14 @@
 package via_test
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
-	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
@@ -28,14 +27,14 @@ type member struct{ Name string }
 // action and let the re-render surface it.
 type loginComp struct{ greeting string }
 
-func (c *loginComp) SignIn(ctx *via.Ctx) { via.SessPut(ctx, member{Name: "alice"}) }
+func (c *loginComp) SignIn(ctx *via.Ctx) { ctx.Session().Put(member{Name: "alice"}) }
 func (c *loginComp) Greet(ctx *via.Ctx) {
-	if m, ok := via.SessGet[member](ctx); ok {
+	if m, ok := ctx.Session().Get[member](); ok {
 		c.greeting = "hi " + m.Name
 	}
 }
-func (c *loginComp) SignOut(ctx *via.Ctx) { via.SessClear[member](ctx) }
-func (c *loginComp) Refresh(ctx *via.Ctx) { via.SessRotate(ctx) }
+func (c *loginComp) SignOut(ctx *via.Ctx) { ctx.Session().Clear[member]() }
+func (c *loginComp) Refresh(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (c *loginComp) View() h.H {
 	return h.Div(
 		h.P(h.Str(c.greeting)),
@@ -53,12 +52,12 @@ type tally struct{ N int }
 type counterComp struct{ shown int }
 
 func (c *counterComp) Bump(ctx *via.Ctx) {
-	t, _ := via.SessGet[tally](ctx)
+	t, _ := ctx.Session().Get[tally]()
 	t.N++
-	via.SessPut(ctx, t)
+	ctx.Session().Put(t)
 }
 func (c *counterComp) Show(ctx *via.Ctx) {
-	t, _ := via.SessGet[tally](ctx)
+	t, _ := ctx.Session().Get[tally]()
 	c.shown = t.N
 }
 func (c *counterComp) View() h.H {
@@ -85,15 +84,30 @@ func cookieValue(t *testing.T, c *http.Client, base, name string) string {
 // value, so a test can replay a stale session id the jar has already replaced.
 func greetWithRawCookie(t *testing.T, base, name, value string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+"/_via/a/1", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 1), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Cookie", name+"="+value)
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return string(b)
+}
+
+// actionPath fetches base's root page on a bare (cookie-less) client and
+// returns the currently-rendered action URL for island/n. loginComp's and
+// counterComp's View render the same action set regardless of session state,
+// so this is safe to call before any login/session step in the test.
+func actionPath(t *testing.T, c *http.Client, base string, island, n int) string {
+	t.Helper()
+	resp, err := c.Get(base + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return actionURL(t, string(b), island, n)
 }
 
 func jarClient(t *testing.T) *http.Client {
@@ -105,9 +119,10 @@ func jarClient(t *testing.T) *http.Client {
 
 func fireAction(t *testing.T, c *http.Client, base string, n int) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+"/_via/a/"+strconv.Itoa(n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, 0, n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	resp, err := c.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -238,9 +253,10 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 
 	// Fire the first session access on a raw request so we can read the
 	// Set-Cookie attributes the cookiejar would otherwise hide.
-	req, err := http.NewRequest(http.MethodPost, base+"/_via/a/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -256,18 +272,25 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 }
 
 // A session left idle past its TTL must stop resolving — a long-abandoned
-// session must not silently resurrect on a late request.
+// session must not silently resurrect on a late request. This runs at the
+// real default TTL (24h), not a shortened override: synctest's fake clock
+// makes the wait free in wall time, and proves the documented default rather
+// than a stand-in for it. The server must live on httptest's in-memory
+// network — a real listener's Accept-loop goroutine would block the bubble
+// from ever going idle.
 func TestSession_expiresAfterIdleTTL(t *testing.T) {
-	t.Parallel()
-	base := sessionServer(t,
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
-		via.WithSessionTTL(30*time.Millisecond))
-	c := jarClient(t)
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, via.Register(loginComp{},
+			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
 
-	fireAction(t, c, base, 0)            // SignIn
-	time.Sleep(80 * time.Millisecond)    // sit idle past the TTL
-	_, body := fireAction(t, c, base, 1) // Greet
-	assert.NotContains(t, body, "hi alice", "an idle session past its TTL must not resolve")
+		fireAction(t, c, srv.URL, 0)            // SignIn
+		time.Sleep(24*time.Hour + time.Second)  // sit idle past the default TTL
+		_, body := fireAction(t, c, srv.URL, 1) // Greet
+		assert.NotContains(t, body, "hi alice", "an idle session past its TTL must not resolve")
+	})
 }
 
 // WithSessionTTL alone (no WithSessionKey) must still enable sessions, signing
@@ -287,9 +310,10 @@ func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
 // caller can read the Set-Cookie attributes the jar hides.
 func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+"/_via/a/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -324,9 +348,10 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, 0, 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	resp, err := srv.Client().Do(req) // trusts the test cert
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -359,7 +384,7 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 // there (a live action runs after its 204 and can't set a cookie).
 type liveSess struct{}
 
-func (c *liveSess) OnConnect(ctx *via.Ctx) error { via.SessPut(ctx, member{Name: "bob"}); return nil }
+func (c *liveSess) OnConnect(ctx *via.Ctx) error { ctx.Session().Put(member{Name: "bob"}); return nil }
 func (c *liveSess) View() h.H                    { return h.Div(h.Str("live")) }
 
 // A live app's OnConnect must be able to establish the session: the cookie is
@@ -370,8 +395,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 	srv := httptest.NewServer(via.Register(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel() // close the stream so the island tears down
+	ctx := t.Context() // close the stream so the island tears down
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -384,7 +408,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 		names = append(names, ck.Name)
 	}
 	assert.Contains(t, names, "via_session",
-		"OnConnect's via.SessPut did not establish the session cookie on the SSE connect")
+		"OnConnect's ctx.Session().Put did not establish the session cookie on the SSE connect")
 }
 
 // tamperID swaps the first character of the cookie's id part, leaving the
@@ -426,9 +450,10 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, http.DefaultClient, srv.URL, 0, 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -442,7 +467,7 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 }
 
 // Sessions are always available: a plain app (no session option) stays
-// cookieless until the first via.SessPut, and from that write on the value
+// cookieless until the first ctx.Session().Put, and from that write on the value
 // resolves — no opt-in ceremony, the cookie is the lazy consequence of the
 // first write. Fails if sessions go back behind an option gate, or if a page
 // view starts minting cookies eagerly.

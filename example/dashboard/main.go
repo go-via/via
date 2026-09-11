@@ -48,9 +48,9 @@ func (c *Counter) View() h.H {
 	)
 }
 
-// Dashboard is the shell. It does NOT implement OnConnect — it isn't a live
-// composition itself; its embedded children are. They all share this page's one
-// SSE stream.
+// Dashboard is the shell. It does not implement OnConnect here — a shell need
+// not be live itself for its embedded children to be; they all share this
+// page's one SSE stream.
 type Dashboard struct {
 	Greeting Greeting
 	Clock    Clock

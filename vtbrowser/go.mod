@@ -1,6 +1,6 @@
 module github.com/go-via/via/vtbrowser
 
-go 1.24.0
+go 1.27
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327

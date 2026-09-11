@@ -120,7 +120,9 @@ func TestPage_cspCarriesNoNonce(t *testing.T) {
 // must carry the same hardening headers as the page rather than shipping bare.
 func TestActionPatch_carriesSecurityHeaders(t *testing.T) {
 	t.Parallel()
-	resp, _ := do(t, newCounter(t), http.MethodPost, "/_via/a/1", "{}")
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
 	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "frame-ancestors 'self'")

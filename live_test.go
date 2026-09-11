@@ -5,11 +5,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
@@ -57,23 +62,312 @@ func TestSSE_statelessAppHasNoLiveStream(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a stateless app must not serve the SSE stream")
 }
 
-// A live stream must emit a periodic keepalive even on an island with no ticks:
-// a successful write proves the peer is still there, and a FAILED write is the
-// only in-band way to notice a silently-dropped (half-open) peer so the island
-// goroutine and its timers don't leak. It must be an SSE comment frame, not a
-// signal/element patch, so it never mutates client state.
-func TestKeepalive_quietStreamStillBeatsSoHalfOpenPeersAreDetected(t *testing.T) {
+// A live stream must emit a periodic keepalive even on an island with no
+// ticks: a successful write proves the peer is still there, and a FAILED
+// write is the only in-band way to notice a silently-dropped (half-open) peer
+// so the island goroutine and its timers don't leak. It must be an SSE
+// comment frame, not a signal/element patch, so it never mutates client
+// state. This runs at the real production cadence (no WithSSEHeartbeat
+// override) — synctest makes the 25s wait free in wall time, and proves the
+// documented default rather than a shortened stand-in for it.
+func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(quietIsland{}))
+		conn := app.Connect()
+
+		time.Sleep(24 * time.Second)
+		synctest.Wait()
+		// Connect() only reads up to the tab-id line of the connect-time
+		// signals frame; its trailing blank line is already buffered. Drain
+		// whatever the connect handshake left behind before asserting nothing
+		// NEW (a keepalive) has arrived.
+		for {
+			line, ok := conn.Peek()
+			if !ok {
+				break
+			}
+			require.NotContains(t, line, "keepalive", "keepalive must not fire before the 25s default cadence")
+		}
+
+		time.Sleep(time.Second) // cross the 25s mark
+		line := conn.Await(": keepalive")
+		assert.True(t, strings.HasPrefix(strings.TrimSpace(line), ":"),
+			"keepalive must be an SSE comment frame (starts with ':'), not a data/event line")
+
+		// A single beat proves the keepalive fires at all, but not that it
+		// RECURS — a time.Timer (fires once) would pass the assertion above just
+		// as well as a time.Ticker. Drive another full cadence and require a
+		// second beat to catch that regression.
+		time.Sleep(25 * time.Second)
+		synctest.Wait()
+		line = conn.Await(": keepalive")
+		assert.True(t, strings.HasPrefix(strings.TrimSpace(line), ":"),
+			"a second keepalive must fire a full cadence after the first — the beat must recur, not fire once")
+	})
+}
+
+// WithSSEHeartbeat must actually change the cadence, not just be accepted and
+// ignored: a 5s override must fire well before the 25s default would.
+func TestLive_heartbeatOverrideChangesCadence(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(5*time.Second)))
+		conn := app.Connect()
+
+		time.Sleep(4 * time.Second)
+		synctest.Wait()
+		for {
+			line, ok := conn.Peek()
+			if !ok {
+				break
+			}
+			require.NotContains(t, line, "keepalive", "keepalive must not fire before the overridden 5s cadence")
+		}
+
+		time.Sleep(time.Second) // cross the 5s mark
+		conn.Await(": keepalive")
+	})
+}
+
+// WithSSEHeartbeat(d) for a non-positive d must NOT disable the keepalive — it
+// floors to the 25s default, since a failed keepalive write is the only
+// in-band way to notice a half-open peer.
+func TestLive_heartbeatNonPositiveFallsBackToDefault(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(-1*time.Second)))
+		conn := app.Connect()
+
+		time.Sleep(24 * time.Second)
+		synctest.Wait()
+		for {
+			line, ok := conn.Peek()
+			if !ok {
+				break
+			}
+			require.NotContains(t, line, "keepalive", "a non-positive override must floor to 25s, not fire earlier")
+		}
+
+		time.Sleep(time.Second) // cross the 25s mark
+		conn.Await(": keepalive")
+	})
+}
+
+// WithSSEWriteTimeout must actually change the per-frame write deadline: a 3s
+// override on a stalled peer must tear the island down well before the 10s
+// default would.
+func TestLive_writeTimeoutOverrideShortensDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		handler := via.Register(disposeProbe{disposed: done}, via.WithSSEWriteTimeout(3*time.Second))
+		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		go handler.ServeHTTP(&stalledPeer{}, req)
+
+		// The default 25s keepalive drives the first (only) write; the 3s
+		// override sets its deadline then. One second later it must still be
+		// alive — the deadline has not elapsed yet.
+		time.Sleep(25*time.Second + time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+			require.Fail(t, "the island was disposed before the overridden 3s write deadline elapsed")
+		default:
+		}
+
+		// Crossing the 3s deadline (well short of the 10s default) must tear it
+		// down.
+		time.Sleep(3 * time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "a 3s WithSSEWriteTimeout override must tear the stalled peer down after 3s, not the 10s default")
+		}
+	})
+}
+
+// A non-positive WithSSEWriteTimeout would let a stalled peer's write pin an
+// action POST behind it forever (see liveConn.run), so it panics instead of
+// disabling the deadline.
+func TestLive_writeTimeoutNonPositivePanics(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(quietIsland{}, via.WithSSEHeartbeat(15*time.Millisecond)))
-	conn := app.Connect()
+	for _, d := range []time.Duration{0, -1 * time.Second} {
+		assert.Panics(t, func() { via.WithSSEWriteTimeout(d) }, "d=%s", d)
+	}
+}
 
-	line := conn.Await(": keepalive")
-	assert.True(t, strings.HasPrefix(strings.TrimSpace(line), ":"),
-		"keepalive must be an SSE comment frame (starts with ':'), not a data/event line")
+// stalledPeer models a peer whose receive side has stalled: the connect-time
+// frame goes through (a real handshake reaches this far), but the next write
+// — the keepalive — can only succeed once the peer reads again (never, here)
+// or the per-frame write deadline set via http.ResponseController expires.
+// The in-memory httptest network's transport buffer turned out to be
+// unbounded (internal/nettest.Conn defaults bufMax to math.MaxInt), so
+// "drive frames until the pipe is full" cannot reproduce a blocked write over
+// it; a ResponseWriter that itself honors SetWriteDeadline is the direct way
+// to exercise the deadline path, in the same style as halfOpenFlusher above.
+type stalledPeer struct {
+	hdr      http.Header
+	deadline time.Time
+}
 
-	// A second beat proves the keepalive is periodic, not a one-shot frame on
-	// connect — only a recurring write can detect a peer that vanishes later.
-	conn.Await(": keepalive")
+func (s *stalledPeer) Header() http.Header {
+	if s.hdr == nil {
+		s.hdr = http.Header{}
+	}
+	return s.hdr
+}
+func (s *stalledPeer) WriteHeader(int)                    {}
+func (s *stalledPeer) Flush()                             {}
+func (s *stalledPeer) SetWriteDeadline(t time.Time) error { s.deadline = t; return nil }
+func (s *stalledPeer) Write(p []byte) (int, error) {
+	if !bytes.Contains(p, []byte(": keepalive")) {
+		return len(p), nil
+	}
+	<-time.After(time.Until(s.deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+// A stalled (not vanished) peer must still be torn down once a write blocks
+// past the write deadline — the deadline is what catches a peer whose write
+// never fails outright, only never completes. This runs at the real
+// production write timeout (10s), not a shortened override.
+func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		handler := via.Register(disposeProbe{disposed: done})
+		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+
+		go handler.ServeHTTP(&stalledPeer{}, req)
+
+		// disposeProbe registers no ticks; only the default 25s keepalive
+		// drives a write, so nothing tears down before then.
+		time.Sleep(25*time.Second + time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+			require.Fail(t, "the island was disposed before the write deadline elapsed")
+		default:
+		}
+
+		// The stalled keepalive write can only fail once the 10s write
+		// deadline (set at the moment of that write) expires.
+		time.Sleep(10*time.Second + time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "a stalled peer must be torn down once its write deadline elapses")
+		}
+	})
+}
+
+// The per-frame write deadline guards against a stalled peer pinning the
+// island goroutine — but it must not kill a healthy, merely-slow client. A
+// normal stream with a write timeout configured must still deliver its
+// keepalive frames, across more than one cadence.
+func TestLive_perFrameWriteDeadlineDoesNotBreakAHealthyStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(quietIsland{},
+			via.WithSSEHeartbeat(15*time.Second), via.WithSSEWriteTimeout(2*time.Second)))
+		conn := app.Connect()
+
+		time.Sleep(15 * time.Second)
+		synctest.Wait()
+		conn.Await(": keepalive")
+
+		time.Sleep(15 * time.Second)
+		synctest.Wait()
+		conn.Await(": keepalive")
+	})
+}
+
+// stalledAfterConnect lets the connect handshake's own frame (the tab-id
+// signals patch) through — recording the tab id off it — then stalls every
+// later write until its deadline elapses. That models an SSE reader that
+// stopped draining while the stream keeps producing frames (a tick, or an
+// action's own deferred push): the handshake completed, so the connection is
+// registered and dispatchable, but nothing it streams afterward ever lands.
+type stalledAfterConnect struct {
+	hdr          http.Header
+	deadline     time.Time
+	tab          string
+	handshook    bool
+	blockedWrite []byte
+}
+
+func (s *stalledAfterConnect) Header() http.Header {
+	if s.hdr == nil {
+		s.hdr = http.Header{}
+	}
+	return s.hdr
+}
+func (s *stalledAfterConnect) WriteHeader(int)                    {}
+func (s *stalledAfterConnect) Flush()                             {}
+func (s *stalledAfterConnect) SetWriteDeadline(t time.Time) error { s.deadline = t; return nil }
+func (s *stalledAfterConnect) Write(p []byte) (int, error) {
+	if !s.handshook {
+		if m := tabRe.FindSubmatch(p); m != nil {
+			s.tab = string(m[1])
+		}
+		if bytes.HasSuffix(p, []byte("\n\n")) {
+			s.handshook = true
+		}
+		return len(p), nil
+	}
+	s.blockedWrite = append(s.blockedWrite[:0:0], p...) // capture what a later frame attempted to send
+	<-time.After(time.Until(s.deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+// A stalled reader must not delay an action POST behind the deferred push it
+// triggers: the mutation is already done, and the response must say so,
+// before the write ever gets a chance to block. dispatchLive used to run the
+// re-render/push inline, so the POST's own goroutine sat parked in
+// liveConn.run for as long as the write took (up to the write timeout, or
+// forever if disabled) even though the action had already succeeded.
+func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler := via.Register(liveClicker{})
+		peer := &stalledAfterConnect{}
+		connReq := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
+		connReq.Header.Set("Sec-Fetch-Site", "same-origin")
+		go handler.ServeHTTP(peer, connReq)
+		synctest.Wait()
+		require.NotEmpty(t, peer.tab, "the connect handshake must have handed out a tab id")
+
+		getRec := httptest.NewRecorder()
+		getReq := httptest.NewRequest(http.MethodGet, "/", nil)
+		handler.ServeHTTP(getRec, getReq)
+		url := actionURL(t, getRec.Body.String(), 0, 0)
+
+		actionRec := httptest.NewRecorder()
+		actionReq := httptest.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
+		actionReq.Header.Set("Sec-Fetch-Site", "same-origin")
+		actionReq.Header.Set("Datastar-Request", "true")
+		actionReq.Header.Set("X-Via-Tab", peer.tab)
+		actionDone := make(chan struct{})
+		go func() {
+			handler.ServeHTTP(actionRec, actionReq)
+			close(actionDone)
+		}()
+
+		synctest.Wait()
+		select {
+		case <-actionDone:
+		default:
+			require.Fail(t, "the action POST must not still be parked behind the stalled peer's write")
+		}
+		assert.Equal(t, http.StatusNoContent, actionRec.Code,
+			"the action ran — the response must not report failure just because its push hasn't landed")
+
+		// Let the deferred push's write time out and tear the stream down, so
+		// every bubble goroutine is gone (not merely idle) before this returns.
+		time.Sleep(11 * time.Second)
+		synctest.Wait()
+		assert.Contains(t, string(peer.blockedWrite), "datastar-patch-elements",
+			"the action's push must still have been attempted (deferred, not dropped) even though its write stalls")
+	})
 }
 
 // halfOpenFlusher lets the connect handshake succeed but fails the keepalive
@@ -103,33 +397,26 @@ func (f *halfOpenFlusher) Flush() {}
 // react to it by tearing the island down — running disposers, stopping ticks —
 // not by looping its single goroutine against a dead socket forever.
 func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
-	t.Parallel()
-	done := make(chan struct{})
-	handler := via.Register(disposeProbe{disposed: done}, via.WithSSEHeartbeat(15*time.Millisecond))
-	// httptest.NewRequest's context is never cancelled, so the ONLY thing that
-	// can end the stream here is the failed keepalive write — isolating that path.
-	req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
-	req.Header.Set("Sec-Fetch-Site", "same-origin") // past the origin floor, as a real browser would
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		handler := via.Register(disposeProbe{disposed: done})
+		// httptest.NewRequest's context is never cancelled, so the ONLY thing that
+		// can end the stream here is the failed keepalive write — isolating that path.
+		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin") // past the origin floor, as a real browser would
 
-	go handler.ServeHTTP(&halfOpenFlusher{}, req)
+		go handler.ServeHTTP(&halfOpenFlusher{}, req)
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("a failed keepalive write must tear the island down (run disposers); it leaked instead")
-	}
-}
-
-// The per-frame write deadline guards against a stalled peer pinning the single
-// goroutine — but it must not kill a healthy, merely-slow client. A normal
-// stream with a write timeout configured must still deliver its frames.
-func TestLive_perFrameWriteDeadlineDoesNotBreakAHealthyStream(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Register(quietIsland{},
-		via.WithSSEHeartbeat(15*time.Millisecond), via.WithSSEWriteTimeout(2*time.Second)))
-	conn := app.Connect()
-
-	conn.Await(": keepalive")
+		// disposeProbe registers no ticks; only the default 25s keepalive
+		// drives the write that fails here.
+		time.Sleep(25*time.Second + time.Second)
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "a failed keepalive write must tear the island down (run disposers); it leaked instead")
+		}
+	})
 }
 
 // pulse is a live island: implementing OnConnect opts it into a server-push SSE
@@ -146,11 +433,21 @@ func (p *pulse) View() h.H {
 	return h.Div(h.H1(h.Str("pulse")), h.P(h.Str("beats: "), p.beats.Display()))
 }
 
+// liveServer starts handler on httptest's in-memory network — required for
+// the server's own goroutines (ticks, subscriptions) to run inside a
+// synctest bubble at all — and forces srv.URL to populate (it is set lazily,
+// on the first call to Client/Start/StartTLS) before any caller builds a
+// request string from it.
+func liveServer(t testing.TB, handler http.Handler) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewTestServer(t, handler)
+	srv.Client()
+	return srv
+}
+
 func newPulse(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(via.Register(pulse{}))
-	t.Cleanup(srv.Close)
-	return srv
+	return liveServer(t, via.Register(pulse{}))
 }
 
 // multiline is a live island whose rendered content contains a newline. The SSE
@@ -201,7 +498,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("no datastar-patch-elements frame arrived")
+			require.Fail(t, "no datastar-patch-elements frame arrived")
 		case line, ok := <-lines:
 			require.True(t, ok, "stream closed before a patch-elements frame")
 			switch {
@@ -231,8 +528,15 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 // subscription is registered by the time this returns.
 func openStream(t *testing.T, srv *httptest.Server) (<-chan string, context.CancelFunc) {
 	t.Helper()
+	return openStreamAt(t, srv, "/_via/sse")
+}
+
+// openStreamAt is openStream against an arbitrary mount's SSE path — a
+// parametrised mount's stream lives at its concrete base, not "/_via/sse".
+func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan string, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
 	resp, err := srv.Client().Do(req)
@@ -261,7 +565,7 @@ func awaitLine(t *testing.T, lines <-chan string, want string) {
 	for {
 		select {
 		case <-deadline:
-			t.Fatalf("timed out waiting for a line containing %q", want)
+			require.Fail(t, fmt.Sprintf("timed out waiting for a line containing %q", want))
 		case line, ok := <-lines:
 			require.True(t, ok, "stream closed before %q arrived", want)
 			if strings.Contains(line, want) {
@@ -281,7 +585,7 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("no _viatab signals frame arrived")
+			require.Fail(t, "no _viatab signals frame arrived")
 		case line, ok := <-lines:
 			require.True(t, ok, "stream closed before the tab-id frame")
 			if m := tabRe.FindStringSubmatch(line); m != nil {
@@ -297,39 +601,40 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 // a junk field, silently truncating the patch — the morph then applies broken
 // HTML. This guards that the framing splits multi-line payloads correctly.
 func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Register(multiline{}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(multiline{}))
 
-	frame := readFirstFrame(t, srv)
-	require.NotEmpty(t, frame)
-	assert.Equal(t, "event: datastar-patch-elements", frame[0])
-	for _, line := range frame[1:] {
-		assert.Truef(t, strings.HasPrefix(line, "data:"),
-			"every content line must be a data: field, got a bare line that would truncate the patch: %q", line)
-	}
-	whole := strings.Join(frame, "\n")
-	assert.Contains(t, whole, "top")
-	assert.Contains(t, whole, "bottom")
+		frame := readFirstFrame(t, srv)
+		require.NotEmpty(t, frame)
+		assert.Equal(t, "event: datastar-patch-elements", frame[0])
+		for _, line := range frame[1:] {
+			assert.Truef(t, strings.HasPrefix(line, "data:"),
+				"every content line must be a data: field, got a bare line that would truncate the patch: %q", line)
+		}
+		whole := strings.Join(frame, "\n")
+		assert.Contains(t, whole, "top")
+		assert.Contains(t, whole, "bottom")
+	})
 }
 
 // A live island that registers no ticks must still open the stream cleanly.
 func TestLive_streamOpensWithNoTicks(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Register(quietIsland{}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(quietIsland{}))
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
-	cancel() // disconnect; the no-ticks branch must return without panic/leak
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+		require.NoError(t, err)
+		req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+		cancel() // disconnect; the no-ticks branch must return without panic/leak
+		synctest.Wait()
+	})
 }
 
 // A live page must server-render its initial View (no empty flash) and carry a
@@ -348,50 +653,51 @@ func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 // an `event: datastar-patch-elements` line, and a `data: elements <#root …>`
 // line carrying the re-rendered fragment with an advanced beat — the live push.
 func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
-	t.Parallel()
-	srv := newPulse(t)
+	synctest.Test(t, func(t *testing.T) {
+		srv := newPulse(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+		require.NoError(t, err)
+		req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
+		resp, err := srv.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
 
-	lines := make(chan string, 64)
-	go func() {
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			lines <- sc.Text()
-		}
-		close(lines)
-	}()
-
-	var sawEvent bool
-	deadline := time.After(1500 * time.Millisecond)
-	for {
-		select {
-		case <-deadline:
-			t.Fatal("no datastar-patch-elements frame arrived")
-		case line, ok := <-lines:
-			require.True(t, ok, "stream closed before a frame arrived")
-			if line == "event: datastar-patch-elements" {
-				sawEvent = true
-				continue
+		lines := make(chan string, 64)
+		go func() {
+			sc := bufio.NewScanner(resp.Body)
+			for sc.Scan() {
+				lines <- sc.Text()
 			}
-			if sawEvent && strings.HasPrefix(line, "data: elements ") {
-				assert.Contains(t, line, `<div id="root"`, "frame must carry the #root morph target")
-				assert.Contains(t, line, "beats: ", "frame must re-render the island")
-				cancel()
-				return
+			close(lines)
+		}()
+
+		var sawEvent bool
+		deadline := time.After(1500 * time.Millisecond)
+		for {
+			select {
+			case <-deadline:
+				require.Fail(t, "no datastar-patch-elements frame arrived")
+			case line, ok := <-lines:
+				require.True(t, ok, "stream closed before a frame arrived")
+				if line == "event: datastar-patch-elements" {
+					sawEvent = true
+					continue
+				}
+				if sawEvent && strings.HasPrefix(line, "data: elements ") {
+					assert.Contains(t, line, `<div id="root"`, "frame must carry the #root morph target")
+					assert.Contains(t, line, "beats: ", "frame must re-render the island")
+					cancel()
+					return
+				}
 			}
 		}
-	}
+	})
 }
 
 // feed is a live island driven by a shared Topic: every connection subscribes,
@@ -404,7 +710,7 @@ type feed struct {
 func (f *feed) OnConnect(ctx *via.Ctx) error {
 	sub := f.room.Subscribe()
 	ctx.OnDispose(sub.Stop) // method value — deterministic teardown
-	via.Subscribe(ctx, sub.C(), f.recv)
+	ctx.Subscribe(sub.C(), f.recv)
 	return nil
 }
 func (f *feed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
@@ -427,20 +733,20 @@ func (d *disposeProbe) View() h.H     { return h.Div(h.Str("probe")) }
 // headline. Two streams subscribe; a single Publish to the shared Topic shows up
 // on both.
 func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
-	t.Parallel()
-	room := topic.New[string]()
-	srv := httptest.NewServer(via.Register(feed{room: room}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		room := topic.New[string]()
+		srv := liveServer(t, via.Register(feed{room: room}))
 
-	l1, c1 := openStream(t, srv)
-	defer c1()
-	l2, c2 := openStream(t, srv)
-	defer c2()
+		l1, c1 := openStream(t, srv)
+		defer c1()
+		l2, c2 := openStream(t, srv)
+		defer c2()
 
-	room.Publish("hello-everyone")
+		room.Publish("hello-everyone")
 
-	awaitLine(t, l1, "latest: hello-everyone")
-	awaitLine(t, l2, "latest: hello-everyone")
+		awaitLine(t, l1, "latest: hello-everyone")
+		awaitLine(t, l2, "latest: hello-everyone")
+	})
 }
 
 // listenFeed is feed rebuilt on via.Listen — the subscribe/pump/dispose triple
@@ -451,7 +757,7 @@ type listenFeed struct {
 }
 
 func (f *listenFeed) OnConnect(ctx *via.Ctx) error {
-	via.Listen(ctx, f.room, f.recv)
+	ctx.Listen(f.room, f.recv)
 	return nil
 }
 func (f *listenFeed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
@@ -464,16 +770,16 @@ func (f *listenFeed) View() h.H {
 // Listen stops subscribing, stops pumping into the handler, or the push stops
 // reaching the stream.
 func TestListen_publishReachesTheIsland(t *testing.T) {
-	t.Parallel()
-	room := topic.New[string]()
-	srv := httptest.NewServer(via.Register(listenFeed{room: room}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		room := topic.New[string]()
+		srv := liveServer(t, via.Register(listenFeed{room: room}))
 
-	l1, c1 := openStream(t, srv)
-	defer c1()
+		l1, c1 := openStream(t, srv)
+		defer c1()
 
-	room.Publish("via-listen")
-	awaitLine(t, l1, "latest: via-listen")
+		room.Publish("via-listen")
+		awaitLine(t, l1, "latest: via-listen")
+	})
 }
 
 // mixedIsland registers BOTH a tick and a subscription, plus a dispose probe.
@@ -489,7 +795,7 @@ func (m *mixedIsland) OnConnect(ctx *via.Ctx) error {
 	sub := m.room.Subscribe()
 	ctx.OnDispose(sub.Stop)
 	ctx.OnDispose(m.markDispose)
-	via.Subscribe(ctx, sub.C(), m.recv)
+	ctx.Subscribe(sub.C(), m.recv)
 	return nil
 }
 func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get() + 1) }
@@ -506,23 +812,24 @@ func (m *mixedIsland) View() h.H {
 // deliver published messages, and disconnecting a ticking+subscribed island
 // must still tear down cleanly (the ticker goroutine exits, disposers run).
 func TestLive_tickAndSubscribeShareOneIslandLoopAndTearDownCleanly(t *testing.T) {
-	t.Parallel()
-	room := topic.New[string]()
-	done := make(chan struct{})
-	srv := httptest.NewServer(via.Register(mixedIsland{room: room, disposed: done}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		room := topic.New[string]()
+		done := make(chan struct{})
+		srv := liveServer(t, via.Register(mixedIsland{room: room, disposed: done}))
 
-	lines, cancel := openStream(t, srv)
-	awaitLine(t, lines, "beats: ") // a tick frame flows
-	room.Publish("from-topic")
-	awaitLine(t, lines, "last: from-topic") // a sub frame flows alongside ticks
+		lines, cancel := openStream(t, srv)
+		awaitLine(t, lines, "beats: ") // a tick frame flows
+		room.Publish("from-topic")
+		awaitLine(t, lines, "last: from-topic") // a sub frame flows alongside ticks
 
-	cancel() // disconnect while the ticker is running
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnDispose did not run when a ticking, subscribed island disconnected")
-	}
+		cancel() // disconnect while the ticker is running
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "OnDispose did not run when a ticking, subscribed island disconnected")
+		}
+	})
 }
 
 // failConnect registers a disposer, then OnConnect fails.
@@ -553,7 +860,7 @@ func TestLive_disposersRunWhenOnConnectFails(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("OnConnect-error path did not run disposers — the subscription leaks")
+		require.Fail(t, "OnConnect-error path did not run disposers — the subscription leaks")
 	}
 }
 
@@ -574,19 +881,20 @@ func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 // On disconnect the island's OnDispose must run, so subscriptions and producers
 // are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
-	t.Parallel()
-	done := make(chan struct{})
-	srv := httptest.NewServer(via.Register(disposeProbe{disposed: done}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		srv := liveServer(t, via.Register(disposeProbe{disposed: done}))
 
-	_, cancel := openStream(t, srv)
-	cancel() // disconnect
+		_, cancel := openStream(t, srv)
+		cancel() // disconnect
+		synctest.Wait()
 
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("OnDispose did not run on disconnect")
-	}
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "OnDispose did not run on disconnect")
+		}
+	})
 }
 
 // clicker is a live island whose action mutates its OWN server State. The proof
@@ -602,24 +910,25 @@ func (c *clicker) View() h.H {
 }
 
 func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Register(clicker{}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(clicker{}))
 
-	lines, cancel := openStream(t, srv)
-	defer cancel()
+		lines, cancel := openStream(t, srv)
+		defer cancel()
 
-	tab := awaitTabID(t, lines)
-	require.NotEmpty(t, tab, "the SSE must hand the client its tab id")
+		tab := awaitTabID(t, lines)
+		require.NotEmpty(t, tab, "the SSE must hand the client its tab id")
 
-	// Simulate Datastar's @post(...,{headers:{'X-Via-Tab':$_viatab}}).
-	resp, _ := post(t, srv, "/_via/a/0", "{}", map[string]string{
-		"Sec-Fetch-Site": "same-origin",
-		"X-Via-Tab":      tab,
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		// Simulate Datastar's @post(...,{headers:{'X-Via-Tab':$_viatab}}).
+		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tab,
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "a live action acks 204; the patch ships over the SSE")
+
+		awaitLine(t, lines, "count: 1") // the mutation reaches THIS connection
 	})
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode, "a live action acks 204; the patch ships over the SSE")
-
-	awaitLine(t, lines, "count: 1") // the mutation reaches THIS connection
 }
 
 // A live action POST with no/unknown tab id (no live connection to route to)
@@ -629,7 +938,7 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	srv := httptest.NewServer(via.Register(clicker{}))
 	t.Cleanup(srv.Close)
 
-	resp, _ := post(t, srv, "/_via/a/0", "{}", map[string]string{
+	resp, _ := post(t, srv, "/_via/a/0/0", "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
 		"X-Via-Tab":      "nonexistent",
 	})
@@ -649,7 +958,7 @@ type chatIsland struct {
 func (c *chatIsland) OnConnect(ctx *via.Ctx) error {
 	sub := c.room.bus.Subscribe()
 	ctx.OnDispose(sub.Stop)
-	via.Subscribe(ctx, sub.C(), c.recv)
+	ctx.Subscribe(sub.C(), c.recv)
 	return nil
 }
 func (c *chatIsland) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
@@ -677,32 +986,32 @@ func actionID(t *testing.T, body string) string {
 // The headline: a message sent on one connection's live island fans out — via
 // the Room's Topic — to EVERY connection, including a second tab.
 func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
-	t.Parallel()
-	room := &chatRoom{bus: topic.New[string]()}
-	srv := httptest.NewServer(via.Register(chatIsland{room: room}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		room := &chatRoom{bus: topic.New[string]()}
+		srv := liveServer(t, via.Register(chatIsland{room: room}))
 
-	la, ca := openStream(t, srv)
-	defer ca()
-	tabA := awaitTabID(t, la)
-	lb, cb := openStream(t, srv)
-	defer cb()
-	_ = awaitTabID(t, lb)
+		la, ca := openStream(t, srv)
+		defer ca()
+		tabA := awaitTabID(t, la)
+		lb, cb := openStream(t, srv)
+		defer cb()
+		_ = awaitTabID(t, lb)
 
-	// Learn A's Send action id + the Draft signal slot from a page render
-	// (positional/handle identity is deterministic, so it matches A's island).
-	_, page := do(t, srv, http.MethodGet, "/", "")
-	draftSlot := attrValue(t, page, "data-bind")
-	sendID := actionID(t, page)
+		// Learn A's Send action id + the Draft signal slot from a page render
+		// (positional/handle identity is deterministic, so it matches A's island).
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		draftSlot := attrValue(t, page, "data-bind")
+		sendID := actionID(t, page)
 
-	resp, _ := post(t, srv, "/_via/a/"+sendID, `{"`+draftSlot+`":"hello-room"}`, map[string]string{
-		"Sec-Fetch-Site": "same-origin",
-		"X-Via-Tab":      tabA,
+		resp, _ := post(t, srv, "/_via/a/"+sendID, `{"`+draftSlot+`":"hello-room"}`, map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tabA,
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+		awaitLine(t, lb, "hello-room") // the OTHER tab receives it — fan-out
+		awaitLine(t, la, "hello-room") // and the sender does too
 	})
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-
-	awaitLine(t, lb, "hello-room") // the OTHER tab receives it — fan-out
-	awaitLine(t, la, "hello-room") // and the sender does too
 }
 
 // liveReqEchoer is a live island whose action copies a header off the request
@@ -720,22 +1029,23 @@ func (e *liveReqEchoer) View() h.H {
 // request never did, so the value surfacing over the SSE proves the triggering
 // action request is threaded through (not the connect request).
 func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Register(liveReqEchoer{}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(liveReqEchoer{}))
 
-	lines, cancel := openStream(t, srv)
-	defer cancel()
-	tab := awaitTabID(t, lines)
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		tab := awaitTabID(t, lines)
 
-	resp, _ := post(t, srv, "/_via/a/0", "{}", map[string]string{
-		"Sec-Fetch-Site": "same-origin",
-		"X-Via-Tab":      tab,
-		"X-Echo":         "from-the-action-post",
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tab,
+			"X-Echo":         "from-the-action-post",
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+		awaitLine(t, lines, "echo: from-the-action-post")
 	})
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
-
-	awaitLine(t, lines, "echo: from-the-action-post")
 }
 
 // connReqEchoer reads the connect request in OnConnect and a no-op tick forces a
@@ -755,15 +1065,16 @@ func (e *connReqEchoer) View() h.H {
 // OnConnect must see the SSE connect request, so an island can authorize or
 // inspect the connection at open time (the same request ticks and subscriptions
 // then run under). The request Host is the server's own address; a pushed frame
-// must reflect it.
+// must reflect it — "example.com" is the fixed host of httptest's in-memory
+// network, not a real loopback address.
 func TestOnConnect_seesTheConnectRequest(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Register(connReqEchoer{}))
-	t.Cleanup(srv.Close)
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(connReqEchoer{}))
 
-	lines, cancel := openStream(t, srv)
-	defer cancel()
-	awaitLine(t, lines, "host: 127.0.0.1")
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		awaitLine(t, lines, "host: example.com")
+	})
 }
 
 // tickReqEchoer reads the connect request from inside a TICK body, not OnConnect.
@@ -784,11 +1095,226 @@ func (e *tickReqEchoer) View() h.H {
 // This locks that inherited contract, distinct from a handler that triggered an
 // action.
 func TestTick_seesTheConnectRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(tickReqEchoer{}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		awaitLine(t, lines, "tick-host: example.com")
+	})
+}
+
+// A guard must gate the SSE connect itself, beyond the page GET and the
+// action route — before A3 the stream handler ran no guards at all, so
+// RequireSession left a live page's push channel open to anyone who knew the
+// URL even though the page and its actions were protected.
+func TestLive_streamRunsGuards(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(tickReqEchoer{}))
-	t.Cleanup(srv.Close)
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r.Mount("/secret", secret{}, via.RequireSession[acct]("/login"))
+	srv := serve(t, r)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/sse", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := (&http.Client{CheckRedirect: noFollow}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode,
+		"a guard must gate the SSE connect too, not just the page and action routes")
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+// onInitLive loads a field in OnInit, before the connect render ever runs —
+// a live island's ticks fire on the connection's own goroutine, so its first
+// pushed frame is the proof OnInit's field reached the persistent instance.
+type onInitLive struct{ label string }
+
+func (p *onInitLive) OnInit(ctx *via.Ctx) error {
+	p.label = "loaded"
+	return nil
+}
+func (p *onInitLive) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, func(*via.Ctx) {})
+	return nil
+}
+func (p *onInitLive) View() h.H { return h.Div(h.Str(p.label)) }
+
+// OnInit must run before the connect render binds the live unit, so a field
+// it loads is already set by the time the first push renders — before A3 the
+// stream handler never ran OnInit at all.
+func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(onInitLive{}))
+
+		frame := readFirstFrame(t, srv)
+		require.NotEmpty(t, frame)
+		assert.Contains(t, strings.Join(frame, "\n"), "loaded")
+	})
+}
+
+// livePushIsland is a live embedded island under a parametrised mount; Bump
+// changes its visible count so its action's push is a real patch.
+type livePushIsland struct{ n int }
+
+func (k *livePushIsland) OnConnect(ctx *via.Ctx) error { return nil }
+func (k *livePushIsland) Bump(ctx *via.Ctx)            { k.n++ }
+func (k *livePushIsland) View() h.H {
+	return h.Div(h.Str(k.n), h.Button(via.OnClick(k.Bump)))
+}
+
+type livePushParent struct{ I livePushIsland }
+
+func (p *livePushParent) View() h.H { return h.Div(via.Embed(p.I)) }
+
+// A live push under a parametrised mount must carry the concrete path
+// segment in its action URLs, not the literal "{id}" pattern wildcard —
+// before A3 mount.connect closed over the pattern base instead of computing
+// the concrete base per connection, so every push rendered a dead "{id}" URL.
+func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := via.NewRouter()
+		r.Mount("/thread/{id}", livePushParent{})
+		srv := liveServer(t, r)
+
+		lines, cancel := openStreamAt(t, srv, "/thread/7/_via/sse")
+		defer cancel()
+		tab := awaitTabID(t, lines)
+
+		_, page := do(t, srv, http.MethodGet, "/thread/7", "")
+		resp, _ := post(t, srv, actionURL(t, page, 1, 0), "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin", "X-Via-Tab": tab,
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "the live action answers 204; the push carries the patch")
+
+		awaitLine(t, lines, "/thread/7/_via/a/1/0")
+	})
+}
+
+// renderCounter counts its own View calls so a test can assert on renders
+// without reaching into via's internals — views is a pointer so it survives
+// Register's per-connection value copy.
+type renderCounter struct {
+	views *atomic.Int64
+	count via.State[int]
+}
+
+func (r *renderCounter) OnConnect(*via.Ctx) error { return nil }
+func (r *renderCounter) Bump(*via.Ctx)            { r.count.Set(r.count.Get() + 1) }
+func (r *renderCounter) View() h.H {
+	r.views.Add(1)
+	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.OnClick(r.Bump)))
+}
+
+// A live action must run against the last render's table, not a fresh one of
+// its own: connect renders once, and the action's own push renders once —
+// never a bind render in between just to locate the action.
+func TestLive_actionRunsWithoutPreRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		views := &atomic.Int64{}
+		srv := liveServer(t, via.Register(renderCounter{views: views}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+
+		tab := awaitTabID(t, lines)
+		require.NotEmpty(t, tab)
+		require.EqualValues(t, 1, views.Load(), "the connect render is the only render so far")
+
+		// A throwaway instance (its own views counter) discovers the current
+		// action URL without adding a render to the instance under test — the
+		// whole point of this test is counting THAT instance's View calls.
+		digestSrv := liveServer(t, via.Register(renderCounter{views: &atomic.Int64{}}))
+		_, page := do(t, digestSrv, http.MethodGet, "/", "")
+
+		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tab,
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+		awaitLine(t, lines, "count: 1")
+		assert.EqualValues(t, 2, views.Load(), "a live action renders once — for the push — not twice")
+	})
+}
+
+// A stale action id (a click racing a push, or a branched View that shifted
+// the table) must 410, not silently do nothing — the client can then
+// re-bootstrap instead of a click quietly having no effect. This carries a
+// genuinely valid shape digest (read off the rendered page) with only n
+// forged: a digest mismatch alone would 410 for the wrong reason ("stale
+// page") and never reach the index-range check this guards.
+func TestLive_outOfRangeActionAnswers410(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(clicker{}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+
+		tab := awaitTabID(t, lines)
+		require.NotEmpty(t, tab)
+
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		url := swapActionIndex(t, actionURL(t, page, 0, 0), "99")
+
+		resp, _ := post(t, srv, url, "{}", map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+			"X-Via-Tab":      tab,
+		})
+		assert.Equal(t, http.StatusGone, resp.StatusCode)
+	})
+}
+
+// racyTicker ticks as fast as time.Ticker allows so its OnConnect-scheduled
+// push races liveConn.replace (island goroutine) against Bump's dispatchLive,
+// which reads liveConn.units via unit() on the POST's own goroutine.
+type racyTicker struct{ n via.State[int] }
+
+func (r *racyTicker) OnConnect(ctx *via.Ctx) error { ctx.Tick(time.Microsecond, r.tick); return nil }
+func (r *racyTicker) tick(*via.Ctx)                { r.n.Set(r.n.Get() + 1) }
+func (r *racyTicker) Bump(*via.Ctx)                {}
+func (r *racyTicker) View() h.H {
+	return h.Div(r.n.Display(), h.Button(via.OnClick(r.Bump)))
+}
+
+// liveConn.mu guards units/childSlots: a background tick's push runs replace
+// on the island goroutine while a concurrent action POST reads the same maps
+// via unit() on the dispatching request's own goroutine. This test runs both
+// in real (not synctest-serialized) time and depth so -race — or the Go
+// runtime's own concurrent-map-access panic — catches a missing lock; it
+// asserts nothing about outcomes because the property under test is the
+// absence of a race, not any particular response.
+func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(racyTicker{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
-	awaitLine(t, lines, "tick-host: 127.0.0.1")
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 0, 0)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				if err != nil {
+					continue
+				}
+				req.Header.Set("Datastar-Request", "true")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				req.Header.Set("X-Via-Tab", tab)
+				resp, err := srv.Client().Do(req)
+				if err == nil {
+					resp.Body.Close()
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

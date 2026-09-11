@@ -4,7 +4,7 @@
 // action, or a live SSE stream without hand-rolling request plumbing.
 //
 //	app := vt.Serve(t, via.Register(Counter{count: &store{}}))
-//	status, body := app.Action(1).Fire()      // POST /_via/a/1, same-origin
+//	status, body := app.Action(1).Fire()      // POST /_via/a/0/1, same-origin
 //	require.Equal(t, 200, status)
 //
 //	conn := app.Connect()                      // open the per-tab SSE stream
@@ -26,45 +26,55 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-// quietServer builds an httptest server whose net/http ErrorLog is discarded:
-// a test that deliberately drives a render panic (e.g. the off-island State
-// guard) would otherwise spam a recovered-panic stack trace to stderr. Real
-// failures surface through the test's own assertions, not this log.
-func quietServer(handler http.Handler, tls bool) *httptest.Server {
-	srv := httptest.NewUnstartedServer(handler)
-	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
-	if tls {
-		srv.StartTLS()
-	} else {
-		srv.Start()
-	}
-	return srv
-}
-
 // App wraps a via handler under an httptest server, registered for cleanup.
 type App struct {
-	t   testing.TB
-	srv *httptest.Server
+	t        testing.TB
+	srv      *httptest.Server
+	mu       sync.Mutex
+	pageBody string
+	fetched  bool
 }
 
-// Serve mounts handler on a plain-HTTP httptest server (req.TLS is nil).
+// actionURLRe finds the currently-rendered action URL for a given
+// {island}/{n} — the `?v=` shape digest travels with it, so a builder that
+// hand-built the path would 410 the instant a test's View shape changed.
+// Reading it off the page is what makes the digest an enforced contract
+// rather than a second, parallel numbering scheme tests must keep in sync by
+// hand.
+func actionURLRe(island, n int) *regexp.Regexp {
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/` + strconv.Itoa(n) + `(?:[?&][^'"]*)?)['"]`
+	return regexp.MustCompile(pat)
+}
+
+// Serve mounts handler on an in-memory httptest server (req.TLS is nil), so
+// the live-runtime suite can run under testing/synctest without touching a
+// real socket.
 func Serve(t testing.TB, handler http.Handler) *App {
 	t.Helper()
-	srv := quietServer(handler, false)
-	t.Cleanup(srv.Close)
+	srv := httptest.NewTestServer(t, handler)
+	// ErrorLog must be set before the first Client()/Start() call: a test that
+	// deliberately drives a render panic (e.g. the off-island State guard)
+	// would otherwise spam a recovered-panic stack trace to stderr.
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.Client() // forces srv.URL to populate; harmless before any real request
 	return &App{t: t, srv: srv}
 }
 
 // ServeTLS mounts handler on a TLS httptest server, so the action endpoint sees
 // req.TLS != nil and the origin floor enforces the https scheme. The returned
-// App's client trusts the server's self-signed certificate.
+// App's client trusts the server's self-signed certificate. This stays on a
+// real loopback listener — no TLS test needs fake time, and synctest requires
+// an in-memory network.
 func ServeTLS(t testing.TB, handler http.Handler) *App {
 	t.Helper()
-	srv := quietServer(handler, true)
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return &App{t: t, srv: srv}
 }
@@ -72,10 +82,17 @@ func ServeTLS(t testing.TB, handler http.Handler) *App {
 // URL returns the server's base URL.
 func (a *App) URL() string { return a.srv.URL }
 
-// Get fetches path and returns the status code and body. A transport error
-// (e.g. the server aborted the connection because the render panicked) returns
-// status 0 rather than failing the test, so a caller can assert on a render
-// that is expected to fail.
+// Client returns the server's http.Client, wired to reach it (over the
+// in-memory network for Serve, or trusting the self-signed cert for
+// ServeTLS). A test that hand-rolls a request past the builder methods above
+// must send it through this, not http.DefaultClient — Serve's server has no
+// real address for DefaultClient to dial.
+func (a *App) Client() *http.Client { return a.srv.Client() }
+
+// Get fetches path and returns the status code and body. A render panic is
+// recovered by via itself and answered 500, not a transport-level abort, so a
+// caller asserting on a render that is expected to fail sees a real status
+// code rather than 0.
 func (a *App) Get(path string) (int, string) {
 	a.t.Helper()
 	req, err := http.NewRequest(http.MethodGet, a.srv.URL+path, nil)
@@ -91,17 +108,55 @@ func (a *App) Get(path string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Action builds a POST to /_via/a/{n}. By default it carries
-// Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch; the
-// builder methods override that to exercise the origin floor.
+// Action builds a POST to the root's action table, /_via/a/0/{n} (island 0
+// is the root). The URL (including its `?v=` shape digest) is read off the
+// rendered root page at Fire time, not constructed — every action posts to
+// {base}/_via/a/{island}/{n}?v={digest}, and the digest 410s a click whose
+// page has gone stale, so a hand-built path would drift the moment a test's
+// View shape changed. By default it carries Sec-Fetch-Site: same-origin,
+// modelling a same-origin browser fetch; the builder methods override that
+// to exercise the origin floor.
 func (a *App) Action(n int) *Action {
-	return &Action{app: a, n: n, headers: map[string]string{}, body: "{}"}
+	return &Action{app: a, island: 0, n: n, headers: map[string]string{}, body: "{}"}
+}
+
+// IslandAction builds a POST to an embedded island's action table —
+// /_via/a/{island}/{n}. island is the URL id an island's own container
+// carries: 1 for the first embedded child, 2 for the second, and so on (0 is
+// the root; use Action for that).
+func (a *App) IslandAction(island, n int) *Action {
+	return &Action{app: a, island: island, n: n, headers: map[string]string{}, body: "{}"}
+}
+
+// page fetches and caches the root page's HTML, so repeated Action/
+// IslandAction calls don't re-render it. Refresh drops the cache when a test
+// needs the current (possibly reshaped) page instead.
+func (a *App) page() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.fetched {
+		_, body := a.Get("/")
+		a.pageBody = body
+		a.fetched = true
+	}
+	return a.pageBody
+}
+
+// Refresh drops the cached root page, so the next Action/IslandAction call
+// re-fetches it. Needed after a mutation that changes the View's rendered
+// shape (a branched View whose action set or digest differs by state).
+func (a *App) Refresh() {
+	a.mu.Lock()
+	a.fetched = false
+	a.mu.Unlock()
 }
 
 // Action is a builder for an action POST.
 type Action struct {
 	app         *App
+	island      int
 	n           int
+	raw         string
 	host        string
 	headers     map[string]string
 	body        string
@@ -109,6 +164,11 @@ type Action struct {
 	secFetchSet bool
 	noOrigin    bool
 }
+
+// Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
+// test that deliberately wants a hand-built or stale URL (e.g. asserting a
+// 410 on a shape-digest mismatch).
+func (x *Action) Raw(path string) *Action { x.raw = path; return x }
 
 // Host overrides the request Host header (the authority the origin floor
 // compares an Origin against). The connection still dials the test server.
@@ -141,13 +201,24 @@ func (x *Action) Body(json string) *Action { x.body = json; return x }
 // Fire issues the POST and returns the status code and response body.
 func (x *Action) Fire() (int, string) {
 	x.app.t.Helper()
-	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+"/_via/a/"+strconv.Itoa(x.n), strings.NewReader(x.body))
+	path := x.raw
+	if path == "" {
+		m := actionURLRe(x.island, x.n).FindStringSubmatch(x.app.page())
+		if m == nil {
+			x.app.t.Fatalf("vt.Action.Fire: no action %d/%d found on the rendered page", x.island, x.n)
+		}
+		path = m[1]
+	}
+	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+path, strings.NewReader(x.body))
 	if err != nil {
 		x.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
 	if x.host != "" {
 		req.Host = x.host
 	}
+	// The bundled Datastar client sends this on every @post; it is how
+	// dispatch tells a JSON action apart from a native form submit.
+	req.Header.Set("Datastar-Request", "true")
 	// A same-origin fetch is the default; only when the test pins no origin,
 	// an explicit Origin, or an explicit Sec-Fetch-Site do we drop it.
 	if !x.noOrigin && !x.originSet && !x.secFetchSet {
@@ -222,6 +293,19 @@ func (a *App) Connect() *Conn {
 
 // TabID returns the connection's tab id.
 func (c *Conn) TabID() string { return c.tabID }
+
+// Peek returns the next buffered frame without blocking, so a test can assert
+// something has NOT happened yet without letting time advance further to find
+// out — under synctest, a blocking Await would just wait for whatever
+// eventually arrives, which defeats a "not yet" claim at a specific instant.
+func (c *Conn) Peek() (string, bool) {
+	select {
+	case line, ok := <-c.frames:
+		return line, ok
+	default:
+		return "", false
+	}
+}
 
 // Await blocks until a frame line containing needle arrives and returns that
 // line, failing the test after 2s otherwise. The returned line lets a caller

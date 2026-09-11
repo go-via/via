@@ -1,21 +1,26 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
-// Datastar client. Slice 1 is deliberately narrow: a hardened, stateless,
-// request/response counter. No SSE, islands, Stream, State or Local yet.
+// Datastar client: stateless request/response pages, SSE-backed live islands,
+// server-authoritative State/List/Signal/Local, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
-// user-facing identifier strings, no reflection, no closures in the public API
-// surface, no any in element/child signatures. The library is stdlib-only.
+// reflection, no closures in the public API surface, no any in element/child
+// signatures. The library is stdlib-only. Identifier strings do appear at the
+// edges the caller controls directly — ctx.Param[T]("id"), FormFile("avatar"),
+// Mount("/thread/{id}") — but never as an internal wire-name a caller could
+// desync (see the Field-Embeddable Types convention).
 package via
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"log"
-	"mime/multipart"
+	"maps"
 	"net/http"
 	"net/url"
 	"runtime/debug"
@@ -34,38 +39,51 @@ var datastarJS []byte
 // viewer is the (pointer) contract a root must satisfy: a pure, ctx-free View.
 type viewer interface{ View() h.H }
 
+// PtrViewer is the constraint every Register/Mount call site needs — one named
+// alias instead of the same anonymous interface repeated at each generic entry
+// point. Exported (rather than kept package-private) so `go doc` renders it
+// as `*T; // Has unexported methods` at Register/Mount's signature — an
+// unexported alias showed up as a bare, unresolvable name instead.
+type PtrViewer[T any] = interface {
+	*T
+	viewer
+}
+
 // Ctx is the per-request binder. It assigns positional slot/action ids during a
 // render pass, hydrates signals from the request, and records the per-slot
 // initial values for the page-level data-signals declaration. It implements
 // hcore.Binder.
 type Ctx struct {
-	inSignals   map[string]json.RawMessage // hydrated from the request
-	nextSig     int                        // next signal slot index
-	order       []string                   // slots in assignment order
-	initial     map[string]any             // per-slot value seen at render time
-	actions     []func()                   // positional action table
-	ticks       []tickReg                  // live-island timer registrations
-	subs        []subStarter               // live-island external subscriptions
-	disposers   []func()                   // live-island teardown, run on disconnect
-	island      bool                       // true while rendering a live island
-	dirty       map[string]any             // signals an action Set this pass (→ signal-patch)
-	declareOnly map[string]any             // when non-nil, declare only these slots (stateless action patch)
-	req         *http.Request              // the request that triggered this handler (nil during a pure render)
-	sessions    *sessionManager            // per-Register session manager (always constructed; cookie is lazy)
-	sessW       http.ResponseWriter        // response writer for issuing the session cookie; nil in a live action
-	session     *Session                   // resolved session handle, cached per Ctx
-	islands     []*Ctx                     // embedded child islands, in positional order (parent binder only)
-	isIsland    bool                       // true when this Ctx binds an embedded island's child View
-	islandIdx   int                        // this island's positional index, used in its action path
-	islandV     viewer                     // the island's child viewer, for re-rendering on action
-	rendered    []byte                     // this island's inner HTML from the discovery render (for 204 compare)
-	push        func()                     // re-render THIS island and frame it on the stream (set per live unit)
-	declare     bool                       // whether this render declares page-level data-signals (first paint, not a push)
-	base        string                     // mount path prefix for action POSTs ("" for the single-page root)
-	forms       []func(*Ctx)               // positional native-form handlers (PostForm)
-	uploads     []func(*Ctx, File)         // positional multipart-upload handlers (OnUpload)
-	redirect    string                     // pending Redirect target, applied after a form handler returns
-	params      []string                   // positional path-param segments ({} in the mount pattern)
+	inSignals   map[string]json.RawMessage       // hydrated from the request
+	nextSig     int                              // next signal slot index
+	order       []string                         // slots in assignment order
+	initial     map[string]any                   // per-slot value seen at render time
+	actions     []func()                         // positional action table
+	hydrators   map[string]func(json.RawMessage) // per-slot value updater, kept from the last render so a live action can hydrate without re-rendering
+	ticks       []tickReg                        // live-island timer registrations
+	subs        []subStarter                     // live-island external subscriptions
+	disposers   []func()                         // live-island teardown, run on disconnect
+	island      bool                             // true while rendering a live island
+	dirty       map[string]any                   // signals an action Set this pass (→ signal-patch)
+	declareOnly map[string]any                   // when non-nil, declare only these slots (stateless action patch)
+	req         *http.Request                    // the request that triggered this handler (nil during a pure render)
+	sessions    *sessionManager                  // per-Register session manager (always constructed; cookie is lazy)
+	sessW       http.ResponseWriter              // response writer for issuing the session cookie; nil in a live action
+	session     *Session                         // resolved session handle, cached per Ctx
+	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
+	isIsland    bool                             // true when this Ctx binds an embedded island's child View
+	islandIdx   int                              // this island's flat, page-wide index (shared via pass), used in its action path
+	islandV     viewer                           // the island's child viewer, for re-rendering on action
+	rendered    []byte                           // this island's inner HTML from the discovery render (for 204 compare)
+	push        func()                           // re-render THIS island and frame it on the stream (set per live unit)
+	declare     bool                             // whether this render declares page-level data-signals (first paint, not a push)
+	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
+	redirect    string                           // pending Redirect target, applied after a handler returns
+	pass        *renderPass                      // shared flat-index allocator during a fresh discovery render; nil once a descendant is reused via conn
+	conn        *liveConn                        // set during a live push render, so embedViewer can find an already-connected descendant's own instance
+	parentUnit  int                              // this island's parent's dispatch address, half of its childSlots identity
+	ordinal     int                              // this island's position among its parent's Embeds this render, the other half
+	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -88,29 +106,43 @@ func newCtx(in map[string]json.RawMessage) *Ctx {
 		inSignals: in,
 		initial:   map[string]any{},
 		dirty:     map[string]any{},
+		hydrators: map[string]func(json.RawMessage){},
 	}
 }
 
-// shapeMatches reports whether the signal slots assigned during a bind pass
-// (order) are exactly the slots the client carried in the request (in). The
-// positional binding contract is only sound when the hydrated POST render
-// reproduces the same slot set the GET page declared; any divergence means the
-// View branched on a value and the action/slot indices no longer line up.
-func shapeMatches(order []string, in map[string]json.RawMessage) bool {
-	want := 0
-	for _, slot := range order {
-		// A client-only slot is underscore-prefixed and Datastar never POSTs it,
-		// so its absence from the body is correct, not a shape change. Counting
-		// it would 410 every action on any View holding a SignalClientOnly.
-		if strings.HasPrefix(slot, "_") {
-			continue
-		}
-		want++
-		if _, ok := in[slot]; !ok {
-			return false
+// digestPlaceholder lazily allocates c's shape-digest placeholder token from
+// its render pass. Every action c writes shares this one token — the digest
+// itself isn't knowable until the whole render ends, so writeActionAttr and
+// PostForm write the placeholder now and renderRootCore/renderIslandInner
+// substitute the real digest into the finished buffer.
+func (c *Ctx) digestPlaceholder() string {
+	if c.digestPH == "" {
+		if c.pass != nil {
+			c.digestPH = c.pass.nextDigestToken()
+		} else {
+			c.digestPH = "\x00vD\x00" // no pass: a bare render with no dispatch behind it
 		}
 	}
-	return want == len(in)
+	return c.digestPH
+}
+
+// shapeDigest fingerprints this unit's own render shape: its signal order, its
+// own action count, and each directly embedded island's (order length, action
+// count). dispatch recomputes it fresh and 410s on any mismatch — a branched
+// View that shifted an action's index (or an Embed's ordinal) since the
+// client's copy was rendered no longer silently misroutes a click, it 410s.
+func (c *Ctx) shapeDigest() string {
+	h := sha256.New()
+	io.WriteString(h, strings.Join(c.order, ","))
+	io.WriteString(h, "|")
+	io.WriteString(h, strconv.Itoa(len(c.actions)))
+	for _, isl := range c.islands {
+		io.WriteString(h, "|")
+		io.WriteString(h, strconv.Itoa(len(isl.order)))
+		io.WriteString(h, ",")
+		io.WriteString(h, strconv.Itoa(len(isl.actions)))
+	}
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))[:8]
 }
 
 // dirtyAll gathers every signal this pass wrote, across the whole page. A Set
@@ -122,13 +154,9 @@ func (c *Ctx) dirtyAll() map[string]any {
 		return c.dirty
 	}
 	all := make(map[string]any, len(c.dirty))
-	for k, v := range c.dirty {
-		all[k] = v
-	}
+	maps.Copy(all, c.dirty)
 	for _, isl := range c.islands {
-		for k, v := range isl.dirtyAll() {
-			all[k] = v
-		}
+		maps.Copy(all, isl.dirtyAll())
 	}
 	return all
 }
@@ -138,10 +166,11 @@ func (c *Ctx) dirtyAll() map[string]any {
 // renderer sees the four binder verbs.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) SignalName() string                     { return b.c.signalName() }
-func (b binderCtx) DeclareSignal(slot string, initial any) { b.c.declareSignal(slot, initial) }
-func (b binderCtx) SignalInit(slot string) (any, bool)     { return b.c.signalInit(slot) }
-func (b binderCtx) ActionSlot(fn func()) string            { return b.c.actionSlot(fn) }
+func (b binderCtx) SignalName() string                             { return b.c.signalName() }
+func (b binderCtx) DeclareSignal(slot string, initial any)         { b.c.declareSignal(slot, initial) }
+func (b binderCtx) SignalInit(slot string) (any, bool)             { return b.c.signalInit(slot) }
+func (b binderCtx) ActionSlot(fn func()) string                    { return b.c.actionSlot(fn) }
+func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage)) { b.c.hydrator(slot, fn) }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
 // via's own (a bare h render).
@@ -199,20 +228,46 @@ func (c *Ctx) actionSlot(fn func()) string {
 	return strconv.Itoa(idx)
 }
 
+// hydrator records slot's update function. A live unit keeps the table from its
+// last render (every push is a render, so it is always current), so a live
+// action hydrates the slots the client sent in place, without a re-render.
+// hcore.Binder.
+func (c *Ctx) hydrator(slot string, fn func(json.RawMessage)) {
+	c.hydrators[slot] = fn
+}
+
 // PostForm renders a native <form method="post"> whose submit runs handler on
-// the server — the server-rendered flow for sign-up/in and anything that ends in
-// a Redirect. Unlike OnSubmit (a Datastar @post that element-patches in place),
-// this is a real browser navigation: handler reads form fields via
-// ctx.Request().FormValue and may via.Redirect. handler is a named method value;
-// children are the form contents (inputs, button). No '&', no closure.
+// the server — the server-rendered flow for sign-up/in, file uploads, and
+// anything that ends in a Redirect. Unlike OnSubmit (a Datastar @post that
+// element-patches in place), this is a real browser navigation: handler reads
+// form fields via ctx.Request().FormValue and may via.Redirect. The form is
+// always multipart, so a file <input> just works — read it with
+// ctx.Request().FormFile(name). handler is a named method value; children are
+// the form contents (inputs, button). No '&', no closure. It claims a slot in
+// the same action table a @post event binding uses, so a page mixing OnSubmit
+// and PostForm never collides on an id.
+//
+// Inside a live unit it also carries a hidden _viatab field, reactively kept
+// in sync with the $_viatab signal: a native form submit is a plain browser
+// POST, which cannot set the X-Via-Tab header a Datastar @post uses, so
+// dispatch falls back to this field to route the submit to the connection —
+// under the exact same per-mount ownership check the header gets.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
 			return
 		}
-		idx := ctx.formSlot(handler)
-		r.WriteString(`<form method="post" action="` + ctx.base + `/_via/f/` + idx + `">`)
+		idx := ctx.actionSlot(func() { handler(ctx) })
+		island := 0
+		if ctx.isIsland {
+			island = ctx.islandIdx + 1
+		}
+		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
+			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `?v=` + ctx.digestPlaceholder() + `">`)
+		if ctx.island {
+			r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr-value="$_viatab">`)
+		}
 		for _, c := range children {
 			r.Render(c)
 		}
@@ -222,42 +277,42 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 
 // paramMiss is the panic sentinel Param throws when a real request carries a
 // segment that cannot decode into the asked-for type (/thread/abc read as
-// Param[int]). The transport recovers it into a 404: the URL space simply has
-// no such page. It is a control-flow sentinel, not an error value — user code
-// never sees it.
+// Param[int]("id")). The transport recovers it into a 404: the URL space
+// simply has no such page. It is a control-flow sentinel, not an error
+// value — user code never sees it.
 type paramMiss struct {
-	n   int
-	seg string
+	name string
+	seg  string
 }
 
-// Param reads the nth positional path param — the nth anonymous {} segment in
-// the mount pattern (Mount(r, "/thread/{}", …) → Param[int](ctx, 0)). Positional,
-// like actions and signals: no identifier string. Callable from OnInit and
-// actions (which carry a Ctx); View is ctx-free and so cannot read params —
-// load them in OnInit into a field instead.
+// Param reads the mount pattern's named {name} segment — the same syntax
+// http.ServeMux uses (r.Mount("/thread/{id}", …) → ctx.Param[int]("id")).
+// Callable from OnInit and actions (which carry a Ctx); View is ctx-free and
+// so cannot read params — load them in OnInit into a field instead.
 //
 // A segment that cannot decode into T answers the request with 404 (the URL
-// names a page that doesn't exist — never a silent zero value). Reading an
-// index the mount pattern doesn't have is a wiring mistake and panics.
-func Param[T any](ctx *Ctx, n int) T {
-	if ctx == nil || n < 0 || n >= len(ctx.params) {
-		panic("via: Param index out of range — the mount pattern has no {} segment " + strconv.Itoa(n))
+// names a page that doesn't exist — never a silent zero value). Naming a
+// segment the mount pattern doesn't have is a wiring mistake and panics.
+func (c *Ctx) Param[T any](name string) T {
+	seg := c.req.PathValue(name)
+	if seg == "" && !strings.Contains(c.req.Pattern, "{"+name+"}") {
+		panic("via: Param: the mount pattern has no {" + name + "} segment")
 	}
-	return decodeSegment[T](ctx.params[n], n)
+	return decodeSegment[T](seg, name)
 }
 
 // decodeSegment turns a raw URL segment into T. Strings pass through verbatim
 // (a path segment is not quoted JSON); everything else (int/float/bool) decodes
 // as JSON, which parses "42" → 42 without a reflect-driven scalar table. A
 // segment that does not decode panics with the paramMiss sentinel (→ 404).
-func decodeSegment[T any](seg string, n int) T {
+func decodeSegment[T any](seg string, name string) T {
 	var v T
 	if sp, ok := any(&v).(*string); ok {
 		*sp = seg
 		return v
 	}
 	if err := json.Unmarshal([]byte(seg), &v); err != nil {
-		panic(paramMiss{n: n, seg: seg})
+		panic(paramMiss{name: name, seg: seg})
 	}
 	return v
 }
@@ -270,76 +325,25 @@ type Guard func(*Ctx) (redirect string, ok bool)
 
 // RequireSession guards a mount: if the session has no value of type T (i.e. the
 // user is not signed in), the request is redirected to loginPath. T is the same
-// type used with SessPut/SessGet, keyed identically (a typed-nil pointer), so
-// RequireSession[User]("/login") gates on a SessPut(ctx, user) elsewhere.
+// type used with Session.Put/Get, keyed identically (a typed-nil pointer), so
+// RequireSession[User]("/login") gates on a ctx.Session().Put(user) elsewhere.
 func RequireSession[T any](loginPath string) Guard {
 	return func(ctx *Ctx) (string, bool) {
-		if _, ok := ctx.Session().load((*T)(nil)); ok {
+		if _, ok := ctx.Session().Get[T](); ok {
 			return "", true
 		}
 		return loginPath, false
 	}
 }
 
-// File is an uploaded multipart file handed to an OnUpload handler: an io.Reader
-// the app drains, plus its metadata. The framework owns no storage — the app
-// reads the File and persists it wherever it likes.
-type File interface {
-	io.Reader
-	Name() string        // the client's filename
-	Size() int64         // size in bytes
-	ContentType() string // the part's declared Content-Type
-}
-
-type uploadedFile struct {
-	multipart.File
-	hdr *multipart.FileHeader
-}
-
-func (f uploadedFile) Name() string        { return f.hdr.Filename }
-func (f uploadedFile) Size() int64         { return f.hdr.Size }
-func (f uploadedFile) ContentType() string { return f.hdr.Header.Get("Content-Type") }
-
-// OnUpload renders a native multipart <form> whose submit uploads a file — the
-// file analogue of PostForm/OnClickArg. handler receives the first uploaded file
-// part as a via.File (and may read text fields via ctx.Request().FormValue and
-// via.Redirect). A file needs a real multipart submit, so this is the one form
-// that steps outside the Datastar @post JSON model. handler is a named method
-// value; children are the form contents (a file <input>, a button). No '&', no
-// closure.
-func OnUpload(handler func(*Ctx, File), children ...h.H) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
-		ctx := ctxOf(r.Binder())
-		if ctx == nil {
-			return
-		}
-		idx := ctx.uploadSlot(handler)
-		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` + ctx.base + `/_via/upload/` + idx + `">`)
-		for _, c := range children {
-			r.Render(c)
-		}
-		r.WriteString(`</form>`)
-	})
-}
-
-// uploadSlot registers a multipart-upload handler and returns its positional id.
-func (c *Ctx) uploadSlot(fn func(*Ctx, File)) string {
-	idx := len(c.uploads)
-	c.uploads = append(c.uploads, fn)
-	return strconv.Itoa(idx)
-}
-
 // Redirect navigates the browser to path after the current handler returns. From
 // a PostForm handler it is a 303 See Other on the native form submit. From a
-// Datastar @post action it is shipped as an executable location.assign() script
-// stamped with the session's CSP nonce — which requires an active session (the
-// nonce the document admits); without one the @post redirect is dropped (no
-// navigation), so use PostForm for pre-session flows like sign-in. path must be
-// http/https or a same-origin relative path; other schemes are rejected.
-func Redirect(ctx *Ctx, path string) {
-	if ctx != nil {
-		ctx.redirect = path
-	}
+// Datastar @post action it is shipped as an executable location.assign() script,
+// admitted by the document CSP via the sha256 hash of a constant script; no
+// session is required. path must be http/https or a same-origin relative path;
+// other schemes are rejected.
+func (c *Ctx) Redirect(path string) {
+	c.redirect = path
 }
 
 // redirectInit is the client half of a @post Redirect. It is a CONSTANT so the
@@ -350,37 +354,18 @@ func Redirect(ctx *Ctx, path string) {
 // where currentScript is unset.
 const redirectInit = `(()=>{var s=document.currentScript||document.querySelector('script[data-via-to]');if(s&&s.dataset.viaTo)location.assign(s.dataset.viaTo)})()`
 
-// writeRedirectScript ships a queued via.Redirect as an executable script when a
-// @post action requested one. It returns true (response written) only when there
-// is a redirect AND its target passes hcore.SafeURL; otherwise it returns false and
-// the caller falls back to the normal element-patch response. The target is
-// passed as data-via-to through the datastar-script-attributes header, which the
-// bundle copies onto the <script> it creates: the script source stays constant so
-// its CSP hash matches, and the document accepts it whichever pod served it.
-func writeRedirectScript(w http.ResponseWriter, target string) bool {
-	if target == "" {
-		return false // no redirect queued — normal element-patch response
-	}
-	if !hcore.SafeURL(target) {
-		log.Printf("via: unsafe Redirect target %q dropped", target)
-		return false
-	}
+// writeRedirectScript ships a queued via.Redirect as an executable script — the
+// document's CSP admits it by the sha256 hash of its constant source. respond
+// has already validated target with hcore.SafeURL before calling this. The
+// target rides as an attribute VALUE that Datastar sets with the DOM API, so
+// it is never parsed as HTML or as JS source — there is no string literal
+// left to break out of. json.Marshal handles the header's own encoding.
+func writeRedirectScript(w http.ResponseWriter, target string) {
 	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// The target rides as an attribute VALUE that Datastar sets with the DOM API,
-	// so it is never parsed as HTML or as JS source — there is no string literal
-	// left to break out of. json.Marshal handles the header's own encoding.
 	attrs, _ := json.Marshal(map[string]string{"data-via-to": target})
 	w.Header().Set("datastar-script-attributes", string(attrs))
 	w.Write([]byte(redirectInit))
-	return true
-}
-
-// formSlot registers a native-form handler and returns its positional id.
-func (c *Ctx) formSlot(fn func(*Ctx)) string {
-	idx := len(c.forms)
-	c.forms = append(c.forms, fn)
-	return strconv.Itoa(idx)
 }
 
 // OnClick wires a click to a POST action. fn is a named method value (e.g.
@@ -465,33 +450,37 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // via-generated (fixed template + the via-controlled event name + a numeric id +
 // a url-encoded arg), so no user input reaches it and there is no injection
 // surface. Datastar v1's colon syntax (data-on:<event>); the old dash form is
-// parsed as a nonexistent plugin and silently dropped. On a live island the POST
+// parsed as a nonexistent plugin and silently dropped. Every action posts to
+// {base}/_via/a/{island}/{n}?v={digest} — the root is island 0, an embedded
+// child is its islandIdx+1, and the digest is this render's shape fingerprint
+// (see Ctx.shapeDigest): dispatch 410s a click whose digest no longer matches
+// instead of misrouting it against a shifted index. On a live unit the POST
 // routes to THIS connection's instance, so it echoes the tab id (the _viatab
-// local signal the SSE set) as the X-Via-Tab header; the island id scopes which
-// island; a stateless page omits both.
+// local signal the SSE set) as the X-Via-Tab header; a stateless page omits it.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
-	base := ""
+	base, island, digest := "", 0, ""
 	if ctx != nil {
-		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{n}
-	}
-	path := base + "/_via/a/" + idx
-	opts := ""
-	switch {
-	case ctx != nil && ctx.isIsland:
-		path = base + "/_via/a/" + strconv.Itoa(ctx.islandIdx) + "/" + idx
-		if ctx.island {
-			opts = ",{headers:{'X-Via-Tab':$_viatab}}"
+		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{island}/{n}
+		if ctx.isIsland {
+			island = ctx.islandIdx + 1
 		}
-	case ctx != nil && ctx.island:
+		digest = ctx.digestPlaceholder()
+	}
+	path := base + "/_via/a/" + strconv.Itoa(island) + "/" + idx
+	if digest != "" {
+		if query == "" {
+			query = "?v=" + digest
+		} else {
+			query += "&v=" + digest
+		}
+	}
+	opts := ""
+	if ctx != nil && ctx.island {
 		opts = ",{headers:{'X-Via-Tab':$_viatab}}"
 	}
 	r.WriteString(` data-on:` + event + `="@post('` + path + query + `'` + opts + `)"`)
 }
 
-// Register builds an http.Handler serving the root component. root is taken by
-// value; per request via copies it into an addressable local and operates on
-// the pointer, so pointer-receiver methods and handles work without '&' at the
-// call site.
 // decodeActionBody decodes the client signals from an action POST under a body
 // cap. An empty body is the common no-signals case; a malformed or oversize body
 // writes the error response and returns ok=false so the caller returns.
@@ -502,8 +491,7 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxActionBody))
 	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return nil, false
 		}
@@ -524,15 +512,18 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // every push would re-merge (clobber) a client signal the user is editing (their
 // half-typed message vanishing when someone else's message arrives). Deliberate
 // server-driven signal changes ride an explicit signal-patch instead.
-func renderRoot(v viewer, in map[string]json.RawMessage, island, declareSignals bool) (*Ctx, []byte) {
-	return renderRootBase(v, in, island, declareSignals, "")
+func renderRoot(v viewer, in map[string]json.RawMessage, declareSignals bool) (*Ctx, []byte) {
+	return renderRootBase(v, in, declareSignals, "", nil)
 }
 
 // renderRootBase is renderRoot with an explicit action base path — the router
 // mounts a page under /path, so its actions must post to /path/_via/a/{n}, not
-// the root /_via/a/{n}. base is "" for the single-page Register.
-func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSignals bool, base string) (*Ctx, []byte) {
-	return renderRootCore(v, in, island, declareSignals, base, nil)
+// the root /_via/a/{n}. base is "" for the single-page Register. conn is the
+// live connection driving this render (nil for first paint and every
+// stateless render), so embedViewer can reuse an already-connected
+// descendant's own instance instead of a fresh by-value copy.
+func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, conn *liveConn) (*Ctx, []byte) {
+	return renderRootCore(v, in, declareSignals, base, nil, conn)
 }
 
 // renderRootPatch renders a stateless action's element-patch response. A
@@ -542,22 +533,24 @@ func renderRootBase(v viewer, in map[string]json.RawMessage, island, declareSign
 // store, clobbering a value the user is mid-edit. That is the same hazard a live
 // push avoids by omitting the attribute; here the attribute stays, restricted to
 // only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any) (*Ctx, []byte) {
+func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
 	if only == nil {
 		only = map[string]any{} // nil would read as "declare everything"
 	}
-	return renderRootCore(v, in, false, true, base, only)
+	return renderRootCore(v, in, true, base, only, conn)
 }
 
 // renderRootCore is the shared body: only is threaded to writeSignalsAttr (and
 // to embedded islands via ctx.declareOnly) so one render path serves the full
 // first paint, the declaration-free live push, and the restricted action patch.
-func renderRootCore(v viewer, in map[string]json.RawMessage, island, declareSignals bool, base string, only map[string]any) (*Ctx, []byte) {
+func renderRootCore(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
 	ctx := newCtx(in)
-	ctx.island = island
+	_, ctx.island = v.(Live)     // the root is a live unit exactly when it implements OnConnect
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
+	ctx.pass = &renderPass{} // fresh page-wide index allocator for this discovery walk
+	ctx.conn = conn
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -568,7 +561,11 @@ func renderRootCore(v viewer, in map[string]json.RawMessage, island, declareSign
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())
 	b.WriteString(`</div>`)
-	return ctx, b.Bytes()
+	out := b.Bytes()
+	if ctx.digestPH != "" {
+		out = bytes.ReplaceAll(out, []byte(ctx.digestPH), []byte(ctx.shapeDigest()))
+	}
+	return ctx, out
 }
 
 // Register builds an http.Handler serving the root composition. root is taken
@@ -577,353 +574,216 @@ func renderRootCore(v viewer, in map[string]json.RawMessage, island, declareSign
 // the call site. The PT constraint makes a missing or mistyped View() a
 // compile error rather than a first-request 500 — Register(Counter{}) still
 // infers T=Counter, PT=*Counter with zero type arguments.
-func Register[T any, PT interface {
-	*T
-	viewer
-}](root T, opts ...Option) http.Handler {
+func Register[T any, PT PtrViewer[T]](root T, opts ...Option) http.Handler {
 	r := NewRouter(opts...)
-	Mount[T, PT](r, "/", root)
+	r.Mount[T, PT]("/", root)
 	return r
 }
 
-// mountLive registers a mounted page's live transports: the SSE stream at
-// base/_via/sse and the embedded-island action route at
-// base/_via/a/{island}/{n}. Every mount gets them — one dispatch pipeline; a
-// page with no live content answers 404 on the stream.
-func mountLive[T any, PT interface {
-	*T
-	viewer
-}](r *Router, base string, root T, rootLive bool) {
-	cfg, sessions, reg := r.cfg, r.sessions, r.reg
-	maxLive := r.maxLive
-	liveCount := r.liveCount
-	_ = maxLive
-
-	r.mux.HandleFunc("POST "+base+"/_via/sse", func(w http.ResponseWriter, req *http.Request) {
-		// Origin floor first: the stream opens a long-lived island goroutine +
-		// timers and renders the app's HTML, so reject anything that can't prove
-		// a same-origin (or explicitly trusted) source before allocating it.
-		if !originAllowed(req, cfg) {
-			http.Error(w, "forbidden origin", http.StatusForbidden)
-			return
-		}
-		// The connect is a POST so it can carry the page's signals as a body
-		// (capped + decoded); the island hydrates from them. Multiplexing reads
-		// per-island state out of this on connect.
-		connectSig, ok := decodeActionBody(w, req)
-		if !ok {
-			return
-		}
-		if _, ok := w.(http.Flusher); !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-		// Connection cap: bound concurrent streams (each holds an island
-		// goroutine + timers). Increment-then-check so the gauge can't be raced
-		// past the limit; on refusal give back the slot and 503. The admitted
-		// path's defer below decrements when the stream ends.
-		if liveCount.Add(1) > int64(maxLive) {
-			liveCount.Add(-1)
-			http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
-			return
-		}
-		defer liveCount.Add(-1)
-		defer func() {
-			if rec := recover(); rec != nil {
-				log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
-			}
-		}()
-		inst := root
-		pv := PT(&inst)
-		// A half-open peer never cancels req.Context(); a failed frame write
-		// is the only signal it's gone. Derive a cancelable context so a write
-		// failure (or the per-frame deadline) tears the island(s) down here.
-		streamCtx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		stream := &sseStream{
-			w:       w,
-			rc:      http.NewResponseController(w),
-			timeout: cfg.sseWriteTimeout,
-			cancel:  cancel,
-		}
-		keepalive := func() { stream.frame(writeKeepaliveFrame) }
-		interval := cfg.sseHeartbeat
-		if interval <= 0 {
-			interval = defaultHeartbeat
-		}
-		id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
-		pulse := make(chan func())
-
-		// Establish the live unit(s) and run each OnConnect once, BEFORE the
-		// stream headers flush (so OnConnect can still set the session cookie).
-		// Each unit's push closure re-renders only ITS container.
-		var units []*Ctx
-		disposeAll := func() {
-			for _, u := range units {
-				for _, d := range u.disposers {
-					d()
-				}
-			}
-		}
-		if rootLive {
-			// Legacy single island: the root composition is the island, patched
-			// at #root.
-			island := newCtx(connectSig)
-			island.req = req
-			island.sessions = sessions
-			island.sessW = w
-			island.push = func() {
-				_, body := renderRootBase(pv, nil, true, false, base) // push omits data-signals
-				stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
-			}
-			lv, _ := any(pv).(Live)
-			if err := lv.OnConnect(island); err != nil {
-				for _, d := range island.disposers {
-					d()
-				}
-				connectError(w, err)
-				return
-			}
-			units = append(units, island)
-			reg.put(id, &liveConn{
-				inst:        pv,
-				pulse:       pulse,
-				done:        streamCtx.Done(),
-				push:        island.push,
-				pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-			})
-			defer reg.del(id)
-		} else {
-			// Multiplex: each embedded Island[C] that implements OnConnect is its
-			// own live unit, sharing this one stream/goroutine and patched at its
-			// own #via-i{n}.
-			bind, _ := renderRootBase(pv, connectSig, true, false, base) // discovery render
-			for i, isl := range bind.islands {
-				lv, ok := isl.islandV.(Live)
-				if !ok {
-					continue
-				}
-				uctx := newCtx(connectSig)
-				uctx.req = req
-				uctx.sessions = sessions
-				uctx.sessW = w
-				uctx.isIsland = true
-				uctx.islandIdx = i
-				idx, v := i, isl.islandV
-				uctx.islandV = v // the action handler re-binds this island's actions
-				uctx.push = func() {
-					stream.frame(func(w io.Writer) { writePatchFrame(w, renderIslandPatch(idx, v)) })
-				}
-				var onConnectFailed bool
-				func() {
-					defer func() {
-						if rec := recover(); rec != nil {
-							disposeAll()
-							for _, d := range uctx.disposers {
-								d()
-							}
-							log.Printf("via: OnConnect panic: %v\n%s", rec, debug.Stack())
-							onConnectFailed = true
-						}
-					}()
-					if err := lv.OnConnect(uctx); err != nil {
-						disposeAll()
-						for _, d := range uctx.disposers {
-							d()
-						}
-						connectError(w, err)
-						onConnectFailed = true
-						return
-					}
-				}()
-				if onConnectFailed {
-					return
-				}
-				units = append(units, uctx)
-			}
-		}
-
-		// No live units: this app has no live content (a stateless page POSTing
-		// the stream endpoint), so there is nothing to stream.
-		if len(units) == 0 {
-			http.Error(w, "no live stream", http.StatusNotFound)
-			return
-		}
-
-		// Register a multiplex connection's islands so a live action POST
-		// (/_via/a/{island}/{n} + X-Via-Tab) routes to the right island on this
-		// connection's goroutine. The legacy single-island case registered itself
-		// above; here inst/push stay nil and the per-island units carry them.
-		if !rootLive {
-			islands := make(map[int]*Ctx, len(units))
-			for _, u := range units {
-				islands[u.islandIdx] = u
-			}
-			reg.put(id, &liveConn{
-				pulse:       pulse,
-				done:        streamCtx.Done(),
-				pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-				islands:     islands,
-			})
-			defer reg.del(id)
-		}
-
-		writeSSEHeaders(w)
-		w.WriteHeader(http.StatusOK)
-		stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
-
-		runLiveStream(streamCtx, units, pulse, keepalive, interval)
-	})
-
-	r.mux.HandleFunc("POST "+base+"/_via/a/{island}/{n}", func(w http.ResponseWriter, req *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				recoverToHTTP(w, rec, "island action")
-			}
-		}()
-		if !originAllowed(req, cfg) {
-			http.Error(w, "forbidden origin", http.StatusForbidden)
-			return
-		}
-		in, ok := decodeActionBody(w, req)
-		if !ok {
-			return
-		}
-
-		island, err := strconv.Atoi(req.PathValue("island"))
-		if err != nil {
-			http.Error(w, "no such island", http.StatusGone)
-			return
-		}
-		n, err := strconv.Atoi(req.PathValue("n"))
-		if err != nil {
-			http.Error(w, "no such action", http.StatusGone)
-			return
-		}
-
-		// Live mux island: the X-Via-Tab header routes to THIS connection's island
-		// goroutine, where the action runs against the connection's own instance and
-		// the result is pushed over its SSE — so the POST just acks 204. An
-		// unknown/closed tab is 410 so a stale client re-bootstraps.
-		if lc, ok := reg.get(req.Header.Get("X-Via-Tab")); ok && lc.islands != nil {
-			isl, ok := lc.islands[island]
-			if !ok {
-				http.Error(w, "no such island", http.StatusGone)
-				return
-			}
-			dispatched := lc.Dispatch(func() {
-				bind := bindIsland(isl.islandIdx, isl.islandV, in)
-				bind.req = req
-				bind.sessions = sessions // store-only: a live action can't set a cookie
-				if n >= 0 && n < len(bind.actions) {
-					bind.actions[n]()
-				}
-				if len(bind.dirty) > 0 {
-					if raw, err := json.Marshal(bind.dirty); err == nil {
-						lc.pushSignals(string(raw))
-					}
-				}
-				isl.push() // re-render this island and frame the element-patch
-			})
-			if !dispatched {
-				http.Error(w, "live connection closed", http.StatusGone)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-
-		// Stateless embedded island: discover positionally and re-render in place.
-		inst := root
-		bind, _ := renderRootBase(PT(&inst), in, false, true, base) // discovery render → bind.islands
-		if island < 0 || island >= len(bind.islands) {
-			http.Error(w, "no such island", http.StatusGone)
-			return
-		}
-		isl := bind.islands[island]
-		// A LIVE island's action only routes through the tab handshake above; if we
-		// reached the stateless path the tab was missing/stale, so fail closed (410)
-		// rather than mutating a throwaway. Only genuinely stateless islands
-		// re-render in place here.
-		if _, live := isl.islandV.(Live); live {
-			http.Error(w, "no live connection for this tab", http.StatusGone)
-			return
-		}
-		if n < 0 || n >= len(isl.actions) {
-			http.Error(w, "no such action", http.StatusGone)
-			return
-		}
-
-		before := isl.rendered
-		isl.req = req // so a value-carrying action (OnClickArg) can read its arg from the request
-		isl.actions[n]()
-		after := renderIsland(island, isl.islandV)
-		if bytes.Equal(before, after) {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		// Element-patch scoped to this island's container, so the morph replaces
-		// only #via-i{island} and never disturbs a sibling island.
-		writeSecurityHeaders(w)
-		w.Write([]byte(`<div id="via-i` + strconv.Itoa(island) + `">`))
-		w.Write(after)
-		w.Write([]byte(`</div>`))
-	})
+// liveUnits collects every Live viewer discovered in bind's render, at any
+// embedding depth — the root itself first, when it implements OnConnect,
+// then its embedded live islands in render order. Each becomes its own unit
+// on the connection; a page with no live content at all yields an empty
+// slice.
+func liveUnits(bind *Ctx) []*Ctx {
+	var units []*Ctx
+	if _, ok := bind.islandV.(Live); ok {
+		units = append(units, bind)
+	}
+	appendLiveIslands(bind, &units)
+	return units
 }
 
-// tryLiveAction routes a live root's action POST to its connection's island
-// goroutine (found by the X-Via-Tab header) and acks 204 — the SSE push carries
-// the result. Returns true when it wrote the response (the live path applies).
-func tryLiveAction(w http.ResponseWriter, req *http.Request, reg *registry, sessions *sessionManager, base string, in map[string]json.RawMessage) {
-	// Live island: route the action to THIS connection's island goroutine,
-	// found by the X-Via-Tab header (the _viatab the SSE handed it). The
-	// action runs against the connection's own instance — mutating its State —
-	// and the SSE push ships the patch, so the POST just acks 204
-	// (fire-and-forget: the action runs async on the island goroutine; the
-	// result arrives over the SSE, not on this response). The bind-shape guard
-	// does not apply here: the island re-render is the authority, not the
-	// request echo. An unknown/closed tab is 410 so a stale client
-	// re-bootstraps rather than mutating a throwaway.
-	//
-	// Contract: a live island's View must render a render-stable action set
-	// (action ids are positional). A gone/out-of-range index simply no-ops on
-	// the island; the next SSE push re-syncs the client either way.
-	{
-		lc, ok := reg.get(req.Header.Get("X-Via-Tab"))
-		if !ok {
-			http.Error(w, "no live connection for this tab", http.StatusGone)
-			return
+// appendLiveIslands walks the discovered island tree recursively — a live
+// grandchild gets no stream wiring unless discovery descends past its
+// (live or plain) parent too.
+func appendLiveIslands(ctx *Ctx, out *[]*Ctx) {
+	for _, isl := range ctx.islands {
+		if _, ok := isl.islandV.(Live); ok {
+			*out = append(*out, isl)
 		}
-		n, err := strconv.Atoi(req.PathValue("n"))
-		if err != nil {
-			http.Error(w, "no such action", http.StatusGone)
-			return
+		appendLiveIslands(isl, out)
+	}
+}
+
+// connectUnit wires unit's push closure to stream (whole-page at #root for the
+// root unit, its own #via-i{idx} container for an island), registers unit on lc
+// as this island's current unit, and runs its OnConnect once, recovering a
+// panic into a connect error so one broken unit can't crash the rest of the
+// handshake.
+func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *sessionManager, stream *sseStream, base string, lc *liveConn) (err error) {
+	unit.req = req
+	unit.sessions = sessions
+	unit.sessW = w
+	if unit.isIsland {
+		idx, v, parentUnit, ordinal := unit.islandIdx, unit.islandV, unit.parentUnit, unit.ordinal
+		lc.replace(unit)
+		unit.push = islandPush(idx, v, base, parentUnit, ordinal, stream, lc)
+	} else {
+		v := unit.islandV
+		lc.replace(unit)
+		unit.push = rootPush(v, base, stream, lc)
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("via: OnConnect panic: %v\n%s", rec, debug.Stack())
+			err = errors.New("via: OnConnect panicked")
 		}
-		dispatched := lc.Dispatch(func() {
-			bind, _ := renderRootBase(lc.inst, in, true, false, base)
-			bind.req = req // the action POST that triggered this live action
-			// Store-only: a live action runs after its 204, so it can read/write an
-			// already-established session but cannot issue a cookie (sessW stays nil).
-			bind.sessions = sessions
-			if n >= 0 && n < len(bind.actions) {
-				bind.actions[n]()
-			}
-			// A deliberate server-driven signal change (e.g. clearing the
-			// composer) reaches the client as a signal-patch — the element
-			// push omits data-signals, so morphs never clobber what the user
-			// is typing.
-			if len(bind.dirty) > 0 {
-				if raw, err := json.Marshal(bind.dirty); err == nil {
-					lc.pushSignals(string(raw))
-				}
-			}
-			lc.push() // re-render the island and frame the element-patch
-		})
-		if !dispatched {
-			http.Error(w, "live connection closed", http.StatusGone)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
+	}()
+	return unit.islandV.(Live).OnConnect(unit)
+}
+
+// rootPush renders v fresh and pushes it as the whole-page element-patch. The
+// fresh render's bind Ctx replaces lc.root: it is the one whose actions and
+// hydrators table a live action runs against next, so a live action needs no
+// render of its own — the previous push already built it.
+func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
+	var push func()
+	push = func() {
+		bind, body := renderRootBase(v, nil, false, base, lc) // push omits data-signals
+		bind.push = push
+		lc.replace(bind)
+		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+	}
+	return push
+}
+
+// islandPush is rootPush for an embedded live island: it re-renders island idx
+// in place and replaces the connection's current unit for it. parentUnit and
+// ordinal are carried from the discovery render so a fresh bind still keys
+// into the same childSlots identity a live ancestor's own re-render looks up.
+func islandPush(idx int, v viewer, base string, parentUnit, ordinal int, stream *sseStream, lc *liveConn) func() {
+	var push func()
+	push = func() {
+		bind, body := renderIslandPatch(idx, v, base, lc)
+		bind.push = push
+		bind.parentUnit, bind.ordinal = parentUnit, ordinal
+		lc.replace(bind)
+		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+	}
+	return push
+}
+
+// connect is the SSE stream's entry point at {base}/_via/sse — dispatch's
+// preamble (origin floor, guards, OnInit) followed by the connect render and
+// the stream loop. Every mount gets the route; a page with no live content
+// answers 404 on it.
+func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
+	// Origin floor first: the stream opens a long-lived island goroutine +
+	// timers and renders the app's HTML, so reject anything that can't prove
+	// a same-origin (or explicitly trusted) source before allocating it.
+	if !originAllowed(req, m.cfg) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
+	if runGuards(w, req, m.sessions, m.guards) {
+		return
+	}
+	// The connect is a POST so it can carry the page's signals as a body
+	// (capped + decoded); the island hydrates from them. Multiplexing reads
+	// per-island state out of this on connect.
+	connectSig, ok := decodeInput(w, req, modeDatastar)
+	if !ok {
+		return
+	}
+	if _, ok := w.(http.Flusher); !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	// Connection cap: bound concurrent streams (each holds an island
+	// goroutine + timers). Increment-then-check so the gauge can't be raced
+	// past the limit; on refusal give back the slot and 503. The admitted
+	// path's defer below decrements when the stream ends.
+	if m.liveCount.Add(1) > int64(m.maxLive) {
+		m.liveCount.Add(-1)
+		http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
+		return
+	}
+	defer m.liveCount.Add(-1)
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
+		}
+	}()
+	pv := m.newInst()
+	if runOnInit(pv, w, req, m.sessions) != nil { // load session/request data into fields first
+		return
+	}
+	base := concreteBase(m.patternBase, req, m.names)
+	// A half-open peer never cancels req.Context(); a failed frame write
+	// is the only signal it's gone. Derive a cancelable context so a write
+	// failure (or the per-frame deadline) tears the island(s) down here.
+	streamCtx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	stream := &sseStream{
+		w:       w,
+		rc:      http.NewResponseController(w),
+		timeout: m.cfg.sseWriteTimeout,
+		cancel:  cancel,
+	}
+	keepalive := func() { stream.frame(writeKeepaliveFrame) }
+	interval := m.cfg.sseHeartbeat
+	if interval <= 0 {
+		interval = defaultHeartbeat
+	}
+	id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
+	pulse := make(chan func())
+
+	// The discovery render finds every unit the root's View holds this
+	// render — the root itself (bind), when live, plus each embedded live
+	// island — so a live root and live children are found the same way; the
+	// root unit's own instance is pv, mirroring an island unit's islandV.
+	bind, _ := renderRootBase(pv, connectSig, false, base, nil)
+	bind.islandV = pv
+	units := liveUnits(bind)
+
+	// No live units: this app has no live content (a stateless page POSTing
+	// the stream endpoint), so there is nothing to stream.
+	if len(units) == 0 {
+		http.Error(w, "no live stream", http.StatusNotFound)
+		return
+	}
+
+	// Built before the connect loop so each unit's push closure can register
+	// itself as the connection's current unit for its island on every render —
+	// a live action always runs against the last render's actions/hydrators.
+	lc := &liveConn{
+		mount:       m,
+		pageRoot:    pv,
+		pulse:       pulse,
+		done:        streamCtx.Done(),
+		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
+		units:       map[int]*Ctx{},
+		childSlots:  map[childKey]*Ctx{},
+	}
+
+	// Run each unit's OnConnect once, BEFORE the stream headers flush (so
+	// OnConnect can still set the session cookie). A unit not yet connected
+	// has no disposers, so disposing the whole (fixed) set on a failure
+	// partway through only tears down the ones that actually ran.
+	disposeAll := func() {
+		for _, u := range units {
+			for _, d := range u.disposers {
+				d()
+			}
+		}
+	}
+	for _, u := range units {
+		if err := connectUnit(u, req, w, m.sessions, stream, base, lc); err != nil {
+			disposeAll()
+			connectError(w, err)
+			return
+		}
+	}
+
+	// Register this connection so a live action POST (/_via/a/{island}/{n} +
+	// X-Via-Tab) routes to the right unit on this connection's goroutine.
+	m.reg.put(id, lc)
+	defer m.reg.del(id)
+
+	writeSSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
+
+	runLiveStream(streamCtx, units, pulse, keepalive, interval)
 }

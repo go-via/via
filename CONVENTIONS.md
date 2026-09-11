@@ -113,6 +113,18 @@ slow test beats a flaky fast one.
 
 Always run tests with `-race` (`go test -race ./...`).
 
+### Carve-out: `testing/synctest`
+
+`synctest.Test`'s doc is explicit: "T.Run, T.Parallel, and T.Deadline must
+not be called" on the `*testing.T` it hands to the bubble callback. When a
+test's entire body is that one `synctest.Test(t, func(t *testing.T) {…})`
+call, there is no outer `t` left to call `Parallel` on — omit it.
+
+If a test runs plain code before entering the bubble (e.g. an ordinary GET
+against a real listener, which needs no fake clock), call `t.Parallel()` as
+the first line as usual — it runs on the outer `*testing.T`, before the
+bubble exists, and is unaffected by the restriction.
+
 ## Test Helpers
 
 Reasoning: Test helpers that don't call `t.Helper()` produce misleading

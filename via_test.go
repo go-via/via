@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,12 +11,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,6 +108,11 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 	// POST and the SSE GET) admits the request; tests that exercise the floor
 	// itself build their own requests (see post()/sseStatus in security_test.go).
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	if method == http.MethodPost {
+		// The bundled Datastar client sends this on every @post; dispatch reads
+		// it to tell a JSON action apart from a native form submit.
+		req.Header.Set("Datastar-Request", "true")
+	}
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err, "request failed")
 	t.Cleanup(func() { resp.Body.Close() })
@@ -131,6 +140,9 @@ func post(t *testing.T, srv *httptest.Server, path, body string, headers map[str
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
 	require.NoError(t, err)
+	// A JSON action POST — every caller of post() carries a Datastar signals
+	// body, never a native form submit.
+	req.Header.Set("Datastar-Request", "true")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
@@ -149,6 +161,18 @@ func readAll(t *testing.T, resp *http.Response) string {
 
 func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
 
+// actionURL extracts the currently-rendered action URL for {island}/{n} out of
+// html — every action now carries a `?v=` shape digest dispatch recomputes
+// and must match, so a test posts to the URL the page actually shipped
+// instead of a hand-built path that would 410 the instant the shape changed.
+func actionURL(t *testing.T, html string, island, n int) string {
+	t.Helper()
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/` + strconv.Itoa(n) + `(?:[?&][^'"]*)?)['"]`
+	m := regexp.MustCompile(pat).FindStringSubmatch(html)
+	require.NotEmptyf(t, m, "action %d/%d not found on rendered page:\n%s", island, n, html)
+	return m[1]
+}
+
 // The GET page must ship the server-rendered skeleton — the current value baked
 // into HTML, both wired buttons, the morph-target #root, and the client script.
 func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
@@ -159,10 +183,10 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	assert.True(t, strings.HasPrefix(ct, "text/html"), "page Content-Type = %q, want text/html", ct)
 	for _, want := range []string{
 		`<div id="root"`,
-		`<h1>0</h1>`,                         // value rendered server-side, not a signal
-		`data-on:click="@post('/_via/a/0')"`, // Dec, declared first
-		`data-on:click="@post('/_via/a/1')"`, // Inc, declared second
-		`src="/_via/datastar.js">`,           // module script tag (external, admitted by 'self')
+		`<h1>0</h1>`,                           // value rendered server-side, not a signal
+		`data-on:click="@post('/_via/a/0/0?v=`, // Dec, declared first
+		`data-on:click="@post('/_via/a/0/1?v=`, // Inc, declared second
+		`src="/_via/datastar.js">`,             // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
@@ -187,17 +211,19 @@ func TestEventBinding_usesDatastarColonSyntaxNotDeadDashForm(t *testing.T) {
 func TestAction_elementPatchesAndPersists(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	dec, inc := actionURL(t, page, 0, 0), actionURL(t, page, 0, 1)
 
-	resp, body := do(t, srv, http.MethodPost, "/_via/a/1", "{}") // Inc: 0 -> 1
+	resp, body := do(t, srv, http.MethodPost, inc, "{}") // Inc: 0 -> 1
 	ct := resp.Header.Get("Content-Type")
 	assert.True(t, strings.HasPrefix(ct, "text/html"), "Content-Type = %q, want text/html (element-patch)", ct)
 	for _, want := range []string{`<div id="root"`, `<h1>1</h1>`} {
 		assert.Contains(t, body, want, "patch missing fragment")
 	}
 
-	_, body = do(t, srv, http.MethodPost, "/_via/a/1", "{}") // 1 -> 2
+	_, body = do(t, srv, http.MethodPost, inc, "{}") // 1 -> 2
 	assert.Contains(t, body, `<h1>2</h1>`, "second Inc did not persist to 2")
-	_, body = do(t, srv, http.MethodPost, "/_via/a/0", "{}") // 2 -> 1
+	_, body = do(t, srv, http.MethodPost, dec, "{}") // 2 -> 1
 	assert.Contains(t, body, `<h1>1</h1>`, "Dec did not bring state back to 1")
 }
 
@@ -205,28 +231,30 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 // a stale client learns the action is gone rather than silently no-op.
 func TestOutOfRangeAction_isGone(t *testing.T) {
 	t.Parallel()
-	resp, _ := do(t, newCounter(t), http.MethodPost, "/_via/a/99", "{}")
+	resp, _ := do(t, newCounter(t), http.MethodPost, "/_via/a/0/99", "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
 }
 
-// Positional dispatch is only sound against the render shape the client was
-// served. The server-state counter renders no signals, so a request carrying a
-// signal the View never declares is a mismatch and must be rejected with 410
-// rather than dispatched against a slot table that does not line up.
-func TestRenderShapeMismatch_isRejected(t *testing.T) {
+// Go 1.27's default jsonv2 backing must still decode a signal body the way v1
+// did (replace invalid UTF-8 with U+FFFD) rather than reject it, or the module
+// silently starts 400ing bodies real browsers happily sent under v1.
+func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, newCounter(t), http.MethodPost, "/_via/a/1", `{"s0":1}`)
-	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone (render-shape mismatch)\nbody: %s", body)
+	app := vt.Serve(t, via.Register(boundForm{}))
+	status, _ := app.Action(0).Body("{\"s0\":\"\xff\"}").Fire()
+	assert.Equal(t, http.StatusOK, status)
 }
 
-// A request whose signal-key set is the same SIZE as the rendered shape but a
-// different key is still a render-shape mismatch and must 410, not be dispatched
-// against a slot table that does not line up.
-func TestRenderShapeMismatch_sameLengthDifferentKeyIsRejected(t *testing.T) {
+// A duplicate key in a signal body must decode with v1's last-write-wins
+// semantics, not jsonv2's stricter default, or the same request a v1 client
+// sent starts failing under the new decoder.
+func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(boundForm{}))
-	resp, _ := post(t, srv, "/_via/a/0", `{"sX":"1"}`, sameOrigin())
-	assert.Equal(t, http.StatusGone, resp.StatusCode, "one declared signal vs one foreign key must 410")
+	app := vt.Serve(t, via.Register(boundForm{}))
+	status, frag := app.Action(0).Body(`{"s0":"one","s0":"two"}`).Fire()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, "two")
+	assert.NotContains(t, frag, "one")
 }
 
 // The vendored Datastar client must be served from the embedded asset with a JS
@@ -247,7 +275,9 @@ func TestEmbeddedDatastarClient_isServedAsJS(t *testing.T) {
 // untested wire contract from silently returning.
 func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, newCounter(t), http.MethodPost, "/_via/a/1", "{}")
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	ct := resp.Header.Get("Content-Type")
@@ -272,7 +302,9 @@ func (n *noopComp) View() h.H {
 // annotation (no NoContent call) required.
 func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	t.Parallel()
-	resp, body := post(t, serve(t, via.Register(noopComp{})), "/_via/a/0", "{}", sameOrigin())
+	srv := serve(t, via.Register(noopComp{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := post(t, srv, actionURL(t, page, 0, 0), "{}", sameOrigin())
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	assert.Empty(t, body)
 }
@@ -291,7 +323,7 @@ func (c *formComp) View() h.H {
 func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-on:submit="@post('/_via/a/0')"`)
+	assert.Contains(t, body, `data-on:submit="@post('/_via/a/0/0?v=`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
@@ -310,11 +342,49 @@ func (r *reqEchoer) View() h.H {
 // of the request must reach the re-rendered response.
 func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	t.Parallel()
-	_, body := post(t, serve(t, via.Register(reqEchoer{})), "/_via/a/0", "{}", map[string]string{
+	srv := serve(t, via.Register(reqEchoer{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	_, body := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
 		"X-Echo":         "hello-from-header",
 	})
 	assert.Contains(t, body, "hello-from-header", "the action must see the triggering request via ctx.Request()")
+}
+
+// digestEchoer renders a bound signal's raw value straight into the page, so a
+// test can post hostile text through the signal channel (a header can't carry
+// a literal NUL byte; a JSON body can).
+type digestEchoer struct {
+	q    via.Signal[string]
+	echo string
+}
+
+func (c *digestEchoer) Grab(ctx *via.Ctx) { c.echo = c.q.Get() }
+func (c *digestEchoer) View() h.H {
+	return h.Div(h.Input(c.q.Bind()), h.Button(via.OnClick(c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
+}
+
+// TestAction_digestPlaceholderCannotBeForgedByUserText posts hostile text
+// containing the literal NUL-delimited digest placeholder via.digestPlaceholder
+// mints internally (NUL, "vD0", NUL — token 0, this component's only
+// action). If writeEscaped ever stopped neutralising NUL, the final
+// bytes.ReplaceAll pass that splices the real shape digest into the response
+// would match this text too and corrupt it with digest bytes.
+func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(digestEchoer{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	slot := attrValue(t, page, "data-bind")
+	nul := string(byte(0))
+	hostile := nul + "vD0" + nul
+	reqBody, err := json.Marshal(map[string]string{slot: hostile})
+	require.NoError(t, err)
+	url := actionURL(t, page, 0, 0)
+	digest := url[strings.Index(url, "v=")+2:]
+	_, body := post(t, srv, url, string(reqBody), sameOrigin())
+	p := regexp.MustCompile(`<p>(.*?)</p>`).FindStringSubmatch(body)
+	require.Len(t, p, 2, "rendered paragraph not found:\n%s", body)
+	assert.NotContains(t, p[1], digest, "hostile text carrying the raw digest-placeholder token got the real shape digest spliced into it")
 }
 
 // viaCallNames are the via entry points whose arguments must be named method
@@ -323,7 +393,7 @@ var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "Subscribe": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnInput": true, "OnChange": true,
 	"OnClickArg": true, "PostForm": true, "Mount": true,
-	"Param": true, "RequireSession": true, "OnUpload": true,
+	"Param": true, "RequireSession": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
@@ -488,7 +558,7 @@ func newTodoList() *todoBox {
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(todoList{box: newTodoList()})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `@post('/_via/a/1?a=2')`, "the bravo row's button must carry its id (2) as the action arg")
+	assert.Contains(t, body, `@post('/_via/a/0/1?a=2&v=`, "the bravo row's button must carry its id (2) as the action arg")
 }
 
 // The handler must receive the carried value as a typed parameter and act on it:
@@ -496,7 +566,8 @@ func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(todoList{box: newTodoList()}))
-	resp, body := do(t, srv, http.MethodPost, "/_via/a/1?a=2", "{}")
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the row whose value was sent must be deleted")
 	assert.Contains(t, body, "alpha")
@@ -509,7 +580,11 @@ func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(todoList{box: newTodoList()}))
-	resp, body := do(t, srv, http.MethodPost, "/_via/a/0?a=2", "{}") // slot 0 (alpha), but arg=2 (bravo)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
+	// value (2) while keeping alpha's slot and shape digest.
+	url := strings.Replace(actionURL(t, page, 0, 0), "a=1", "a=2", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}") // slot 0 (alpha), but arg=2 (bravo)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
 	assert.Contains(t, body, "alpha")
@@ -527,8 +602,9 @@ func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	t.Parallel()
 	board := todoBoard{List: todoList{box: newTodoList()}}
 	srv := serve(t, via.Register(board))
+	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, "/_via/a/0/1?a=2", "{}") // island 0, bravo's slot, arg=2
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 1), "{}") // island 1, bravo's slot, arg=2
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the island row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
@@ -562,8 +638,8 @@ func TestActionArg_changeAndSubmitVariantsCarryTheValue(t *testing.T) {
 	assert.Contains(t, page, `data-on:submit`, "OnSubmitArg must bind the submit event")
 	assert.Contains(t, page, `?a=%22colors%22`, "the change binding must carry its arg")
 
-	_, body := do(t, srv, http.MethodPost, "/_via/a/0?a=%22colors%22", "{}")
+	_, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
 	assert.Contains(t, body, "pick:colors", "OnChangeArg's handler must receive the typed value")
-	_, body = do(t, srv, http.MethodPost, "/_via/a/1?a=%22checkout%22", "{}")
+	_, body = do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
 	assert.Contains(t, body, "submit:checkout", "OnSubmitArg's handler must receive the typed value")
 }
