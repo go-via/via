@@ -210,11 +210,57 @@ func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 		app := vt.Serve(t, via.Register(panicLive{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Tab(conn.TabID()).Fire()
+		status, _ := app.Action(0).Live(conn).Fire()
 		assert.Equal(t, http.StatusInternalServerError, status, "a live action panic must answer 500")
 
-		status2, _ := app.Action(1).Tab(conn.TabID()).Fire()
+		status2, _ := app.Action(1).Live(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status2, "the connection must survive the panic and keep dispatching")
+	})
+}
+
+// branchy's second button (action 1) only exists in the View after Reveal
+// fires and its push renders it — the connect-time render and the initial
+// stateless GET both show only Reveal.
+type branchy struct{ shown via.State[bool] }
+
+func (b *branchy) OnConnect(ctx *via.Ctx) error { return nil }
+func (b *branchy) Reveal(ctx *via.Ctx)          { b.shown.Set(true) }
+func (b *branchy) Extra(ctx *via.Ctx)           {}
+func (b *branchy) View() h.H {
+	kids := []h.H{h.Button(via.OnClick(b.Reveal))}
+	if b.shown.Get() {
+		kids = append(kids, h.Button(via.OnClick(b.Extra)))
+	}
+	return h.Div(kids...)
+}
+
+// TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL is C2: a
+// connection's action table can change shape mid-connection (a push adds a
+// button), and the URL for the new action only ever appears in what THIS
+// connection pushed — never in the stateless page vt cached before Connect.
+// Sourcing it from Conn's own pushed markup (vt.Action.Live) finds it and
+// dispatches successfully; sourcing it from the stale page (plain
+// vt.Action) can't find action 1 at all, because the page vt fetched never
+// had it.
+func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(branchy{}))
+		conn := app.Connect()
+
+		status, _ := app.Action(0).Live(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status, "Reveal must run and push the new button")
+
+		status, _ = app.Action(1).Live(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status,
+			"Extra's URL only exists in what this connection pushed — vt.Action.Live must read it from there")
+
+		// A stateless GET is a fresh, unrelated instance (shown resets to
+		// false) — it can never carry this connection's action 1, proving
+		// plain vt.Action's stateless-page lookup could not have found it
+		// either; only Conn's own pushed markup has it.
+		page := fetchPage(t, app, "/")
+		assert.NotContains(t, page, "/_via/a/0/1",
+			"a fresh stateless render never reflects the live connection's Reveal")
 	})
 }
 

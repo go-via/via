@@ -62,7 +62,7 @@ func TestState_rendersEscapedValueOnALiveIsland(t *testing.T) {
 	app := vt.Serve(t, via.Register(stateEcho{}))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Tab(conn.TabID()).Fire()
+	status, _ := app.Action(0).Live(conn).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the render ships over the SSE")
 
 	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;") // the escaped value reaches the client
@@ -160,7 +160,7 @@ func TestList_removeReachesTheBrowser(t *testing.T) {
 	defer c.Close()
 	// A live island's action answers 204: the re-render travels on the
 	// connection as a patch frame, not in the action's own response body.
-	status, _ = app.Action(0).Tab(c.TabID()).Fire()
+	status, _ = app.Action(0).Live(c).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 	patch := c.Await("count-1")
 	assert.NotContains(t, patch, "row-drop", "the dropped row must be gone from the pushed patch")
