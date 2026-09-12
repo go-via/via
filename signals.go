@@ -110,7 +110,10 @@ func (s *Signal[T]) Set(v T) {
 func (s *Signal[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
-	if s.slot == "" {
+	// Re-mint when the scope moved: via.Embed copies the child by value, so a
+	// signal the parent's View already bound arrives in the island carrying an
+	// unprefixed root slot, which would collide in the page's one signal store.
+	if s.slot == "" || (s.bound != nil && !s.bound.slotInScope(s.slot)) {
 		if s.bound != nil {
 			s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 		} else {

@@ -17,11 +17,13 @@ import (
 	_ "embed"
 	"errors"
 	"io"
+	"log"
 	"maps"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"unsafe"
 
 	"crypto/sha256"
@@ -62,8 +64,8 @@ type ptrViewer[T any] = interface {
 	viewer
 }
 
-// Ctx is the per-request binder. It assigns positional slot/action ids during a
-// render pass, hydrates signals from the request, and records the per-slot
+// Ctx is the per-request binder. It names signal slots by field offset and
+// actions by handler identity during a render pass, hydrates signals from the request, and records the per-slot
 // initial values for the page-level data-signals declaration. It implements
 // hcore.Binder.
 type Ctx struct {
@@ -175,9 +177,22 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 		if off := uintptr(field) - uintptr(base); off < c.islandV.size {
 			return c.slotScope("f" + strconv.FormatUint(uint64(off), 10))
 		}
+		// The unit HAS a composition and this signal is not in it. The usual
+		// cause is a value-receiver View: it binds a stack copy, so every
+		// signal on it offsets from the wrong base and silently drops back to
+		// render-order slots — losing exactly the conditional-render safety
+		// the offsets exist for. Say so once.
+		valueReceiverWarning.Do(func() {
+			log.Print("via: a rendered Signal is not addressable inside its composition, so it falls back " +
+				"to a render-order slot that a conditional render can hand to a different signal — " +
+				"give View a POINTER receiver, and hold child compositions as plain struct fields " +
+				"(not through a pointer or slice)")
+		})
 	}
 	return c.signalName()
 }
+
+var valueReceiverWarning sync.Once
 
 // signalName allocates the next first-use render-order signal name
 // ("s0","s1",…) — the fallback for a signal with no field offset.
@@ -190,11 +205,39 @@ func (c *Ctx) signalName() string {
 // slotScope prefixes a slot with the island index: an embedded island binds in
 // its own Ctx, so two islands would otherwise mint the same name and collide in
 // the page's one global Datastar store.
-func (c *Ctx) slotScope(name string) string {
+func (c *Ctx) slotScope(name string) string { return c.scopePrefix() + name }
+
+// scopePrefix is the island prefix every slot this Ctx mints carries.
+func (c *Ctx) scopePrefix() string {
 	if c.isIsland {
-		return "i" + strconv.Itoa(c.islandIdx) + "_" + name
+		return "i" + strconv.Itoa(c.islandIdx) + "_"
 	}
-	return name
+	return ""
+}
+
+// slotInScope reports whether an already-minted slot belongs to this Ctx. A
+// Signal caches its slot, and via.Embed takes the child BY VALUE: a signal the
+// PARENT's own View already bound arrives in the island still carrying its
+// unprefixed root slot, which would collide in the page's one signal store.
+// Re-minting is the fix; this is how bind notices it has to.
+func (c *Ctx) slotInScope(slot string) bool {
+	if p := c.scopePrefix(); p != "" {
+		return strings.HasPrefix(slot, p)
+	}
+	return !islandScoped(slot)
+}
+
+// islandScoped reports whether slot carries an "i<idx>_" island prefix. A root
+// slot ("f40", "s2") never can, so the shapes cannot be confused.
+func islandScoped(slot string) bool {
+	if len(slot) < 3 || slot[0] != 'i' {
+		return false
+	}
+	i := 1
+	for i < len(slot) && slot[i] >= '0' && slot[i] <= '9' {
+		i++
+	}
+	return i > 1 && i < len(slot) && slot[i] == '_'
 }
 
 // slotSet collects every slot this render declared, page-wide (the unit's own
@@ -242,8 +285,9 @@ func (c *Ctx) signalInit(slot string) (any, bool) {
 // plus the Go name it was derived from (surfaced in a 410 so a handler that
 // vanished between renders reads as a name, not a bare id).
 type action struct {
-	fn   func(*Ctx)
-	name string
+	fn     func(*Ctx)
+	name   string
+	handle actionHandle // runtime identity, compared to catch an id collision
 }
 
 // actionSlot registers run under the content-addressed id of ident — the
@@ -253,26 +297,93 @@ type action struct {
 // via's own On/OnArg/PostForm are its only callers, so it stays a plain Ctx
 // method.
 //
-// The id is the func's fully-qualified Go name hashed, not its code pointer:
-// the name survives a rebuild, so a deploy does not invalidate every action
-// URL an open tab is holding. Two bindings of the same handler collapse onto
-// one entry, which is what they mean — identity is the handler (plus ?a= for
-// a value-carrying one), never the render position.
+// The id is the func's fully-qualified Go name plus its receiver's byte offset
+// within the unit's composition, hashed — not its code pointer: the name
+// survives a rebuild, so a deploy does not invalidate every action URL an open
+// tab is holding, while the offset keeps two instances of the same type
+// (struct{ A, B Counter }) from minting one id for A.Inc and B.Inc. Two
+// bindings of the same handler on the same receiver collapse onto one entry,
+// which is what they mean — identity is the handler (plus ?a= for a
+// value-carrying one), never the render position.
+//
+// A handler whose receiver is not addressable inside the composition (a
+// closure, a child reached through a pointer or slice field, a value-receiver
+// method) has no offset and falls back to the name alone. Two such handlers
+// that hash alike would silently last-wins misroute, so that case panics here
+// instead: the caller must give the children separate via.Embed islands.
 func (c *Ctx) actionSlot(ident any, run func(*Ctx)) string {
-	id, name := actionID(ident)
-	c.actions[id] = action{fn: run, name: name}
+	id, name, ah := c.actionID(ident)
+	if prev, dup := c.actions[id]; dup && prev.handle != ah {
+		panic("via: two different actions share the action id " + id + ": " + prev.name +
+			" and " + name + " — their receivers are not addressable inside this unit " +
+			"(a closure, or a child held through a pointer/slice field), so via cannot tell " +
+			"them apart; give each child its own via.Embed island")
+	}
+	c.actions[id] = action{fn: run, name: name, handle: ah}
 	return id
 }
 
+// actionHandle is a handler's runtime identity within ONE render: its code
+// pointer plus the word that distinguishes two bindings of the same code —
+// the bound receiver for a method value, the func value itself otherwise.
+// Never hashed into the id (both halves move every request); only compared,
+// to turn a would-be silent last-wins overwrite into a panic.
+type actionHandle struct {
+	code uintptr
+	self unsafe.Pointer
+}
+
+// eface is the runtime layout of a non-empty-method interface value. For a
+// func stored in an any, data is the *funcval.
+type eface struct{ typ, data unsafe.Pointer }
+
+// funcSelf returns the func value's closure pointer (the *funcval).
+//
+// A funcval is a code pointer followed by the captured words, and the compiler
+// emits a method-value wrapper precisely because there is a receiver to
+// capture — it heap-allocates that closure even for a zero-sized receiver, so
+// the second word is in bounds for a "-fm" func and ONLY for one. A plain func
+// or a capture-free closure is a one-word static symbol; reading past it would
+// be out of bounds, so those are identified by the funcval pointer itself,
+// which is never dereferenced.
+func funcSelf(fn any) unsafe.Pointer { return (*eface)(unsafe.Pointer(&fn)).data }
+
+// methodRecv reads the receiver a method-value closure captured. Valid only
+// for a "-fm" func value — see funcSelf.
+func methodRecv(self unsafe.Pointer) unsafe.Pointer {
+	if self == nil {
+		return nil
+	}
+	return *(*unsafe.Pointer)(unsafe.Add(self, unsafe.Sizeof(uintptr(0))))
+}
+
 // actionID content-addresses a handler by its fully-qualified Go name
-// ("main.(*Poll).Vote-fm").
-func actionID(fn any) (id, name string) {
+// ("main.(*Poll).Vote-fm") and, when the receiver lies inside this unit's
+// composition, that receiver's byte offset — the same trick signalSlot uses,
+// and for the same reason: the Go name alone drops the receiver, so two
+// instances of one type would collapse onto a single action.
+func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	name = "unknown"
-	if f := runtime.FuncForPC(reflect.ValueOf(fn).Pointer()); f != nil {
+	pc := reflect.ValueOf(fn).Pointer()
+	if f := runtime.FuncForPC(pc); f != nil {
 		name = f.Name()
 	}
-	sum := sha256.Sum256([]byte(name))
-	return base64.RawURLEncoding.EncodeToString(sum[:])[:8], name
+	self := funcSelf(fn)
+	ah = actionHandle{code: pc, self: self}
+	key := name
+	if strings.HasSuffix(name, "-fm") {
+		recv := methodRecv(self)
+		ah.self = recv // two takes of the same method value are two funcvals; the receiver is the identity
+		if base := c.islandV.base; base != nil && recv != nil {
+			// Unsigned, so a receiver below the base wraps past size and fails
+			// the bound check along with one above it.
+			if off := uintptr(recv) - uintptr(base); off < c.islandV.size {
+				key = name + "@" + strconv.FormatUint(uint64(off), 10)
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(sum[:])[:8], name, ah
 }
 
 // hydrator records slot's update function. A live unit keeps the table from its
@@ -500,8 +611,8 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // signals during the render; pass nil for no hydration (e.g. the post-action
 // response render, which must reflect mutated server state, not request echoes).
 // It renders under an explicit action base path — the router mounts a page
-// under /path, so its actions must post to /path/_via/a/{n}, not the root
-// /_via/a/{n}; base is "" for the single-page Register. declareSignals
+// under /path, so its actions must post to /path/_via/a/{island}/{id}, not the
+// root /_via/a/{island}/{id}; base is "" for the single-page Register. declareSignals
 // controls the page-level data-signals attribute: the GET first paint
 // declares the signals so the client store is seeded, but a LIVE SSE push
 // omits it — re-declaring on every push would re-merge (clobber) a client
@@ -777,6 +888,24 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		sess:        sess,
 	}
 
+	// runLiveStream owns the disposer sweep, but it is not running yet: an
+	// OnLive fn (or anything else below) that panics before it takes over
+	// would strand every acquire already made — a room joined with no
+	// matching part, for the life of the process. Arm the sweep here and hand
+	// it over at the call. It is deferred AFTER the recover above, so it runs
+	// first: everything is released before the panic is answered.
+	streaming := false
+	defer func() {
+		if streaming {
+			return
+		}
+		for _, u := range units {
+			for _, d := range u.disposers {
+				runPulseItem(d)
+			}
+		}
+	}()
+
 	for _, u := range units {
 		connectUnit(u, stream, base, lc)
 		for _, fn := range u.onLive {
@@ -813,5 +942,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		u.sessW = nil
 	}
 
+	streaming = true
 	runLiveStream(streamCtx, units, pulse, keepalive, sseHeartbeat)
 }

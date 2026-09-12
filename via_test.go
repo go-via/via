@@ -332,7 +332,7 @@ func (c *formComp) View() h.H {
 // On("submit", ...) wires a form submit to a POST action with Datastar's colon event
 // syntax. Datastar auto-prevents a form's default submit, so no modifier is
 // needed.
-func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
+func TestOn_submitWiresAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, 0, 0)+`'`)
@@ -685,7 +685,7 @@ func (a *changePicker) View() h.H {
 
 // On("change", ...) must render its event binding and route the commit back into the
 // handler. Fails if the change event stops firing or stops reaching Pick.
-func TestOnChange_firesHandlerOnCommit(t *testing.T) {
+func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(changePicker{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -826,4 +826,120 @@ func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testi
 	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
 	assert.NotContains(t, body, ").Inc", "but never the Go method names of the render")
 	assert.Contains(t, buf.String(), ").Inc", "the bound handlers go to the server log instead")
+}
+
+// --- action id identity (two instances of one type) ---
+
+type idCounter struct {
+	N via.Signal[int]
+}
+
+func (c *idCounter) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
+
+func (c *idCounter) View() h.H {
+	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+}
+
+type idPair struct{ A, B idCounter }
+
+func (p *idPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+
+// idTwins holds two instances of one type as PLAIN fields (no Embed), so both
+// bind into the same action table. runtime.FuncForPC drops the receiver, so
+// without the offset in the id both buttons would render the SAME action URL
+// and A's click would run B's handler.
+type idTwins struct{ A, B idCounter }
+
+func (p *idTwins) View() h.H { return h.Div(p.A.View(), p.B.View()) }
+
+var actionURLRe = regexp.MustCompile(`@post\('([^']+)'`)
+
+func actionURLs(t *testing.T, h http.Handler) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out []string
+	for _, m := range actionURLRe.FindAllStringSubmatch(rec.Body.String(), -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+func TestActionID_twoInstancesOfOneTypeGetDistinctIDs(t *testing.T) {
+	t.Parallel()
+	urls := actionURLs(t, via.Register(idTwins{}))
+	require.Len(t, urls, 2)
+	require.NotEqual(t, urls[0], urls[1],
+		"two instances of one type must not share an action id — A's click would run B")
+}
+
+func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
+	t.Parallel()
+	urls := actionURLs(t, via.Register(idPair{}))
+	require.Len(t, urls, 2)
+	require.NotEqual(t, urls[0], urls[1])
+}
+
+// The id must address the receiver, not the render position: clicking the
+// SECOND twin's button must increment the second counter, not the first.
+func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
+	t.Parallel()
+	app := via.Register(idTwins{})
+	urls := actionURLs(t, app)
+	require.Len(t, urls, 2)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, urls[1], strings.NewReader(`{}`))
+	req.Header.Set("Datastar-Request", "true")
+	app.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	// Two signals on the page; the second twin's is the one that moved.
+	slots := regexp.MustCompile(`data-text="\$([a-z0-9_]+)"`).FindAllStringSubmatch(rec.Body.String(), -1)
+	require.Len(t, slots, 2)
+	require.Contains(t, rec.Body.String(), `"`+slots[1][1]+`":1`, "body: %s", rec.Body.String())
+}
+
+type idSameMethodTwice struct{ N via.Signal[int] }
+
+func (c *idSameMethodTwice) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
+
+func (c *idSameMethodTwice) View() h.H {
+	return h.Div(
+		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Inc), h.Str("also +")),
+	)
+}
+
+// The flip side of the guard: the SAME method on the SAME receiver, bound
+// twice, is one action and must still collapse onto one id.
+func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
+	t.Parallel()
+	urls := actionURLs(t, via.Register(idSameMethodTwice{}))
+	require.Len(t, urls, 2)
+	require.Equal(t, urls[0], urls[1])
+}
+
+type idClosurePair struct{ hits [2]int }
+
+func (p *idClosurePair) View() h.H {
+	var kids []h.H
+	for i := range p.hits {
+		kids = append(kids, h.Button(via.On("click", func(ctx *via.Ctx) { p.hits[i]++ })))
+	}
+	return h.Div(kids...)
+}
+
+// Two distinct closures share a Go name ("…View.func1"), so via cannot tell
+// them apart by identity. That must be loud, never a silent last-wins.
+func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
+	t.Parallel()
+	app := via.Register(idClosurePair{})
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, logs.String(), "share the action id")
 }

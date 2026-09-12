@@ -66,3 +66,45 @@ func TestURLPolicy_coversEveryTypedAttribute(t *testing.T) {
 	assert.Contains(t, render(t, h.Img(h.Src("/ok.png"))), `src="/ok.png"`)
 	assert.Contains(t, render(t, h.Form(h.Action("/ok"))), `action="/ok"`)
 }
+
+// RawAttr is the escape hatch for any attribute name, and a caller can spell
+// the same URL-bearing attributes the typed constructors cover — formaction
+// being the sharpest, since it hijacks a submit button inside an otherwise
+// safe form. Every one of them must go through the same SafeURL gate as
+// Href/Src/Action, or RawAttr is a bypass of the typed policy rather than an
+// equally-policed alternative to it. Case is attacked too, since HTML
+// attribute names are case-insensitive.
+func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
+	t.Parallel()
+	// xlink:href is deliberately excluded: RawAttr's name allowlist already
+	// rejects any colon outside a data-* prefix (see
+	// TestNonDataNamesStillRejectPluginPunctuation), so it is unreachable via
+	// RawAttr regardless of the URL gate — nothing to wire here.
+	for _, name := range []string{
+		"formaction", "FormAction", "action", "href", "src",
+		"poster", "data", "cite", "background", "ping", "manifest",
+	} {
+		got := render(t, h.El("a", h.RawAttr(name, "javascript:alert(1)")))
+		assert.Containsf(t, got, `="#"`, "h.RawAttr(%q, javascript:...) must neutralize to \"#\", got %s", name, got)
+	}
+	// srcset carries a list, not a bare scheme, but a scheme-only payload must
+	// still be caught.
+	assert.Contains(t, render(t, h.El("img", h.RawAttr("srcset", "javascript:alert(1)"))), `="#"`)
+
+	// A legitimate relative URL on every gated name must render untouched.
+	assert.Contains(t, render(t, h.El("a", h.RawAttr("formaction", "/ok"))), `formaction="/ok"`)
+	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`)
+}
+
+// srcdoc is single-escaped like any other attribute value, but a browser
+// entity-decodes the attribute and then parses the decoded string as a
+// document: an escaped "<script>" round-trips back to a live <script> tag,
+// same-origin. There is no safe escaping strategy for it through RawAttr, so
+// it must be refused outright rather than rendered.
+func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"srcdoc", "SRCDOC", "SrcDoc"} {
+		assert.Panicsf(t, func() { h.RawAttr(name, "<script>alert(1)</script>") },
+			"RawAttr(%q) must panic — srcdoc always allows same-origin script", name)
+	}
+}
