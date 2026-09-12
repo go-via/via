@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -275,8 +274,10 @@ func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 // cookie must not each mint their own session — that was the reID leak the
 // automatic rotation caused (N concurrent Puts -> N live ids aliasing one
 // *sessionData, none ever swept). With rotation gone from the write path,
-// concurrent Bumps on one cookie must land on the one id the SignIn-less
-// jar started with and sum into a single counter.
+// concurrent Bumps on one cookie must all land on the one id the
+// SignIn-less jar started with. (What they do to the counter once there is
+// a lost-update race the Session API never promised to prevent — Get/Put
+// isn't compare-and-swap — so this test only pins the id, not the sum.)
 func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Register(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -300,8 +301,6 @@ func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 
 	assert.Equal(t, id, cookieValue(t, c, srv.URL, "via_session"),
 		"concurrent writes on one cookie must not rotate/fork the session id")
-	_, body := fireAction(t, c, srv.URL, 1) // Show
-	assert.Contains(t, body, fmt.Sprintf("n=%d", n+1), "every concurrent Bump must have landed on the same session data")
 }
 
 // Enabling sessions issues the browser an HttpOnly cookie so the session id

@@ -252,7 +252,11 @@ func multipartTempFiles(t *testing.T) []string {
 // them upload a file big enough to spill past maxActionBody in the first
 // place. This one deliberately does.
 func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
-	t.Parallel()
+	// Not t.Parallel(): os.TempDir() is process-wide, and mime/multipart's
+	// spill files all share the "multipart-*" prefix regardless of which
+	// test created them. Redirect TMPDIR to a private dir instead of
+	// sharing the real one with whatever else is mid-upload.
+	t.Setenv("TMPDIR", t.TempDir())
 	r := via.NewRouter()
 	r.Mount("/p", avatarPage{cap: &capture{}})
 	srv := serve(t, r)
