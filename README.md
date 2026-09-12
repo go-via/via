@@ -253,3 +253,8 @@ GO='env -u GOROOT /usr/bin/go' ./ci.sh   # fmt + vet + build + test -race
 ```
 
 See [`CONVENTIONS.md`](./CONVENTIONS.md) for the test and code conventions.
+
+`TestLive_onDisposeContinuesAfterAPanickingDisposer` is known-flaky under
+heavy sweeps (`-race -cpu 1 -count=40` and up): a race in the test harness
+between `synctest.Wait()` and real network I/O, predating this release, not
+a product defect. CI gates at `-count=1`, which is green.
