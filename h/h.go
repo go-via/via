@@ -13,7 +13,12 @@
 // vocabulary — elements, attributes, and Str.
 package h
 
-import "github.com/go-via/via/internal/hcore"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/go-via/via/internal/hcore"
+)
 
 // H is the single sealed tree type. The render method is unexported, so only
 // types defined in this module can satisfy H — the tree is closed.
@@ -33,11 +38,31 @@ func Str[T Stringish](v T) H { return hcore.Str(v) }
 
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
 // must match [A-Za-z][A-Za-z0-9-]*, with ':', '_' and '.' additionally allowed
-// in data-* names for Datastar's plugin/modifier syntax. Inline DOM event
-// handlers (onclick, onerror, ... — anything on* that is not data-on*) are
-// rejected. An invalid name panics, since a name is a programming-time
-// construction and an injectable one defeats the safe-HTML guarantee.
-func RawAttr(name, val string) Attr { return hcore.RawAttr(name, val) }
+// in data-* names for Datastar's plugin/modifier syntax. A literal on* name
+// (onclick, onerror, ... anything that is not data-on*) is rejected. An
+// invalid name panics, since a name is a programming-time construction and an
+// injectable one defeats the safe-HTML guarantee.
+//
+// This only stops a *literal* on* attribute name; it is not a general inline
+// event-handler ban. h.Data("attr:onclick", "$x") legitimately re-creates
+// onclick client-side through Datastar's attr plugin — that is Datastar's own
+// vocabulary, not an injection, and this gate does not and cannot police it.
+//
+// A URL-bearing name (formaction, action, href, src, xlink:href, poster, the
+// <object> data attribute, cite, background, ping, manifest, srcset) is run
+// through the same policy as Href/Src/Action, so h.RawAttr("formaction", …)
+// cannot smuggle a javascript: scheme past the typed constructors. srcdoc is
+// rejected outright: a browser entity-decodes it and parses the result as a
+// same-origin document, so single-escaping it is not a safe render.
+func RawAttr(name, val string) Attr {
+	if strings.EqualFold(name, "srcdoc") {
+		panic(fmt.Sprintf("h: %q is not permitted via RawAttr — an inline document can carry same-origin script", name))
+	}
+	if isURLBearingAttr(name) {
+		val = safeURL(val, name)
+	}
+	return hcore.RawAttr(name, val)
+}
 
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. It
 // is the escape hatch to Datastar's full vocabulary: the suffix may carry the

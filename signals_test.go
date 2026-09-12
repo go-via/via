@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -340,4 +341,25 @@ func TestSignal_behindAPointerFieldFallsBackToARenderOrderSlot(t *testing.T) {
 	_, body := vt.Serve(t, via.Register(boxed{sig: &via.Signal[string]{}})).Get("/")
 
 	assert.Equal(t, []string{"s0"}, bindSlots(body), "a pointer-held signal keeps the render-order slot")
+}
+
+// --- slot scope and offset fallback ---
+
+type valueReceiverView struct{ S via.Signal[int] }
+
+// A value receiver binds a STACK COPY: every signal offsets from the wrong
+// base and silently drops back to a render-order slot, losing the
+// conditional-render safety the offsets exist for.
+func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
+
+func TestSignal_valueReceiverViewWarnsOnSlotFallback(t *testing.T) {
+	via.ResetSlotFallbackWarningForTest()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	app := vt.Serve(t, via.Register(valueReceiverView{}))
+	_, page := app.Get("/")
+	assert.Contains(t, page, `data-text="$s0"`, "the fallback slot is render-order, not an offset")
+	assert.Contains(t, logs.String(), "not addressable inside its composition")
 }

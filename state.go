@@ -27,6 +27,15 @@ func (s *State[T]) Set(v T) { s.val = v }
 // marks the unit it renders in LIVE, so server-held state is enough on its own
 // to earn a connection. A bare render with no unit behind it (no binder) just
 // writes the text.
+//
+// Liveness must be render-invariant. The verdict is taken from the render that
+// serves the page, and only a live page bootstraps an SSE stream — so a
+// Display reached through a branch that is CLOSED at GET wires the page
+// non-live, and an action that later opens the branch leaves the tab demanding
+// a connection it never opened. via fails that action loudly rather than
+// letting every action after it 410. Render the State unconditionally (use
+// via.When INSIDE the row, not around the Display), or register a Tick/Listen
+// in OnInit so the page is live from the first paint.
 func (s *State[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		if ctx := ctxOf(r.Binder()); ctx != nil {

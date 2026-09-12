@@ -75,3 +75,37 @@ func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	r.Render(hcore.El("span", attr, hcore.Str("body")))
 	assert.Equal(t, `<span data-x="1">body</span>`, r.String())
 }
+
+// El writes tag straight into "<" + tag + ">" with no escaping of its own — an
+// unvalidated tag string is as much a breakout vector as an unvalidated
+// attribute name is, and "div onclick=alert(1)" grafts a live inline handler
+// onto the opening tag. It must be held to the same allowlist RawAttr uses.
+func TestEl_rejectsTagNamesThatCanBreakOutOfTheOpeningTag(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{
+		"div onclick=alert(1)",
+		"div ",
+		"",
+		"1div",
+		"naïve", // non-ASCII outside the allowlist
+	} {
+		assert.Panicsf(t, func() { hcore.El(tag) },
+			"El(%q) must panic — an unvalidated tag name is an injection vector", tag)
+	}
+}
+
+// The allowlist must still admit ordinary tags: lowercase, uppercase (custom
+// elements are conventionally lower, but the class is [A-Za-z] not [a-z]),
+// and a hyphenated custom-element name.
+func TestEl_acceptsOrdinaryTagNames(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{"div", "DIV", "my-widget", "a"} {
+		var got string
+		assert.NotPanicsf(t, func() {
+			r := hcore.NewRenderer(&stubBinder{})
+			r.Render(hcore.El(tag))
+			got = r.String()
+		}, "El(%q) must be accepted", tag)
+		assert.Equal(t, "<"+tag+"></"+tag+">", got)
+	}
+}

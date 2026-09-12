@@ -174,8 +174,36 @@ func (d dynAttr) isAttr()            {}
 // (On) that must claim an action id from the Binder at render time.
 func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 
-// El builds a generic element with the given tag and children.
-func El(tag string, kids ...H) H { return element{tag: tag, kids: kids} }
+// El builds a generic element with the given tag and children. tag must match
+// [A-Za-z][A-Za-z0-9-]* — an invalid tag panics, since it is a
+// programming-time construction and an unvalidated one (e.g. "div
+// onclick=alert(1)") would graft a live attribute into the opening tag.
+func El(tag string, kids ...H) H {
+	if !validTagName(tag) {
+		panic(fmt.Sprintf("h: invalid tag name %q (must match [A-Za-z][A-Za-z0-9-]*)", tag))
+	}
+	return element{tag: tag, kids: kids}
+}
+
+// validTagName holds tag to the same strict ASCII allowlist as a non-data
+// attribute name: a leading letter, then letters, digits or hyphens. No
+// spaces, so a tag string cannot smuggle a second attribute or an inline
+// event handler into the opening tag.
+func validTagName(tag string) bool {
+	if tag == "" {
+		return false
+	}
+	for i := range len(tag) {
+		c := tag[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // Stringish constrains the value types Str accepts, avoiding any.
 type Stringish interface {

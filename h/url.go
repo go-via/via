@@ -2,9 +2,33 @@ package h
 
 import (
 	"log"
+	"strings"
 
 	"github.com/go-via/via/internal/hcore"
 )
+
+// urlBearingAttrs are the RawAttr names that carry a URL and so must go
+// through safeURL just like Href/Src/Action do — otherwise
+// h.RawAttr("formaction", "javascript:...") bypasses the typed gate entirely.
+// Keys are lower-cased; RawAttr matches case-insensitively.
+var urlBearingAttrs = map[string]bool{
+	"formaction": true,
+	"action":     true,
+	"href":       true,
+	"src":        true,
+	"xlink:href": true,
+	"poster":     true,
+	"data":       true, // the <object> "data" attribute, not h.Data
+	"cite":       true,
+	"background": true,
+	"ping":       true,
+	"manifest":   true,
+	"srcset":     true,
+}
+
+// isURLBearingAttr reports whether name (case-insensitively) is one of
+// urlBearingAttrs.
+func isURLBearingAttr(name string) bool { return urlBearingAttrs[strings.ToLower(name)] }
 
 // safeURL admits what hcore.SafeURL admits; everything else — javascript:,
 // data:, vbscript:, protocol-relative // and \\ — neutralizes to "#" with a

@@ -1875,3 +1875,122 @@ func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
 	require.Eventually(t, func() bool { return bus.Subs() == 0 }, 2*time.Second, 5*time.Millisecond,
 		"closing the stream must stop the subscription it started")
 }
+
+// --- OnLive acquires must not leak when connect fails ---
+
+type leakRoom struct {
+	held  *atomic.Int32
+	boom  bool
+	beats *topic.Topic[int]
+}
+
+func (r *leakRoom) join() {
+	r.held.Add(1)
+	if r.boom {
+		panic("via_test: OnLive exploded")
+	}
+}
+func (r *leakRoom) part()                   { r.held.Add(-1) }
+func (r *leakRoom) got(ctx *via.Ctx, n int) {}
+
+func (r *leakRoom) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(r.beats, r.got) // makes the unit live
+	ctx.OnLive(r.join)
+	ctx.OnDispose(r.part)
+	return nil
+}
+
+func (r *leakRoom) View() h.H { return h.Div(h.Str("room")) }
+
+type leakPage struct{ A, B leakRoom }
+
+func (p *leakPage) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+
+// The second unit's OnLive panics after the first has already acquired. The
+// connect answers 500 — and the first unit's OnDispose must still run, or the
+// acquire is stranded for the life of the process.
+func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
+	t.Parallel()
+	var held atomic.Int32
+	beats := topic.New[int]()
+	app := via.Register(leakPage{
+		A: leakRoom{held: &held, beats: beats},
+		B: leakRoom{held: &held, beats: beats, boom: true},
+	})
+	resp, _ := do(t, serve(t, app), http.MethodPost, "/_via/sse", "")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Zero(t, held.Load(), "an acquire made before the panic was never released")
+	assert.Zero(t, beats.Subs(), "the Listen subscription was never stopped")
+}
+
+// firstElementsFrame drains lines until the first datastar-patch-elements
+// frame and returns its joined element lines.
+func firstElementsFrame(t *testing.T, lines <-chan string) string {
+	t.Helper()
+	var frame []string
+	in := false
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for an element patch")
+		case line, ok := <-lines:
+			if !ok {
+				t.Fatal("stream closed before an element patch")
+			}
+			switch {
+			case strings.HasPrefix(line, "event:"):
+				in = strings.Contains(line, "datastar-patch-elements")
+			case line == "":
+				if in && len(frame) > 0 {
+					return strings.Join(frame, "\n")
+				}
+				in = false
+			case in:
+				frame = append(frame, line)
+			}
+		}
+	}
+}
+
+// --- an Embed copy must not inherit the parent's root-scoped slot ---
+
+type staleChild struct{ S via.Signal[string] }
+
+func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
+
+// The parent binds the child's signal in its OWN View and also Embeds the
+// child. Embed copies the field by value at View-build time, so from the
+// SECOND render on the copy arrives carrying the root-scoped slot the first
+// render minted on the parent's field — which collides with the parent's own
+// in the page's one signal store.
+type stalePage struct {
+	Beat via.State[int]
+	C    staleChild
+}
+
+func (p *stalePage) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.tick)
+	return nil
+}
+
+func (p *stalePage) tick(ctx *via.Ctx) { p.Beat.Set(p.Beat.Get() + 1) }
+
+func (p *stalePage) View() h.H {
+	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Embed(p.C))
+}
+
+func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(stalePage{}))
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+
+	frame := firstElementsFrame(t, lines)
+	binds := regexp.MustCompile(`data-bind="([a-z0-9_]+)"`).FindAllStringSubmatch(frame, -1)
+	require.Len(t, binds, 2, "frame: %s", frame)
+	assert.NotEqual(t, binds[0][1], binds[1][1],
+		"the island copy must re-mint its slot, not inherit the parent's root-scoped one")
+	assert.True(t, strings.HasPrefix(binds[1][1], "i0_"),
+		"island slot must carry its island prefix: %s", binds[1][1])
+}

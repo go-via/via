@@ -386,11 +386,10 @@ func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
-// A non-existent island or action index must fail closed (410) so a stale client
-// re-bootstraps rather than misrouting onto the wrong island. This carries a
-// genuinely valid shape digest (read off the rendered page, like
-// TestLive_unknownActionAnswers410) with only the island or action segment
-// forged.
+// A non-existent island or action id must fail closed (410) so a stale client
+// re-bootstraps rather than misrouting onto the wrong island. Only the island
+// or action segment is forged; the rest of the URL is read off the rendered
+// page (like TestLive_unknownActionAnswers410).
 func TestEmbed_unknownIslandOrActionIsGone(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(board{}))
@@ -593,8 +592,8 @@ func (c *flipChild) View() h.H {
 }
 
 // flipRoot has its own dispatchable action (island 0) and embeds flipChild —
-// the vehicle for proving the root's OWN digest survives a child-only shape
-// change, now that shapeDigest no longer folds a child's shape into it.
+// the vehicle for proving the root's OWN action URL survives a child-only
+// shape change.
 type flipRoot struct {
 	Child flipChild
 	hits  int
@@ -604,10 +603,10 @@ func (r *flipRoot) Act(*via.Ctx) { r.hits++ }
 func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act)), via.Embed(r.Child)) }
 
 // A child's shape changing between a page's GET and a later click on the
-// PARENT's own button must not 410 that click — shapeDigest folding the
-// child's own shape into the parent's was the A6 bug: the parent's digest
-// would only ever refresh on the parent's OWN next push, so a child-only
-// shape drift left the parent's already-rendered URL permanently stale.
+// PARENT's own button must not 410 that click. An action id addresses its
+// handler, so nothing about a sibling's render can invalidate it — the A6 bug
+// (a whole-page shape digest that only refreshed on the parent's own next
+// push) is structurally gone.
 func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	t.Parallel()
 	extra := false

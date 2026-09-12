@@ -35,7 +35,7 @@ const (
 // check, it only changes where the id is read from.
 const tabFormField = "_viatab"
 
-// actionResult is what running a positional action produced. panicked is set
+// actionResult is what running an action produced. panicked is set
 // only on the live path: it happens on the connection's own goroutine, so it
 // must be carried back across the channel to the POST that triggered it
 // rather than answered where it occurred.
@@ -44,7 +44,7 @@ type actionResult struct {
 	panicked  bool
 	badArg    error  // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
 	pushWork  func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
-	gone      string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
+	gone      string // live path only: set when the unit/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
 	forbidden string // live path only: set when the session-bound check (run on the island goroutine — see dispatchLive) rejects the request
 }
 
@@ -436,13 +436,17 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 func (m *mount) rerenderStateless(island int, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
 	if island == 0 {
-		_, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
+		afterCtx, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
+		if len(liveUnits(bind)) == 0 {
+			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
+		}
 		if bytes.Equal(rootBefore, after) {
 			return nil
 		}
 		return after
 	}
 	afterCtx, afterInner := renderIslandBind(u.islandIdx, u.islandV, base)
+	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
 	}
@@ -453,6 +457,30 @@ func (m *mount) rerenderStateless(island int, rootBefore []byte, inst instance, 
 	buf.Write(afterInner)
 	buf.WriteString(`</div>`)
 	return buf.Bytes()
+}
+
+// assertRenderInvariantLiveness fails the action that just turned a unit live
+// which the page was served non-live. Liveness is decided by the discovery
+// render (a Tick/Listen in OnInit, or a State/List in the View), and the page
+// only bootstraps an SSE stream when that verdict is yes. A unit whose View
+// reaches its State through a branch that was CLOSED at GET is served
+// non-live; a stateless action that opens the branch leaves the tab holding a
+// unit that now demands a connection it never opened, and every action after
+// it 410s "no live connection" — a frozen tab with no clue why.
+//
+// It panics (→ 500, logged, the transport's own recover) rather than logging
+// and carrying on: the failure is deterministic for that render path and the
+// alternative is a tab that is already dead but does not say so. Keep the
+// liveness verdict render-invariant — see State.Display.
+func assertRenderInvariantLiveness(nowLive bool) {
+	if !nowLive {
+		return
+	}
+	panic("via: this action turned a unit live that the page was served non-live — " +
+		"the tab has no SSE connection and every action after this one would 410. " +
+		"Liveness must not depend on a branch an action can open: render the State " +
+		"unconditionally, or register a Tick/Listen in OnInit so the page is live from " +
+		"the first paint")
 }
 
 // respond is dispatch's one response policy for every action POST — root,

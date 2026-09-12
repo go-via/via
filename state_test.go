@@ -1,8 +1,14 @@
 package via_test
 
 import (
+	"bytes"
+	"log"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/go-via/via"
@@ -217,4 +223,47 @@ func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, status,
 		"a live action answers 204 — its re-render travels on the stream, not in the response")
 	assert.Contains(t, c.Await("n="), "n=1", "the mutation must reach the browser as a patch frame")
+}
+
+// --- liveness must be render-invariant ---
+
+type lateLive struct {
+	open bool
+	Msg  via.State[string]
+}
+
+func (p *lateLive) Open(ctx *via.Ctx) { p.open = true }
+
+func (p *lateLive) msg() h.H { return p.Msg.Display() }
+
+func (p *lateLive) View() h.H {
+	return h.Div(
+		h.Button(via.On("click", p.Open), h.Str("open")),
+		via.When(p.open, p.msg),
+	)
+}
+
+// The GET renders the closed branch, so the page is served non-live and opens
+// no SSE stream. An action that opens the branch would leave the tab demanding
+// a connection it never made — every later action 410s. That must be loud at
+// the action that caused it, not a silent freeze.
+func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
+	t.Parallel()
+	app := via.Register(lateLive{})
+	rec := httptest.NewRecorder()
+	rec.Body = &bytes.Buffer{}
+	get := httptest.NewRecorder()
+	app.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.NotContains(t, get.Body.String(), "/_via/sse", "page must be served non-live")
+	m := regexp.MustCompile(`@post\('([^']+)'`).FindStringSubmatch(get.Body.String())
+	require.Len(t, m, 2)
+
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	req := httptest.NewRequest(http.MethodPost, m[1], strings.NewReader(`{}`))
+	req.Header.Set("Datastar-Request", "true")
+	app.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, logs.String(), "turned a unit live")
 }

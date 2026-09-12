@@ -77,6 +77,15 @@ hook: `Initer`/`OnInit` is the one lifecycle hook, on a page and on every
 embedded child. The same model spans the spectrum from a fully static page to a
 fully live app.
 
+That verdict is taken from the render that serves the page, and only a live
+page bootstraps the SSE stream — so **liveness has to be render-invariant**. A
+`State.Display` behind a branch that is closed at GET wires the page non-live;
+an action that later opens the branch would leave the tab demanding a
+connection it never opened, and every action after it would 410. via fails that
+action loudly instead. Render the `State` unconditionally (put the `When`
+*inside* the row, not around the `Display`), or register a `Tick`/`Listen` in
+`OnInit` so the page is live from the first paint.
+
 `OnInit` runs on every request that renders the unit — the GET, each action,
 the SSE connect. Register connection-scoped side effects rather than performing
 them: `ctx.OnLive(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
