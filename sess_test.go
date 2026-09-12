@@ -450,9 +450,9 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	assert.False(t, ck.Secure, "a plain-HTTP cookie must not be Secure by default (dev ergonomics)")
 }
 
-// liveSess is a live island that establishes its session in OnConnect — the
-// place a live app must do it, since the SSE connect response is still open
-// there (a live action runs after its 204 and can't set a cookie).
+// liveSess is a live island that establishes its session in OnConnect, so
+// the cookie rides the SSE connect response itself rather than a later
+// action's.
 type liveSess struct{}
 
 func (c *liveSess) OnConnect(ctx *via.Ctx) error { ctx.Session().Put(member{Name: "bob"}); return nil }
