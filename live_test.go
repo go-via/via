@@ -1265,7 +1265,15 @@ func (p *paramInTick) OnConnect(ctx *via.Ctx) error {
 	return nil
 }
 func (p *paramInTick) check(ctx *via.Ctx) {
-	defer func() { p.panics <- recover() }()
+	defer func() {
+		// Non-blocking: the test only ever reads the first result, and Tick
+		// keeps firing every 1ms — a blocking send here wedges the island
+		// goroutine forever once the buffer is full, hanging server Close.
+		select {
+		case p.panics <- recover():
+		default:
+		}
+	}()
 	ctx.Param[int]("id") // this mount declares no {id} segment
 }
 func (p *paramInTick) View() h.H { return h.Div() }
