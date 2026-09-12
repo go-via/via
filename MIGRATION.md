@@ -299,22 +299,39 @@ form:
   none, warning once. Set `WithSessionKey` or `VIA_SESSION_KEY` or sessions will
   not survive a restart.
 
+## Wire break: action URLs
+
+The action endpoint is `/_via/a/{island}/{id}` with an optional `?a=` row
+datum. There is no `?v=` shape digest and no positional `{n}`: `id` is a hash
+of the handler method's own Go name (`main.(*Poll).Vote-fm`), stable across
+renders, instances and rebuilds.
+
+Nothing in your code calls this URL, so there is nothing to port — but a tab
+left open across the upgrade is holding the OLD URL shape. Its first click
+answers `410 Gone` (the old `{n}` segment binds no handler), and the page
+comes back correct on reload. Deploy-time impact is one dead click per stale
+tab, not a permanently broken page.
+
+The upside is the bug this replaces: the digest folded in the action COUNT, so
+on a page backed by a shared store (a poll, a feed, any list with per-row
+actions) another user adding or removing a row changed every other open tab's
+digest and silently 410'd ALL of its buttons, including untouched ones, until
+a reload. Handler-addressed URLs cannot do that.
+
 ## Known rough edges in v0.8
 
 Stated plainly so you can decide whether to wait:
 
 - **`h.Data` and `<data>` collide** — the `data-*` helper owns the name.
-- **A unit whose `View()` shape moves can 410 its own clicks — on stateless
-  pages too, not just live ones.** Every action URL carries a shape digest
-  that the server recomputes on dispatch; if the unit's signal/action/embed
-  layout changes between when the client rendered and when it clicks, the
-  digest no longer matches and the click 410s. Datastar resolves a non-2xx
-  response silently, so on a live page the next push carries the new digest
-  and heals it automatically — a stateless page has no push, so its button
-  stays dead until reload. A live unit's own background tick is the most
-  common way its shape drifts unintentionally; keep a live unit's action
-  layout stable across ticks (change values, not shape) if this matters to
-  you.
+- **A click 410s only when the current render no longer binds its handler.**
+  Actions are addressed by handler identity, so a shifting `View()` shape no
+  longer invalidates unrelated buttons. What does still 410: a branch that
+  stopped rendering that handler at all. The common cause is an `OnInit` that
+  does not restore the session/UI state the `View` branches on, so the
+  dispatch-time render takes a different branch than the client's — the 410
+  body names the handlers the render DID bind, which is the fastest way to
+  see it. Datastar resolves a non-2xx response silently; a live page heals on
+  the next push, a stateless one stays dead until reload.
 - **Per-connection `State` does not survive a native form submit** — it is a
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared

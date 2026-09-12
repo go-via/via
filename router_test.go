@@ -228,7 +228,7 @@ func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 
 	_, page := do(t, srv, http.MethodGet, "/p", "")
 	assert.Contains(t, page, `enctype="multipart/form-data"`, "PostForm must always render a multipart form")
-	assert.Contains(t, page, `action="/p/_via/a/0/0?v=`, "posting to the positional form endpoint")
+	assert.Regexp(t, `action="/p/_via/a/0/[A-Za-z0-9_-]+"`, page, "posting to the form's own action endpoint")
 
 	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "me.png", "PNGBYTES")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "a Redirect in the handler must 303")
@@ -326,7 +326,7 @@ func TestRouter_pathParamReadableInAction(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/e/7", "")
-	assert.Contains(t, page, `@post('/e/7/_via/a/0/0?v=`, "action URL must carry the concrete {id} segment")
+	assert.Regexp(t, `@post\('/e/7/_via/a/0/[A-Za-z0-9_-]+'`, page, "action URL must carry the concrete {id} segment")
 	_, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
 	assert.Contains(t, body, "echoed 7", `the action must read ctx.Param[int]("id") from its own POST path`)
 }
@@ -511,7 +511,7 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	assert.Contains(t, page, `<form method="post" enctype="multipart/form-data" action="/login/_via/a/0/0?v=`,
+	assert.Regexp(t, `<form method="post" enctype="multipart/form-data" action="/login/_via/a/0/[A-Za-z0-9_-]+"`, page,
 		"PostForm must render a native multipart form posting to the form endpoint")
 
 	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "alice")
@@ -543,14 +543,14 @@ func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
-// An out-of-range form index fails closed (410), so a stale client re-bootstraps.
-func TestRouter_postFormOutOfRangeIsGone(t *testing.T) {
+// An unbound form action id fails closed (410), so a stale client re-bootstraps.
+func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
 	r.Mount("/login", loginForm{})
 	srv := serve(t, r)
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	url := swapActionIndex(t, actionURL(t, page, 0, 0), "9")
+	url := swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz")
 
 	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+url, "name", "alice")
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
@@ -611,9 +611,9 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	// Each page renders at its path, with its actions namespaced under it.
 	_, a := do(t, srv, http.MethodGet, "/a", "")
 	assert.Contains(t, a, `<h1>0</h1>`)
-	assert.Contains(t, a, `@post('/a/_via/a/0/1?v=`, "page /a's Inc must post under /a")
+	assert.Contains(t, a, `@post('`+actionURL(t, a, 0, 1)+`'`, "page /a's Inc must post under /a")
 	_, b := do(t, srv, http.MethodGet, "/b", "")
-	assert.Contains(t, b, `@post('/b/_via/a/0/1?v=`, "page /b's Inc must post under /b")
+	assert.Contains(t, b, `@post('`+actionURL(t, b, 0, 1)+`'`, "page /b's Inc must post under /b")
 
 	// Inc on /a; /b must be untouched (independent state + routing).
 	do(t, srv, http.MethodPost, actionURL(t, a, 0, 1), "{}")
@@ -624,7 +624,7 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 }
 
 // Mounting at "/" must namespace to the root (no prefix): the page posts to
-// /_via/a/0/{n}, exactly like a single-page Register.
+// /_via/a/0/{act}, exactly like a single-page Register.
 func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -632,7 +632,7 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	srv := serve(t, r)
 
 	_, body := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, body, `@post('/_via/a/0/1?v=`, "root mount must post to /_via/a/{n} with no prefix")
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body, "root mount must post to /_via/a/{act} with no prefix")
 	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, 0, 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, after, `<h1>1</h1>`)

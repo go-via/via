@@ -8,31 +8,21 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// renderPass allocates flat, page-wide island indices and shape-digest
-// placeholder tokens during one root-level render — shared by pointer across
+// renderPass allocates flat, page-wide island indices during one root-level
+// render — shared by pointer across
 // a whole tree of Embeds so a live descendant's container id (and dispatch
 // address) can never collide with an unrelated one elsewhere on the page. It
 // is created once per renderRootBase call and never forked: an island's own
 // standalone re-render (renderIslandBind) never calls Embed itself (see
 // Embed's godoc on nested composition), so it never needs one of its own.
 type renderPass struct {
-	n    int
-	dTok int // next shape-digest placeholder token, unique within this pass
+	n int
 }
 
 func (p *renderPass) next() int {
 	idx := p.n
 	p.n++
 	return idx
-}
-
-// nextDigestToken mints a placeholder unique within this render pass — every
-// unit's action(s) share their own token, so a later per-unit substitution
-// pass can't confuse one unit's shape digest for another's.
-func (p *renderPass) nextDigestToken() string {
-	tok := p.dTok
-	p.dTok++
-	return "\x00vD" + strconv.Itoa(tok) + "\x00"
 }
 
 // Embed renders a child composition — a plain struct field of the parent,
@@ -177,18 +167,11 @@ func initChild(child *Ctx, v any) {
 }
 
 // renderIslandInner renders the island's View with child as the binder, so the
-// child's actions/signals bind into its own tables, then substitutes child's
-// own shape-digest placeholder (if it wrote any action) into the finished
-// bytes — child.shapeDigest is only knowable once its own render is done.
-// Returns the inner HTML (without the container div), already escaped.
+// child's actions/signals bind into its own tables. Returns the inner HTML (without the container div), already escaped.
 func renderIslandInner(child *Ctx, v viewer) []byte {
 	rr := hcore.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
-	out := rr.Bytes()
-	if child.digestPH != "" {
-		out = bytes.ReplaceAll(out, []byte(child.digestPH), []byte(child.shapeDigest()))
-	}
-	return out
+	return rr.Bytes()
 }
 
 // renderIslandBind re-renders island idx's child (no hydration, so it

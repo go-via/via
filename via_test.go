@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,16 +169,16 @@ func readAll(t *testing.T, resp *http.Response) string {
 
 func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
 
-// actionURL extracts the currently-rendered action URL for {island}/{n} out of
-// html — every action now carries a `?v=` shape digest dispatch recomputes
-// and must match, so a test posts to the URL the page actually shipped
-// instead of a hand-built path that would 410 the instant the shape changed.
+// actionURL extracts the n-th action URL island rendered, in document order,
+// out of html. The wire id is a hash of the handler's func name (and any ?a=
+// row datum rides with it), so a test posts the URL the page actually
+// shipped rather than a hand-built path.
 func actionURL(t *testing.T, html string, island, n int) string {
 	t.Helper()
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/` + strconv.Itoa(n) + `(?:[?&][^'"]*)?)['"]`
-	m := regexp.MustCompile(pat).FindStringSubmatch(html)
-	require.NotEmptyf(t, m, "action %d/%d not found on rendered page:\n%s", island, n, html)
-	return m[1]
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
+	m := regexp.MustCompile(pat).FindAllStringSubmatch(html, -1)
+	require.Greaterf(t, len(m), n, "action %d/%d not found on rendered page:\n%s", island, n, html)
+	return m[n][1]
 }
 
 // The GET page must ship the server-rendered skeleton — the current value baked
@@ -190,10 +191,10 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	assert.True(t, strings.HasPrefix(ct, "text/html"), "page Content-Type = %q, want text/html", ct)
 	for _, want := range []string{
 		`<div id="root"`,
-		`<h1>0</h1>`,                           // value rendered server-side, not a signal
-		`data-on:click="@post('/_via/a/0/0?v=`, // Dec, declared first
-		`data-on:click="@post('/_via/a/0/1?v=`, // Inc, declared second
-		`src="/_via/datastar.js">`,             // module script tag (external, admitted by 'self')
+		`<h1>0</h1>`, // value rendered server-side, not a signal
+		`data-on:click="@post('` + actionURL(t, body, 0, 0) + `'`, // Dec, declared first
+		`data-on:click="@post('` + actionURL(t, body, 0, 1) + `'`, // Inc, declared second
+		`src="/_via/datastar.js">`,                                // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
@@ -234,13 +235,13 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 	assert.Contains(t, body, `<h1>1</h1>`, "Dec did not bring state back to 1")
 }
 
-// An action index with no registered handler must be rejected with 410 Gone, so
+// An action id with no registered handler must be rejected with 410 Gone, so
 // a stale client learns the action is gone rather than silently no-op.
-func TestOutOfRangeAction_isGone(t *testing.T) {
+func TestUnknownAction_isGone(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := swapActionIndex(t, actionURL(t, page, 0, 0), "99")
+	url := swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz")
 
 	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
@@ -334,7 +335,7 @@ func (c *formComp) View() h.H {
 func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-on:submit="@post('/_via/a/0/0?v=`)
+	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, 0, 0)+`'`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
@@ -475,11 +476,13 @@ func isViaCallNamed(call *ast.CallExpr, name string) bool {
 }
 
 // via's headline guarantee is reflection-free wiring: the composition is bound
-// by generics + interface assertions + positional/handle identity, never by
-// reflecting over its fields, method names, or struct tags (which is what the
-// old reflect-based framework did). This locks that — no via source file may
-// import "reflect". (Signal values decode through encoding/json, which reflects
-// internally; that is data decoding, not wiring, and is out of this guard.)
+// by generics + interface assertions + handle identity, never by reflecting
+// over its fields, method names, or struct tags (which is what the old
+// reflect-based framework did). This locks that — only via.go may import
+// reflect, and only to read a handler func value's own code pointer for
+// actionID (a func's identity, not a struct's shape). (Signal values decode
+// through encoding/json, which reflects internally; that is data decoding, not
+// wiring, and is out of this guard.)
 func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
 	files := coreGoFiles(t)
@@ -491,8 +494,17 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 			f, err := parser.ParseFile(fset, file, nil, parser.ImportsOnly)
 			require.NoError(t, err)
 			for _, imp := range f.Imports {
-				assert.NotEqualf(t, `"reflect"`, imp.Path.Value,
+				if imp.Path.Value != `"reflect"` {
+					continue
+				}
+				require.Equal(t, "via.go", filepath.Base(file),
 					"%s imports reflect — via wiring must be reflection-free", file)
+				src, err := os.ReadFile(file)
+				require.NoError(t, err)
+				uses := slices.Compact(slices.Sorted(slices.Values(
+					regexp.MustCompile(`reflect\.\w+`).FindAllString(string(src), -1))))
+				assert.Equal(t, []string{"reflect.ValueOf"}, uses,
+					"via.go may only reflect to take a func value's pointer")
 			}
 		})
 	}
@@ -570,7 +582,7 @@ func newTodoList() *todoBox {
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(todoList{box: newTodoList()})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `@post('/_via/a/0/1?a=2&v=`, "the bravo row's button must carry its id (2) as the action arg")
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
 }
 
 // The handler must receive the carried value as a typed parameter and act on it:
@@ -723,4 +735,87 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 
 	assert.Contains(t, buf.String(), "no cookie can be set",
 		"a Tick-minted session must warn instead of silently orphaning")
+}
+
+// TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs is the regression
+// guard for the bug content-addressed action ids replace: two tabs share one
+// store; tab A deletes a row, changing the action COUNT for everyone. Under
+// the old positional/shape-digest wire, every URL tab B was still holding
+// (its untouched rows included) 410'd as "stale page" — silently, permanently,
+// until a reload. Addressed by handler + ?a=, tab B's shipped URLs keep working.
+func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
+	t.Parallel()
+	box := newTodoList()
+	srv := serve(t, via.Register(todoList{box: box}))
+
+	_, tabB := do(t, srv, http.MethodGet, "/", "") // tab B paints, then sits idle
+	bravoFromB := rowActionURL(t, tabB, 2)
+
+	_, tabA := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, rowActionURL(t, tabA, 1), "{}") // tab A deletes alpha
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body := do(t, srv, http.MethodPost, bravoFromB, "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"tab B's already-rendered row action must survive another tab resizing the list")
+	assert.NotContains(t, body, "bravo", "and it must have deleted bravo — the row it named")
+	assert.Contains(t, body, "gamma", "not some other row")
+}
+
+// rowActionURL picks the action URL carrying ?a={id} out of a rendered list.
+func rowActionURL(t *testing.T, html string, id int) string {
+	t.Helper()
+	m := regexp.MustCompile(`@post\('([^']*_via/a/0/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
+	require.NotEmptyf(t, m, "no row action for id %d in:\n%s", id, html)
+	return m[1]
+}
+
+// An action id is derived from the handler's own Go func name, so it is the
+// same across renders AND across instances — a deploy or a second server does
+// not invalidate the URLs open tabs are holding.
+func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
+	t.Parallel()
+	_, first := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
+	_, second := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
+	assert.Equal(t, actionURL(t, first, 0, 1), actionURL(t, second, 0, 1),
+		"two independent instances must address the same handler identically")
+}
+
+// twinButtons binds the SAME handler twice. Both buttons mean the same thing,
+// so they collapse onto one action entry and one URL — identity is the
+// handler, never the render position.
+type twinButtons struct{ count *store }
+
+func (c *twinButtons) Inc(ctx *via.Ctx) { c.count.Add(1) }
+func (c *twinButtons) View() h.H {
+	return h.Div(
+		h.H1(h.Str(strconv.Itoa(c.count.Value()))),
+		h.Button(via.On("click", c.Inc)),
+		h.Button(via.On("click", c.Inc)),
+	)
+}
+
+func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(twinButtons{count: &store{}}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	assert.Equal(t, actionURL(t, page, 0, 0), actionURL(t, page, 0, 1),
+		"two bindings of one handler must share one id")
+
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
+}
+
+// The 410 for an id this render does not bind names the handlers it DOES
+// bind, so the common wiring mistake (OnInit not restoring the UI state the
+// View branches on) reads as a diagnosis instead of a dead button.
+func TestUnknownAction_410NamesTheBoundHandlers(t *testing.T) {
+	t.Parallel()
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz"), "{}")
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
+	assert.Contains(t, body, ").Inc", "and the handlers this render does bind")
 }

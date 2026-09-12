@@ -258,7 +258,7 @@ func TestMux_liveIslandActionWithUnknownTabIsGone(t *testing.T) {
 func TestMux_liveIslandActionBindingCarriesTabHeader(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(panel{})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/1/0\?v=[^']+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
+	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
 		"a live island action must carry its island id and the tab header")
 }
 
@@ -345,13 +345,14 @@ func TestEmbed_rendersEachIslandInItsOwnContainerWithScopedActions(t *testing.T)
 	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
-		`id="via-i0"`,           // first island's container
-		`id="via-i1"`,           // second island's container
-		`@post('/_via/a/1/0?v=`, // first island (url id 1), action 0
-		`@post('/_via/a/2/0?v=`, // second island (url id 2), action 0 — scoped, not a shared flat index
+		`id="via-i0"`, // first island's container
+		`id="via-i1"`, // second island's container
 	} {
 		assert.Contains(t, body, want, "embedded islands missing container/scoped-action")
 	}
+	// Each island's action is addressed under its OWN id, not a shared flat one.
+	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+'`, body)
+	assert.Regexp(t, `@post\('/_via/a/2/[A-Za-z0-9_-]+'`, body)
 }
 
 // An action must route to the island named in its path, mutate that island, and
@@ -387,16 +388,15 @@ func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
 // A non-existent island or action index must fail closed (410) so a stale client
 // re-bootstraps rather than misrouting onto the wrong island. This carries a
 // genuinely valid shape digest (read off the rendered page, like
-// TestLive_outOfRangeActionAnswers410) with only the island or action segment
-// forged — a bare "no ?v=" URL would already 410 as "stale page" before ever
-// reaching the range check this guards.
+// TestLive_unknownActionAnswers410) with only the island or action segment
+// forged.
 func TestEmbed_unknownIslandOrActionIsGone(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, 1, 0)
 
-	for _, path := range []string{swapIslandIndex(t, url, "10"), swapActionIndex(t, url, "9")} {
+	for _, path := range []string{swapIslandIndex(t, url, "10"), swapActionID(t, url, "zzzzzzzz")} {
 		resp, _ := do(t, srv, http.MethodPost, path, "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode, "out-of-range %s must be 410", path)
 	}
@@ -407,10 +407,10 @@ func TestEmbed_unknownIslandOrActionIsGone(t *testing.T) {
 func TestEmbed_siblingIslandsDoNotShareAnActionIndexSpace(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
-	// Both islands declare action 0 within their OWN namespace; neither uses a
-	// page-global flat index.
-	assert.True(t, strings.Contains(body, `/_via/a/1/0`) && strings.Contains(body, `/_via/a/2/0`),
-		"each island must own a /{island}/{n} table, not a flat page index")
+	// Both islands address their action under their OWN island segment; neither
+	// uses a page-global flat index.
+	assert.True(t, strings.Contains(body, `/_via/a/1/`) && strings.Contains(body, `/_via/a/2/`),
+		"each island must own a /{island}/{act} table, not a flat page index")
 }
 
 // banner is a plain (stateless) composition embedded by a layout.

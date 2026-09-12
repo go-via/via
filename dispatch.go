@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"sort"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/go-via/via/internal/hcore"
@@ -84,7 +86,7 @@ func (c *liveConn) unit(island int) *Ctx {
 	return c.units[island]
 }
 
-// unitAddr is c's own dispatch address in /_via/a/{island}/{n} — 0 for the
+// unitAddr is c's own dispatch address in /_via/a/{island}/{act} — 0 for the
 // root, islandIdx+1 for an embedded unit at any depth.
 func unitAddr(c *Ctx) int {
 	if c != nil && c.isIsland {
@@ -95,7 +97,7 @@ func unitAddr(c *Ctx) int {
 
 // dispatch is the single entry point for every action POST on a mount — a
 // Datastar @post, a native PostForm submit, or a live unit's action — at
-// {base}/_via/a/{island}/{n} (the root is island 0). One origin floor, one
+// {base}/_via/a/{island}/{act} (the root is island 0). One origin floor, one
 // OnInit, one body decode: the six transports this replaced each
 // re-implemented these and drifted (OnInit never ran on an island action; a
 // live/island action silently dropped ctx.Redirect).
@@ -125,12 +127,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "no such island", http.StatusGone)
 		return
 	}
-	n, err := strconv.Atoi(req.PathValue("n"))
-	if err != nil {
-		http.Error(w, "no such action", http.StatusGone)
-		return
-	}
-	digest := req.URL.Query().Get("v")
+	act := req.PathValue("act")
 	base := concreteBase(m.patternBase, req, m.names)
 
 	tab := req.Header.Get("X-Via-Tab")
@@ -144,7 +141,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		if lc.mount != m {
 			// The registry is router-wide (one registry, every mount); a tab id
 			// from another mount is otherwise structurally valid here — same
-			// header/field, same shape digest space — so this must be checked
+			// header/field, same action-id space — so this must be checked
 			// explicitly rather than relying on anything else to fail first.
 			http.Error(w, "no such island", http.StatusGone)
 			return
@@ -155,11 +152,11 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// tab id is, and never removed), so this check is safe off the island
 		// goroutine, unlike the staleness lookup dispatchLive still does there.
 		if lc.unit(island) != nil {
-			m.dispatchLive(w, req, mode, lc, island, n, in, digest, base)
+			m.dispatchLive(w, req, mode, lc, island, act, in, base)
 			return
 		}
 	}
-	m.dispatchStateless(w, req, mode, island, n, in, base, digest)
+	m.dispatchStateless(w, req, mode, island, act, in, base)
 }
 
 // decodeInput decodes an action POST's body per mode: a native PostForm
@@ -183,14 +180,14 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 	return decodeActionBody(w, req)
 }
 
-// dispatchLive runs action n against a connected live unit on its
+// dispatchLive runs action act against a connected live unit on its
 // connection's serialized goroutine and WAITS for the mutation's result —
 // synchronous, unlike the old fire-and-forget island dispatch, so a
 // Redirect, the session cookie, and a panic all resolve on THIS response
 // exactly like a stateless action. The wait is bounded by req.Context() as
 // well as the connection closing, so a stalled peer elsewhere on the stream
 // can't park this POST's goroutine forever (see liveConn.run).
-func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island, n int, in map[string]json.RawMessage, digest, base string) {
+func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island int, act string, in map[string]json.RawMessage, base string) {
 	res, ok := lc.run(req.Context(), func() actionResult {
 		// A closure queued on pulse runs regardless of what its caller does
 		// meanwhile: if req.Context() is already done, run's own second
@@ -239,13 +236,11 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		if u == nil {
 			return actionResult{gone: "no such island"}
 		}
-		if u.shapeDigest() != digest {
-			return actionResult{gone: "stale page"}
+		a, ok := u.actions[act]
+		if !ok {
+			return actionResult{gone: unknownAction(u, act)}
 		}
-		if n < 0 || n >= len(u.actions) {
-			return actionResult{gone: "no such action"}
-		}
-		return liveRunAction(w, req, m.sessions, lc, u, in, n)
+		return liveRunAction(w, req, m.sessions, lc, u, in, a)
 	})
 	if !ok {
 		http.Error(w, "live connection closed", http.StatusGone)
@@ -290,18 +285,15 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 	respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
 }
 
-// liveRunAction hydrates unit's signals from in, runs action n, and returns
+// liveRunAction hydrates unit's signals from in, runs act, and returns
 // as soon as the mutation is known. unit is the bind Ctx the last push
 // produced (or, before any push, the connect render) — its actions/hydrators
 // table is current because every push is a render, so no render happens here
 // before the action runs. It runs on the connection's serialized goroutine
 // while the triggering POST blocks in liveConn.run — so w is safe to write to
 // here (the session cookie, a queued Redirect) exactly as a stateless action
-// would be. dispatchLive already range-checked n against unit.actions before
-// calling in here — the shape digest alone does not do this: it fixes the
-// action COUNT, not which index was requested, so a forged n within a
-// stale/foreign range could still slip past it. The recover below is a
-// last-resort backstop, not the primary guard.
+// would be. dispatchLive already resolved act against unit.actions before
+// calling in here. The recover below is a last-resort backstop.
 //
 // The re-render + SSE push (the dirty-signals patch, then the element patch)
 // rides back in res.pushWork instead of running here: liveConn.run sends the
@@ -312,7 +304,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 // detached goroutine doing this enqueue used to race other such goroutines
 // from concurrent actions, reordering their pushes; returning it as data
 // instead keeps everything on the one goroutine, in order.
-func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *liveConn, unit *Ctx, in map[string]json.RawMessage, n int) (res actionResult) {
+func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *liveConn, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			if bad, ok := rec.(badActionArg); ok {
@@ -347,7 +339,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	_, beforeSession, _ := sessions.resolve(req)
 	rc := &Ctx{req: req, sessions: sessions, sessW: w}
 	unit.dirty = map[string]any{}
-	unit.actions[n](rc)
+	act.fn(rc)
 
 	// The action may have just minted a session (Session().Put or .Rotate) on
 	// a connection that was anonymous at connect — bind it now so the tab id
@@ -374,12 +366,23 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 }
 
+// unknownAction is the 410 body for an id the freshly-rendered unit does not
+// carry: the handler is gone from this render — a branch closed, or (the
+// common wiring mistake) OnInit failed to restore the UI state the View
+// branches on. It names the ids that ARE bound so that reads as a diagnosis
+// instead of a silent dead button.
+func unknownAction(u *Ctx, act string) string {
+	have := make([]string, 0, len(u.actions))
+	for id, a := range u.actions {
+		have = append(have, id+" ("+a.name+")")
+	}
+	sort.Strings(have)
+	return "no such action " + act + "; this render binds: " + strings.Join(have, ", ")
+}
+
 // dispatchStateless is dispatch's non-live path: bind a fresh instance, run
-// OnInit, run the acted-on unit's action, then answer per mode. digest is
-// checked against the freshly-bound unit's own shapeDigest, which (unlike an
-// order-only, root-signals-only check) also catches a branched View shifting
-// a STATELESS ISLAND's action indices.
-func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island, n int, in map[string]json.RawMessage, base, digest string) {
+// OnInit, run the acted-on unit's action, then answer per mode.
+func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island int, act string, in map[string]json.RawMessage, base string) {
 	inst := m.newInst()
 	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
 	bind.islandV = inst                                  // so bind.unit(0)'s liveness reads the same way an embedded island's does
@@ -392,12 +395,9 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 		http.Error(w, "no such island", http.StatusGone)
 		return
 	}
-	if u.shapeDigest() != digest {
-		http.Error(w, "stale page", http.StatusGone)
-		return
-	}
-	if n < 0 || n >= len(u.actions) {
-		http.Error(w, "no such action", http.StatusGone)
+	a, ok := u.actions[act]
+	if !ok {
+		http.Error(w, unknownAction(u, act), http.StatusGone)
 		return
 	}
 	if u.live {
@@ -410,7 +410,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 	u.req = req
 	u.sessions = m.sessions
 	u.sessW = w
-	u.actions[n](u) // no long-lived handler holds this render's Ctx (stateless), so u is its own dispatch Ctx
+	a.fn(u) // no long-lived handler holds this render's Ctx (stateless), so u is its own dispatch Ctx
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {

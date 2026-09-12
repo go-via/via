@@ -102,11 +102,8 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 			// datastar-patch-elements frame mid-payload. Neutralise it.
 			buf.WriteString("&#13;")
 		case '\x00':
-			// via's shape-digest placeholder is NUL-delimited; leaving a
-			// literal NUL in escaped text would let hostile input collide
-			// with the token and get the digest spliced into it. HTML5
-			// parsing already replaces NUL with U+FFFD, so this matches
-			// what a browser would do anyway.
+			// HTML5 parsing replaces a literal NUL with U+FFFD; doing it
+			// here keeps the escaped bytes and the parsed DOM identical.
 			buf.WriteString("&#65533;")
 		default:
 			buf.WriteByte(s[i])

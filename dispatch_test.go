@@ -179,8 +179,8 @@ func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 	srv := serve(t, via.Register(mixedPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `@post('/_via/a/0/0?v=`, "the @post binding claims action 0")
-	assert.Contains(t, page, `action="/_via/a/0/1?v=`, "PostForm claims the next slot in the same table")
+	assert.Contains(t, page, `@post('`+actionURL(t, page, 0, 0)+`'`, "the @post binding claims its own action id")
+	assert.Contains(t, page, `action="`+actionURL(t, page, 0, 1)+`"`, "PostForm claims an id in the same table")
 
 	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the @post action must dispatch")
@@ -222,7 +222,7 @@ func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 	})
 }
 
-// branchy's second button (action 1) only exists in the View after Reveal
+// branchy's second button only exists in the View after Reveal
 // fires and its push renders it — the connect-time render and the initial
 // stateless GET both show only Reveal.
 type branchy struct {
@@ -235,7 +235,7 @@ func (b *branchy) Extra(ctx *via.Ctx)  {}
 func (b *branchy) View() h.H {
 	kids := []h.H{b.n.Display(), h.Button(via.On("click", b.Reveal))}
 	if b.shown.Get() {
-		kids = append(kids, h.Button(via.On("click", b.Extra)))
+		kids = append(kids, h.Button(via.On("click", b.Extra), h.Str("extra")))
 	}
 	return h.Div(kids...)
 }
@@ -261,7 +261,7 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 		// network I/O is not "durably blocked" — see I4); Await blocks for it
 		// instead of racing the reader, which is what made this test flaky
 		// under -cpu 1.
-		conn.Await("_via/a/0/1")
+		conn.Await("extra")
 
 		status, _ = app.Action(1).Live(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status,
@@ -272,7 +272,7 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 		// plain vt.Action's stateless-page lookup could not have found it
 		// either; only Conn's own pushed markup has it.
 		page := fetchPage(t, app, "/")
-		assert.NotContains(t, page, "/_via/a/0/1",
+		assert.NotContains(t, page, "extra",
 			"a fresh stateless render never reflects the live connection's Reveal")
 	})
 }
@@ -295,12 +295,12 @@ func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/thread/7", "")
-	assert.Contains(t, page, `@post('/thread/7/_via/a/1/0?v=`)
+	assert.Regexp(t, `@post\('/thread/7/_via/a/1/[A-Za-z0-9_-]+'`, page)
 
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "{id}", "the re-rendered action URL must not carry the pattern wildcard")
-	assert.Contains(t, body, `/thread/7/_via/a/1/0`, "the re-rendered action URL must carry the concrete segment")
+	assert.Contains(t, body, `/thread/7/_via/a/1/`, "the re-rendered action URL must carry the concrete segment")
 }
 
 // unsafeRoot and unsafeIsland both bump a visible counter alongside an
@@ -353,54 +353,45 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 	})
 }
 
-// staleDigest rewrites url's ?v=/&v= shape digest to an obviously wrong
-// value, simulating a client whose page has gone stale (or a forged one).
-func staleDigest(t *testing.T, url string) string {
+// splitActionURL cuts url into its /_via/a/ prefix, {island}, {act} and any
+// query, so a test can forge one segment and keep the rest genuine.
+func splitActionURL(t *testing.T, url string) (prefix, island, act, query string) {
 	t.Helper()
-	i := strings.LastIndex(url, "v=")
-	require.GreaterOrEqual(t, i, 0, "url %q carries no shape digest", url)
-	return url[:i] + "v=00000000"
-}
-
-// swapActionIndex rewrites url's trailing {n} path segment to n, keeping its
-// ?v= shape digest intact — a valid digest with a forged out-of-range index,
-// the shape a shape-digest check alone cannot catch (the digest fixes the
-// action COUNT, not which index was requested).
-func swapActionIndex(t *testing.T, url, n string) string {
-	t.Helper()
-	i := strings.Index(url, "?")
-	require.GreaterOrEqual(t, i, 0, "url %q carries no ?v=", url)
-	path, q := url[:i], url[i:]
-	j := strings.LastIndex(path, "/")
+	if i := strings.Index(url, "?"); i >= 0 {
+		url, query = url[:i], url[i:]
+	}
+	j := strings.LastIndex(url, "/")
 	require.GreaterOrEqual(t, j, 0)
-	return path[:j+1] + n + q
+	k := strings.LastIndex(url[:j], "/")
+	require.GreaterOrEqual(t, k, 0)
+	return url[:k+1], url[k+1 : j], url[j+1:], query
 }
 
-// swapIslandIndex rewrites url's {island} path segment to island, keeping its
-// {n} segment and ?v= shape digest intact — a valid digest with a forged
-// out-of-range island id, the same "digest fixes the count, not the index"
-// gap swapActionIndex covers for the action segment.
+// swapActionID rewrites url's {act} segment to an id the render does not
+// bind, keeping island, mount prefix and ?a= genuine.
+func swapActionID(t *testing.T, url, act string) string {
+	t.Helper()
+	prefix, island, _, q := splitActionURL(t, url)
+	return prefix + island + "/" + act + q
+}
+
+// swapIslandIndex rewrites url's {island} segment, keeping a genuine action id
+// on it — an id that resolves on ITS island must not resolve on another.
 func swapIslandIndex(t *testing.T, url, island string) string {
 	t.Helper()
-	i := strings.Index(url, "?")
-	require.GreaterOrEqual(t, i, 0, "url %q carries no ?v=", url)
-	path, q := url[:i], url[i:]
-	j := strings.LastIndex(path, "/")
-	require.GreaterOrEqual(t, j, 0)
-	k := strings.LastIndex(path[:j], "/")
-	require.GreaterOrEqual(t, k, 0)
-	return path[:k+1] + island + path[j:] + q
+	prefix, _, act, q := splitActionURL(t, url)
+	return prefix + island + "/" + act + q
 }
 
-func TestDispatch_forgedActionIndexWithValidDigestIsGone(t *testing.T) {
+func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 	t.Run("stateless", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		url := actionURL(t, page, 0, 0)
-		for _, n := range []string{"99", "-1"} {
-			resp, _ := do(t, srv, http.MethodPost, swapActionIndex(t, url, n), "{}")
-			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged n=%s must 410, not panic/misroute", n)
+		for _, n := range []string{"99", "-1", "________"} {
+			resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, n), "{}")
+			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged id=%s must 410, not panic/misroute", n)
 		}
 	})
 
@@ -410,9 +401,9 @@ func TestDispatch_forgedActionIndexWithValidDigestIsGone(t *testing.T) {
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 			url := actionURL(t, page, 0, 0)
-			for _, n := range []string{"99", "-1"} {
-				status, _ := app.Action(0).Raw(swapActionIndex(t, url, n)).Tab(conn.TabID()).Fire()
-				assert.Equal(t, http.StatusGone, status, "forged n=%s must 410, not panic/misroute", n)
+			for _, n := range []string{"99", "-1", "________"} {
+				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
+				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
 			}
 			// The connection must still be usable — the recovered panic path
 			// this replaces must not be the only thing standing between a
@@ -423,14 +414,14 @@ func TestDispatch_forgedActionIndexWithValidDigestIsGone(t *testing.T) {
 	})
 }
 
-func TestDispatch_staleShapeAnswers410OnEveryPath(t *testing.T) {
+func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 	t.Parallel()
 
 	t.Run("stateless root", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, staleDigest(t, actionURL(t, page, 0, 1)), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 0, 1), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -438,7 +429,7 @@ func TestDispatch_staleShapeAnswers410OnEveryPath(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, staleDigest(t, actionURL(t, page, 1, 0)), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 1, 0), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -450,7 +441,7 @@ func TestDispatch_staleShapeAnswers410OnEveryPath(t *testing.T) {
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 
-			req, err := http.NewRequest(http.MethodPost, app.URL()+staleDigest(t, actionURL(t, page, 0, 0)), strings.NewReader("{}"))
+			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz"), strings.NewReader("{}"))
 			require.NoError(t, err)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			req.Header.Set("Datastar-Request", "true")
@@ -549,27 +540,29 @@ func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
 	srv := serve(t, via.Register(branchedView{st: &toggleState{}}))
 
 	_, unlocked := do(t, srv, http.MethodGet, "/", "")
-	staleDelete := actionURL(t, unlocked, 0, 1) // Delete, while unlocked
+	staleSave := actionURL(t, unlocked, 0, 0)   // Save, only bound while unlocked
+	staleDelete := actionURL(t, unlocked, 0, 1) // Delete, bound in both branches
 	flip := actionURL(t, unlocked, 0, 2)
 
-	// Flip to locked: Save disappears from the action table, so every later
-	// index shifts down by one — index 1 (Delete, under the old shape) is
-	// now Flip.
+	// Flip to locked: Save leaves the table and every later index shifts down
+	// by one — under positional routing the pre-flip Delete URL (index 1)
+	// would now land on Flip, silently toggling back to unlocked.
 	resp, lockedBody := do(t, srv, http.MethodPost, flip, "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Contains(t, lockedBody, "locked:", "Flip must have taken effect")
 
-	// Replay the pre-flip Delete URL. It still names index 1, which under the
-	// NEW (locked) shape is Flip — a real misroute (toggling back to
-	// unlocked) if dispatched. The digest baked into the URL no longer
-	// matches the post-flip render, so this must 410, not run Flip.
-	resp2, _ := do(t, srv, http.MethodPost, staleDelete, "{}")
-	assert.Equal(t, http.StatusGone, resp2.StatusCode,
-		"a stale action URL from before a branch flip must 410, not misroute")
-
-	_, after := do(t, srv, http.MethodGet, "/", "")
+	// The id addresses the handler, so the pre-flip Delete URL still means
+	// Delete — the click does what the button it came from said it does.
+	resp2, after := do(t, srv, http.MethodPost, staleDelete, "{}")
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
 	assert.Contains(t, after, "locked:", "the stale click must not have misrouted into Flip (back to unlocked)")
-	assert.NotContains(t, after, "delete", "Delete must not have run either — the click must not have run at all")
+	assert.Contains(t, after, "delete", "it must have run Delete, the handler it named")
+
+	// Save, on the other hand, is not bound by the locked branch at all: 410,
+	// never a misroute into whatever now sits at its old index.
+	resp3, _ := do(t, srv, http.MethodPost, staleSave, "{}")
+	assert.Equal(t, http.StatusGone, resp3.StatusCode,
+		"an action the current render does not bind must 410")
 }
 
 // liveForm is a live root whose View carries a native PostForm — the case

@@ -3,7 +3,8 @@
 // server-authoritative State/List/Signal, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
-// reflection, no closures in the public API surface, no any in element/child
+// reflection in the public API surface (one internal reflect.ValueOf reads a
+// handler's own func name to address its action), no closures in it either, no any in element/child
 // signatures. The library is stdlib-only. Identifier strings do appear at the
 // edges the caller controls directly — ctx.Param[T]("id"), FormFile("avatar"),
 // Mount("/thread/{id}") — but never as an internal wire-name a caller could
@@ -13,20 +14,22 @@ package via
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"maps"
-	"net/http"
-	"net/url"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
+	"net/http"
+	"net/url"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.
@@ -56,7 +59,7 @@ type Ctx struct {
 	nextSig     int                              // next signal slot index
 	order       []string                         // slots in assignment order
 	initial     map[string]any                   // per-slot value seen at render time
-	actions     []func(*Ctx)                     // positional action table; dispatch calls each with a fresh per-dispatch Ctx, never this one
+	actions     map[string]action                // content-addressed action table, keyed by handler identity; dispatch calls each with a fresh per-dispatch Ctx, never this one
 	hydrators   map[string]func(json.RawMessage) // per-slot value updater, kept from the last render so a live action can hydrate without re-rendering
 	ticks       []tickReg                        // live-unit timer registrations
 	subs        []subStarter                     // live-unit external subscriptions
@@ -79,7 +82,6 @@ type Ctx struct {
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
 	pass        *renderPass                      // shared flat-index allocator during a root-level render; nil for an island's own standalone render
-	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
 	doInit      bool                             // this render is request-scoped, so every embedded child's OnInit runs before its View (a live push re-render must not re-run them)
 	initDone    bool                             // true once OnInit has returned — a later Tick/Listen would register into a snapshot nobody reads, so they log loudly instead
 }
@@ -103,43 +105,10 @@ func newCtx(in map[string]json.RawMessage) *Ctx {
 	return &Ctx{
 		inSignals: in,
 		initial:   map[string]any{},
+		actions:   map[string]action{},
 		dirty:     map[string]any{},
 		hydrators: map[string]func(json.RawMessage){},
 	}
-}
-
-// digestPlaceholder lazily allocates c's shape-digest placeholder token from
-// its render pass. Every action c writes shares this one token — the digest
-// itself isn't knowable until the whole render ends, so writeActionAttr and
-// PostForm write the placeholder now and renderRootCore/renderIslandInner
-// substitute the real digest into the finished buffer.
-func (c *Ctx) digestPlaceholder() string {
-	if c.digestPH == "" {
-		if c.pass != nil {
-			c.digestPH = c.pass.nextDigestToken()
-		} else {
-			c.digestPH = "\x00vD\x00" // no pass: a bare render with no dispatch behind it
-		}
-	}
-	return c.digestPH
-}
-
-// shapeDigest fingerprints this unit's own render shape: its signal order and
-// its own action count. dispatch recomputes it fresh and 410s on any
-// mismatch — a branched View that shifted an action's index since the
-// client's copy was rendered no longer silently misroutes a click, it 410s.
-// It deliberately does not fold in embedded islands' shapes: a live island's
-// own push re-renders and reframes only itself, never its parent's already-
-// shipped URLs, so folding a child's shape in here only left the parent
-// permanently 410 the next time the child's (unrelated) shape happened to
-// change — see the v0.8 coherence notes on the child-shape-in-parent-digest
-// bug.
-func (c *Ctx) shapeDigest() string {
-	h := sha256.New()
-	io.WriteString(h, strings.Join(c.order, ","))
-	io.WriteString(h, "|")
-	io.WriteString(h, strconv.Itoa(len(c.actions)))
-	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))[:8]
 }
 
 // dirtyAll gathers every signal this pass wrote, across the whole page. A Set
@@ -216,14 +185,41 @@ func (c *Ctx) signalInit(slot string) (any, bool) {
 	return raw, true
 }
 
-// actionSlot registers a handler and returns its positional id "0","1",….
-// Unlike SignalName/DeclareSignal/Hydrator this is not on hcore.Binder — via's
-// own On/OnArg/PostForm are its only callers, so it stays a
-// plain Ctx method.
-func (c *Ctx) actionSlot(fn func(*Ctx)) string {
-	idx := len(c.actions)
-	c.actions = append(c.actions, fn)
-	return strconv.Itoa(idx)
+// action is one entry in a unit's action table: the handler dispatch runs,
+// plus the Go name it was derived from (surfaced in a 410 so a handler that
+// vanished between renders reads as a name, not a bare id).
+type action struct {
+	fn   func(*Ctx)
+	name string
+}
+
+// actionSlot registers run under the content-addressed id of ident — the
+// handler the user wrote (for OnArg that is the user's fn, NOT the decoding
+// wrapper, which would name the same via-internal closure for every row).
+// Unlike SignalName/DeclareSignal/Hydrator this is not on hcore.Binder —
+// via's own On/OnArg/PostForm are its only callers, so it stays a plain Ctx
+// method.
+//
+// The id is the func's fully-qualified Go name hashed, not its code pointer:
+// the name survives a rebuild, so a deploy does not invalidate every action
+// URL an open tab is holding. Two bindings of the same handler collapse onto
+// one entry, which is what they mean — identity is the handler (plus ?a= for
+// a value-carrying one), never the render position.
+func (c *Ctx) actionSlot(ident any, run func(*Ctx)) string {
+	id, name := actionID(ident)
+	c.actions[id] = action{fn: run, name: name}
+	return id
+}
+
+// actionID content-addresses a handler by its fully-qualified Go name
+// ("main.(*Poll).Vote-fm").
+func actionID(fn any) (id, name string) {
+	name = "unknown"
+	if f := runtime.FuncForPC(reflect.ValueOf(fn).Pointer()); f != nil {
+		name = f.Name()
+	}
+	sum := sha256.Sum256([]byte(name))
+	return base64.RawURLEncoding.EncodeToString(sum[:])[:8], name
 }
 
 // hydrator records slot's update function. A live unit keeps the table from its
@@ -259,13 +255,13 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		if ctx == nil {
 			return
 		}
-		idx := ctx.actionSlot(handler)
+		idx := ctx.actionSlot(handler, handler)
 		island := 0
 		if ctx.isIsland {
 			island = ctx.islandIdx + 1
 		}
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `?v=` + ctx.digestPlaceholder() + `">`)
+			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `">`)
 		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
 		for _, c := range children {
 			r.Render(c)
@@ -338,7 +334,7 @@ func (c *Ctx) Redirect(path string) {
 func On(event string, fn func(*Ctx)) h.Attr { return onEvent(event, fn) }
 
 // onEvent emits the Datastar event binding for a named method value. At render
-// it claims a positional action id and writes data-on:<event>="@post('/_via/a/N')".
+// it claims its handler's action id and writes data-on:<event>="@post('/_via/a/{island}/{id}')".
 func onEvent(event string, fn func(*Ctx)) h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
@@ -347,7 +343,7 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 		}
 		// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
 		// never the one bound here at render time (see liveRunAction).
-		idx := ctx.actionSlot(fn)
+		idx := ctx.actionSlot(fn, fn)
 		writeActionAttr(r, ctx, event, idx, "")
 	})
 }
@@ -377,7 +373,7 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 		if ctx == nil {
 			return
 		}
-		idx := ctx.actionSlot(func(rc *Ctx) {
+		idx := ctx.actionSlot(fn, func(rc *Ctx) {
 			if rc.req == nil {
 				return
 			}
@@ -402,35 +398,26 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // writeActionAttr writes the data-on:<event>="@post('PATH?query'<,opts>)" binding
 // for a claimed action slot. Written raw (not via h.Data): the value is a
 // Datastar expression whose single-quotes must survive verbatim, and it is fully
-// via-generated (fixed template + the via-controlled event name + a numeric id +
+// via-generated (fixed template + the via-controlled event name + a hashed id +
 // a url-encoded arg), so no user input reaches it and there is no injection
 // surface. Datastar v1's colon syntax (data-on:<event>); the old dash form is
 // parsed as a nonexistent plugin and silently dropped. Every action posts to
-// {base}/_via/a/{island}/{n}?v={digest} — the root is island 0, an embedded
-// child is its islandIdx+1, and the digest is this render's shape fingerprint
-// (see Ctx.shapeDigest): dispatch 410s a click whose digest no longer matches
-// instead of misrouting it against a shifted index. Every POST echoes the tab
-// id (the _viatab local signal, declared empty on <body> and filled by the SSE
-// stream) as the X-Via-Tab header, so a live unit's action routes to THIS
-// connection's instance; on a stateless page it is empty, matches no
-// connection, and dispatch falls through to the stateless path.
+// {base}/_via/a/{island}/{id} — the root is island 0, an embedded child is its
+// islandIdx+1, and id addresses the handler itself, so a list that grew or
+// shrank since the client's copy was rendered still routes every already-shipped
+// URL. Every POST echoes the tab id (the _viatab local signal, declared empty on
+// <body> and filled by the SSE stream) as the X-Via-Tab header, so a live unit's
+// action routes to THIS connection's instance; on a stateless page it is empty,
+// matches no connection, and dispatch falls through to the stateless path.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
-	base, island, digest := "", 0, ""
+	base, island := "", 0
 	if ctx != nil {
-		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{island}/{n}
+		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{island}/{id}
 		if ctx.isIsland {
 			island = ctx.islandIdx + 1
 		}
-		digest = ctx.digestPlaceholder()
 	}
 	path := base + "/_via/a/" + strconv.Itoa(island) + "/" + idx
-	if digest != "" {
-		if query == "" {
-			query = "?v=" + digest
-		} else {
-			query += "&v=" + digest
-		}
-	}
 	r.WriteString(` data-on:` + event + `="@post('` + path + query + `',{headers:{'X-Via-Tab':$_viatab}})"`)
 }
 
@@ -506,9 +493,6 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	b.Write(rr.Bytes())
 	b.WriteString(`</div>`)
 	out := b.Bytes()
-	if ctx.digestPH != "" {
-		out = bytes.ReplaceAll(out, []byte(ctx.digestPH), []byte(ctx.shapeDigest()))
-	}
 	checkLiveNesting(ctx, false)
 	return out
 }

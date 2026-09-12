@@ -53,7 +53,9 @@ any call site, and a missing or mistyped `View` is a compile error.
 
 - **No reflection in wiring.** The composition is bound by generics and
   interface assertions, never by reflecting over its fields, methods, or tags
-  (a `reflect`-import lint enforces it). Signal *values* decode via
+  (a lint keeps `reflect` out of every core file but `via.go`, which uses it
+  only to take a handler func value's code pointer for its action id — a
+  func's own identity, not a struct's shape). Signal *values* decode via
   `encoding/json`, which reflects internally — data decoding, not wiring.
 - **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
 - **No closures at a via call site.** Named method values only.
@@ -236,10 +238,15 @@ the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
 a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
-An action URL carries its unit's shape digest as `?v=` and answers `410 Gone`
-— on both the stateless and live dispatch paths — for a stale digest (the
-`View()` shape changed since the client rendered), an out-of-range action
-index, an unknown island, or a live action with no connection for its tab.
+An action URL addresses its handler, not its render position: `id` in
+`/_via/a/{island}/{id}` is a hash of the handler method's own Go name, so it
+is the same across renders, instances and builds, and a row's datum rides
+along in `?a=`. A list that grew or shrank since a tab painted therefore keeps
+every URL that tab is holding valid. Dispatch answers `410 Gone` — on both the
+stateless and live paths — for an id the current render does not bind (a
+closed branch, or an `OnInit` that failed to restore the state the `View`
+branches on; the 410 names the handlers that ARE bound), an unknown island, or
+a live action with no connection for its tab.
 Datastar resolves a non-2xx response silently and moves on; a native `<form>`
 submit shows the browser's own error page.
 
