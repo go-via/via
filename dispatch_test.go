@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -1116,4 +1117,79 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	defer staleResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, staleResp.StatusCode,
 		"the pre-rotate id must not drive the connection anymore")
+}
+
+// raceLoginer is liveLoginer's Login, but pausable: it blocks on the island
+// goroutine until proceed is signaled, closing started the instant it takes
+// hold of that goroutine — the two channels let a test park a concurrent
+// cookieless dispatch's own goroutine right at the moment the connection is
+// still unbound, then release the login and observe which check ran first.
+type raceLoginer struct {
+	n       via.State[int]
+	started chan struct{}
+	proceed chan struct{}
+}
+
+func (p *raceLoginer) OnConnect(*via.Ctx) error { return nil }
+func (p *raceLoginer) Bump(ctx *via.Ctx)        { p.n.Set(p.n.Get() + 1) } // action 0
+func (p *raceLoginer) Login(ctx *via.Ctx) {
+	close(p.started)
+	<-p.proceed
+	ctx.Session().Put(member{Name: "bob"})
+} // action 1
+func (p *raceLoginer) View() h.H {
+	return h.Div(p.n.Display(),
+		h.Button(via.OnClick(p.Bump)),
+		h.Button(via.OnClick(p.Login)))
+}
+
+// I3: the session-bound check must run on the same serialized goroutine as
+// the action it guards, not on the dispatching request's own goroutine
+// before the closure is even queued — otherwise a cookieless dispatch that
+// passes the check while the connection is still unbound, then actually
+// runs after a concurrent login has bound it, is applied anyway.
+func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
+	t.Parallel()
+	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
+	srv := httptest.NewServer(via.Register(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginDone := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(loginReq)
+		require.NoError(t, err)
+		loginDone <- resp
+	}()
+	<-root.started // Login now holds the island goroutine, unbound so far
+
+	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	bumpDone := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(bumpReq)
+		require.NoError(t, err)
+		bumpDone <- resp
+	}()
+	// Give the cookieless dispatch time to reach its own check/enqueue point
+	// while the connection is STILL unbound — the exact window I3 closes.
+	time.Sleep(50 * time.Millisecond)
+	close(root.proceed) // let Login finish and bind
+
+	loginResp := <-loginDone
+	loginResp.Body.Close()
+	bumpResp := <-bumpDone
+	defer bumpResp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
+		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
 }
