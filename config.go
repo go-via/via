@@ -65,6 +65,13 @@ func newConfig(opts []Option) *config {
 // reads as "allow this origin" and says nothing about also switching enforcement
 // on, which means an app that never calls it looks configured rather than open.
 // This is the line that tells you which mode you are actually in.
+//
+// Deliberately untested: it is package-global and fires at most once per test
+// binary, so whichever of the many open-floor tests in this suite happens to
+// run first wins the log line and every other one sees nothing — an assertion
+// here would pass or fail depending on test order/parallelism, not on the
+// warning actually firing. Black-box tests (package via_test) have no way to
+// reset it between cases either.
 var originWarnOnce sync.Once
 
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and

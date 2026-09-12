@@ -7,8 +7,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -233,6 +236,41 @@ func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 	assert.Equal(t, "PNGBYTES", cap.body, "handler must receive the file bytes")
 	assert.Equal(t, int64(len("PNGBYTES")), cap.size, "the header must report the parsed byte count")
 	assert.Equal(t, "application/octet-stream", cap.ctype, "the header must report the part's declared type")
+}
+
+// multipartTempFiles lists os.TempDir() entries matching the "multipart-*"
+// pattern mime/multipart's Reader uses for a part it spills to disk.
+func multipartTempFiles(t *testing.T) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "multipart-*"))
+	require.NoError(t, err)
+	return matches
+}
+
+// deferred req.MultipartForm.RemoveAll() is what deletes a part's spilled
+// temp file — deleting that defer entirely fails no other test, since none of
+// them upload a file big enough to spill past maxActionBody in the first
+// place. This one deliberately does.
+func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	r.Mount("/p", avatarPage{cap: &capture{}})
+	srv := serve(t, r)
+	_, page := do(t, srv, http.MethodGet, "/p", "")
+
+	before := multipartTempFiles(t)
+
+	big := strings.Repeat("x", 2<<20) // > maxActionBody (1 MiB): the part spills to a temp file
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "big.bin", big)
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+
+	// The removal races the client observing the response (the server's own
+	// post-handler teardown runs after the response is already flushed), so
+	// poll briefly rather than asserting on the very next instant.
+	assert.Eventually(t, func() bool {
+		return len(multipartTempFiles(t)) == len(before)
+	}, time.Second, 5*time.Millisecond,
+		"no multipart temp file spilled during this upload may survive the handler returning")
 }
 
 // The body cap for PostForm rises to maxUploadBytes (files are the payload);
