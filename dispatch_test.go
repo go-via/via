@@ -617,13 +617,13 @@ func nativeFormPost(t *testing.T, app *vt.App, url string, fields map[string]str
 	return resp.StatusCode, string(b)
 }
 
-func TestDispatch_liveFormFieldFallbackRunsHandlerAndRerendersFullPage(t *testing.T) {
+func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		calls := 0
 		app := vt.Serve(t, via.Register(liveForm{calls: &calls}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
-		assert.Contains(t, page, `data-attr-value="$_viatab"`,
+		assert.Contains(t, page, `data-attr:value="$_viatab"`,
 			"a live unit's PostForm must reactively fill the fallback field from the tab signal")
 		formURL := actionURL(t, page, 0, 0)
 

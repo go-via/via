@@ -311,6 +311,11 @@ Stated plainly so you can decide whether to wait:
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared
   pointer dep, or `Redirect` instead of returning a page.
+- **A native form submit whose action mints the session renders its own
+  returned page anonymously** — `OnInit` resolves the session from the
+  request's cookie, which predates the `Set-Cookie` the same action just
+  wrote. `Redirect` after a session-establishing submit instead of returning
+  a page directly.
 - **An `Embed`'s position among the page's `Embed` calls is its identity**
   (container id, signal prefix, dispatch address). It must be fixed for the
   life of a connection: a `When` around an `Embed` must depend only on data

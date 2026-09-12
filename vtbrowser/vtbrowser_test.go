@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -380,6 +381,52 @@ func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
 	if path != "/" {
 		t.Fatalf("expected no navigation for a @post Redirect, but went to %q", path)
 	}
+	s.RequireCleanConsole()
+}
+
+// liveFormBrowser is a live root with a native PostForm — the vehicle for
+// proving, in a real browser, that the hidden $_viatab field is actually
+// filled (see the L1 fix: `data-attr:value`, not `data-attr-value`, which
+// Datastar's `t.split(/:(.+)/)` key parser silently drops).
+type liveFormBrowser struct {
+	calls *int
+}
+
+func (f *liveFormBrowser) OnConnect(*via.Ctx) error { return nil }
+func (f *liveFormBrowser) Save(ctx *via.Ctx)        { *f.calls++ }
+func (f *liveFormBrowser) View() h.H {
+	return h.Div(
+		via.PostForm(f.Save,
+			h.Input(h.Name("name"), h.RawAttr("id", "name")),
+			h.Button(h.RawAttr("id", "save"), h.Str("save")),
+		),
+		h.Span(h.RawAttr("id", "calls"), h.Str(strconv.Itoa(*f.calls))),
+	)
+}
+
+// A native PostForm submit from inside a live unit must reach the handler and
+// come back as a fresh 200 page, not fall through to the stateless path's
+// fail-closed 410 "no live connection for this tab" document. Only a real
+// browser can see this: an unfilled `data-attr-value` is not an error, it is
+// silently ignored, so no Go-level assertion catches it (see L1).
+func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
+	calls := 0
+	s := vtbrowser.Open(t, via.Register(liveFormBrowser{calls: &calls}))
+
+	s.Sleep(500 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Type("#name", "alice")
+	s.Click("#save")
+	s.Sleep(500 * time.Millisecond) // let the native submit navigate
+
+	var status float64
+	s.Eval(`performance.getEntriesByType('navigation')[0].responseStatus`, &status)
+	if status != http.StatusOK {
+		t.Fatalf("native PostForm submit from a live unit did not return 200: got %v", status)
+	}
+	if got := s.Text("body"); strings.Contains(got, "no live connection for this tab") {
+		t.Fatalf("submit fell through to the stateless 410 fallback: %q", got)
+	}
+	s.WaitTextContains("#calls", "1")
 	s.RequireCleanConsole()
 }
 
