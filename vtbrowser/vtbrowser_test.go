@@ -144,6 +144,47 @@ func TestChild_multiplexedIslandsUpdateIndependently(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
+// pRoot is a PLAIN root (not itself live) with its own action, embedding a
+// live bCounter — the region-ownership case: the root's own action patch
+// must not repaint the live island from its seed value.
+type pRoot struct {
+	hits    int
+	Counter bCounter
+}
+
+func (p *pRoot) Hit(ctx *via.Ctx) { p.hits++ }
+func (p *pRoot) View() h.H {
+	return h.Div(
+		h.P(h.Str("hits "), h.Str(p.hits)),
+		h.Button(via.OnClick(p.Hit), h.Str("hit")),
+		via.Embed(p.Counter),
+	)
+}
+
+// A plain root's own action re-renders #root (Datastar's default whole-root
+// morph); the embedded live island's container carries data-ignore-morph, so
+// that patch must leave the island's DOM untouched, and the island's own push
+// (Datastar inner mode) must still land afterward.
+func TestChild_rootActionPatchLeavesLiveIslandAlone(t *testing.T) {
+	s := vtbrowser.Open(t, via.Register(pRoot{}))
+
+	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Click("#via-i0 button")
+	s.WaitTextContains("#via-i0 p", "clicks 1")
+
+	s.Click("#root > div > button")
+	s.WaitTextContains("#root > div > p", "hits 1")
+
+	s.Sleep(300 * time.Millisecond) // give a stray morph time to land, if it were going to
+	if got := s.Text("#via-i0 p"); !strings.Contains(got, "clicks 1") {
+		t.Fatalf("the root's own action patch repainted the live island from its seed: %q", got)
+	}
+
+	s.Click("#via-i0 button")
+	s.WaitTextContains("#via-i0 p", "clicks 2")
+	s.RequireCleanConsole()
+}
+
 // --- harness tests ---
 
 // Open must serve the server-rendered skeleton (including the #root morph

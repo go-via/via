@@ -47,8 +47,8 @@ func TestMux_eachLiveIslandPushesItsOwnContainer(t *testing.T) {
 		app := vt.Serve(t, via.Register(duo{}))
 		conn := app.Connect()
 
-		conn.Await(`id="via-i0"`) // island 0 pushed its container
-		conn.Await(`id="via-i1"`) // island 1 pushed its container, independently
+		conn.Await(`selector #via-i0`) // island 0 pushed its container
+		conn.Await(`selector #via-i1`) // island 1 pushed its container, independently
 	})
 }
 
@@ -183,7 +183,7 @@ func TestMux_liveIslandSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	// bubble — it needs no fake time and this keeps the two halves of the
 	// test independent.
 	_, body := do(t, serve(t, srv), http.MethodGet, "/", "")
-	assert.Contains(t, body, `id="via-i0" data-signals=`, "GET must declare the island's signal")
+	assert.Contains(t, body, `id="via-i0" data-ignore-morph data-signals=`, "GET must declare the island's signal")
 	assert.Contains(t, body, `data-bind="i0_s0"`, "the island signal uses an island-scoped slot")
 
 	synctest.Test(t, func(t *testing.T) {
@@ -242,8 +242,8 @@ func TestMux_liveIslandActionRoutesToItsIslandAndPushes(t *testing.T) {
 		status, _ := app.IslandAction(1, 0).Live(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
 
-		line := conn.Await("c=1")
-		assert.Contains(t, line, "via-i0", "the action's push must target its own island container")
+		conn.Await("selector #via-i0") // the action's push must target its own island container
+		conn.Await("c=1")
 	})
 }
 
@@ -266,6 +266,44 @@ func TestMux_liveIslandActionBindingCarriesTabHeader(t *testing.T) {
 	_, body := do(t, serve(t, via.Register(panel{})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/1/0\?v=[^']+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
 		"a live island action must carry its island id and the tab header")
+}
+
+// hitsRoot is a PLAIN root (not itself live) with its own stateless action,
+// embedding a LIVE island (liveClicker) — the region-ownership case: the
+// root's own action patch must not repaint the island from its seed value.
+type hitsRoot struct {
+	hits int
+	Isl  liveClicker
+}
+
+func (r *hitsRoot) Hit(ctx *via.Ctx) { r.hits++ }
+func (r *hitsRoot) View() h.H {
+	return h.Div(
+		h.Span(h.Str("hits:"), h.Str(r.hits)),
+		via.Embed(r.Isl),
+		h.Button(via.OnClick(r.Hit), h.Str("hit")),
+	)
+}
+
+// A plain root's own action re-renders only itself (Datastar's default,
+// whole-root morph) — its embedded live island's container must carry
+// data-ignore-morph on every root-walk render, so that patch never repaints
+// the island from its seed value.
+func TestEmbed_statelessRootPatchLeavesLiveIslandRegionAlone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(hitsRoot{}))
+
+		status, body := app.Get("/")
+		assert.Equal(t, http.StatusOK, status)
+		assert.Contains(t, body, `id="via-i0" data-ignore-morph`,
+			"a live island's container must be marked so a root patch skips it")
+
+		status, body = app.Action(0).Fire()
+		assert.Equal(t, http.StatusOK, status)
+		assert.Contains(t, body, "hits:1", "the root's own action must take effect")
+		assert.Contains(t, body, `id="via-i0" data-ignore-morph`,
+			"the root patch must still mark the live island's container")
+	})
 }
 
 // A parent that embeds live islands (but isn't itself a live composition) must
@@ -421,8 +459,8 @@ func TestEmbed_projectsLiveIsland(t *testing.T) {
 	app := vt.Serve(t, via.Register(liveShell{Body: beater{label: "hb"}}))
 	conn := app.Connect()
 
-	conn.Await(`id="via-i0"`) // the embedded live island pushes its own container
-	conn.Await("hb=")         // and renders its own server State through the field
+	conn.Await(`selector #via-i0`) // the embedded live island pushes its own container
+	conn.Await("hb=")              // and renders its own server State through the field
 }
 
 // Embed panics when the child lacks a View() — a wrote-it-wrong error surfaces
@@ -454,8 +492,8 @@ func TestEmbed_liveChildInsideLiveIslandAtDepthTwo(t *testing.T) {
 	app := vt.Serve(t, via.Register(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
 
-	conn.Await(`id="via-i1"`) // the depth-two live child gets its own container, distinct from its wrapper island's via-i0
-	conn.Await("hb=")         // and streams its own server state independently
+	conn.Await(`selector #via-i1`) // the depth-two live child gets its own container, distinct from its wrapper island's via-i0
+	conn.Await("hb=")              // and streams its own server state independently
 }
 
 // The guard is about LIVE children only: a plain (stateless) child embedded
@@ -669,8 +707,8 @@ func TestPostForm_liveSubmitRendersFreshPageWithDistinctIslandIds(t *testing.T) 
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	awaitLine(t, lines, `id="via-i0"`)
-	awaitLine(t, lines, `id="via-i1"`)
+	awaitLine(t, lines, `selector #via-i0`)
+	awaitLine(t, lines, `selector #via-i1`)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, 1, 0) // island 1 = A's dispatch address (islandIdx 0 + 1)

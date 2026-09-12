@@ -35,20 +35,6 @@ func (p *renderPass) nextDigestToken() string {
 	return "\x00vD" + strconv.Itoa(tok) + "\x00"
 }
 
-// renderIslandPatch re-renders island idx's child for an element-patch — Datastar
-// morphs it onto #via-i{idx}, leaving siblings alone. base is the mount prefix,
-// so the island's own action URLs carry it too. Returns the render's bind Ctx
-// alongside the framed bytes: a live push keeps it as the island's current unit
-// so the next action's actions/hydrators table is the one this render bound.
-func renderIslandPatch(idx int, v viewer, base string) (*Ctx, []byte) {
-	c, inner := renderIslandBind(idx, v, base)
-	var b bytes.Buffer
-	b.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `">`)
-	b.Write(inner)
-	b.WriteString(`</div>`)
-	return c, b.Bytes()
-}
-
 // Embed renders a child composition — a plain struct field of the parent,
 // seeded at the parent's literal — into its own positional container within the
 // parent's View. The child may be plain (just structure + actions) or live (it
@@ -152,10 +138,18 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 
 	// Render first so the child's signal slots (order/initial) are populated,
 	// then declare them on the container — on a declaring render (first paint)
-	// only. A live push omits the declaration (renderIslandPatch), so a morph
+	// only. A live push omits the declaration (renderIslandBind), so a morph
 	// never re-merges a signal the user is editing.
 	child.rendered = renderIslandInner(child, v)
 	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
+	if live {
+		// Datastar only skips a morph when BOTH the existing element and the
+		// incoming fragment carry the attribute — so every root-walk render
+		// marks the container, and a plain root's own patch leaves it alone.
+		// The island's own push targets #via-i{idx} in inner mode instead,
+		// which never compares the container, so the push still lands.
+		r.WriteString(` data-ignore-morph`)
+	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
 		writeSignalsAttr(&buf, child.order, child.initial, parent.declareOnly)

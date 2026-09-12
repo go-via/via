@@ -598,15 +598,18 @@ func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
 	return push
 }
 
-// islandPush is rootPush for an embedded live island: it re-renders island idx
-// in place and replaces the connection's current unit for it.
+// islandPush is rootPush for an embedded live island: it re-renders island idx's
+// children in place (Datastar inner mode, so the container's own
+// data-ignore-morph never blocks the push) and replaces the connection's
+// current unit for it.
 func islandPush(idx int, v viewer, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderIslandPatch(idx, v, base)
+		bind, body := renderIslandBind(idx, v, base)
 		bind.push = push
 		lc.replace(bind)
-		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
+		id := "via-i" + strconv.Itoa(idx)
+		stream.frame(func(w io.Writer) { writeInnerPatchFrame(w, id, body) })
 	}
 	return push
 }
