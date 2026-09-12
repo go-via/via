@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // H is the single sealed tree type. The render method is unexported, so only
@@ -206,11 +207,29 @@ func (a rawAttr) render(r *Renderer) {
 
 func (a rawAttr) isAttr() {}
 
-// validAttrName reports whether name is a safe HTML attribute name: a leading
-// ASCII letter, then ASCII letters, digits, or hyphens. Only attribute values
-// are escaped at render — an unvalidated name composed from caller data could
-// graft a second attribute or close the tag, so the name is allowlisted here.
+// validAttrName reports whether name is a safe HTML attribute name. Only
+// attribute values are escaped at render — an unvalidated name composed from
+// caller data could graft a second attribute or close the tag, so the name is
+// allowlisted here: a leading ASCII letter, then ASCII letters, digits or
+// hyphens.
+//
+// data-* names additionally admit ':', '_' and '.', because that is Datastar's
+// plugin syntax: it splits a key on the FIRST colon, so data-on:click is the
+// `on` plugin with arg `click`, while data-on-click is a plugin literally named
+// "on-click" that does not exist and is silently ignored. Rejecting ':' would
+// put the entire client-side vocabulary (data-on:*, data-class:*, data-attr:*,
+// __debounce.300ms modifiers) out of reach.
+//
+// Inline DOM event handlers are rejected outright: any on* name that is not
+// data-on* executes caller-adjacent strings as script, which is the actual XSS
+// vector a name allowlist exists to stop.
 func validAttrName(name string) bool {
+	if rest, ok := cutDataPrefix(name); ok {
+		return validDataSuffix(rest)
+	}
+	if len(name) >= 2 && (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N') {
+		return false
+	}
 	if name == "" {
 		return false
 	}
@@ -226,13 +245,38 @@ func validAttrName(name string) bool {
 	return true
 }
 
+// cutDataPrefix strips a case-insensitive "data-" prefix.
+func cutDataPrefix(name string) (string, bool) {
+	if len(name) < len("data-") || !strings.EqualFold(name[:len("data-")], "data-") {
+		return "", false
+	}
+	return name[len("data-"):], true
+}
+
+// validDataSuffix allows Datastar's plugin punctuation after a leading letter.
+func validDataSuffix(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '-' || c == ':' || c == '_' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
 // must match [A-Za-z][A-Za-z0-9-]* — an invalid name panics, since a name is a
 // programming-time construction and an injectable one defeats the safe-HTML
 // guarantee.
 func RawAttr(name, val string) Attr {
 	if !validAttrName(name) {
-		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
 	}
 	return rawAttr{name: name, val: val}
 }
@@ -240,8 +284,8 @@ func RawAttr(name, val string) Attr {
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. The
 // suffix is held to the same allowlist as RawAttr ("data-" is a fixed prefix).
 func Data(name, val string) Attr {
-	if !validAttrName(name) {
-		panic(fmt.Sprintf("h: invalid data-* attribute suffix %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+	if !validAttrName("data-" + name) {
+		panic(fmt.Sprintf("h: invalid data-* attribute suffix %q (must match [A-Za-z][A-Za-z0-9-]* with : _ . permitted)", name))
 	}
 	return rawAttr{name: "data-" + name, val: val}
 }
@@ -259,7 +303,7 @@ func (noAttr) isAttr()          {}
 // at all when off. The name is held to the same allowlist as RawAttr.
 func BoolAttr(name string, on bool) Attr {
 	if !validAttrName(name) {
-		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*)", name))
+		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
 	}
 	if !on {
 		return noAttr{}

@@ -221,3 +221,52 @@ func TestRawAttr_acceptsOrdinaryHTMLAttributeNames(t *testing.T) {
 		assert.Equal(t, tc.want, got)
 	}
 }
+
+// Datastar v1 parses a plugin attribute by splitting the key on the FIRST
+// colon: data-on:click is the `on` plugin with arg `click`, while data-on-click
+// names a plugin "on-click" that does not exist and is silently ignored. A name
+// allowlist that rejects ':' and '_' therefore puts the entire client-side
+// vocabulary — events, modifiers, class/attr toggles — out of reach.
+func TestDatastarPluginNamesAreExpressible(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ suffix, val, want string }{
+		{"on:click", "@post('/x')", `data-on:click="@post(&#39;/x&#39;)"`},
+		{"on:keydown__debounce.300ms", "@get('/s')", `data-on:keydown__debounce.300ms="@get(&#39;/s&#39;)"`},
+		{"class:active", "$open", `data-class:active="$open"`},
+		{"attr:disabled", "$busy", `data-attr:disabled="$busy"`},
+		{"show", "$open", `data-show="$open"`},
+	} {
+		got := render(t, h.Div(h.Data(tc.suffix, tc.val)))
+		assert.Containsf(t, got, tc.want, "h.Data(%q) must render the Datastar attribute verbatim", tc.suffix)
+
+		raw := render(t, h.Div(h.RawAttr("data-"+tc.suffix, tc.val)))
+		assert.Containsf(t, raw, tc.want, "h.RawAttr(%q) must render the Datastar attribute verbatim", "data-"+tc.suffix)
+	}
+}
+
+// The colon is not the danger; an inline DOM event handler is. onclick="..."
+// executes its value as script, so a caller-supplied name that reaches it turns
+// any string-valued attribute into an XSS sink — regardless of case, since HTML
+// attribute names are case-insensitive.
+func TestRawAttr_rejectsInlineEventHandlers(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"onclick", "onerror", "ONCLICK", "onload", "OnMouseOver", "onfocus"} {
+		assert.Panicsf(t, func() { h.RawAttr(name, "alert(1)") },
+			"RawAttr(%q) must panic — inline event handlers are script sinks", name)
+		assert.Panicsf(t, func() { hcore.BoolAttr(name, true) },
+			"BoolAttr(%q) must panic — inline event handlers are script sinks", name)
+	}
+	// The prefix rule must not swallow data-on:*, which is Datastar, not a DOM
+	// handler, and must not reject legitimate names that merely start with "o".
+	assert.NotPanics(t, func() { h.RawAttr("data-on:click", "@post('/x')") })
+	assert.NotPanics(t, func() { h.RawAttr("open", "") })
+}
+
+// The ':' '_' '.' relaxation is scoped to data-*; a plain attribute name has no
+// use for them and they would widen the breakout surface for nothing.
+func TestNonDataNamesStillRejectPluginPunctuation(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"xmlns:foo", "a_b", "a.b", "data-", "data-:x"} {
+		assert.Panicsf(t, func() { h.RawAttr(name, "v") }, "RawAttr(%q) must panic", name)
+	}
+}
