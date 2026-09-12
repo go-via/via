@@ -246,5 +246,23 @@ as a re-read of the README, not a diff.
   honoured, on a mounted page's SSE stream too** — the stream route ran
   neither, so a session-gated live page's push channel was reachable by
   anyone who knew the URL.
+- **A panicking render inside a dispatched action, a Tick, or a Listen
+  handler no longer kills the live stream.** Only the action's own mutation
+  was recovered; a panic in the re-render it (or a timer, or a topic fan-out)
+  triggers unwound the whole connection goroutine — after an action had
+  already answered 204. Each pulse item now recovers on its own; the
+  connection stays up and keeps serving later actions/ticks.
+- **A session id carried by the request is rotated to a fresh one on its
+  first write**, closing fixation for the common case (a planted pre-login
+  cookie does not survive the write that logs the user in) with no `Rotate`
+  call required. `Session.Rotate` remains for an explicit rotation.
+- A value-carrying action (`OnClickArg`) with a malformed or wrong-typed `?a=`
+  now answers 400 instead of silently handing the handler a zero value.
+- `Tick`/`Listen` called after `OnConnect` has returned now log loudly
+  instead of silently registering nothing.
+- A panic before a live stream's headers are sent now answers 500 instead of
+  falling through to Go's default 200-with-empty-body.
+- `WithSessionKey`/`VIA_SESSION_KEY` under 16 bytes now panics at
+  construction instead of silently signing cookies with a guessable key.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.

@@ -80,7 +80,16 @@ The action endpoint and rendered pages are hardened by default:
   CSRF token, and dev/non-browser clients just work); set `WithTrustedOrigin`
   in production to enforce same-origin (plus the listed origins), failing
   closed.
-- **Request-body cap** + strict decode (413 / 400), and a **panic recover**.
+- **Known limitation:** a live connection's tab id is a bearer credential —
+  it is not currently checked against the session that established the
+  connection. With the origin floor open (the default), a leaked tab id lets
+  a request carrying no session cookie at all, from any origin, drive that
+  connection's action. Never render, log, or leak a tab id outside its own
+  client; set `WithTrustedOrigin` to close the cross-origin leg. Binding the
+  tab id to its connecting session is deferred past v0.8.
+- **Request-body cap** (413) + a capped JSON decode (400 on malformed/oversized
+  input; unknown signal keys and trailing bytes after the JSON value are
+  ignored, not rejected — it is not a strict decode), and a **panic recover**.
 - **`nosniff` + a hash-admitted CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
   the `Function` constructor — without it every action is silently dead in the
@@ -90,7 +99,9 @@ The action endpoint and rendered pages are hardened by default:
   the CSP is a seatbelt against *injected* inline script; the load-bearing
   defenses are output escaping, the attribute-name allowlist, and the same URL
   gate on every `Redirect` target (`javascript:`/`data:`/`//` are dropped
-  loudly, falling back to the element patch).
+  loudly: a Datastar action falls back to its normal element-patch response, a
+  native `PostForm` submit falls back to a full-page re-render, and an unsafe
+  target from `OnInit` answers 500).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` and the typed helpers reject injectable names).
 
@@ -124,8 +135,13 @@ examples, the whole live stack verified in real headless browsers
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
-  write — apps that never store anything stay cookieless. `Session.Rotate` for
-  fixation defense, idle TTL eviction. The signing key resolves
+  write — apps that never store anything stay cookieless. A request-carried
+  session id is rotated to a fresh one the first time it writes (fixation
+  defense with no explicit call needed); `Session.Rotate` remains for an
+  explicit rotation. Idle sessions expire lazily on access (past the TTL, the
+  next read/write treats them as gone) — there is no background sweep, so a
+  session that is never touched again is not proactively evicted. The signing
+  key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
   first use — set a stable key so sessions survive restarts and span pods).
   `WithSessionTTL`/`WithSessionCookieName` tune it. The cookie is `Secure`
@@ -207,7 +223,15 @@ at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
 for replay). The SSE GET stream applies the same origin floor as the action
 POST and is capped at a fixed number of concurrent connections (10,000; over
-the cap returns 503).
+the cap returns 503) — router-wide, not per IP: an anonymous client can open
+enough connections on its own to fill the cap and 503 everyone else. A per-IP
+cap is deferred past v0.8.
+
+**Reconnect.** A dropped stream and its reconnect build an entirely new
+`liveConn`: any action POST still in flight against the old tab id answers 410
+once the old connection is gone, and the client's own reconnect manager is
+what re-bootstraps the page from server truth (also see "Live-island
+multiplexing" above for the one-level-deep nesting limit).
 
 ## Develop
 
