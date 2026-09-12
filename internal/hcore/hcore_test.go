@@ -66,7 +66,7 @@ func TestDyn_rendersInTheElementBody(t *testing.T) {
 }
 
 // DynAttr satisfies Attr (isAttr), so El must route it into the opening tag —
-// this is the seam OnClick and friends use to claim an action id at render
+// this is the seam On and friends use to claim an action id at render
 // time without El special-casing them by concrete type.
 func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	t.Parallel()

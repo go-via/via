@@ -138,7 +138,7 @@ type panicComp struct{}
 
 func (p *panicComp) Boom(*via.Ctx) { panic("boom") }
 func (p *panicComp) View() h.H {
-	return h.Div(h.Button(via.OnClick(p.Boom), h.Str("x")))
+	return h.Div(h.Button(via.On("click", p.Boom), h.Str("x")))
 }
 
 // POST /_via/a/{n} is a state-changing endpoint; under origin enforcement

@@ -1,6 +1,6 @@
 // Command poll is a CRUD list with per-row actions: add an option, vote for one,
 // remove one. The list re-sorts by vote count on every render, so rows reorder
-// constantly — yet each button carries its option's id (via.OnClickArg), so a
+// constantly — yet each button carries its option's id (via.OnArg), so a
 // vote always lands on the option you clicked, not whatever now sits at that
 // position. That's the point of value-carrying actions: identity rides with the
 // click, so a list that grows, shrinks, and reorders never misroutes — no stable
@@ -94,8 +94,8 @@ func (a *PollApp) Remove(ctx *via.Ctx, id int) { a.poll.remove(id) }
 func (a *PollApp) row(o Option) h.H {
 	return h.Li(
 		h.Span(h.Str(o.Label+" — "), h.Str(o.Votes)),
-		h.Button(via.OnClickArg(a.Vote, o.ID), h.Str("vote")),     // carries o.ID
-		h.Button(via.OnClickArg(a.Remove, o.ID), h.Str("remove")), // carries o.ID
+		h.Button(via.OnArg("click", a.Vote, o.ID), h.Str("vote")),     // carries o.ID
+		h.Button(via.OnArg("click", a.Remove, o.ID), h.Str("remove")), // carries o.ID
 	)
 }
 
@@ -103,7 +103,7 @@ func (a *PollApp) View() h.H {
 	return h.Div(
 		h.H1(h.Str("poll")),
 		h.Ul(via.Each(a.poll.ranked(), a.row)), // rows reorder by votes each render
-		h.Form(via.OnSubmit(a.Add),
+		h.Form(via.On("submit", a.Add),
 			h.Input(a.Draft.Bind(), h.Placeholder("new option")),
 			h.Button(h.Str("add")),
 		),

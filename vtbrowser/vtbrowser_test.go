@@ -44,7 +44,7 @@ type clicker struct{ count via.State[int] }
 func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
-	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
 
 // form is a stateless page with one bound input — the vehicle for Type and Value.
@@ -93,7 +93,7 @@ func (c *chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("online: "), c.Online.Display()),
 		h.Ul(via.Each(c.Log.Get(), c.line)),
-		h.Form(via.OnSubmit(c.Send),
+		h.Form(via.On("submit", c.Send),
 			h.Input(c.Draft.Bind(), h.RawAttr("placeholder", "msg")),
 			h.Button(h.Str("send")),
 		),
@@ -113,7 +113,7 @@ type bCounter struct{ n via.State[int] }
 func (c *bCounter) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
 func (c *bCounter) View() h.H {
-	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.OnClick(c.Inc), h.Str("+")))
+	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
 }
 
 type bDash struct {
@@ -157,7 +157,7 @@ func (p *pRoot) Hit(ctx *via.Ctx) { p.hits++ }
 func (p *pRoot) View() h.H {
 	return h.Div(
 		h.P(h.Str("hits "), h.Str(p.hits)),
-		h.Button(via.OnClick(p.Hit), h.Str("hit")),
+		h.Button(via.On("click", p.Hit), h.Str("hit")),
 		via.Embed(p.Counter),
 	)
 }
@@ -359,7 +359,7 @@ type redirectViaScript struct{}
 
 func (p *redirectViaScript) Go(ctx *via.Ctx) { ctx.Redirect("/done") }
 func (p *redirectViaScript) View() h.H {
-	return h.Div(h.Button(h.RawAttr("id", "go"), via.OnClick(p.Go), h.Str("go")))
+	return h.Div(h.Button(h.RawAttr("id", "go"), via.On("click", p.Go), h.Str("go")))
 }
 
 // A via.Redirect from a Datastar @post action must NOT navigate the browser —

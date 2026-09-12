@@ -72,7 +72,7 @@ func (c *Chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Room — "), c.Online.Display(), h.Str(" online")),
 		h.Ul(c.Log.Each(c.row)),
-		h.Form(via.OnSubmit(c.Send),
+		h.Form(via.On("submit", c.Send),
 			h.Label(h.Str("you "), h.Input(c.Who.Bind())),
 			h.Input(c.Draft.Bind(), h.Placeholder("message")),
 			h.Button(h.Str("send")),

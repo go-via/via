@@ -32,8 +32,8 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.count.Add(-1) }
 func (c *Counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str(c.count.Value())),
-		h.Button(via.OnClick(c.Dec), h.Str("-")),
-		h.Button(via.OnClick(c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Dec), h.Str("-")),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 
@@ -45,7 +45,7 @@ func main() {
 ```
 
 A composition is a struct. Its `View` is a pure, `ctx`-free function. Actions are
-methods, wired by **named method value** (`via.OnClick(c.Inc)`) — no strings, no
+methods, wired by **named method value** (`via.On("click", c.Inc)`) — no strings, no
 closures. `via.Register` takes the composition **by value**: there is no `&` at
 any call site, and a missing or mistyped `View` is a compile error.
 
@@ -193,7 +193,7 @@ examples, the whole live stack verified in real headless browsers
   time, a client signal, or shared state that changes while the page is
   open.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
-  datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
+  datum — `via.OnArg("click", l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
   that grows, shrinks, and **reorders** never misroutes: the value (not the
   positional slot) picks the row. Still a named method value — no `&`, no closure.
@@ -236,7 +236,7 @@ submit shows the browser's own error page.
 
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
-lists *of* live islands (per-row actions are done via `OnClickArg`; fixed
+lists *of* live islands (per-row actions are done via `OnArg`; fixed
 embeds via `via.Embed` are done); nested live composition (a live island
 embedding a further live island, or an embedded live island's own `View`
 calling `Embed` at all — v0.8 refuses both at render instead); and

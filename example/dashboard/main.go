@@ -44,7 +44,7 @@ func (c *Counter) View() h.H {
 	return h.Div(
 		h.H2(h.Str("clicks")),
 		h.P(c.n.Display()),
-		h.Button(via.OnClick(c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 

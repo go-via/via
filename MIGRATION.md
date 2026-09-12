@@ -157,7 +157,7 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the primary hook |
 | Live island | `Connector.OnConnect` + `Disposer.Dispose` | `via.Live` — `OnConnect(*Ctx) error`; disposal is automatic |
-| Events | `on.Click(p.Inc)` (package `on`) | `via.OnClick`/`OnSubmit`/`OnChange`; typed data via `via.OnClickArg` (no `OnInput`, `OnChangeArg`, or `OnSubmitArg` — per-keystroke work is a `Signal.Bind` + `OnChange`/`OnSubmit`, a per-row toggle is `OnClickArg`) |
+| Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")` — and it is generic over `Stringish` |
 | Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49; `h.RawAttr` covers the rest |
 | Signal rendering | `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`, `.Class()` | `Bind` remains; the rest are gone — render the value in Go |
@@ -260,7 +260,7 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.count.Add(1) }
 func (c *Counter) View() h.H {
     return h.Main(h.Class("container"),
         h.P(h.Str("Count: "), h.Str(c.count.Value())),
-        h.Button(via.OnClick(c.Inc), h.Str("+")),
+        h.Button(via.On("click", c.Inc), h.Str("+")),
     )
 }
 

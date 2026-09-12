@@ -42,10 +42,10 @@ func (c *loginComp) Refresh(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (c *loginComp) View() h.H {
 	return h.Div(
 		h.P(h.Str(c.greeting)),
-		h.Button(via.OnClick(c.SignIn), h.Str("in")),      // action 0
-		h.Button(via.OnClick(c.Greet), h.Str("greet")),    // action 1
-		h.Button(via.OnClick(c.SignOut), h.Str("out")),    // action 2
-		h.Button(via.OnClick(c.Refresh), h.Str("rotate")), // action 3
+		h.Button(via.On("click", c.SignIn), h.Str("in")),      // action 0
+		h.Button(via.On("click", c.Greet), h.Str("greet")),    // action 1
+		h.Button(via.On("click", c.SignOut), h.Str("out")),    // action 2
+		h.Button(via.On("click", c.Refresh), h.Str("rotate")), // action 3
 	)
 }
 
@@ -67,8 +67,8 @@ func (c *counterComp) Show(ctx *via.Ctx) {
 func (c *counterComp) View() h.H {
 	return h.Div(
 		h.P(h.Str("n="), h.Str(c.shown)),
-		h.Button(via.OnClick(c.Bump), h.Str("+")),    // action 0
-		h.Button(via.OnClick(c.Show), h.Str("show")), // action 1
+		h.Button(via.On("click", c.Bump), h.Str("+")),    // action 0
+		h.Button(via.On("click", c.Show), h.Str("show")), // action 1
 	)
 }
 

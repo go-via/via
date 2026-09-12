@@ -173,7 +173,7 @@ func (d dynAttr) render(r *Renderer) { d.fn(r) }
 func (d dynAttr) isAttr()            {}
 
 // DynAttr wraps fn as a dynamic attribute. via uses this for event bindings
-// (OnClick) that must claim an action id from the Binder at render time.
+// (On) that must claim an action id from the Binder at render time.
 func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 
 // El builds a generic element with the given tag and children.

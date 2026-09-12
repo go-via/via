@@ -868,7 +868,7 @@ type clicker struct{ count via.State[int] }
 func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
-	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
 
 func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T) {
@@ -924,7 +924,7 @@ func (c *chatIsland) row(m string) h.H { return h.Li(h.Str(m)) }
 func (c *chatIsland) View() h.H {
 	return h.Div(
 		h.Ul(via.Each(c.Log.Get(), c.row)),
-		h.Form(via.OnSubmit(c.Send), h.Input(c.Draft.Bind())),
+		h.Form(via.On("submit", c.Send), h.Input(c.Draft.Bind())),
 	)
 }
 
@@ -975,7 +975,7 @@ type liveReqEchoer struct{ echo via.State[string] }
 func (e *liveReqEchoer) Grab(ctx *via.Ctx)            { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
 func (e *liveReqEchoer) OnConnect(ctx *via.Ctx) error { return nil }
 func (e *liveReqEchoer) View() h.H {
-	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.OnClick(e.Grab), h.Str("x")))
+	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
 }
 
 // A live action runs on the island goroutine, yet it must still see the request
@@ -1080,7 +1080,7 @@ func (p *pathTicker) View() h.H {
 	return h.Div(
 		h.P(h.Str("path: "), p.path.Display()),
 		h.P(h.Str("n: "), p.n.Display()),
-		h.Button(via.OnClick(p.Bump)),
+		h.Button(via.On("click", p.Bump)),
 	)
 }
 
@@ -1164,7 +1164,7 @@ type livePushIsland struct{ n int }
 func (k *livePushIsland) OnConnect(ctx *via.Ctx) error { return nil }
 func (k *livePushIsland) Bump(ctx *via.Ctx)            { k.n++ }
 func (k *livePushIsland) View() h.H {
-	return h.Div(h.Str(k.n), h.Button(via.OnClick(k.Bump)))
+	return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump)))
 }
 
 type livePushParent struct{ I livePushIsland }
@@ -1207,7 +1207,7 @@ func (r *renderCounter) OnConnect(*via.Ctx) error { return nil }
 func (r *renderCounter) Bump(*via.Ctx)            { r.count.Set(r.count.Get() + 1) }
 func (r *renderCounter) View() h.H {
 	r.views.Add(1)
-	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.OnClick(r.Bump)))
+	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.On("click", r.Bump)))
 }
 
 // A live action must run against the last render's table, not a fresh one of
@@ -1277,8 +1277,8 @@ func (f *flakyRender) View() h.H {
 	}
 	return h.Div(
 		h.P(h.Str("n: "), f.n.Display()),
-		h.Button(via.OnClick(f.Trigger)),
-		h.Button(via.OnClick(f.Fix)),
+		h.Button(via.On("click", f.Trigger)),
+		h.Button(via.On("click", f.Fix)),
 	)
 }
 
@@ -1313,7 +1313,7 @@ type liveArg struct{ last via.State[int] }
 func (l *liveArg) OnConnect(*via.Ctx) error { return nil }
 func (l *liveArg) Set(ctx *via.Ctx, v int)  { l.last.Set(v) }
 func (l *liveArg) View() h.H {
-	return h.Div(l.last.Display(), h.Button(via.OnClickArg(l.Set, 7)))
+	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Set, 7)))
 }
 
 // A malformed ?a= on a LIVE action must answer 400, not run the handler with
@@ -1439,7 +1439,7 @@ func (r *racyTicker) OnConnect(ctx *via.Ctx) error { ctx.Tick(time.Microsecond, 
 func (r *racyTicker) tick(*via.Ctx)                { r.n.Set(r.n.Get() + 1) }
 func (r *racyTicker) Bump(*via.Ctx)                {}
 func (r *racyTicker) View() h.H {
-	return h.Div(r.n.Display(), h.Button(via.OnClick(r.Bump)))
+	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
 }
 
 // liveConn.mu guards units: a background tick's push runs replace
@@ -1552,7 +1552,7 @@ type abandonedAction struct {
 
 func (a *abandonedAction) OnConnect(ctx *via.Ctx) error { return nil }
 func (a *abandonedAction) Act(ctx *via.Ctx)             { a.applied.Add(1) }
-func (a *abandonedAction) View() h.H                    { return h.Div(h.Button(via.OnClick(a.Act))) }
+func (a *abandonedAction) View() h.H                    { return h.Div(h.Button(via.On("click", a.Act))) }
 
 // A live action must never mutate state once its own caller has already given
 // up on it — before the fix, a closure handed off to the island goroutine
@@ -1647,7 +1647,7 @@ type racyDirtySignal struct{ n via.Signal[int] }
 func (r *racyDirtySignal) OnConnect(ctx *via.Ctx) error { return nil }
 func (r *racyDirtySignal) Inc(ctx *via.Ctx)             { r.n.Set(r.n.Get() + 1) }
 func (r *racyDirtySignal) View() h.H {
-	return h.Div(r.n.Display(), h.Button(via.OnClick(r.Inc), h.Str("inc")))
+	return h.Div(r.n.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
 }
 
 // TestLiveAction_signalPatchSurvivesARacingPush proves every Inc dispatch that

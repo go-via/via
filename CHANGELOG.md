@@ -122,7 +122,7 @@ as a re-read of the README, not a diff.
   the mount pattern doesn't have panics at request time (a wiring mistake).
 - **`ctx.Listen[T](topic, handler)`**: subscribe + pump + auto-dispose
   in one line.
-- **Arg events**: `via.OnClickArg` carries a typed render-time datum with the
+- **Arg events**: `via.OnArg` carries a typed render-time datum with the
   event — a per-row action without an `&` at the call site.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
   multipart, so a file `<input>` just works — read it with stdlib's
@@ -273,7 +273,7 @@ as a re-read of the README, not a diff.
   triggers unwound the whole connection goroutine — after an action had
   already answered 204. Each pulse item now recovers on its own; the
   connection stays up and keeps serving later actions/ticks.
-- A value-carrying action (`OnClickArg`) with a malformed, empty, or `null`
+- A value-carrying action (`OnArg`) with a malformed, empty, or `null`
   `?a=` now answers 400 instead of silently handing the handler a zero value
   (e.g. deleting row 0).
 - **A panic in a native `PostForm`'s post-mutation re-render — run on the

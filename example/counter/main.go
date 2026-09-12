@@ -40,8 +40,8 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.count.Add(-1) }
 func (c *Counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str(c.count.Value())),
-		h.Button(via.OnClick(c.Dec), h.Str("-")),
-		h.Button(via.OnClick(c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Dec), h.Str("-")),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 
