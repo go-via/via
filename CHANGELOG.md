@@ -280,12 +280,42 @@ as a re-read of the README, not a diff.
   with the origin floor open (the default), a leaked tab id let a request
   carrying no session cookie at all, from any origin, drive that connection's
   actions. Bound by the session's `*sessionData` pointer, not its id, so a
-  `Rotate` after connect does not break the binding.
+  `Rotate` after connect does not break the binding. **Extended:** a
+  connection that started anonymous and only logs in afterward — a live
+  action calling `Session().Put`/`Rotate`, or the recommended
+  "establish the session in `OnConnect`" pattern — now binds too, on that
+  first mint; previously only a session that already existed at connect time
+  was covered, so a tab that logged in mid-connection kept accepting a
+  cookieless dispatch until reload.
+- **A panicking `OnDispose` function no longer skips every disposer
+  registered after it.** Each disposer now runs through the same per-item
+  recover a Tick/Listen/action pulse already gets; a skipped disposer (e.g.
+  `sub.Stop`) used to leak its subscription for the life of the process.
 - `Tick`/`Listen` called after `OnConnect` has returned now log loudly
   instead of silently registering nothing.
 - A panic before a live stream's headers are sent now answers 500 instead of
   falling through to Go's default 200-with-empty-body.
 - `WithSessionKey`/`VIA_SESSION_KEY` under 16 bytes now panics at
   construction instead of silently signing cookies with a guessable key.
+
+### Known limitations
+
+- A live connection's tab id is a bearer credential for that connection's
+  actions until it binds to a session (at connect, or on first login
+  afterward); an anonymous connection has no session to check against at
+  all, so never render, log, or leak a tab id outside its own client.
+- There is no per-IP or per-tab cap on concurrent SSE connections beyond the
+  router-wide `WithMaxLiveConnections`; a single client can still open many.
+- Action-body JSON decoding is not strict: unknown signal keys and trailing
+  bytes after the JSON value are ignored, not rejected.
+- Session idle-TTL eviction is lazy — enforced on the next access, not swept
+  proactively — so a session nobody ever touches again outlives its TTL in
+  memory.
+- A `Tick` handler that blocks (I/O, an unbounded loop) pins the connection's
+  one goroutine, which defeats a clean shutdown of that connection until the
+  handler returns.
+- A session that idles past its TTL while a live stream is open turns every
+  later dispatch on that tab into a 403 "session mismatch" until the page is
+  reloaded — the stream itself does not keep the session warm.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.
