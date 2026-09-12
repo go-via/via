@@ -321,7 +321,9 @@ func typeKey[T any]() any { return (*T)(nil) }
 // one-per-session value like the logged-in user. Sessions are always on and
 // lazy: the first Put issues the cookie, and only where a response is open —
 // a stateless action, OnConnect, or a live action (its response hasn't gone
-// out yet when the action runs).
+// out yet when the action runs). Put does not rotate the session id — call
+// [Session.Rotate] right after a Put that changes auth state (login,
+// privilege elevation) so a pre-auth id an attacker planted doesn't survive.
 // WithSessionKey / WithSessionTTL / WithSessionCookieName tune, but do not
 // gate, the behavior.
 func (s *Session) Put[T any](v T) {

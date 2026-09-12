@@ -87,6 +87,10 @@ The action endpoint and rendered pages are hardened by default:
   session) has nothing to check against — never render, log, or leak a tab
   id outside its own client, and set `WithTrustedOrigin` to close the
   cross-origin leg too.
+- **Session fixation defense is opt-in, not automatic**: sessions never
+  rotate their id on their own, so call `Session.Rotate()` at an auth-state
+  change (login, logout, privilege elevation) to invalidate a pre-auth id an
+  attacker may have planted.
 - **Request-body cap** (413) + a capped JSON decode (400 on malformed/oversized
   input; unknown signal keys and trailing bytes after the JSON value are
   ignored, not rejected — it is not a strict decode), and a **panic recover**.
