@@ -75,9 +75,16 @@ func renderIslandPatch(idx int, v viewer, base string) (*Ctx, []byte) {
 // is NOT itself live (the root, or a plain wrapper reached only through
 // further plain Embeds, may hold it) — a live island can never be embedded
 // inside another live composition, nor may a live island's own View call
-// Embed at all. Nested live composition (keyed live islands addressing a
-// dynamic set of live children) is a deferred feature; violating either rule
+// Embed at all. Nested live composition (a dynamic set of live children
+// addressed by identity) is a deferred feature; violating either rule
 // panics at render, loud and early, rather than silently misrouting an action.
+//
+// An Embed's position among the page's Embed calls is its identity — the
+// container id, the signal prefix, and the dispatch address are all derived
+// from render order. That position must be the same on every render for the
+// life of a connection: a When wrapped around an Embed must depend only on
+// data fixed by OnInit or the field literal, never on time, a client signal,
+// or shared state that changes while the page is open.
 //
 // It panics if the child has no View() method — a wrote-it-wrong error, loud
 // at the first render, never a silent blank or dead region.

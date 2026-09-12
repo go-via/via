@@ -311,6 +311,11 @@ Stated plainly so you can decide whether to wait:
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared
   pointer dep, or `Redirect` instead of returning a page.
+- **An `Embed`'s position among the page's `Embed` calls is its identity**
+  (container id, signal prefix, dispatch address). It must be fixed for the
+  life of a connection: a `When` around an `Embed` must depend only on data
+  fixed by `OnInit` or the field literal, never on time, a client signal, or
+  shared state that changes while the page is open.
 
 ## Staying on v1
 
