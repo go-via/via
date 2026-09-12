@@ -1296,6 +1296,34 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 	})
 }
 
+// Neighbour of the malformed-arg case: a missing ?a= (empty, or "null") on a
+// LIVE action must also answer 400, not run Set with the zero value.
+func TestLive_missingActionArgAnswers400(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+	}{
+		{"empty", "a="},
+		{"null", "a=null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				app := vt.Serve(t, via.Register(liveArg{}))
+				conn := app.Connect()
+
+				url := strings.Replace(conn.ActionURL(0, 0), "a=7", tt.a, 1)
+				status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+				assert.Equal(t, http.StatusBadRequest, status)
+
+				status, _ = app.Action(0).Live(conn).Fire() // well-formed, same slot
+				assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive")
+				conn.Await("7")
+			})
+		})
+	}
+}
+
 // reTicker's beat handler calls Tick again on the same (already-connected)
 // Ctx — nonsensical user code, but it must not silently register a second,
 // invisible ticker; it must log loudly and otherwise no-op.

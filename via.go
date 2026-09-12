@@ -387,10 +387,12 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 				return
 			}
 			var v T
-			if raw := rc.req.URL.Query().Get("a"); raw != "" {
-				if err := json.Unmarshal([]byte(raw), &v); err != nil {
-					panic(badActionArg{err: err})
-				}
+			raw := rc.req.URL.Query().Get("a")
+			if raw == "" || raw == "null" {
+				panic(badActionArg{err: errors.New("missing action arg")})
+			}
+			if err := json.Unmarshal([]byte(raw), &v); err != nil {
+				panic(badActionArg{err: err})
 			}
 			fn(rc, v)
 		})

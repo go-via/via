@@ -612,6 +612,30 @@ func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
 }
 
+// A missing ?a= value (empty, or the literal "null") must answer 400, not
+// silently hand the handler the zero value — the "delete row 0" case this
+// guards against reads identically to a malformed arg to a client.
+func TestActionArg_missingArgAnswers400(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+	}{
+		{"empty", "a="},
+		{"null", "a=null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := serve(t, via.Register(todoList{box: newTodoList()}))
+			_, page := do(t, srv, http.MethodGet, "/", "")
+			url := strings.Replace(actionURL(t, page, 0, 0), "a=1", tt.a, 1)
+			resp, body := do(t, srv, http.MethodPost, url, "{}")
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a missing arg")
+		})
+	}
+}
+
 // todoBoard embeds the todo list as a STATELESS island — per-row value-actions
 // must work there too, not only at the root.
 type todoBoard struct{ List todoList }
