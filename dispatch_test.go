@@ -656,3 +656,37 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 		assert.Zero(t, aCalls, "the /a handler must not have run")
 	})
 }
+
+// nativeFormPanic's View panics on re-render once boom is set — reproducing
+// a native <form> submit whose mutation succeeds but whose full-page
+// re-render (dispatchLive, native mode) then panics on the island goroutine.
+type nativeFormPanic struct{ boom via.State[bool] }
+
+func (f *nativeFormPanic) OnConnect(*via.Ctx) error { return nil }
+func (f *nativeFormPanic) Save(ctx *via.Ctx)        { f.boom.Set(true) }
+func (f *nativeFormPanic) View() h.H {
+	if f.boom.Get() {
+		panic("via_test: native re-render exploded")
+	}
+	return h.Div(via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))))
+}
+
+// A panic in a native form's post-mutation re-render must answer 500, not
+// hang the POST forever — the render runs on the island goroutine, outside
+// liveRunAction's own recover, after the mutation already succeeded.
+func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(nativeFormPanic{}))
+		conn := app.Connect()
+		page := fetchPage(t, app, "/")
+		formURL := actionURL(t, page, 0, 0)
+
+		status, _ := nativeFormPost(t, app, formURL, map[string]string{
+			"name":    "zed",
+			"_viatab": conn.TabID(),
+		})
+
+		assert.Equal(t, http.StatusInternalServerError, status,
+			"a panic in the native re-render must answer 500, not hang the POST forever")
+	})
+}
