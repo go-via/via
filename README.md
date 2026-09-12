@@ -132,7 +132,12 @@ examples, the whole live stack verified in real headless browsers
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side; `When`/`Each`
-  render conditionals and lists.
+  render conditionals and lists. A signal's wire name is its field offset in
+  the composition struct (`f0`, `f48`), not its render order, so a `Bind()`
+  behind a `When` — a wizard step, a branch that only sometimes renders its
+  input — keeps its own slot instead of inheriting one from whatever rendered
+  first. A signal held through a pointer or slice field has no offset and falls
+  back to a render-order name; keep that one's `Bind()` unconditional.
 - **Live islands + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live island with a per-tab SSE
   stream; `State[T]` is

@@ -35,7 +35,7 @@ func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Register(numComp{})).Get("/")
 
-	assert.Contains(t, body, `data-signals='{"s0":0}'`, "numeric signal declaration missing/malformed")
+	assert.Contains(t, body, `data-signals='{"f0":0}'`, "numeric signal declaration missing/malformed")
 }
 
 // nameComp is a string signal plus a no-op action. The action lets a client
@@ -58,9 +58,10 @@ func (c *nameComp) View() h.H {
 // against the real HTTP response, not the internal serializer.
 func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	t.Parallel()
-	// Echo the breakout payload back as the s0 value; the request shape (one
-	// signal slot, s0) matches what the GET page declares, so dispatch proceeds.
-	payload := `{"s0":"' data-on-load='alert(document.cookie)"}`
+	// Echo the breakout payload back as the signal's own slot; the request shape
+	// (one slot, at field offset 0) matches what the GET page declares, so
+	// dispatch proceeds.
+	payload := `{"f0":"' data-on-load='alert(document.cookie)"}`
 	_, body := vt.Serve(t, via.Register(nameComp{})).Action(0).Body(payload).Fire()
 
 	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the response — attribute breakout possible")
@@ -199,11 +200,144 @@ func TestStatelessAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(twoSignals{}))
 	_, page := app.Get("/")
-	assert.Contains(t, page, `"s0":""`, "the GET first paint declares every slot")
-	assert.Contains(t, page, `"s1":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"f0":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"f48":""`, "the GET first paint declares every slot")
 
 	status, frag := app.Action(0).Fire()
 	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
-	assert.Contains(t, frag, `"s0":"ada"`, "the written signal is declared")
-	assert.NotContains(t, frag, "s1\":", "the untouched signal must not be re-declared")
+	assert.Contains(t, frag, `"f0":"ada"`, "the written signal is declared")
+	assert.NotContains(t, frag, "f48\":", "the untouched signal must not be re-declared")
+}
+
+// wizard is the conditional-Bind shape: exactly one of Name/Email is rendered
+// per step, so their slots can only stay distinct if a slot is the field's
+// identity rather than the order it was first rendered in. The step indicator
+// renders AFTER the input, so a render-order scheme hands the step's own slot
+// to the input.
+type wizard struct {
+	Step  via.Signal[int]
+	Name  via.Signal[string]
+	Email via.Signal[string]
+	note  via.State[string] // server state: renders the page live
+}
+
+func (w *wizard) Next(ctx *via.Ctx) { w.Step.Set(1) }
+func (w *wizard) Save(ctx *via.Ctx) { w.note.Set("saved") }
+
+func (w *wizard) View() h.H {
+	if w.Step.Get() == 0 {
+		return h.Div(
+			h.Input(w.Name.Bind()),
+			h.Button(via.On("click", w.Next), h.Str("next")),
+			w.Step.Display(),
+			w.note.Display(),
+		)
+	}
+	return h.Div(
+		h.Input(w.Email.Bind()),
+		h.Button(via.On("click", w.Save), h.Str("save")),
+		w.Step.Display(),
+		w.note.Display(),
+		h.Str("name="+w.Name.Get()+" email="+w.Email.Get()),
+	)
+}
+
+// bindSlots lists every data-bind slot in document order.
+func bindSlots(markup string) []string {
+	var out []string
+	for _, m := range regexp.MustCompile(`data-bind="([^"]*)"`).FindAllStringSubmatch(markup, -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+// A signal whose Bind is conditional must never inherit a slot another signal
+// already owns. On a live page the hydrator table is keyed by slot, so an
+// aliased slot posts the user's input into the WRONG FIELD.
+func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(wizard{}))
+	conn := app.Connect()
+
+	_, step0 := app.Get("/")
+	nameSlot := bindSlots(step0)[0]
+
+	status, _ := app.Action(0).Live(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	require.Equal(t, http.StatusNoContent, status, "the live action acks; the push carries the render")
+
+	step1 := conn.Await("name=Ada")
+	emailSlot := bindSlots(step1)[0]
+	assert.NotEqual(t, nameSlot, emailSlot, "the email input must not be seated on the name's slot")
+
+	// Save, with the client store the browser is actually holding: the name it
+	// typed on step 1, under the slot that input had. Nothing has been typed
+	// into the email box yet, so an aliased slot posts the name into Email.
+	status, _ = app.Action(0).Live(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+
+	line := conn.Await("saved")
+	assert.Contains(t, line, "name=Ada email=<", "the posted slot must write its own field, never the email's")
+}
+
+// The same aliasing on a stateless page shows up client-side: the instance is
+// fresh per request, so the wrong-field write lands in the Datastar store — the
+// step-2 input would render bound to the slot still holding step 1's name.
+func TestSignal_conditionalBindKeepsItsOwnSlotOnAStatelessPage(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(statelessWizard{}))
+	_, page := app.Get("/")
+	nameSlot := bindSlots(page)[0]
+
+	status, frag := app.Action(0).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	require.Equal(t, http.StatusOK, status)
+	emailSlot := bindSlots(frag)[0]
+	assert.NotEqual(t, nameSlot, emailSlot, "the email input must not be seated on the name's slot")
+	assert.NotContains(t, frag, "Ada", "and so must not render carrying the name the user typed")
+}
+
+// A stateless action's patch declares the dirty slots — plus any slot the
+// pre-action render did not carry. Without that, an input that appears for the
+// first time in the response ships no declaration at all and the client either
+// has no value for it or, worse, a stale one left by whatever held the slot.
+func TestStatelessAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(statelessWizard{}))
+	_, page := app.Get("/")
+
+	_, frag := app.Action(0).Body(`{"` + bindSlots(page)[0] + `":"Ada"}`).Fire()
+	emailSlot := bindSlots(frag)[0]
+	assert.Contains(t, frag, `"`+emailSlot+`":""`, "the newly-appearing input must be seeded")
+}
+
+// statelessWizard is wizard without the State field, so the page stays
+// stateless and the step round-trips through the client store alone.
+type statelessWizard struct {
+	Step  via.Signal[int]
+	Name  via.Signal[string]
+	Email via.Signal[string]
+}
+
+func (w *statelessWizard) Next(ctx *via.Ctx) { w.Step.Set(1) }
+
+func (w *statelessWizard) View() h.H {
+	if w.Step.Get() == 0 {
+		return h.Div(h.Input(w.Name.Bind()), h.Button(via.On("click", w.Next), h.Str("next")), w.Step.Display())
+	}
+	return h.Div(h.Input(w.Email.Bind()), w.Step.Display())
+}
+
+// boxed reaches its signal through a pointer field, so the handle lives outside
+// the composition struct and has no field offset to name itself by.
+type boxed struct{ sig *via.Signal[string] }
+
+func (b *boxed) View() h.H { return h.Div(h.Input(b.sig.Bind())) }
+
+// A signal behind a pointer (or slice) field has no offset within the
+// composition, so it falls back to the documented render-order slot rather
+// than colliding with the field at offset 0.
+func TestSignal_behindAPointerFieldFallsBackToARenderOrderSlot(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Register(boxed{sig: &via.Signal[string]{}})).Get("/")
+
+	assert.Equal(t, []string{"s0"}, bindSlots(body), "a pointer-held signal keeps the render-order slot")
 }

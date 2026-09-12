@@ -211,6 +211,25 @@ as a re-read of the README, not a diff.
   built, then pushes once — one render per action, not two. An action id
   outside that table (a click racing a push, or a branched `View` that
   shifted it) now answers `410` instead of silently doing nothing.
+- **Signals are addressed by field offset, not by render position.** A
+  `Signal[T]`'s wire name is its byte offset within the composition struct —
+  `f0`, `f48`, `i0_f0` for an embedded island — replacing the render-order
+  `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
+  across the upgrade posts the old names, the server ignores what it does not
+  recognise, and the page is correct on reload. `via.Embed`'s signature is
+  unchanged — the child copy it already takes by value is the offset base.
+
+  It fixes conditional `Bind()`. Slots were claimed in first-render order, so
+  a `Bind()` inside a `When` (a wizard step) could claim a slot another signal
+  already owned: on a live page the post then wrote the WRONG FIELD, and on a
+  stateless page the new input came up holding the previous occupant's value.
+  A signal reached through a pointer or slice field is outside the struct, has
+  no offset, and keeps the render-order name with the old hazard — keep such a
+  `Bind()` unconditional; keyed per-row signal slots remain future work.
+
+  A stateless action's patch now also declares any slot the pre-action render
+  did not carry, so an input that appears for the first time in the response is
+  seeded instead of inheriting whatever the client store still held.
 - **Actions are addressed by handler, not by render position**
   (`/_via/a/{island}/{id}`, plus `?a=` for a value-carrying action). `id` is a
   short hash of the handler method's fully-qualified Go name, so it is stable
@@ -228,9 +247,10 @@ as a re-read of the README, not a diff.
 
   A click now 410s only when the current render does not bind that handler at
   all — a closed branch, or the classic wiring mistake of an `OnInit` that
-  fails to restore the state the `View` branches on. That 410 names the
-  handlers the render DID bind, so the mistake reads as a diagnosis instead of
-  a dead button. Two bindings of the same handler (same method, same `?a=`)
+  fails to restore the state the `View` branches on. The SERVER LOG then names
+  the handlers the render DID bind, so the mistake reads as a diagnosis instead
+  of a dead button; the 410 body names only the id that was asked for, since
+  the bound list is the render's Go type and method names. Two bindings of the same handler (same method, same `?a=`)
   collapse onto one entry, which is what they mean.
 
 ### Fixed

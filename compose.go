@@ -18,7 +18,9 @@ import (
 // carries the row's own key (e.g. item.ID) with the click — so a grow/shrink/
 // reorder of the list can't misroute, the value (not the positional slot)
 // identifies the row. See example/poll. (Per-row *signals* — a Bind() per row —
-// are a separate, rarer case still on positional slots; keyed signal slots for
+// are a separate, rarer case: a signal inside a slice element is outside the
+// composition struct, so it has no field offset to name itself by and keeps
+// the render-order slot, with the aliasing that implies. Keyed signal slots for
 // reordering inputs remain future work.)
 func Each[T any](items []T, row func(T) h.H) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {

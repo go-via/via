@@ -55,7 +55,7 @@ type mount struct {
 	cfg         *config
 	sessions    *sessionManager
 	reg         *registry
-	newInst     func() viewer
+	newInst     func() instance
 	patternBase string
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
@@ -274,10 +274,10 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 			inst := m.newInst()
 			ctx := newRootCtx(nil, true, base, nil)
 			ctx.islandV = inst
-			if runOnInit(inst, ctx, w, req, m.sessions) != nil {
+			if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
 				return
 			}
-			body := renderRootWith(ctx, inst)
+			body := renderRootWith(ctx, inst.v)
 			writeHTMLPage(w, m.cfg, body, len(liveUnits(ctx)) > 0, base+"/_via/sse")
 		}, nil)
 		return
@@ -369,15 +369,18 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // unknownAction is the 410 body for an id the freshly-rendered unit does not
 // carry: the handler is gone from this render — a branch closed, or (the
 // common wiring mistake) OnInit failed to restore the UI state the View
-// branches on. It names the ids that ARE bound so that reads as a diagnosis
-// instead of a silent dead button.
+// branches on. The diagnosis — which ids ARE bound, and the Go method each
+// came from — goes to the server log; the response body names only the id the
+// client asked for, since the bound list is a map of the render's Go type and
+// method names and the client is not entitled to it.
 func unknownAction(u *Ctx, act string) string {
 	have := make([]string, 0, len(u.actions))
 	for id, a := range u.actions {
 		have = append(have, id+" ("+a.name+")")
 	}
 	sort.Strings(have)
-	return "no such action " + act + "; this render binds: " + strings.Join(have, ", ")
+	log.Printf("via: no such action %s; this render binds: %s", act, strings.Join(have, ", "))
+	return "no such action " + act + "; this render does not bind it"
 }
 
 // dispatchStateless is dispatch's non-live path: bind a fresh instance, run
@@ -386,10 +389,10 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 	inst := m.newInst()
 	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
 	bind.islandV = inst                                  // so bind.unit(0)'s liveness reads the same way an embedded island's does
-	if runOnInit(inst, bind, w, req, m.sessions) != nil {
+	if runOnInit(inst.v, bind, w, req, m.sessions) != nil {
 		return
 	}
-	rootBefore := renderRootWith(bind, inst)
+	rootBefore := renderRootWith(bind, inst.v)
 	u := bind.unit(island)
 	if u == nil {
 		http.Error(w, "no such island", http.StatusGone)
@@ -414,7 +417,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			_, body := renderRootBase(inst, nil, true, base, nil)
+			_, body := renderRootBase(inst, nil, true, base, nil, nil)
 			writeHTMLPage(w, m.cfg, body, false, "")
 		}, nil)
 		return
@@ -430,9 +433,10 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 // attribute restricted to the island's own dirty slots — the piece the old
 // island-action handler omitted entirely, silently dropping a Signal.Set
 // inside a stateless island's action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderStateless(island int, rootBefore []byte, inst viewer, bind, u *Ctx, base string) []byte {
+func (m *mount) rerenderStateless(island int, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
+	seen := bind.slotSet()
 	if island == 0 {
-		_, after := renderRootPatch(inst, nil, base, bind.dirtyAll())
+		_, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
 		if bytes.Equal(rootBefore, after) {
 			return nil
 		}
@@ -444,7 +448,7 @@ func (m *mount) rerenderStateless(island int, rootBefore []byte, inst viewer, bi
 	}
 	var buf bytes.Buffer
 	buf.WriteString(`<div id="via-i` + strconv.Itoa(u.islandIdx) + `"`)
-	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty)
+	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)
 	buf.WriteString(`</div>`)

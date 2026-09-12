@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"strconv"
+	"unsafe"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
@@ -71,7 +72,11 @@ func Embed[C any](child C) h.H {
 	if !isView {
 		panic("via: via.Embed(child) requires child to have a View() method")
 	}
-	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, v) })
+	// &child, not the parent's field: the copy is what the child's View binds
+	// against for the life of this render (and, for a live island, for the life
+	// of the connection), so its address is the base its signals offset from.
+	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child)}
+	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }
 
 // embedViewer is the positional-island wiring behind Embed: it renders v into
@@ -80,7 +85,7 @@ func Embed[C any](child C) h.H {
 // appends it to the parent's islands slice so a push or action patches
 // exactly this one. A non-Ctx binder is a bare render with no parent to
 // attach to, so it writes nothing.
-func embedViewer(r *hcore.Renderer, v viewer) {
+func embedViewer(r *hcore.Renderer, inst instance) {
 	parent := ctxOf(r.Binder())
 	if parent == nil {
 		return
@@ -98,8 +103,9 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	child := newCtx(parent.inSignals)
 	child.isIsland = true
 	child.islandIdx = idx
-	child.islandV = v
+	child.islandV = inst
 	child.base = parent.base // the mount prefix, so the island's own action URLs carry it too
+	child.declareSeen = parent.declareSeen
 	child.pass = parent.pass
 	child.req = parent.req
 	child.sessions = parent.sessions
@@ -111,7 +117,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	// its data — and re-register its Tick/Listen — once per beat.
 	if parent.doInit {
 		child.doInit = true
-		initChild(child, v)
+		initChild(child, inst.v)
 	}
 
 	// Render first so the child's signal slots (order/initial) are populated,
@@ -120,7 +126,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	// never re-merges a signal the user is editing. The render is also what
 	// settles child.live, so the container attribute below can only be decided
 	// after it.
-	child.rendered = renderIslandInner(child, v)
+	child.rendered = renderIslandInner(child, inst.v)
 	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
 	if child.live {
 		// Datastar only skips a morph when BOTH the existing element and the
@@ -132,7 +138,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(&buf, child.order, child.initial, parent.declareOnly)
+		writeSignalsAttr(&buf, child.order, child.initial, parent.declareOnly, parent.declareSeen)
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)
@@ -181,11 +187,11 @@ func renderIslandInner(child *Ctx, v viewer) []byte {
 // Signal.Set the action wrote. A live island's own View can never itself
 // call Embed (see Embed's godoc), so this Ctx needs no render pass or live
 // connection of its own — there is nothing nested left to number or reuse.
-func renderIslandBind(idx int, v viewer, base string) (*Ctx, []byte) {
+func renderIslandBind(idx int, inst instance, base string) (*Ctx, []byte) {
 	c := newCtx(nil)
 	c.isIsland = true
 	c.islandIdx = idx
-	c.islandV = v
+	c.islandV = inst
 	c.base = base
-	return c, renderIslandInner(c, v)
+	return c, renderIslandInner(c, inst.v)
 }
