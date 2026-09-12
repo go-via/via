@@ -320,15 +320,26 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// sees. Everything the action mutates through method values (Signal.Set,
 	// State.Set) still lands on unit, because those handles were bound to it
 	// at render time — only req/session/redirect plumbing moves to rc.
+	//
+	// beforeSession is resolved from req BEFORE the action runs (not just
+	// "rc.session == nil after"): Ctx.Session() lazily resolves the SAME
+	// req's cookie regardless of whether the action reads or writes, so a
+	// request that already carries a valid (e.g. an attacker's own) cookie
+	// would otherwise look identical, post-hoc, to one that minted a session
+	// just now — binding the connection to a session the action never
+	// created (I1). Binding only when the request arrived with no resolvable
+	// session at all, and the action left one in place, means an action must
+	// have actually MINTED it (Session().Put/Rotate) for the bind to fire.
+	_, beforeSession, _ := sessions.resolve(req)
 	rc := &Ctx{req: req, sessions: sessions, sessW: w}
 	unit.dirty = map[string]any{}
 	unit.actions[n](rc)
 
-	// The action may have just minted or resolved a session (Session().Put
-	// or .Rotate) on a connection that was anonymous at connect — bind it now
-	// so the tab id stops being a bearer credential the instant this action
-	// logs it in (see H1; lc.bindSession is a no-op once already bound).
-	if rc.session != nil {
+	// The action may have just minted a session (Session().Put or .Rotate) on
+	// a connection that was anonymous at connect — bind it now so the tab id
+	// stops being a bearer credential the instant this action logs it in
+	// (see H1; lc.bindSession is a no-op once already bound).
+	if beforeSession == nil && rc.session != nil && rc.session.data != nil {
 		lc.bindSession(rc.session.data)
 	}
 
