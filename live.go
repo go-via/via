@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -189,11 +191,27 @@ func runLiveStream(reqCtx context.Context, islands []*Ctx, pulse chan func(), ke
 		case <-reqCtx.Done():
 			return
 		case fn := <-pulse:
-			fn()
+			runPulseItem(fn)
 		case <-beat.C:
 			keepalive()
 		}
 	}
+}
+
+// runPulseItem runs one pulse item (a tick's fn+push, a Listen handler+push,
+// or a dispatched action's mutation+pushWork) with its own recover, so a panic
+// in one bad render — e.g. a View that only fails for a particular Tick
+// value — logs and drops that item instead of unwinding runLiveStream: an
+// action's result is already sent to the waiting POST by the time pushWork
+// runs, so without this the stream would die silently after a 204 the client
+// already saw as success.
+func runPulseItem(fn func()) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("via: live pulse panic: %v\n%s", rec, debug.Stack())
+		}
+	}()
+	fn()
 }
 
 // liveConn is a connected tab's live units, kept in the per-Register registry

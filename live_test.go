@@ -1151,6 +1151,51 @@ func TestLive_outOfRangeActionAnswers410(t *testing.T) {
 	})
 }
 
+// flakyRender panics inside View once boom is set — modelling a push (a
+// pulse item) whose render fails, as opposed to liveRunAction's own mutation,
+// which already recovers separately.
+type flakyRender struct {
+	boom via.State[bool]
+	n    via.State[int]
+}
+
+func (f *flakyRender) OnConnect(ctx *via.Ctx) error { return nil }
+func (f *flakyRender) Trigger(ctx *via.Ctx)         { f.boom.Set(true); f.n.Set(f.n.Get() + 1) }
+func (f *flakyRender) Fix(ctx *via.Ctx)             { f.boom.Set(false) }
+func (f *flakyRender) View() h.H {
+	if f.boom.Get() {
+		panic("via_test: render exploded")
+	}
+	return h.Div(
+		h.P(h.Str("n: "), f.n.Display()),
+		h.Button(via.OnClick(f.Trigger)),
+		h.Button(via.OnClick(f.Fix)),
+	)
+}
+
+// A panic in the re-render a dispatched action's pushWork triggers must not
+// take the whole island goroutine down: the action's own result (204) is
+// already sent to the waiting POST before pushWork runs, so a dead goroutine
+// here would strand every action after it behind a stream that looks alive
+// but never dispatches again. Trigger's mutation succeeds and its 204
+// answers; the render it provokes then panics. A second action (Fix) must
+// still be dispatched and pushed normally, proving the island goroutine
+// survived.
+func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(flakyRender{}))
+		conn := app.Connect()
+		require.NotEmpty(t, conn.TabID())
+
+		status, _ := app.Action(0).Live(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status, "the mutation applies and answers before its render panics")
+
+		status, _ = app.Action(1).Live(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive to dispatch a second action")
+		conn.Await("n: 1")
+	})
+}
+
 // racyTicker ticks as fast as time.Ticker allows so its OnConnect-scheduled
 // push races liveConn.replace (island goroutine) against Bump's dispatchLive,
 // which reads liveConn.units via unit() on the POST's own goroutine.
