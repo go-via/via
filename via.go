@@ -265,7 +265,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
 			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `?v=` + ctx.digestPlaceholder() + `">`)
 		if ctx.island {
-			r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr-value="$_viatab">`)
+			r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
 		}
 		for _, c := range children {
 			r.Render(c)
