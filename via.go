@@ -219,7 +219,7 @@ func (c *Ctx) signalInit(slot string) (any, bool) {
 
 // actionSlot registers a handler and returns its positional id "0","1",….
 // Unlike SignalName/DeclareSignal/Hydrator this is not on hcore.Binder — via's
-// own OnClick/OnSubmit/OnChange/PostForm are its only callers, so it stays a
+// own On/OnArg/PostForm are its only callers, so it stays a
 // plain Ctx method.
 func (c *Ctx) actionSlot(fn func(*Ctx)) string {
 	idx := len(c.actions)
@@ -237,13 +237,13 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage)) {
 
 // PostForm renders a native <form method="post"> whose submit runs handler on
 // the server — the server-rendered flow for sign-up/in, file uploads, and
-// anything that ends in a Redirect. Unlike OnSubmit (a Datastar @post that
+// anything that ends in a Redirect. Unlike On("submit", ...) (a Datastar @post that
 // element-patches in place), this is a real browser navigation: handler reads
 // form fields via ctx.Request().FormValue and may via.Redirect. The form is
 // always multipart, so a file <input> just works — read it with
 // ctx.Request().FormFile(name). handler is a named method value; children are
 // the form contents (inputs, button). No '&', no closure. It claims a slot in
-// the same action table a @post event binding uses, so a page mixing OnSubmit
+// the same action table a @post event binding uses, so a page mixing On("submit", ...)
 // and PostForm never collides on an id.
 //
 // Inside a live unit it also carries a hidden _viatab field, reactively kept
@@ -331,16 +331,11 @@ func (c *Ctx) Redirect(path string) {
 	c.redirect = path
 }
 
-// OnClick wires a click to a POST action. fn is a named method value (e.g.
-// c.Inc) — pointer-bound to the via-owned instance, so no '&' at the call site.
-func OnClick(fn func(*Ctx)) h.Attr { return onEvent("click", fn) }
-
-// OnSubmit wires a form submit to a POST action. Datastar auto-prevents the
-// form's default submit, so no prevent modifier is needed.
-func OnSubmit(fn func(*Ctx)) h.Attr { return onEvent("submit", fn) }
-
-// OnChange wires a change event (fires on commit/blur) to a POST action.
-func OnChange(fn func(*Ctx)) h.Attr { return onEvent("change", fn) }
+// On wires a named DOM event (e.g. "click", "submit", "change") to a POST
+// action. fn is a named method value (e.g. c.Inc) — pointer-bound to the
+// via-owned instance, so no '&' at the call site. Datastar auto-prevents a
+// wired form's default submit, so no prevent modifier is needed for "submit".
+func On(event string, fn func(*Ctx)) h.Attr { return onEvent(event, fn) }
 
 // onEvent emits the Datastar event binding for a named method value. At render
 // it claims a positional action id and writes data-on:<event>="@post('/_via/a/N')".
@@ -357,12 +352,13 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 	})
 }
 
-// OnClickArg wires a click to an action that carries a value — the row's own
-// datum rides with the click (a query arg), so the handler receives it as a
-// typed parameter and acts on THAT item regardless of its render position. fn is
-// a named method value (e.g. l.Delete); arg is plain data (e.g. todo.ID), not an
-// identifier string. Use it for per-row actions in a list. No '&', no closure.
-func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("click", fn, arg) }
+// OnArg wires a named DOM event to an action that carries a value — the
+// row's own datum rides with the event (a query arg), so the handler
+// receives it as a typed parameter and acts on THAT item regardless of its
+// render position. fn is a named method value (e.g. l.Delete); arg is plain
+// data (e.g. todo.ID), not an identifier string. Use it for per-row actions
+// in a list. No '&', no closure.
+func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr { return onEventArg(event, fn, arg) }
 
 // badActionArg is the panic sentinel a value-carrying action's slot throws
 // when ?a= fails to decode into T — the arg is client-controlled input (any

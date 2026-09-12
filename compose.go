@@ -14,7 +14,7 @@ import (
 // appended. For reorder/delete identity, give each row a stable id in the row
 // method (h.RawAttr("id", …)) so the morph matches by id.
 //
-// Per-row actions: a row whose button acts on that row uses OnClickArg, which
+// Per-row actions: a row whose button acts on that row uses OnArg, which
 // carries the row's own key (e.g. item.ID) with the click — so a grow/shrink/
 // reorder of the list can't misroute, the value (not the positional slot)
 // identifies the row. See example/poll. (Per-row *signals* — a Bind() per row —

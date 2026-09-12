@@ -87,8 +87,8 @@ func (c *counter) Dec(ctx *via.Ctx) { c.count.Add(-1) }
 func (c *counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str(c.count.Value())),
-		h.Button(via.OnClick(c.Dec), h.Str("-")),
-		h.Button(via.OnClick(c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Dec), h.Str("-")),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 
@@ -304,7 +304,7 @@ type noopComp struct{}
 
 func (n *noopComp) Ping(*via.Ctx) {}
 func (n *noopComp) View() h.H {
-	return h.Div(h.Button(via.OnClick(n.Ping), h.Str("ping")))
+	return h.Div(h.Button(via.On("click", n.Ping), h.Str("ping")))
 }
 
 // An action that leaves the rendered View identical must return 204 No Content,
@@ -320,15 +320,15 @@ func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	assert.Empty(t, body)
 }
 
-// formComp uses OnSubmit on a form.
+// formComp uses On("submit", ...) on a form.
 type formComp struct{ q via.Signal[string] }
 
 func (c *formComp) Go(ctx *via.Ctx) {}
 func (c *formComp) View() h.H {
-	return h.Form(via.OnSubmit(c.Go), h.Input(c.q.Bind()))
+	return h.Form(via.On("submit", c.Go), h.Input(c.q.Bind()))
 }
 
-// OnSubmit wires a form submit to a POST action with Datastar's colon event
+// On("submit", ...) wires a form submit to a POST action with Datastar's colon event
 // syntax. Datastar auto-prevents a form's default submit, so no modifier is
 // needed.
 func TestOnSubmit_wiresSubmitToAPostAction(t *testing.T) {
@@ -344,7 +344,7 @@ type reqEchoer struct{ echo string }
 
 func (r *reqEchoer) Grab(ctx *via.Ctx) { r.echo = ctx.Request().Header.Get("X-Echo") }
 func (r *reqEchoer) View() h.H {
-	return h.Div(h.Button(via.OnClick(r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
+	return h.Div(h.Button(via.On("click", r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
 }
 
 // An action must be able to read the HTTP request that triggered it — auth
@@ -372,7 +372,7 @@ type digestEchoer struct {
 
 func (c *digestEchoer) Grab(ctx *via.Ctx) { c.echo = c.q.Get() }
 func (c *digestEchoer) View() h.H {
-	return h.Div(h.Input(c.q.Bind()), h.Button(via.OnClick(c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
+	return h.Div(h.Input(c.q.Bind()), h.Button(via.On("click", c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
 }
 
 // TestAction_digestPlaceholderCannotBeForgedByUserText posts hostile text
@@ -405,8 +405,7 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 // call (via.X), and neither is ever spelled that way.
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "When": true, "Each": true,
-	"OnClick": true, "OnSubmit": true, "OnChange": true,
-	"OnClickArg": true, "PostForm": true,
+	"On": true, "OnArg": true, "PostForm": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
@@ -533,7 +532,7 @@ func exampleGoFiles(t *testing.T) []string {
 	return files
 }
 
-// --- value-carrying actions (OnClickArg) ---
+// --- value-carrying actions (OnArg) ---
 
 type todoItem struct {
 	ID   int
@@ -558,7 +557,7 @@ type todoList struct{ box *todoBox }
 
 func (l *todoList) Del(ctx *via.Ctx, id int) { l.box.remove(id) }
 func (l *todoList) row(t todoItem) h.H {
-	return h.Li(h.Str(t.Text), h.Button(via.OnClickArg(l.Del, t.ID), h.Str("x")))
+	return h.Li(h.Str(t.Text), h.Button(via.OnArg("click", l.Del, t.ID), h.Str("x")))
 }
 func (l *todoList) View() h.H { return h.Ul(via.Each(l.box.items, l.row)) }
 
@@ -660,19 +659,19 @@ func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	assert.Contains(t, body, "alpha")
 }
 
-// changePicker exercises OnChange: a select whose commit posts an action,
-// with no value carried (that's OnClickArg's job, tested elsewhere).
+// changePicker exercises On("change", ...): a select whose commit posts an action,
+// with no value carried (that's OnArg's job, tested elsewhere).
 type changePicker struct{ got string }
 
 func (a *changePicker) Pick(ctx *via.Ctx) { a.got = "picked" }
 func (a *changePicker) View() h.H {
 	return h.Div(
-		h.El("select", via.OnChange(a.Pick)),
+		h.El("select", via.On("change", a.Pick)),
 		h.P(h.Str(a.got)),
 	)
 }
 
-// OnChange must render its event binding and route the commit back into the
+// On("change", ...) must render its event binding and route the commit back into the
 // handler. Fails if the change event stops firing or stops reaching Pick.
 func TestOnChange_firesHandlerOnCommit(t *testing.T) {
 	t.Parallel()

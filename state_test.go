@@ -48,7 +48,7 @@ func (e *stateEcho) Set(ctx *via.Ctx)             { e.msg.Set("<b>Ada</b>") }
 func (e *stateEcho) View() h.H {
 	return h.Div(
 		h.P(h.Str("msg: "), e.msg.Display()),
-		h.Button(via.OnClick(e.Set), h.Str("set")),
+		h.Button(via.On("click", e.Set), h.Str("set")),
 	)
 }
 
@@ -141,7 +141,7 @@ func (t *listIsland) View() h.H {
 		// A marker that changes with the length, so a test can await the
 		// post-removal frame rather than matching the row it expects gone.
 		h.P(h.RawAttr("id", "count-"+strconv.Itoa(len(t.items.Get())))),
-		h.Button(via.OnClick(t.DropFirst), h.Str("drop")),
+		h.Button(via.On("click", t.DropFirst), h.Str("drop")),
 	)
 }
 

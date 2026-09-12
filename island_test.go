@@ -222,7 +222,7 @@ type liveClicker struct{ n via.State[int] }
 func (c *liveClicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *liveClicker) Bump(ctx *via.Ctx)            { c.n.Set(c.n.Get() + 1) }
 func (c *liveClicker) View() h.H {
-	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.OnClick(c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
 
 // panel embeds two live clickers.
@@ -281,7 +281,7 @@ func (r *hitsRoot) View() h.H {
 	return h.Div(
 		h.Span(h.Str("hits:"), h.Str(r.hits)),
 		via.Embed(r.Isl),
-		h.Button(via.OnClick(r.Hit), h.Str("hit")),
+		h.Button(via.On("click", r.Hit), h.Str("hit")),
 	)
 }
 
@@ -333,8 +333,8 @@ func (k *kid) Noop(ctx *via.Ctx) {} // changes nothing the View reads
 func (k *kid) View() h.H {
 	return h.Div(
 		h.P(h.Str("n="), h.Str(k.n)),
-		h.Button(via.OnClick(k.Bump), h.Str("+")),    // action 0
-		h.Button(via.OnClick(k.Noop), h.Str("noop")), // action 1
+		h.Button(via.On("click", k.Bump), h.Str("+")),    // action 0
+		h.Button(via.On("click", k.Noop), h.Str("noop")), // action 1
 	)
 }
 
@@ -584,9 +584,9 @@ func (c *flipChild) Bump(*via.Ctx)  {}
 func (c *flipChild) Extra(*via.Ctx) {}
 func (c *flipChild) View() h.H {
 	if *c.extra {
-		return h.Div(h.Button(via.OnClick(c.Bump)), h.Button(via.OnClick(c.Extra)))
+		return h.Div(h.Button(via.On("click", c.Bump)), h.Button(via.On("click", c.Extra)))
 	}
-	return h.Div(h.Button(via.OnClick(c.Bump)))
+	return h.Div(h.Button(via.On("click", c.Bump)))
 }
 
 // flipRoot has its own dispatchable action (island 0) and embeds flipChild —
@@ -598,7 +598,7 @@ type flipRoot struct {
 }
 
 func (r *flipRoot) Act(*via.Ctx) { r.hits++ }
-func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.OnClick(r.Act)), via.Embed(r.Child)) }
+func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act)), via.Embed(r.Child)) }
 
 // A child's shape changing between a page's GET and a later click on the
 // PARENT's own button must not 410 that click — shapeDigest folding the

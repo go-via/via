@@ -47,7 +47,7 @@ type nameComp struct{ name via.Signal[string] }
 // 204) is returned, letting the test inspect how the value is reflected.
 func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get() + "!") }
 func (c *nameComp) View() h.H {
-	return h.Div(h.Button(via.OnClick(c.Touch), h.Str("x")), c.name.Display())
+	return h.Div(h.Button(via.On("click", c.Touch), h.Str("x")), c.name.Display())
 }
 
 // A string signal value is attacker-influenced — it round-trips through the
@@ -128,7 +128,7 @@ func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(f.Name.Get() + "!") }
 func (f *boundForm) View() h.H {
 	return h.Div(
 		h.Input(f.Name.Bind()),
-		h.Button(via.OnClick(f.Save), h.Str("save")),
+		h.Button(via.On("click", f.Save), h.Str("save")),
 		h.P(f.Name.Display()),
 	)
 }
@@ -188,7 +188,7 @@ func (t *twoSignals) View() h.H {
 	return h.Div(
 		h.Input(t.Written.Bind()),
 		h.Input(t.Left.Bind()),
-		h.Button(via.OnClick(t.Fill), h.Str("fill")),
+		h.Button(via.On("click", t.Fill), h.Str("fill")),
 	)
 }
 

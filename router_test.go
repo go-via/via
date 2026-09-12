@@ -33,7 +33,7 @@ func (p *profilePage) OnInit(ctx *via.Ctx) error {
 }
 func (p *profilePage) SignIn(ctx *via.Ctx) { ctx.Session().Put(acct{Name: "alice"}) }
 func (p *profilePage) View() h.H {
-	return h.Div(h.P(h.Str(p.greeting)), h.Button(via.OnClick(p.SignIn), h.Str("in")))
+	return h.Div(h.P(h.Str(p.greeting)), h.Button(via.On("click", p.SignIn), h.Str("in")))
 }
 
 func jarGet(t *testing.T, c *http.Client, url string) string {
@@ -64,7 +64,7 @@ type redirectPage struct{}
 func (p *redirectPage) Go(ctx *via.Ctx)   { ctx.Redirect("/dest") }
 func (p *redirectPage) Evil(ctx *via.Ctx) { ctx.Redirect("javascript:alert(1)") }
 func (p *redirectPage) View() h.H {
-	return h.Div(h.Button(via.OnClick(p.Go)), h.Button(via.OnClick(p.Evil)))
+	return h.Div(h.Button(via.On("click", p.Go)), h.Button(via.On("click", p.Evil)))
 }
 
 // cspOf fetches a page and returns the Content-Security-Policy it served.
@@ -165,7 +165,7 @@ type echoPage struct{ echoed int }
 
 func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = ctx.Param[int]("id") }
 func (p *echoPage) View() h.H {
-	return h.Div(h.Button(via.OnClick(p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
+	return h.Div(h.Button(via.On("click", p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
 }
 
 // avatarPage uploads a file via PostForm (always multipart); Save reads it with

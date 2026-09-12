@@ -41,7 +41,7 @@ type liveRedirector struct{}
 
 func (c *liveRedirector) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *liveRedirector) Go(ctx *via.Ctx)              { ctx.Redirect("/dest") }
-func (c *liveRedirector) View() h.H                    { return h.Div(h.Button(via.OnClick(c.Go))) }
+func (c *liveRedirector) View() h.H                    { return h.Div(h.Button(via.On("click", c.Go))) }
 
 func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -70,7 +70,7 @@ func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 type islandRedirector struct{}
 
 func (r *islandRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
-func (r *islandRedirector) View() h.H       { return h.Div(h.Button(via.OnClick(r.Go))) }
+func (r *islandRedirector) View() h.H       { return h.Div(h.Button(via.On("click", r.Go))) }
 
 type islandRedirectorParent struct{ I islandRedirector }
 
@@ -104,7 +104,7 @@ type sigIsland struct{ Name, Other via.Signal[string] }
 
 func (s *sigIsland) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
 func (s *sigIsland) View() h.H {
-	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.OnClick(s.Reset)))
+	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.On("click", s.Reset)))
 }
 
 type sigPage struct{ I sigIsland }
@@ -129,7 +129,7 @@ func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
 type guardedIsland struct{}
 
 func (g *guardedIsland) Ping(ctx *via.Ctx) {}
-func (g *guardedIsland) View() h.H         { return h.Div(h.Button(via.OnClick(g.Ping))) }
+func (g *guardedIsland) View() h.H         { return h.Div(h.Button(via.On("click", g.Ping))) }
 
 type guardedParent struct{ I guardedIsland }
 
@@ -168,7 +168,7 @@ func (p *mixedPage) Save(ctx *via.Ctx) { ctx.Redirect("/done") }
 func (p *mixedPage) View() h.H {
 	return h.Div(
 		h.Str(p.n),
-		h.Button(via.OnClick(p.Bump), h.Str("+")),     // action 0
+		h.Button(via.On("click", p.Bump), h.Str("+")), // action 0
 		via.PostForm(p.Save, h.Button(h.Str("save"))), // action 1
 	)
 }
@@ -206,7 +206,7 @@ func (p *panicLive) OnConnect(ctx *via.Ctx) error { return nil }
 func (p *panicLive) Boom(ctx *via.Ctx)            { panic("boom") }
 func (p *panicLive) Ping(ctx *via.Ctx)            {}
 func (p *panicLive) View() h.H {
-	return h.Div(h.Button(via.OnClick(p.Boom)), h.Button(via.OnClick(p.Ping)))
+	return h.Div(h.Button(via.On("click", p.Boom)), h.Button(via.On("click", p.Ping)))
 }
 
 func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
@@ -231,9 +231,9 @@ func (b *branchy) OnConnect(ctx *via.Ctx) error { return nil }
 func (b *branchy) Reveal(ctx *via.Ctx)          { b.shown.Set(true) }
 func (b *branchy) Extra(ctx *via.Ctx)           {}
 func (b *branchy) View() h.H {
-	kids := []h.H{h.Button(via.OnClick(b.Reveal))}
+	kids := []h.H{h.Button(via.On("click", b.Reveal))}
 	if b.shown.Get() {
-		kids = append(kids, h.Button(via.OnClick(b.Extra)))
+		kids = append(kids, h.Button(via.On("click", b.Extra)))
 	}
 	return h.Div(kids...)
 }
@@ -280,7 +280,7 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 type paramIsland struct{ n int }
 
 func (k *paramIsland) Bump(ctx *via.Ctx) { k.n++ }
-func (k *paramIsland) View() h.H         { return h.Div(h.Str(k.n), h.Button(via.OnClick(k.Bump))) }
+func (k *paramIsland) View() h.H         { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
 
 type paramParent struct{ I paramIsland }
 
@@ -307,12 +307,12 @@ func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 type unsafeRoot struct{ n int }
 
 func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
-func (u *unsafeRoot) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.OnClick(u.Go))) }
+func (u *unsafeRoot) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
 type unsafeIsland struct{ n int }
 
 func (u *unsafeIsland) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
-func (u *unsafeIsland) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.OnClick(u.Go))) }
+func (u *unsafeIsland) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
 type unsafeParent struct{ I unsafeIsland }
 
@@ -492,15 +492,15 @@ func (b *branchedView) View() h.H {
 	locked, ran := b.st.snapshot()
 	if locked {
 		return h.Div(
-			h.Button(via.OnClick(b.Delete)), // locked: Delete=0
-			h.Button(via.OnClick(b.Flip)),   // locked: Flip=1 (Save is gone)
+			h.Button(via.On("click", b.Delete)), // locked: Delete=0
+			h.Button(via.On("click", b.Flip)),   // locked: Flip=1 (Save is gone)
 			h.P(h.Str("locked:"), h.Str(ran)),
 		)
 	}
 	return h.Div(
-		h.Button(via.OnClick(b.Save)),   // unlocked: Save=0
-		h.Button(via.OnClick(b.Delete)), // unlocked: Delete=1
-		h.Button(via.OnClick(b.Flip)),   // unlocked: Flip=2
+		h.Button(via.On("click", b.Save)),   // unlocked: Save=0
+		h.Button(via.On("click", b.Delete)), // unlocked: Delete=1
+		h.Button(via.On("click", b.Flip)),   // unlocked: Flip=2
 		h.P(h.Str("unlocked:"), h.Str(ran)),
 	)
 }
@@ -511,7 +511,7 @@ type xmIsland struct{ fired *int }
 
 func (x *xmIsland) OnConnect(*via.Ctx) error { return nil }
 func (x *xmIsland) Fire(*via.Ctx)            { *x.fired++ }
-func (x *xmIsland) View() h.H                { return h.Div(h.Button(via.OnClick(x.Fire))) }
+func (x *xmIsland) View() h.H                { return h.Div(h.Button(via.On("click", x.Fire))) }
 
 func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -751,8 +751,8 @@ func (s *sessionLive) Bump(ctx *via.Ctx)        { s.n.Set(s.n.Get() + 1) }
 func (s *sessionLive) Peek(ctx *via.Ctx)        { ctx.Session().Get[member]() } // read-only, never mints
 func (s *sessionLive) View() h.H {
 	return h.Div(s.n.Display(),
-		h.Button(via.OnClick(s.Bump)), // action 0
-		h.Button(via.OnClick(s.Peek))) // action 1
+		h.Button(via.On("click", s.Bump)), // action 0
+		h.Button(via.On("click", s.Peek))) // action 1
 }
 
 // liveActionRequest builds a raw dispatch POST against island/n using the
@@ -960,9 +960,9 @@ func (p *liveLoginer) Login(ctx *via.Ctx)       { ctx.Session().Put(member{Name:
 func (p *liveLoginer) Rotate(ctx *via.Ctx)      { ctx.Session().Rotate() }                 // action 2
 func (p *liveLoginer) View() h.H {
 	return h.Div(p.n.Display(),
-		h.Button(via.OnClick(p.Bump)),
-		h.Button(via.OnClick(p.Login)),
-		h.Button(via.OnClick(p.Rotate)))
+		h.Button(via.On("click", p.Bump)),
+		h.Button(via.On("click", p.Login)),
+		h.Button(via.On("click", p.Rotate)))
 }
 
 // A tab connects anonymously, then a live action logs it in (Session().Put)
@@ -1007,7 +1007,7 @@ func (o *onConnectLoginer) OnConnect(ctx *via.Ctx) error {
 }
 func (o *onConnectLoginer) Bump(ctx *via.Ctx) { o.n.Set(o.n.Get() + 1) } // action 0
 func (o *onConnectLoginer) View() h.H {
-	return h.Div(o.n.Display(), h.Button(via.OnClick(o.Bump)))
+	return h.Div(o.n.Display(), h.Button(via.On("click", o.Bump)))
 }
 
 // The README-recommended "establish the session in OnConnect" pattern must
@@ -1146,8 +1146,8 @@ func (p *raceLoginer) Login(ctx *via.Ctx) {
 } // action 1
 func (p *raceLoginer) View() h.H {
 	return h.Div(p.n.Display(),
-		h.Button(via.OnClick(p.Bump)),
-		h.Button(via.OnClick(p.Login)))
+		h.Button(via.On("click", p.Bump)),
+		h.Button(via.On("click", p.Login)))
 }
 
 // I3: the session-bound check must run on the same serialized goroutine as
