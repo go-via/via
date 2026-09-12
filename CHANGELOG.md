@@ -211,22 +211,27 @@ as a re-read of the README, not a diff.
   built, then pushes once — one render per action, not two. An action id
   outside that table (a click racing a push, or a branched `View` that
   shifted it) now answers `410` instead of silently doing nothing.
-- **Every action URL carries a `?v=` shape digest** (`/_via/a/{island}/{n}?v={digest}`),
-  a short hash of that render's signal order, action count, and embedded
-  islands' layout. `dispatch` recomputes it fresh and 410s on any mismatch —
-  the one check that replaces the old signals-only, root-only render-shape
-  guard and the per-path index-range checks. This is what closes the real
-  misroute hazard: a `View` that branches on server state shifts every later
-  action's index, and a stale click landing on the wrong handler used to be a
-  silent misroute (or, on the live path, a silent no-op) rather than a `410`.
-  **Known limitation:** a live unit whose `View()` shape depends on a
-  background tick (not just the triggering action) can shift its own digest
-  out from under a client that already rendered — in an adversarial probe
-  this 410s on the order of a fifth of clicks. Datastar resolves a non-200
-  response silently with no visible error; on a live page the next push
-  carries the new digest and heals it, but on a stateless page the button
-  stays dead until reload. Keep a live unit's action/signal/embed layout
-  stable across ticks if clicks must never 410.
+- **Actions are addressed by handler, not by render position**
+  (`/_via/a/{island}/{id}`, plus `?a=` for a value-carrying action). `id` is a
+  short hash of the handler method's fully-qualified Go name, so it is stable
+  across renders, across instances and across rebuilds — a deploy does not
+  invalidate the URLs open tabs are holding. This is a **wire break**: a tab
+  open across the upgrade 410s its first click, then reloads correct.
+
+  It replaces the `?v=` shape digest, which is deleted. The digest fixed the
+  signal order and the action COUNT, so on a page backed by a shared store
+  every per-row `OnArg` was its own action slot and another user adding or
+  removing a row silently 410'd every other open tab's buttons — untouched
+  ones included, permanently, until reload (`example/poll` demonstrated it).
+  The digest also did no security work: CSRF is the origin floor plus the
+  per-connection tab id, and the digest never stopped a forged in-range `n`.
+
+  A click now 410s only when the current render does not bind that handler at
+  all — a closed branch, or the classic wiring mistake of an `OnInit` that
+  fails to restore the state the `View` branches on. That 410 names the
+  handlers the render DID bind, so the mistake reads as a diagnosis instead of
+  a dead button. Two bindings of the same handler (same method, same `?a=`)
+  collapse onto one entry, which is what they mean.
 
 ### Fixed
 

@@ -1206,7 +1206,7 @@ func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "the live action answers 204; the push carries the patch")
 
-		awaitLine(t, lines, "/thread/7/_via/a/1/0")
+		awaitLine(t, lines, "/thread/7/_via/a/1/")
 	})
 }
 
@@ -1256,19 +1256,16 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 	})
 }
 
-// A stale action id (a click racing a push, or a branched View that shifted
-// the table) must 410, not silently do nothing — the client can then
-// re-bootstrap instead of a click quietly having no effect. This carries a
-// genuinely valid shape digest (read off the rendered page) with only n
-// forged: a digest mismatch alone would 410 for the wrong reason ("stale
-// page") and never reach the index-range check this guards.
-func TestLive_outOfRangeActionAnswers410(t *testing.T) {
+// An action id this render does not bind (a click racing a push that closed
+// the branch) must 410, not silently do nothing — the client can then
+// re-bootstrap instead of a click quietly having no effect.
+func TestLive_unknownActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(clicker{}))
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID())
 
-		url := swapActionIndex(t, conn.ActionURL(0, 0), "99")
+		url := swapActionID(t, conn.ActionURL(0, 0), "zzzzzzzz")
 		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})

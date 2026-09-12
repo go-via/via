@@ -4,7 +4,7 @@
 // action, or a live SSE stream without hand-rolling request plumbing.
 //
 //	app := vt.Serve(t, via.Register(Counter{count: &store{}}))
-//	status, body := app.Action(1).Fire()      // POST /_via/a/0/1, same-origin
+//	status, body := app.Action(1).Fire()      // POST the root's 2nd action, same-origin
 //	require.Equal(t, 200, status)
 //
 //	conn := app.Connect()                      // open the per-tab SSE stream
@@ -40,15 +40,23 @@ type App struct {
 	fetched  bool
 }
 
-// actionURLRe finds the currently-rendered action URL for a given
-// {island}/{n} — the `?v=` shape digest travels with it, so a builder that
-// hand-built the path would 410 the instant a test's View shape changed.
-// Reading it off the page is what makes the digest an enforced contract
-// rather than a second, parallel numbering scheme tests must keep in sync by
-// hand.
-func actionURLRe(island, n int) *regexp.Regexp {
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/` + strconv.Itoa(n) + `(?:[?&][^'"]*)?)['"]`
-	return regexp.MustCompile(pat)
+// actionURLRe matches every action URL bound to island in one chunk of
+// rendered markup. The action id is content-addressed from the handler's own
+// func name, so a test cannot construct the URL — it reads the one the page
+// actually shipped, which is also what makes the ?a= row datum travel with it.
+func actionURLRe(island int) *regexp.Regexp {
+	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+}
+
+// nthActionURL returns the n-th action URL for island in document order
+// within markup — vt addresses actions by render position, which is how a
+// test reads its own View, while the wire addresses them by handler.
+func nthActionURL(markup []byte, island, n int) (string, bool) {
+	m := actionURLRe(island).FindAllSubmatch(markup, -1)
+	if n < 0 || n >= len(m) {
+		return "", false
+	}
+	return string(m[n][1]), true
 }
 
 // Serve mounts handler on an in-memory httptest server (req.TLS is nil), so
@@ -108,20 +116,19 @@ func (a *App) Get(path string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Action builds a POST to the root's action table, /_via/a/0/{n} (island 0
-// is the root). The URL (including its `?v=` shape digest) is read off the
-// rendered root page at Fire time, not constructed — every action posts to
-// {base}/_via/a/{island}/{n}?v={digest}, and the digest 410s a click whose
-// page has gone stale, so a hand-built path would drift the moment a test's
-// View shape changed. By default it carries Sec-Fetch-Site: same-origin,
+// Action builds a POST to the n-th action the root renders, in document
+// order (island 0 is the root). The URL is read off the rendered root page at
+// Fire time, not constructed: the wire id is a hash of the handler's func
+// name and any ?a= row datum rides along with it, so a hand-built path would
+// be wrong. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
 func (a *App) Action(n int) *Action {
 	return &Action{app: a, island: 0, n: n, headers: map[string]string{}, body: "{}"}
 }
 
-// IslandAction builds a POST to an embedded island's action table —
-// /_via/a/{island}/{n}. island is the URL id an island's own container
+// IslandAction builds a POST to the n-th action an embedded island renders,
+// in document order. island is the URL id an island's own container
 // carries: 1 for the first embedded child, 2 for the second, and so on (0 is
 // the root; use Action for that).
 func (a *App) IslandAction(island, n int) *Action {
@@ -144,7 +151,7 @@ func (a *App) page() string {
 
 // Refresh drops the cached root page, so the next Action/IslandAction call
 // re-fetches it. Needed after a mutation that changes the View's rendered
-// shape (a branched View whose action set or digest differs by state).
+// shape (a branched View whose action set differs by state).
 func (a *App) Refresh() {
 	a.mu.Lock()
 	a.fetched = false
@@ -168,7 +175,7 @@ type Action struct {
 
 // Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
 // test that deliberately wants a hand-built or stale URL (e.g. asserting a
-// 410 on a shape-digest mismatch).
+// 410 on an action id this render no longer binds).
 func (x *Action) Raw(path string) *Action { x.raw = path; return x }
 
 // Host overrides the request Host header (the authority the origin floor
@@ -217,11 +224,11 @@ func (x *Action) Fire() (int, string) {
 		path = x.conn.ActionURL(x.island, x.n)
 	}
 	if path == "" {
-		m := actionURLRe(x.island, x.n).FindStringSubmatch(x.app.page())
-		if m == nil {
+		u, ok := nthActionURL([]byte(x.app.page()), x.island, x.n)
+		if !ok {
 			x.app.t.Fatalf("vt.Action.Fire: no action %d/%d found on the rendered page", x.island, x.n)
 		}
-		path = m[1]
+		path = u
 	}
 	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+path, strings.NewReader(x.body))
 	if err != nil {
@@ -258,7 +265,7 @@ type Conn struct {
 	cancel   context.CancelFunc
 	tabID    string
 	mu       sync.Mutex
-	elements []byte // every datastar-patch-elements frame's data lines seen so far, concatenated in arrival order
+	elements [][]byte // one entry per datastar-patch-elements frame, in arrival order
 }
 
 var tabRE = regexp.MustCompile(`"_viatab":"([^"]+)"`)
@@ -300,12 +307,17 @@ func (a *App) Connect() *Conn {
 			switch {
 			case strings.HasPrefix(line, "event:"):
 				inElements = strings.Contains(line, "datastar-patch-elements")
+				if inElements {
+					c.mu.Lock()
+					c.elements = append(c.elements, nil)
+					c.mu.Unlock()
+				}
 			case line == "":
 				inElements = false
 			case inElements:
 				c.mu.Lock()
-				c.elements = append(c.elements, line...)
-				c.elements = append(c.elements, '\n')
+				i := len(c.elements) - 1
+				c.elements[i] = append(append(c.elements[i], line...), '\n')
 				c.mu.Unlock()
 			}
 			select {
@@ -324,27 +336,28 @@ func (a *App) Connect() *Conn {
 // TabID returns the connection's tab id.
 func (c *Conn) TabID() string { return c.tabID }
 
-// ActionURL returns the currently-rendered action URL for {island}/{n} — read
-// off the LATEST datastar-patch-elements frame this connection has actually
-// received, the same markup a browser's DOM would hold at this point, not a
+// ActionURL returns the currently-rendered URL of island's n-th action, in
+// document order — read off the LATEST datastar-patch-elements frame that
+// carries one, the same markup a browser's DOM would hold at this point, not a
 // separate stateless GET's render. Before any push has touched this island
 // (e.g. the very first action after Connect), nothing has been pushed yet
 // either, so this falls back to the page's own initial GET — exactly what a
 // real browser would still be showing.
 func (c *Conn) ActionURL(island, n int) string {
 	c.t.Helper()
-	re := actionURLRe(island, n)
 	c.mu.Lock()
-	buf := append([]byte(nil), c.elements...)
+	frames := append([][]byte(nil), c.elements...)
 	c.mu.Unlock()
-	if m := re.FindAllSubmatch(buf, -1); m != nil {
-		return string(m[len(m)-1][1])
+	for i := len(frames) - 1; i >= 0; i-- {
+		if u, ok := nthActionURL(frames[i], island, n); ok {
+			return u
+		}
 	}
-	m := re.FindStringSubmatch(c.app.page())
-	if m == nil {
-		c.t.Fatalf("vt.Conn.ActionURL: no action %d/%d found on the page or any pushed frame", island, n)
+	if u, ok := nthActionURL([]byte(c.app.page()), island, n); ok {
+		return u
 	}
-	return m[1]
+	c.t.Fatalf("vt.Conn.ActionURL: no action %d/%d found on the page or any pushed frame", island, n)
+	return ""
 }
 
 // Peek returns the next buffered frame without blocking, so a test can assert
