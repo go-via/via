@@ -187,6 +187,17 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 // can't park this POST's goroutine forever (see liveConn.run).
 func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island, n int, in map[string]json.RawMessage, digest, base string) {
 	res, ok := lc.run(req.Context(), func() actionResult {
+		// A closure queued on pulse runs regardless of what its caller does
+		// meanwhile: if req.Context() is already done, run's own second
+		// select has already given up and answered 410 to the client (see
+		// liveConn.run) — applying the action now would double-apply on a
+		// client retry, and passing w into liveRunAction would hand a dead
+		// ResponseWriter to Session().Put (SetCookie -> Header() would race
+		// the server's post-handler teardown). Skip the mutation entirely —
+		// w is never threaded into a Ctx below.
+		if req.Context().Err() != nil {
+			return actionResult{gone: "request abandoned"}
+		}
 		// u is looked up here, on the island goroutine, rather than by the
 		// dispatching request's own goroutine before this closure was posted —
 		// a concurrent push (a tick, another action, Listen fan-out) replaces

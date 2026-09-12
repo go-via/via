@@ -1255,6 +1255,61 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	wg.Wait()
 }
 
+// abandonedAction is a trivial live action dispatched with a request context
+// that is already canceled before ServeHTTP is even called — so
+// req.Context().Err() is guaranteed non-nil from the very first instruction
+// dispatch runs, isolating liveConn.run's first select (pulse-send vs.
+// reqCtx.Done(), both ready at once) from any timing noise in an actual
+// client/server round trip.
+type abandonedAction struct {
+	applied *atomic.Int32 // shared across Register's per-connection copy and the test's own handle
+}
+
+func (a *abandonedAction) OnConnect(ctx *via.Ctx) error { return nil }
+func (a *abandonedAction) Act(ctx *via.Ctx)             { a.applied.Add(1) }
+func (a *abandonedAction) View() h.H                    { return h.Div(h.Button(via.OnClick(a.Act))) }
+
+// A live action must never mutate state once its own caller has already given
+// up on it — before the fix, a closure handed off to the island goroutine
+// (see liveConn.run) ran to completion regardless of whether the dispatching
+// request's context was already done by the time the goroutine picked it up.
+// Every one of these requests is abandoned from the start (its context is
+// canceled before dispatch even begins), so every response this handler
+// could possibly produce is one of ok=false or gone — never a mutation.
+func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
+	t.Parallel()
+	root := &abandonedAction{applied: new(atomic.Int32)}
+	handler := via.Register(*root)
+	srv := liveServer(t, handler)
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	actURL := actionURL(t, page, 0, 0)
+
+	const n = 3000
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // abandoned before the request is even dispatched
+			req := httptest.NewRequest(http.MethodPost, actURL, strings.NewReader("{}")).WithContext(ctx)
+			req.Header.Set("Datastar-Request", "true")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			req.Header.Set("X-Via-Tab", tab)
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(0), root.applied.Load(),
+		"an action dispatched with an already-canceled request context must never apply")
+}
+
 // paramInTick calls ctx.Param from a Tick handler to prove the connection's
 // bind carries a real request throughout its life (set once at OnConnect),
 // not just during the dispatched action that started the connection.
