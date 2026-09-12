@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/go-via/via/internal/hcore"
 )
@@ -171,7 +172,10 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	}
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
-	newInst := func() viewer { inst := root; return PT(&inst) }
+	newInst := func() instance {
+		inst := root
+		return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst)}
+	}
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
@@ -186,11 +190,11 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		}()
 		inst := newInst()
 		ctx := newRootCtx(nil, true, concreteBase(patternBase, req, names), nil)
-		ctx.islandV = inst                                   // the root is a unit like any embedded island, when it is live
-		if runOnInit(inst, ctx, w, req, r.sessions) != nil { // load session/request data into fields first
+		ctx.islandV = inst                                     // the root is a unit like any embedded island, when it is live
+		if runOnInit(inst.v, ctx, w, req, r.sessions) != nil { // load session/request data into fields first
 			return
 		}
-		body := renderRootWith(ctx, inst)
+		body := renderRootWith(ctx, inst.v)
 		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, patternBase+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{island}/{act}", m.dispatch)

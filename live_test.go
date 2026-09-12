@@ -1680,8 +1680,8 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, 0, 0)
 
-	var seen sync.Map // values (int) observed in an "s0" signals-patch frame
-	re := regexp.MustCompile(`"s0":(\d+)`)
+	var seen sync.Map // values (int) observed in the counter signal's signals-patch frame
+	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1760,7 +1760,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, 0, 0)
 
-	re := regexp.MustCompile(`"s0":(\d+)`)
+	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
 	var mu sync.Mutex
 	var seq []int
 	done := make(chan struct{})

@@ -318,6 +318,39 @@ actions) another user adding or removing a row changed every other open tab's
 digest and silently 410'd ALL of its buttons, including untouched ones, until
 a reload. Handler-addressed URLs cannot do that.
 
+## Wire break: signal slot names
+
+A `Signal[T]`'s wire name is now its byte offset within the composition
+struct — `f0`, `f48`, `i0_f0` for an embedded island — where v0.8's earlier
+builds (and v1) named it by render order: `s0`, `s1`, `i0_s0`.
+
+Nothing in your code writes a slot name either, so again there is nothing to
+port; a tab left open across the upgrade holds the old names, posts them, and
+the server ignores signals it does not recognise, so the page comes back
+correct on reload.
+
+The bug this fixes: slots were claimed in first-render order, so a `Bind()`
+inside a `When` (a wizard step, a branch that only sometimes renders an input)
+could claim a slot another signal already owned. The input was then wired to
+the wrong field — on a live page the post wrote the wrong signal, on a
+stateless page the new input came up holding the previous occupant's value. An
+offset is a property of the struct, not of what this render happened to draw,
+so a conditional `Bind()` is now safe.
+
+Two carve-outs:
+
+- A signal reached through a **pointer or slice field** lives outside the
+  composition struct and has no offset. It falls back to the render-order name
+  (`s0`, `s1`, …), with the old aliasing hazard — keep such a signal's `Bind()`
+  unconditional. Keyed per-row signal slots remain future work.
+- `via.Embed`'s signature is unchanged: the child copy `Embed` already takes by
+  value is the offset base, so call sites need no edit.
+
+A stateless action's patch also now declares any slot the pre-action render did
+not carry, alongside the ones the action wrote — that is what seeds an input
+appearing for the first time in the response instead of leaving it on whatever
+the client store already held.
+
 ## Known rough edges in v0.8
 
 Stated plainly so you can decide whether to wait:
@@ -328,9 +361,11 @@ Stated plainly so you can decide whether to wait:
   longer invalidates unrelated buttons. What does still 410: a branch that
   stopped rendering that handler at all. The common cause is an `OnInit` that
   does not restore the session/UI state the `View` branches on, so the
-  dispatch-time render takes a different branch than the client's — the 410
-  body names the handlers the render DID bind, which is the fastest way to
-  see it. Datastar resolves a non-2xx response silently; a live page heals on
+  dispatch-time render takes a different branch than the client's — the
+  SERVER LOG names the handlers the render DID bind, which is the fastest way
+  to see it (the response body names only the id that was asked for: the bound
+  list is your Go type and method names, and the client is not entitled to
+  them). Datastar resolves a non-2xx response silently; a live page heals on
   the next push, a stateless one stays dead until reload.
 - **Per-connection `State` does not survive a native form submit** — it is a
   navigation and opens a new connection, and the returned page no longer

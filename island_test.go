@@ -136,15 +136,16 @@ type pair struct{ X, Y namer }
 func (p *pair) View() h.H { return h.Div(via.Embed(p.X), via.Embed(p.Y)) }
 
 // Sibling islands that each declare a Signal must get DISTINCT slot names —
-// without a per-island prefix both would claim "s0" and clobber each other in
+// without a per-island prefix both would claim the same offset slot and clobber
+// each other in
 // the page's global Datastar store. Each island also declares its own signals on
 // its container so they reach the store.
 func TestEmbed_islandSignalsAreScopedPerIsland(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(pair{})), http.MethodGet, "/", "")
 
-	assert.Contains(t, body, "i0_s0", "island 0's signal must carry an island-scoped slot")
-	assert.Contains(t, body, "i1_s0", "island 1's signal must carry an island-scoped slot")
+	assert.Contains(t, body, "i0_f0", "island 0's signal must carry an island-scoped slot")
+	assert.Contains(t, body, "i1_f0", "island 1's signal must carry an island-scoped slot")
 	assert.Contains(t, body, `id="via-i0" data-signals=`, "island 0 must declare its own signals")
 	assert.Contains(t, body, `id="via-i1" data-signals=`, "island 1 must declare its own signals")
 }
@@ -168,8 +169,8 @@ func (s *solo) View() h.H { return h.Div(via.Embed(s.X)) }
 
 // A live island's signal must keep the SAME island-scoped slot across a push, or
 // the client binding breaks; and the push must NOT re-declare data-signals, or a
-// fan-out would clobber what the user is editing. The GET declares i0_s0 on the
-// container; a tick-driven push re-binds i0_s0 with no data-signals.
+// fan-out would clobber what the user is editing. The GET declares i0_f0 on the
+// container; a tick-driven push re-binds i0_f0 with no data-signals.
 func TestMux_liveIslandSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
 	srv := via.Register(solo{})
@@ -179,12 +180,12 @@ func TestMux_liveIslandSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	// test independent.
 	_, body := do(t, serve(t, srv), http.MethodGet, "/", "")
 	assert.Contains(t, body, `id="via-i0" data-ignore-morph data-signals=`, "GET must declare the island's signal")
-	assert.Contains(t, body, `data-bind="i0_s0"`, "the island signal uses an island-scoped slot")
+	assert.Contains(t, body, `data-bind="i0_f0"`, "the island signal uses an island-scoped slot")
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, srv)
 		conn := app.Connect()
-		line := conn.Await(`data-bind="i0_s0"`) // the push re-renders the island with the same slot
+		line := conn.Await(`data-bind="i0_f0"`) // the push re-renders the island with the same slot
 		assert.NotContains(t, line, "data-signals", "a live push must not re-declare island signals")
 	})
 }

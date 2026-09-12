@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"crypto/sha256"
 	"encoding/base64"
@@ -39,6 +40,17 @@ var datastarJS []byte
 
 // viewer is the (pointer) contract a root must satisfy: a pure, ctx-free View.
 type viewer interface{ View() h.H }
+
+// instance is one root/child composition plus the two facts a Signal needs to
+// name itself by field offset: the address of the struct it lives in, and that
+// struct's size. Both come from the generic entry point that still knows the
+// concrete type (Mount's T, Embed's C); everything downstream is non-generic
+// and would otherwise have to reflect.
+type instance struct {
+	v    viewer
+	base unsafe.Pointer
+	size uintptr
+}
 
 // ptrViewer is the constraint every Register/Mount call site needs — one named
 // alias instead of the same anonymous interface repeated at each generic entry
@@ -68,6 +80,7 @@ type Ctx struct {
 	live        bool                             // this unit is live: OnInit registered a Tick/Listen, or its View rendered server State
 	dirty       map[string]any                   // signals an action Set this pass (→ signal-patch)
 	declareOnly map[string]any                   // when non-nil, declare only these slots (stateless action patch)
+	declareSeen map[string]bool                  // slots the pre-action render already declared; a slot absent from it is seeded even when declareOnly excludes it
 	req         *http.Request                    // the request that triggered this handler (nil during a pure render)
 	sessions    *sessionManager                  // per-Register session manager (always constructed; cookie is lazy)
 	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnInit, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); cleared once the connect response is flushed, so a Tick/Listen handler's Ctx (which keeps running against this same Ctx afterward) sees nil and its Session().Put warns instead of writing a dead response (see I2)
@@ -75,7 +88,7 @@ type Ctx struct {
 	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
 	isIsland    bool                             // true when this Ctx binds an embedded island's child View
 	islandIdx   int                              // this island's flat, page-wide index (shared via pass), used in its action path
-	islandV     viewer                           // the island's child viewer, for re-rendering on action
+	islandV     instance                         // the unit's composition, for re-rendering on action and for offset-derived signal slots
 	rendered    []byte                           // this island's inner HTML from the discovery render (for 204 compare)
 	push        func()                           // re-render THIS island and frame it on the stream (set per live unit)
 	declare     bool                             // whether this render declares page-level data-signals (first paint, not a push)
@@ -146,19 +159,59 @@ func ctxOf(b hcore.Binder) *Ctx {
 	return nil
 }
 
-// signalName allocates the next first-use signal name ("s0","s1",…). A handle
-// calls it once and caches the result, so a signal's identity is the handle,
-// not its render position. hcore.Binder.
+// signalSlot names the signal at field, which must point into this unit's
+// composition. The name is the field's byte offset within the struct, so a
+// signal's wire identity survives a render that skips an earlier sibling's
+// Bind: render-order slots ("s0","s1",…) are claimed in first-render order and
+// a conditional Bind would hand one signal's slot to another, writing the wrong
+// field on the next post.
+//
+// The subtraction is unsigned, so a field BELOW the base wraps to a huge
+// offset and fails the bound check along with one above it. A signal reached
+// through a pointer or slice field lives outside the struct entirely and has no
+// offset — it falls back to the render-order name (see Each's godoc).
+func (c *Ctx) signalSlot(field unsafe.Pointer) string {
+	if base := c.islandV.base; base != nil && field != nil {
+		if off := uintptr(field) - uintptr(base); off < c.islandV.size {
+			return c.slotScope("f" + strconv.FormatUint(uint64(off), 10))
+		}
+	}
+	return c.signalName()
+}
+
+// signalName allocates the next first-use render-order signal name
+// ("s0","s1",…) — the fallback for a signal with no field offset.
 func (c *Ctx) signalName() string {
 	name := "s" + strconv.Itoa(c.nextSig)
 	c.nextSig++
-	// An embedded island binds in its own Ctx, so two islands would both mint
-	// "s0" and collide in the page's one global Datastar store. Prefix the slot
-	// with the island index to keep sibling islands' signals distinct.
+	return c.slotScope(name)
+}
+
+// slotScope prefixes a slot with the island index: an embedded island binds in
+// its own Ctx, so two islands would otherwise mint the same name and collide in
+// the page's one global Datastar store.
+func (c *Ctx) slotScope(name string) string {
 	if c.isIsland {
-		name = "i" + strconv.Itoa(c.islandIdx) + "_" + name
+		return "i" + strconv.Itoa(c.islandIdx) + "_" + name
 	}
 	return name
+}
+
+// slotSet collects every slot this render declared, page-wide (the unit's own
+// plus every embedded island's).
+func (c *Ctx) slotSet() map[string]bool {
+	seen := map[string]bool{}
+	c.collectSlots(seen)
+	return seen
+}
+
+func (c *Ctx) collectSlots(dst map[string]bool) {
+	for _, slot := range c.order {
+		dst[slot] = true
+	}
+	for _, isl := range c.islands {
+		isl.collectSlots(dst)
+	}
 }
 
 // declareSignal records that slot participates in this render with the given
@@ -459,9 +512,11 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // render path serves the full first paint (only nil), the declaration-free
 // live push (declareSignals false), and the restricted action patch (only
 // non-nil, see renderRootPatch).
-func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any) (*Ctx, []byte) {
+func renderRootBase(inst instance, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, seen map[string]bool) (*Ctx, []byte) {
 	ctx := newRootCtx(in, declareSignals, base, only)
-	return ctx, renderRootWith(ctx, v)
+	ctx.declareSeen = seen
+	ctx.islandV = inst
+	return ctx, renderRootWith(ctx, inst.v)
 }
 
 // newRootCtx builds the root bind Ctx for one render. A request-scoped
@@ -487,7 +542,7 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
 	if declareSignals {
-		writeSignalsAttr(&b, ctx.order, ctx.initial, only)
+		writeSignalsAttr(&b, ctx.order, ctx.initial, only, ctx.declareSeen)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())
@@ -526,11 +581,11 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 // store, clobbering a value the user is mid-edit. That is the same hazard a live
 // push avoids by omitting the attribute; here the attribute stays, restricted to
 // only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any) (*Ctx, []byte) {
+func renderRootPatch(inst instance, in map[string]json.RawMessage, base string, only map[string]any, seen map[string]bool) (*Ctx, []byte) {
 	if only == nil {
 		only = map[string]any{} // nil would read as "declare everything"
 	}
-	return renderRootBase(v, in, true, base, only)
+	return renderRootBase(inst, in, true, base, only, seen)
 }
 
 // Register builds an http.Handler serving the root composition. root is taken
@@ -587,10 +642,10 @@ func connectUnit(unit *Ctx, stream *sseStream, base string, lc *liveConn) {
 // fresh render's bind Ctx replaces lc.root: it is the one whose actions and
 // hydrators table a live action runs against next, so a live action needs no
 // render of its own — the previous push already built it.
-func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
+func rootPush(inst instance, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderRootBase(v, nil, false, base, nil) // push omits data-signals
+		bind, body := renderRootBase(inst, nil, false, base, nil, nil) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
@@ -602,10 +657,10 @@ func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
 // children in place (Datastar inner mode, so the container's own
 // data-ignore-morph never blocks the push) and replaces the connection's
 // current unit for it.
-func islandPush(idx int, v viewer, base string, stream *sseStream, lc *liveConn) func() {
+func islandPush(idx int, inst instance, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderIslandBind(idx, v, base)
+		bind, body := renderIslandBind(idx, inst, base)
 		bind.push = push
 		lc.replace(bind)
 		id := "via-i" + strconv.Itoa(idx)
@@ -697,10 +752,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// root unit's own instance is pv, mirroring an island unit's islandV.
 	bind := newRootCtx(connectSig, false, base, nil)
 	bind.islandV = pv
-	if runOnInit(pv, bind, w, req, m.sessions) != nil {
+	if runOnInit(pv.v, bind, w, req, m.sessions) != nil {
 		return
 	}
-	renderRootWith(bind, pv)
+	renderRootWith(bind, pv.v)
 	units := liveUnits(bind)
 
 	// No live units: this app has no live content (a stateless page POSTing

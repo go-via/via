@@ -120,8 +120,8 @@ func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
-	assert.Contains(t, body, `"i0_s0":"resetted"`, "the Set signal must reach the client")
-	assert.NotContains(t, body, `"i0_s1":`,
+	assert.Contains(t, body, `"i0_f0":"resetted"`, "the Set signal must reach the client")
+	assert.NotContains(t, body, `"i0_f48":`,
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
 }
 

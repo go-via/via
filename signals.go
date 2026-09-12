@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"unsafe"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
@@ -29,11 +30,17 @@ import (
 // slots it names: that is how a stateless action patch ships the signals it
 // wrote without overwriting the ones it did not, so a value the user is mid-edit
 // survives the morph. If the restriction leaves nothing, no attribute is written.
-func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any) {
+func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
 	sig := make(map[string]any, len(order))
 	for _, slot := range order {
 		if only != nil {
-			if _, ok := only[slot]; !ok {
+			_, dirty := only[slot]
+			// A slot the pre-action render did not carry is a control that has
+			// just appeared (a branch opened). The client store has no value
+			// for it — or, worse, a stale one from whatever occupied the slot
+			// before — so it is seeded here even though the action never wrote
+			// it. seen nil means "no pre-action render to compare against".
+			if !dirty && (seen == nil || seen[slot]) {
 				continue
 			}
 		}
@@ -104,7 +111,11 @@ func (s *Signal[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
 	if s.slot == "" {
-		s.slot = b.SignalName()
+		if s.bound != nil {
+			s.slot = s.bound.signalSlot(unsafe.Pointer(s))
+		} else {
+			s.slot = b.SignalName()
+		}
 	}
 	if raw, ok := b.SignalInit(s.slot); ok {
 		if rm, isRaw := raw.(json.RawMessage); isRaw {

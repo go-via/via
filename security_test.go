@@ -187,7 +187,7 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 // and reject an oversize body with 413 rather than buffering it whole.
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
-	big := `{"s0":"` + strings.Repeat("a", 2<<20) + `"}`
+	big := `{"f0":"` + strings.Repeat("a", 2<<20) + `"}`
 	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body(big).Fire()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }

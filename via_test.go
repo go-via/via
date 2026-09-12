@@ -253,7 +253,7 @@ func TestUnknownAction_isGone(t *testing.T) {
 func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(boundForm{}))
-	status, _ := app.Action(0).Body("{\"s0\":\"\xff\"}").Fire()
+	status, _ := app.Action(0).Body("{\"f0\":\"\xff\"}").Fire()
 	assert.Equal(t, http.StatusOK, status)
 }
 
@@ -263,7 +263,7 @@ func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(boundForm{}))
-	status, frag := app.Action(0).Body(`{"s0":"one","s0":"two"}`).Fire()
+	status, frag := app.Action(0).Body(`{"f0":"one","f0":"two"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "two")
 	assert.NotContains(t, frag, "one")
@@ -807,15 +807,23 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
 
-// The 410 for an id this render does not bind names the handlers it DOES
-// bind, so the common wiring mistake (OnInit not restoring the UI state the
-// View branches on) reads as a diagnosis instead of a dead button.
-func TestUnknownAction_410NamesTheBoundHandlers(t *testing.T) {
-	t.Parallel()
+// The 410 for an id this render does not bind keeps the diagnosis (which
+// handlers ARE bound, and the Go method behind each) server-side: the body
+// names only the id the client asked for, so the render's Go type and method
+// names never reach it.
+//
+// Sequential: it captures the global log output.
+func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz"), "{}")
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
-	assert.Contains(t, body, ").Inc", "and the handlers this render does bind")
+	assert.NotContains(t, body, ").Inc", "but never the Go method names of the render")
+	assert.Contains(t, buf.String(), ").Inc", "the bound handlers go to the server log instead")
 }
