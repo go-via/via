@@ -195,14 +195,7 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // session, one ShoppingCart{} per session, and so on. Sessions do not rotate
 // their id on their own: call [Session.Rotate] at an auth-state change
 // (login, logout, privilege elevation) to invalidate a session id an
-// attacker may have planted before that change (fixation defense). An
-// earlier revision rotated automatically on a session's first write instead;
-// that was reverted (see CHANGELOG) because "first write" is tracked per
-// request, not per session, so every subsequent writing request minted
-// ANOTHER fresh id — a request still carrying the previous one (a
-// double-click, a retried POST) forked a new, empty session instead of
-// resolving, and concurrent writers racing one cookie each minted their own
-// id with no sweeper to reclaim the abandoned ones.
+// attacker may have planted before that change (fixation defense).
 //
 // The store is in-memory and single-pod (the 1.0 scope). Expiry is enforced
 // lazily on access: a session idle past its TTL stops resolving, but a session
@@ -211,12 +204,11 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // authenticated sessions, not anonymous traffic. A background sweep / durable
 // or cross-pod store is deferred to the backplane work.
 type Session struct {
-	mgr        *sessionManager
-	id         string // current session id; "" until resolved or created
-	data       *sessionData
-	w          http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a stateless action, OnConnect, AND a live action — dispatchLive is synchronous, so a live action's response hasn't gone out yet either
-	secure     bool
-	fromCookie bool // id was resolved from a request-carried cookie, not minted this request
+	mgr    *sessionManager
+	id     string // current session id; "" until resolved or created
+	data   *sessionData
+	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a stateless action, OnConnect, AND a live action — dispatchLive is synchronous, so a live action's response hasn't gone out yet either
+	secure bool
 }
 
 // ensure returns the session's data, creating the session (and issuing the
@@ -314,7 +306,6 @@ func (c *Ctx) Session() *Session {
 		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
 		if id, d, ok := c.sessions.resolve(c.req); ok {
 			s.id, s.data = id, d
-			s.fromCookie = true
 		}
 	}
 	c.session = s
