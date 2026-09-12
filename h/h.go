@@ -32,11 +32,20 @@ type Stringish = hcore.Stringish
 func Str[T Stringish](v T) H { return hcore.Str(v) }
 
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
-// must match [A-Za-z][A-Za-z0-9-]* — an invalid name panics, since a name is a
-// programming-time construction and an injectable one defeats the safe-HTML
-// guarantee.
+// must match [A-Za-z][A-Za-z0-9-]*, with ':', '_' and '.' additionally allowed
+// in data-* names for Datastar's plugin/modifier syntax. Inline DOM event
+// handlers (onclick, onerror, ... — anything on* that is not data-on*) are
+// rejected. An invalid name panics, since a name is a programming-time
+// construction and an injectable one defeats the safe-HTML guarantee.
 func RawAttr(name, val string) Attr { return hcore.RawAttr(name, val) }
 
-// Data builds a data-<name>="val" attribute; val is HTML-escaped at render. The
-// suffix is held to the same allowlist as RawAttr ("data-" is a fixed prefix).
+// Data builds a data-<name>="val" attribute; val is HTML-escaped at render. It
+// is the escape hatch to Datastar's full vocabulary: the suffix may carry the
+// plugin syntax, as in h.Data("on:click", "@post(\'/x\')"),
+// h.Data("on:keydown__debounce.300ms", ...), h.Data("class:active", "$on"),
+// h.Data("attr:disabled", "$busy") or h.Data("show", "$open").
+//
+// Spell the separator as a colon, never a hyphen: Datastar splits a key on the
+// FIRST colon, so data-attr-value names a plugin "attr-value" that does not
+// exist and is silently ignored — no console error, no attribute applied.
 func Data(name, val string) Attr { return hcore.Data(name, val) }
