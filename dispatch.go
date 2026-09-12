@@ -41,12 +41,13 @@ const tabFormField = "_viatab"
 // goroutine as the mutation (see dispatchLive) because it reads the live
 // tree the island goroutine concurrently ticks.
 type actionResult struct {
-	redirect string
-	panicked bool
-	badArg   error // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
-	body     []byte
-	pushWork func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
-	gone     string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
+	redirect  string
+	panicked  bool
+	badArg    error // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
+	body      []byte
+	pushWork  func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
+	gone      string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
+	forbidden string // live path only: set when the session-bound check (run on the island goroutine — see dispatchLive) rejects the request
 }
 
 // mount bundles a page's per-request wiring — built once in Router.Mount and
@@ -152,20 +153,6 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "no such island", http.StatusGone)
 			return
 		}
-		if bound := lc.boundSession(); bound != nil {
-			// The connection is bound to a real session — either the one open
-			// at connect, or one a live action minted/rotated afterward (see
-			// liveConn.bindSession) — and a dispatch against it must carry
-			// that SAME session (by pointer, not id — a Rotate since connect
-			// moves the pointer to a new id, never a new data object).
-			// Otherwise a leaked tab id is a bearer credential good from any
-			// request, session or none, once the origin floor is open.
-			_, s, _ := m.sessions.resolve(req)
-			if s != bound {
-				http.Error(w, "session mismatch", http.StatusForbidden)
-				return
-			}
-		}
 		m.dispatchLive(w, req, mode, lc, island, n, in, digest, base)
 		return
 	}
@@ -213,6 +200,27 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		if req.Context().Err() != nil {
 			return actionResult{gone: "request abandoned"}
 		}
+		// Checked here, on the island goroutine, rather than by the dispatching
+		// request's own goroutine before this closure was posted — a
+		// cookieless dispatch that passed a pre-queue check while the
+		// connection was still unbound could otherwise be applied AFTER a
+		// concurrent live login bound it, since the check and the run were on
+		// different goroutines with a queue hop between them. Checking here
+		// makes the compare and the run atomic on this one serialized
+		// goroutine, closing that window.
+		if bound := lc.boundSession(); bound != nil {
+			// The connection is bound to a real session — either the one open
+			// at connect, or one a live action minted/rotated afterward (see
+			// liveConn.bindSession) — and a dispatch against it must carry
+			// that SAME session (by pointer, not id — a Rotate since connect
+			// moves the pointer to a new id, never a new data object).
+			// Otherwise a leaked tab id is a bearer credential good from any
+			// request, session or none, once the origin floor is open.
+			_, s, _ := m.sessions.resolve(req)
+			if s != bound {
+				return actionResult{forbidden: "session mismatch"}
+			}
+		}
 		// u is looked up here, on the island goroutine, rather than by the
 		// dispatching request's own goroutine before this closure was posted —
 		// a concurrent push (a tick, another action, Listen fan-out) replaces
@@ -253,6 +261,10 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 	})
 	if !ok {
 		http.Error(w, "live connection closed", http.StatusGone)
+		return
+	}
+	if res.forbidden != "" {
+		http.Error(w, res.forbidden, http.StatusForbidden)
 		return
 	}
 	if res.gone != "" {
