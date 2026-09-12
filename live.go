@@ -33,8 +33,14 @@ type subStarter func(reqCtx context.Context, pulse chan<- func())
 // Tick schedules fn to run every d for the life of the island's connection. fn
 // is a named method value (e.g. c.beat); after each run via re-renders the
 // island and pushes an element-patch over the SSE stream. Valid only inside
-// OnConnect of a live composition.
+// OnConnect of a live composition — runLiveStream snapshots ticks/subs once,
+// right after OnConnect returns, so a call after that point registers nothing
+// and logs loudly instead of silently doing nothing.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
+	if c.connected {
+		log.Print("via: Tick called after OnConnect returned — ignored; Tick is valid only inside OnConnect")
+		return
+	}
 	c.ticks = append(c.ticks, tickReg{d: d, fn: fn})
 }
 
@@ -47,8 +53,12 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // published value into handler on the island's own goroutine (serialized with
 // Tick, so island state is mutated race-free), pushes this island's
 // re-render, and stops the subscription on disconnect. Valid only inside
-// OnConnect.
+// OnConnect — see Tick for why a call after OnConnect returns is a loud no-op.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
+	if c.connected {
+		log.Print("via: Listen called after OnConnect returned — ignored; Listen is valid only inside OnConnect")
+		return
+	}
 	sub := t.Subscribe()
 	c.OnDispose(sub.Stop)
 	c.subs = append(c.subs, func(reqCtx context.Context, pulse chan<- func()) {

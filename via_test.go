@@ -395,12 +395,14 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 }
 
 // viaCallNames are the via entry points whose arguments must be named method
-// values or by-value compositions — never an address-of or a closure.
+// values or by-value compositions — never an address-of or a closure. Mount
+// (a *Router method, called as r.Mount) and Param (a *Ctx method, called as
+// ctx.Param) cannot appear here: isViaCall only matches a package-qualified
+// call (via.X), and neither is ever spelled that way.
 var viaCallNames = map[string]bool{
 	"Register": true, "Embed": true, "When": true, "Each": true,
 	"OnClick": true, "OnSubmit": true, "OnChange": true,
-	"OnClickArg": true, "PostForm": true, "Mount": true,
-	"Param": true,
+	"OnClickArg": true, "PostForm": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
@@ -595,6 +597,19 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
 	assert.Contains(t, body, "alpha")
+}
+
+// A malformed ?a= (here, a string where the handler wants an int) must not
+// silently hand the handler a zero value it might act on (e.g. deleting row
+// 0) — the arg is client-controlled input, so an honest answer is 400.
+func TestActionArg_malformedArgAnswers400(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := strings.Replace(actionURL(t, page, 0, 0), "a=1", "a=%22abc%22", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}")
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
 }
 
 // todoBoard embeds the todo list as a STATELESS island — per-row value-actions

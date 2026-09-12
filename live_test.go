@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -717,6 +718,24 @@ func TestLive_disposersRunWhenOnConnectFails(t *testing.T) {
 	}
 }
 
+// boomOnDiscovery panics in View on every call, including the connect
+// handshake's own discovery render — before OnConnect ever runs and before any
+// header has gone out on the response.
+type boomOnDiscovery struct{}
+
+func (boomOnDiscovery) OnConnect(*via.Ctx) error { return nil }
+func (boomOnDiscovery) View() h.H                { panic("via_test: discovery render exploded") }
+
+// A panic before the stream's headers are sent must answer 500, not fall
+// through to Go's default of 200 with an empty body — the client would read
+// that as a successful (if empty) connect.
+func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
+	t.Parallel()
+	resp, body := do(t, serve(t, via.Register(boomOnDiscovery{})), http.MethodPost, "/_via/sse", "")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.NotEmpty(t, body)
+}
+
 // notFoundConnect's OnConnect returns via.ErrNotFound — the live analogue of a
 // page whose data vanished. The connect must answer 404, not 500: the world
 // changed, the request is honest. Fails if the sentinel stops mapping to 404.
@@ -1194,6 +1213,103 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 		assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive to dispatch a second action")
 		conn.Await("n: 1")
 	})
+}
+
+// liveArg is a live island with one value-carrying action, so a malformed
+// ?a= can be exercised on the live dispatch path too (dispatchStateless has
+// its own via_test coverage).
+type liveArg struct{ last via.State[int] }
+
+func (l *liveArg) OnConnect(*via.Ctx) error { return nil }
+func (l *liveArg) Set(ctx *via.Ctx, v int)  { l.last.Set(v) }
+func (l *liveArg) View() h.H {
+	return h.Div(l.last.Display(), h.Button(via.OnClickArg(l.Set, 7)))
+}
+
+// A malformed ?a= on a LIVE action must answer 400, not run the handler with
+// a zero value nor 500 — and the island goroutine must survive to answer a
+// later, well-formed action normally.
+func TestLive_malformedActionArgAnswers400(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(liveArg{}))
+		conn := app.Connect()
+
+		url := strings.Replace(conn.ActionURL(0, 0), "a=7", "a=%22bad%22", 1)
+		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+		assert.Equal(t, http.StatusBadRequest, status)
+
+		status, _ = app.Action(0).Live(conn).Fire() // well-formed, same slot
+		assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive")
+		conn.Await("7")
+	})
+}
+
+// reTicker's beat handler calls Tick again on the same (already-connected)
+// Ctx — nonsensical user code, but it must not silently register a second,
+// invisible ticker; it must log loudly and otherwise no-op.
+type reTicker struct{ n via.State[int] }
+
+func (r *reTicker) OnConnect(ctx *via.Ctx) error { ctx.Tick(10*time.Millisecond, r.beat); return nil }
+func (r *reTicker) beat(ctx *via.Ctx) {
+	r.n.Set(r.n.Get() + 1)
+	ctx.Tick(time.Millisecond, r.beat) // called after OnConnect returned
+}
+func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
+
+// Sequential: it captures the global log output.
+func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(reTicker{}))
+		_ = app.Connect()
+		time.Sleep(50 * time.Millisecond)
+		synctest.Wait()
+	})
+
+	assert.Contains(t, buf.String(), "Tick called after OnConnect returned",
+		"a Tick call after OnConnect must log loudly instead of silently registering nothing")
+}
+
+// reListener's recv handler calls Listen again on the same (already-connected)
+// Ctx — same nonsensical case as reTicker, for Listen.
+type reListener struct {
+	room *topic.Topic[string]
+	last via.State[string]
+}
+
+func (r *reListener) OnConnect(ctx *via.Ctx) error {
+	ctx.Listen(r.room, r.recv)
+	return nil
+}
+func (r *reListener) recv(ctx *via.Ctx, msg string) {
+	r.last.Set(msg)
+	ctx.Listen(r.room, r.recv) // called after OnConnect returned
+}
+func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
+
+// Sequential: it captures the global log output.
+func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	room := topic.New[string]()
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Register(reListener{room: room}))
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		_ = awaitTabID(t, lines)
+		room.Publish("hello")
+		awaitLine(t, lines, "hello")
+	})
+
+	assert.Contains(t, buf.String(), "Listen called after OnConnect returned",
+		"a Listen call after OnConnect must log loudly instead of silently registering nothing")
 }
 
 // racyTicker ticks as fast as time.Ticker allows so its OnConnect-scheduled

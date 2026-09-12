@@ -340,6 +340,16 @@ func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
 		"WithSessionTTL alone must enable sessions with an auto-generated key")
 }
 
+// A short WithSessionKey is a guessable HMAC-SHA256 key — accepted silently,
+// it would forgeably sign every session cookie the app issues. It must fail
+// loudly at construction, not at request time.
+func TestSession_shortSessionKeyPanicsAtConstruction(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() {
+		via.Register(loginComp{}, via.WithSessionKey([]byte("too-short")))
+	}, "a session key under the minimum length must panic at construction")
+}
+
 // firstActionSessionCookie fires action 0 on a raw (non-jar) request so the
 // caller can read the Set-Cookie attributes the jar hides.
 func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {

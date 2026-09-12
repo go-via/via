@@ -71,7 +71,7 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 		if errors.Is(oerr, ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
-			log.Printf("via: OnInit failed: %v", oerr)
+			log.Printf("via: OnInit failed: %q", oerr)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 		}
 		return oerr
@@ -86,7 +86,7 @@ func connectError(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("via: OnConnect failed: %v", err)
+	log.Printf("via: OnConnect failed: %q", err)
 	http.Error(w, "connect failed", http.StatusInternalServerError)
 }
 
@@ -96,6 +96,10 @@ func connectError(w http.ResponseWriter, err error) {
 func recoverToHTTP(w http.ResponseWriter, rec any, what string) {
 	if _, ok := rec.(paramMiss); ok {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if bad, ok := rec.(badActionArg); ok {
+		http.Error(w, "bad action arg: "+bad.err.Error(), http.StatusBadRequest)
 		return
 	}
 	log.Printf("via: %s panic: %v\n%s", what, rec, debug.Stack())
