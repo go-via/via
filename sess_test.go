@@ -1,6 +1,9 @@
 package via_test
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -439,6 +442,66 @@ func TestSession_rejectsATamperedCookie(t *testing.T) {
 
 	body := greetWithRawCookie(t, base, "via_session", tamperID(valid))
 	assert.NotContains(t, body, "hi alice", "a cookie with a broken signature must not resolve a session")
+}
+
+// hmacSign reproduces sessionManager.sign under an arbitrary key, so a test
+// can forge a signature the server's real key never produced.
+func hmacSign(key []byte, id string) string {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(id))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// A cookie whose id is genuinely valid (still resolvable in the store) but
+// whose signature has been corrupted must still be rejected — tamperID above
+// only ever breaks the id half, so sabotaging verify to always succeed passes
+// every existing test (the forged id fails the store lookup regardless of
+// what verify says). This corrupts only the signature half of a real,
+// currently-valid cookie, isolating the MAC check itself.
+func TestSession_rejectsACookieWithACorruptedSignature(t *testing.T) {
+	t.Parallel()
+	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	c := jarClient(t)
+
+	fireAction(t, c, base, 0) // SignIn → valid signed cookie
+	valid := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, valid)
+
+	i := strings.LastIndexByte(valid, '.')
+	require.GreaterOrEqual(t, i, 0)
+	id, sig := valid[:i], valid[i+1:]
+	first := "A"
+	if strings.HasPrefix(sig, "A") {
+		first = "B"
+	}
+	corrupted := id + "." + first + sig[1:]
+
+	body := greetWithRawCookie(t, base, "via_session", corrupted)
+	assert.NotContains(t, body, "hi alice",
+		"a real session id with a corrupted signature must not resolve")
+}
+
+// A cookie whose id is genuine but whose signature was produced by a
+// DIFFERENT key (the two-apps-on-localhost-with-different-secrets case) must
+// be rejected exactly like a corrupted signature — this is the same MAC
+// check, exercised via a differently-keyed forgery rather than bit damage.
+func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
+	t.Parallel()
+	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	c := jarClient(t)
+
+	fireAction(t, c, base, 0) // SignIn → valid signed cookie
+	valid := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, valid)
+
+	i := strings.LastIndexByte(valid, '.')
+	require.GreaterOrEqual(t, i, 0)
+	id := valid[:i]
+	forged := id + "." + hmacSign([]byte("a-different-signing-key-32-bytes"), id)
+
+	body := greetWithRawCookie(t, base, "via_session", forged)
+	assert.NotContains(t, body, "hi alice",
+		"a real session id signed under a different key must not resolve")
 }
 
 // WithSessionCookieName lets an app pick its cookie name — the mitigation for
