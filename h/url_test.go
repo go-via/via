@@ -30,6 +30,10 @@ var urlCorpus = []struct {
 	{"vbscript:msgbox", false},
 	{"//evil.example/x", false},
 	{`\\evil.example\x`, false},
+	{`/\evil.example`, false},
+	{`/\/evil.example`, false},
+	{`\/evil.example`, false},
+	{"\n//evil.example/x", false},
 	{"mailto:a@b.c", false},
 }
 
