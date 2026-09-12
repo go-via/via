@@ -65,12 +65,20 @@ These aren't slogans: `TestExamples_takeNoAddressOfOrClosureAtViaCallSites`
 fails the build if an example violates the `&`/closure rules, and the sealed
 `h.H` interface makes an untyped node uninjectable.
 
-## Stateless by default, live by opt-in
+## Stateless by default, live by what a unit does
 
-A page is stateless request/response. A composition becomes a connection-scoped
-**live island** (its own server state, pushed over SSE) the moment it implements
-`OnConnect` — detected by interface assertion, never reflection. The same model
-spans the spectrum from a fully static page to a fully live app.
+A page is stateless request/response. It becomes a connection-scoped **live
+island** (its own server state, pushed over SSE) the moment it *acts* like
+one — its `OnInit` registered a `ctx.Tick` or a `ctx.Listen`, or its `View`
+rendered a `State[T]`/`List[E]`. There is no marker interface and no second
+hook: `Initer`/`OnInit` is the one lifecycle hook, on a page and on every
+embedded child. The same model spans the spectrum from a fully static page to a
+fully live app.
+
+`OnInit` runs on every request that renders the unit — the GET, each action,
+the SSE connect. Register connection-scoped side effects rather than performing
+them: `ctx.OnLive(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
+when it closes.
 
 ## Security floor (built in)
 
@@ -123,8 +131,9 @@ examples, the whole live stack verified in real headless browsers
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side; `When`/`Each`
   render conditionals and lists.
-- **Live islands + `State[T]`** (`example/pulse`): implement `OnConnect` and a
-  composition becomes a live island with a per-tab SSE stream; `State[T]` is
+- **Live islands + `State[T]`** (`example/pulse`): render a `State[T]` or
+  register a `Tick` and a composition becomes a live island with a per-tab SSE
+  stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
   `Tick` drives the push. `Tick`/`Listen`/action handlers all run on the
   connection's one goroutine — a handler that blocks (I/O, an unbounded
@@ -166,10 +175,10 @@ examples, the whole live stack verified in real headless browsers
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
   Datastar gives up.
 - **Live-island multiplexing** (`example/dashboard`): embed sub-compositions as
-  plain struct fields — `via.Embed(p.Clock)` in the parent's `View`. A child
-  without `OnConnect` is a plain in-place component; one with `OnConnect` is a
-  live island, and all the live children on a page share the tab's *one* SSE
-  stream on one goroutine — each re-renders and patches only its own region
+  plain struct fields — `via.Embed(p.Clock)` in the parent's `View`. Each child
+  gets its own `OnInit`; a child that neither ticks nor holds `State` is a plain
+  in-place component, one that does is a live island, and all the live children
+  on a page share the tab's *one* SSE stream on one goroutine — each re-renders and patches only its own region
   (`#via-i{n}`, pushed in place — its container is never morphed by a
   parent's patch), its actions route by island id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. The parent's literal seeds a

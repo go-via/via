@@ -449,15 +449,15 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	assert.False(t, ck.Secure, "a plain-HTTP cookie must not be Secure by default (dev ergonomics)")
 }
 
-// liveSess is a live island that establishes its session in OnConnect, so
+// liveSess is a live island that establishes its session in OnInit, so
 // the cookie rides the SSE connect response itself rather than a later
 // action's.
 type liveSess struct{}
 
-func (c *liveSess) OnConnect(ctx *via.Ctx) error { ctx.Session().Put(member{Name: "bob"}); return nil }
-func (c *liveSess) View() h.H                    { return h.Div(h.Str("live")) }
+func (c *liveSess) OnInit(ctx *via.Ctx) error { ctx.Session().Put(member{Name: "bob"}); return nil }
+func (c *liveSess) View() h.H                 { return h.Div(h.Str("live")) }
 
-// A live app's OnConnect must be able to establish the session: the cookie is
+// A live app's OnInit must be able to establish the session: the cookie is
 // issued on the SSE connect response, so it's in place before any later live
 // action needs it.
 func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
@@ -478,7 +478,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 		names = append(names, ck.Name)
 	}
 	assert.Contains(t, names, "via_session",
-		"OnConnect's ctx.Session().Put did not establish the session cookie on the SSE connect")
+		"OnInit's ctx.Session().Put did not establish the session cookie on the SSE connect")
 }
 
 // tamperID swaps the first character of the cookie's id part, leaving the

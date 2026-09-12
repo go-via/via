@@ -1,9 +1,9 @@
 // Command dashboard shows live-island multiplexing: one page, one SSE stream,
 // several independent regions. The Dashboard is a static shell that embeds child
 // compositions — plain struct fields rendered with via.Embed; each child
-// re-renders and patches only itself. A child without OnConnect (Greeting) is a
-// plain in-place component; a child with OnConnect (Clock, Counter) is a live
-// island pushed over the shared stream. The parent literal seeds a child's data
+// re-renders and patches only itself. A child with neither server State nor a
+// Tick (Greeting) is a plain in-place component; a child that holds State or
+// ticks (Clock, Counter) is a live island pushed over the shared stream. The parent literal seeds a child's data
 // (Greeting's name). Zero '&', no identifier strings, no closures at any call site.
 package main
 
@@ -15,7 +15,7 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// Greeting is a PLAIN child — no OnConnect, so it just renders structure. It is
+// Greeting is a PLAIN child — no State, no Tick, so it just renders structure. It is
 // seeded with a name at the parent's literal; nothing about it streams.
 type Greeting struct{ name string }
 
@@ -27,19 +27,19 @@ func (g *Greeting) View() h.H {
 // its own region — the counter and greeting are untouched by its updates.
 type Clock struct{ secs via.State[int] }
 
-func (c *Clock) OnConnect(ctx *via.Ctx) error { ctx.Tick(time.Second, c.beat); return nil }
-func (c *Clock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get() + 1) }
+func (c *Clock) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Second, c.beat); return nil }
+func (c *Clock) beat(ctx *via.Ctx)         { c.secs.Set(c.secs.Get() + 1) }
 func (c *Clock) View() h.H {
 	return h.Div(h.H2(h.Str("uptime")), h.P(c.secs.Display(), h.Str("s")))
 }
 
-// Counter is a LIVE island with an action: its + button routes to this island
-// on this connection (the via_tab handshake), mutates its State, and the result
-// rides back over the shared stream — patching only the counter's region.
+// Counter is a LIVE island with an action, and it needs no hook at all to be
+// one: rendering its State is what earns it a connection. The + button routes
+// to this island on this connection (the tab handshake), mutates its State, and
+// the result rides back over the shared stream — patching only its region.
 type Counter struct{ n via.State[int] }
 
-func (c *Counter) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *Counter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
+func (c *Counter) Inc(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *Counter) View() h.H {
 	return h.Div(
 		h.H2(h.Str("clicks")),
@@ -48,7 +48,7 @@ func (c *Counter) View() h.H {
 	)
 }
 
-// Dashboard is the shell. It does not implement OnConnect here — a shell need
+// Dashboard is the shell. It holds no State and never ticks — a shell need
 // not be live itself for its embedded children to be; they all share this
 // page's one SSE stream.
 type Dashboard struct {

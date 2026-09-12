@@ -24,7 +24,7 @@ type Feed struct {
 	last via.State[string]
 }
 
-func (f *Feed) OnConnect(ctx *via.Ctx) error {
+func (f *Feed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(f.room, f.recv)
 	return nil
 }

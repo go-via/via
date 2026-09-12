@@ -37,6 +37,28 @@ composition types) is replaced wholesale by the core below. Treat migration
 as a re-read of the README, not a diff.
 
 - **Requires Go 1.27.**
+- **`via.Live` and `OnConnect` are gone: there is ONE hook, `Initer`/`OnInit`.**
+  `OnConnect(*Ctx) error` and `OnInit(*Ctx) error` had the same signature, the
+  same Ctx powers, and ran at the same point; keeping both meant a composition
+  with nothing to load still had to write an empty method to flip a liveness
+  boolean. Rename `OnConnect` to `OnInit` and delete it outright where its body
+  was `return nil`. Liveness is no longer an interface assertion but what a
+  unit DOES: it is live if its `OnInit` registered a `Tick` or a `Listen`, or
+  its `View` rendered a `State`/`List`. A unit whose server state only drives a
+  branch (`State.Get()` in an `if`, never `Display()`ed) is not detectable that
+  way — give it a `Tick` or render it.
+- **`OnInit` now runs on every request that renders the unit** — the GET, each
+  action, and the SSE connect — not once per connection. Register
+  connection-scoped side effects, never perform them: the new `ctx.OnLive(fn)`
+  is the acquire half of `ctx.OnDispose(fn)` and runs only when a stream
+  actually opens. `ctx.Listen` subscribes lazily for the same reason, so a page
+  fetched but never connected no longer orphans a `Sub` per GET.
+- **A failed `OnInit` runs no disposers**, because nothing was acquired yet:
+  the acquire/release pair is `OnLive`/`OnDispose` and neither half runs.
+- **Every action now echoes the tab id**, live or not — `_viatab` is declared
+  on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
+  page sends the empty id, which matches no connection and falls through to the
+  stateless path, as does a plain child embedded on a live page.
 - **`h.SafeURL` is gone.** The URL policy — http/https/relative admitted,
   `javascript:`/`data:`/protocol-relative refused, including a leading `\` or
   `/\` (WHATWG parsing treats `\` as `/`, so `/\evil.com` is protocol-relative
@@ -61,7 +83,7 @@ as a re-read of the README, not a diff.
 - **`via.Listen` is a Ctx method**: `ctx.Listen(topic, handler)`.
 - **`OnInit(*Ctx) error`**: the per-request hook now returns an error —
   `via.ErrNotFound` answers 404, anything else 500; the View never renders a
-  lie. The same sentinel works from `OnConnect`.
+  lie. The same sentinel works from an embedded child's `OnInit`.
 - **Sessions are always on** (lazily — the cookie is only issued on the first
   write); the session options are tune-only. Key resolution:
   `WithSessionKey` → `VIA_SESSION_KEY` → random per-process key (warned at
@@ -78,6 +100,15 @@ as a re-read of the README, not a diff.
 
 ### Added
 
+- **Embedded children get `OnInit` too.** Only the root's ever ran; now every
+  `via.Embed`ed child gets its own data-loading hook, before its own `View`,
+  with the same answers — `via.ErrNotFound` → 404, `ctx.Redirect` → 303, any
+  other error → 500 — even though it fails from inside the parent's render.
+- **`ctx.OnLive(fn)`**: run fn once when this unit's live connection opens.
+  The acquire half of `OnDispose`, and the only correct place for a
+  connection-scoped side effect now that `OnInit` is per-request.
+- **`topic.Topic.Subs() int`**: the live subscription count, for publishing
+  presence and for proving a subscription was actually released.
 - **A plain (non-live) page may embed live islands** as sibling struct
   fields — each streams and patches independently over the page's one
   connection. **Known limitation:** a live island cannot itself embed
@@ -288,7 +319,7 @@ as a re-read of the README, not a diff.
   `Rotate` after connect does not break the binding. **Extended:** a
   connection that started anonymous and only logs in afterward — a live
   action calling `Session().Put`/`Rotate`, or the recommended
-  "establish the session in `OnConnect`" pattern — now binds too, on that
+  "establish the session in `OnInit`" pattern — now binds too, on that
   first mint; previously only a session that already existed at connect time
   was covered, so a tab that logged in mid-connection kept accepting a
   cookieless dispatch until reload.
@@ -296,7 +327,7 @@ as a re-read of the README, not a diff.
   registered after it.** Each disposer now runs through the same per-item
   recover a Tick/Listen/action pulse already gets; a skipped disposer (e.g.
   `sub.Stop`) used to leak its subscription for the life of the process.
-- `Tick`/`Listen` called after `OnConnect` has returned now log loudly
+- `Tick`/`Listen` called after `OnInit` has returned now log loudly
   instead of silently registering nothing.
 - A panic before a live stream's headers are sent now answers 500 instead of
   falling through to Go's default 200-with-empty-body.
@@ -342,13 +373,13 @@ as a re-read of the README, not a diff.
   once, because it is indistinguishable from an attacker's request at
   that point. This is deliberate, not a bug, but it is a behaviour change.
 - A session minted from a `Tick`/`Listen` handler (as opposed to an action
-  or `OnConnect`) has no open response to carry a cookie, so it is created
+  or `OnInit`) has no open response to carry a cookie, so it is created
   and then orphaned until its TTL. In some configurations this is silent:
-  if the connection's `OnConnect` ever calls `Session()` at all — including
+  if the connection's `OnInit` ever calls `Session()` at all — including
   a read-only `Get`, the pattern this doc recommends — the resulting
   handle is cached with the connect response already attached, so a later
   `Tick`/`Listen` `Put` writes its `Set-Cookie` onto that dead response
-  with no warning logged. Establish sessions in `OnConnect` or an action
+  with no warning logged. Establish sessions in `OnInit` or an action
   instead.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.

@@ -310,12 +310,12 @@ func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
 	})
 }
 
-// pulse is a live island: implementing OnConnect opts it into a server-push SSE
+// pulse is a live island: implementing OnInit opts it into a server-push SSE
 // stream. A server-side ticker increments a beat count; via re-renders and
 // pushes the fragment, so the browser updates with no client code.
 type pulse struct{ beats via.State[int] }
 
-func (p *pulse) OnConnect(ctx *via.Ctx) error {
+func (p *pulse) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, p.beat)
 	return nil
 }
@@ -345,7 +345,7 @@ func newPulse(t *testing.T) *httptest.Server {
 // framing must survive it.
 type multiline struct{ s string }
 
-func (m *multiline) OnConnect(ctx *via.Ctx) error {
+func (m *multiline) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(15*time.Millisecond, m.set)
 	return nil
 }
@@ -354,10 +354,9 @@ func (m *multiline) View() h.H    { return h.Div(h.P(h.Str(m.s))) }
 
 // quietIsland is a live composition that registers no ticks — the stream must
 // still open and hold cleanly, not panic or wedge.
-type quietIsland struct{}
+type quietIsland struct{ n via.State[int] }
 
-func (q *quietIsland) OnConnect(*via.Ctx) error { return nil }
-func (q *quietIsland) View() h.H                { return h.Div(h.Str("quiet")) }
+func (q *quietIsland) View() h.H { return h.Div(h.Str("quiet"), q.n.Display()) }
 
 // readFirstFrame returns the lines of the first SSE event from the stream
 // (everything up to the first blank-line terminator), cancelling the request.
@@ -415,7 +414,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 }
 
 // openStream opens the SSE stream and returns its lines plus a cancel. The Do()
-// returns once headers are flushed — which happens after OnConnect — so the
+// returns once headers are flushed — which happens after OnInit — so the
 // subscription is registered by the time this returns.
 func openStream(t *testing.T, srv *httptest.Server) (<-chan string, context.CancelFunc) {
 	t.Helper()
@@ -536,7 +535,7 @@ func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	_, body := do(t, newPulse(t), http.MethodGet, "/", "")
 	assert.Contains(t, body, `<div id="root"`)
 	assert.Contains(t, body, "beats: 0",
-		"State must render its zero value at first paint (before OnConnect) without panicking")
+		"State must render its zero value at first paint (before OnInit) without panicking")
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`, "page must bootstrap the SSE stream")
 }
 
@@ -598,7 +597,7 @@ type feed struct {
 	last via.State[string]
 }
 
-func (f *feed) OnConnect(ctx *via.Ctx) error {
+func (f *feed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(f.room, f.recv)
 	return nil
 }
@@ -609,14 +608,17 @@ func (f *feed) View() h.H {
 
 // disposeProbe signals a channel from its OnDispose so a test can observe that
 // teardown ran on disconnect.
-type disposeProbe struct{ disposed chan struct{} }
+type disposeProbe struct {
+	disposed chan struct{}
+	n        via.State[int]
+}
 
-func (d *disposeProbe) OnConnect(ctx *via.Ctx) error {
+func (d *disposeProbe) OnInit(ctx *via.Ctx) error {
 	ctx.OnDispose(d.markDisposed)
 	return nil
 }
 func (d *disposeProbe) markDisposed() { close(d.disposed) }
-func (d *disposeProbe) View() h.H     { return h.Div(h.Str("probe")) }
+func (d *disposeProbe) View() h.H     { return h.Div(h.Str("probe"), d.n.Display()) }
 
 // One publish must reach EVERY connected island — that's the multi-user
 // headline. Two streams subscribe; a single Publish to the shared Topic shows up
@@ -646,7 +648,7 @@ type mixedIsland struct {
 	disposed chan struct{}
 }
 
-func (m *mixedIsland) OnConnect(ctx *via.Ctx) error {
+func (m *mixedIsland) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(15*time.Millisecond, m.beat)
 	ctx.OnDispose(m.markDispose)
 	ctx.Listen(m.room, m.recv)
@@ -686,45 +688,58 @@ func TestLive_tickAndSubscribeShareOneIslandLoopAndTearDownCleanly(t *testing.T)
 	})
 }
 
-// failConnect registers a disposer, then OnConnect fails.
-type failConnect struct{ disposed chan struct{} }
+// failInit acquires nothing and fails: OnInit runs on every request that
+// renders the unit, so the pair it registers must stay unrun when the connect
+// never opens.
+type failInit struct {
+	acquired chan struct{}
+	disposed chan struct{}
+	n        via.State[int]
+}
 
-func (f *failConnect) OnConnect(ctx *via.Ctx) error {
+func (f *failInit) OnInit(ctx *via.Ctx) error {
+	ctx.OnLive(f.markAcquired)
 	ctx.OnDispose(f.markDisposed)
 	return errConnectBoom
 }
-func (f *failConnect) markDisposed() { close(f.disposed) }
-func (f *failConnect) View() h.H     { return h.Div(h.Str("x")) }
+func (f *failInit) markAcquired() { close(f.acquired) }
+func (f *failInit) markDisposed() { close(f.disposed) }
+func (f *failInit) View() h.H     { return h.Div(h.Str("x"), f.n.Display()) }
 
-var errConnectBoom = errorString("connect boom")
+var errConnectBoom = errorString("init boom")
 
 type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
-// If OnConnect fails after registering disposers (a Topic Subscribe is paired
-// with OnDispose(sub.Stop) before a later step errors), those disposers must
-// still run — otherwise the subscription is orphaned in the Topic forever and
-// presence stays inflated.
-func TestLive_disposersRunWhenOnConnectFails(t *testing.T) {
+// A failed OnInit opens no connection, so neither half of an OnLive/OnDispose
+// pair may run: registering is not acquiring, and a Listen registered before
+// the failure never subscribed either — nothing is left orphaned in a Topic.
+func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	t.Parallel()
-	done := make(chan struct{})
-	resp, _ := do(t, serve(t, via.Register(failConnect{disposed: done})), http.MethodPost, "/_via/sse", "")
+	acquired, disposed := make(chan struct{}), make(chan struct{})
+	resp, _ := do(t, serve(t, via.Register(failInit{acquired: acquired, disposed: disposed})),
+		http.MethodPost, "/_via/sse", "")
+
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	select {
-	case <-done:
-	case <-time.After(time.Second):
-		require.Fail(t, "OnConnect-error path did not run disposers — the subscription leaks")
+	case <-acquired:
+		require.Fail(t, "OnLive ran on a connect that never opened")
+	default:
+	}
+	select {
+	case <-disposed:
+		require.Fail(t, "OnDispose ran on a connect that never opened")
+	default:
 	}
 }
 
 // boomOnDiscovery panics in View on every call, including the connect
-// handshake's own discovery render — before OnConnect ever runs and before any
+// handshake's own discovery render — before OnInit ever runs and before any
 // header has gone out on the response.
 type boomOnDiscovery struct{}
 
-func (boomOnDiscovery) OnConnect(*via.Ctx) error { return nil }
-func (boomOnDiscovery) View() h.H                { panic("via_test: discovery render exploded") }
+func (boomOnDiscovery) View() h.H { panic("via_test: discovery render exploded") }
 
 // A panic before the stream's headers are sent must answer 500, not fall
 // through to Go's default of 200 with an empty body — the client would read
@@ -736,13 +751,13 @@ func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
 	assert.NotEmpty(t, body)
 }
 
-// notFoundConnect's OnConnect returns via.ErrNotFound — the live analogue of a
+// notFoundConnect's OnInit returns via.ErrNotFound — the live analogue of a
 // page whose data vanished. The connect must answer 404, not 500: the world
 // changed, the request is honest. Fails if the sentinel stops mapping to 404.
 type notFoundConnect struct{}
 
-func (f *notFoundConnect) OnConnect(ctx *via.Ctx) error { return via.ErrNotFound }
-func (f *notFoundConnect) View() h.H                    { return h.Div(h.Str("x")) }
+func (f *notFoundConnect) OnInit(ctx *via.Ctx) error { return via.ErrNotFound }
+func (f *notFoundConnect) View() h.H                 { return h.Div(h.Str("x")) }
 
 func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 	t.Parallel()
@@ -777,15 +792,18 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 
 // panicThenDisposeProbe registers two disposers — the first always panics —
 // so a test can prove the second still runs.
-type panicThenDisposeProbe struct{ disposed chan struct{} }
+type panicThenDisposeProbe struct {
+	disposed chan struct{}
+	n        via.State[int]
+}
 
-func (p *panicThenDisposeProbe) OnConnect(ctx *via.Ctx) error {
+func (p *panicThenDisposeProbe) OnInit(ctx *via.Ctx) error {
 	ctx.OnDispose(func() { panic("disposer boom") })
 	ctx.OnDispose(p.markDisposed)
 	return nil
 }
 func (p *panicThenDisposeProbe) markDisposed() { close(p.disposed) }
-func (p *panicThenDisposeProbe) View() h.H     { return h.Div(h.Str("probe")) }
+func (p *panicThenDisposeProbe) View() h.H     { return h.Div(h.Str("probe"), p.n.Display()) }
 
 // A panicking disposer must not skip every disposer registered after it — a
 // skipped one (e.g. sub.Stop) would otherwise leak for the life of the
@@ -865,8 +883,7 @@ func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 // against this connection's island instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
-func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
+func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
@@ -911,7 +928,7 @@ type chatIsland struct {
 	Log   via.List[string]
 }
 
-func (c *chatIsland) OnConnect(ctx *via.Ctx) error {
+func (c *chatIsland) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.recv)
 	return nil
 }
@@ -972,8 +989,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 // that triggered it into State.
 type liveReqEchoer struct{ echo via.State[string] }
 
-func (e *liveReqEchoer) Grab(ctx *via.Ctx)            { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
-func (e *liveReqEchoer) OnConnect(ctx *via.Ctx) error { return nil }
+func (e *liveReqEchoer) Grab(ctx *via.Ctx) { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
 func (e *liveReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
 }
@@ -1004,11 +1020,11 @@ func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 	})
 }
 
-// connReqEchoer reads the connect request in OnConnect and a no-op tick forces a
+// connReqEchoer reads the connect request in OnInit and a no-op tick forces a
 // push so the read value is observable on the stream.
 type connReqEchoer struct{ host via.State[string] }
 
-func (e *connReqEchoer) OnConnect(ctx *via.Ctx) error {
+func (e *connReqEchoer) OnInit(ctx *via.Ctx) error {
 	e.host.Set(ctx.Request().Host)
 	ctx.Tick(20*time.Millisecond, e.push)
 	return nil
@@ -1018,12 +1034,12 @@ func (e *connReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("host: "), e.host.Display()))
 }
 
-// OnConnect must see the SSE connect request, so an island can authorize or
+// OnInit must see the SSE connect request, so an island can authorize or
 // inspect the connection at open time (the same request ticks and subscriptions
 // then run under). The request Host is the server's own address; a pushed frame
 // must reflect it — "example.com" is the fixed host of httptest's in-memory
 // network, not a real loopback address.
-func TestOnConnect_seesTheConnectRequest(t *testing.T) {
+func TestOnInit_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Register(connReqEchoer{}))
 
@@ -1033,10 +1049,10 @@ func TestOnConnect_seesTheConnectRequest(t *testing.T) {
 	})
 }
 
-// tickReqEchoer reads the connect request from inside a TICK body, not OnConnect.
+// tickReqEchoer reads the connect request from inside a TICK body, not OnInit.
 type tickReqEchoer struct{ host via.State[string] }
 
-func (e *tickReqEchoer) OnConnect(ctx *via.Ctx) error {
+func (e *tickReqEchoer) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, e.tick)
 	return nil
 }
@@ -1070,7 +1086,7 @@ type pathTicker struct {
 	n    via.State[int]
 }
 
-func (p *pathTicker) OnConnect(ctx *via.Ctx) error {
+func (p *pathTicker) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(20*time.Millisecond, p.tick)
 	return nil
 }
@@ -1091,7 +1107,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 
 		// Fire BEFORE the first tick has pushed — no fake time has advanced
 		// yet, so the connection's current unit is still the exact Ctx object
-		// OnConnect handed to Tick. Dispatch writing req/sessW straight onto
+		// OnInit handed to Tick. Dispatch writing req/sessW straight onto
 		// that shared object (instead of a fresh per-action Ctx) would only be
 		// observable in this narrow window; waiting for a push first (as the
 		// old version of this test did) replaces the unit with a fresh render
@@ -1136,9 +1152,6 @@ type onInitLive struct{ label string }
 
 func (p *onInitLive) OnInit(ctx *via.Ctx) error {
 	p.label = "loaded"
-	return nil
-}
-func (p *onInitLive) OnConnect(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, func(*via.Ctx) {})
 	return nil
 }
@@ -1159,12 +1172,14 @@ func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
 
 // livePushIsland is a live embedded island under a parametrised mount; Bump
 // changes its visible count so its action's push is a real patch.
-type livePushIsland struct{ n int }
+type livePushIsland struct {
+	n    int
+	seen via.State[int]
+}
 
-func (k *livePushIsland) OnConnect(ctx *via.Ctx) error { return nil }
-func (k *livePushIsland) Bump(ctx *via.Ctx)            { k.n++ }
+func (k *livePushIsland) Bump(ctx *via.Ctx) { k.n++ }
 func (k *livePushIsland) View() h.H {
-	return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump)))
+	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(via.On("click", k.Bump)))
 }
 
 type livePushParent struct{ I livePushIsland }
@@ -1203,8 +1218,7 @@ type renderCounter struct {
 	count via.State[int]
 }
 
-func (r *renderCounter) OnConnect(*via.Ctx) error { return nil }
-func (r *renderCounter) Bump(*via.Ctx)            { r.count.Set(r.count.Get() + 1) }
+func (r *renderCounter) Bump(*via.Ctx) { r.count.Set(r.count.Get() + 1) }
 func (r *renderCounter) View() h.H {
 	r.views.Add(1)
 	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.On("click", r.Bump)))
@@ -1268,9 +1282,8 @@ type flakyRender struct {
 	n    via.State[int]
 }
 
-func (f *flakyRender) OnConnect(ctx *via.Ctx) error { return nil }
-func (f *flakyRender) Trigger(ctx *via.Ctx)         { f.boom.Set(true); f.n.Set(f.n.Get() + 1) }
-func (f *flakyRender) Fix(ctx *via.Ctx)             { f.boom.Set(false) }
+func (f *flakyRender) Trigger(ctx *via.Ctx) { f.boom.Set(true); f.n.Set(f.n.Get() + 1) }
+func (f *flakyRender) Fix(ctx *via.Ctx)     { f.boom.Set(false) }
 func (f *flakyRender) View() h.H {
 	if f.boom.Get() {
 		panic("via_test: render exploded")
@@ -1310,8 +1323,7 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 // its own via_test coverage).
 type liveArg struct{ last via.State[int] }
 
-func (l *liveArg) OnConnect(*via.Ctx) error { return nil }
-func (l *liveArg) Set(ctx *via.Ctx, v int)  { l.last.Set(v) }
+func (l *liveArg) Set(ctx *via.Ctx, v int) { l.last.Set(v) }
 func (l *liveArg) View() h.H {
 	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Set, 7)))
 }
@@ -1367,10 +1379,10 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 // invisible ticker; it must log loudly and otherwise no-op.
 type reTicker struct{ n via.State[int] }
 
-func (r *reTicker) OnConnect(ctx *via.Ctx) error { ctx.Tick(10*time.Millisecond, r.beat); return nil }
+func (r *reTicker) OnInit(ctx *via.Ctx) error { ctx.Tick(10*time.Millisecond, r.beat); return nil }
 func (r *reTicker) beat(ctx *via.Ctx) {
 	r.n.Set(r.n.Get() + 1)
-	ctx.Tick(time.Millisecond, r.beat) // called after OnConnect returned
+	ctx.Tick(time.Millisecond, r.beat) // called after OnInit returned
 }
 func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
 
@@ -1388,8 +1400,8 @@ func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
 		synctest.Wait()
 	})
 
-	assert.Contains(t, buf.String(), "Tick called after OnConnect returned",
-		"a Tick call after OnConnect must log loudly instead of silently registering nothing")
+	assert.Contains(t, buf.String(), "Tick called after OnInit returned",
+		"a Tick call after OnInit must log loudly instead of silently registering nothing")
 }
 
 // reListener's recv handler calls Listen again on the same (already-connected)
@@ -1399,13 +1411,13 @@ type reListener struct {
 	last via.State[string]
 }
 
-func (r *reListener) OnConnect(ctx *via.Ctx) error {
+func (r *reListener) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(r.room, r.recv)
 	return nil
 }
 func (r *reListener) recv(ctx *via.Ctx, msg string) {
 	r.last.Set(msg)
-	ctx.Listen(r.room, r.recv) // called after OnConnect returned
+	ctx.Listen(r.room, r.recv) // called after OnInit returned
 }
 func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
 
@@ -1426,18 +1438,18 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 		awaitLine(t, lines, "hello")
 	})
 
-	assert.Contains(t, buf.String(), "Listen called after OnConnect returned",
-		"a Listen call after OnConnect must log loudly instead of silently registering nothing")
+	assert.Contains(t, buf.String(), "Listen called after OnInit returned",
+		"a Listen call after OnInit must log loudly instead of silently registering nothing")
 }
 
-// racyTicker ticks as fast as time.Ticker allows so its OnConnect-scheduled
+// racyTicker ticks as fast as time.Ticker allows so its OnInit-scheduled
 // push races liveConn.replace (island goroutine) against Bump's dispatchLive,
 // which reads liveConn.units via unit() on the POST's own goroutine.
 type racyTicker struct{ n via.State[int] }
 
-func (r *racyTicker) OnConnect(ctx *via.Ctx) error { ctx.Tick(time.Microsecond, r.tick); return nil }
-func (r *racyTicker) tick(*via.Ctx)                { r.n.Set(r.n.Get() + 1) }
-func (r *racyTicker) Bump(*via.Ctx)                {}
+func (r *racyTicker) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Microsecond, r.tick); return nil }
+func (r *racyTicker) tick(*via.Ctx)             { r.n.Set(r.n.Get() + 1) }
+func (r *racyTicker) Bump(*via.Ctx)             {}
 func (r *racyTicker) View() h.H {
 	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
 }
@@ -1483,13 +1495,13 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	wg.Wait()
 }
 
-// racyNativeForm ticks as fast as time.Ticker allows so its OnConnect-scheduled
+// racyNativeForm ticks as fast as time.Ticker allows so its OnInit-scheduled
 // push races dispatchLive's native-form re-render, which (before the fix) ran
 // renderRootBase against lc.pageRoot on the POST's own goroutine instead of
 // the island goroutine.
 type racyNativeForm struct{ n via.State[int] }
 
-func (r *racyNativeForm) OnConnect(ctx *via.Ctx) error {
+func (r *racyNativeForm) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Microsecond, r.tick)
 	return nil
 }
@@ -1548,11 +1560,13 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 // client/server round trip.
 type abandonedAction struct {
 	applied *atomic.Int32 // shared across Register's per-connection copy and the test's own handle
+	n       via.State[int]
 }
 
-func (a *abandonedAction) OnConnect(ctx *via.Ctx) error { return nil }
-func (a *abandonedAction) Act(ctx *via.Ctx)             { a.applied.Add(1) }
-func (a *abandonedAction) View() h.H                    { return h.Div(h.Button(via.On("click", a.Act))) }
+func (a *abandonedAction) Act(ctx *via.Ctx) { a.applied.Add(1) }
+func (a *abandonedAction) View() h.H {
+	return h.Div(a.n.Display(), h.Button(via.On("click", a.Act)))
+}
 
 // A live action must never mutate state once its own caller has already given
 // up on it — before the fix, a closure handed off to the island goroutine
@@ -1596,11 +1610,11 @@ func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T)
 }
 
 // paramInTick calls ctx.Param from a Tick handler to prove the connection's
-// bind carries a real request throughout its life (set once at OnConnect),
+// bind carries a real request throughout its life (set once at OnInit),
 // not just during the dispatched action that started the connection.
 type paramInTick struct{ panics chan any }
 
-func (p *paramInTick) OnConnect(ctx *via.Ctx) error {
+func (p *paramInTick) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, p.check)
 	return nil
 }
@@ -1642,12 +1656,14 @@ func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 // every action, mutating or not) is the race: many concurrent Incs each read
 // the connection's current unit and each replace it, so one dispatch's read
 // can land on a unit a concurrent dispatch's push is about to make stale.
-type racyDirtySignal struct{ n via.Signal[int] }
+type racyDirtySignal struct {
+	n    via.Signal[int]
+	beat via.State[int]
+}
 
-func (r *racyDirtySignal) OnConnect(ctx *via.Ctx) error { return nil }
-func (r *racyDirtySignal) Inc(ctx *via.Ctx)             { r.n.Set(r.n.Get() + 1) }
+func (r *racyDirtySignal) Inc(ctx *via.Ctx) { r.n.Set(r.n.Get() + 1) }
 func (r *racyDirtySignal) View() h.H {
-	return h.Div(r.n.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
+	return h.Div(r.n.Display(), r.beat.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
 }
 
 // TestLiveAction_signalPatchSurvivesARacingPush proves every Inc dispatch that
@@ -1815,4 +1831,50 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	}
 	require.Equal(t, want, got,
 		"a live connection's pushes must ship in the order their mutations committed")
+}
+
+// listenOnly goes live purely by subscribing: OnInit registers a Listen and
+// nothing else, and the View renders the last value it received.
+type listenOnly struct {
+	bus  *topic.Topic[string]
+	last via.State[string]
+}
+
+func (l *listenOnly) OnInit(ctx *via.Ctx) error    { ctx.Listen(l.bus, l.onMsg); return nil }
+func (l *listenOnly) onMsg(ctx *via.Ctx, s string) { l.last.Set(s) }
+func (l *listenOnly) View() h.H                    { return h.Div(h.Str("last="), l.last.Display()) }
+
+// OnInit runs on every request that renders the unit, plain GETs included, so
+// Listen must register a starter rather than subscribe on the spot: a page
+// fetched but never connected would otherwise orphan one Sub per GET in the
+// Topic forever.
+func TestListen_plainGetLeaksNoSubscription(t *testing.T) {
+	t.Parallel()
+	bus := topic.New[string]()
+	app := vt.Serve(t, via.Register(listenOnly{bus: bus}))
+
+	for range 3 {
+		status, _ := app.Get("/")
+		require.Equal(t, http.StatusOK, status)
+	}
+	assert.Zero(t, bus.Subs(), "a GET that never opened a stream must leave no subscription behind")
+
+	c := app.Connect()
+	defer c.Close()
+	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond,
+		"the connect itself must subscribe exactly once")
+}
+
+// A disconnect must give the subscription back — the lazy Subscribe is still
+// paired with the disposer that stops it.
+func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
+	t.Parallel()
+	bus := topic.New[string]()
+	app := vt.Serve(t, via.Register(listenOnly{bus: bus}))
+
+	c := app.Connect()
+	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond)
+	c.Close()
+	require.Eventually(t, func() bool { return bus.Subs() == 0 }, 2*time.Second, 5*time.Millisecond,
+		"closing the stream must stop the subscription it started")
 }

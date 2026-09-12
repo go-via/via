@@ -38,6 +38,15 @@ func (t *Topic[T]) Subscribe() *Sub[T] {
 	return s
 }
 
+// Subs returns the number of live subscriptions — the head-count an app
+// publishes as presence, and the number that must fall back to zero once every
+// tab has disconnected.
+func (t *Topic[T]) Subs() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.subs)
+}
+
 // Publish delivers v to every current subscriber. It never blocks: a subscriber
 // whose buffer is full drops v, so one slow consumer cannot stall the publisher
 // or starve the others.

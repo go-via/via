@@ -11,14 +11,19 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// Initer is an optional per-request hook on a page: OnInit runs with a Ctx
-// BEFORE the (ctx-free) View, so a stateless page can load request/session data
-// (the logged-in user, a query value) into its fields for rendering. It is the
-// stateless analogue of OnConnect for live islands, detected by interface
-// assertion — never reflection.
+// Initer is via's one lifecycle hook, on a page or on any embedded child:
+// OnInit runs with a Ctx BEFORE the (ctx-free) View, so a unit can load
+// request/session data (the logged-in user, a query value) into its fields for
+// rendering, and can register the timers and subscriptions that make it LIVE —
+// ctx.Tick and ctx.Listen are valid only here. Detected by interface
+// assertion, never reflection.
+//
+// Registering a Tick or a Listen is one of the two things that make a unit
+// live (rendering a State or List is the other); a unit that does neither is a
+// plain request/response page, and OnInit is just its data-loading hook.
 type Initer interface{ OnInit(*Ctx) error }
 
-// ErrNotFound is the sentinel an OnInit (or OnConnect) returns when the data
+// ErrNotFound is the sentinel an OnInit returns when the data
 // the page needs no longer exists — the world changed, the request is honest,
 // so the answer is a 404, not a 500. Wrap it freely; errors.Is matches.
 var ErrNotFound = errors.New("via: not found")
@@ -28,14 +33,18 @@ var ErrNotFound = errors.New("via: not found")
 // must stop, same as any other non-nil return.
 var errRedirected = errors.New("via: redirected")
 
-// runOnInit calls v.OnInit with a request-scoped Ctx if v implements Initer.
-// sessW is the open response, so OnInit may also set the session cookie or
-// queue a Redirect (honoured here with a 303, before the View ever renders —
-// this is via's one per-request gate, replacing the removed guard
-// mechanism). A non-nil error has already been answered on w (404 for
-// ErrNotFound, 500 otherwise, 303 for a redirect) — the caller must stop,
-// never render.
-func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessionManager) (err error) {
+// runOnInit calls v.OnInit on ctx — the SAME Ctx the render then binds, so a
+// Tick or Listen it registers is what marks the unit live. sessW is the open
+// response, so OnInit may also set the session cookie or queue a Redirect
+// (honoured here with a 303, before the View ever renders — this is via's one
+// per-request gate, replacing the removed guard mechanism). A non-nil error has
+// already been answered on w (404 for ErrNotFound, 500 otherwise, 303 for a
+// redirect) — the caller must stop, never render.
+func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager) (err error) {
+	ctx.req = req
+	ctx.sessions = sessions
+	ctx.sessW = w
+	ctx.doInit = true // every embedded child's OnInit runs too, inside Embed
 	ic, ok := v.(Initer)
 	if !ok {
 		return nil
@@ -52,10 +61,6 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 			err = ErrNotFound
 		}
 	}()
-	ctx := newCtx(nil)
-	ctx.req = req
-	ctx.sessions = sessions
-	ctx.sessW = w
 	defer func() {
 		if err == nil && ctx.redirect != "" {
 			if !hcore.SafeURL(ctx.redirect) {
@@ -67,7 +72,9 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 			err = errRedirected
 		}
 	}()
-	if oerr := ic.OnInit(ctx); oerr != nil {
+	oerr := ic.OnInit(ctx)
+	ctx.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
+	if oerr != nil {
 		if errors.Is(oerr, ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
@@ -79,23 +86,17 @@ func runOnInit(v any, w http.ResponseWriter, req *http.Request, sessions *sessio
 	return nil
 }
 
-// connectError answers a failed OnConnect: ErrNotFound → 404 (the island's
-// data is gone — an honest miss), anything else → 500 (a server fault, logged).
-func connectError(w http.ResponseWriter, err error) {
-	if errors.Is(err, ErrNotFound) {
+// recoverToHTTP answers a recovered panic on a request transport: the paramMiss
+// sentinel (a URL segment that doesn't decode) is an honest 404; the childInit
+// sentinel is an embedded child's failed OnInit, answered exactly as the root's
+// would be; anything else is a server fault — logged with its stack, answered 500.
+func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what string) {
+	if _, ok := rec.(paramMiss); ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("via: OnConnect failed: %q", err)
-	http.Error(w, "connect failed", http.StatusInternalServerError)
-}
-
-// recoverToHTTP answers a recovered panic on a request transport: the paramMiss
-// sentinel (a URL segment that doesn't decode) is an honest 404; anything else
-// is a server fault — logged with its stack, answered 500.
-func recoverToHTTP(w http.ResponseWriter, rec any, what string) {
-	if _, ok := rec.(paramMiss); ok {
-		http.Error(w, "not found", http.StatusNotFound)
+	if ci, ok := rec.(childInit); ok {
+		answerInitFailure(w, req, ci)
 		return
 	}
 	if bad, ok := rec.(badActionArg); ok {
@@ -104,6 +105,26 @@ func recoverToHTTP(w http.ResponseWriter, rec any, what string) {
 	}
 	log.Printf("via: %s panic: %v\n%s", what, rec, debug.Stack())
 	http.Error(w, what+" failed", http.StatusInternalServerError)
+}
+
+// answerInitFailure gives an embedded child's failed OnInit the same answers
+// the root's gets in runOnInit: a queued Redirect is a 303, ErrNotFound a 404,
+// anything else a logged 500.
+func answerInitFailure(w http.ResponseWriter, req *http.Request, ci childInit) {
+	switch {
+	case ci.redirect != "":
+		if !hcore.SafeURL(ci.redirect) {
+			log.Printf("via: unsafe OnInit redirect %q dropped", ci.redirect)
+			http.Error(w, "init failed", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, req, ci.redirect, http.StatusSeeOther)
+	case errors.Is(ci.err, ErrNotFound):
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		log.Printf("via: OnInit failed: %q", ci.err)
+		http.Error(w, "init failed", http.StatusInternalServerError)
+	}
 }
 
 // Router serves several via pages, each Mounted at its own path, behind one
@@ -160,17 +181,17 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				recoverToHTTP(w, rec, "render")
+				recoverToHTTP(w, req, rec, "render")
 			}
 		}()
 		inst := newInst()
-		if runOnInit(inst, w, req, r.sessions) != nil { // load session/request data into fields first
+		ctx := newRootCtx(nil, true, concreteBase(patternBase, req, names), nil)
+		ctx.islandV = inst                                   // the root is a unit like any embedded island, when it is live
+		if runOnInit(inst, ctx, w, req, r.sessions) != nil { // load session/request data into fields first
 			return
 		}
-		ctx, body := renderRootBase(inst, nil, true, concreteBase(patternBase, req, names), nil)
-		ctx.islandV = inst // the root is a unit like any embedded island, when it is Live
-		units := liveUnits(ctx)
-		writeHTMLPage(w, r.cfg, body, len(units) > 0, patternBase+"/_via/sse")
+		body := renderRootWith(ctx, inst)
+		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, patternBase+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{island}/{n}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
@@ -208,11 +229,13 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // hash, so no per-response token has to be threaded through here.
 func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
 	writeHeadersWithCSP(w, cfg.csp)
-	// A live page bootstraps the SSE stream on init and pre-declares the
-	// _viatab local signal so $_viatab is always defined: the patch-signals
-	// frame fills it with the real tab id; a click before the stream connects
-	// sends an empty id and gets a graceful 410.
-	bodyOpen := `</head><body>`
+	// Every page pre-declares the _viatab local signal so $_viatab is always
+	// defined — every action attribute and PostForm echoes it unconditionally,
+	// since liveness is only knowable once the render has ended. On a stateless
+	// page it stays "" and dispatch falls through to the stateless path; on a
+	// live page the patch-signals frame fills it with the real tab id, and a
+	// click before the stream connects sends an empty id and gets a graceful 410.
+	bodyOpen := `</head><body data-signals='{"_viatab":""}'>`
 	if hasLive {
 		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"_viatab":""}'>`
 	}

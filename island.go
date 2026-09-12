@@ -37,10 +37,12 @@ func (p *renderPass) nextDigestToken() string {
 
 // Embed renders a child composition — a plain struct field of the parent,
 // seeded at the parent's literal — into its own positional container within the
-// parent's View. The child may be plain (just structure + actions) or live (it
-// implements OnConnect) — when live it becomes an independent region patched
-// over the parent's one SSE stream; when not, its actions re-render it in place.
-// Liveness is an interface assertion on C, never a separate type:
+// parent's View. The child gets its own OnInit (run before its View, on every
+// request-scoped render) and may be plain (just structure + actions) or live —
+// when live it becomes an independent region patched over the parent's one SSE
+// stream; when not, its actions re-render it in place. Liveness is what the
+// child DOES, never a separate type: it registered a Tick/Listen in OnInit, or
+// its View rendered a State/List.
 //
 //	type Page struct{ Chat ChatRoom; Ticker Clock }
 //	func (p *Page) View() h.H { return h.Div(via.Embed(p.Chat), via.Embed(p.Ticker)) }
@@ -94,27 +96,6 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 		return
 	}
 
-	// An embedded live unit's own View calling Embed is exactly the nested
-	// composition A1 cut from v0.8: its own independent re-render (via
-	// renderIslandBind) never re-walks a parent, so it has nothing to
-	// replicate stable addressing from — the deleted childSlots/renderPass
-	// forking existed only to paper over that. Refuse it outright instead.
-	if parent.isIsland && parent.island {
-		panic("via: via.Embed: a live island's own View must not call Embed — " +
-			"nested live composition is deferred; keep a live island's View flat")
-	}
-	// A live child anywhere under a live unit (the immediate parent, or any
-	// ancestor reached only through plain Embeds) has the same problem in
-	// reverse: the live ANCESTOR's own re-render would re-seed the live
-	// child from its field literal every time, with no reuse mechanism left
-	// to preserve its state. One live unit per page: the root, or a live
-	// island embedded directly (or via plain wrappers) from a plain root.
-	_, live := v.(Live)
-	if live && (parent.island || parent.underLive) {
-		panic("via: via.Embed: a live island cannot be embedded inside another live composition — " +
-			"nested live composition is deferred; embed it directly from a plain root instead")
-	}
-
 	ordinal := len(parent.islands) // this parent's k-th Embed call this render
 
 	// pass.next() must advance exactly once per Embed call, or a later
@@ -129,20 +110,29 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	child.islandIdx = idx
 	child.islandV = v
 	child.base = parent.base // the mount prefix, so the island's own action URLs carry it too
-	// A live island's View reads server State[T], which is gated on the
-	// live-island flag — set it so the child renders inside its own island.
-	child.island = live
-	child.underLive = parent.island || parent.underLive
 	child.pass = parent.pass
+	child.req = parent.req
+	child.sessions = parent.sessions
+	child.sessW = parent.sessW
 	parent.islands = append(parent.islands, child)
+
+	// Only a request-scoped render inits: a live push re-renders the whole
+	// tree on every tick, and re-running a child's OnInit there would reload
+	// its data — and re-register its Tick/Listen — once per beat.
+	if parent.doInit {
+		child.doInit = true
+		initChild(child, v)
+	}
 
 	// Render first so the child's signal slots (order/initial) are populated,
 	// then declare them on the container — on a declaring render (first paint)
 	// only. A live push omits the declaration (renderIslandBind), so a morph
-	// never re-merges a signal the user is editing.
+	// never re-merges a signal the user is editing. The render is also what
+	// settles child.live, so the container attribute below can only be decided
+	// after it.
 	child.rendered = renderIslandInner(child, v)
 	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
-	if live {
+	if child.live {
 		// Datastar only skips a morph when BOTH the existing element and the
 		// incoming fragment carry the attribute — so every root-walk render
 		// marks the container, and a plain root's own patch leaves it alone.
@@ -158,6 +148,32 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	r.WriteString(`>`)
 	r.WriteString(string(child.rendered))
 	r.WriteString(`</div>`)
+}
+
+// childInit is the panic sentinel initChild throws when an embedded child's
+// OnInit fails: the render is already deep inside the parent's View, with no
+// return path left, so the transport's own recover turns it back into the
+// answer OnInit asked for (see recoverToHTTP).
+type childInit struct {
+	err      error
+	redirect string
+}
+
+// initChild runs an embedded child's OnInit before its View. A paramMiss panic
+// propagates untouched — the transport already answers it as a 404.
+func initChild(child *Ctx, v any) {
+	ic, ok := v.(Initer)
+	if !ok {
+		return
+	}
+	err := ic.OnInit(child)
+	child.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
+	if err != nil {
+		panic(childInit{err: err})
+	}
+	if child.redirect != "" {
+		panic(childInit{redirect: child.redirect})
+	}
 }
 
 // renderIslandInner renders the island's View with child as the binder, so the
@@ -188,6 +204,5 @@ func renderIslandBind(idx int, v viewer, base string) (*Ctx, []byte) {
 	c.islandIdx = idx
 	c.islandV = v
 	c.base = base
-	_, c.island = v.(Live) // a live island's State[T] reads need the live flag
 	return c, renderIslandInner(c, v)
 }

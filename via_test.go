@@ -683,14 +683,14 @@ func TestOnChange_firesHandlerOnCommit(t *testing.T) {
 	assert.Contains(t, body, "picked", "OnChange's handler did not run")
 }
 
-// tickSessionWriter starts a Tick in OnConnect that writes to the session on
+// tickSessionWriter starts a Tick in OnInit that writes to the session on
 // every beat — the pattern I2 covers: a Tick/Listen handler's Ctx is the SAME
-// Ctx OnConnect held, so its sessW was set (for OnConnect's own use) and, if
+// Ctx OnInit held, so its sessW was set (for OnInit's own use) and, if
 // never cleared, silently survives long past the point the response it
 // pointed at was flushed.
 type tickSessionWriter struct{ n via.State[int] }
 
-func (t *tickSessionWriter) OnConnect(ctx *via.Ctx) error {
+func (t *tickSessionWriter) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(10*time.Millisecond, t.beat)
 	return nil
 }

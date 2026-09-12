@@ -94,9 +94,17 @@ func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 
 The v1 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
-`View() h.H`; `OnInit(*Ctx) error` is the per-request hook; `via.Live` is the
-one interface, `OnConnect(*Ctx) error`, and it is what makes a composition a
-live island. There is no `Dispose` — `ctx.Listen` auto-disposes with the island.
+`View() h.H`, and `Initer` — `OnInit(*Ctx) error` — is the one lifecycle hook,
+on a page and on every embedded child. There is no `OnConnect` and no `Live`
+interface: a composition is a live island when it *acts* like one, meaning its
+`OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
+`State[T]`/`List[E]`. There is no `Dispose` — `ctx.Listen` auto-disposes with
+the island.
+
+`OnInit` is per-request, not per-connection: it runs on the GET, on every
+action, and on the SSE connect. Pair a connection-scoped acquire with
+`ctx.OnLive(fn)` and its release with `ctx.OnDispose(fn)`; both run only when a
+stream actually opens.
 
 ### 3. Composition is `via.Embed`, and roots are taken by value
 
@@ -131,7 +139,7 @@ All removed. v2 fans out through a typed topic that islands subscribe to:
 ```go
 var Posts = topic.New[Post]()          // package topic
 
-func (p *Feed) OnConnect(ctx *via.Ctx) error {
+func (p *Feed) OnInit(ctx *via.Ctx) error {
     ctx.Listen(Posts, p.onPost)
     return nil
 }
@@ -155,8 +163,8 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 | --- | --- | --- |
 | Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
-| Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the primary hook |
-| Live island | `Connector.OnConnect` + `Disposer.Dispose` | `via.Live` — `OnConnect(*Ctx) error`; disposal is automatic |
+| Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook — on the page and on every embedded child |
+| Live island | `Connector.OnConnect` + `Disposer.Dispose` | no interface — a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")` — and it is generic over `Stringish` |
 | Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49; `h.RawAttr` covers the rest |
