@@ -182,7 +182,10 @@ func runLiveStream(reqCtx context.Context, islands []*Ctx, pulse chan func(), ke
 	defer func() {
 		for _, island := range islands {
 			for _, d := range island.disposers {
-				d()
+				// runPulseItem, not a bare call: a disposer is user code (e.g.
+				// sub.Stop) and one panicking must not skip every disposer after
+				// it — that would leak whatever the rest were meant to release.
+				runPulseItem(d)
 			}
 		}
 	}()
