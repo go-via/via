@@ -181,10 +181,16 @@ examples, the whole live stack verified in real headless browsers
   directly under a plain root, or through further plain `via.Embed`s); it
   panics at render, loud and early, rather than misroute an action. Plain
   (non-live) composition still nests to any depth. Nested live composition
-  (a dynamic set of live children keyed by identity) is a deferred feature.
-  `State` is per connection: a native `PostForm` submit is a navigation,
-  opens a new connection, and reseeds it — persist through the session or a
-  shared pointer dep, or `Redirect` instead of returning a page.
+  (a dynamic set of live children addressed by identity) is a deferred
+  feature. `State` is per connection: a native `PostForm` submit is a
+  navigation, opens a new connection, and reseeds it — persist through the
+  session or a shared pointer dep, or `Redirect` instead of returning a page.
+  An `Embed`'s position among the page's `Embed` calls is its identity
+  (container id, signal prefix, dispatch address); it must be the same on
+  every render for the life of a connection — a `When` around an `Embed`
+  must depend only on data fixed by `OnInit` or the field literal, never on
+  time, a client signal, or shared state that changes while the page is
+  open.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
