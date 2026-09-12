@@ -326,11 +326,20 @@ as a re-read of the README, not a diff.
 - A live action racing a concurrent `Session.Rotate` on the same
   connection can answer one spurious 403 "session mismatch" — the action
   ran against the id the cookie held a moment before Rotate moved it. A
-  retry with the refreshed cookie succeeds.
+  retry with the refreshed cookie succeeds. The same class of thing
+  happens if a cookieless action is queued behind a login action on the
+  same connection (a double-click during login): before the connection
+  binds it would have applied, but now it answers 403 "session mismatch"
+  once, because it is indistinguishable from an attacker's request at
+  that point. This is deliberate, not a bug, but it is a behaviour change.
 - A session minted from a `Tick`/`Listen` handler (as opposed to an action
   or `OnConnect`) has no open response to carry a cookie, so it is created
-  and then orphaned until its TTL; via now warns loudly when this happens,
-  but the session is still lost. Establish sessions in `OnConnect` or an
-  action instead.
+  and then orphaned until its TTL. In some configurations this is silent:
+  if the connection's `OnConnect` ever calls `Session()` at all — including
+  a read-only `Get`, the pattern this doc recommends — the resulting
+  handle is cached with the connect response already attached, so a later
+  `Tick`/`Listen` `Put` writes its `Set-Cookie` onto that dead response
+  with no warning logged. Establish sessions in `OnConnect` or an action
+  instead.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.
