@@ -248,6 +248,35 @@ func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	assert.NotContains(t, body, "hi alice", "the pre-rotate session id still resolved")
 }
 
+// Session fixation defense must not depend on the app remembering to call
+// Rotate: a request that carries an existing session id and then writes into
+// that session for the first time gets a fresh id on its own. This plants a
+// real, attacker-known id (as a fixation attack would, e.g. a cross-subdomain
+// cookie) on a second browser and logs in through it with no Rotate call
+// anywhere in loginComp.
+func TestSession_fixedIdIsRotatedOnFirstWriteWithNoExplicitRotate(t *testing.T) {
+	t.Parallel()
+	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+
+	attacker := jarClient(t)
+	fireAction(t, attacker, base, 0) // SignIn — mints a real, attacker-known session id
+	fixedID := cookieValue(t, attacker, base, "via_session")
+	require.NotEmpty(t, fixedID)
+
+	u, err := url.Parse(base)
+	require.NoError(t, err)
+	victim := jarClient(t)
+	victim.Jar.SetCookies(u, []*http.Cookie{{Name: "via_session", Value: fixedID}})
+
+	fireAction(t, victim, base, 0) // SignIn — the victim's real login, carrying the planted id
+	rotatedID := cookieValue(t, victim, base, "via_session")
+	assert.NotEqual(t, fixedID, rotatedID,
+		"a request carrying a planted session id must rotate to a fresh one on its first write")
+
+	body := greetWithRawCookie(t, base, "via_session", fixedID)
+	assert.NotContains(t, body, "hi alice", "the pre-rotation fixed id must not resolve after the victim's login")
+}
+
 // Enabling sessions issues the browser an HttpOnly cookie so the session id
 // can't be read by page scripts.
 func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
