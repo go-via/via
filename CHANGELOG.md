@@ -317,5 +317,20 @@ as a re-read of the README, not a diff.
 - A session that idles past its TTL while a live stream is open turns every
   later dispatch on that tab into a 403 "session mismatch" until the page is
   reloaded — the stream itself does not keep the session warm.
+- A live connection only binds to a session an action actually MINTS
+  (`Session().Put`/`.Rotate`) while none existed at the start of that
+  request; a merely read-only `Session().Get` never binds it, even one
+  carrying a foreign valid cookie, closing the capture window an earlier
+  fix left open. Until an action mints one, the tab id above remains the
+  connection's only credential.
+- A live action racing a concurrent `Session.Rotate` on the same
+  connection can answer one spurious 403 "session mismatch" — the action
+  ran against the id the cookie held a moment before Rotate moved it. A
+  retry with the refreshed cookie succeeds.
+- A session minted from a `Tick`/`Listen` handler (as opposed to an action
+  or `OnConnect`) has no open response to carry a cookie, so it is created
+  and then orphaned until its TTL; via now warns loudly when this happens,
+  but the session is still lost. Establish sessions in `OnConnect` or an
+  action instead.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.
