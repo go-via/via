@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 const (
 	defaultSessionTTL    = 24 * time.Hour
 	defaultSessionCookie = "via_session"
+	minSessionKeyLen     = 16 // bytes; below this an HMAC-SHA256 key is guessable
 )
 
 // sessionData is one browser session's value bag. Values are keyed by an opaque
@@ -104,6 +106,11 @@ func newSessionManager(cfg *config) *sessionManager {
 			panic("via: session key generation failed: " + err.Error())
 		}
 		random = true
+	} else if len(key) < minSessionKeyLen {
+		// A short key is guessable — HMAC-SHA256 accepts any length, so this
+		// would otherwise fail silently into a forgeable signature. Fail at
+		// construction (WithSessionKey / VIA_SESSION_KEY), not at request time.
+		panic(fmt.Sprintf("via: session key must be at least %d bytes (got %d)", minSessionKeyLen, len(key)))
 	}
 	ttl := cfg.sessionTTL
 	if ttl <= 0 {

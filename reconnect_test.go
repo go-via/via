@@ -45,12 +45,15 @@ func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	assert.Contains(t, body, `<script>(()=>{if(window.__viaRC)`,
 		"the reconnect script ships bare — its hash, not a nonce, admits it")
 	csp := resp.Header.Get("Content-Security-Policy")
+	found := false
 	for _, js := range inlineScripts(t, body) {
 		if strings.Contains(js, "__viaRC") {
+			found = true
 			assert.Contains(t, csp, hashSource(js),
 				"the reconnect script's digest must be in the policy or the browser drops it")
 		}
 	}
+	require.True(t, found, "no inline script contained __viaRC — the loop above asserted nothing")
 }
 
 // A stateless page has no SSE stream to lose, so injecting a reconnect manager

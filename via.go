@@ -83,6 +83,7 @@ type Ctx struct {
 	conn        *liveConn                        // set during a root-level render on a live connection, so embedViewer can find an already-connected descendant's own instance
 	underLive   bool                             // true when an ancestor (not necessarily the immediate parent) is a live unit — Embed refuses a live child here (see embedViewer)
 	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
+	connected   bool                             // true once OnConnect has returned — runLiveStream already snapshotted ticks/subs by then, so a later Tick/Listen on this Ctx would silently no-op; they log loudly instead
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
@@ -364,6 +365,13 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 // identifier string. Use it for per-row actions in a list. No '&', no closure.
 func OnClickArg[T any](fn func(*Ctx, T), arg T) h.Attr { return onEventArg("click", fn, arg) }
 
+// badActionArg is the panic sentinel a value-carrying action's slot throws
+// when ?a= fails to decode into T — the arg is client-controlled input (any
+// client can POST a malformed or wrong-typed one), so the honest answer is
+// 400, not silently handing the handler a zero value it might act on (e.g.
+// deleting row 0). recoverToHTTP and liveRunAction both recognize it.
+type badActionArg struct{ err error }
+
 // onEventArg is onEvent for a value-carrying action: it JSON-encodes arg into the
 // action's query (?a=…) so the client posts the row's datum, and the dispatched
 // slot decodes it from the request and hands it to fn. Identity rides with the
@@ -380,7 +388,9 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 			}
 			var v T
 			if raw := rc.req.URL.Query().Get("a"); raw != "" {
-				_ = json.Unmarshal([]byte(raw), &v)
+				if err := json.Unmarshal([]byte(raw), &v); err != nil {
+					panic(badActionArg{err: err})
+				}
 			}
 			fn(rc, v)
 		})
@@ -571,7 +581,9 @@ func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *
 			err = errors.New("via: OnConnect panicked")
 		}
 	}()
-	return unit.islandV.(Live).OnConnect(unit)
+	err = unit.islandV.(Live).OnConnect(unit)
+	unit.connected = true // ticks/subs are snapshotted right after this call returns — see Tick/Listen
+	return err
 }
 
 // rootPush renders v fresh and pushes it as the whole-page element-patch. The
@@ -635,9 +647,20 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer m.liveCount.Add(-1)
+	headersSent := false
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
+			// A panic before the stream's headers went out (the discovery
+			// render, OnInit, connectUnit) would otherwise fall through to
+			// Go's default: 200 with an empty body, telling the client the
+			// connect succeeded. Once headers ARE sent this can't help (and
+			// would log a superfluous-WriteHeader warning), so only answer
+			// here for the pre-header case; a mid-stream panic is instead
+			// caught per pulse item (see runPulseItem) so it never reaches here.
+			if !headersSent {
+				http.Error(w, "connect failed", http.StatusInternalServerError)
+			}
 		}
 	}()
 	pv := m.newInst()
@@ -713,6 +736,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
+	headersSent = true
 	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
 
 	runLiveStream(streamCtx, units, pulse, keepalive, sseHeartbeat)

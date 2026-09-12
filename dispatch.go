@@ -43,6 +43,7 @@ const tabFormField = "_viatab"
 type actionResult struct {
 	redirect string
 	panicked bool
+	badArg   error // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
 	body     []byte
 	pushWork func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
 	gone     string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
@@ -244,6 +245,10 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		http.Error(w, res.gone, http.StatusGone)
 		return
 	}
+	if res.badArg != nil {
+		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
+		return
+	}
 	if res.panicked {
 		http.Error(w, "action failed", http.StatusInternalServerError)
 		return
@@ -282,6 +287,10 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *liveConn, unit *Ctx, in map[string]json.RawMessage, n int) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
+			if bad, ok := rec.(badActionArg); ok {
+				res = actionResult{badArg: bad.err}
+				return
+			}
 			log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
 			res = actionResult{panicked: true}
 		}
