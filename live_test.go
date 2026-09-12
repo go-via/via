@@ -753,20 +753,26 @@ func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 // On disconnect the island's OnDispose must run, so subscriptions and producers
 // are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
+	t.Parallel()
+	done := make(chan struct{})
 	synctest.Test(t, func(t *testing.T) {
-		done := make(chan struct{})
 		srv := liveServer(t, via.Register(disposeProbe{disposed: done}))
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
 		synctest.Wait()
-
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "OnDispose did not run on disconnect")
-		}
 	})
+
+	// The server's stream goroutine runs on a real httptest listener, outside
+	// the bubble (see I4): synctest.Wait() only settles bubble goroutines, so
+	// the OS actually delivering the close can still be in flight once the
+	// bubble above returns. This wait runs after the bubble, in real wall-clock
+	// time, so it is a genuine (bounded) wait rather than a fake-clock no-op.
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "OnDispose did not run on disconnect")
+	}
 }
 
 // panicThenDisposeProbe registers two disposers — the first always panics —
