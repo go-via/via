@@ -436,6 +436,7 @@ func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan strin
 
 	lines := make(chan string, 256)
 	go func() {
+		defer close(lines)
 		defer resp.Body.Close()
 		sc := bufio.NewScanner(resp.Body)
 		for sc.Scan() {
@@ -445,7 +446,6 @@ func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan strin
 				return
 			}
 		}
-		close(lines)
 	}()
 	return lines, cancel
 }
@@ -767,6 +767,58 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 			require.Fail(t, "OnDispose did not run on disconnect")
 		}
 	})
+}
+
+// openStreamAt's reader goroutine has two return paths — ctx.Done (client
+// cancels) and the scanner running dry (server closes the body). Both must
+// close lines, or a caller that ranges over it (or does `cancel(); <-done`
+// on a goroutine that ranges over it) hangs forever.
+func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		srv := liveServer(t, via.Register(disposeProbe{disposed: done}))
+
+		lines, cancel := openStream(t, srv)
+		cancel()
+
+		drained := make(chan struct{})
+		go func() {
+			for range lines {
+			}
+			close(drained)
+		}()
+		synctest.Wait()
+
+		select {
+		case <-drained:
+		default:
+			require.Fail(t, "lines was not closed after the client canceled")
+		}
+	})
+}
+
+// Neighbour path: the scanner running dry (the server ends the stream, not
+// the caller canceling ctx) must also close lines — the reader goroutine
+// falls out of `for sc.Scan()` without ever taking the ctx.Done arm.
+func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(disposeProbe{disposed: make(chan struct{})}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	srv.CloseClientConnections() // ends the connection from the server side, without canceling ctx
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-lines:
+			if !ok {
+				return // closed, as required
+			}
+		case <-deadline:
+			require.Fail(t, "lines was not closed after the server closed the stream")
+		}
+	}
 }
 
 // clicker is a live island whose action mutates its OWN server State. The proof
