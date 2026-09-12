@@ -272,6 +272,8 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 	}
 	require.NotNil(t, sessionCookie, "no via_session cookie was issued on first session access")
 	assert.True(t, sessionCookie.HttpOnly, "session cookie must be HttpOnly")
+	assert.Equal(t, http.SameSiteLaxMode, sessionCookie.SameSite, "session cookie must be SameSite=Lax")
+	assert.Greater(t, sessionCookie.MaxAge, 0, "session cookie must carry a MaxAge, not expire with the browser session")
 }
 
 // A session left idle past its TTL must stop resolving — a long-abandoned

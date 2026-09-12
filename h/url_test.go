@@ -34,6 +34,7 @@ var urlCorpus = []struct {
 	{`/\/evil.example`, false},
 	{`\/evil.example`, false},
 	{"\n//evil.example/x", false},
+	{" \t//evil.example/x", false},
 	{"mailto:a@b.c", false},
 }
 

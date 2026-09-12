@@ -979,8 +979,14 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(pathTicker{}))
 		conn := app.Connect()
-		conn.Await("path: /_via/sse") // the first tick sees the connect request
 
+		// Fire BEFORE the first tick has pushed — no fake time has advanced
+		// yet, so the connection's current unit is still the exact Ctx object
+		// OnConnect handed to Tick. Dispatch writing req/sessW straight onto
+		// that shared object (instead of a fresh per-action Ctx) would only be
+		// observable in this narrow window; waiting for a push first (as the
+		// old version of this test did) replaces the unit with a fresh render
+		// Ctx, making the corruption invisible to any later tick.
 		status, _ := app.Action(0).Live(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n: 1") // the action landed
@@ -988,7 +994,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(20 * time.Millisecond)
 		synctest.Wait()
-		conn.Await("path: /_via/sse") // a tick AFTER the action must still see the connect request
+		conn.Await("path: /_via/sse") // the tick must still see the connect request, not the action's
 	})
 }
 
