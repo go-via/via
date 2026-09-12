@@ -769,6 +769,38 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	})
 }
 
+// panicThenDisposeProbe registers two disposers — the first always panics —
+// so a test can prove the second still runs.
+type panicThenDisposeProbe struct{ disposed chan struct{} }
+
+func (p *panicThenDisposeProbe) OnConnect(ctx *via.Ctx) error {
+	ctx.OnDispose(func() { panic("disposer boom") })
+	ctx.OnDispose(p.markDisposed)
+	return nil
+}
+func (p *panicThenDisposeProbe) markDisposed() { close(p.disposed) }
+func (p *panicThenDisposeProbe) View() h.H     { return h.Div(h.Str("probe")) }
+
+// A panicking disposer must not skip every disposer registered after it — a
+// skipped one (e.g. sub.Stop) would otherwise leak for the life of the
+// process.
+func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{})
+		srv := liveServer(t, via.Register(panicThenDisposeProbe{disposed: done}))
+
+		_, cancel := openStream(t, srv)
+		cancel() // disconnect
+		synctest.Wait()
+
+		select {
+		case <-done:
+		default:
+			require.Fail(t, "the disposer after the panicking one did not run")
+		}
+	})
+}
+
 // openStreamAt's reader goroutine has two return paths — ctx.Done (client
 // cancels) and the scanner running dry (server closes the body). Both must
 // close lines, or a caller that ranges over it (or does `cancel(); <-done`
