@@ -1,10 +1,13 @@
 package via_test
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -689,4 +692,146 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, status,
 			"a panic in the native re-render must answer 500, not hang the POST forever")
 	})
+}
+
+// openStreamWithClient is openStreamAt against a caller-supplied client, so a
+// test can open the SSE stream carrying a cookie already sitting in the
+// client's jar (a session established by an earlier stateless action).
+func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, path string) (<-chan string, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	lines := make(chan string, 256)
+	go func() {
+		defer close(lines)
+		defer resp.Body.Close()
+		sc := bufio.NewScanner(resp.Body)
+		for sc.Scan() {
+			select {
+			case lines <- sc.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return lines, cancel
+}
+
+// sessionLive is a live root — a Live-implementing root's own actions only
+// ever route through the tab handshake (dispatchStateless refuses them, see
+// dispatch.go), so establishing the session ahead of connecting needs a
+// separate, stateless mount (loginComp, from sess_test.go) sharing the same
+// router-wide session manager. Bump is the live action a stolen tab id would
+// try to drive.
+type sessionLive struct{ n via.State[int] }
+
+func (s *sessionLive) OnConnect(*via.Ctx) error { return nil }
+func (s *sessionLive) Bump(ctx *via.Ctx)        { s.n.Set(s.n.Get() + 1) }
+func (s *sessionLive) View() h.H {
+	return h.Div(s.n.Display(), h.Button(via.OnClick(s.Bump))) // action 0
+}
+
+// liveActionRequest builds a raw dispatch POST against island/n using the
+// page's currently-rendered action URL, with tab as its X-Via-Tab header —
+// bypassing any cookie jar, so the caller controls exactly what (if any)
+// session cookie rides along.
+func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab string, island, n int) *http.Request {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, island, n), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Via-Tab", tab)
+	return req
+}
+
+// A live connection opened under a real session must reject a dispatch that
+// doesn't carry that same session — the tab id alone (a leaked/stolen one,
+// with no cookie at all, exactly as a cross-origin request would arrive with
+// the origin floor open) is no longer a sufficient credential.
+func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r.Mount("/login", loginComp{})  // stateless — establishes the session cookie
+	r.Mount("/live", sessionLive{}) // Live root, shares the router-wide session manager
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	owner := jarClient(t)
+
+	loginResp, err := owner.Get(srv.URL + "/login")
+	require.NoError(t, err)
+	loginPage, err := io.ReadAll(loginResp.Body)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), 0, 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
+	signInReq.Header.Set("Datastar-Request", "true")
+	signInResp, err := owner.Do(signInReq)
+	require.NoError(t, err)
+	signInResp.Body.Close()
+	require.NotEmpty(t, cookieValue(t, owner, srv.URL, "via_session"))
+
+	lines, cancel := openStreamWithClient(t, srv, owner, "/live/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := owner.Get(srv.URL + "/live")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	req := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	// No cookie at all on this request — the stolen-tab-id, no-session attack.
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"a dispatch against a session-bound connection with no session must be rejected")
+
+	// The rightful owner, same tab, same session cookie, must still work —
+	// the check rejects a MISMATCH, not the connection itself.
+	ownReq := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	ownResp, err := owner.Do(ownReq)
+	require.NoError(t, err)
+	defer ownResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, ownResp.StatusCode,
+		"the connecting session's own dispatch must still succeed")
+}
+
+// Neighbour of the mismatch rejection: an ANONYMOUS live connection (no
+// session at any point) must keep dispatching exactly as before — the check
+// only applies once a connection is actually bound to a session, so an app
+// that never touches Session() sees no behavior change.
+func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	req := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie anywhere
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusNoContent, resp.StatusCode,
+		"an anonymous connection must not be blocked — there is no session to mismatch")
 }

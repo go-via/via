@@ -275,6 +275,12 @@ as a re-read of the README, not a diff.
   island goroutine after the mutation already answered — now answers 500
   instead of hanging the POST forever;** the SSE keepalive beat is recovered
   the same way.
+- **A live connection opened under a session now requires that same session
+  on every dispatch against it.** The tab id used to be the sole credential —
+  with the origin floor open (the default), a leaked tab id let a request
+  carrying no session cookie at all, from any origin, drive that connection's
+  actions. Bound by the session's `*sessionData` pointer, not its id, so a
+  `Rotate` after connect does not break the binding.
 - `Tick`/`Listen` called after `OnConnect` has returned now log loudly
   instead of silently registering nothing.
 - A panic before a live stream's headers are sent now answers 500 instead of

@@ -80,13 +80,13 @@ The action endpoint and rendered pages are hardened by default:
   CSRF token, and dev/non-browser clients just work); set `WithTrustedOrigin`
   in production to enforce same-origin (plus the listed origins), failing
   closed.
-- **Known limitation:** a live connection's tab id is a bearer credential —
-  it is not currently checked against the session that established the
-  connection. With the origin floor open (the default), a leaked tab id lets
-  a request carrying no session cookie at all, from any origin, drive that
-  connection's action. Never render, log, or leak a tab id outside its own
-  client; set `WithTrustedOrigin` to close the cross-origin leg. Binding the
-  tab id to its connecting session is deferred past v0.8.
+- A live connection's tab id is a bearer credential for that connection's
+  actions; if it was opened under a session, a dispatch is also checked
+  against that same session, so a leaked tab id alone is no longer enough
+  once the connecting browser was logged in. An anonymous connection (no
+  session) has nothing to check against — never render, log, or leak a tab
+  id outside its own client, and set `WithTrustedOrigin` to close the
+  cross-origin leg too.
 - **Request-body cap** (413) + a capped JSON decode (400 on malformed/oversized
   input; unknown signal keys and trailing bytes after the JSON value are
   ignored, not rejected — it is not a strict decode), and a **panic recover**.

@@ -703,6 +703,15 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Built before the connect loop so each unit's push closure can register
 	// itself as the connection's current unit for its island on every render —
 	// a live action always runs against the last render's actions/hydrators.
+	// Bind the connection to whatever session the connect request's cookie
+	// already resolves to (nil for an anonymous connect) — this is the
+	// credential dispatch requires a match against, closing the gap where a
+	// leaked tab id was a bearer token good from any origin with no session
+	// at all (see dispatch). Resolved BEFORE OnConnect, which may itself
+	// mint or rotate a session; the point is the identity the browser
+	// already held when it opened this stream, not one OnConnect creates.
+	_, sess, _ := m.sessions.resolve(req)
+
 	lc := &liveConn{
 		mount:       m,
 		pageRoot:    pv,
@@ -710,6 +719,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		done:        streamCtx.Done(),
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:       map[int]*Ctx{},
+		sess:        sess,
 	}
 
 	// Run each unit's OnConnect once, BEFORE the stream headers flush (so

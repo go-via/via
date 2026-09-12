@@ -152,6 +152,18 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "no such island", http.StatusGone)
 			return
 		}
+		if lc.sess != nil {
+			// The connection was opened by a real session; a dispatch against
+			// it must carry that SAME session (by pointer, not id — a Rotate
+			// since connect moves the pointer to a new id, never a new data
+			// object). Otherwise a leaked tab id is a bearer credential good
+			// from any request, session or none, once the origin floor is open.
+			_, s, _ := m.sessions.resolve(req)
+			if s != lc.sess {
+				http.Error(w, "session mismatch", http.StatusForbidden)
+				return
+			}
+		}
 		m.dispatchLive(w, req, mode, lc, island, n, in, digest, base)
 		return
 	}
