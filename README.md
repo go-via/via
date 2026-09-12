@@ -135,11 +135,12 @@ examples, the whole live stack verified in real headless browsers
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
-  write — apps that never store anything stay cookieless. A request-carried
-  session id is rotated to a fresh one the first time it writes (fixation
-  defense with no explicit call needed); `Session.Rotate` remains for an
-  explicit rotation. Idle sessions expire lazily on access (past the TTL, the
-  next read/write treats them as gone) — there is no background sweep, so a
+  write — apps that never store anything stay cookieless. Sessions do not
+  rotate their id on their own: call `Session.Rotate` at an auth-state change
+  (login, logout, privilege elevation) to invalidate a session id an attacker
+  may have planted beforehand (fixation defense). Idle sessions expire lazily
+  on access (past the TTL, the next read/write treats them as gone) — there
+  is no background sweep, so a
   session that is never touched again is not proactively evicted. The signing
   key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on

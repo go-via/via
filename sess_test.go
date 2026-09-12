@@ -4,12 +4,14 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -248,33 +250,58 @@ func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	assert.NotContains(t, body, "hi alice", "the pre-rotate session id still resolved")
 }
 
-// Session fixation defense must not depend on the app remembering to call
-// Rotate: a request that carries an existing session id and then writes into
-// that session for the first time gets a fresh id on its own. This plants a
-// real, attacker-known id (as a fixation attack would, e.g. a cross-subdomain
-// cookie) on a second browser and logs in through it with no Rotate call
-// anywhere in loginComp.
-func TestSession_fixedIdIsRotatedOnFirstWriteWithNoExplicitRotate(t *testing.T) {
+// Writing into a session never rotates its id on its own — that was an
+// earlier revision's behavior (rotate-on-first-write), reverted because
+// "first write" was tracked per REQUEST, not per session: every subsequent
+// writing request rotated again, so a request still carrying the previous
+// id (a double-click, a retried form) forked a fresh, empty session instead
+// of resolving to the one the user was just using. Fixation defense is now
+// [Session.Rotate], called explicitly at an auth-state change.
+func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	c := jarClient(t)
 
-	attacker := jarClient(t)
-	fireAction(t, attacker, base, 0) // SignIn — mints a real, attacker-known session id
-	fixedID := cookieValue(t, attacker, base, "via_session")
-	require.NotEmpty(t, fixedID)
+	fireAction(t, c, base, 0) // SignIn — first write, mints the session
+	first := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, first)
 
-	u, err := url.Parse(base)
-	require.NoError(t, err)
-	victim := jarClient(t)
-	victim.Jar.SetCookies(u, []*http.Cookie{{Name: "via_session", Value: fixedID}})
+	fireAction(t, c, base, 1) // Greet — a second write-capable request, no Rotate call
+	second := cookieValue(t, c, base, "via_session")
+	assert.Equal(t, first, second, "a write with no explicit Rotate call must not change the session id")
+}
 
-	fireAction(t, victim, base, 0) // SignIn — the victim's real login, carrying the planted id
-	rotatedID := cookieValue(t, victim, base, "via_session")
-	assert.NotEqual(t, fixedID, rotatedID,
-		"a request carrying a planted session id must rotate to a fresh one on its first write")
+// Neighbour of the no-auto-rotate fix: concurrent writers racing the SAME
+// cookie must not each mint their own session — that was the reID leak the
+// automatic rotation caused (N concurrent Puts -> N live ids aliasing one
+// *sessionData, none ever swept). With rotation gone from the write path,
+// concurrent Bumps on one cookie must land on the one id the SignIn-less
+// jar started with and sum into a single counter.
+func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
 
-	body := greetWithRawCookie(t, base, "via_session", fixedID)
-	assert.NotContains(t, body, "hi alice", "the pre-rotation fixed id must not resolve after the victim's login")
+	fireAction(t, c, srv.URL, 0) // Bump — mints the session and its cookie
+	id := cookieValue(t, c, srv.URL, "via_session")
+	require.NotEmpty(t, id)
+
+	const n = 16
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			fireAction(t, c, srv.URL, 0) // Bump, same cookie
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, id, cookieValue(t, c, srv.URL, "via_session"),
+		"concurrent writes on one cookie must not rotate/fork the session id")
+	_, body := fireAction(t, c, srv.URL, 1) // Show
+	assert.Contains(t, body, fmt.Sprintf("n=%d", n+1), "every concurrent Bump must have landed on the same session data")
 }
 
 // Enabling sessions issues the browser an HttpOnly cookie so the session id

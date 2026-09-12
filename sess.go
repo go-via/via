@@ -192,12 +192,17 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // app that never stores anything stays cookieless.
 //
 // A session value is keyed by the Go type used to store it — one User{} per
-// session, one ShoppingCart{} per session, and so on. A request that arrives
-// carrying a session id and then writes into that session for the first time
-// gets a fresh id (rotate-on-first-write, see ensure) — a session id planted
-// before login cannot survive the write that establishes the logged-in state,
-// with no code required to know about fixation. Rotate remains for an
-// explicit rotation (e.g. a privilege change with no new Put alongside it).
+// session, one ShoppingCart{} per session, and so on. Sessions do not rotate
+// their id on their own: call [Session.Rotate] at an auth-state change
+// (login, logout, privilege elevation) to invalidate a session id an
+// attacker may have planted before that change (fixation defense). An
+// earlier revision rotated automatically on a session's first write instead;
+// that was reverted (see CHANGELOG) because "first write" is tracked per
+// request, not per session, so every subsequent writing request minted
+// ANOTHER fresh id — a request still carrying the previous one (a
+// double-click, a retried POST) forked a new, empty session instead of
+// resolving, and concurrent writers racing one cookie each minted their own
+// id with no sweeper to reclaim the abandoned ones.
 //
 // The store is in-memory and single-pod (the 1.0 scope). Expiry is enforced
 // lazily on access: a session idle past its TTL stops resolving, but a session
@@ -212,32 +217,17 @@ type Session struct {
 	w          http.ResponseWriter // nil when the cookie can't be set (a live action)
 	secure     bool
 	fromCookie bool // id was resolved from a request-carried cookie, not minted this request
-	rotated    bool // rotate-on-first-write already ran for this Session instance
 }
 
 // ensure returns the session's data, creating the session (and issuing the
 // cookie) on first write. A write where no cookie can be set — a live action,
 // which runs after its 204 — still stores into a fresh session but logs a
 // warning, since the browser will never carry that id back.
-//
-// A session resolved from a request-carried cookie is rotated to a fresh id
-// the first time this Session instance writes — session fixation defense
-// with no Rotate call required: an id an attacker planted before login is
-// carried by the request that establishes (or changes) the logged-in state,
-// and that very write is what invalidates it. A session minted fresh THIS
-// request (nothing existed to fix) is exempt, and the rotation runs once per
-// Session instance (rotated), not once per write, so a request that Puts
-// several values only rotates on the first of them.
 func (s *Session) ensure() *sessionData {
 	if s.mgr == nil {
 		return nil
 	}
 	if s.data != nil {
-		if s.fromCookie && !s.rotated && s.w != nil {
-			s.rotated = true
-			s.id = s.mgr.store.reID(s.id, s.data)
-			s.mgr.setCookie(s.w, s.id, s.secure)
-		}
 		return s.data
 	}
 	if s.mgr.randomKey {
@@ -286,7 +276,6 @@ func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
 	}
-	s.rotated = true // an explicit Rotate satisfies ensure's rotate-on-first-write too
 	if s.data == nil {
 		// Nothing stored yet — rotation of an empty session still mints a fresh id.
 		s.id, s.data = s.mgr.store.create()

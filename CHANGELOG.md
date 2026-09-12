@@ -38,13 +38,15 @@ as a re-read of the README, not a diff.
 
 - **Requires Go 1.27.**
 - **`h.SafeURL` is gone.** The URL policy — http/https/relative admitted,
-  `javascript:`/`data:`/protocol-relative refused — moved to
-  `internal/hcore`, where `h`'s typed attributes and via's `Redirect` gate
-  share one implementation. It was exported only to cross a package boundary,
-  and it carried a second copy of the three checks: two gates that agreed
-  today is how one of them later admits a `javascript:` target the other
-  refuses. Nothing outside via needed it; the typed `h.Href`/`h.Src`/
-  `h.Action` attributes and `via.Redirect` enforce the policy for you.
+  `javascript:`/`data:`/protocol-relative refused, including a leading `\` or
+  `/\` (WHATWG parsing treats `\` as `/`, so `/\evil.com` is protocol-relative
+  too) — moved to `internal/hcore`, where `h`'s typed attributes and via's
+  `Redirect` gate share one implementation. It was exported only to cross a
+  package boundary, and it carried a second copy of the three checks: two
+  gates that agreed today is how one of them later admits a `javascript:`
+  target the other refuses. Nothing outside via needed it; the typed
+  `h.Href`/`h.Src`/`h.Action` attributes and `via.Redirect` enforce the
+  policy for you.
 - **`via/sess` merged into the root package**: `Session` is a real type with
   `Put`/`Get[T]`/`Clear[T]`/`Rotate` methods, reached via `ctx.Session()`; the
   `sess` subpackage and its `internal/sessbridge` shim are gone.
@@ -192,6 +194,20 @@ as a re-read of the README, not a diff.
 
 ### Fixed
 
+- **A live island's `Embed`ded child is looked up by the right address.**
+  `embedViewer` indexed a connection's units by the child's plain island
+  index, but `liveConn.replace` keys them by `islandIdx+1` (root is 0) — a
+  live root that embeds anything re-entered `Embed` on its own render and
+  panicked on the first push; a plain root with one live island reseeded a
+  by-value copy instead of the connected instance on a native re-render; two
+  live islands collided on the same address, duplicating one and losing the
+  other.
+- **A live action abandoned mid-flight (the POST's context gave up while its
+  mutation was still queued behind the island goroutine) no longer runs
+  against a dead `ResponseWriter`.** The mutation used to apply anyway (after
+  the client had already been answered 410), racing `SetCookie`/`Header()`
+  against the server's own post-handler teardown; it's now skipped entirely
+  once the request is known abandoned.
 - **A live action no longer rewrites the Ctx a Tick or Listen handler
   holds; those keep the connect request.** Dispatch used to write the
   action's own req/sessW/redirect directly onto the render-time Ctx an
@@ -252,12 +268,13 @@ as a re-read of the README, not a diff.
   triggers unwound the whole connection goroutine — after an action had
   already answered 204. Each pulse item now recovers on its own; the
   connection stays up and keeps serving later actions/ticks.
-- **A session id carried by the request is rotated to a fresh one on its
-  first write**, closing fixation for the common case (a planted pre-login
-  cookie does not survive the write that logs the user in) with no `Rotate`
-  call required. `Session.Rotate` remains for an explicit rotation.
-- A value-carrying action (`OnClickArg`) with a malformed or wrong-typed `?a=`
-  now answers 400 instead of silently handing the handler a zero value.
+- A value-carrying action (`OnClickArg`) with a malformed, empty, or `null`
+  `?a=` now answers 400 instead of silently handing the handler a zero value
+  (e.g. deleting row 0).
+- **A panic in a native `PostForm`'s post-mutation re-render — run on the
+  island goroutine after the mutation already answered — now answers 500
+  instead of hanging the POST forever;** the SSE keepalive beat is recovered
+  the same way.
 - `Tick`/`Listen` called after `OnConnect` has returned now log loudly
   instead of silently registering nothing.
 - A panic before a live stream's headers are sent now answers 500 instead of
