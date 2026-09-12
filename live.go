@@ -203,7 +203,7 @@ func runLiveStream(reqCtx context.Context, islands []*Ctx, pulse chan func(), ke
 		case fn := <-pulse:
 			runPulseItem(fn)
 		case <-beat.C:
-			keepalive()
+			runPulseItem(keepalive)
 		}
 	}
 }
@@ -270,11 +270,18 @@ func (c *liveConn) run(reqCtx context.Context, fn func() actionResult) (actionRe
 	result := make(chan actionResult, 1)
 	select {
 	case c.pulse <- func() {
-		res := fn()
-		result <- res
-		if res.pushWork != nil {
-			res.pushWork()
-		}
+		var res actionResult
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
+				res = actionResult{panicked: true}
+			}
+			result <- res
+			if res.pushWork != nil {
+				res.pushWork()
+			}
+		}()
+		res = fn()
 	}:
 	case <-c.done:
 		return actionResult{}, false
