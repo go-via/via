@@ -37,11 +37,12 @@ func fetchPage(t *testing.T, app *vt.App, path string) string {
 // liveRedirector is a live root whose action queues a Redirect — which a
 // @post action can no longer act on; the action must still answer normally
 // rather than hang or crash.
-type liveRedirector struct{}
+type liveRedirector struct{ n via.State[int] }
 
-func (c *liveRedirector) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *liveRedirector) Go(ctx *via.Ctx)              { ctx.Redirect("/dest") }
-func (c *liveRedirector) View() h.H                    { return h.Div(h.Button(via.On("click", c.Go))) }
+func (c *liveRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
+func (c *liveRedirector) View() h.H {
+	return h.Div(c.n.Display(), h.Button(via.On("click", c.Go)))
+}
 
 func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -200,13 +201,12 @@ func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 
 // panicLive is a live root whose Boom action panics; Ping proves the
 // connection is still usable afterward.
-type panicLive struct{}
+type panicLive struct{ n via.State[int] }
 
-func (p *panicLive) OnConnect(ctx *via.Ctx) error { return nil }
-func (p *panicLive) Boom(ctx *via.Ctx)            { panic("boom") }
-func (p *panicLive) Ping(ctx *via.Ctx)            {}
+func (p *panicLive) Boom(ctx *via.Ctx) { panic("boom") }
+func (p *panicLive) Ping(ctx *via.Ctx) {}
 func (p *panicLive) View() h.H {
-	return h.Div(h.Button(via.On("click", p.Boom)), h.Button(via.On("click", p.Ping)))
+	return h.Div(p.n.Display(), h.Button(via.On("click", p.Boom)), h.Button(via.On("click", p.Ping)))
 }
 
 func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
@@ -225,13 +225,15 @@ func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 // branchy's second button (action 1) only exists in the View after Reveal
 // fires and its push renders it — the connect-time render and the initial
 // stateless GET both show only Reveal.
-type branchy struct{ shown via.State[bool] }
+type branchy struct {
+	shown via.State[bool]
+	n     via.State[int]
+}
 
-func (b *branchy) OnConnect(ctx *via.Ctx) error { return nil }
-func (b *branchy) Reveal(ctx *via.Ctx)          { b.shown.Set(true) }
-func (b *branchy) Extra(ctx *via.Ctx)           {}
+func (b *branchy) Reveal(ctx *via.Ctx) { b.shown.Set(true) }
+func (b *branchy) Extra(ctx *via.Ctx)  {}
 func (b *branchy) View() h.H {
-	kids := []h.H{h.Button(via.On("click", b.Reveal))}
+	kids := []h.H{b.n.Display(), h.Button(via.On("click", b.Reveal))}
 	if b.shown.Get() {
 		kids = append(kids, h.Button(via.On("click", b.Extra)))
 	}
@@ -507,11 +509,15 @@ func (b *branchedView) View() h.H {
 
 // xmIsland is a live, dep-free island mountable at any path — the vehicle for
 // proving a live tab from one mount can't drive another mount's action table.
-type xmIsland struct{ fired *int }
+type xmIsland struct {
+	fired *int
+	n     via.State[int]
+}
 
-func (x *xmIsland) OnConnect(*via.Ctx) error { return nil }
-func (x *xmIsland) Fire(*via.Ctx)            { *x.fired++ }
-func (x *xmIsland) View() h.H                { return h.Div(h.Button(via.On("click", x.Fire))) }
+func (x *xmIsland) Fire(*via.Ctx) { *x.fired++ }
+func (x *xmIsland) View() h.H {
+	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
+}
 
 func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -575,7 +581,6 @@ type liveForm struct {
 	calls *int
 }
 
-func (f *liveForm) OnConnect(*via.Ctx) error { return nil }
 func (f *liveForm) Save(ctx *via.Ctx) {
 	*f.calls++
 	f.got.Set(ctx.Request().FormValue("name"))
@@ -676,15 +681,17 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 // a shared pointer, not per-instance State: the fresh instance the render
 // runs against is a different value from the one Save mutated, so only a
 // pointer shared across instances can carry the trigger between them.
-type nativeFormPanic struct{ boom *bool }
+type nativeFormPanic struct {
+	boom *bool
+	n    via.State[int]
+}
 
-func (f *nativeFormPanic) OnConnect(*via.Ctx) error { return nil }
-func (f *nativeFormPanic) Save(ctx *via.Ctx)        { *f.boom = true }
+func (f *nativeFormPanic) Save(ctx *via.Ctx) { *f.boom = true }
 func (f *nativeFormPanic) View() h.H {
 	if *f.boom {
 		panic("via_test: native re-render exploded")
 	}
-	return h.Div(via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))))
+	return h.Div(f.n.Display(), via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))))
 }
 
 // A panic in a native form's post-mutation re-render must answer 500, not
@@ -746,9 +753,8 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 // try to drive.
 type sessionLive struct{ n via.State[int] }
 
-func (s *sessionLive) OnConnect(*via.Ctx) error { return nil }
-func (s *sessionLive) Bump(ctx *via.Ctx)        { s.n.Set(s.n.Get() + 1) }
-func (s *sessionLive) Peek(ctx *via.Ctx)        { ctx.Session().Get[member]() } // read-only, never mints
+func (s *sessionLive) Bump(ctx *via.Ctx) { s.n.Set(s.n.Get() + 1) }
+func (s *sessionLive) Peek(ctx *via.Ctx) { ctx.Session().Get[member]() } // read-only, never mints
 func (s *sessionLive) View() h.H {
 	return h.Div(s.n.Display(),
 		h.Button(via.On("click", s.Bump)), // action 0
@@ -954,10 +960,9 @@ type liveLoginer struct {
 	n via.State[int]
 }
 
-func (p *liveLoginer) OnConnect(*via.Ctx) error { return nil }
-func (p *liveLoginer) Bump(ctx *via.Ctx)        { p.n.Set(p.n.Get() + 1) }                 // action 0
-func (p *liveLoginer) Login(ctx *via.Ctx)       { ctx.Session().Put(member{Name: "bob"}) } // action 1
-func (p *liveLoginer) Rotate(ctx *via.Ctx)      { ctx.Session().Rotate() }                 // action 2
+func (p *liveLoginer) Bump(ctx *via.Ctx)   { p.n.Set(p.n.Get() + 1) }                 // action 0
+func (p *liveLoginer) Login(ctx *via.Ctx)  { ctx.Session().Put(member{Name: "bob"}) } // action 1
+func (p *liveLoginer) Rotate(ctx *via.Ctx) { ctx.Session().Rotate() }                 // action 2
 func (p *liveLoginer) View() h.H {
 	return h.Div(p.n.Display(),
 		h.Button(via.On("click", p.Bump)),
@@ -997,11 +1002,11 @@ func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispat
 		"the tab id must stop being a bearer credential the instant it logs in")
 }
 
-// onConnectLoginer establishes its session in OnConnect — the pattern the
+// onConnectLoginer establishes its session in OnInit — the pattern the
 // README recommends — rather than through a later action.
 type onConnectLoginer struct{ n via.State[int] }
 
-func (o *onConnectLoginer) OnConnect(ctx *via.Ctx) error {
+func (o *onConnectLoginer) OnInit(ctx *via.Ctx) error {
 	ctx.Session().Put(member{Name: "carol"})
 	return nil
 }
@@ -1010,7 +1015,7 @@ func (o *onConnectLoginer) View() h.H {
 	return h.Div(o.n.Display(), h.Button(via.On("click", o.Bump)))
 }
 
-// The README-recommended "establish the session in OnConnect" pattern must
+// The README-recommended "establish the session in OnInit" pattern must
 // bind the connection too — not just a session that already existed at
 // connect time.
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
@@ -1033,7 +1038,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"an OnConnect-minted session must bind the connection exactly like a live-action login")
+		"an OnInit-minted session must bind the connection exactly like a live-action login")
 }
 
 // Neighbour: two tabs open anonymously against the same app — logging one of
@@ -1137,8 +1142,7 @@ type raceLoginer struct {
 	proceed chan struct{}
 }
 
-func (p *raceLoginer) OnConnect(*via.Ctx) error { return nil }
-func (p *raceLoginer) Bump(ctx *via.Ctx)        { p.n.Set(p.n.Get() + 1) } // action 0
+func (p *raceLoginer) Bump(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) } // action 0
 func (p *raceLoginer) Login(ctx *via.Ctx) {
 	close(p.started)
 	<-p.proceed

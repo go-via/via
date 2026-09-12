@@ -30,7 +30,7 @@ import (
 // the vehicle for testing that WaitFor observes a server-push morph.
 type liveTicker struct{ n via.State[int] }
 
-func (p *liveTicker) OnConnect(ctx *via.Ctx) error {
+func (p *liveTicker) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(80*time.Millisecond, p.tick)
 	return nil
 }
@@ -42,7 +42,6 @@ func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Dis
 type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
-func (c *clicker) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
@@ -72,7 +71,7 @@ type chat struct {
 	Online via.State[int]
 }
 
-func (c *chat) OnConnect(ctx *via.Ctx) error {
+func (c *chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMsg)
 	ctx.Listen(c.room.presence, c.onPres)
 	c.room.join()
@@ -104,13 +103,12 @@ func (c *chat) View() h.H {
 // clock and a click-driven counter. bDash is the shell (not itself live).
 type bClock struct{ secs via.State[int] }
 
-func (c *bClock) OnConnect(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
+func (c *bClock) OnInit(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
 func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get() + 1) }
 func (c *bClock) View() h.H                    { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
 
 type bCounter struct{ n via.State[int] }
 
-func (c *bCounter) OnConnect(ctx *via.Ctx) error { return nil }
 func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
 func (c *bCounter) View() h.H {
 	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
@@ -390,12 +388,13 @@ func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
 // Datastar's `t.split(/:(.+)/)` key parser silently drops).
 type liveFormBrowser struct {
 	calls *int
+	n     via.State[int]
 }
 
-func (f *liveFormBrowser) OnConnect(*via.Ctx) error { return nil }
 func (f *liveFormBrowser) Save(ctx *via.Ctx)        { *f.calls++ }
 func (f *liveFormBrowser) View() h.H {
 	return h.Div(
+		f.n.Display(),
 		via.PostForm(f.Save,
 			h.Input(h.Name("name"), h.RawAttr("id", "name")),
 			h.Button(h.RawAttr("id", "save"), h.Str("save")),

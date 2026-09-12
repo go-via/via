@@ -1,4 +1,4 @@
-// Command pulse is a live island. Pulse implements OnConnect, so via opens a
+// Command pulse is a live island. Pulse implements OnInit, so via opens a
 // per-tab SSE stream and pushes a re-rendered fragment on every server-side
 // tick — the browser updates with no client code, no WebSocket, no build step.
 // The View is pure and ctx-free; there is no '&' and no closure at any call site.
@@ -19,7 +19,7 @@ import (
 // re-render over SSE on every beat.
 type Pulse struct{ Beats via.State[int] }
 
-func (p *Pulse) OnConnect(ctx *via.Ctx) error {
+func (p *Pulse) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Second, p.beat)
 	return nil
 }

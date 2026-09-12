@@ -43,11 +43,13 @@ type Chat struct {
 	Online via.State[int]     // presence count, pushed over SSE
 }
 
-func (c *Chat) OnConnect(ctx *via.Ctx) error {
+func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
 	ctx.Listen(c.room.presence, c.onPresence)
 
-	c.room.join()              // tell everyone the head-count rose
+	// Registered, not performed: OnInit also runs on the plain GET and on every
+	// action, and only a real connection gets an OnLive/OnDispose pair.
+	ctx.OnLive(c.room.join)    // tell everyone the head-count rose
 	ctx.OnDispose(c.room.part) // …and that it fell when this tab leaves
 	return nil
 }

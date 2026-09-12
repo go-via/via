@@ -19,11 +19,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"maps"
 	"net/http"
 	"net/url"
-	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -60,15 +58,16 @@ type Ctx struct {
 	initial     map[string]any                   // per-slot value seen at render time
 	actions     []func(*Ctx)                     // positional action table; dispatch calls each with a fresh per-dispatch Ctx, never this one
 	hydrators   map[string]func(json.RawMessage) // per-slot value updater, kept from the last render so a live action can hydrate without re-rendering
-	ticks       []tickReg                        // live-island timer registrations
-	subs        []subStarter                     // live-island external subscriptions
-	disposers   []func()                         // live-island teardown, run on disconnect
-	island      bool                             // true while rendering a live island
+	ticks       []tickReg                        // live-unit timer registrations
+	subs        []subStarter                     // live-unit external subscriptions
+	onLive      []func()                         // live-unit acquire, run once when the stream opens
+	disposers   []func()                         // live-unit teardown, run on disconnect
+	live        bool                             // this unit is live: OnInit registered a Tick/Listen, or its View rendered server State
 	dirty       map[string]any                   // signals an action Set this pass (→ signal-patch)
 	declareOnly map[string]any                   // when non-nil, declare only these slots (stateless action patch)
 	req         *http.Request                    // the request that triggered this handler (nil during a pure render)
 	sessions    *sessionManager                  // per-Register session manager (always constructed; cookie is lazy)
-	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnConnect, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); cleared once the connect response is flushed, so a Tick/Listen handler's Ctx (which keeps running against this same Ctx afterward) sees nil and its Session().Put warns instead of writing a dead response (see I2)
+	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnInit, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); cleared once the connect response is flushed, so a Tick/Listen handler's Ctx (which keeps running against this same Ctx afterward) sees nil and its Session().Put warns instead of writing a dead response (see I2)
 	session     *Session                         // resolved session handle, cached per Ctx
 	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
 	isIsland    bool                             // true when this Ctx binds an embedded island's child View
@@ -80,21 +79,21 @@ type Ctx struct {
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
 	pass        *renderPass                      // shared flat-index allocator during a root-level render; nil for an island's own standalone render
-	underLive   bool                             // true when an ancestor (not necessarily the immediate parent) is a live unit — Embed refuses a live child here (see embedViewer)
 	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
-	connected   bool                             // true once OnConnect has returned — runLiveStream already snapshotted ticks/subs by then, so a later Tick/Listen on this Ctx would silently no-op; they log loudly instead
+	doInit      bool                             // this render is request-scoped, so every embedded child's OnInit runs before its View (a live push re-render must not re-run them)
+	initDone    bool                             // true once OnInit has returned — a later Tick/Listen would register into a snapshot nobody reads, so they log loudly instead
 }
 
 // Request returns the HTTP request that triggered this handler, for advanced
 // request-native wiring (auth headers, cookies, RemoteAddr, query). It is set
-// in a stateless action (the action POST), in OnConnect and the ticks and
+// in a stateless action (the action POST), in OnInit and the ticks and
 // subscriptions that run under it (the SSE connect request), and in a live
 // action (the action POST that triggered it).
 //
 // Read-only: the body is already consumed into the request's signals, and for a
 // live action — which runs on the island goroutine after the POST has acked —
 // the request's Context may already be done. Read headers, cookies, URL,
-// RemoteAddr, TLS. On a live island the connect request is retained for the
+// RemoteAddr, TLS. On a live unit the connect request is retained for the
 // connection's lifetime (ticks and subscriptions read it). Returns nil if no
 // request is in scope (e.g. a bare render).
 func (c *Ctx) Request() *http.Request { return c.req }
@@ -246,11 +245,14 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage)) {
 // the same action table a @post event binding uses, so a page mixing On("submit", ...)
 // and PostForm never collides on an id.
 //
-// Inside a live unit it also carries a hidden _viatab field, reactively kept
-// in sync with the $_viatab signal: a native form submit is a plain browser
-// POST, which cannot set the X-Via-Tab header a Datastar @post uses, so
-// dispatch falls back to this field to route the submit to the connection —
-// under the exact same per-mount ownership check the header gets.
+// It always carries a hidden _viatab field, reactively kept in sync with the
+// $_viatab signal: a native form submit is a plain browser POST, which cannot
+// set the X-Via-Tab header a Datastar @post uses, so dispatch falls back to
+// this field to route the submit to the connection — under the exact same
+// per-mount ownership check the header gets. On a stateless page the signal is
+// the empty string declared on <body>, which matches no connection and falls
+// through to the stateless path; liveness is only knowable once the render
+// ends, so there is nothing to branch on here anyway.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
@@ -264,9 +266,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		}
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
 			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `?v=` + ctx.digestPlaceholder() + `">`)
-		if ctx.island {
-			r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
-		}
+		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
 		for _, c := range children {
 			r.Render(c)
 		}
@@ -289,7 +289,7 @@ type paramMiss struct {
 // Callable from OnInit and actions (which carry a Ctx); View is ctx-free and
 // so cannot read params — load them in OnInit into a field instead. It
 // requires a request in scope: a live unit's Ctx has one throughout its
-// connection (set once at OnConnect), so Param is also safe from Tick,
+// connection (set once at OnInit), so Param is also safe from Tick,
 // Subscribe, and Listen handlers — but not from a bare render with no
 // request behind it at all (see Ctx.Request).
 //
@@ -409,9 +409,11 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // {base}/_via/a/{island}/{n}?v={digest} — the root is island 0, an embedded
 // child is its islandIdx+1, and the digest is this render's shape fingerprint
 // (see Ctx.shapeDigest): dispatch 410s a click whose digest no longer matches
-// instead of misrouting it against a shifted index. On a live unit the POST
-// routes to THIS connection's instance, so it echoes the tab id (the _viatab
-// local signal the SSE set) as the X-Via-Tab header; a stateless page omits it.
+// instead of misrouting it against a shifted index. Every POST echoes the tab
+// id (the _viatab local signal, declared empty on <body> and filled by the SSE
+// stream) as the X-Via-Tab header, so a live unit's action routes to THIS
+// connection's instance; on a stateless page it is empty, matches no
+// connection, and dispatch falls through to the stateless path.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 	base, island, digest := "", 0, ""
 	if ctx != nil {
@@ -429,11 +431,7 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 			query += "&v=" + digest
 		}
 	}
-	opts := ""
-	if ctx != nil && ctx.island {
-		opts = ",{headers:{'X-Via-Tab':$_viatab}}"
-	}
-	r.WriteString(` data-on:` + event + `="@post('` + path + query + `'` + opts + `)"`)
+	r.WriteString(` data-on:` + event + `="@post('` + path + query + `',{headers:{'X-Via-Tab':$_viatab}})"`)
 }
 
 // decodeActionBody decodes the client signals from an action POST under a body
@@ -475,12 +473,28 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // live push (declareSignals false), and the restricted action patch (only
 // non-nil, see renderRootPatch).
 func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any) (*Ctx, []byte) {
+	ctx := newRootCtx(in, declareSignals, base, only)
+	return ctx, renderRootWith(ctx, v)
+}
+
+// newRootCtx builds the root bind Ctx for one render. A request-scoped
+// transport takes it before rendering so runOnInit can register the root's
+// Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
+func newRootCtx(in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any) *Ctx {
 	ctx := newCtx(in)
-	_, ctx.island = v.(Live)     // the root is a live unit exactly when it implements OnConnect
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
 	ctx.pass = &renderPass{} // fresh page-wide index allocator for this discovery walk
+	return ctx
+}
+
+// renderRootWith renders v under an already-built root Ctx. Liveness is an
+// OUTPUT of this call, not an input: Tick/Listen (from OnInit, already run)
+// and a rendered State mark each unit live, so the nesting rules can only be
+// checked once the whole walk is done — see checkLiveNesting.
+func renderRootWith(ctx *Ctx, v viewer) []byte {
+	declareSignals, only := ctx.declare, ctx.declareOnly
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -495,7 +509,30 @@ func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool
 	if ctx.digestPH != "" {
 		out = bytes.ReplaceAll(out, []byte(ctx.digestPH), []byte(ctx.shapeDigest()))
 	}
-	return ctx, out
+	checkLiveNesting(ctx, false)
+	return out
+}
+
+// checkLiveNesting enforces the two deferred-feature rules on the finished
+// render tree: a live unit may not hold another live unit beneath it, and a
+// live ISLAND's View may not call Embed at all. Both were interface
+// assertions made before the render; liveness is now only knowable after it,
+// so the walk runs once here — loud and early, rather than serving a page
+// that silently misroutes an action.
+func checkLiveNesting(c *Ctx, underLive bool) {
+	if c.live {
+		if underLive {
+			panic("via: via.Embed: a live island cannot be embedded inside another live composition — " +
+				"nested live composition is deferred; embed it directly from a plain root instead")
+		}
+		if c.isIsland && len(c.islands) > 0 {
+			panic("via: via.Embed: a live island's own View must not call Embed — " +
+				"nested live composition is deferred; keep a live island's View flat")
+		}
+	}
+	for _, ch := range c.islands {
+		checkLiveNesting(ch, underLive || c.live)
+	}
 }
 
 // renderRootPatch renders a stateless action's element-patch response. A
@@ -524,14 +561,13 @@ func Register[T any, PT ptrViewer[T]](root T, opts ...Option) http.Handler {
 	return r
 }
 
-// liveUnits collects every Live viewer discovered in bind's render, at any
-// embedding depth — the root itself first, when it implements OnConnect,
-// then its embedded live islands in render order. Each becomes its own unit
-// on the connection; a page with no live content at all yields an empty
-// slice.
+// liveUnits collects every live unit discovered in bind's render, at any
+// embedding depth — the root itself first, when it is live, then its embedded
+// live islands in render order. Each becomes its own unit on the connection; a
+// page with no live content at all yields an empty slice.
 func liveUnits(bind *Ctx) []*Ctx {
 	var units []*Ctx
-	if _, ok := bind.islandV.(Live); ok {
+	if bind.live {
 		units = append(units, bind)
 	}
 	appendLiveIslands(bind, &units)
@@ -543,7 +579,7 @@ func liveUnits(bind *Ctx) []*Ctx {
 // (live or plain) parent too.
 func appendLiveIslands(ctx *Ctx, out *[]*Ctx) {
 	for _, isl := range ctx.islands {
-		if _, ok := isl.islandV.(Live); ok {
+		if isl.live {
 			*out = append(*out, isl)
 		}
 		appendLiveIslands(isl, out)
@@ -551,32 +587,16 @@ func appendLiveIslands(ctx *Ctx, out *[]*Ctx) {
 }
 
 // connectUnit wires unit's push closure to stream (whole-page at #root for the
-// root unit, its own #via-i{idx} container for an island), registers unit on lc
-// as this island's current unit, and runs its OnConnect once, recovering a
-// panic into a connect error so one broken unit can't crash the rest of the
-// handshake.
-func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *sessionManager, stream *sseStream, base string, lc *liveConn) (err error) {
-	unit.req = req
-	unit.sessions = sessions
-	unit.sessW = w
+// root unit, its own #via-i{idx} container for an island) and registers unit on
+// lc as this island's current unit. The unit's OnInit already ran, before its
+// View — the discovery render is what decided it is live at all.
+func connectUnit(unit *Ctx, stream *sseStream, base string, lc *liveConn) {
+	lc.replace(unit)
 	if unit.isIsland {
-		idx, v := unit.islandIdx, unit.islandV
-		lc.replace(unit)
-		unit.push = islandPush(idx, v, base, stream, lc)
+		unit.push = islandPush(unit.islandIdx, unit.islandV, base, stream, lc)
 	} else {
-		v := unit.islandV
-		lc.replace(unit)
-		unit.push = rootPush(v, base, stream, lc)
+		unit.push = rootPush(unit.islandV, base, stream, lc)
 	}
-	defer func() {
-		if rec := recover(); rec != nil {
-			log.Printf("via: OnConnect panic: %v\n%s", rec, debug.Stack())
-			err = errors.New("via: OnConnect panicked")
-		}
-	}()
-	err = unit.islandV.(Live).OnConnect(unit)
-	unit.connected = true // ticks/subs are snapshotted right after this call returns — see Tick/Listen
-	return err
 }
 
 // rootPush renders v fresh and pushes it as the whole-page element-patch. The
@@ -646,23 +666,20 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	headersSent := false
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: live stream panic: %v\n%s", rec, debug.Stack())
 			// A panic before the stream's headers went out (the discovery
-			// render, OnInit, connectUnit) would otherwise fall through to
-			// Go's default: 200 with an empty body, telling the client the
-			// connect succeeded. Once headers ARE sent this can't help (and
-			// would log a superfluous-WriteHeader warning), so only answer
-			// here for the pre-header case; a mid-stream panic is instead
-			// caught per pulse item (see runPulseItem) so it never reaches here.
+			// render, an embedded child's OnInit, connectUnit) would otherwise
+			// fall through to Go's default: 200 with an empty body, telling the
+			// client the connect succeeded. Once headers ARE sent this can't
+			// help (and would log a superfluous-WriteHeader warning), so only
+			// answer here for the pre-header case; a mid-stream panic is
+			// instead caught per pulse item (see runPulseItem) so it never
+			// reaches here.
 			if !headersSent {
-				http.Error(w, "connect failed", http.StatusInternalServerError)
+				recoverToHTTP(w, req, rec, "live stream")
 			}
 		}
 	}()
 	pv := m.newInst()
-	if runOnInit(pv, w, req, m.sessions) != nil { // load session/request data into fields first
-		return
-	}
 	base := concreteBase(m.patternBase, req, m.names)
 	// A half-open peer never cancels req.Context(); a failed frame write
 	// is the only signal it's gone. Derive a cancelable context so a write
@@ -679,12 +696,27 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
 	pulse := make(chan func())
 
-	// The discovery render finds every unit the root's View holds this
-	// render — the root itself (bind), when live, plus each embedded live
-	// island — so a live root and live children are found the same way; the
+	// Bind the connection to whatever session the connect request's cookie
+	// already resolves to (nil for an anonymous connect) — this is the
+	// credential dispatch requires a match against, closing the gap where a
+	// leaked tab id was a bearer token good from any origin with no session
+	// at all (see dispatch). Resolved BEFORE OnInit, which may itself mint or
+	// rotate a session; the point is the identity the browser already held
+	// when it opened this stream, not one OnInit creates.
+	_, sess, _ := m.sessions.resolve(req)
+
+	// OnInit runs on the very Ctx the discovery render then binds, so a
+	// Tick/Listen it registers is what makes the root a live unit. The render
+	// finds every unit the root's View holds — the root itself (bind), when
+	// live, plus each embedded live island (whose own OnInit runs inside
+	// Embed) — so a live root and live children are found the same way; the
 	// root unit's own instance is pv, mirroring an island unit's islandV.
-	bind, _ := renderRootBase(pv, connectSig, false, base, nil)
+	bind := newRootCtx(connectSig, false, base, nil)
 	bind.islandV = pv
+	if runOnInit(pv, bind, w, req, m.sessions) != nil {
+		return
+	}
+	renderRootWith(bind, pv)
 	units := liveUnits(bind)
 
 	// No live units: this app has no live content (a stateless page POSTing
@@ -697,15 +729,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Built before the connect loop so each unit's push closure can register
 	// itself as the connection's current unit for its island on every render —
 	// a live action always runs against the last render's actions/hydrators.
-	// Bind the connection to whatever session the connect request's cookie
-	// already resolves to (nil for an anonymous connect) — this is the
-	// credential dispatch requires a match against, closing the gap where a
-	// leaked tab id was a bearer token good from any origin with no session
-	// at all (see dispatch). Resolved BEFORE OnConnect, which may itself
-	// mint or rotate a session; the point is the identity the browser
-	// already held when it opened this stream, not one OnConnect creates.
-	_, sess, _ := m.sessions.resolve(req)
-
 	lc := &liveConn{
 		mount:       m,
 		pulse:       pulse,
@@ -715,25 +738,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		sess:        sess,
 	}
 
-	// Run each unit's OnConnect once, BEFORE the stream headers flush (so
-	// OnConnect can still set the session cookie). A unit not yet connected
-	// has no disposers, so disposing the whole (fixed) set on a failure
-	// partway through only tears down the ones that actually ran.
-	disposeAll := func() {
-		for _, u := range units {
-			for _, d := range u.disposers {
-				d()
-			}
-		}
-	}
 	for _, u := range units {
-		if err := connectUnit(u, req, w, m.sessions, stream, base, lc); err != nil {
-			disposeAll()
-			connectError(w, err)
-			return
+		connectUnit(u, stream, base, lc)
+		for _, fn := range u.onLive {
+			fn()
 		}
-		// OnConnect may have just minted or resolved a session (the
-		// README-recommended "log in during OnConnect" pattern) where the
+		// OnInit may have just minted or resolved a session (the
+		// README-recommended "log in during OnInit" pattern) where the
 		// connect cookie alone left lc.sess nil — bind it now so the
 		// connection isn't left as a bare-tab-id credential (see H1).
 		if u.session != nil {

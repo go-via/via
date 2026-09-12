@@ -102,7 +102,7 @@ func unitAddr(c *Ctx) int {
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			recoverToHTTP(w, rec, "action")
+			recoverToHTTP(w, req, rec, "action")
 		}
 	}()
 	if !originAllowed(req, m.cfg) {
@@ -149,8 +149,15 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "no such island", http.StatusGone)
 			return
 		}
-		m.dispatchLive(w, req, mode, lc, island, n, in, digest, base)
-		return
+		// Every action now echoes the tab id, live or not, so a live page's
+		// PLAIN child posts one too — and its address was never registered on
+		// the connection. Membership is stable (a unit is published before the
+		// tab id is, and never removed), so this check is safe off the island
+		// goroutine, unlike the staleness lookup dispatchLive still does there.
+		if lc.unit(island) != nil {
+			m.dispatchLive(w, req, mode, lc, island, n, in, digest, base)
+			return
+		}
 	}
 	m.dispatchStateless(w, req, mode, island, n, in, base, digest)
 }
@@ -270,11 +277,13 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 			// client's own reconnect is about to reseed anyway once this
 			// response's data-init opens a new SSE stream).
 			inst := m.newInst()
-			if runOnInit(inst, w, req, m.sessions) != nil {
+			ctx := newRootCtx(nil, true, base, nil)
+			ctx.islandV = inst
+			if runOnInit(inst, ctx, w, req, m.sessions) != nil {
 				return
 			}
-			_, body := renderRootBase(inst, nil, true, base, nil)
-			writeHTMLPage(w, m.cfg, body, true, base+"/_via/sse")
+			body := renderRootWith(ctx, inst)
+			writeHTMLPage(w, m.cfg, body, len(liveUnits(ctx)) > 0, base+"/_via/sse")
 		}, nil)
 		return
 	}
@@ -372,11 +381,12 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // a STATELESS ISLAND's action indices.
 func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island, n int, in map[string]json.RawMessage, base, digest string) {
 	inst := m.newInst()
-	if runOnInit(inst, w, req, m.sessions) != nil {
+	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
+	bind.islandV = inst                                  // so bind.unit(0)'s liveness reads the same way an embedded island's does
+	if runOnInit(inst, bind, w, req, m.sessions) != nil {
 		return
 	}
-	bind, rootBefore := renderRootPatch(inst, in, base, nil)
-	bind.islandV = inst // so bind.unit(0)'s liveness reads the same way an embedded island's does
+	rootBefore := renderRootWith(bind, inst)
 	u := bind.unit(island)
 	if u == nil {
 		http.Error(w, "no such island", http.StatusGone)
@@ -390,7 +400,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 		http.Error(w, "no such action", http.StatusGone)
 		return
 	}
-	if _, live := u.islandV.(Live); live {
+	if u.live {
 		// A live unit's action only routes through the tab handshake in
 		// dispatch; reaching here means the tab was missing/stale, so fail
 		// closed rather than mutating a throwaway instance.

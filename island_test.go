@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -27,13 +26,13 @@ type beater struct {
 	n     via.State[int]
 }
 
-func (b *beater) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, b.tick); return nil }
-func (b *beater) tick(ctx *via.Ctx)            { b.n.Set(b.n.Get() + 1) }
+func (b *beater) OnInit(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, b.tick); return nil }
+func (b *beater) tick(ctx *via.Ctx)         { b.n.Set(b.n.Get() + 1) }
 func (b *beater) View() h.H {
 	return h.Div(h.P(h.Str(b.label+"="), b.n.Display()))
 }
 
-// duo embeds two live beaters; it does NOT itself implement OnConnect — it is a
+// duo embeds two live beaters; it does NOT itself implement OnInit — it is a
 // multiplex parent whose live children share one SSE stream.
 type duo struct{ A, B beater }
 
@@ -52,82 +51,78 @@ func TestMux_eachLiveIslandPushesItsOwnContainer(t *testing.T) {
 	})
 }
 
-// disposerIsland registers a teardown on connect; failerIsland's OnConnect
-// errors. Embedded as siblings (disposer first), a failed connect must run the
-// already-connected sibling's disposer so its subscriptions don't leak.
-type disposerIsland struct{ disposed chan struct{} }
+// liveProbe is an embedded LIVE island (State alone makes it live) that
+// registers an OnLive/OnDispose pair, so a test can prove whether the pair ran
+// at all. failerIsland's OnInit errors; panickerIsland's panics.
+type liveProbe struct {
+	acquired chan struct{}
+	n        via.State[int]
+}
 
-func (d *disposerIsland) OnConnect(ctx *via.Ctx) error {
-	ctx.OnDispose(func() { close(d.disposed) })
+func (d *liveProbe) OnInit(ctx *via.Ctx) error {
+	ctx.OnLive(d.markAcquired)
 	return nil
 }
-func (d *disposerIsland) View() h.H { return h.Div(h.Str("ok")) }
+func (d *liveProbe) markAcquired() { close(d.acquired) }
+func (d *liveProbe) View() h.H     { return h.Div(h.Str("ok"), d.n.Display()) }
 
 type failerIsland struct{}
 
-func (f *failerIsland) OnConnect(ctx *via.Ctx) error { return errors.New("connect boom") }
-func (f *failerIsland) View() h.H                    { return h.Div(h.Str("x")) }
+func (f *failerIsland) OnInit(ctx *via.Ctx) error { return errors.New("init boom") }
+func (f *failerIsland) View() h.H                 { return h.Div(h.Str("x")) }
 
 type failPair struct {
-	A disposerIsland
+	A liveProbe
 	B failerIsland
 }
 
 func (p *failPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 
-// If one island's OnConnect fails, the islands connected before it must have
-// their disposers run — otherwise a multiplex page leaks the subscriptions of
-// the siblings that already connected.
-func TestMux_onConnectFailureDisposesConnectedSiblings(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		done := make(chan struct{})
-		handler := via.Register(failPair{A: disposerIsland{disposed: done}})
-		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
+// An embedded child's OnInit runs inside the parent's render, before any unit
+// has a stream: a failure there must abort the whole connect with a 500 and
+// leave every sibling's OnLive unrun, so no acquire is left without its
+// release.
+func TestMux_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+	t.Parallel()
+	acquired := make(chan struct{})
+	resp, _ := do(t, serve(t, via.Register(failPair{A: liveProbe{acquired: acquired}})),
+		http.MethodPost, "/_via/sse", "")
 
-		go handler.ServeHTTP(&halfOpenFlusher{}, req)
-		synctest.Wait()
-
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "a failed island connect did not dispose the already-connected sibling")
-		}
-	})
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"an embedded child's failed OnInit must abort the connect")
+	select {
+	case <-acquired:
+		require.Fail(t, "a sibling's OnLive ran even though the connect never opened")
+	default:
+	}
 }
 
-// panickerIsland's OnConnect panics instead of returning an error.
+// panickerIsland's OnInit panics instead of returning an error.
 type panickerIsland struct{}
 
-func (p *panickerIsland) OnConnect(ctx *via.Ctx) error { panic("connect boom") }
-func (p *panickerIsland) View() h.H                    { return h.Div(h.Str("x")) }
+func (p *panickerIsland) OnInit(ctx *via.Ctx) error { panic("init boom") }
+func (p *panickerIsland) View() h.H                 { return h.Div(h.Str("x")) }
 
 type panicPair struct {
-	A disposerIsland
+	A liveProbe
 	B panickerIsland
 }
 
 func (p *panicPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 
-// If one island's OnConnect panics, the islands connected before it must still
-// have their disposers run — otherwise a multiplex page leaks the subscriptions
-// of the siblings that already connected.
-func TestMux_onConnectPanicDisposesConnectedSiblings(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		done := make(chan struct{})
-		handler := via.Register(panicPair{A: disposerIsland{disposed: done}})
-		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
+func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+	t.Parallel()
+	acquired := make(chan struct{})
+	resp, _ := do(t, serve(t, via.Register(panicPair{A: liveProbe{acquired: acquired}})),
+		http.MethodPost, "/_via/sse", "")
 
-		go handler.ServeHTTP(&halfOpenFlusher{}, req)
-		synctest.Wait()
-
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "a panicked island connect did not dispose the already-connected sibling")
-		}
-	})
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"an embedded child's panicking OnInit must abort the connect")
+	select {
+	case <-acquired:
+		require.Fail(t, "a sibling's OnLive ran even though the connect never opened")
+	default:
+	}
 }
 
 // namer has a client Signal — two of them as sibling islands must not collide on
@@ -161,8 +156,8 @@ type liveNamer struct {
 	beats via.State[int]
 }
 
-func (n *liveNamer) OnConnect(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, n.tick); return nil }
-func (n *liveNamer) tick(ctx *via.Ctx)            { n.beats.Set(n.beats.Get() + 1) }
+func (n *liveNamer) OnInit(ctx *via.Ctx) error { ctx.Tick(15*time.Millisecond, n.tick); return nil }
+func (n *liveNamer) tick(ctx *via.Ctx)         { n.beats.Set(n.beats.Get() + 1) }
 func (n *liveNamer) View() h.H {
 	return h.Div(n.draft.Bind(), h.P(h.Str("beats="), n.beats.Display()))
 }
@@ -219,8 +214,7 @@ func TestEmbed_newIslandSeedsTheChild(t *testing.T) {
 // Island works) — the vehicle for routing a live action to its own island.
 type liveClicker struct{ n via.State[int] }
 
-func (c *liveClicker) OnConnect(ctx *via.Ctx) error { return nil }
-func (c *liveClicker) Bump(ctx *via.Ctx)            { c.n.Set(c.n.Get() + 1) }
+func (c *liveClicker) Bump(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *liveClicker) View() h.H {
 	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
@@ -446,7 +440,7 @@ func TestEmbed_projectsChildInPlace(t *testing.T) {
 		"content is embedded in place, after the frame heading")
 }
 
-// liveShell is a NON-live layout (no OnConnect) whose Body field holds a LIVE
+// liveShell is a NON-live layout (no OnInit) whose Body field holds a LIVE
 // island. The page must bootstrap its SSE stream and the embedded live island
 // must push its own container and render its server State — proving plain
 // struct-field composition rides the live multiplex machinery.
@@ -515,12 +509,14 @@ func TestEmbed_allowsNestedPlainChild(t *testing.T) {
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
 
-// livePage is a LIVE root (implements OnConnect) whose View embeds a LIVE
+// livePage is a LIVE root (implements OnInit) whose View embeds a LIVE
 // island — nested live composition, refused at render.
-type livePage struct{ Inner beater }
+type livePage struct {
+	Inner beater
+	n     via.State[int]
+}
 
-func (p *livePage) View() h.H                { return h.Div(via.Embed(p.Inner)) }
-func (p *livePage) OnConnect(*via.Ctx) error { return nil }
+func (p *livePage) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Inner)) }
 
 // A live root embedding a live child is nested live composition, cut from
 // v0.8 (deferred alongside keyed live islands) — it must abort the render
@@ -538,10 +534,12 @@ func TestEmbed_liveChildInsideLivePageIsRefused(t *testing.T) {
 // own View calls Embed again — the other nested-composition shape A1 cuts:
 // an embedded live unit's own independent re-render never re-walks a parent,
 // so it has nothing to keep a further Embed's addressing stable against.
-type nestedLiveIsland struct{ Child banner }
+type nestedLiveIsland struct {
+	Child banner
+	n     via.State[int]
+}
 
-func (n *nestedLiveIsland) OnConnect(*via.Ctx) error { return nil }
-func (n *nestedLiveIsland) View() h.H                { return h.Div(via.Embed(n.Child)) }
+func (n *nestedLiveIsland) View() h.H { return h.Div(n.n.Display(), via.Embed(n.Child)) }
 
 type nestedLiveHost struct{ Inner nestedLiveIsland }
 
@@ -561,10 +559,14 @@ func TestEmbed_liveIslandEmbeddingFurtherChildrenIsRefused(t *testing.T) {
 // The guard is about LIVE children only: a live page may still embed a plain
 // (stateless) child — the whole-page push re-renders it in place, which is its
 // normal semantics. Fails if the guard over-reaches to all embeds.
-type livePlainPage struct{ Inner banner }
+type livePlainPage struct {
+	Inner banner
+	n     via.State[int]
+}
 
-func (p *livePlainPage) View() h.H                { return h.Div(h.H1(h.Str("LIVEPAGE")), via.Embed(p.Inner)) }
-func (p *livePlainPage) OnConnect(*via.Ctx) error { return nil }
+func (p *livePlainPage) View() h.H {
+	return h.Div(h.H1(h.Str("LIVEPAGE")), p.n.Display(), via.Embed(p.Inner))
+}
 
 func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
 	t.Parallel()
@@ -630,7 +632,7 @@ type liveRootWithEmbed struct {
 	Child embedRootChild
 }
 
-func (r *liveRootWithEmbed) OnConnect(ctx *via.Ctx) error {
+func (r *liveRootWithEmbed) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, r.tick)
 	return nil
 }
@@ -664,7 +666,7 @@ type twoSpeedIsland struct {
 	n    via.State[int]
 }
 
-func (b *twoSpeedIsland) OnConnect(ctx *via.Ctx) error {
+func (b *twoSpeedIsland) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, b.tick)
 	return nil
 }
@@ -679,7 +681,7 @@ type twoSpeedIslandNoAction struct {
 	n    via.State[int]
 }
 
-func (b *twoSpeedIslandNoAction) OnConnect(ctx *via.Ctx) error {
+func (b *twoSpeedIslandNoAction) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, b.tick)
 	return nil
 }
@@ -730,19 +732,19 @@ func TestPostForm_liveSubmitRendersFreshPageWithDistinctIslandIds(t *testing.T) 
 	require.Len(t, matchesB, 1, "via-i1 must appear exactly once, not duplicated")
 }
 
-// sessionSettingIsland is a live island whose OnConnect establishes the
+// sessionSettingIsland is a live island whose OnInit establishes the
 // session (so its cookie reaches the browser on the connect response,
 // before any action fires) and whose Login action re-Puts a different value
 // into that SAME session — an in-place mutation, not a fresh cookie.
-type sessionSettingIsland struct{}
+type sessionSettingIsland struct{ n via.State[int] }
 
-func (s *sessionSettingIsland) OnConnect(ctx *via.Ctx) error {
+func (s *sessionSettingIsland) OnInit(ctx *via.Ctx) error {
 	ctx.Session().Put(member{Name: "anon"})
 	return nil
 }
 func (s *sessionSettingIsland) Login(ctx *via.Ctx) { ctx.Session().Put(member{Name: "zed"}) }
 func (s *sessionSettingIsland) View() h.H {
-	return h.Div(via.PostForm(s.Login, h.Button(h.Str("go"))))
+	return h.Div(s.n.Display(), via.PostForm(s.Login, h.Button(h.Str("go"))))
 }
 
 // rootReadsSessionOnInit is a plain root whose OnInit loads the session
@@ -802,4 +804,109 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 
 	assert.Contains(t, string(respBody), "zed",
 		"the fresh page's OnInit must see the session value the live action just Put")
+}
+
+// initChild loads a field in its own OnInit — the hook an embedded child never
+// used to get at all; only the root's ran.
+type childIniter struct {
+	label string
+	hits  *int
+}
+
+func (c *childIniter) OnInit(ctx *via.Ctx) error {
+	*c.hits++
+	c.label = "from-child-init"
+	return nil
+}
+func (c *childIniter) View() h.H { return h.Div(h.Str(c.label)) }
+
+type initChildHost struct{ Kid childIniter }
+
+func (p *initChildHost) View() h.H { return h.Div(h.H1(h.Str("HOST")), via.Embed(p.Kid)) }
+
+// An embedded child is a unit like any other, so its OnInit runs before its
+// own View — the data-loading hook that used to be the root's alone.
+func TestEmbed_runsTheChildsOwnOnInit(t *testing.T) {
+	t.Parallel()
+	hits := 0
+	_, body := do(t, serve(t, via.Register(initChildHost{Kid: childIniter{hits: &hits}})), http.MethodGet, "/", "")
+
+	assert.Contains(t, body, "from-child-init", "the child's OnInit must run before its View renders")
+	assert.Equal(t, 1, hits, "the child's OnInit runs exactly once per request-scoped render")
+}
+
+// notFoundChild's OnInit reports its data is gone — the honest 404 a root's
+// OnInit gets, from inside a render that is already several frames deep.
+type notFoundChild struct{}
+
+func (c *notFoundChild) OnInit(ctx *via.Ctx) error { return via.ErrNotFound }
+func (c *notFoundChild) View() h.H                 { return h.Div(h.Str("never")) }
+
+type notFoundHost struct{ Kid notFoundChild }
+
+func (p *notFoundHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
+
+func TestEmbed_childOnInitNotFoundAnswers404(t *testing.T) {
+	t.Parallel()
+	resp, body := do(t, serve(t, via.Register(notFoundHost{})), http.MethodGet, "/", "")
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"ErrNotFound from an embedded child's OnInit is a 404, exactly as it is from the root's")
+	assert.NotContains(t, body, "never", "the page must not serve once a child's OnInit failed")
+}
+
+// redirectChild's OnInit queues a Redirect — via's one per-request gate,
+// usable from a child so an embedded region can guard the whole page.
+type redirectChild struct{}
+
+func (c *redirectChild) OnInit(ctx *via.Ctx) error { ctx.Redirect("/login"); return nil }
+func (c *redirectChild) View() h.H                 { return h.Div(h.Str("never")) }
+
+type redirectHost struct{ Kid redirectChild }
+
+func (p *redirectHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
+
+func TestEmbed_childOnInitRedirectGatesThePage(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(redirectHost{}))
+	resp, err := (&http.Client{CheckRedirect: noFollow}).Get(srv.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+// plainKid is a NON-live child of a LIVE root: it holds no State and never
+// ticks, so its action is a stateless in-place re-render even though the page
+// around it is streaming.
+type plainKid struct{ hits int }
+
+func (k *plainKid) Bump(ctx *via.Ctx) { k.hits++ }
+func (k *plainKid) View() h.H {
+	return h.Div(h.Str("kid-hits="), h.Str(strconv.Itoa(k.hits)), h.Button(via.On("click", k.Bump)))
+}
+
+type livePageWithPlainKid struct {
+	n   via.State[int]
+	Kid plainKid
+}
+
+func (p *livePageWithPlainKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Kid)) }
+
+// Every action now echoes the tab id, live or not — so a live page's PLAIN
+// child posts one too, against an address the connection never registered.
+// That must fall through to the stateless path and answer with the child's own
+// patch, not 410 as an unknown live unit.
+func TestDispatch_plainChildOfALivePageStaysStateless(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(livePageWithPlainKid{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, body := app.IslandAction(1, 0).Live(conn).Fire()
+
+	assert.Equal(t, http.StatusOK, status,
+		"a plain child on a live page must dispatch statelessly, not 410 as a missing live unit")
+	assert.Contains(t, body, "kid-hits=1", "its action answers with its own re-rendered container")
 }

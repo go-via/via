@@ -13,14 +13,6 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Live marks a composition as a connection-scoped live island: implementing
-// OnConnect opts it into server-held state and a server-push SSE stream. It is
-// detected by interface assertion, never reflection. OnConnect runs once when
-// the stream opens; it registers the island's timers and subscriptions.
-type Live interface {
-	OnConnect(*Ctx) error
-}
-
 type tickReg struct {
 	d  time.Duration
 	fn func(*Ctx)
@@ -30,38 +22,60 @@ type tickReg struct {
 // channel into the island's single pulse loop. via builds these in Listen.
 type subStarter func(reqCtx context.Context, pulse chan<- func())
 
-// Tick schedules fn to run every d for the life of the island's connection. fn
-// is a named method value (e.g. c.beat); after each run via re-renders the
-// island and pushes an element-patch over the SSE stream. Valid only inside
-// OnConnect of a live composition — runLiveStream snapshots ticks/subs once,
-// right after OnConnect returns, so a call after that point registers nothing
-// and logs loudly instead of silently doing nothing.
+// Tick schedules fn to run every d for the life of the unit's connection, and
+// is one of the two things that make a unit LIVE (rendering a State or List is
+// the other). fn is a named method value (e.g. c.beat); after each run via
+// re-renders the unit and pushes an element-patch over the SSE stream. Valid
+// only inside OnInit — the ticks/subs registered there are snapshotted once,
+// so a call after OnInit returns registers nothing and logs loudly instead of
+// silently doing nothing.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
-	if c.connected {
-		log.Print("via: Tick called after OnConnect returned — ignored; Tick is valid only inside OnConnect")
+	if c.initDone {
+		log.Print("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
 		return
 	}
+	c.live = true
 	c.ticks = append(c.ticks, tickReg{d: d, fn: fn})
 }
 
-// OnDispose registers a teardown function run when the island's connection
+// OnLive registers fn to run once, when this unit's live connection opens — the
+// acquire half of OnDispose (join a room, claim a slot), and the only place for
+// a connection-scoped side effect. OnInit itself runs on every request that
+// renders the unit (a GET, an action, the SSE connect), so doing the acquire
+// there directly would fire it on requests that never become a connection.
+// Valid only inside OnInit. It does not by itself make a unit live: on a unit
+// nothing else made live, fn never runs.
+func (c *Ctx) OnLive(fn func()) { c.onLive = append(c.onLive, fn) }
+
+// OnDispose registers a teardown function run when the unit's connection
 // closes — stop subscriptions, release producers. fn is a named method value
-// (e.g. sub.Stop). Valid only inside OnConnect.
+// (e.g. sub.Stop). Valid only inside OnInit, and only meaningful on a unit
+// something else has already made live: a unit that never ticks, listens, or
+// renders State opens no connection to tear down.
 func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 
-// Listen wires an island to a Topic in one line: it subscribes, pumps every
-// published value into handler on the island's own goroutine (serialized with
-// Tick, so island state is mutated race-free), pushes this island's
-// re-render, and stops the subscription on disconnect. Valid only inside
-// OnConnect — see Tick for why a call after OnConnect returns is a loud no-op.
+// Listen wires a unit to a Topic in one line: it subscribes, pumps every
+// published value into handler on the unit's own goroutine (serialized with
+// Tick, so unit state is mutated race-free), pushes this unit's re-render, and
+// stops the subscription on disconnect. Like Tick it makes the unit live, and
+// is valid only inside OnInit — see Tick for why a call after OnInit returns is
+// a loud no-op.
+//
+// The Subscribe itself is deferred to the moment the stream starts pumping:
+// OnInit also runs on a plain GET and on every stateless action, and
+// subscribing there would hand out a Sub nothing will ever Stop.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
-	if c.connected {
-		log.Print("via: Listen called after OnConnect returned — ignored; Listen is valid only inside OnConnect")
+	if c.initDone {
+		log.Print("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
 		return
 	}
-	sub := t.Subscribe()
-	c.OnDispose(sub.Stop)
+	c.live = true
 	c.subs = append(c.subs, func(reqCtx context.Context, pulse chan<- func()) {
+		// Both this call and runLiveStream's disposer sweep run on the one
+		// stream goroutine, the starter strictly before the sweep — so the
+		// append needs no lock.
+		sub := t.Subscribe()
+		c.OnDispose(sub.Stop)
 		go func() {
 			ch := sub.C()
 			for {
@@ -188,7 +202,7 @@ func (s *sseStream) frame(write func(io.Writer)) {
 	}
 }
 
-// runLiveStream drives one or more islands on a single goroutine. Every island's
+// runLiveStream drives one or more live units on a single goroutine. Every unit's
 // ticks, subscriptions, dispatched actions (via liveConn.run), AND the
 // keepalive feed through this one goroutine — so all mutation, render, and stream
 // writes are serialized, no lock. Each pulse unit is self-contained: it mutates
