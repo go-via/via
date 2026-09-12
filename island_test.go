@@ -2,8 +2,11 @@ package via_test
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -575,4 +578,190 @@ func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	resp, _ := do(t, srv, http.MethodPost, rootAction, "{}")
 	assert.NotEqual(t, http.StatusGone, resp.StatusCode,
 		"a child-only shape change must not stale the parent's own already-rendered action")
+}
+
+// embedRootChild is a plain (non-live) Embed child of a live root — enough to
+// trigger the reuse lookup on the root's own first push.
+type embedRootChild struct{}
+
+func (embedRootChild) View() h.H { return h.Div(h.Str("child")) }
+
+type liveRootWithEmbed struct {
+	n     via.State[int]
+	Child embedRootChild
+}
+
+func (r *liveRootWithEmbed) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, r.tick)
+	return nil
+}
+func (r *liveRootWithEmbed) tick(ctx *via.Ctx) { r.n.Set(r.n.Get() + 1) }
+func (r *liveRootWithEmbed) View() h.H {
+	return h.Div(r.n.Display(), via.Embed(r.Child))
+}
+
+// A live root's own first push must not treat itself as an already-connected
+// Embed child: before the off-by-one fix, the reuse lookup used the raw
+// island index (0) instead of the dispatch address (1), so a live root's
+// first push resolved unit(0) to ITSELF, re-entered its own View through
+// Embed, and panicked — killing the stream after the connect handshake.
+func TestLive_rootEmbedSurvivesItsOwnFirstPush(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(liveRootWithEmbed{}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitTabID(t, lines)
+
+	awaitLine(t, lines, `id="via-i0"`)
+}
+
+// embedReuseIsland is a live island whose own State only ever advances via
+// its Tick — never re-seeded from the struct literal after connect. Its own
+// Noop action, dispatched over the live connection, is what triggers a
+// native-form full-page re-render (dispatchLive's modeNative branch always
+// re-renders lc.pageRoot, regardless of which unit's action fired).
+type embedReuseIsland struct{ n via.State[int] }
+
+func (b *embedReuseIsland) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, b.tick)
+	return nil
+}
+func (b *embedReuseIsland) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + 1) }
+func (b *embedReuseIsland) Noop(ctx *via.Ctx) {}
+func (b *embedReuseIsland) View() h.H {
+	return h.Div(h.Str(strconv.Itoa(b.n.Get())), via.PostForm(b.Noop, h.Button(h.Str("go"))))
+}
+
+type plainRootWithLiveIsland struct{ Isl embedReuseIsland }
+
+func (s *plainRootWithLiveIsland) View() h.H { return h.Div(via.Embed(s.Isl)) }
+
+// A native <form> submit's full-page re-render must reuse the connected live
+// island's own instance, not reseed it from the page's field literal — before
+// the off-by-one fix, the reuse lookup missed the connection's registered
+// unit (keyed one past the island index) and Embed built a fresh zero-valued
+// copy on every native submit, silently resetting the connection's state.
+func TestPostForm_reusesConnectedLiveIslandInsteadOfReseeding(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(plainRootWithLiveIsland{}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	// Wait for a non-zero ticked push, so a reseed to 0 is unambiguous.
+	re := regexp.MustCompile(`id="via-i0"><div>(\d+)`)
+	var ticked int
+	deadline := time.After(2 * time.Second)
+	for ticked == 0 {
+		select {
+		case <-deadline:
+			require.Fail(t, "timed out waiting for a ticked (non-zero) push")
+		case line, ok := <-lines:
+			require.True(t, ok, "stream closed unexpectedly")
+			if m := re.FindStringSubmatch(line); m != nil {
+				ticked, _ = strconv.Atoi(m[1])
+			}
+		}
+	}
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 1, 0) // island 1 = embedReuseIsland's dispatch address (islandIdx 0 + 1)
+	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
+	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", ctype)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	m := re.FindSubmatch(respBody)
+	require.NotNil(t, m, "native re-render must still contain the island's own container")
+	val, _ := strconv.Atoi(string(m[1]))
+	assert.Greater(t, val, 0,
+		"native form submit must reuse the connected island's ticked state, not reseed it from zero")
+}
+
+// twoSpeedIsland is a live island whose Tick step is distinguishable from a
+// sibling's, so which instance ended up under which container id is provable.
+// A has the Noop action so an action dispatch against it exists to trigger
+// the native-form full-page re-render both islands get caught up in.
+type twoSpeedIsland struct {
+	step int
+	n    via.State[int]
+}
+
+func (b *twoSpeedIsland) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, b.tick)
+	return nil
+}
+func (b *twoSpeedIsland) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
+func (b *twoSpeedIsland) Noop(ctx *via.Ctx) {}
+func (b *twoSpeedIsland) View() h.H {
+	return h.Div(h.Str(strconv.Itoa(b.n.Get())), via.PostForm(b.Noop, h.Button(h.Str("go"))))
+}
+
+type twoSpeedIslandNoAction struct {
+	step int
+	n    via.State[int]
+}
+
+func (b *twoSpeedIslandNoAction) OnConnect(ctx *via.Ctx) error {
+	ctx.Tick(time.Millisecond, b.tick)
+	return nil
+}
+func (b *twoSpeedIslandNoAction) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
+func (b *twoSpeedIslandNoAction) View() h.H         { return h.Div(h.Str(strconv.Itoa(b.n.Get()))) }
+
+type twoLiveIslandsRoot struct {
+	A twoSpeedIsland
+	B twoSpeedIslandNoAction
+}
+
+func (r *twoLiveIslandsRoot) View() h.H { return h.Div(via.Embed(r.A), via.Embed(r.B)) }
+
+// Two sibling live islands must each keep their own identity across a native
+// re-render: before the off-by-one fix, B's reuse lookup (idx=1) hit A's
+// registered dispatch address (unitAddr=1), so the re-render duplicated A
+// under a second "via-i0" container and B's own state never appeared.
+func TestPostForm_twoLiveIslandsKeepDistinctIdentityAcrossReuse(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(twoLiveIslandsRoot{A: twoSpeedIsland{step: 1}, B: twoSpeedIslandNoAction{step: 1000}}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	awaitLine(t, lines, `id="via-i0"`)
+	awaitLine(t, lines, `id="via-i1"`)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 1, 0) // island 1 = A's dispatch address (islandIdx 0 + 1)
+	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
+	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", ctype)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	reA := regexp.MustCompile(`id="via-i0"><div>(\d+)`)
+	reB := regexp.MustCompile(`id="via-i1"><div>(\d+)`)
+	matchesA := reA.FindAllSubmatch(respBody, -1)
+	matchesB := reB.FindAllSubmatch(respBody, -1)
+	require.Len(t, matchesA, 1, "via-i0 must appear exactly once, not duplicated")
+	require.Len(t, matchesB, 1, "via-i1 must not vanish from the re-rendered page")
+
+	valB, _ := strconv.Atoi(string(matchesB[0][1]))
+	assert.GreaterOrEqual(t, valB, 1000,
+		"B's own ticked state must survive the re-render, not be replaced by A's")
 }
