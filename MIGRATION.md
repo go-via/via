@@ -307,6 +307,10 @@ Stated plainly so you can decide whether to wait:
   common way its shape drifts unintentionally; keep a live unit's action
   layout stable across ticks (change values, not shape) if this matters to
   you.
+- **Per-connection `State` does not survive a native form submit** — it is a
+  navigation and opens a new connection, and the returned page no longer
+  pretends it does. Persist across it through the session or a shared
+  pointer dep, or `Redirect` instead of returning a page.
 
 ## Staying on v1
 

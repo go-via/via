@@ -36,15 +36,11 @@ const tabFormField = "_viatab"
 // actionResult is what running a positional action produced. panicked is set
 // only on the live path: it happens on the connection's own goroutine, so it
 // must be carried back across the channel to the POST that triggered it
-// rather than answered where it occurred. body carries a native-form live
-// dispatch's whole-page re-render — it must be produced on the same
-// goroutine as the mutation (see dispatchLive) because it reads the live
-// tree the island goroutine concurrently ticks.
+// rather than answered where it occurred.
 type actionResult struct {
 	redirect  string
 	panicked  bool
-	badArg    error // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
-	body      []byte
+	badArg    error  // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
 	pushWork  func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
 	gone      string // live path only: set when the unit/digest/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
 	forbidden string // live path only: set when the session-bound check (run on the island goroutine — see dispatchLive) rejects the request
@@ -242,22 +238,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		if n < 0 || n >= len(u.actions) {
 			return actionResult{gone: "no such action"}
 		}
-		result := liveRunAction(w, req, m.sessions, lc, u, in, n)
-		if mode == modeNative && !result.panicked {
-			// A native <form> submit is a real navigation: the browser replaces
-			// the whole document, so it needs a full page, not the element-patch
-			// the (still open, about-to-be-abandoned) SSE stream carries
-			// separately. lc.pageRoot is the connection's actual top-level
-			// instance — rendering through lc lets an already-connected live
-			// descendant reuse its own state instead of a fresh by-value copy
-			// (see embedViewer), exactly like a real push does. It must run
-			// here, on the island's own serialized goroutine, not back on the
-			// POST's — this render reads/mutates the same live tree a
-			// concurrent tick or push does.
-			_, body := renderRootBase(lc.pageRoot, nil, true, base, nil, lc)
-			result.body = body
-		}
-		return result
+		return liveRunAction(w, req, m.sessions, lc, u, in, n)
 	})
 	if !ok {
 		http.Error(w, "live connection closed", http.StatusGone)
@@ -281,7 +262,19 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 	}
 	if mode == modeNative {
 		respond(w, req, mode, res.redirect, func() {
-			writeHTMLPage(w, m.cfg, res.body, true, base+"/_via/sse")
+			// A native <form> submit is a real navigation: the browser
+			// replaces the whole document with whatever this response
+			// carries. That is the page a brand-new connection will hold —
+			// a fresh instance, OnInit run — exactly like dispatchStateless,
+			// not a snapshot of the dying connection's live tree (which the
+			// client's own reconnect is about to reseed anyway once this
+			// response's data-init opens a new SSE stream).
+			inst := m.newInst()
+			if runOnInit(inst, w, req, m.sessions) != nil {
+				return
+			}
+			_, body := renderRootBase(inst, nil, true, base, nil)
+			writeHTMLPage(w, m.cfg, body, true, base+"/_via/sse")
 		}, nil)
 		return
 	}
@@ -382,7 +375,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 	if runOnInit(inst, w, req, m.sessions) != nil {
 		return
 	}
-	bind, rootBefore := renderRootPatch(inst, in, base, nil, nil)
+	bind, rootBefore := renderRootPatch(inst, in, base, nil)
 	bind.islandV = inst // so bind.unit(0)'s liveness reads the same way an embedded island's does
 	u := bind.unit(island)
 	if u == nil {
@@ -411,7 +404,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			_, body := renderRootBase(inst, nil, true, base, nil, nil)
+			_, body := renderRootBase(inst, nil, true, base, nil)
 			writeHTMLPage(w, m.cfg, body, false, "")
 		}, nil)
 		return
@@ -429,7 +422,7 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 // inside a stateless island's action. Returns nil when unchanged (→ 204).
 func (m *mount) rerenderStateless(island int, rootBefore []byte, inst viewer, bind, u *Ctx, base string) []byte {
 	if island == 0 {
-		_, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), nil)
+		_, after := renderRootPatch(inst, nil, base, bind.dirtyAll())
 		if bytes.Equal(rootBefore, after) {
 			return nil
 		}

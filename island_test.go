@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"regexp"
 	"strconv"
@@ -616,81 +617,10 @@ func TestLive_rootEmbedSurvivesItsOwnFirstPush(t *testing.T) {
 	awaitLine(t, lines, `id="via-i0"`)
 }
 
-// embedReuseIsland is a live island whose own State only ever advances via
-// its Tick — never re-seeded from the struct literal after connect. Its own
-// Noop action, dispatched over the live connection, is what triggers a
-// native-form full-page re-render (dispatchLive's modeNative branch always
-// re-renders lc.pageRoot, regardless of which unit's action fired).
-type embedReuseIsland struct{ n via.State[int] }
-
-func (b *embedReuseIsland) OnConnect(ctx *via.Ctx) error {
-	ctx.Tick(time.Millisecond, b.tick)
-	return nil
-}
-func (b *embedReuseIsland) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + 1) }
-func (b *embedReuseIsland) Noop(ctx *via.Ctx) {}
-func (b *embedReuseIsland) View() h.H {
-	return h.Div(h.Str(strconv.Itoa(b.n.Get())), via.PostForm(b.Noop, h.Button(h.Str("go"))))
-}
-
-type plainRootWithLiveIsland struct{ Isl embedReuseIsland }
-
-func (s *plainRootWithLiveIsland) View() h.H { return h.Div(via.Embed(s.Isl)) }
-
-// A native <form> submit's full-page re-render must reuse the connected live
-// island's own instance, not reseed it from the page's field literal — before
-// the off-by-one fix, the reuse lookup missed the connection's registered
-// unit (keyed one past the island index) and Embed built a fresh zero-valued
-// copy on every native submit, silently resetting the connection's state.
-func TestPostForm_reusesConnectedLiveIslandInsteadOfReseeding(t *testing.T) {
-	t.Parallel()
-	srv := liveServer(t, via.Register(plainRootWithLiveIsland{}))
-
-	lines, cancel := openStream(t, srv)
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	// Wait for a non-zero ticked push, so a reseed to 0 is unambiguous.
-	re := regexp.MustCompile(`id="via-i0"><div>(\d+)`)
-	var ticked int
-	deadline := time.After(2 * time.Second)
-	for ticked == 0 {
-		select {
-		case <-deadline:
-			require.Fail(t, "timed out waiting for a ticked (non-zero) push")
-		case line, ok := <-lines:
-			require.True(t, ok, "stream closed unexpectedly")
-			if m := re.FindStringSubmatch(line); m != nil {
-				ticked, _ = strconv.Atoi(m[1])
-			}
-		}
-	}
-
-	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 1, 0) // island 1 = embedReuseIsland's dispatch address (islandIdx 0 + 1)
-	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
-	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", ctype)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := srv.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	respBody, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	m := re.FindSubmatch(respBody)
-	require.NotNil(t, m, "native re-render must still contain the island's own container")
-	val, _ := strconv.Atoi(string(m[1]))
-	assert.Greater(t, val, 0,
-		"native form submit must reuse the connected island's ticked state, not reseed it from zero")
-}
-
 // twoSpeedIsland is a live island whose Tick step is distinguishable from a
 // sibling's, so which instance ended up under which container id is provable.
-// A has the Noop action so an action dispatch against it exists to trigger
-// the native-form full-page re-render both islands get caught up in.
+// It has the Noop action so a native form submit against it exists to
+// trigger dispatchLive's full-page re-render.
 type twoSpeedIsland struct {
 	step int
 	n    via.State[int]
@@ -725,11 +655,13 @@ type twoLiveIslandsRoot struct {
 
 func (r *twoLiveIslandsRoot) View() h.H { return h.Div(via.Embed(r.A), via.Embed(r.B)) }
 
-// Two sibling live islands must each keep their own identity across a native
-// re-render: before the off-by-one fix, B's reuse lookup (idx=1) hit A's
-// registered dispatch address (unitAddr=1), so the re-render duplicated A
-// under a second "via-i0" container and B's own state never appeared.
-func TestPostForm_twoLiveIslandsKeepDistinctIdentityAcrossReuse(t *testing.T) {
+// A native <form> submit inside a live unit now answers with the page a
+// fresh connection will hold (a fresh instance, seeded from the field
+// literal, not the dying connection's ticked state) — the reuse path that
+// used to patch the response together from the connection's own live tree
+// is gone (see Embed's godoc). Both islands must still get their own
+// distinct container, exactly once each, on that fresh render.
+func TestPostForm_liveSubmitRendersFreshPageWithDistinctIslandIds(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Register(twoLiveIslandsRoot{A: twoSpeedIsland{step: 1}, B: twoSpeedIslandNoAction{step: 1000}}))
 
@@ -754,14 +686,82 @@ func TestPostForm_twoLiveIslandsKeepDistinctIdentityAcrossReuse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	reA := regexp.MustCompile(`id="via-i0"><div>(\d+)`)
-	reB := regexp.MustCompile(`id="via-i1"><div>(\d+)`)
-	matchesA := reA.FindAllSubmatch(respBody, -1)
-	matchesB := reB.FindAllSubmatch(respBody, -1)
+	matchesA := regexp.MustCompile(`id="via-i0"`).FindAll(respBody, -1)
+	matchesB := regexp.MustCompile(`id="via-i1"`).FindAll(respBody, -1)
 	require.Len(t, matchesA, 1, "via-i0 must appear exactly once, not duplicated")
-	require.Len(t, matchesB, 1, "via-i1 must not vanish from the re-rendered page")
+	require.Len(t, matchesB, 1, "via-i1 must appear exactly once, not duplicated")
+}
 
-	valB, _ := strconv.Atoi(string(matchesB[0][1]))
-	assert.GreaterOrEqual(t, valB, 1000,
-		"B's own ticked state must survive the re-render, not be replaced by A's")
+// sessionSettingIsland is a live island whose OnConnect establishes the
+// session (so its cookie reaches the browser on the connect response,
+// before any action fires) and whose Login action re-Puts a different value
+// into that SAME session — an in-place mutation, not a fresh cookie.
+type sessionSettingIsland struct{}
+
+func (s *sessionSettingIsland) OnConnect(ctx *via.Ctx) error {
+	ctx.Session().Put(member{Name: "anon"})
+	return nil
+}
+func (s *sessionSettingIsland) Login(ctx *via.Ctx) { ctx.Session().Put(member{Name: "zed"}) }
+func (s *sessionSettingIsland) View() h.H {
+	return h.Div(via.PostForm(s.Login, h.Button(h.Str("go"))))
+}
+
+// rootReadsSessionOnInit is a plain root whose OnInit loads the session
+// value into a field — the fresh instance dispatchLive's native path now
+// renders must see whatever the live island's action last Put, since it
+// reads the SAME session object the action just mutated.
+type rootReadsSessionOnInit struct {
+	Isl  sessionSettingIsland
+	name string
+}
+
+func (r *rootReadsSessionOnInit) OnInit(ctx *via.Ctx) error {
+	if m, ok := ctx.Session().Get[member](); ok {
+		r.name = m.Name
+	}
+	return nil
+}
+func (r *rootReadsSessionOnInit) View() h.H {
+	return h.Div(h.Str(r.name), via.Embed(r.Isl))
+}
+
+// A native form submit's fresh-instance re-render runs OnInit on the POST
+// goroutine, so a session write the SAME action just made (Login, above) is
+// already visible to it — proving the returned page reflects post-action
+// state via the session, not via the deleted live-tree reuse path.
+func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(rootReadsSessionOnInit{}))
+
+	// liveServer's httptest.NewTestServer only routes through its own
+	// srv.Client()'s transport (an in-memory network, needed for a live
+	// unit's own goroutines to run inside synctest) — a plain &http.Client{}
+	// would try to dial the real network instead.
+	client := srv.Client()
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	client.Jar = jar
+
+	lines, cancel := openStreamWithClient(t, srv, client, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, 1, 0) // island 1 = sessionSettingIsland's Login action
+
+	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
+	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", ctype)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Contains(t, string(respBody), "zed",
+		"the fresh page's OnInit must see the session value the live action just Put")
 }

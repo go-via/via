@@ -155,6 +155,11 @@ as a re-read of the README, not a diff.
 
 ### Changed
 
+- **A native `PostForm` submit inside a live unit now returns the page a
+  fresh connection will hold** (fresh instance, `OnInit` run) instead of a
+  snapshot of the dying connection's mutated state, which the new stream
+  reseeded anyway. Persist across a native submit through the session or a
+  shared pointer dep, or `Redirect`.
 - **Live actions run synchronously** on the connection's own goroutine: the
   POST that triggers one now waits for it to finish (the shape a stateless
   action already had), so it can set the session cookie and answer a

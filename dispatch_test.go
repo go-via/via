@@ -627,14 +627,16 @@ func TestDispatch_liveFormFieldFallbackRunsHandlerAndRerendersFullPage(t *testin
 			"a live unit's PostForm must reactively fill the fallback field from the tab signal")
 		formURL := actionURL(t, page, 0, 0)
 
-		status, body := nativeFormPost(t, app, formURL, map[string]string{
+		status, _ := nativeFormPost(t, app, formURL, map[string]string{
 			"name":    "zed",
 			"_viatab": conn.TabID(),
 		})
 
+		// The returned page is a fresh connection's page (see Embed's godoc on
+		// the native-submit contract), not a snapshot of the dying
+		// connection's mutated liveForm — so it no longer carries "got:zed".
 		assert.Equal(t, http.StatusOK, status)
-		assert.Contains(t, body, "got:zed", "the handler must have run against the live unit's own state")
-		assert.Equal(t, 1, calls)
+		assert.Equal(t, 1, calls, "the handler must still have run against the live unit's own state")
 	})
 }
 
@@ -668,26 +670,31 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 	})
 }
 
-// nativeFormPanic's View panics on re-render once boom is set — reproducing
-// a native <form> submit whose mutation succeeds but whose full-page
-// re-render (dispatchLive, native mode) then panics on the island goroutine.
-type nativeFormPanic struct{ boom via.State[bool] }
+// nativeFormPanic's View panics on re-render once boom is flipped —
+// reproducing a native <form> submit whose mutation succeeds but whose
+// fresh-instance re-render (dispatchLive, native mode) then panics. boom is
+// a shared pointer, not per-instance State: the fresh instance the render
+// runs against is a different value from the one Save mutated, so only a
+// pointer shared across instances can carry the trigger between them.
+type nativeFormPanic struct{ boom *bool }
 
 func (f *nativeFormPanic) OnConnect(*via.Ctx) error { return nil }
-func (f *nativeFormPanic) Save(ctx *via.Ctx)        { f.boom.Set(true) }
+func (f *nativeFormPanic) Save(ctx *via.Ctx)        { *f.boom = true }
 func (f *nativeFormPanic) View() h.H {
-	if f.boom.Get() {
+	if *f.boom {
 		panic("via_test: native re-render exploded")
 	}
 	return h.Div(via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))))
 }
 
 // A panic in a native form's post-mutation re-render must answer 500, not
-// hang the POST forever — the render runs on the island goroutine, outside
-// liveRunAction's own recover, after the mutation already succeeded.
+// hang the POST forever — the render runs on the dispatching POST's own
+// goroutine (see dispatch.go's dispatchLive), outside liveRunAction's own
+// recover, after the mutation already succeeded.
 func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(nativeFormPanic{}))
+		boom := new(bool)
+		app := vt.Serve(t, via.Register(nativeFormPanic{boom: boom}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 		formURL := actionURL(t, page, 0, 0)

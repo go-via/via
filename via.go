@@ -80,7 +80,6 @@ type Ctx struct {
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
 	pass        *renderPass                      // shared flat-index allocator during a root-level render; nil for an island's own standalone render
-	conn        *liveConn                        // set during a root-level render on a live connection, so embedViewer can find an already-connected descendant's own instance
 	underLive   bool                             // true when an ancestor (not necessarily the immediate parent) is a live unit — Embed refuses a live child here (see embedViewer)
 	digestPH    string                           // this unit's shape-digest placeholder, lazily allocated on first action write and substituted for the real digest once the render ends
 	connected   bool                             // true once OnConnect has returned — runLiveStream already snapshotted ticks/subs by then, so a later Tick/Listen on this Ctx would silently no-op; they log loudly instead
@@ -478,18 +477,14 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // writeSignalsAttr (and to embedded islands via ctx.declareOnly) so this one
 // render path serves the full first paint (only nil), the declaration-free
 // live push (declareSignals false), and the restricted action patch (only
-// non-nil, see renderRootPatch). conn is the live connection driving this
-// render (nil for first paint and every stateless render), so embedViewer
-// can reuse an already-connected descendant's own instance instead of a
-// fresh by-value copy.
-func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
+// non-nil, see renderRootPatch).
+func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any) (*Ctx, []byte) {
 	ctx := newCtx(in)
 	_, ctx.island = v.(Live)     // the root is a live unit exactly when it implements OnConnect
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
 	ctx.pass = &renderPass{} // fresh page-wide index allocator for this discovery walk
-	ctx.conn = conn
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -514,11 +509,11 @@ func renderRootBase(v viewer, in map[string]json.RawMessage, declareSignals bool
 // store, clobbering a value the user is mid-edit. That is the same hazard a live
 // push avoids by omitting the attribute; here the attribute stays, restricted to
 // only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any, conn *liveConn) (*Ctx, []byte) {
+func renderRootPatch(v viewer, in map[string]json.RawMessage, base string, only map[string]any) (*Ctx, []byte) {
 	if only == nil {
 		only = map[string]any{} // nil would read as "declare everything"
 	}
-	return renderRootBase(v, in, true, base, only, conn)
+	return renderRootBase(v, in, true, base, only)
 }
 
 // Register builds an http.Handler serving the root composition. root is taken
@@ -595,7 +590,7 @@ func connectUnit(unit *Ctx, req *http.Request, w http.ResponseWriter, sessions *
 func rootPush(v viewer, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderRootBase(v, nil, false, base, nil, lc) // push omits data-signals
+		bind, body := renderRootBase(v, nil, false, base, nil) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
@@ -689,7 +684,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// render — the root itself (bind), when live, plus each embedded live
 	// island — so a live root and live children are found the same way; the
 	// root unit's own instance is pv, mirroring an island unit's islandV.
-	bind, _ := renderRootBase(pv, connectSig, false, base, nil, nil)
+	bind, _ := renderRootBase(pv, connectSig, false, base, nil)
 	bind.islandV = pv
 	units := liveUnits(bind)
 
@@ -714,7 +709,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	lc := &liveConn{
 		mount:       m,
-		pageRoot:    pv,
 		pulse:       pulse,
 		done:        streamCtx.Done(),
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },

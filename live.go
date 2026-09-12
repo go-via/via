@@ -234,7 +234,6 @@ func runPulseItem(fn func()) {
 // the client's DOM currently reflects.
 type liveConn struct {
 	mount       *mount            // the mount that opened this connection — a tab id is only valid on ITS mount, never another sharing the router-wide registry
-	pageRoot    viewer            // the connection's actual top-level instance, live or not — a native-form action response re-renders the whole page from here, reusing live descendants via this liveConn (see dispatchLive)
 	pulse       chan func()       // the connection's serialization channel (shared by all its units)
 	done        <-chan struct{}   // reqCtx.Done() — closed on disconnect
 	pushSignals func(json string) // emit a patch-signals frame on this stream
