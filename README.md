@@ -126,7 +126,10 @@ examples, the whole live stack verified in real headless browsers
 - **Live islands + `State[T]`** (`example/pulse`): implement `OnConnect` and a
   composition becomes a live island with a per-tab SSE stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
-  `Tick` drives the push.
+  `Tick` drives the push. `Tick`/`Listen`/action handlers all run on the
+  connection's one goroutine — a handler that blocks (I/O, an unbounded
+  loop) stalls every other tick, action, and push on that same connection,
+  and delays that connection's shutdown until it returns.
 - **Interactive live actions** (`example/chat`): a live-island action routes —
   via the `via_tab` handshake (an unguessable per-connection id echoed in the
   `X-Via-Tab` header) — to *this* connection's island, mutates its state, and the
@@ -145,7 +148,10 @@ examples, the whole live stack verified in real headless browsers
   may have planted beforehand (fixation defense). Idle sessions expire lazily
   on access (past the TTL, the next read/write treats them as gone) — there
   is no background sweep, so a
-  session that is never touched again is not proactively evicted. The signing
+  session that is never touched again is not proactively evicted. A session
+  that idles past its TTL while a live stream is still open (the stream
+  itself does nothing to keep it warm) turns every later dispatch on that tab
+  into a 403 "session mismatch" until the page is reloaded. The signing
   key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
   first use — set a stable key so sessions survive restarts and span pods).
