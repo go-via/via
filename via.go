@@ -68,7 +68,7 @@ type Ctx struct {
 	declareOnly map[string]any                   // when non-nil, declare only these slots (stateless action patch)
 	req         *http.Request                    // the request that triggered this handler (nil during a pure render)
 	sessions    *sessionManager                  // per-Register session manager (always constructed; cookie is lazy)
-	sessW       http.ResponseWriter              // response writer for issuing the session cookie; nil in a live action
+	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnConnect, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); nil only in a Tick/Listen handler's Ctx, which has no request in flight
 	session     *Session                         // resolved session handle, cached per Ctx
 	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
 	isIsland    bool                             // true when this Ctx binds an embedded island's child View

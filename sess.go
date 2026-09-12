@@ -214,15 +214,18 @@ type Session struct {
 	mgr        *sessionManager
 	id         string // current session id; "" until resolved or created
 	data       *sessionData
-	w          http.ResponseWriter // nil when the cookie can't be set (a live action)
+	w          http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a stateless action, OnConnect, AND a live action — dispatchLive is synchronous, so a live action's response hasn't gone out yet either
 	secure     bool
 	fromCookie bool // id was resolved from a request-carried cookie, not minted this request
 }
 
 // ensure returns the session's data, creating the session (and issuing the
-// cookie) on first write. A write where no cookie can be set — a live action,
-// which runs after its 204 — still stores into a fresh session but logs a
-// warning, since the browser will never carry that id back.
+// cookie) on first write. A stateless action, OnConnect, and a live action
+// (dispatchLive is synchronous, so its response hasn't gone out yet either)
+// all have an open response and can set the cookie normally. A write with no
+// open response at all — a Tick or Listen handler's Ctx — still stores into
+// a fresh session but logs a warning, since the browser will never carry
+// that id back.
 func (s *Session) ensure() *sessionData {
 	if s.mgr == nil {
 		return nil
@@ -241,8 +244,8 @@ func (s *Session) ensure() *sessionData {
 	if s.w != nil {
 		s.mgr.setCookie(s.w, id, s.secure)
 	} else {
-		log.Print("via: session created where no cookie can be set (a live action runs after its response); " +
-			"establish the session in OnConnect or a stateless action")
+		log.Print("via: session created where no cookie can be set (a Tick or Listen handler, which has no " +
+			"request in flight); establish the session in OnConnect or an action instead")
 	}
 	return d
 }
@@ -326,8 +329,8 @@ func typeKey[T any]() any { return (*T)(nil) }
 // Put stores a typed value in the session, keyed by its type — use it for the
 // one-per-session value like the logged-in user. Sessions are always on and
 // lazy: the first Put issues the cookie, and only where a response is open —
-// a stateless action or OnConnect. A live action runs after its 204, so it
-// can mutate an already-established session but cannot create one.
+// a stateless action, OnConnect, or a live action (its response hasn't gone
+// out yet when the action runs).
 // WithSessionKey / WithSessionTTL / WithSessionCookieName tune, but do not
 // gate, the behavior.
 func (s *Session) Put[T any](v T) {
