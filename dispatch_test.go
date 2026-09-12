@@ -835,3 +835,182 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode,
 		"an anonymous connection must not be blocked — there is no session to mismatch")
 }
+
+// liveLoginer is a live root that starts every connection anonymous — Login
+// and Rotate are both live actions, so the only way its session gets
+// established is on the connection's own goroutine, after connect (see H1).
+type liveLoginer struct {
+	n via.State[int]
+}
+
+func (p *liveLoginer) OnConnect(*via.Ctx) error { return nil }
+func (p *liveLoginer) Bump(ctx *via.Ctx)        { p.n.Set(p.n.Get() + 1) }                 // action 0
+func (p *liveLoginer) Login(ctx *via.Ctx)       { ctx.Session().Put(member{Name: "bob"}) } // action 1
+func (p *liveLoginer) Rotate(ctx *via.Ctx)      { ctx.Session().Rotate() }                 // action 2
+func (p *liveLoginer) View() h.H {
+	return h.Div(p.n.Display(),
+		h.Button(via.OnClick(p.Bump)),
+		h.Button(via.OnClick(p.Login)),
+		h.Button(via.OnClick(p.Rotate)))
+}
+
+// A tab connects anonymously, then a live action logs it in (Session().Put)
+// — the connection must stop accepting a cookieless dispatch from that point
+// on, closing the gap H1 was filed for.
+func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginResp, err := http.DefaultClient.Do(loginReq)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+	require.NotEmpty(t, loginResp.Header.Get("Set-Cookie"), "a live Login must still mint the session cookie")
+
+	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	bumpResp, err := http.DefaultClient.Do(bumpReq)
+	require.NoError(t, err)
+	defer bumpResp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
+		"the tab id must stop being a bearer credential the instant it logs in")
+}
+
+// onConnectLoginer establishes its session in OnConnect — the pattern the
+// README recommends — rather than through a later action.
+type onConnectLoginer struct{ n via.State[int] }
+
+func (o *onConnectLoginer) OnConnect(ctx *via.Ctx) error {
+	ctx.Session().Put(member{Name: "carol"})
+	return nil
+}
+func (o *onConnectLoginer) Bump(ctx *via.Ctx) { o.n.Set(o.n.Get() + 1) } // action 0
+func (o *onConnectLoginer) View() h.H {
+	return h.Div(o.n.Display(), h.Button(via.OnClick(o.Bump)))
+}
+
+// The README-recommended "establish the session in OnConnect" pattern must
+// bind the connection too — not just a session that already existed at
+// connect time.
+func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	req := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"an OnConnect-minted session must bind the connection exactly like a live-action login")
+}
+
+// Neighbour: two tabs open anonymously against the same app — logging one of
+// them in through a live action must bind ONLY that connection. A sibling
+// tab that never logs in keeps dispatching cookielessly, exactly as before.
+func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+
+	linesA, cancelA := openStreamAt(t, srv, "/_via/sse")
+	defer cancelA()
+	tabA := awaitTabID(t, linesA)
+	linesB, cancelB := openStreamAt(t, srv, "/_via/sse")
+	defer cancelB()
+	tabB := awaitTabID(t, linesB)
+
+	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	loginReq := liveActionRequest(t, srv, string(page), tabA, 0, 1) // Login on A
+	loginResp, err := http.DefaultClient.Do(loginReq)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+
+	bumpA := liveActionRequest(t, srv, string(page), tabA, 0, 0)
+	bumpAResp, err := http.DefaultClient.Do(bumpA)
+	require.NoError(t, err)
+	bumpAResp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, bumpAResp.StatusCode, "the logged-in tab rejects a cookieless dispatch")
+
+	bumpB := liveActionRequest(t, srv, string(page), tabB, 0, 0)
+	bumpBResp, err := http.DefaultClient.Do(bumpB)
+	require.NoError(t, err)
+	defer bumpBResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, bumpBResp.StatusCode,
+		"the sibling tab, never logged in, dispatches exactly as before")
+}
+
+// Neighbour: a session that rotates AFTER a live login bound the connection
+// must keep the binding across the new id — Rotate moves the same
+// *sessionData pointer (see sessionStore.reID), which is what dispatch
+// compares against.
+func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+	owner := jarClient(t)
+
+	lines, cancel := openStreamWithClient(t, srv, owner, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := owner.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginResp, err := owner.Do(loginReq)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+	before := cookieValue(t, owner, srv.URL, "via_session")
+	require.NotEmpty(t, before)
+
+	rotReq := liveActionRequest(t, srv, string(page), tab, 0, 2) // Rotate
+	rotResp, err := owner.Do(rotReq)
+	require.NoError(t, err)
+	rotResp.Body.Close()
+	after := cookieValue(t, owner, srv.URL, "via_session")
+	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
+
+	okReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, new cookie
+	okResp, err := owner.Do(okReq)
+	require.NoError(t, err)
+	okResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
+		"the post-rotate dispatch with the new cookie must still be bound")
+
+	staleReq := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	staleReq.AddCookie(&http.Cookie{Name: "via_session", Value: before})
+	staleResp, err := http.DefaultClient.Do(staleReq)
+	require.NoError(t, err)
+	defer staleResp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, staleResp.StatusCode,
+		"the pre-rotate id must not drive the connection anymore")
+}

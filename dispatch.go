@@ -152,14 +152,16 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, "no such island", http.StatusGone)
 			return
 		}
-		if lc.sess != nil {
-			// The connection was opened by a real session; a dispatch against
-			// it must carry that SAME session (by pointer, not id — a Rotate
-			// since connect moves the pointer to a new id, never a new data
-			// object). Otherwise a leaked tab id is a bearer credential good
-			// from any request, session or none, once the origin floor is open.
+		if bound := lc.boundSession(); bound != nil {
+			// The connection is bound to a real session — either the one open
+			// at connect, or one a live action minted/rotated afterward (see
+			// liveConn.bindSession) — and a dispatch against it must carry
+			// that SAME session (by pointer, not id — a Rotate since connect
+			// moves the pointer to a new id, never a new data object).
+			// Otherwise a leaked tab id is a bearer credential good from any
+			// request, session or none, once the origin floor is open.
 			_, s, _ := m.sessions.resolve(req)
-			if s != lc.sess {
+			if s != bound {
 				http.Error(w, "session mismatch", http.StatusForbidden)
 				return
 			}
@@ -321,6 +323,14 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	rc := &Ctx{req: req, sessions: sessions, sessW: w}
 	unit.dirty = map[string]any{}
 	unit.actions[n](rc)
+
+	// The action may have just minted or resolved a session (Session().Put
+	// or .Rotate) on a connection that was anonymous at connect — bind it now
+	// so the tab id stops being a bearer credential the instant this action
+	// logs it in (see H1; lc.bindSession is a no-op once already bound).
+	if rc.session != nil {
+		lc.bindSession(rc.session.data)
+	}
 
 	// A deliberate server-driven signal change (e.g. clearing the composer)
 	// reaches the client as a signal-patch — the element push omits

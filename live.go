@@ -240,6 +240,33 @@ type liveConn struct {
 	sess        *sessionData      // the session, if any, that was resolved from the connect request's cookie — nil for an anonymous connect. Compared by pointer, not id, so it survives a later Session.Rotate (reID moves the same *sessionData to a fresh id; it never changes the pointer)
 }
 
+// boundSession returns the session this connection is bound to, if any.
+// Guarded because a live action can bind it after connect (see bindSession),
+// racing a concurrent dispatch's read on its own goroutine.
+func (c *liveConn) boundSession() *sessionData {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sess
+}
+
+// bindSession records d as this connection's credential on first mint — a
+// connect-time cookie already resolved before the connection is published to
+// the registry, or (the gap this closes) a session a live action's
+// Session().Put/Rotate establishes after connect, when nothing bound it yet.
+// Idempotent: once bound, later calls (e.g. a subsequent Rotate on the same
+// connection) are no-ops here — dispatch compares by pointer, and reID moves
+// the same *sessionData to a fresh id without changing the pointer.
+func (c *liveConn) bindSession(d *sessionData) {
+	if d == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sess == nil {
+		c.sess = d
+	}
+}
+
 // replace registers u as the current bind for its own dispatch address —
 // the next action against it, or a full-page re-render's Embed reusing its
 // already-connected instance, targets this render's actions/hydrators table.

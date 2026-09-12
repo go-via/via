@@ -739,6 +739,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 			connectError(w, err)
 			return
 		}
+		// OnConnect may have just minted or resolved a session (the
+		// README-recommended "log in during OnConnect" pattern) where the
+		// connect cookie alone left lc.sess nil — bind it now so the
+		// connection isn't left as a bare-tab-id credential (see H1).
+		if u.session != nil {
+			lc.bindSession(u.session.data)
+		}
 	}
 
 	// Register this connection so a live action POST (/_via/a/{island}/{n} +
