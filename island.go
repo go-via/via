@@ -124,29 +124,11 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 
 	ordinal := len(parent.islands) // this parent's k-th Embed call this render
 
-	// pass.next() must advance exactly once per Embed call, on both the
-	// reuse and the fresh-seed path below, or a later sibling's page-wide
-	// index collides with (or skips) this one's.
+	// pass.next() must advance exactly once per Embed call, or a later
+	// sibling's page-wide index collides with (or skips) this one's.
 	idx := ordinal
 	if parent.pass != nil {
 		idx = parent.pass.next()
-	}
-
-	// A native-form full-page re-render on a live connection (dispatchLive)
-	// walks the whole page again, re-invoking Embed for every live
-	// descendant it finds (directly under the root, or through plain
-	// wrappers) — reusing the connection's own already-running instance
-	// (found by its stable dispatch address, idx) is what keeps its server
-	// state intact instead of reseeding a fresh by-value copy. Addressing is
-	// stable by construction here: idx is assigned in the same deterministic
-	// order every full walk, and a live unit's own View can never itself
-	// call Embed (see above), so there is no ordinal-shifting sibling to
-	// confuse it with.
-	if parent.conn != nil {
-		if existing := parent.conn.unit(idx + 1); existing != nil {
-			renderConnectedChild(r, parent, existing)
-			return
-		}
 	}
 
 	child := newCtx(parent.inSignals)
@@ -159,7 +141,6 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	child.island = live
 	child.underLive = parent.island || parent.underLive
 	child.pass = parent.pass
-	child.conn = parent.conn
 	parent.islands = append(parent.islands, child)
 
 	// Render first so the child's signal slots (order/initial) are populated,
@@ -175,24 +156,6 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	}
 	r.WriteString(`>`)
 	r.WriteString(string(child.rendered))
-	r.WriteString(`</div>`)
-}
-
-// renderConnectedChild re-renders an already-connected live descendant's OWN
-// instance (existing.islandV, the pointer every one of its own actions/ticks
-// has been mutating) in place of the fresh by-value copy Embed just made —
-// the fix for a native-form full-page re-render otherwise clobbering the
-// child's state. It reuses existing's islandIdx (so the container id and
-// dispatch address are unchanged) and re-registers the fresh bind so the
-// next action against the child runs against THIS render's actions/hydrators
-// table.
-func renderConnectedChild(r *hcore.Renderer, parent, existing *Ctx) {
-	c, inner := renderIslandBind(existing.islandIdx, existing.islandV, parent.base)
-	c.push = existing.push // the push closure is fixed for the unit's whole life; carry it over
-	parent.conn.replace(c)
-	parent.islands = append(parent.islands, c)
-	r.WriteString(`<div id="via-i` + strconv.Itoa(existing.islandIdx) + `">`)
-	r.WriteString(string(inner))
 	r.WriteString(`</div>`)
 }
 

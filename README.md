@@ -182,6 +182,9 @@ examples, the whole live stack verified in real headless browsers
   panics at render, loud and early, rather than misroute an action. Plain
   (non-live) composition still nests to any depth. Nested live composition
   (a dynamic set of live children keyed by identity) is a deferred feature.
+  `State` is per connection: a native `PostForm` submit is a navigation,
+  opens a new connection, and reseeds it — persist through the session or a
+  shared pointer dep, or `Redirect` instead of returning a page.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnClickArg(l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
