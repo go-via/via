@@ -237,6 +237,7 @@ type liveConn struct {
 	pushSignals func(json string) // emit a patch-signals frame on this stream
 	mu          sync.Mutex        // guards units: replace runs on the island goroutine, unit is read from the dispatching request's own goroutine
 	units       map[int]*Ctx      // dispatch address (0=root, islandIdx+1=embedded) → current unit Ctx, at any embedding depth
+	sess        *sessionData      // the session, if any, that was resolved from the connect request's cookie — nil for an anonymous connect. Compared by pointer, not id, so it survives a later Session.Rotate (reID moves the same *sessionData to a fresh id; it never changes the pointer)
 }
 
 // replace registers u as the current bind for its own dispatch address —
