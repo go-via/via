@@ -88,18 +88,37 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 
 // writePatchFrame writes one Datastar element-patch SSE event. The fragment is
 // the re-rendered <div id="root">…</div>, which the client morphs into the live
-// DOM by id (default mode). The fragment is emitted as one `data: elements`
-// field per physical line: a bare newline in rendered content (e.g. a value
-// carrying "\n") would otherwise split the SSE event and truncate the patch.
-// The client rejoins the multi-line payload with newlines, reconstructing it.
+// DOM by id (default mode).
 func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	writeElementLines(w, fragment)
+	_, _ = io.WriteString(w, "\n")
+}
+
+// writeInnerPatchFrame writes one Datastar element-patch SSE event that patches
+// the CHILDREN of #id, never comparing id's own element — mode inner hands the
+// client a DocumentFragment, and the both-sided data-ignore-morph check only
+// fires when the incoming node is an Element. This is how a live island's own
+// push still lands on a container a root-walk render has marked
+// data-ignore-morph to keep a parent's patch from repainting it.
+func writeInnerPatchFrame(w io.Writer, id string, fragment []byte) {
+	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, "data: selector #"+id+"\n")
+	_, _ = io.WriteString(w, "data: mode inner\n")
+	writeElementLines(w, fragment)
+	_, _ = io.WriteString(w, "\n")
+}
+
+// writeElementLines emits fragment as one `data: elements` field per physical
+// line: a bare newline in rendered content (e.g. a value carrying "\n") would
+// otherwise split the SSE event and truncate the patch. The client rejoins the
+// multi-line payload with newlines, reconstructing it.
+func writeElementLines(w io.Writer, fragment []byte) {
 	for line := range bytes.SplitSeq(fragment, []byte{'\n'}) {
 		_, _ = io.WriteString(w, "data: elements ")
 		_, _ = w.Write(line)
 		_, _ = io.WriteString(w, "\n")
 	}
-	_, _ = io.WriteString(w, "\n")
 }
 
 // writeKeepaliveFrame writes one SSE comment frame. A comment (a line starting

@@ -302,6 +302,10 @@ as a re-read of the README, not a diff.
   falling through to Go's default 200-with-empty-body.
 - `WithSessionKey`/`VIA_SESSION_KEY` under 16 bytes now panics at
   construction instead of silently signing cookies with a guessable key.
+- **A plain root's own action no longer repaints its embedded live islands
+  from their seed:** live containers carry `data-ignore-morph` and a live
+  island's push patches its children (Datastar inner mode), so a root patch
+  leaves the live DOM alone.
 
 ### Known limitations
 

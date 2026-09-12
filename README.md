@@ -170,7 +170,8 @@ examples, the whole live stack verified in real headless browsers
   without `OnConnect` is a plain in-place component; one with `OnConnect` is a
   live island, and all the live children on a page share the tab's *one* SSE
   stream on one goroutine — each re-renders and patches only its own region
-  (`#via-i{n}`), its actions route by island id + the tab handshake, and its
+  (`#via-i{n}`, pushed in place — its container is never morphed by a
+  parent's patch), its actions route by island id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. The parent's literal seeds a
   child's dependencies (a shared `*Topic`, a store) at registration; generic
   layouts (`Shell[C]{Body C}`) compose one shell with any page. Ownership is
