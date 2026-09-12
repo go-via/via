@@ -143,7 +143,7 @@ func embedViewer(r *hcore.Renderer, v viewer) {
 	// call Embed (see above), so there is no ordinal-shifting sibling to
 	// confuse it with.
 	if parent.conn != nil {
-		if existing := parent.conn.unit(idx); existing != nil {
+		if existing := parent.conn.unit(idx + 1); existing != nil {
 			renderConnectedChild(r, parent, existing)
 			return
 		}
