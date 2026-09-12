@@ -68,7 +68,7 @@ type Ctx struct {
 	declareOnly map[string]any                   // when non-nil, declare only these slots (stateless action patch)
 	req         *http.Request                    // the request that triggered this handler (nil during a pure render)
 	sessions    *sessionManager                  // per-Register session manager (always constructed; cookie is lazy)
-	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnConnect, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); nil only in a Tick/Listen handler's Ctx, which has no request in flight
+	sessW       http.ResponseWriter              // response writer for issuing the session cookie; set in a stateless action, OnConnect, and a live action (dispatchLive is synchronous, so the response hasn't gone out yet); cleared once the connect response is flushed, so a Tick/Listen handler's Ctx (which keeps running against this same Ctx afterward) sees nil and its Session().Put warns instead of writing a dead response (see I2)
 	session     *Session                         // resolved session handle, cached per Ctx
 	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
 	isIsland    bool                             // true when this Ctx binds an embedded island's child View
@@ -757,6 +757,18 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	headersSent = true
 	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
+
+	// The connect response is flushed now — w's headers are long gone. A
+	// Tick/Listen handler runs against this SAME unit Ctx for the life of the
+	// connection (unlike a live action, which gets a fresh Ctx per dispatch —
+	// see liveRunAction), so leaving sessW set here would let Session().Put
+	// from a Tick/Listen call SetCookie on a dead response: no error, no
+	// cookie reaching the browser, a session minted and orphaned until TTL
+	// (see I2). Clearing it makes Session.ensure's "no cookie can be set"
+	// warning actually fire for that case, as documented.
+	for _, u := range units {
+		u.sessW = nil
+	}
 
 	runLiveStream(streamCtx, units, pulse, keepalive, sseHeartbeat)
 }
