@@ -15,7 +15,7 @@ import "strings"
 // scheme is compared case-folded for the same reason.
 func SafeURL(u string) bool {
 	trimmed := strings.TrimLeftFunc(u, func(r rune) bool { return r <= ' ' })
-	if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, `\\`) {
+	if trimmed == "" || isSlashLike(trimmed, 0) && isSlashLike(trimmed, 1) {
 		return false
 	}
 	if i := strings.IndexAny(trimmed, ":/?#"); i >= 0 && trimmed[i] == ':' {
@@ -23,4 +23,12 @@ func SafeURL(u string) bool {
 		return scheme == "http" || scheme == "https"
 	}
 	return true
+}
+
+// isSlashLike reports whether s[i] is '/' or '\\' — a browser's URL parser
+// treats a backslash exactly like a forward slash, so "/\evil.com" and
+// "\/evil.com" are protocol-relative just as much as "//evil.com" is; only
+// checking for a literal "//" or "\\\\" prefix misses both mixed forms.
+func isSlashLike(s string, i int) bool {
+	return i < len(s) && (s[i] == '/' || s[i] == '\\')
 }
