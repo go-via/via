@@ -255,12 +255,11 @@ func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	assert.NotContains(t, body, "hi alice", "the pre-rotate session id still resolved")
 }
 
-// Writing into a session never rotates its id on its own — that was an
-// earlier revision's behavior (rotate-on-first-write), reverted because
-// "first write" was tracked per REQUEST, not per session: every subsequent
-// writing request rotated again, so a request still carrying the previous
-// id (a double-click, a retried form) forked a fresh, empty session instead
-// of resolving to the one the user was just using. Fixation defense is now
+// Writing into a session never rotates its id on its own. Rotate-on-write is
+// tempting but wrong: "first write" can only be tracked per REQUEST, so every
+// writing request rotates again, and a request still carrying the previous id
+// (a double-click, a retried form) forks a fresh, empty session instead of
+// resolving to the one the user was just using. Fixation defense is
 // [Session.Rotate], called explicitly at an auth-state change.
 func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 	t.Parallel()

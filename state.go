@@ -46,7 +46,11 @@ func (s *State[T]) Display() h.H {
 // live.
 type List[E any] struct{ State[[]E] }
 
-// Append adds v to the end of the list on the per-(tab,embed) instance.
+// Append adds v to the end of this connection's list and schedules the push,
+// like any Set. It re-slices in place when there is capacity, so appending in a
+// tick loop does not reallocate every frame — but the whole list re-renders on
+// each push, so a list that grows without bound grows the frame without bound
+// too. Cap it, or page it.
 func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
 
 // Remove deletes the element at i, shifting the rest left, and panics if i is

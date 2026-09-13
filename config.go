@@ -34,7 +34,9 @@ const sseWriteTimeout = 10 * time.Second
 // is refused 503. var rather than const only so a test can shrink it.
 var maxSSEConn = 10_000
 
-// Option configures a Handler call.
+// Option configures a Handler or a NewRouter. On a Router the options apply to
+// the whole app, not to an individual Mount: there is one session cookie and
+// one origin policy across every page mounted on it.
 type Option func(*config)
 
 func newConfig(opts []Option) *config {

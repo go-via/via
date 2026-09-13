@@ -229,7 +229,11 @@ func (a *Action) signalBody() string {
 	return string(out)
 }
 
-// Fire issues the POST and returns the status code and response body.
+// Fire issues the POST and returns the status code and the response body. On a
+// plain page the body is the Datastar patch; on a live one the patch goes to
+// the open Conn instead and the body is empty, so assert on the Conn there. A
+// refused dispatch answers 410 (nothing binds that action id in the current
+// render) or 403 (origin or tab-id check), with a bodyless message.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
 	path := a.raw

@@ -326,7 +326,7 @@ func mountBase(path string) (base string, names []string) {
 // @post('<base>/…') — and Datastar evaluates that expression as JavaScript, so
 // it needs BOTH layers and neither substitutes for the other: PathEscape here
 // keeps a segment out of the JS string literal (a quote would otherwise close
-// it and run whatever follows), and hcore.EscapeString at the write site keeps
+// it and run whatever follows), and the attribute escaping at the write site keeps
 // it out of the attribute. PathEscape also keeps the URL a valid path, and the
 // value round-trips through Param unchanged because the browser decodes it back
 // before it reaches the mux.

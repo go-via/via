@@ -46,9 +46,8 @@ func safeURL(u, where string) string {
 // unsafe scheme is neutralized to "#" and logged — a link must never become a
 // script gadget.
 //
-// These three go straight to hcore.RawAttr, not h.RawAttr: the name is
-// URL-bearing, so h.RawAttr would run the same gate a second time and log a
-// neutralized URL twice.
+// Href, [Src] and [Action] each run the URL gate exactly once, so an unsafe
+// value is logged once rather than per layer.
 func Href(u string) Attr { return hcore.RawAttr("href", safeURL(u, "href")) }
 
 // Src is the typed src attribute, gated like Href.

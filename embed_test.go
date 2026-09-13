@@ -978,11 +978,11 @@ func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
 	assert.Len(t, seen, 5, "root filter + two panel queries + two counter steps")
 }
 
-// A PLAIN embed's action re-renders that embed alone — and its View Embeds a
+// A PLAIN embed's action re-renders that embed alone, and its View Embeds a
 // live child, so the re-render must number that child off the embed's own key
-// rather than restarting at the root's. Before this, the nested child came back
-// as a DUPLICATE of its parent's container id, with a signal prefix that
-// aliased the parent's own slot and a dispatch address that 410'd on click.
+// rather than restarting at the root's. Numbering from the root gives the
+// nested child a container id duplicating its parent's, a signal prefix that
+// aliases the parent's own slot, and a dispatch address that 410s on click.
 func TestEmbed_plainEmbedActionKeepsItsNestedLiveChildAddressable(t *testing.T) {
 	t.Parallel()
 	hits := &atomic.Int64{}
