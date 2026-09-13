@@ -42,10 +42,13 @@ const (
 //     TTL is left, so a store never has to touch expiry on Load.
 //
 // Every method may be called concurrently, and from a request goroutine — honour
-// ctx. An error never fails the request: it is logged, and a failed Load is
-// treated as "the store could not answer", which is NOT "no session" — via
-// refuses to mint a replacement over a cookie the browser already holds, and
-// drops the write instead.
+// ctx. An error is logged and, with one exception, never fails the request: a
+// failed Load is treated as "the store could not answer", which is NOT "no
+// session" — via refuses to mint a replacement over a cookie the browser
+// already holds, and drops the write instead. The exception is
+// [Session.Rotate]: if the old id can be neither deleted nor overwritten with
+// an expired blob, the pre-rotation id would stay valid, so via panics and the
+// request answers 500 rather than reporting a rotation that did not happen.
 //
 // Implement [AtomicSessionStore] as well if the backend can do a conditional
 // write; without it, two requests writing the same session at the same instant
@@ -199,6 +202,10 @@ type sessionData struct {
 	// the life of the handle and is never trimmed: a re-save must be able to
 	// re-apply every write the request made.
 	dirty map[string]json.RawMessage
+	// retired is set once a save finds the id no longer names this session —
+	// rotated away, expired, or recycled. Later writes through the same handle
+	// then short-circuit instead of re-round-tripping the store to relearn it.
+	retired bool
 }
 
 // sessionBlob is the wire form of a session. Field names are short because
@@ -342,7 +349,7 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 	}
 	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp, dirty: map[string]json.RawMessage{}}
 	if m.ttl > 0 && time.Until(exp) < m.ttl/2 {
-		m.save(ctx, id, d) // sliding idle window, at one write per half-TTL rather than per request
+		m.save(ctx, id, d, false) // sliding idle window, at one write per half-TTL rather than per request
 	}
 	return d, nil
 }
@@ -354,16 +361,26 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 // finished first. What is left is a read-modify-write window of one store
 // round-trip, and last-writer-wins on the SAME key — see [Session].
 //
-// A blob that is absent, corrupt, or carries a different sid falls back to
-// writing d's own values whole, which is also how a freshly minted session and
-// the new id of a Rotate get their first write.
+// mint says id is a brand-new home for d — a freshly created session, or the
+// new id of a Rotate — and is the ONLY case allowed to write where the store
+// holds no live blob for it. Without that gate a handle still holding a
+// pre-rotation id would re-create a valid session under it on its next write:
+// the rotated-away session never sees the write, and the id Rotate exists to
+// invalidate resolves again.
+//
 // sessionSaveRetries caps the CAS loop. Contention on ONE session id is a
-// handful of tabs, not a thundering herd, so exhausting this means the store is
-// pathological and an unconditional write is the lesser evil.
+// handful of tabs, not a thundering herd, so exhausting it means the store is
+// pathological; the write is dropped rather than applied unconditionally over
+// a blob up to that many revisions stale, which is the very lost update the
+// CAS loop exists to prevent.
 const sessionSaveRetries = 8
 
-func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
+func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) {
 	d.mu.Lock()
+	if d.retired {
+		d.mu.Unlock()
+		return
+	}
 	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
 	for k, v := range d.dirty {
 		dirty[k] = v
@@ -376,6 +393,12 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
 
 	cas, _ := m.store.(AtomicSessionStore)
 	for attempt := 0; ; attempt++ {
+		if cas != nil && attempt >= sessionSaveRetries {
+			log.Printf("via: session write gave up after %d CAS attempts — the store is under "+
+				"pathological contention on one session; the write is dropped rather than "+
+				"clobbering the writers that got through", sessionSaveRetries)
+			return
+		}
 		var (
 			raw []byte
 			ver uint64
@@ -393,15 +416,23 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
 			log.Printf("via: session store Load failed before save: %v", err)
 			return
 		}
+		var b sessionBlob
+		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid && b.Vals != nil &&
+			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
+		if !live && !mint {
+			log.Print("via: session id retired (rotated away or expired); write dropped — " +
+				"writing under it would revive an id that no longer names this session")
+			d.mu.Lock()
+			d.retired = true
+			d.mu.Unlock()
+			return
+		}
 		vals := make(map[string]json.RawMessage, len(own))
 		for k, v := range own {
 			vals[k] = v
 		}
-		if ok {
-			var b sessionBlob
-			if json.Unmarshal(raw, &b) == nil && b.SID == sid && b.Vals != nil {
-				vals = b.Vals
-			}
+		if live {
+			vals = b.Vals
 		}
 		for k, v := range dirty {
 			if v == nil {
@@ -417,7 +448,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
 			log.Printf("via: session encode failed: %v", err)
 			return
 		}
-		if cas != nil && attempt < sessionSaveRetries {
+		if cas != nil {
 			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
 			if err != nil {
 				log.Printf("via: session store SaveIf failed: %v", err)
@@ -443,7 +474,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
 func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
 	id := randomToken() // 128-bit URL-safe token, same generator as the tab id
 	d := &sessionData{sid: randomToken(), vals: map[string]json.RawMessage{}, dirty: map[string]json.RawMessage{}}
-	m.save(ctx, id, d)
+	m.save(ctx, id, d, true)
 	return id, d
 }
 
@@ -452,7 +483,7 @@ func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
 // session's identity, and a live connection bound to it stays bound.
 func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData) string {
 	newID := randomToken()
-	m.save(ctx, newID, d)
+	m.save(ctx, newID, d, true)
 	if oldID != "" {
 		if err := m.store.Delete(ctx, oldID); err != nil {
 			// Returning the new id while the old one still resolves would void
@@ -521,11 +552,16 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // another. Two requests writing the SAME type resolve last-writer-wins.
 //
 // The merge is a read-modify-write. Against a store that implements
-// [AtomicSessionStore] — the default one does — it retries until it applies to
-// the revision it merged against, so nothing is lost. Against a store that does
-// not, the window between the read and the write is real: a write landing
-// inside another's round-trip is dropped. Either way a session is a value bag,
-// not a counter and not a lock.
+// [AtomicSessionStore] — the default one does — it re-merges and retries until
+// its write applies to the revision it merged against, so a concurrent write is
+// not clobbered; under contention that will not settle it gives up after a
+// bounded number of attempts and drops ITS OWN write, with a log. Against a
+// store that does not, the window between the read and the write is real: a
+// write landing inside another's round-trip is dropped. Either way a session is
+// a value bag, not a counter and not a lock.
+//
+// A write through a handle whose id has been rotated away or has expired is
+// also dropped, with a log: reviving that id would undo [Session.Rotate].
 type Session struct {
 	mgr    *sessionManager
 	id     string // "" until resolved or created
@@ -609,7 +645,7 @@ func (s *Session) set(key string, value json.RawMessage) {
 	d.vals[key] = value
 	d.dirty[key] = value
 	d.mu.Unlock()
-	s.mgr.save(s.storeCtx(), s.id, d)
+	s.mgr.save(s.storeCtx(), s.id, d, false)
 }
 
 // Rotate issues a fresh session id, carries the existing data to it, and
@@ -644,7 +680,7 @@ func (s *Session) clear(key string) {
 	delete(s.data.vals, key)
 	s.data.dirty[key] = nil // tombstone: a Clear must survive the merge, not just be absent from it
 	s.data.mu.Unlock()
-	s.mgr.save(s.storeCtx(), s.id, s.data)
+	s.mgr.save(s.storeCtx(), s.id, s.data, false)
 }
 
 // Session resolves the browser session for this Ctx, always returning a usable

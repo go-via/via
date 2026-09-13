@@ -2,9 +2,12 @@ package via_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,4 +313,94 @@ func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	ok, body := app.Action(1).Host("app.example").Origin("https://app.example").Fire()
 	assert.Equal(t, http.StatusOK, ok, "https Origin on a TLS request to the same host matches")
 	assert.Contains(t, body, "<h1>1</h1>")
+}
+
+// liveSessStream is a live embed (its State makes the root a live unit) that
+// establishes its session in OnInit, so the connect response carries the cookie.
+type liveSessStream struct{ n via.State[int] }
+
+func (c *liveSessStream) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(member{Name: "bob"})
+	return nil
+}
+func (c *liveSessStream) View() h.H { return h.Div(h.Str("live"), c.n.Display()) }
+
+// outageStore is a real store that can be switched to failing Load, so a test
+// can open a stream while the backend is healthy and then blip it.
+type outageStore struct {
+	via.SessionStore
+	mu   sync.Mutex
+	down bool
+}
+
+func (s *outageStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	s.mu.Lock()
+	down := s.down
+	s.mu.Unlock()
+	if down {
+		return nil, false, errors.New("session store down")
+	}
+	return s.SessionStore.Load(ctx, id)
+}
+
+// A connect resolves the session BEFORE OnInit so the stream is bound to the
+// identity the browser held when it opened. If the store cannot answer, that
+// resolve must fail the connect: admitting the stream would leave it forever
+// unbound — no later live action binds it, since one sees a session that
+// already existed — and the tab id would be a bearer credential good from any
+// request for the connection's whole life.
+func TestSSE_refusesToConnectWhileTheSessionStoreIsDown(t *testing.T) {
+	t.Parallel()
+	store := &outageStore{SessionStore: via.MemorySessionStore()}
+	srv := serve(t, via.Register(liveSessStream{},
+		via.WithSessionStore(store),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+
+	ck := sseSessionCookie(t, srv)
+	require.NotNil(t, ck, "precondition: a healthy connect establishes the session cookie")
+
+	store.mu.Lock()
+	store.down = true
+	store.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.AddCookie(ck)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"a connect during a session-store outage must be refused, not admitted unbound")
+	assert.Contains(t, string(body), "session store unavailable")
+	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/event-stream",
+		"no stream may be opened when the session behind it could not be resolved")
+	assert.NotContains(t, string(body), "viatab",
+		"a refused connect must not hand out a tab id")
+}
+
+// sseSessionCookie opens one healthy stream and returns the session cookie its
+// OnInit established, cancelling the request.
+func sseSessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	for _, ck := range resp.Cookies() {
+		if ck.Name == "via_session" {
+			return ck
+		}
+	}
+	return nil
 }

@@ -338,3 +338,100 @@ func TestSessionSaveRetriesWhenOvertakenMidMerge(t *testing.T) {
 		t.Errorf("the retried write did not land: %+v ok=%v", a, ok)
 	}
 }
+
+// Rotate's whole point is that the pre-rotation id stops resolving. A handle
+// still pinned to that id — a Tick/Listen snapshot, or a plain request resolved
+// just before the Rotate — must NOT re-create a session under it on its next
+// write.
+func TestSessionWriteThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
+	m := newSessionManager(&config{})
+	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
+	s0.Put(auditA{1})
+	old := s0.id
+
+	pinned := auditResolve(t, m, old) // resolved before the rotation
+
+	newID := s0.Rotate()
+	if newID == "" || newID == old {
+		t.Fatalf("Rotate returned %q", newID)
+	}
+	if _, d, _ := m.resolve(auditReq(m, old)); d != nil {
+		t.Fatal("precondition: the pre-rotation id still resolves immediately after Rotate")
+	}
+
+	pinned.Put(auditA{2})
+
+	if _, d, err := m.resolve(auditReq(m, old)); err != nil || d != nil {
+		t.Error("a write through the pinned handle re-created a session under the pre-rotation id")
+	}
+	after := auditResolve(t, m, newID)
+	if a, ok := after.Get[auditA](); !ok || a.N != 1 {
+		t.Errorf("the rotated-to session was disturbed by the dropped write: %+v ok=%v", a, ok)
+	}
+}
+
+// When Delete fails, Rotate leaves an expired tombstone under the old id. A
+// pinned handle writing there must not overwrite the tombstone with live values
+// (which would also refresh its expiry) — that would defeat the tombstone.
+func TestSessionWriteThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
+	fs := &failStore{SessionStore: MemorySessionStore()}
+	m := newSessionManager(&config{sessionStore: fs})
+	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
+	s0.Put(auditA{1})
+	old := s0.id
+
+	pinned := auditResolve(t, m, old)
+
+	fs.mu.Lock()
+	fs.delErr = errors.New("redis down")
+	fs.mu.Unlock()
+	newID := s0.Rotate()
+	if newID == "" || newID == old {
+		t.Fatalf("Rotate returned %q", newID)
+	}
+
+	pinned.Put(auditA{2})
+
+	if _, d, err := m.resolve(auditReq(m, old)); err != nil || d != nil {
+		t.Error("a write through the pinned handle overwrote the rotation tombstone, reviving the old id")
+	}
+	after := auditResolve(t, m, newID)
+	if a, ok := after.Get[auditA](); !ok || a.N != 1 {
+		t.Errorf("the rotated-to session was disturbed by the dropped write: %+v ok=%v", a, ok)
+	}
+}
+
+// casStuckStore never lets a conditional write apply once armed: the CAS loop
+// can retry forever and never settle.
+type casStuckStore struct {
+	AtomicSessionStore
+	armed atomic.Bool
+}
+
+func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error) {
+	if s.armed.Load() {
+		return false, nil
+	}
+	return s.AtomicSessionStore.SaveIf(ctx, id, data, ttl, version)
+}
+
+// Contention the CAS loop cannot settle means every merge this request made was
+// against a revision that moved on. Falling back to an unconditional write
+// there applies a stale merge over whichever writers did get through — exactly
+// the lost update the loop exists to prevent. The write must be dropped.
+func TestSessionSaveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
+	cs := &casStuckStore{AtomicSessionStore: MemorySessionStore().(AtomicSessionStore)}
+	m := newSessionManager(&config{sessionStore: cs})
+	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
+	s0.Put(auditA{1})
+	id := s0.id
+
+	cs.armed.Store(true)
+	auditResolve(t, m, id).Put(auditA{2})
+	cs.armed.Store(false)
+
+	final := auditResolve(t, m, id)
+	if a, ok := final.Get[auditA](); !ok || a.N != 1 {
+		t.Errorf("an unsettled CAS loop wrote unconditionally instead of dropping: %+v ok=%v", a, ok)
+	}
+}
