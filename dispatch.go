@@ -349,6 +349,15 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 			res = actionResult{panicked: true}
 		}
 	}()
+	// Registered BEFORE the hydrate loop so EVERY exit unwinds it, not just the
+	// one that reaches a push: a malformed arg, an unrendered arg, a paramMiss,
+	// a handler panic or a reloadUnit error all return without pushWork, and
+	// livePush's restore is the only other one — so without this the client's
+	// posted values stayed on the instance for the next Tick/Listen handler to
+	// read. Deferred rather than inline so the handler and reloadUnit still see
+	// the hydrated values; a Set inside the handler drops its own slot, so a
+	// server write still survives.
+	defer lc.rev.restore()
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
 			hydrate(raw)
