@@ -124,7 +124,12 @@ func jarClient(t *testing.T) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	return &http.Client{Jar: jar}
+	// Its OWN transport: a nil Transport means http.DefaultTransport, shared with
+	// every other parallel test, so one test's server teardown closed this
+	// client's idle connections mid-request.
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(tr.CloseIdleConnections)
+	return &http.Client{Jar: jar, Transport: tr}
 }
 
 func fireAction(t *testing.T, c *http.Client, base string, n int) (int, string) {

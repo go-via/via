@@ -1415,3 +1415,88 @@ func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
 	assert.Contains(t, body, "not found")
 }
+
+// --- F1 regression: two live units on one connection.
+//
+// The revert set used to be reallocated per push and stored on the CONNECTION,
+// while a hydrator closure notes its undo into the rev of the Ctx that bound
+// the signal. So a SECOND live unit pushing in between left the first unit
+// pointing at a set nothing restores: its next action's posted value survived
+// into the AUTHORITY render and opened the gated branch for real. The
+// single-unit tests above all pass against that bug — this shape is the one
+// that catches it, and it is the README's canonical composition.
+
+type livePrivClock struct{ n int }
+
+func (c *livePrivClock) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, c.tick)
+	return nil
+}
+func (c *livePrivClock) tick(*via.Ctx) { c.n++ }
+func (c *livePrivClock) View() h.H     { return h.Div(h.Str("beat: " + fmt.Sprint(c.n))) }
+
+type twoLivePage struct {
+	Priv  livePriv
+	Clock livePrivClock
+}
+
+func (p *twoLivePage) View() h.H { return h.Div(via.Embed(p.Priv), via.Embed(p.Clock)) }
+
+func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(twoLivePage{Priv: livePriv{live: true}}))
+	conn := app.Connect()
+
+	// The sibling must push at least once BEFORE the forgery: that push is what
+	// used to swap the connection's revert set out from under Priv.
+	require.Contains(t, conn.Await("beat: 1"), "beat: 1")
+
+	// The forgery rides on an action Priv IS allowed to call.
+	code, _ := app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
+	require.Equal(t, http.StatusNoContent, code)
+	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
+
+	for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
+		url := conn.ActionURL("0", n)
+		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"priv__isAdmin":true}`).Fire()
+		assert.Equal(t, http.StatusGone, code, what+" must not be dispatchable: "+url)
+		assert.Contains(t, body, "does not bind it")
+	}
+	require.Equal(t, http.StatusNoContent,
+		mustFire(t, app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
+	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0", "no gated handler may have run")
+}
+
+// --- F2: a Tick/Listen handler sees the SERVER's value, not the client's.
+//
+// The handler runs between a display render and the next push, straight against
+// the live instance. The display render applies the client's posted signals to
+// that instance, so without a restore at the END of a push the handler read
+// attacker-controlled data as input.
+
+type tickReadsSignal struct {
+	Name via.Signal[string]
+	seen string
+}
+
+func (p *tickReadsSignal) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen = p.Name.Get() })
+	return nil
+}
+func (p *tickReadsSignal) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.P(h.Str("seen: ["+p.seen+"]")))
+}
+
+func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tickReadsSignal{}))
+	conn := app.ConnectWith(`{"name":"ATTACKER"}`)
+
+	// The first tick pushes; the second is the one that reads the instance
+	// AFTER a display render has applied the connect body to it.
+	require.Contains(t, conn.Await("seen: ["), "seen: []")
+	frame := conn.Await("seen: [")
+	assert.Contains(t, frame, "seen: []", "the handler read the client's value: %s", frame)
+	// The client must still SEE what it posted — the display render is unchanged.
+	assert.Contains(t, frame, ">ATTACKER<")
+}

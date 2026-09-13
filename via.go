@@ -965,12 +965,19 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // Signal.bind stamps the dirty sink at render time: the Ctx registered on the
 // connection must be the one a later Set writes through.
 //
-// Cost: one render per push when the client has posted nothing, two once it
-// has — the same floor the plain path pays for a Bind()ed slot.
+// Cost: TWO renders per push on any page carrying a Bind() — a real Datastar
+// connect body is the whole signal store, so lc.client holds every bindable
+// slot from the first connect on. Each extra render re-runs every plain child's
+// OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
 func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []byte) {
-	lc.rev.restore()
-	rev := newRevertSet()
-	lc.rev = rev
+	// ONE set for the life of the connection, never replaced: a hydrator closure
+	// notes its undo into the rev of the Ctx that bound the signal, so a second
+	// live unit's push swapping lc.rev would leave that unit pointing at a set
+	// nothing restores — and its next action's client value would survive into
+	// the AUTHORITY render. restore() clears the map, so reuse is not growth:
+	// it is keyed by slot and bounded by the page's signal count.
+	rev := lc.rev
+	rev.restore()
 	auth, body := render(rev)
 	bind := auth
 	done := map[string]bool{}
@@ -984,6 +991,12 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	if bind != auth {
 		pruneToAuthority(bind, auth)
 	}
+	// The display render's client values are undone HERE, not just before the
+	// next authority render: between pushes a Tick/Listen handler reads the
+	// instance directly, and leaving the client's values on it hands attacker
+	// data to server-side handler code. body is already built, so the frame the
+	// client sees is unaffected.
+	rev.restore()
 	return bind, body
 }
 
