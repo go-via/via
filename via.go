@@ -1110,6 +1110,9 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Session.ensure's "no cookie can be set" warning fire, as documented.
 	for _, u := range units {
 		u.sessW = nil
+		if u.session != nil {
+			u.session.w = nil // the handle cached w at resolve time; clearing the Ctx alone left it live
+		}
 	}
 
 	streaming = true

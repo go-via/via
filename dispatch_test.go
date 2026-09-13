@@ -1758,3 +1758,97 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 		"the executed render is an intersection with auth per (handler, arg), not per handler")
 	assert.NotContains(t, body, "del:3")
 }
+
+// liveBoundRoot is tabGuard with a Bind()ed slot, so a POST carrying that
+// signal takes a SECOND discovery pass — the pass whose bind Ctx never ran the
+// root's OnInit and so used to read live=false.
+type liveBoundRoot struct {
+	Q    via.Signal[string]
+	hits *int
+}
+
+func (g *liveBoundRoot) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
+func (g *liveBoundRoot) tick(ctx *via.Ctx)         {}
+func (g *liveBoundRoot) Bump(ctx *via.Ctx)         { *g.hits++ }
+func (g *liveBoundRoot) View() h.H {
+	return h.Div(h.Input(g.Q.Bind()), h.Button(via.On("click", g.Bump)))
+}
+
+func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`{}`, `{"q":"x"}`} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			app := vt.Serve(t, via.Register(liveBoundRoot{hits: &calls}))
+			conn := app.Connect()
+			defer conn.Close()
+
+			status, _ := app.Action(0).Body(body).Fire()
+			assert.Equal(t, http.StatusGone, status,
+				"liveness is decided by the auth render; a posted signal that adds a discovery pass must not bypass it")
+			assert.Zero(t, calls, "and the live unit must not have been touched")
+		})
+	}
+}
+
+// sessKid writes the session from its own OnInit; two of them under a root that
+// never calls Session() is the sibling case.
+type sessKid struct{ Tag string }
+
+func (k *sessKid) OnInit(ctx *via.Ctx) error { ctx.Session().Put(sessUser{Name: "ann"}); return nil }
+func (k *sessKid) View() h.H                 { return h.P(h.Str(k.Tag)) }
+
+type sessSiblings struct {
+	Q    via.Signal[string]
+	A, B sessKid
+	hit  string
+}
+
+func (p *sessSiblings) Save(ctx *via.Ctx) {
+	u, ok := ctx.Session().Get[sessUser]()
+	p.hit = fmt.Sprintf("who:%v:%s", ok, u.Name)
+}
+
+func (p *sessSiblings) View() h.H {
+	return h.Div(
+		h.Input(p.Q.Bind()),
+		via.Embed(p.A), via.Embed(p.B),
+		h.P(h.Str(p.hit)),
+		h.Button(via.On("click", p.Save)),
+	)
+}
+
+func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(sessSiblings{}))
+
+	req, err := http.NewRequest(http.MethodGet, app.URL()+"/", nil)
+	require.NoError(t, err)
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"the root resolves the session once per request; siblings must inherit it, not mint their own")
+}
+
+func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(sessSiblings{}))
+	page := fetchPage(t, app, "/")
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"a second discovery pass must not re-mint per sibling")
+	assert.Contains(t, string(b), "who:true:ann",
+		"and the handler must read the very session the children wrote")
+}
