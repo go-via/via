@@ -426,8 +426,19 @@ as a re-read of the README rather than a diff.
   instead. **Breaking:** a `Bind()`ed signal's posted value no longer persists as
   server state between requests on a live page — it is re-applied to each
   display render wherever that render still binds the slot, which is exactly
-  what the plain path has always done. Reading one in a `Tick`/`Listen` handler,
-  or in a `View` that no longer `Bind()`s it, now sees the server's value.
+  what the plain path has always done. A push undoes the display render's
+  application before it returns, so reading one in a `Tick`/`Listen` handler, or
+  in a `View` that no longer `Bind()`s it, sees the server's value.
+  **Cost:** a page containing any `Bind()` pays TWO renders per push, not one —
+  a real Datastar connect body is the whole signal store, so the client's posted
+  slots are never empty once the page has a bindable signal. Each extra render
+  also re-runs every plain child's `OnInit` (`inheritRequestScope` sets
+  `doInit`) and re-walks the live-nesting check, so keep a plain child's
+  `OnInit` cheap or hold the data on the live root.
+  A page's live units share ONE revert set for the life of the connection: a
+  per-push set left a second live unit's registered `Ctx` pointing at a set
+  nothing restored, which re-opened the escalation above on any page with two
+  live units.
 
 - **A `ctx.Param` that no longer decodes answers 404 on the live path too.** It
   was the plain path's 404 and the live path's 500-plus-stack-dump for the same

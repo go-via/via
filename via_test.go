@@ -969,8 +969,8 @@ func BenchmarkRender_thousandActionBindings(b *testing.B) {
 // instances of the same type — the cache is keyed on the code pointer plus the
 // receiver's offset, so a key that dropped either half would either churn URLs
 // between renders or collapse two receivers onto one id.
+// Not Parallel: it captures the process-global log, which every other test writes to.
 func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
-	t.Parallel()
 	handler := via.Handler(idTwins{})
 	first := actionURLs(t, handler)
 	second := actionURLs(t, handler)
@@ -1082,8 +1082,8 @@ func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 
 // valueReceiverEmbed is only reachable through via.Embed, so its View receiver
 // is checked where Embed resolves the child type rather than at Mount.
+// Not Parallel: it captures the process-global log, which every other test writes to.
 func TestSignal_valueReceiverEmbedPanicsAtRender(t *testing.T) {
-	t.Parallel()
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
