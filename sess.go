@@ -20,8 +20,8 @@ const (
 	minSessionKeyLen     = 16 // bytes; below this an HMAC-SHA256 key is guessable
 )
 
-// sessionData is one browser session's value bag. Values are keyed by an opaque
-// key (the Sess* helpers use a per-type sentinel) so distinct typed values coexist.
+// sessionData is one browser session's value bag, keyed by an opaque per-type
+// sentinel so distinct typed values coexist.
 type sessionData struct {
 	mu   sync.Mutex
 	vals map[any]any
@@ -54,8 +54,8 @@ func (st *sessionStore) get(id string) (*sessionData, bool) {
 	return d, true
 }
 
-// reID moves an existing session's data to a fresh id and drops the old one, so
-// a captured pre-rotation id no longer resolves.
+// reID moves a session's data to a fresh id and drops the old one, so a
+// captured pre-rotation id no longer resolves.
 func (st *sessionStore) reID(oldID string, d *sessionData) string {
 	newID := randomToken()
 	st.mu.Lock()
@@ -74,9 +74,8 @@ func (st *sessionStore) create() (string, *sessionData) {
 	return id, d
 }
 
-// sessionManager holds the per-Register session config + store. Sessions are
-// always available — every Register/NewRouter constructs one; the cookie is
-// only ever issued lazily on the first write.
+// sessionManager holds the per-Register session config and store. Sessions are
+// always available; the cookie is issued lazily on the first write.
 type sessionManager struct {
 	store        *sessionStore
 	key          []byte
@@ -88,10 +87,9 @@ type sessionManager struct {
 	mismatchOnce sync.Once // warn once about signature-mismatch cookies (the two-apps clobber)
 }
 
-// newSessionManager resolves the signing key in order: WithSessionKey →
-// VIA_SESSION_KEY env → a random per-process key. The random fallback is fine
-// for dev and warns on first use; a stable key is what makes sessions survive
-// restarts and span pods.
+// newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
+// → a random per-process key. The random fallback warns on first use; a stable
+// key is what makes sessions survive restarts and span pods.
 func newSessionManager(cfg *config) *sessionManager {
 	key := cfg.sessionKey
 	if len(key) == 0 {
@@ -107,9 +105,8 @@ func newSessionManager(cfg *config) *sessionManager {
 		}
 		random = true
 	} else if len(key) < minSessionKeyLen {
-		// A short key is guessable — HMAC-SHA256 accepts any length, so this
-		// would otherwise fail silently into a forgeable signature. Fail at
-		// construction (WithSessionKey / VIA_SESSION_KEY), not at request time.
+		// HMAC-SHA256 accepts any length, so a short key would fail silently
+		// into a forgeable signature. Fail at construction, not at request time.
 		panic(fmt.Sprintf("via: session key must be at least %d bytes (got %d)", minSessionKeyLen, len(key)))
 	}
 	ttl := cfg.sessionTTL
@@ -123,17 +120,16 @@ func newSessionManager(cfg *config) *sessionManager {
 	return &sessionManager{store: newSessionStore(ttl), key: key, cookie: name, ttl: ttl, forceSecure: cfg.sessionSecure, randomKey: random}
 }
 
-// sign returns base64url(HMAC-SHA256(key, id)) — the signature appended to the id
-// in the cookie so a tampered id is rejected.
+// sign returns the signature appended to the id in the cookie, so a tampered
+// id is rejected.
 func (m *sessionManager) sign(id string) string {
 	mac := hmac.New(sha256.New, m.key)
 	mac.Write([]byte(id))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// resolve returns the session data for the request's cookie, if the cookie is
-// present, its signature verifies, and the id is still in the store. It never
-// creates a session — reads must not mint one.
+// resolve returns the session data for the request's cookie when it verifies
+// and is still in the store. It never creates one — reads must not mint.
 func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool) {
 	if req == nil {
 		return "", nil, false
@@ -144,10 +140,9 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool)
 	}
 	id, ok := m.verify(ck.Value)
 	if !ok {
-		// A cookie that fails its signature is almost always another app on the
-		// same host signing the same cookie name with a different key (two dev
-		// servers on localhost ports). Fall through to a fresh session, but say
-		// so loudly once — silence here reads as "my session randomly resets".
+		// Almost always another app on the same host signing the same cookie
+		// name with a different key (two dev servers on localhost ports).
+		// Silence here reads as "my session randomly resets".
 		m.mismatchOnce.Do(func() {
 			log.Print("via: session cookie failed its signature check — likely another app on this host " +
 				"uses the same cookie name with a different key; issuing a fresh session " +
@@ -187,37 +182,30 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 	})
 }
 
-// Session is a browser session's value bag, resolved from the signed cookie. It
-// is created lazily on the first write, and only then is the cookie issued — an
-// app that never stores anything stays cookieless.
+// Session is a browser session's value bag, resolved from the signed cookie,
+// created lazily on the first write — an app that never stores anything stays
+// cookieless. A value is keyed by the Go type used to store it.
 //
-// A session value is keyed by the Go type used to store it — one User{} per
-// session, one ShoppingCart{} per session, and so on. Sessions do not rotate
-// their id on their own: call [Session.Rotate] at an auth-state change
-// (login, logout, privilege elevation) to invalidate a session id an
-// attacker may have planted before that change (fixation defense).
+// SECURITY: sessions do NOT rotate their id on their own. Call [Session.Rotate]
+// at every auth-state change (login, logout, privilege elevation) to invalidate
+// an id an attacker may have planted before it — fixation defense.
 //
-// The store is in-memory and single-pod (the 1.0 scope). Expiry is enforced
-// lazily on access: a session idle past its TTL stops resolving, but a session
-// that is never accessed again is not actively swept — acceptable because a
-// session is only created on a write (typically login), so growth tracks real
-// authenticated sessions, not anonymous traffic. A background sweep / durable
-// or cross-pod store is deferred to the backplane work.
+// The store is in-memory and single-pod. Expiry is lazy on access: a session
+// idle past its TTL stops resolving, but one never accessed again is not
+// actively swept — acceptable because a session is created only on a write
+// (typically login), so growth tracks authenticated sessions, not anonymous
+// traffic.
 type Session struct {
 	mgr    *sessionManager
-	id     string // current session id; "" until resolved or created
+	id     string // "" until resolved or created
 	data   *sessionData
-	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a plain action, OnInit, AND a live action — dispatchOverStream is synchronous, so a live action's response hasn't gone out yet either
+	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, AND a live action
 	secure bool
 }
 
-// ensure returns the session's data, creating the session (and issuing the
-// cookie) on first write. A plain action, OnInit, and a live action
-// (dispatchOverStream is synchronous, so its response hasn't gone out yet either)
-// all have an open response and can set the cookie normally. A write with no
-// open response at all — a Tick or Listen handler's Ctx — still stores into
-// a fresh session but logs a warning, since the browser will never carry
-// that id back.
+// ensure creates the session and issues the cookie on first write. A write with
+// no open response at all — a Tick or Listen handler's Ctx — still stores into a
+// fresh session but warns, since the browser will never carry that id back.
 func (s *Session) ensure() *sessionData {
 	if s.mgr == nil {
 		return nil
@@ -262,17 +250,17 @@ func (s *Session) set(key any, value any) {
 	d.mu.Unlock()
 }
 
-// Rotate issues a fresh session id, carrying the existing data to it, and
-// re-sets the cookie on the open response — call it after an auth state change
-// (login, privilege elevation) so a fixed pre-auth id is invalidated. Returns
-// the new id, or "" when no response is open to carry the new cookie (a live
-// action): rotate from a plain action or OnInit.
+// Rotate issues a fresh session id, carries the existing data to it, and
+// re-sets the cookie — call it after every auth-state change (login, privilege
+// elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""
+// when no response is open to carry the cookie; rotate from a plain action or
+// OnInit.
 func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
 	}
 	if s.data == nil {
-		// Nothing stored yet — rotation of an empty session still mints a fresh id.
+		// Rotating an empty session still mints a fresh id.
 		s.id, s.data = s.mgr.store.create()
 		s.mgr.setCookie(s.w, s.id, s.secure)
 		return s.id
@@ -291,9 +279,8 @@ func (s *Session) clear(key any) {
 	s.data.mu.Unlock()
 }
 
-// Session resolves the browser session for this Ctx. Returns a usable handle
-// even when sessions are disabled (reads yield nothing, writes no-op), so the
-// Sess* helpers never need a nil check. The cookie is read here but issued
+// Session resolves the browser session for this Ctx, always returning a usable
+// handle so callers never need a nil check. The cookie is read here but issued
 // only on the first write (see Session.ensure).
 func (c *Ctx) Session() *Session {
 	if c.session != nil {
@@ -312,27 +299,24 @@ func (c *Ctx) Session() *Session {
 	return s
 }
 
-// typeKey returns a stable, comparable key unique to T — a typed nil pointer,
-// so distinct types never collide and the same type always matches. No reflect:
-// (*T)(nil) boxed in an interface carries T's identity for free.
+// typeKey is a typed nil pointer: boxed in an interface it carries T's identity
+// for free, with no reflect.
 func typeKey[T any]() any { return (*T)(nil) }
 
-// Put stores a typed value in the session, keyed by its type — use it for the
-// one-per-session value like the logged-in user. Sessions are always on and
-// lazy: the first Put issues the cookie, and only where a response is open —
-// a plain action, OnInit, or a live action (its response hasn't gone
-// out yet when the action runs). Put does not rotate the session id — call
-// [Session.Rotate] right after a Put that changes auth state (login,
-// privilege elevation) so a pre-auth id an attacker planted doesn't survive.
-// WithSessionKey / WithSessionTTL / WithSessionCookieName tune, but do not
-// gate, the behavior.
+// Put stores a typed value in the session, keyed by its type — the
+// one-per-session value like the logged-in user. The first Put issues the
+// cookie, and only where a response is open: a plain action, OnInit, or a live
+// action.
+//
+// SECURITY: Put does NOT rotate the session id. Call [Session.Rotate] right
+// after a Put that changes auth state, so a pre-auth id an attacker planted
+// doesn't survive the login.
 func (s *Session) Put[T any](v T) {
 	s.set(typeKey[T](), v)
 }
 
 // Get reads the value stored with [Session.Put] for type T, returning the zero
-// value and false when nothing is stored (including on an app that hasn't
-// enabled sessions).
+// value and false when nothing is stored.
 func (s *Session) Get[T any]() (T, bool) {
 	var zero T
 	raw, ok := s.load(typeKey[T]())
@@ -343,7 +327,7 @@ func (s *Session) Get[T any]() (T, bool) {
 	return v, ok
 }
 
-// Clear removes the value stored under T's key — e.g. a logout dropping the
+// Clear removes the value stored under T's key — a logout dropping the
 // session-held user.
 func (s *Session) Clear[T any]() {
 	s.clear(typeKey[T]())

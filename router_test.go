@@ -610,14 +610,12 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	r.Mount("/b", counter{count: &store{}})
 	srv := serve(t, r)
 
-	// Each page renders at its path, with its actions namespaced under it.
 	_, a := do(t, srv, http.MethodGet, "/a", "")
 	assert.Contains(t, a, `<h1>0</h1>`)
 	assert.Contains(t, a, `@post('`+actionURL(t, a, "r", 1)+`'`, "page /a's Inc must post under /a")
 	_, b := do(t, srv, http.MethodGet, "/b", "")
 	assert.Contains(t, b, `@post('`+actionURL(t, b, "r", 1)+`'`, "page /b's Inc must post under /b")
 
-	// Inc on /a; /b must be untouched (independent state + routing).
 	do(t, srv, http.MethodPost, actionURL(t, a, "r", 1), "{}")
 	_, a2 := do(t, srv, http.MethodGet, "/a", "")
 	assert.Contains(t, a2, `<h1>1</h1>`, "/a's counter must reflect its action")

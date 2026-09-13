@@ -67,13 +67,10 @@ func TestSSE_plainAppHasNoStream(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a plain app must not serve the SSE stream")
 }
 
-// A stream must emit a periodic keepalive even on an embed with no
-// ticks: a successful write proves the peer is still there, and a FAILED
-// write is the only in-band way to notice a silently-dropped (half-open) peer
-// so the stream goroutine and its timers don't leak. It must be an SSE
-// comment frame, not a signal/element patch, so it never mutates client
-// state. This runs at the fixed 25s cadence — synctest makes the wait free in
-// wall time.
+// A stream must emit a periodic keepalive even on an embed with no ticks: a
+// failed write is the only in-band way to notice a half-open peer. It must be
+// an SSE comment frame, not a signal/element patch, so it never mutates
+// client state. Runs at the real 25s cadence — synctest makes the wait free.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(quietEmbed{}))
@@ -110,15 +107,11 @@ func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	})
 }
 
-// stalledPeer models a peer whose receive side has stalled: the connect-time
-// frame goes through (a real handshake reaches this far), but the next write
-// — the keepalive — can only succeed once the peer reads again (never, here)
-// or the per-frame write deadline set via http.ResponseController expires.
-// The in-memory httptest network's transport buffer turned out to be
-// unbounded (internal/nettest.Conn defaults bufMax to math.MaxInt), so
-// "drive frames until the pipe is full" cannot reproduce a blocked write over
-// it; a ResponseWriter that itself honors SetWriteDeadline is the direct way
-// to exercise the deadline path, in the same style as halfOpenFlusher above.
+// stalledPeer models a peer whose receive side stalled: the connect frame
+// goes through, but the next write only succeeds once the write deadline set
+// via http.ResponseController expires. httptest's in-memory transport buffer
+// is unbounded (internal/nettest.Conn bufMax defaults to math.MaxInt), so
+// driving frames until the pipe fills cannot reproduce a blocked write there.
 type stalledPeer struct {
 	hdr      http.Header
 	deadline time.Time
@@ -176,12 +169,10 @@ func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 	})
 }
 
-// stalledAfterConnect lets the connect handshake's own frame (the tab-id
-// signals patch) through — recording the tab id off it — then stalls every
-// later write until its deadline elapses. That models an SSE reader that
-// stopped draining while the stream keeps producing frames (a tick, or an
-// action's own deferred push): the handshake completed, so the connection is
-// registered and dispatchable, but nothing it streams afterward ever lands.
+// stalledAfterConnect lets the connect handshake's frame through — recording
+// the tab id off it — then stalls every later write. Models an SSE reader
+// that stopped draining mid-stream: connected and dispatchable, but nothing
+// streamed afterward ever lands.
 type stalledAfterConnect struct {
 	hdr          http.Header
 	deadline     time.Time
@@ -215,11 +206,9 @@ func (s *stalledAfterConnect) Write(p []byte) (int, error) {
 }
 
 // A stalled reader must not delay an action POST behind the deferred push it
-// triggers: the mutation is already done, and the response must say so,
-// before the write ever gets a chance to block. dispatchOverStream used to run the
-// re-render/push inline, so the POST's own goroutine sat parked in
-// tabStream.run for as long as the write took (up to the write timeout, or
-// forever if disabled) even though the action had already succeeded.
+// triggers. dispatchOverStream used to run the re-render/push inline, so the
+// POST's goroutine sat parked in tabStream.run for as long as the write took,
+// even though the action had already succeeded.
 func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler := via.Register(liveClicker{})
@@ -264,10 +253,9 @@ func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 }
 
 // halfOpenFlusher lets the connect handshake succeed but fails the keepalive
-// write, standing in for a peer that vanished mid-session without a FIN (a
-// broken pipe surfacing on the next write). Failing the keepalive specifically —
-// not the first frame — exercises the realistic half-open moment: the stream was
-// healthy, then a later write is the first to notice the peer is gone.
+// write, standing in for a peer that vanished mid-session without a FIN.
+// Failing the keepalive (not the first frame) exercises the realistic
+// half-open moment: healthy, then a later write is the first to notice.
 type halfOpenFlusher struct{ hdr http.Header }
 
 func (f *halfOpenFlusher) Header() http.Header {
@@ -326,11 +314,9 @@ func (p *pulse) View() h.H {
 	return h.Div(h.H1(h.Str("pulse")), h.P(h.Str("beats: "), p.beats.Display()))
 }
 
-// liveServer starts handler on httptest's in-memory network — required for
-// the server's own goroutines (ticks, subscriptions) to run inside a
-// synctest bubble at all — and forces srv.URL to populate (it is set lazily,
-// on the first call to Client/Start/StartTLS) before any caller builds a
-// request string from it.
+// liveServer starts handler on httptest's in-memory network, required for the
+// server's goroutines to run inside a synctest bubble, and forces srv.URL to
+// populate (it's set lazily, on first Client/Start/StartTLS call).
 func liveServer(t testing.TB, handler http.Handler) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewTestServer(t, handler)
@@ -487,11 +473,10 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 	}
 }
 
-// A rendered fragment with an embedded newline must remain ONE SSE event: every
-// content line after the event line must be a `data:` field. A bare,
-// unprefixed line (the naive single-data-line framing) is read by the client as
-// a junk field, silently truncating the patch — the morph then applies broken
-// HTML. This guards that the framing splits multi-line payloads correctly.
+// A rendered fragment with an embedded newline must remain ONE SSE event:
+// every content line after the event line must be a `data:` field. A bare,
+// unprefixed line is read by the client as a junk field, silently truncating
+// the patch, then applying broken HTML.
 func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Register(multiline{}))
@@ -780,11 +765,10 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 		synctest.Wait()
 	})
 
-	// The server's stream goroutine runs on a real httptest listener, outside
-	// the bubble (see I4): synctest.Wait() only settles bubble goroutines, so
-	// the OS actually delivering the close can still be in flight once the
-	// bubble above returns. This wait runs after the bubble, in real wall-clock
-	// time, so it is a genuine (bounded) wait rather than a fake-clock no-op.
+	// The stream goroutine runs on a real httptest listener, outside the
+	// bubble (see I4): synctest.Wait() only settles bubble goroutines, so the
+	// OS delivering the close can still be in flight after it returns. This
+	// wait runs after the bubble, in real wall-clock time.
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -1034,10 +1018,8 @@ func (e *connReqEchoer) View() h.H {
 }
 
 // OnInit must see the SSE connect request, so an embed can authorize or
-// inspect the connection at open time (the same request ticks and subscriptions
-// then run under). The request Host is the server's own address; a pushed frame
-// must reflect it — "example.com" is the fixed host of httptest's in-memory
-// network, not a real loopback address.
+// inspect the connection at open time. "example.com" is httptest's fixed
+// in-memory network host, not a real loopback address.
 func TestOnInit_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Register(connReqEchoer{}))
@@ -1060,11 +1042,9 @@ func (e *tickReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
 }
 
-// Ticks (and subscriptions) run under the embed ctx, so a tick body reading
-// ctx.Request() must see the connection's connect request — there is no
-// triggering request for a timer, and the connection's is the honest answer.
-// This locks that inherited contract, distinct from a handler that triggered an
-// action.
+// Ticks run under the embed ctx, so a tick body reading ctx.Request() must
+// see the connection's connect request — there is no triggering request for
+// a timer, and the connection's is the honest answer.
 func TestTick_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Register(tickReqEchoer{}))
@@ -1076,10 +1056,10 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 }
 
 // pathTicker's Tick reads ctx.Request().URL.Path — a live action's own POST
-// (to /_via/a/r/0) must never be visible from there: before S8, dispatch
-// wrote req/sessW/redirect directly onto the render-time Ctx a Tick holds for
-// the life of the connection, so firing an action left every later tick
-// reading the ACTION's request instead of the connect one.
+// must never be visible from there. Before S8, dispatch wrote req/sessW/
+// redirect directly onto the render-time Ctx a Tick holds for the life of
+// the connection, so firing an action left every later tick reading the
+// ACTION's request instead of the connect one.
 type pathTicker struct {
 	path via.State[string]
 	n    via.State[int]
@@ -1104,13 +1084,10 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 		app := vt.Serve(t, via.Register(pathTicker{}))
 		conn := app.Connect()
 
-		// Fire BEFORE the first tick has pushed — no fake time has advanced
-		// yet, so the connection's current unit is still the exact Ctx object
-		// OnInit handed to Tick. Dispatch writing req/sessW straight onto
-		// that shared object (instead of a fresh per-action Ctx) would only be
-		// observable in this narrow window; waiting for a push first (as the
-		// old version of this test did) replaces the unit with a fresh render
-		// Ctx, making the corruption invisible to any later tick.
+		// Fire BEFORE the first tick pushes, while the connection's unit is
+		// still the exact Ctx OnInit handed to Tick. Waiting for a push first
+		// (the old version of this test) replaces the unit with a fresh
+		// render Ctx, hiding the corruption this test exists to catch.
 		status, _ := app.Action(0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n: 1") // the action landed
@@ -1291,13 +1268,10 @@ func (f *flakyRender) View() h.H {
 }
 
 // A panic in the re-render a dispatched action's pushWork triggers must not
-// take the whole stream goroutine down: the action's own result (204) is
-// already sent to the waiting POST before pushWork runs, so a dead goroutine
-// here would strand every action after it behind a stream that looks alive
-// but never dispatches again. Trigger's mutation succeeds and its 204
-// answers; the render it provokes then panics. A second action (Fix) must
-// still be dispatched and pushed normally, proving the stream goroutine
-// survived.
+// take the whole stream goroutine down — a dead goroutine here would strand
+// every later action behind a stream that looks alive but never dispatches
+// again. Trigger's mutation succeeds and its render then panics; a second
+// action (Fix) must still dispatch and push normally.
 func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(flakyRender{}))
@@ -1449,13 +1423,11 @@ func (r *racyTicker) View() h.H {
 	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
 }
 
-// tabStream.mu guards units: a background tick's push runs replace
-// on the stream goroutine while a concurrent action POST reads the same maps
-// via unit() on the dispatching request's own goroutine. This test runs both
-// in real (not synctest-serialized) time and depth so -race — or the Go
-// runtime's own concurrent-map-access panic — catches a missing lock; it
-// asserts nothing about outcomes because the property under test is the
-// absence of a race, not any particular response.
+// tabStream.mu guards units: a background tick's push runs replace on the
+// stream goroutine while a concurrent action POST reads it via unit() on its
+// own goroutine. Runs in real (not synctest) time so -race, or Go's own
+// concurrent-map-access panic, catches a missing lock; it asserts nothing
+// about outcomes since the property under test is the absence of a race.
 func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Register(racyTicker{}))
@@ -1506,12 +1478,10 @@ func (r *racyNativeForm) View() h.H {
 }
 
 // A native <form> submit on a streaming page re-renders lc.pageRoot in full
-// (dispatchOverStream's modeNative branch) so the browser gets a whole document, not
-// a patch. That render must run on the embed's own serialized goroutine like
-// every other read/write of live state — otherwise it races a concurrent tick.
-// This runs in real (not synctest-serialized) time and concurrency so -race
-// catches a regression; it asserts nothing about outcomes because the
-// property under test is the absence of a race.
+// (dispatchOverStream's modeNative branch), so that render must run on the
+// embed's own serialized goroutine like every other live-state read/write —
+// otherwise it races a concurrent tick. Runs in real time/concurrency so
+// -race catches a regression; asserts nothing about outcomes.
 func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Register(racyNativeForm{}))
@@ -1546,12 +1516,10 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	wg.Wait()
 }
 
-// abandonedAction is a trivial live action dispatched with a request context
-// that is already canceled before ServeHTTP is even called — so
-// req.Context().Err() is guaranteed non-nil from the very first instruction
-// dispatch runs, isolating tabStream.run's first select (pulse-send vs.
-// reqCtx.Done(), both ready at once) from any timing noise in an actual
-// client/server round trip.
+// abandonedAction is dispatched with a request context already canceled
+// before ServeHTTP is called, isolating tabStream.run's first select
+// (pulse-send vs. reqCtx.Done, both ready at once) from real round-trip
+// timing noise.
 type abandonedAction struct {
 	applied *atomic.Int32 // shared across Register's per-connection copy and the test's own handle
 	n       via.State[int]
@@ -1562,13 +1530,10 @@ func (a *abandonedAction) View() h.H {
 	return h.Div(a.n.Display(), h.Button(via.On("click", a.Act)))
 }
 
-// A live action must never mutate state once its own caller has already given
-// up on it — before the fix, a closure handed off to the stream goroutine
-// (see tabStream.run) ran to completion regardless of whether the dispatching
-// request's context was already done by the time the goroutine picked it up.
-// Every one of these requests is abandoned from the start (its context is
-// canceled before dispatch even begins), so every response this handler
-// could possibly produce is one of ok=false or gone — never a mutation.
+// A live action must never mutate state once its caller has given up on it.
+// Before the fix, a closure handed to the stream goroutine (tabStream.run)
+// ran to completion regardless of whether the request's context was already
+// done when the goroutine picked it up.
 func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
 	t.Parallel()
 	root := &abandonedAction{applied: new(atomic.Int32)}
@@ -1644,11 +1609,10 @@ func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 		"a Tick's Ctx must carry the connect request, not nil")
 }
 
-// racyDirtySignal is a live counter with nothing else going on — every Inc
-// dispatch's own push (dispatchOverStream's pushWork replaces lc.units[0] after
-// every action, mutating or not) is the race: many concurrent Incs each read
-// the connection's current unit and each replace it, so one dispatch's read
-// can land on a unit a concurrent dispatch's push is about to make stale.
+// racyDirtySignal is a live counter: every Inc dispatch's own push
+// (dispatchOverStream's pushWork replaces lc.units[0] after every action) is
+// the race — one dispatch's read can land on a unit a concurrent dispatch's
+// push is about to make stale.
 type racyDirtySignal struct {
 	n    via.Signal[int]
 	beat via.State[int]
@@ -1659,12 +1623,10 @@ func (r *racyDirtySignal) View() h.H {
 	return h.Div(r.n.Display(), r.beat.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
 }
 
-// TestLiveAction_signalPatchSurvivesARacingPush proves every Inc dispatch that
-// acks also ships its value over the SSE stream's signals-patch, even under a
-// storm of concurrent Incs on the same connection. Before the fix
-// (dispatchOverStream looking up its unit before handing off to the embed
-// goroutine instead of inside it), a concurrent push could replace the unit
-// in between, and some values in 1..total never arrived.
+// Every Inc dispatch that acks must also ship its value over the SSE
+// signals-patch, even under concurrent Incs. Before the fix (dispatchOverStream
+// looked up its unit before handing off to the embed goroutine, not inside
+// it), a concurrent push could replace the unit in between, dropping values.
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Register(racyDirtySignal{}))
@@ -1735,15 +1697,10 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	<-done
 }
 
-// TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch is the C9
-// regression: liveRunAction's push (the dirty-signals patch, then the
-// element patch) rides back as actionResult.pushWork and runs on the
-// connection's own serialized goroutine, right after acking, in the exact
-// order its mutation committed — not on a detached goroutine racing every
-// other concurrent action's. n increments monotonically at commit time, so a
-// correct stream shows every value in 1..total in strict, gapless order;
-// reordering (the old fire-and-forget enqueue) breaks that order under
-// concurrent dispatch.
+// C9 regression: liveRunAction's push rides back as actionResult.pushWork
+// and runs on the connection's serialized goroutine right after acking, in
+// commit order — not on a detached goroutine racing other actions. The old
+// fire-and-forget enqueue could reorder pushes under concurrent dispatch.
 func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Register(racyDirtySignal{}))
@@ -1870,8 +1827,6 @@ func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
 		"closing the stream must stop the subscription it started")
 }
 
-// --- OnConnect acquires must not leak when connect fails ---
-
 type leakRoom struct {
 	held  *atomic.Int32
 	boom  bool
@@ -1947,17 +1902,14 @@ func firstElementsFrame(t *testing.T, lines <-chan string) string {
 	}
 }
 
-// --- an Embed copy must not inherit the parent's root-scoped slot ---
-
 type staleChild struct{ S via.Signal[string] }
 
 func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
 
 // The parent binds the child's signal in its OWN View and also Embeds the
 // child. Embed copies the field by value at View-build time, so from the
-// SECOND render on the copy arrives carrying the root-scoped slot the first
-// render minted on the parent's field — which collides with the parent's own
-// in the page's one signal store.
+// second render on, the copy arrives carrying the root-scoped slot the
+// parent's field minted, colliding with the parent's own.
 type stalePage struct {
 	Beat via.State[int]
 	C    staleChild
@@ -1989,8 +1941,6 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 		"embed slot must carry its embed prefix: %s", binds[1][1])
 }
 
-// --- topic delivery contract: every handler call lands, renders coalesce ---
-
 // burstUnit counts handler calls and renders separately, which is the whole
 // point of the contract: the two numbers must NOT be equal under a burst.
 type burstUnit struct {
@@ -2008,10 +1958,9 @@ func (b *burstUnit) View() h.H {
 }
 
 // The defect: a burst wider than the old 64-slot buffer silently skipped
-// handler calls, so a unit that accumulates in its handler got a WRONG answer.
-// Exact counts, not thresholds — a handler call is either lost or it is not.
-// The same burst must also cost far fewer renders than it has messages: every
-// pending value is drained into one batch, handled in order, then pushed once.
+// handler calls, giving an accumulating handler a WRONG answer. The same
+// burst must also cost far fewer renders than messages — drained into one
+// batch, handled in order, pushed once.
 func TestListen_burstLosesNoHandlerCallAndCoalescesRenders(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const msgs = 1000
@@ -2094,7 +2043,6 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	var got, renders atomic.Int64
 	srv := serve(t, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
 
-	// A stream whose body is never read at all.
 	ctx, stall := context.WithCancel(context.Background())
 	defer stall()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
@@ -2171,8 +2119,6 @@ func withTab(tab, body string) string {
 	out, _ := json.Marshal(sig)
 	return string(out)
 }
-
-// --- Listen runs on the stream's own select loop (change 4) ---
 
 // orderUnit registers TWO Listens on one topic. Each used to own a reader
 // goroutine, so which handler saw a value first was a scheduler race; both now
@@ -2297,8 +2243,6 @@ func (u *triListen) View() h.H {
 	return h.Div(u.n.Display())
 }
 
-// --- regression: a live root's plain embed keeps what its OnInit loaded ---
-
 // oninitKid is a plain embed whose only content comes from OnInit. Embed copies
 // it out of the parent's field on EVERY render, so if a push render skips
 // OnInit the child comes back zero-valued.
@@ -2334,8 +2278,6 @@ func TestLive_plainEmbedUnderALiveRootKeepsItsOnInitState(t *testing.T) {
 	assert.Contains(t, firstElementsFrame(t, lines), "kid=FROM_ONINIT",
 		"a push must not serve the embed zero-valued")
 }
-
-// --- regression: one panicking Listen handler costs one value, not the batch ---
 
 type panicListener struct {
 	bus  *topic.Topic[int]

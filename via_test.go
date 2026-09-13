@@ -104,8 +104,6 @@ func newCounter(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// do issues method+path (with optional body) against srv and returns the
-// response and body string.
 func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Response, string) {
 	t.Helper()
 	var rdr io.Reader
@@ -131,7 +129,6 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 	return resp, string(b)
 }
 
-// serve mounts a handler behind one httptest server, registered for cleanup.
 // The raw-httptest helpers below back the tests that assert on response headers
 // or SSE frame structure (csp, theme, live, and via's own Content-Type checks),
 // which the vt harness deliberately does not expose; the behavior-only tests
@@ -323,7 +320,6 @@ func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	assert.Empty(t, body)
 }
 
-// formComp uses On("submit", ...) on a form.
 type formComp struct{ q via.Signal[string] }
 
 func (c *formComp) Go(ctx *via.Ctx) {}
@@ -467,7 +463,6 @@ func isViaCall(call *ast.CallExpr) bool {
 	return ok && pkg.Name == "via" && viaCallNames[sel.Sel.Name]
 }
 
-// isViaCallNamed reports whether call is via.<name>(...).
 func isViaCallNamed(call *ast.CallExpr, name string) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -521,8 +516,6 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 	}
 }
 
-// coreGoFiles lists the non-test Go sources of the core packages (the root via
-// package and the h DSL), excluding examples.
 func coreGoFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -554,8 +547,6 @@ func exampleGoFiles(t *testing.T) []string {
 	require.NoError(t, err)
 	return files
 }
-
-// --- value-carrying actions (OnArg) ---
 
 type todoItem struct {
 	ID   int
@@ -773,7 +764,6 @@ func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 	assert.Contains(t, body, "gamma", "not some other row")
 }
 
-// rowActionURL picks the action URL carrying ?a={id} out of a rendered list.
 func rowActionURL(t *testing.T, html string, id int) string {
 	t.Helper()
 	m := regexp.MustCompile(`@post\('([^']*_via/a/r/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
@@ -838,8 +828,6 @@ func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testi
 	assert.NotContains(t, body, ").Inc", "but never the Go method names of the render")
 	assert.Contains(t, buf.String(), ").Inc", "the bound handlers go to the server log instead")
 }
-
-// --- action id identity (two instances of one type) ---
 
 type idCounter struct {
 	N via.Signal[int]
@@ -955,8 +943,6 @@ func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
 	require.Contains(t, logs.String(), "share the action id")
 }
 
-// --- action id memoization (change 1) ---
-
 // gridBench binds ONE handler a thousand times, which is the shape actionID's
 // cost shows up in: the id is a pure function of (code pointer, receiver
 // offset), so resolving the Go name and hashing it per binding per render was
@@ -991,8 +977,6 @@ func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
 	assert.Equal(t, first, actionURLs(t, via.Register(idTwins{})),
 		"the id is content-addressed, not per-instance")
 }
-
-// --- regression: a slot name that is not one field's unique identity ---
 
 // collidePage mints "a_b" twice: once for the nested A.B (nested struct names
 // join with "_") and once for the sibling field A_b. Two spans bind one slot,
