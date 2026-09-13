@@ -292,10 +292,21 @@ var tabRE = regexp.MustCompile(`"` + tabSignal + `":"([^"]+)"`)
 
 // Connect opens the per-tab SSE stream and reads the connect-time signals frame
 // that carries the tab id, so the returned Conn is ready to route actions.
-func (a *App) Connect() *Conn {
+func (a *App) Connect() *Conn { return a.ConnectAt("/", "{}") }
+
+// ConnectWith is Connect with a hand-written connect body — the page signals a
+// real client ships with its @post('/_via/sse'). Tests that need to prove what
+// a forged body can and cannot do reach for this; everything else wants
+// Connect.
+func (a *App) ConnectWith(body string) *Conn { return a.ConnectAt("/", body) }
+
+// ConnectAt is ConnectWith on a mount other than the root, for a Router with
+// several pages.
+func (a *App) ConnectAt(path, body string) *Conn {
 	a.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.srv.URL+"/_via/sse", strings.NewReader("{}"))
+	sse := strings.TrimSuffix(path, "/") + "/_via/sse"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.srv.URL+sse, strings.NewReader(body))
 	if err != nil {
 		cancel()
 		a.t.Fatalf("vt.Connect: build request: %v", err)

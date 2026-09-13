@@ -2,6 +2,7 @@ package via
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"runtime/debug"
 	"sync"
@@ -18,6 +19,12 @@ type tabStream struct {
 	mu          sync.Mutex        // replace runs on the embed goroutine, unit is read from the dispatching request's
 	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
 	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
+
+	// client and rev are touched only on this connection's own goroutine —
+	// connect builds them before runStream, and every push and every live
+	// action reaches them through pushq — so neither takes mu.
+	client map[string]json.RawMessage // the slots the client last posted, re-applied to every DISPLAY render (livePush)
+	rev    *revertSet                 // how to undo that application before the next AUTHORITY render
 }
 
 // boundSession is guarded because a live action can bind it after connect,

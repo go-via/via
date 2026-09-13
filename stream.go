@@ -89,9 +89,7 @@ func (s *stream) frame(write func(io.Writer)) {
 	if s.failed {
 		return
 	}
-	if s.timeout > 0 {
-		_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
-	}
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
 	ew := &errWriter{w: s.w}
 	write(ew)
 	err := ew.err

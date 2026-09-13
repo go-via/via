@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"unsafe"
 
 	"github.com/go-via/via/h"
@@ -25,7 +26,7 @@ import (
 // slots named, so a plain action patch ships what it wrote without clobbering a
 // value the user is mid-edit; if that leaves nothing, no attribute is written.
 func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
-	sig := make(map[string]any, len(order))
+	want := make([]string, 0, len(order))
 	for _, slot := range order {
 		if only != nil {
 			_, dirty := only[slot]
@@ -38,12 +39,39 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[strin
 				continue
 			}
 		}
-		sig[slot] = initial[slot]
+		want = append(want, slot)
 	}
-	if len(sig) == 0 && only != nil {
+	sort.Strings(want) // encoding/json sorted the map this used to build; keep the bytes stable
+
+	// Marshalled one slot at a time, not as one map: a single unmarshalable
+	// value used to fail the whole object and emit data-signals='', wiping the
+	// client store for EVERY signal on the page with nothing in the log. Drop
+	// the offender, keep the rest — the same treatment an unmarshalable OnArg
+	// value gets.
+	var obj bytes.Buffer
+	obj.WriteByte('{')
+	n := 0
+	for _, slot := range want {
+		val, err := json.Marshal(initial[slot])
+		if err != nil {
+			log.Printf("via: signal %q holds a value encoding/json cannot marshal (%v); it is left out of "+
+				"data-signals and the client store has no value for it — make the type JSON-round-trippable", slot, err)
+			continue
+		}
+		if n > 0 {
+			obj.WriteByte(',')
+		}
+		n++
+		key, _ := json.Marshal(slot)
+		obj.Write(key)
+		obj.WriteByte(':')
+		obj.Write(val)
+	}
+	obj.WriteByte('}')
+	if n == 0 && only != nil {
 		return
 	}
-	raw, _ := json.Marshal(sig)
+	raw := obj.Bytes()
 
 	buf.WriteString(` data-signals='`)
 	for _, b := range raw {
@@ -54,6 +82,51 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[strin
 		buf.WriteByte(b)
 	}
 	buf.WriteByte('\'')
+}
+
+// revertSet records how to put a signal's SERVER-authored value back after a
+// render that applied the client's posted values on top of it.
+//
+// It exists because a live unit outlives the request: hydration writes straight
+// into the instance's field, so without an undo the client's value became the
+// server's own state and every later push re-rendered from it — which is how a
+// posted signal used to open a gated branch and leave its action dispatchable
+// for the life of the connection. livePush reverts, renders the AUTHORITY, then
+// re-applies for display, so the client can still steer what it sees and never
+// what it may call.
+//
+// First write wins per slot: two hydrations in one cycle must both unwind to
+// the value the server last authored, not to the first client value. A
+// Signal.Set drops the slot's entry — a server write supersedes the client's
+// and must survive the revert.
+type revertSet struct{ undo map[string]func() }
+
+func newRevertSet() *revertSet { return &revertSet{undo: map[string]func(){}} }
+
+func (r *revertSet) note(slot string, fn func()) {
+	if r == nil {
+		return
+	}
+	if _, dup := r.undo[slot]; dup {
+		return
+	}
+	r.undo[slot] = fn
+}
+
+func (r *revertSet) drop(slot string) {
+	if r != nil {
+		delete(r.undo, slot)
+	}
+}
+
+func (r *revertSet) restore() {
+	if r == nil {
+		return
+	}
+	for _, fn := range r.undo {
+		fn()
+	}
+	clear(r.undo)
 }
 
 // Signal is a client-resident value that round-trips per request and renders as
@@ -97,6 +170,9 @@ func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound != nil && s.slot != "" {
 		s.bound.dirty[s.slot] = v
+		// A server write supersedes whatever the client posted for this slot, so
+		// it must survive the revert livePush does before the next render.
+		s.bound.rev.drop(s.slot)
 		return
 	}
 	// Silent, an unbound Set reads as "Set does nothing" — warn once per signal.
@@ -129,22 +205,21 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	// also the one place a Signal that is not a plain field is caught.
 	s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 	if writable {
-		if raw, ok := b.SignalInit(s.slot); ok {
-			if rm, isRaw := raw.(json.RawMessage); isRaw {
-				var v T
-				if json.Unmarshal(rm, &v) == nil {
-					s.val = v
-				}
-			}
-		}
-		// A live unit keeps this table from its last render rather than
-		// re-rendering before an action, so the hydration SignalInit did above
-		// must also be reachable by slot name.
+		// The ONE hydration door, deliberately: it is the only one that records
+		// an undo (revertSet), which is what keeps a live unit's instance
+		// server-authored between renders. A second path that wrote s.val
+		// straight from the request would silently re-open the escalation
+		// livePush closes.
 		b.Hydrator(s.slot, func(raw json.RawMessage) {
 			var v T
-			if json.Unmarshal(raw, &v) == nil {
-				s.val = v
+			if json.Unmarshal(raw, &v) != nil {
+				return
 			}
+			if c := s.bound; c != nil {
+				prev := s.val
+				c.rev.note(s.slot, func() { s.val = prev })
+			}
+			s.val = v
 		})
 	}
 	b.DeclareSignal(s.slot, s.val)
