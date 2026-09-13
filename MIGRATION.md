@@ -150,10 +150,13 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 embed's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
-`ctx.Redirect` is a `PostForm`/`OnInit` facility (a 303 before the View ever
-renders, or on a native form submit). A Redirect queued from a Datastar
-`@post` action cannot navigate the page — it is logged and dropped; move it
-to a `PostForm` handler or an `<a href>`.
+`ctx.Redirect` navigates from anywhere: `OnInit`, `Reload`, a native form
+submit (303 before the View ever renders) and a Datastar `@post` action alike.
+A `@post` answers with a one-line `location.assign` script, which Datastar
+v1.0.2 executes through its `text/javascript` response branch; the target rides
+in the `datastar-script-attributes` header, so the script bytes are constant
+and the strict CSP admits them by SHA-256 with no per-response nonce. An unsafe
+target is still dropped loudly and never reaches the client.
 
 ## Mapping table
 
@@ -292,12 +295,19 @@ form:
 - **The origin floor is open by default.** v1 enforced; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, which switches
   enforcement on for the whole endpoint. `WithInsecureOrigin` is gone — there is
-  no secure default left to opt out of. The per-tab id is still the CSRF token,
-  but if you deployed v1 without thinking about origins, **v0.8 needs you to
-  think about them.** via logs one line at startup when the floor is open.
+  no secure default left to opt out of. The per-tab id is the CSRF token on a
+  LIVE page only: a plain page carries an empty `viatab`/`_viatab`, so with the
+  floor open a cross-origin `PostForm` submit is accepted and what actually
+  defends it is the session cookie's `SameSite=Lax` (the request arrives
+  unauthenticated). If you deployed v1 without thinking about origins,
+  **v0.8 needs you to think about them.** via logs one line at startup when the
+  floor is open.
 - **Sessions are always on** and mint a random per-process key if you configure
-  none, warning once. Set `WithSessionKey` or `VIA_SESSION_KEY` or sessions will
-  not survive a restart. The idle TTL slides on **every** request that carries
+  none, warning once. The key signs the COOKIE; the DATA lives in a
+  `SessionStore` whose default is this process's memory, so surviving a restart
+  or spanning pods takes BOTH `WithSessionKey` (or `VIA_SESSION_KEY`) and
+  `WithSessionStore`. Session values are now stored as JSON keyed by the Go
+  type, so a `Session.Put` value must round-trip through `encoding/json`. The idle TTL slides on **every** request that carries
   a valid session cookie — `OnInit` resolves the session eagerly whether or not
   the page reads it — so a session expires only after a full TTL with no
   request at all, not after a TTL with no `Get`/`Put`.
@@ -402,18 +412,21 @@ the client store already held.
 
 ## New startup panics
 
-Two first-render panics were added; both fail loudly on the first render
-rather than writing the wrong field at runtime, and both can surface on an
-upgrade in code that compiled fine before.
+Both fail loudly rather than writing the wrong field at runtime, and both can
+surface on an upgrade in code that compiled fine before.
 
-- A rendered `Signal` that is **not a plain field of its composition** panics.
-  A signal reached through a pointer, slice, array, map or INTERFACE field, or
-  bound off a value-receiver `View`, has no field offset: its writes land on memory the
+- A `Signal` that is **not a plain field of its composition** panics at
+  `Mount`/`Embed` — at startup, not once per request. A signal reached through
+  a pointer, slice, array or map field, or held by a composition whose `View`
+  has a VALUE receiver, has no field offset: its writes land on memory the
   render discards, and the render-order fallback that used to name it aliased
-  one signal's slot onto another under a conditional `Bind()`. The remedy is
-  one line — make the `Signal` (and any child composition holding one) a direct
-  struct field, and give `View` a pointer receiver. Keyed per-row signal slots
-  remain future work.
+  one signal's slot onto another under a conditional `Bind()`. via walks the
+  composition type where the app is wired and refuses it there. The one shape
+  the type walk cannot see is a Signal behind an INTERFACE field, which still
+  panics on the first render that binds it. The remedy is one line — make the
+  `Signal` (and any child composition holding one) a direct struct field, and
+  give `View` a pointer receiver. Keyed per-row signal slots remain future
+  work.
 - Two fields minting the SAME slot name panic. A nested `A.B` joins with one
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling

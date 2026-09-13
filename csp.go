@@ -50,7 +50,7 @@ var cspHeader = buildCSP(Head{})
 // that config serves byte-identical bytes.
 func buildCSP(head Head) string {
 	var script strings.Builder
-	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit))
+	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit))
 	for _, o := range head.ScriptOrigins {
 		script.WriteString(" " + o)
 	}

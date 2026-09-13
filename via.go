@@ -68,6 +68,8 @@ func (*slotID) isViaSignal() {}
 
 var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
 
+var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
+
 // typeSignals is one composition type's signal table: every Signal-typed
 // field's byte offset paired with the wire name its Go field path gives it.
 type typeSignals struct {
@@ -112,7 +114,9 @@ func signalsOf(t reflect.Type) *typeSignals {
 			}
 			if f.Type.Kind() == reflect.Struct {
 				walk(f.Type, off, name+"_", depth+1)
+				continue
 			}
+			checkSignalReachable(t, f)
 		}
 	}
 	walk(t, 0, "", 0)
@@ -129,6 +133,51 @@ func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 		panic("via: signal slot " + name + " is minted twice by " + t.String() +
 			" (field " + field + ") — nested struct names join with \"_\", so rename one of the colliding fields")
 	}
+}
+
+// checkSignalReachable panics when a field hides a Signal behind an indirection.
+// A Signal is named by its byte offset in the composition, so one reached
+// through a pointer, slice, array or map has no name at all: its writes land on
+// memory the render discards. That used to surface only when the View first
+// rendered it — a per-request 500 for the life of the process — so it is caught
+// here instead, on the type walk Mount and Embed do once.
+//
+// An interface-held Signal cannot be seen from the type, so that one case stays
+// a render-time panic.
+func checkSignalReachable(owner reflect.Type, f reflect.StructField) {
+	switch f.Type.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+	default:
+		return
+	}
+	if !typeHoldsSignal(f.Type, map[reflect.Type]bool{}, 0) {
+		return
+	}
+	panic("via: " + owner.String() + "." + f.Name + " holds a via.Signal behind a " +
+		f.Type.Kind().String() + " — a Signal is named by its field offset, so it must be a plain " +
+		"struct field of the composition (through plain nested structs if you like), never behind a " +
+		"pointer, slice, array, map or interface")
+}
+
+func typeHoldsSignal(t reflect.Type, seen map[reflect.Type]bool, depth int) bool {
+	if t == nil || depth > 8 || seen[t] {
+		return false
+	}
+	seen[t] = true
+	if reflect.PointerTo(t).Implements(signalMarker) {
+		return true
+	}
+	switch t.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
+		return typeHoldsSignal(t.Elem(), seen, depth+1)
+	case reflect.Struct:
+		for i := range t.NumField() {
+			if typeHoldsSignal(t.Field(i).Type, seen, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func lowerFirst(s string) string {
@@ -237,6 +286,7 @@ type Ctx struct {
 	actedKey    string // embed key of the unit an action just mutated; Embed re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
 	initDone    bool // a Tick/Listen after this would register into a snapshot nobody reads
+	reinit      bool // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
 }
 
 // Request returns the HTTP request that triggered this handler — headers,
@@ -611,11 +661,16 @@ func decodeSegment[T any](seg string, name string) T {
 	return v
 }
 
-// Redirect navigates the browser to path after the current handler returns: a
-// 303 on a PostForm submit, or from OnInit before the View ever renders. path
-// must be http/https or a same-origin relative path; other schemes are
-// rejected. A Redirect from a Datastar @post action is logged and dropped — a
-// live click cannot navigate; use an <a href> or PostForm instead.
+// Redirect navigates the browser to path after the current handler returns,
+// from anywhere: OnInit (before the View ever renders), Reload, a PostForm
+// submit, and a Datastar @post action — plain, embedded, or live. path must be
+// http/https or a same-origin relative path; any other scheme is dropped and
+// logged, never followed.
+//
+// The transport differs, the meaning does not: a full-page request answers 303,
+// a @post answers the one-line navigation script Datastar executes (see
+// redirectInit). A Redirect skips the unit's Reload and the response render —
+// nothing from this render is going to be shown.
 func (c *Ctx) Redirect(path string) {
 	c.redirect = path
 }
@@ -1036,7 +1091,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// leaked tab id was a bearer token good from any origin with no session at
 	// all (see dispatch). Resolved BEFORE OnInit, which may mint or rotate one:
 	// the point is the identity the browser held when it opened this stream.
-	_, sess, _ := m.sessions.resolve(req)
+	_, sessDat, _ := m.sessions.resolve(req)
 
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
@@ -1062,7 +1117,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		done:        streamCtx.Done(),
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:       map[string]*Ctx{},
-		sess:        sess,
+		sess:        dataSID(sessDat),
 	}
 
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn
@@ -1088,11 +1143,9 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 			fn()
 		}
 		// OnInit may have minted a session where the connect cookie left
-		// lc.sess nil — bind it now so the connection isn't left as a
+		// lc.sess empty — bind it now so the connection isn't left as a
 		// bare-tab-id credential (H1).
-		if u.session != nil {
-			lc.bindSession(u.session.data)
-		}
+		lc.bindSession(u.session.sid())
 	}
 
 	m.reg.put(id, lc) // a live action POST routes to this connection by tab id

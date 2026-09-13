@@ -15,6 +15,7 @@ type config struct {
 	sessionTTL     time.Duration
 	sessionCookie  string
 	sessionSecure  bool
+	sessionStore   SessionStore
 	head           Head
 	csp            string
 }
@@ -98,10 +99,46 @@ func WithSecureCookies() Option {
 	}
 }
 
+// WithSessionStore points sessions at a shared, durable store instead of the
+// default process-local map — the difference between a deploy logging every
+// user out and a deploy nobody notices, and what makes a second pod see the
+// first pod's sessions. Pair it with WithSessionKey: the key keeps the COOKIE
+// valid, the store keeps the DATA behind it.
+//
+//	type redisSessions struct{ c *redis.Client }
+//
+//	func (r redisSessions) Load(ctx context.Context, id string) ([]byte, bool, error) {
+//		b, err := r.c.Get(ctx, "via:"+id).Bytes()
+//		if errors.Is(err, redis.Nil) {
+//			return nil, false, nil
+//		}
+//		return b, err == nil, err
+//	}
+//
+//	func (r redisSessions) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+//		return r.c.Set(ctx, "via:"+id, data, ttl).Err()
+//	}
+//
+//	func (r redisSessions) Delete(ctx context.Context, id string) error {
+//		return r.c.Del(ctx, "via:"+id).Err()
+//	}
+//
+//	via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))
+func WithSessionStore(s SessionStore) Option {
+	return func(c *config) {
+		if s == nil {
+			panic("via: WithSessionStore(nil)")
+		}
+		c.sessionStore = s
+	}
+}
+
 // WithSessionKey sets the HMAC key signing the session cookie id. The key
 // resolves WithSessionKey → VIA_SESSION_KEY → a random per-process key (warned
 // on first use) — fine for dev, but those cookies survive neither a restart nor
-// a second process, so set a stable key in production.
+// a second process, so set a stable key in production. It keeps the COOKIE
+// valid only; the data behind it lives in the SessionStore, so a stable key
+// without WithSessionStore still logs everyone out on restart.
 func WithSessionKey(key []byte) Option {
 	return func(c *config) {
 		c.sessionKey = key

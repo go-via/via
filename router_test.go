@@ -59,8 +59,8 @@ func jarPost(t *testing.T, c *http.Client, url string) {
 	resp.Body.Close()
 }
 
-// redirectPage is a plain page whose @post action calls via.Redirect — a
-// case that can no longer navigate the browser (only PostForm and OnInit can).
+// redirectPage is a plain page whose @post action calls via.Redirect: one safe
+// target and one that must be refused.
 type redirectPage struct{}
 
 func (p *redirectPage) Go(ctx *via.Ctx)   { ctx.Redirect("/dest") }
@@ -107,11 +107,11 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 		"a hash-based policy needs no shared key: pods with different keys agree")
 }
 
-// A via.Redirect from a Datastar @post action cannot navigate the page — only
-// PostForm and OnInit can. It must not ship a script (or any other trace of
-// the target); the action just answers its normal element-patch/204 contract,
-// for a safe target as much as an unsafe one.
-func TestRouter_postActionRedirectDoesNotShipAScript(t *testing.T) {
+// A via.Redirect from a Datastar @post action navigates the tab through the
+// hash-admitted script Datastar's text/javascript branch runs — but ONLY for a
+// target hcore.SafeURL clears. An unsafe one is dropped exactly as before: no
+// script, no header, no trace of the target anywhere in the response.
+func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/x", redirectPage{})
@@ -129,11 +129,18 @@ func TestRouter_postActionRedirectDoesNotShipAScript(t *testing.T) {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
+		if i == 0 {
+			assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+			assert.JSONEq(t, `{"data-via-to":"/dest"}`, resp.Header.Get("datastar-script-attributes"))
+			assert.NotContains(t, string(body), target,
+				"the target rides in a header attribute, never in the script bytes the CSP hashes")
+			continue
+		}
 		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
-			"a @post Redirect must not be delivered as an executable script")
+			"an unsafe Redirect target must not be delivered as an executable script")
 		assert.Empty(t, resp.Header.Get("datastar-script-attributes"),
-			"no script attributes header for a target %q that cannot navigate", target)
-		assert.NotContains(t, string(body), target, "the redirect target must never reach the client")
+			"no script attributes header for a target %q that may not navigate", target)
+		assert.NotContains(t, string(body), target, "an unsafe redirect target must never reach the client")
 	}
 }
 

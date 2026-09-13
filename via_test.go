@@ -488,9 +488,11 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 	// field lookup. Nothing here may run per render — that is the invariant
 	// this whitelist exists to keep honest.
 	allowed := map[string][]string{
-		"via.go":    {"reflect.PointerTo", "reflect.Struct", "reflect.Type", "reflect.TypeOf", "reflect.ValueOf"},
+		"via.go": {"reflect.Array", "reflect.Map", "reflect.Pointer", "reflect.PointerTo",
+			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
+			"reflect.TypeOf", "reflect.ValueOf"},
 		"embed.go":  {"reflect.TypeOf"},
-		"router.go": {"reflect.TypeOf"},
+		"router.go": {"reflect.Type", "reflect.TypeOf"},
 	}
 	files := coreGoFiles(t)
 	require.NotEmpty(t, files, "expected core sources to scan")
@@ -1013,8 +1015,23 @@ func assertSlotPanic(t *testing.T, app http.Handler, want string) {
 	assert.Contains(t, logs.String(), want)
 }
 
-func TestSignal_duplicateSlotNamePanics(t *testing.T) {
-	assertSlotPanic(t, via.Register(collidePage{}), "signal slot a_b is minted twice")
+// assertMountPanic drives the fail-at-boot claim: a composition whose signals
+// cannot be named must be rejected where the app is wired, not once per request
+// for the life of the process.
+func assertMountPanic(t *testing.T, want string, mount func()) {
+	t.Helper()
+	var rec any
+	func() {
+		defer func() { rec = recover() }()
+		mount()
+	}()
+	require.NotNil(t, rec, "expected a panic at Mount containing %q", want)
+	assert.Contains(t, fmt.Sprint(rec), want)
+}
+
+func TestSignal_duplicateSlotNamePanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "signal slot a_b is minted twice", func() { via.Register(collidePage{}) })
 }
 
 // boxedSignal reaches its signal through a pointer field, so the handle lives
@@ -1027,14 +1044,53 @@ func (b *boxedSignal) View() h.H { return h.Div(h.Input(b.S.Bind())) }
 // base, so its writes land on a struct the render throws away.
 type valueReceiverView struct{ S via.Signal[int] }
 
+type slicedSignal struct{ S []via.Signal[string] }
+
+func (b *slicedSignal) View() h.H { return h.Div() }
+
+type mappedSignal struct{ S map[string]via.Signal[string] }
+
+func (b *mappedSignal) View() h.H { return h.Div() }
+
+type valueReceiverEmbedParent struct{ C valueReceiverView }
+
+func (p *valueReceiverEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
+
 func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
 
-func TestSignal_behindAPointerFieldPanics(t *testing.T) {
-	assertSlotPanic(t, via.Register(boxedSignal{S: &via.Signal[string]{}}), "not a plain field of its composition")
+func TestSignal_behindAPointerFieldPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "holds a via.Signal behind a ptr", func() {
+		via.Register(boxedSignal{S: &via.Signal[string]{}})
+	})
 }
 
-func TestSignal_valueReceiverViewPanics(t *testing.T) {
-	assertSlotPanic(t, via.Register(valueReceiverView{}), "not a plain field of its composition")
+func TestSignal_behindASliceFieldPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "holds a via.Signal behind a slice", func() { via.Register(slicedSignal{}) })
+}
+
+func TestSignal_behindAMapFieldPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "holds a via.Signal behind a map", func() { via.Register(mappedSignal{}) })
+}
+
+func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "View has a VALUE receiver", func() { via.Register(valueReceiverView{}) })
+}
+
+// valueReceiverEmbed is only reachable through via.Embed, so its View receiver
+// is checked where Embed resolves the child type rather than at Mount.
+func TestSignal_valueReceiverEmbedPanicsAtRender(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	rec := httptest.NewRecorder()
+	via.Register(valueReceiverEmbedParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, logs.String(), "View has a VALUE receiver")
 }
 
 func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {

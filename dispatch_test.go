@@ -6,9 +6,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +48,7 @@ func (c *liveRedirector) View() h.H {
 	return h.Div(c.n.Display(), h.Button(via.On("click", c.Go)))
 }
 
-func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
+func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Register(liveRedirector{}))
 		conn := app.Connect()
@@ -60,10 +62,12 @@ func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
-		assert.Equal(t, http.StatusNoContent, resp.StatusCode,
-			"a live action's Redirect can no longer navigate; it answers its normal 204")
-		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
-		assert.Empty(t, resp.Header.Get("datastar-script-attributes"))
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+		assert.JSONEq(t, `{"data-via-to":"/dest"}`, resp.Header.Get("datastar-script-attributes"))
+		assert.Contains(t, string(body), "location.assign")
 	})
 }
 
@@ -78,7 +82,7 @@ type embedRedirectorParent struct{ I embedRedirector }
 
 func (p *embedRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_redirectFromPlainEmbedActionDoesNotShipAScript(t *testing.T) {
+func TestDispatch_redirectFromPlainEmbedActionNavigatesTheTab(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(embedRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -91,9 +95,11 @@ func TestDispatch_redirectFromPlainEmbedActionDoesNotShipAScript(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
-		"a plain embed's Redirect can no longer navigate; no script ships")
-	assert.Empty(t, resp.Header.Get("datastar-script-attributes"))
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+	assert.JSONEq(t, `{"data-via-to":"/dest"}`, resp.Header.Get("datastar-script-attributes"))
+	assert.Contains(t, string(body), "location.assign")
 }
 
 // sigEmbed's signals are only Bound (never Displayed), so Setting one never
@@ -1932,4 +1938,184 @@ func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"a hydration pass >= 2 must carry the request, not re-init children against a nil one")
 	assert.Contains(t, body, "method:POST")
+}
+
+// staleLoader is the week-one shape: OnInit reads the store into a field, the
+// action mutates the store, and nothing re-reads it — so the response render
+// frames the PRE-action number.
+type staleLoader struct {
+	s     *store
+	shown int
+}
+
+func (p *staleLoader) OnInit(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *staleLoader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *staleLoader) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+// reloadingLoader is staleLoader with the one method that fixes it.
+type reloadingLoader struct {
+	s     *store
+	shown int
+}
+
+func (p *reloadingLoader) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+func (p *reloadingLoader) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *reloadingLoader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *reloadingLoader) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(reloadingLoader{s: &store{}}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `<p id="n">0</p>`)
+
+	code, body := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, code, "a Reload that changes the render must not answer 204")
+	assert.Contains(t, body, `<p id="n">1</p>`,
+		"the action's response must show what the handler wrote, not what OnInit loaded before it")
+}
+
+// Without Reload the defect is intact — that is the point of the hook being
+// opt-in — but it must no longer be SILENT.
+func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	app := vt.Serve(t, via.Register(staleLoader{s: &store{}}))
+	app.Get("/")
+	code, _ := app.Action(0).Fire()
+
+	require.Equal(t, http.StatusNoContent, code)
+	assert.Contains(t, logs.String(), "changed nothing the render shows")
+	assert.Contains(t, logs.String(), "Reload(*via.Ctx) error",
+		"the 204 must name the hook that fixes it")
+}
+
+// liveReloader's data lives in the store, not in State — the live push has to
+// re-read it or the patched frame carries the pre-action value.
+type liveReloader struct {
+	s     *store
+	shown int
+	beat  via.State[int]
+}
+
+func (p *liveReloader) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+func (p *liveReloader) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *liveReloader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *liveReloader) View() h.H {
+	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(liveReloader{s: &store{}}))
+	conn := app.Connect()
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Less(t, code, 300)
+	assert.Contains(t, conn.Await("n=1"), "n=1",
+		"the pushed frame must carry post-action data, not the connect-time snapshot")
+}
+
+// reloadNotFound models the row an action just deleted: Reload says the page's
+// data is gone, and that answer must reach the client instead of a stale render.
+type reloadNotFound struct{ gone bool }
+
+func (p *reloadNotFound) Reload(ctx *via.Ctx) error {
+	if p.gone {
+		return via.ErrNotFound
+	}
+	return nil
+}
+func (p *reloadNotFound) Drop(ctx *via.Ctx) { p.gone = true }
+func (p *reloadNotFound) View() h.H         { return h.Div(h.Button(via.On("click", p.Drop))) }
+
+func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(reloadNotFound{}))
+	app.Get("/")
+	code, body := app.Action(0).Fire()
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.Contains(t, body, "not found")
+}
+
+// reloadRedirector queues its Redirect from Reload rather than the handler.
+type reloadRedirector struct{}
+
+func (p *reloadRedirector) Reload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
+func (p *reloadRedirector) Go(ctx *via.Ctx)           {}
+func (p *reloadRedirector) View() h.H                 { return h.Div(h.Button(via.On("click", p.Go))) }
+
+func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(reloadRedirector{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
+
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
+}
+
+// tickingReload registers a Tick from Reload on a page served PLAIN. Honouring
+// it would turn the unit live on a page with no stream (I5) and trip the
+// render-invariant panic; Reload must register nothing.
+type tickingReload struct{ n int }
+
+func (p *tickingReload) Reload(ctx *via.Ctx) error {
+	ctx.Tick(time.Second, func(*via.Ctx) {})
+	return nil
+}
+func (p *tickingReload) Bump(ctx *via.Ctx) { p.n++ }
+func (p *tickingReload) View() h.H {
+	return h.Div(h.P(h.Str(p.n)), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	app := vt.Serve(t, via.Register(tickingReload{}))
+	_, page := app.Get("/")
+	require.NotContains(t, page, "data-init", "the page must be served plain")
+
+	code, body := app.Action(0).Fire()
+	assert.Equal(t, http.StatusOK, code, "a Tick in Reload must be ignored, not fail the action")
+	assert.Contains(t, body, "<p>1</p>")
+	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
+		"Reload is not a late OnInit — registering from it is expected and silently ignored")
+}
+
+// reloadedEmbed proves the reload targets the ACTED unit: an embed's action
+// must re-read the embed, not the root.
+type reloadedEmbed struct {
+	s     *store
+	shown int
+}
+
+func (p *reloadedEmbed) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+func (p *reloadedEmbed) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *reloadedEmbed) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+type reloadedEmbedParent struct{ C reloadedEmbed }
+
+func (p *reloadedEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
+
+func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `<p id="n">0</p>`)
+
+	code, body := app.Action(0).Raw(actionURL(t, page, "0", 0)).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, `<p id="n">1</p>`)
 }
