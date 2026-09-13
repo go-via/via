@@ -126,11 +126,11 @@ func MaxLength(n int) Attr { return RawAttr("maxlength", stringish(n)) }
 // MinLength is the minimum accepted input length, with the same caveat.
 func MinLength(n int) Attr { return RawAttr("minlength", stringish(n)) }
 
-// Colspan is the number of columns a cell spans.
-func Colspan(n int) Attr { return RawAttr("colspan", stringish(n)) }
+// ColSpan is the number of columns a cell spans.
+func ColSpan(n int) Attr { return RawAttr("colspan", stringish(n)) }
 
-// Rowspan is the number of rows a cell spans.
-func Rowspan(n int) Attr { return RawAttr("rowspan", stringish(n)) }
+// RowSpan is the number of rows a cell spans.
+func RowSpan(n int) Attr { return RawAttr("rowspan", stringish(n)) }
 
 // TabIndex is the tab order position. -1 removes the element from tab order.
 func TabIndex(n int) Attr { return RawAttr("tabindex", stringish(n)) }

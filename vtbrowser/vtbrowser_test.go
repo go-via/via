@@ -126,7 +126,7 @@ func (d *bDash) View() h.H { return h.Div(via.Embed(d.Clock), via.Embed(d.Counte
 // (via the tab handshake) to #via-i1 and morphs only that — proving Datastar
 // patches each embed's container separately over the one shared SSE stream.
 func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(bDash{}))
+	s := vtbrowser.Open(t, via.Handler(bDash{}))
 
 	// Clock embed ticks on its own (no interaction) → server-push morphs #via-i0.
 	s.WaitFor("#via-i0 p", func(text string) bool {
@@ -165,7 +165,7 @@ func (p *pRoot) View() h.H {
 // that patch must leave the embed's DOM untouched, and the embed's own push
 // (Datastar inner mode) must still land afterward.
 func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(pRoot{}))
+	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
 	s.Sleep(400 * time.Millisecond) // let the SSE connect so $viatab is set
 	s.Click("#via-i0 button")
@@ -190,7 +190,7 @@ func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
 // target) and Datastar must run under the strict nonce'd CSP without a single
 // console error. Eval is the escape hatch for DOM facts the named helpers omit.
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(clicker{}))
+	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	if got := s.Text("p"); !strings.Contains(got, "count: 0") {
 		t.Fatalf("Open did not serve the rendered skeleton: %q", got)
@@ -207,7 +207,7 @@ func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 // no client interaction — proving data-init opens the stream and each
 // datastar-patch-elements frame morphs #root in a real browser.
 func TestWaitFor_observesServerPushMorph(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(liveTicker{}))
+	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
 
 	s.WaitFor("p", func(text string) bool {
 		var n int
@@ -222,7 +222,7 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 // and pushing the result back over its stream. WaitTextContains absorbs the
 // round-trip latency.
 func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(clicker{}))
+	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	s.WaitTextContains("p", "count: 0")
 	s.Sleep(500 * time.Millisecond) // let the SSE connect so Datastar has $viatab to echo
@@ -234,7 +234,7 @@ func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
 // Type sends real key events (so Datastar's data-bind fires as for a human) and
 // Value reads the bound input's resulting value.
 func TestTypeAndValue_driveABoundInput(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(form{}))
+	s := vtbrowser.Open(t, via.Handler(form{}))
 
 	s.Type("input", "alice")
 	if got := s.Value("input"); got != "alice" {
@@ -249,7 +249,7 @@ func TestTypeAndValue_driveABoundInput(t *testing.T) {
 // that WaitValue observes.
 func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	r := newRoom()
-	a := vtbrowser.Open(t, via.Register(chat{room: r}))
+	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
 	b := a.NewTab()
 
 	a.WaitTextContains("h1", "online: 2") // both streams connected + presence settled
@@ -277,7 +277,7 @@ func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 // next element-patch, which is exactly the signal Datastar emits on a live
 // stream resume (no started/finished, only an incoming patch).
 func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(liveTicker{}))
+	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
 
 	var booted bool
 	s.Eval(`window.__viaRC===1 && document.documentElement.getAttribute('data-via-connection')==='online'`, &booted)
@@ -307,7 +307,7 @@ func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 // from pinning a tab in a reload loop. Pre-arming the counter at the cap keeps
 // the test deterministic (no real page reload) while exercising that branch.
 func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
-	s := vtbrowser.Open(t, via.Register(clicker{}))
+	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	var armed bool
 	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
@@ -330,7 +330,7 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 // client signal a user is editing.
 func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	r := newRoom()
-	a := vtbrowser.Open(t, via.Register(chat{room: r}))
+	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
 	b := a.NewTab()
 
 	a.WaitTextContains("h1", "online: 2")
@@ -364,7 +364,7 @@ func (p *redirectViaScript) View() h.H {
 // the payoff no httptest can see is that no script is ever inserted into the
 // live document, under the real CSP.
 func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
-	app := via.Register(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	app := via.Handler(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
 	s.Click("#go")
 	s.Sleep(700 * time.Millisecond)
@@ -410,7 +410,7 @@ func (f *liveFormBrowser) View() h.H {
 // silently ignored, so no Go-level assertion catches it (see L1).
 func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	calls := 0
-	s := vtbrowser.Open(t, via.Register(liveFormBrowser{calls: &calls}))
+	s := vtbrowser.Open(t, via.Handler(liveFormBrowser{calls: &calls}))
 
 	s.Sleep(500 * time.Millisecond) // let the SSE connect so $viatab is set
 	s.Type("#name", "alice")
@@ -429,7 +429,7 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// --- WithDocumentHead under the derived CSP ---
+// --- WithHead under the derived CSP ---
 
 // styledPage is the vehicle for the head tests: one element whose colour comes
 // only from a stylesheet, so "did the sheet load" is directly observable.
@@ -457,7 +457,7 @@ const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color =
 // the server ships the same bytes whether or not the browser fetches them.
 func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
-	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
+	app := via.Handler(styledPage{}, via.WithHead(via.Head{
 		Raw:          `<link rel="stylesheet" href="` + origin + `/app.css">`,
 		StyleOrigins: []string{origin},
 	}))
@@ -474,7 +474,7 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 // go green for the wrong reason and the assertion below would start failing.
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
-	app := via.Register(styledPage{}, via.WithDocumentHead(via.Head{
+	app := via.Handler(styledPage{}, via.WithHead(via.Head{
 		InlineStyle: `@import url("` + origin + `/app.css");`,
 	}))
 	s := vtbrowser.Open(t, app)

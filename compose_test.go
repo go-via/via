@@ -34,7 +34,7 @@ func (c *listComp) View() h.H {
 // row method that returns <li> lands directly inside the <ul>.
 func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 	t.Parallel()
-	_, body := vt.Serve(t, via.Register(listComp{items: []string{"a", "b", "c"}})).Get("/")
+	_, body := vt.Serve(t, via.Handler(listComp{items: []string{"a", "b", "c"}})).Get("/")
 	assert.Contains(t, body, "<ul><li>a</li><li>b</li><li>c</li></ul>")
 }
 
@@ -43,11 +43,11 @@ func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 // evaluate a branch that may only be valid when the condition is true).
 // Sequential, not Parallel: it reads the shared lazyBuildCalls counter.
 func TestWhen_rendersOnlyWhenTrueAndIsLazy(t *testing.T) {
-	_, on := vt.Serve(t, via.Register(listComp{show: true})).Get("/")
+	_, on := vt.Serve(t, via.Handler(listComp{show: true})).Get("/")
 	assert.Contains(t, on, "lazybuilt", "When(true) must render the built node")
 
 	before := lazyBuildCalls.Load()
-	_, body := vt.Serve(t, via.Register(listComp{show: false})).Get("/")
+	_, body := vt.Serve(t, via.Handler(listComp{show: false})).Get("/")
 	assert.NotContains(t, body, "lazybuilt", "When(false) must render nothing")
 	assert.Equal(t, before, lazyBuildCalls.Load(), "When(false) must not call build")
 }

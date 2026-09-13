@@ -45,25 +45,25 @@ type Head struct {
 	FontOrigins []string
 }
 
-// WithDocumentHead sets the document shell for every page this app serves —
+// WithHead sets the document shell for every page this app serves —
 // title, lang, raw head markup, one inline stylesheet, and the off-origin
 // hosts that markup needs the CSP to admit.
 //
 // Invalid heads panic at startup rather than serving a broken document: a
 // Lang that isn't a language tag, an InlineStyle containing "</style", or an
 // origin list entry that isn't an absolute http(s) origin.
-func WithDocumentHead(head Head) Option {
+func WithHead(head Head) Option {
 	return func(c *config) { c.head = head }
 }
 
 // validate rejects a malformed Head at startup; each of these would otherwise
-// surface as a blocked browser request long after Register returned.
+// surface as a blocked browser request long after Handler returned.
 func (hd Head) validate() {
 	if hd.Lang != "" && !isLangTag(hd.Lang) {
-		panic("via: WithDocumentHead: Lang " + quote(hd.Lang) + " is not a language tag (want e.g. \"en\" or \"pt-PT\")")
+		panic("via: WithHead: Lang " + quote(hd.Lang) + " is not a language tag (want e.g. \"en\" or \"pt-PT\")")
 	}
 	if strings.Contains(strings.ToLower(hd.InlineStyle), "</style") {
-		panic("via: WithDocumentHead: InlineStyle contains \"</style\", which would end the element early")
+		panic("via: WithHead: InlineStyle contains \"</style\", which would end the element early")
 	}
 	validOrigins("ScriptOrigin", hd.ScriptOrigins)
 	validOrigins("StyleOrigin", hd.StyleOrigins)
@@ -127,7 +127,7 @@ func originOf(raw string) string {
 func validOrigins(name string, list []string) {
 	for _, o := range list {
 		if originOf(o) == "" {
-			panic("via: WithDocumentHead: " + name + " " + quote(o) + " is not an absolute http(s) origin")
+			panic("via: WithHead: " + name + " " + quote(o) + " is not an absolute http(s) origin")
 		}
 	}
 }

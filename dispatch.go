@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"runtime/debug"
@@ -34,8 +35,7 @@ const (
 // THE NAME MUST NOT START WITH "_". Datastar's default signal filter excludes
 // /(^|\.)_/, so an underscored name is never posted back — and every action
 // POST depends on this one riding along in the signal store Datastar already
-// ships. The leading underscore it used to carry is exactly the defect the
-// rename fixed; the ordinary name IS the mechanism.
+// ships; the ordinary name IS the mechanism.
 //
 // As a signal it sits in the request body, is set by same-origin JS, and is
 // never auto-attached by the browser — a synchronizer token, which is what a
@@ -56,7 +56,7 @@ const tabFormField = "_viatab"
 //
 // Narrowed to the exact shape that produces the defect — a unit that LOADS in
 // OnInit and never re-reads — so an idempotent action on a unit with no OnInit,
-// or on one that already declares Reload, stays silent. Deduped per action per
+// or on one that already declares OnReload, stays silent. Deduped per action per
 // process: a legitimately idempotent click is a dead click every time it is
 // made, and one line per click buries the log instead of reading it.
 func (m *mount) warnNoChange(act, name string, v any) {
@@ -71,7 +71,7 @@ func (m *mount) warnNoChange(act, name string, v any) {
 	}
 	log.Printf("via: action %s (%s) changed nothing the render shows, so it answers 204 and the UI "+
 		"does not move. If it mutated data this unit loads in OnInit, that data is stale by now: "+
-		"re-read it in a Reload(*via.Ctx) error method, which via runs after every action on this unit",
+		"re-read it in an OnReload(*via.Ctx) error method, which via runs after every action on this unit",
 		act, name)
 }
 
@@ -160,7 +160,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	if req.Header.Get("Datastar-Request") == "true" {
 		mode = modeDatastar
 	}
-	in, ok := decodeInput(w, req, mode)
+	in, ok := decodeSignals(w, req, mode)
 	if !ok {
 		return
 	}
@@ -200,10 +200,10 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	m.dispatchPlain(w, req, mode, embed, act, in, base, tab)
 }
 
-// decodeInput decodes an action POST's body per mode. A native submit is
+// decodeSignals decodes an action POST's body per mode. A native submit is
 // multipart, so the cap rises to maxUploadBytes; only maxActionBody stays in
 // RAM, the rest spills to a temp file the caller removes.
-func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
+func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
 		req.Body = http.MaxBytesReader(w, req.Body, maxUploadBytes)
 		if err := req.ParseMultipartForm(maxActionBody); err != nil {
@@ -216,7 +216,20 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 		}
 		return nil, true
 	}
-	return decodeActionBody(w, req)
+	in := map[string]json.RawMessage{}
+	if req.Body == nil {
+		return in, true
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxActionBody))
+	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return nil, false
+		}
+		http.Error(w, "malformed request body", http.StatusBadRequest)
+		return nil, false
+	}
+	return in, true
 }
 
 // dispatchOverStream runs act against a connected live unit on its
@@ -428,12 +441,12 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	if ctx == nil {
 		return
 	}
-	writeHTMLPage(w, m.cfg, body, len(liveUnits(ctx)) > 0, base+"/_via/sse")
+	writeHTMLPage(w, m.cfg, body, base, len(liveUnits(ctx)) > 0)
 }
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
 	if from != nil {
-		return renderRootBase(inst, nil, true, base, nil, nil, from)
+		return renderRootBase(inst, true, base, nil, nil, from)
 	}
 	ctx := newRootCtx(nil, true, base, nil)
 	ctx.embedV = inst // the root is a unit like any embed, when it is live
@@ -658,7 +671,7 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 		if only == nil {
 			only = map[string]any{}
 		}
-		afterCtx, after := renderRootBase(inst, nil, true, base, only, seen, u)
+		afterCtx, after := renderRootBase(inst, true, base, only, seen, u)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
 		}
@@ -761,6 +774,12 @@ func respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writeSecurityHeaders(w)
+	// Element-patch fragments take the default policy: a fragment carries no
+	// document, so its header is inert — only the page's policy governs what
+	// runs.
+	hdr := w.Header()
+	hdr.Set("Content-Type", "text/html; charset=utf-8")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+	hdr.Set("Content-Security-Policy", cspHeader)
 	w.Write(b)
 }

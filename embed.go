@@ -72,7 +72,7 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	// An action's response re-render substitutes the instance the handler
 	// mutated for this fresh copy (see inheritRequestScope); re-running its
 	// OnInit would undo the very change the handler just made — re-reading
-	// mutated data is Reload's job, and dispatch has already run it.
+	// mutated data is OnReload's job, and dispatch has already run it.
 	//
 	// The type guard is not paranoia: a root View whose Embed ORDER shifts
 	// between the discovery render and the response re-render leaves the acted
@@ -144,10 +144,10 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	r.WriteString(`</div>`)
 }
 
-// childInit is the sentinel initChild panics with: the render is already deep
+// initOutcome is the sentinel initChild panics with: the render is already deep
 // inside the parent's View with no return path, so the transport's recover
 // turns it back into the answer OnInit asked for (see recoverToHTTP).
-type childInit struct {
+type initOutcome struct {
 	err      error
 	redirect string
 }
@@ -162,10 +162,10 @@ func initChild(child *Ctx, v any) {
 	err := ic.OnInit(child)
 	child.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
 	if err != nil {
-		panic(childInit{err: err})
+		panic(initOutcome{err: err})
 	}
 	if child.redirect != "" {
-		panic(childInit{redirect: child.redirect})
+		panic(initOutcome{redirect: child.redirect})
 	}
 }
 

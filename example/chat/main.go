@@ -1,14 +1,12 @@
-// Command chat is the flagship showcase: a live, multi-user chat room with a
-// presence count — and it reads like a plain page. Messages typed in one tab
-// appear in every connected tab, the "N online" header tracks connections, and
-// there is no hand-written JavaScript, no WebSocket, no build step. Three signal
-// kinds say where each value lives: Signal round-trips to the server, State is
-// server-authoritative and pushed, List is server-authoritative slice state.
-// Zero '&', no identifier strings, no closures at any call site.
+// Command chat is a live multi-user chat room with a presence count: messages
+// typed in one tab appear in every connected tab, over one per-tab SSE stream.
 package main
 
 import (
+	"cmp"
+	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 
 	"github.com/go-via/via"
@@ -84,6 +82,6 @@ func (c *Chat) View() h.H {
 
 func main() {
 	room := NewRoom()
-	http.Handle("/", via.Register(Chat{room: room}))
-	http.ListenAndServe(":8080", nil)
+	http.Handle("/", via.Handler(Chat{room: room}))
+	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
 }

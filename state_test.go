@@ -39,7 +39,7 @@ func (s *hookless) View() h.H { return h.Div(h.Str("n="), s.v.Display()) }
 // server-held state is meaningless without one.
 func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(hookless{}))
+	app := vt.Serve(t, via.Handler(hookless{}))
 
 	status, body := app.Get("/")
 	require.Equal(t, http.StatusOK, status)
@@ -70,7 +70,7 @@ func (e *stateEcho) View() h.H {
 // present and the raw form is absent.
 func TestState_rendersEscapedValueOnALiveEmbed(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(stateEcho{}))
+	app := vt.Serve(t, via.Handler(stateEcho{}))
 	conn := app.Connect()
 
 	status, _ := app.Action(0).Over(conn).Fire()
@@ -160,7 +160,7 @@ func (t *listEmbed) View() h.H {
 // unit test on Get() cannot see.
 func TestList_removeReachesTheBrowser(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(listEmbed{items: newListItems("drop", "keep")}))
+	app := vt.Serve(t, via.Handler(listEmbed{items: newListItems("drop", "keep")}))
 	status, first := app.Get("/")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, first, "count-2", "both rows render on the first paint")
@@ -188,7 +188,7 @@ func (e *eachListEmbed) row(s string) h.H { return h.Li(h.Str(s)) }
 // just through the free via.Each function it wraps.
 func TestList_eachRendersRowsInOrder(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(eachListEmbed{items: newListItems("one", "two", "three")}))
+	app := vt.Serve(t, via.Handler(eachListEmbed{items: newListItems("one", "two", "three")}))
 	status, body := app.Get("/")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Regexp(t, "<li>one</li>.*<li>two</li>.*<li>three</li>", body,
@@ -215,7 +215,7 @@ func (c *hooklessCounter) View() h.H {
 
 func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(hooklessCounter{}))
+	app := vt.Serve(t, via.Handler(hooklessCounter{}))
 	c := app.Connect()
 	defer c.Close()
 
@@ -247,7 +247,7 @@ func (p *lateLive) View() h.H {
 // the action that caused it, not a silent freeze.
 // Sequential: it captures the global log output.
 func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
-	app := via.Register(lateLive{})
+	app := via.Handler(lateLive{})
 	rec := httptest.NewRecorder()
 	rec.Body = &bytes.Buffer{}
 	get := httptest.NewRecorder()

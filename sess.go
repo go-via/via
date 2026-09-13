@@ -50,7 +50,7 @@ const (
 // an expired blob, the pre-rotation id would stay valid, so via panics and the
 // request answers 500 rather than reporting a rotation that did not happen.
 //
-// Implement [AtomicSessionStore] as well if the backend can do a conditional
+// Implement [VersionedSessionStore] as well if the backend can do a conditional
 // write; without it, two requests writing the same session at the same instant
 // can still lose one.
 type SessionStore interface {
@@ -64,7 +64,7 @@ type SessionStore interface {
 	Delete(ctx context.Context, id string) error
 }
 
-// AtomicSessionStore is the optional half of [SessionStore], for a backend that
+// VersionedSessionStore is the optional half of [SessionStore], for a backend that
 // can make a write conditional on the revision it read. via writes a session by
 // re-reading the stored blob and overlaying the keys this request touched; with
 // a plain store that read-modify-write is not atomic, so two requests writing at
@@ -75,7 +75,7 @@ type SessionStore interface {
 // version is opaque and store-defined; 0 means "no blob stored". Redis does this
 // with WATCH/MULTI or a Lua script, SQL with an UPDATE ... WHERE version = $n.
 // The default memory store implements it.
-type AtomicSessionStore interface {
+type VersionedSessionStore interface {
 	SessionStore
 	// LoadVersion is Load, plus the revision token of the blob returned.
 	LoadVersion(ctx context.Context, id string) (data []byte, version uint64, ok bool, err error)
@@ -85,10 +85,10 @@ type AtomicSessionStore interface {
 	SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, version uint64) (ok bool, err error)
 }
 
-// MemorySessionStore returns the default process-local store: a map that is
+// NewMemorySessionStore returns the default process-local store: a map that is
 // lost on restart and invisible to every other pod. Use it explicitly only to
 // make that choice visible at the call site.
-func MemorySessionStore() SessionStore {
+func NewMemorySessionStore() SessionStore {
 	return &memoryStore{m: map[string]memoryEntry{}}
 }
 
@@ -268,7 +268,7 @@ func newSessionManager(cfg *config) *sessionManager {
 	}
 	store, inMemory := cfg.sessionStore, false
 	if store == nil {
-		store, inMemory = MemorySessionStore(), true
+		store, inMemory = NewMemorySessionStore(), true
 	}
 	return &sessionManager{store: store, key: key, cookie: name, ttl: ttl,
 		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory}
@@ -396,7 +396,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 	}
 	d.mu.Unlock()
 
-	cas, _ := m.store.(AtomicSessionStore)
+	cas, _ := m.store.(VersionedSessionStore)
 	for attempt := 0; ; attempt++ {
 		if cas != nil && attempt >= sessionSaveRetries {
 			log.Printf("via: session write gave up after %d CAS attempts — the store is under "+
@@ -569,7 +569,7 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // another. Two requests writing the SAME type resolve last-writer-wins.
 //
 // The merge is a read-modify-write. Against a store that implements
-// [AtomicSessionStore] — the default one does — it re-merges and retries until
+// [VersionedSessionStore] — the default one does — it re-merges and retries until
 // its write applies to the revision it merged against, so a concurrent write is
 // not clobbered; under contention that will not settle it gives up after a
 // bounded number of attempts and drops ITS OWN write, with a log. Against a
@@ -679,7 +679,6 @@ func (s *Session) Rotate() string {
 		return ""
 	}
 	if s.data == nil {
-		// Rotating an empty session still mints a fresh id.
 		s.id, s.data = s.mgr.create(s.storeCtx())
 		s.mgr.setCookie(s.w, s.id, s.secure)
 		return s.id
@@ -776,8 +775,8 @@ func (s *Session) Get[T any]() (T, bool) {
 	return v, true
 }
 
-// Clear removes the value stored under T's key — a logout dropping the
+// Delete removes the value stored under T's key — a logout dropping the
 // session-held user.
-func (s *Session) Clear[T any]() {
+func (s *Session) Delete[T any]() {
 	s.clear(sessionKey[T]())
 }

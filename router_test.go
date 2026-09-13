@@ -631,7 +631,7 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 }
 
 // Mounting at "/" must namespace to the root (no prefix): the page posts to
-// /_via/a/r/{act}, exactly like a single-page Register.
+// /_via/a/r/{act}, exactly like a single-page Handler.
 func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -703,22 +703,22 @@ func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-// Register is Mount at "/" internally — ONE dispatch pipeline. The observable
-// consequence: a single-page Register(root) serves the router-only transports
-// too (a native PostForm posts to /_via/a/r/0 and 303s). Fails if Register grows
+// Handler is Mount at "/" internally — ONE dispatch pipeline. The observable
+// consequence: a single-page Handler(root) serves the router-only transports
+// too (a native PostForm posts to /_via/a/r/0 and 303s). Fails if Handler grows
 // its own separate mux again.
-func TestRegister_isMountAtRootOneDispatchPipeline(t *testing.T) {
+func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(loginForm{}))
+	srv := serve(t, via.Handler(loginForm{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "Register must serve the form transport like any mount")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "Handler must serve the form transport like any mount")
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
 
 // The unified pipeline carries the live machinery too: a live embed mounted on
-// a Router (not just Register) bootstraps the SSE stream from its page — the
+// a Router (not just Handler) bootstraps the SSE stream from its page — the
 // body carries @post('<base>/_via/sse') and the reconnect manager. Fails if
 // Mount loses the live bootstrap detection.
 func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {

@@ -2,7 +2,7 @@
 // real headless Chromium and abstracts away raw chromedp, so a browser test
 // reads at the level of the behavior it checks:
 //
-//	s := vtbrowser.Open(t, via.Register(Counter{}))
+//	s := vtbrowser.Open(t, via.Handler(Counter{}))
 //	s.Click("button")
 //	s.WaitTextContains("p", "count: 1")
 //	s.RequireCleanConsole()

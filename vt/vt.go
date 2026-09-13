@@ -3,7 +3,7 @@
 // reach into unexported state — so a test can exercise the origin floor, an
 // action, or a live SSE stream without hand-rolling request plumbing.
 //
-//	app := vt.Serve(t, via.Register(Counter{count: &store{}}))
+//	app := vt.Serve(t, via.Handler(Counter{count: &store{}}))
 //	status, body := app.Action(1).Fire()      // POST the root's 2nd action, same-origin
 //	require.Equal(t, 200, status)
 //
@@ -87,7 +87,8 @@ func ServeTLS(t testing.TB, handler http.Handler) *App {
 	return &App{t: t, srv: srv}
 }
 
-// URL returns the server's base URL.
+// URL is the server's base URL — the origin a test hand-rolls a request
+// against when the builder methods above don't fit.
 func (a *App) URL() string { return a.srv.URL }
 
 // Client returns the server's http.Client, wired to reach it (over the
@@ -123,9 +124,7 @@ func (a *App) Get(path string) (int, string) {
 // be wrong. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
-func (a *App) Action(n int) *Action {
-	return &Action{app: a, embed: "r", n: n, headers: map[string]string{}, body: "{}"}
-}
+func (a *App) Action(n int) *Action { return a.EmbedAction("r", n) }
 
 // EmbedAction builds a POST to the n-th action an embed renders,
 // in document order. embed is the key an embed's own container carries:
@@ -136,8 +135,7 @@ func (a *App) EmbedAction(embed string, n int) *Action {
 }
 
 // page fetches and caches the root page's HTML, so repeated Action/
-// EmbedAction calls don't re-render it. Refresh drops the cache when a test
-// needs the current (possibly reshaped) page instead.
+// EmbedAction calls don't re-render it.
 func (a *App) page() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -147,15 +145,6 @@ func (a *App) page() string {
 		a.fetched = true
 	}
 	return a.pageBody
-}
-
-// Refresh drops the cached root page, so the next Action/EmbedAction call
-// re-fetches it. Needed after a mutation that changes the View's rendered
-// shape (a branched View whose action set differs by state).
-func (a *App) Refresh() {
-	a.mu.Lock()
-	a.fetched = false
-	a.mu.Unlock()
 }
 
 // Action is a builder for an action POST.
@@ -178,103 +167,103 @@ type Action struct {
 // Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
 // test that deliberately wants a hand-built or stale URL (e.g. asserting a
 // 410 on an action id this render no longer binds).
-func (x *Action) Raw(path string) *Action { x.raw = path; return x }
+func (a *Action) Raw(path string) *Action { a.raw = path; return a }
 
 // Host overrides the request Host header (the authority the origin floor
 // compares an Origin against). The connection still dials the test server.
-func (x *Action) Host(h string) *Action { x.host = h; return x }
+func (a *Action) Host(h string) *Action { a.host = h; return a }
 
 // Origin sets the Origin header and suppresses the default Sec-Fetch-Site, so
 // the floor falls through to its Origin-host comparison.
-func (x *Action) Origin(o string) *Action {
-	x.headers["Origin"] = o
-	x.originSet = true
-	return x
+func (a *Action) Origin(o string) *Action {
+	a.headers["Origin"] = o
+	a.originSet = true
+	return a
 }
 
 // SecFetch sets the Sec-Fetch-Site header explicitly.
-func (x *Action) SecFetch(s string) *Action {
-	x.headers["Sec-Fetch-Site"] = s
-	x.secFetchSet = true
-	return x
+func (a *Action) SecFetch(s string) *Action {
+	a.headers["Sec-Fetch-Site"] = s
+	a.secFetchSet = true
+	return a
 }
 
 // Tab sets the viatab signal in the POST body, routing a live action to a
 // connection's embed — the same channel the real client uses, since Datastar
 // ships the whole (underscore-filtered) signal store with every @post.
-func (x *Action) Tab(id string) *Action { x.tab, x.tabSet = id, true; return x }
+func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 
 // Over routes this action over c's stream: its viatab signal is set to c's
 // tab id, and — unless Raw overrides it — Fire reads the action's URL off c's own
 // pushed markup (see Conn.ActionURL) instead of a separate plain GET's
 // render, which can carry a different shape digest than what this connection
 // actually has on screen.
-func (x *Action) Over(c *Conn) *Action {
-	x.conn = c
-	return x.Tab(c.tabID)
+func (a *Action) Over(c *Conn) *Action {
+	a.conn = c
+	return a.Tab(c.tabID)
 }
 
 // NoOrigin sends no origin signal at all, exercising the fail-closed branch.
-func (x *Action) NoOrigin() *Action { x.noOrigin = true; return x }
+func (a *Action) NoOrigin() *Action { a.noOrigin = true; return a }
 
 // Body sets the raw JSON signal body (defaults to "{}").
-func (x *Action) Body(json string) *Action { x.body = json; return x }
+func (a *Action) Body(json string) *Action { a.body = json; return a }
 
 // signalBody splices the tab id into the JSON signal body the way the browser
 // would — the tab id is a signal now, not a header. A body Tab was never set
 // on, or one that is not a JSON object (a test feeding deliberate garbage), is
 // posted verbatim.
-func (x *Action) signalBody() string {
-	if !x.tabSet {
-		return x.body
+func (a *Action) signalBody() string {
+	if !a.tabSet {
+		return a.body
 	}
 	sig := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(x.body), &sig); err != nil {
-		return x.body
+	if err := json.Unmarshal([]byte(a.body), &sig); err != nil {
+		return a.body
 	}
-	sig[tabSignal], _ = json.Marshal(x.tab)
+	sig[tabSignal], _ = json.Marshal(a.tab)
 	out, err := json.Marshal(sig)
 	if err != nil {
-		return x.body
+		return a.body
 	}
 	return string(out)
 }
 
 // Fire issues the POST and returns the status code and response body.
-func (x *Action) Fire() (int, string) {
-	x.app.t.Helper()
-	path := x.raw
-	if path == "" && x.conn != nil {
-		path = x.conn.ActionURL(x.embed, x.n)
+func (a *Action) Fire() (int, string) {
+	a.app.t.Helper()
+	path := a.raw
+	if path == "" && a.conn != nil {
+		path = a.conn.ActionURL(a.embed, a.n)
 	}
 	if path == "" {
-		u, ok := nthActionURL([]byte(x.app.page()), x.embed, x.n)
+		u, ok := nthActionURL([]byte(a.app.page()), a.embed, a.n)
 		if !ok {
-			x.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", x.embed, x.n)
+			a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.embed, a.n)
 		}
 		path = u
 	}
-	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+path, strings.NewReader(x.signalBody()))
+	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+path, strings.NewReader(a.signalBody()))
 	if err != nil {
-		x.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
+		a.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
-	if x.host != "" {
-		req.Host = x.host
+	if a.host != "" {
+		req.Host = a.host
 	}
 	// The bundled Datastar client sends this on every @post; it is how
 	// dispatch tells a JSON action apart from a native form submit.
 	req.Header.Set("Datastar-Request", "true")
 	// A same-origin fetch is the default; only when the test pins no origin,
 	// an explicit Origin, or an explicit Sec-Fetch-Site do we drop it.
-	if !x.noOrigin && !x.originSet && !x.secFetchSet {
+	if !a.noOrigin && !a.originSet && !a.secFetchSet {
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 	}
-	for k, v := range x.headers {
+	for k, v := range a.headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := x.app.srv.Client().Do(req)
+	resp, err := a.app.srv.Client().Do(req)
 	if err != nil {
-		x.app.t.Fatalf("vt.Action.Fire: %v", err)
+		a.app.t.Fatalf("vt.Action.Fire: %v", err)
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -360,7 +349,8 @@ func (a *App) Connect() *Conn {
 	return c
 }
 
-// TabID returns the connection's tab id.
+// TabID is the credential a live action must carry to route to this
+// connection; Action.Over splices it in for you.
 func (c *Conn) TabID() string { return c.tabID }
 
 // ActionURL returns the currently-rendered URL of embed's n-th action, in

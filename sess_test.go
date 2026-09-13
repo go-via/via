@@ -41,7 +41,7 @@ func (c *loginComp) Greet(ctx *via.Ctx) {
 		c.greeting = "hi " + m.Name
 	}
 }
-func (c *loginComp) SignOut(ctx *via.Ctx) { ctx.Session().Clear[member]() }
+func (c *loginComp) SignOut(ctx *via.Ctx) { ctx.Session().Delete[member]() }
 func (c *loginComp) Refresh(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (c *loginComp) View() h.H {
 	return h.Div(
@@ -151,7 +151,7 @@ func getPage(t *testing.T, c *http.Client, base string) *http.Response {
 
 func sessionServer(t *testing.T, opts ...via.Option) string {
 	t.Helper()
-	srv := httptest.NewServer(via.Register(loginComp{}, opts...))
+	srv := httptest.NewServer(via.Handler(loginComp{}, opts...))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -192,7 +192,7 @@ func TestSession_clearRemovesAStoredValue(t *testing.T) {
 // different number of times and must each read back only their own.
 func TestSession_isolatesValuesPerSession(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 	c1, c2 := jarClient(t), jarClient(t)
 
@@ -284,7 +284,7 @@ func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 // isn't compare-and-swap — so this test only pins the id, not the sum.)
 func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 	c := jarClient(t)
 
@@ -344,7 +344,7 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 // from ever going idle.
 func TestSession_expiresAfterIdleTTL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := httptest.NewTestServer(t, via.Register(loginComp{},
+		srv := httptest.NewTestServer(t, via.Handler(loginComp{},
 			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 		jar, err := cookiejar.New(nil)
 		require.NoError(t, err)
@@ -376,7 +376,7 @@ func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
 func TestSession_shortSessionKeyPanicsAtConstruction(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() {
-		via.Register(loginComp{}, via.WithSessionKey([]byte("too-short")))
+		via.Handler(loginComp{}, via.WithSessionKey([]byte("too-short")))
 	}, "a session key under the minimum length must panic at construction")
 }
 
@@ -404,7 +404,7 @@ func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {
 // WithSecureCookies forces Secure regardless, for that deployment.
 func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(loginComp{},
+	srv := httptest.NewServer(via.Handler(loginComp{},
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
 		via.WithSecureCookies()))
 	t.Cleanup(srv.Close)
@@ -418,7 +418,7 @@ func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 // that auto-detection is exactly why Secure isn't forced by default.
 func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewTLSServer(via.Register(loginComp{},
+	srv := httptest.NewTLSServer(via.Handler(loginComp{},
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
@@ -444,7 +444,7 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 // on http://localhost can never receive it — the ergonomic default.
 func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(loginComp{},
+	srv := httptest.NewServer(via.Handler(loginComp{},
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
@@ -466,7 +466,7 @@ func (c *liveSess) View() h.H                 { return h.Div(h.Str("live")) }
 // action needs it.
 func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	ctx := t.Context() // close the stream so the embed tears down
@@ -579,7 +579,7 @@ func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
 // two via apps on one host clobbering a shared default cookie.
 func TestSession_usesACustomCookieName(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(loginComp{},
+	srv := httptest.NewServer(via.Handler(loginComp{},
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)

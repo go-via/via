@@ -56,14 +56,12 @@ func NewRenderer(b Binder) *Renderer {
 	return &Renderer{buf: &bytes.Buffer{}, ctx: b}
 }
 
-// Binder returns the bound Binder for this render pass.
+// Binder returns the Binder that names this render pass's signal and action
+// slots; nil outside a via render.
 func (r *Renderer) Binder() Binder { return r.ctx }
 
-// Render renders a single node into the buffer.
+// Render appends node's markup to the buffer.
 func (r *Renderer) Render(node H) { node.render(r) }
-
-// String returns the accumulated output.
-func (r *Renderer) String() string { return r.buf.String() }
 
 // Bytes returns the accumulated output without copying.
 func (r *Renderer) Bytes() []byte { return r.buf.Bytes() }
@@ -120,11 +118,8 @@ type element struct {
 }
 
 func (e element) render(r *Renderer) {
-	// TODO(static-skeleton): slice 1 walks the tree on every render. A later
-	// slice caches the static skeleton and only re-renders dynamic slots.
 	r.WriteString("<")
 	r.WriteString(e.tag)
-	// Attributes render inside the opening tag, in source order.
 	for _, k := range e.kids {
 		if a, ok := k.(Attr); ok {
 			a.render(r)
@@ -135,7 +130,6 @@ func (e element) render(r *Renderer) {
 		return
 	}
 	r.WriteString(">")
-	// Non-attribute children render in the body, in source order.
 	for _, k := range e.kids {
 		if _, ok := k.(Attr); !ok {
 			k.render(r)

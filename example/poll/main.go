@@ -1,16 +1,14 @@
-// Command poll is a CRUD list with per-row actions: add an option, vote for one,
-// remove one. The list re-sorts by vote count on every render, so rows reorder
-// constantly — yet each button carries its option's id (via.OnArg), so a
-// vote always lands on the option you clicked, not whatever now sits at that
-// position. That's the point of value-carrying actions: identity rides with the
-// click, so a list that grows, shrinks, and reorders never misroutes — no stable
-// action-slot scheme needed. Zero '&', no identifier strings, no closures at any
-// call site.
+// Command poll is a CRUD list with per-row actions. The list re-sorts by vote
+// count on every render, and via.OnArg carries each row's id with the click, so a
+// vote lands on the option you clicked rather than whatever now sits in that slot.
 package main
 
 import (
+	"cmp"
+	"log"
 	"net/http"
-	"sort"
+	"os"
+	"slices"
 	"sync"
 
 	"github.com/go-via/via"
@@ -51,13 +49,7 @@ func (p *Poll) vote(id int) {
 func (p *Poll) remove(id int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := p.opts[:0]
-	for _, o := range p.opts {
-		if o.ID != id {
-			out = append(out, o)
-		}
-	}
-	p.opts = out
+	p.opts = slices.DeleteFunc(p.opts, func(o Option) bool { return o.ID == id })
 }
 
 // ranked returns the options sorted by votes (desc) — so the rendered order
@@ -66,7 +58,7 @@ func (p *Poll) ranked() []Option {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := append([]Option(nil), p.opts...)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Votes > out[j].Votes })
+	slices.SortStableFunc(out, func(a, b Option) int { return cmp.Compare(b.Votes, a.Votes) })
 	return out
 }
 
@@ -115,6 +107,6 @@ func main() {
 	poll.add("Go")
 	poll.add("Rust")
 	poll.add("Zig")
-	http.Handle("/", via.Register(PollApp{poll: poll}))
-	http.ListenAndServe(":8080", nil)
+	http.Handle("/", via.Handler(PollApp{poll: poll}))
+	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
 }

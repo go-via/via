@@ -39,21 +39,12 @@ func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	assert.Same(t, b, r.Binder(), "Binder() did not return the injected binder")
 }
 
-func TestBytes_matchesStringForZeroCopyWriting(t *testing.T) {
-	t.Parallel()
-	// via writes the rendered tree straight to the ResponseWriter via Bytes()
-	// to avoid a string copy; it must equal String().
-	r := hcore.NewRenderer(&stubBinder{})
-	r.Render(hcore.El("span", hcore.Str("x")))
-	assert.Equal(t, r.String(), string(r.Bytes()), "Bytes() must equal String()")
-}
-
 func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	t.Parallel()
 	r := hcore.NewRenderer(&stubBinder{})
 	r.WriteString("<b>")  // raw, caller pre-escaped
 	r.WriteEscaped("<b>") // must be escaped
-	assert.Equal(t, "<b>&lt;b&gt;", r.String())
+	assert.Equal(t, "<b>&lt;b&gt;", string(r.Bytes()))
 }
 
 // Dyn's node is a body node, never an attribute — El must route it into the
@@ -62,7 +53,7 @@ func TestDyn_rendersInTheElementBody(t *testing.T) {
 	t.Parallel()
 	r := hcore.NewRenderer(&stubBinder{})
 	r.Render(hcore.El("span", hcore.Dyn(func(r *hcore.Renderer) { r.WriteString("dyn") })))
-	assert.Equal(t, "<span>dyn</span>", r.String())
+	assert.Equal(t, "<span>dyn</span>", string(r.Bytes()))
 }
 
 // DynAttr satisfies Attr (isAttr), so El must route it into the opening tag —
@@ -73,7 +64,7 @@ func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	r := hcore.NewRenderer(&stubBinder{})
 	attr := hcore.DynAttr(func(r *hcore.Renderer) { r.WriteString(` data-x="1"`) })
 	r.Render(hcore.El("span", attr, hcore.Str("body")))
-	assert.Equal(t, `<span data-x="1">body</span>`, r.String())
+	assert.Equal(t, `<span data-x="1">body</span>`, string(r.Bytes()))
 }
 
 // El writes tag straight into "<" + tag + ">" with no escaping of its own — an
@@ -104,7 +95,7 @@ func TestEl_acceptsOrdinaryTagNames(t *testing.T) {
 		assert.NotPanicsf(t, func() {
 			r := hcore.NewRenderer(&stubBinder{})
 			r.Render(hcore.El(tag))
-			got = r.String()
+			got = string(r.Bytes())
 		}, "El(%q) must be accepted", tag)
 		assert.Equal(t, "<"+tag+"></"+tag+">", got)
 	}

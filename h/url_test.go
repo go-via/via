@@ -1,6 +1,9 @@
 package h_test
 
 import (
+	"bytes"
+	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -106,5 +109,38 @@ func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {
 	for _, name := range []string{"srcdoc", "SRCDOC", "SrcDoc"} {
 		assert.Panicsf(t, func() { h.RawAttr(name, "<script>alert(1)</script>") },
 			"RawAttr(%q) must panic — srcdoc always allows same-origin script", name)
+	}
+}
+
+// Href/Src/Action neutralize through ONE gate. They used to call h.RawAttr,
+// which re-ran the same URL-bearing check on the value they had already
+// neutralized; they now go straight to the core attribute writer. This pins
+// what the second pass was silently propping up: the surviving gate alone
+// still refuses every hostile family, once, with nothing of the URL left in
+// the markup.
+func TestURLPolicy_typedAttributesNeutralizeThroughASingleGate(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	// The gate runs when the Attr is CONSTRUCTED, not at render, so each node
+	// has to be built after the log buffer is reset.
+	gates := []struct {
+		attr string
+		node func(string) h.H
+	}{
+		{"href", func(u string) h.H { return h.A(h.Href(u)) }},
+		{"src", func(u string) h.H { return h.Img(h.Src(u)) }},
+		{"action", func(u string) h.H { return h.Form(h.Action(u)) }},
+	}
+	for _, u := range []string{"javascript:alert(1)", "data:text/html,x", "//evil.example/x"} {
+		for _, g := range gates {
+			logs.Reset()
+			rendered := render(t, g.node(u))
+			assert.Contains(t, rendered, g.attr+`="#"`, "%s=%q must neutralize", g.attr, u)
+			assert.NotContains(t, rendered, u, "the hostile URL must not survive anywhere in the markup")
+			assert.Equal(t, 1, strings.Count(logs.String(), "neutralized"),
+				"%s=%q must be neutralized once, not once per gate: %s", g.attr, u, logs.String())
+		}
 	}
 }

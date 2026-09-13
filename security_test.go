@@ -42,7 +42,7 @@ func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) in
 // allowlisted) source.
 func TestSSE_enforcementRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusForbidden,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
@@ -52,7 +52,7 @@ func TestSSE_enforcementRejectsCrossSiteOrigin(t *testing.T) {
 // closed, exactly as the action endpoint does.
 func TestSSE_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, nil))
 }
 
@@ -60,7 +60,7 @@ func TestSSE_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 // same-origin) must still connect.
 func TestSSE_enforcementAllowsSameOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}))
 }
@@ -69,7 +69,7 @@ func TestSSE_enforcementAllowsSameOrigin(t *testing.T) {
 // per-tab id is the CSRF token): a cross-site connect must succeed.
 func TestSSE_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(quietEmbed{}))
+	srv := serve(t, via.Handler(quietEmbed{}))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
@@ -79,7 +79,7 @@ func TestSSE_defaultAllowsCrossSite(t *testing.T) {
 func TestSSE_allowsTrustedCrossOrigin(t *testing.T) {
 	t.Parallel()
 	const embedder = "https://embedder.example"
-	srv := serve(t, via.Register(quietEmbed{}, via.WithTrustedOrigin(embedder)))
+	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin(embedder)))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Origin": embedder, "Sec-Fetch-Site": "cross-site"}))
 }
@@ -91,7 +91,7 @@ func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
 	// Not t.Parallel(): SetMaxSSEConnForTest mutates package state shared with
 	// any concurrently-Registering test.
 	restore := via.SetMaxSSEConnForTest(1)
-	srv := serve(t, via.Register(quietEmbed{}))
+	srv := serve(t, via.Handler(quietEmbed{}))
 	restore()
 
 	_, release := openStream(t, srv) // takes the only slot; asserts it connected (200)
@@ -106,7 +106,7 @@ func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
 // would wedge the app at its limit forever.
 func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 	restore := via.SetMaxSSEConnForTest(1)
-	srv := serve(t, via.Register(quietEmbed{}))
+	srv := serve(t, via.Handler(quietEmbed{}))
 	restore()
 
 	_, release := openStream(t, srv)
@@ -120,19 +120,19 @@ func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "a freed slot must admit a new connection")
 }
 
-// The cap is per-Register: two independently registered apps in one process must
+// The cap is per-Handler: two independently registered apps in one process must
 // not share a counter, or a busy app would throttle an unrelated one.
 func TestSSE_capIsPerRegister(t *testing.T) {
 	restore := via.SetMaxSSEConnForTest(1)
-	a := serve(t, via.Register(quietEmbed{}))
-	b := serve(t, via.Register(quietEmbed{}))
+	a := serve(t, via.Handler(quietEmbed{}))
+	b := serve(t, via.Handler(quietEmbed{}))
 	restore()
 
 	_, release := openStream(t, a) // fills A's only slot
 	defer release()
 
 	assert.Equal(t, http.StatusOK, sseStatus(t, b, sameOrigin()),
-		"a second Register must have an independent cap")
+		"a second Handler must have an independent cap")
 }
 
 // panicComp's action panics, to prove a buggy handler returns 500 and does not
@@ -149,7 +149,7 @@ func (p *panicComp) View() h.H {
 // mutate server state, or any page on the web can drive the counter (CSRF).
 func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 
 	status, _ := app.Action(1).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
@@ -163,7 +163,7 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 // must be rejected.
 func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).SecFetch("same-site").Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).SecFetch("same-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -172,7 +172,7 @@ func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 // floor must fail closed rather than silently trust it.
 func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).NoOrigin().Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -180,7 +180,7 @@ func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 // when Sec-Fetch-Site is absent) must be allowed and must mutate state.
 func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(counter{count: &store{}}))
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}))
 	status, body := app.Action(1).Origin(app.URL()).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
@@ -191,7 +191,7 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
 	big := `{"f0":"` + strings.Repeat("a", 2<<20) + `"}`
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body(big).Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body(big).Fire()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }
 
@@ -199,7 +199,7 @@ func TestAction_rejectsOversizeBody(t *testing.T) {
 // silently bind an empty signal set and misroute the action.
 func TestAction_rejectsMalformedBody(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body("{not valid json").Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body("{not valid json").Fire()
 	assert.Equal(t, http.StatusBadRequest, status)
 }
 
@@ -207,7 +207,7 @@ func TestAction_rejectsMalformedBody(t *testing.T) {
 // signals", not as a malformed-body 400.
 func TestAction_treatsEmptyBodyAsNoSignals(t *testing.T) {
 	t.Parallel()
-	status, body := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).Body("").Fire()
+	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body("").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -216,7 +216,7 @@ func TestAction_treatsEmptyBodyAsNoSignals(t *testing.T) {
 // keeps serving subsequent requests (no crash, no wedged connection).
 func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(panicComp{}))
+	app := vt.Serve(t, via.Handler(panicComp{}))
 
 	status, _ := app.Action(0).Fire()
 	assert.Equal(t, http.StatusInternalServerError, status)
@@ -229,7 +229,7 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 // non-browser/dev clients that cannot send origin headers just work.
 func TestAction_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(counter{count: &store{}}))
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}))
 	status, body := app.Action(1).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
@@ -240,7 +240,7 @@ func TestAction_defaultAllowsCrossSite(t *testing.T) {
 // that motivates the dev-friendly default.
 func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, body := vt.Serve(t, via.Register(counter{count: &store{}})).Action(1).NoOrigin().Fire()
+	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -250,7 +250,7 @@ func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {
 	t.Parallel()
 	const trusted = "https://trusted.example"
-	app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin(trusted)))
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin(trusted)))
 	status, body := app.Action(1).Origin(trusted).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
@@ -272,7 +272,7 @@ func TestOriginFloor_matchesHostCaseAndDefaultPortInsensitively(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 			status, body := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusOK, status, "a normalized same-origin request must be allowed")
 			assert.Contains(t, body, "<h1>1</h1>", "and must mutate server state")
@@ -291,7 +291,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 			status, _ := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusForbidden, status)
 		})
@@ -305,7 +305,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 // to their own https document.)
 func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	t.Parallel()
-	app := vt.ServeTLS(t, via.Register(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+	app := vt.ServeTLS(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
 
 	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Fire()
 	assert.Equal(t, http.StatusForbidden, down, "http Origin on a TLS request is a scheme downgrade")
@@ -351,8 +351,8 @@ func (s *outageStore) Load(ctx context.Context, id string) ([]byte, bool, error)
 // request for the connection's whole life.
 func TestSSE_refusesToConnectWhileTheSessionStoreIsDown(t *testing.T) {
 	t.Parallel()
-	store := &outageStore{SessionStore: via.MemorySessionStore()}
-	srv := serve(t, via.Register(liveSessStream{},
+	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
+	srv := serve(t, via.Handler(liveSessStream{},
 		via.WithSessionStore(store),
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 

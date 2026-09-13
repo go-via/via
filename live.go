@@ -86,7 +86,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		// This call and runStream's disposer sweep both run on the one stream
 		// goroutine, the starter strictly first, so the append needs no lock.
 		sub := t.Subscribe()
-		sub.Notify(wake)
+		sub.WakeOn(wake)
 		c.OnDispose(sub.Stop)
 		return listener{poll: func() func() {
 			batch, _ := sub.Drain()
@@ -329,14 +329,6 @@ func (c *tabStream) bindSession(sid string) {
 	}
 }
 
-// dataSID is sid for a raw session record.
-func dataSID(d *sessionData) string {
-	if d == nil {
-		return ""
-	}
-	return d.sid
-}
-
 // sid is the stable identity of s's session, "" when there is none.
 func (s *Session) sid() string {
 	if s == nil || s.data == nil {
@@ -396,7 +388,7 @@ func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionR
 }
 
 // registry maps a per-connection tab id to its live embed. A local of each
-// Register call, never global.
+// Handler call, never global.
 type registry struct {
 	mu sync.Mutex
 	m  map[string]*tabStream

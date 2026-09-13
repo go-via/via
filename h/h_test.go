@@ -37,7 +37,7 @@ func render(t *testing.T, node h.H) string {
 	t.Helper()
 	r := hcore.NewRenderer(&stubBinder{})
 	r.Render(node)
-	return r.String()
+	return string(r.Bytes())
 }
 
 func TestChildText_isHTMLEscapedToPreventInjection(t *testing.T) {

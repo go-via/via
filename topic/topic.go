@@ -38,7 +38,7 @@ type Sub[T any] struct {
 	ready chan struct{} // capacity 1, coalescing: "there is work"
 
 	mu      sync.Mutex
-	wake    chan<- struct{} // optional extra notifier, see Notify
+	wake    chan<- struct{} // optional extra notifier, see WakeOn
 	q       []T
 	limit   int
 	dropped int
@@ -62,10 +62,10 @@ func (t *Topic[T]) SubscribeLimit(limit int) *Sub[T] {
 	return s
 }
 
-// Subs returns the number of live subscriptions — the head-count an app
+// NumSubs returns the number of live subscriptions — the head-count an app
 // publishes as presence, and the number that must fall back to zero once every
 // tab has disconnected.
-func (t *Topic[T]) Subs() int {
+func (t *Topic[T]) NumSubs() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return len(t.subs)
@@ -143,7 +143,7 @@ func signal(ch chan<- struct{}) {
 	}
 }
 
-// Notify routes this subscription's wake-ups to ch as well as to Ready, so ONE
+// WakeOn routes this subscription's wake-ups to ch as well as to Ready, so ONE
 // reader can multiplex many subscriptions on a single channel — a live
 // connection drives every ctx.Listen from its own select loop instead of
 // spending a goroutine per subscription. ch must be buffered (capacity 1 is
@@ -152,9 +152,9 @@ func signal(ch chan<- struct{}) {
 // for any number of them.
 //
 // It signals ch immediately when the queue is already non-empty, so a value
-// published between Subscribe and Notify is not stranded, and Stop signals it
+// published between Subscribe and WakeOn is not stranded, and Stop signals it
 // too, so a reader parked on ch alone still sees the end.
-func (s *Sub[T]) Notify(ch chan<- struct{}) {
+func (s *Sub[T]) WakeOn(ch chan<- struct{}) {
 	s.mu.Lock()
 	s.wake = ch
 	pending := len(s.q) > 0 || s.stopped

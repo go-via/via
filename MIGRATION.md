@@ -18,7 +18,7 @@ with `via.On*`, replace `h.Text` with `h.Str`, keep your typed attributes —
 `h.Class`, `h.Type`, `h.Style`, `h.Min`, … all still exist, plus 40+ more —
 and reach for `h.RawAttr` only when no typed helper covers the attribute you
 need; every `via.X(ctx, …)` is now `ctx.X(…)` — `Param`,
-`Redirect`, `Listen`, `Session.Put`/`Get`/`Clear`/`Rotate` are
+`Redirect`, `Listen`, `Session.Put`/`Get`/`Delete`/`Rotate` are
 all `Ctx`/`Session` methods now, not free functions (and `via.Mount(r, …)`
 is `r.Mount(…)`, a `Router` method). Expect the compiler to find the rest.
 Then read shift 1, because that is the one that will actually change your
@@ -117,7 +117,7 @@ type Page struct{ Sidebar Sidebar }
 func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
 ```
 
-`via.Register` and `Router.Mount` take the root **by value** (`Counter{...}`, not
+`via.Handler` and `Router.Mount` take the root **by value** (`Counter{...}`, not
 `&Counter{...}`); via passes a pointer to the per-request instance, which is why
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
@@ -150,7 +150,7 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 embed's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
-`ctx.Redirect` navigates from anywhere: `OnInit`, `Reload`, a native form
+`ctx.Redirect` navigates from anywhere: `OnInit`, `OnReload`, a native form
 submit (303 before the View ever renders) and a Datastar `@post` action alike.
 A `@post` answers with a one-line `location.assign` script, which Datastar
 v1.0.2 executes through its `text/javascript` response branch; the target rides
@@ -164,30 +164,32 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 
 | Area | v1 | v0.8 |
 | --- | --- | --- |
-| Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
+| Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook — on the page and on every embedded child |
 | Live embed | `Connector.OnConnect` + `Disposer.Dispose` | no interface — a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")` — and it is generic over `Stringish` |
-| Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49; `h.RawAttr` covers the rest |
+| Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49 (`h.ColSpan`/`h.RowSpan` carry the Go-style casing); `h.RawAttr` covers the rest |
 | Signal rendering | `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`, `.Class()` | `Bind` remains; the rest are gone — render the value in Go |
 | Conditionals | `h.If` | `via.When` |
 | Groups | `h.Group` | pass the children directly; every element is variadic |
 | Growing lists | `StateTab[[]E]` + `Update` | `via.List[E]` with `Append` |
-| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put/Get[T]/Clear[T]/Rotate` |
-| Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen` |
+| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put/Get[T]/Delete[T]/Rotate` |
+| Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen`; a hand-rolled reader uses `Sub.WakeOn(ch)` and `Topic.NumSubs()` |
+| Post-action reload | — | `OnReload(*via.Ctx) error` (interface `Reloader`), run after every action on the unit |
+| Session storage | — | `via.SessionStore`, default `via.NewMemorySessionStore()`; implement `via.VersionedSessionStore` for a compare-and-set backend |
 | Path params | — | `ctx.Param[T]("name")` |
 | Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
-| Document shell | theme options, `plugins/picocss` | `via.WithDocumentHead(via.Head{…})` |
+| Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
 | Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
 | Render plumbing | `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` | **gone** — behind `internal/hcore` |
 
 ## Removed outright
 
 - **Plugins**, including `plugins/picocss`. Styling is your own CSS, delivered
-  through `WithDocumentHead`. There is no plugin interface to reimplement
+  through `WithHead`. There is no plugin interface to reimplement
   against.
 - **Theme options** and `WithoutSSEReconnect`. Themes are CSS; the reconnect
   manager is always on, because an app that silently stops updating is worse
@@ -276,7 +278,7 @@ func (c *Counter) View() h.H {
 }
 
 func main() {
-    http.Handle("/", via.Register(Counter{count: &Store{}}))
+    http.Handle("/", via.Handler(Counter{count: &Store{}}))
 }
 ```
 

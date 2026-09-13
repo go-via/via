@@ -44,7 +44,7 @@ func (d *duo) View() h.H { return h.Div(via.Embed(d.A), via.Embed(d.B)) }
 // on a parent that is not itself a live embed.
 func TestMux_eachLiveEmbedPushesItsOwnContainer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(duo{}))
+		app := vt.Serve(t, via.Handler(duo{}))
 		conn := app.Connect()
 
 		conn.Await(`selector #via-i0`) // embed 0 pushed its container
@@ -86,7 +86,7 @@ func (p *failPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 func TestMux_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
-	resp, _ := do(t, serve(t, via.Register(failPair{A: liveProbe{acquired: acquired}})),
+	resp, _ := do(t, serve(t, via.Handler(failPair{A: liveProbe{acquired: acquired}})),
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
@@ -114,7 +114,7 @@ func (p *panicPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
-	resp, _ := do(t, serve(t, via.Register(panicPair{A: liveProbe{acquired: acquired}})),
+	resp, _ := do(t, serve(t, via.Handler(panicPair{A: liveProbe{acquired: acquired}})),
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
@@ -143,7 +143,7 @@ func (p *pair) View() h.H { return h.Div(via.Embed(p.X), via.Embed(p.Y)) }
 // its container so they reach the store.
 func TestEmbed_embedSignalsAreScopedPerEmbed(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(pair{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(pair{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "i0__name", "embed 0's signal must carry an embed-scoped slot")
 	assert.Contains(t, body, "i1__name", "embed 1's signal must carry an embed-scoped slot")
@@ -174,7 +174,7 @@ func (s *solo) View() h.H { return h.Div(via.Embed(s.X)) }
 // the container; a tick-driven push re-binds x__draft with no data-signals.
 func TestMux_liveEmbedSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
-	srv := via.Register(solo{})
+	srv := via.Handler(solo{})
 
 	// The plain GET check runs on a real listener, outside any synctest
 	// bubble — it needs no fake time and this keeps the two halves of the
@@ -207,7 +207,7 @@ func (p *greetPage) View() h.H { return h.Div(via.Embed(p.G)) }
 // impossible.
 func TestEmbed_newEmbedSeedsTheChild(t *testing.T) {
 	t.Parallel()
-	app := via.Register(greetPage{G: greeter{who: "alice"}})
+	app := via.Handler(greetPage{G: greeter{who: "alice"}})
 	_, body := do(t, serve(t, app), http.MethodGet, "/", "")
 	assert.Contains(t, body, "hi alice", "the parent literal must seed the embedded child")
 }
@@ -231,7 +231,7 @@ func (p *panel) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 // its own #via-i{n} — not the sibling, not the whole page.
 func TestMux_liveEmbedActionRoutesToItsEmbedAndPushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(panel{}))
+		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect()
 
 		// URL id 1 addresses this embed; Live routes it to THIS connection's tab.
@@ -247,7 +247,7 @@ func TestMux_liveEmbedActionRoutesToItsEmbedAndPushes(t *testing.T) {
 // re-bootstraps rather than mutating a throwaway.
 func TestMux_liveEmbedActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(panel{}))
+		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
 
 		status, _ := app.EmbedAction("0", 0).Over(conn).Tab("bogus-tab-id").Fire()
@@ -260,7 +260,7 @@ func TestMux_liveEmbedActionWithUnknownTabIsGone(t *testing.T) {
 // itself stays bare — no per-action headers clause.
 func TestMux_liveEmbedActionBindingCarriesEmbedID(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(panel{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'\)`, body,
 		"a live embed action must carry its embed id")
 	assert.NotContains(t, body, "X-Via-Tab", "the tab id is a signal now, not a per-action header")
@@ -289,7 +289,7 @@ func (r *hitsRoot) View() h.H {
 // the embed from its seed value.
 func TestEmbed_plainRootPatchLeavesLiveEmbedRegionAlone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(hitsRoot{}))
+		app := vt.Serve(t, via.Handler(hitsRoot{}))
 
 		status, body := app.Get("/")
 		assert.Equal(t, http.StatusOK, status)
@@ -308,7 +308,7 @@ func TestEmbed_plainRootPatchLeavesLiveEmbedRegionAlone(t *testing.T) {
 // bootstrap the SSE stream on its GET page, so its embeds can connect.
 func TestMux_parentWithLiveEmbedsEmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(duo{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(duo{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
 		"a parent with live embeds must bootstrap the stream")
 }
@@ -318,7 +318,7 @@ func TestMux_parentWithLiveEmbedsEmitsTheBootstrap(t *testing.T) {
 // for no SSE connection.
 func TestEmbed_parentWithNoLiveEmbedsOmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
 	assert.NotContains(t, body, "@post('/_via/sse')",
 		"plain embeds must not trigger an SSE bootstrap")
 }
@@ -346,7 +346,7 @@ func (b *board) View() h.H { return h.Div(via.Embed(b.A), via.Embed(b.B)) }
 // a patch can target exactly one of them.
 func TestEmbed_rendersEachEmbedInItsOwnContainerWithScopedActions(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
 		`id="via-i0"`, // first embed's container
@@ -363,7 +363,7 @@ func TestEmbed_rendersEachEmbedInItsOwnContainerWithScopedActions(t *testing.T) 
 // the response must patch that embed's container (not #root, not its sibling).
 func TestEmbed_actionRoutesToItsEmbedAndPatchesThatContainer(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(board{}))
+	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "1", 0), "{}") // bump the second embed (url id 2)
@@ -382,7 +382,7 @@ func TestEmbed_actionRoutesToItsEmbedAndPatchesThatContainer(t *testing.T) {
 // of the flat path's no-op contract.
 func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(board{}))
+	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // first embed (url id 1), Noop
@@ -395,7 +395,7 @@ func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
 // page (like TestLive_unknownActionAnswers410).
 func TestEmbed_unknownEmbedOrActionIsGone(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(board{}))
+	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "0", 0)
 
@@ -409,7 +409,7 @@ func TestEmbed_unknownEmbedOrActionIsGone(t *testing.T) {
 // guard against a flat shared index leaking across embeds).
 func TestEmbed_siblingEmbedsDoNotShareAnActionIndexSpace(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
 	// Both embeds address their action under their OWN embed segment; neither
 	// uses a page-global flat index.
 	assert.True(t, strings.Contains(body, `/_via/a/0/`) && strings.Contains(body, `/_via/a/1/`),
@@ -434,7 +434,7 @@ func (s *shell[C]) View() h.H { return h.Div(h.H1(h.Str("SHELL")), via.Embed(s.B
 // renders the child outside the frame.
 func TestEmbed_projectsChildInPlace(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(shell[banner]{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(shell[banner]{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "SHELL", "the layout frame renders")
 	assert.Contains(t, body, "BANNER", "the embedded content renders inside the frame")
@@ -453,7 +453,7 @@ func (s *liveShell) View() h.H { return h.Div(h.H1(h.Str("APP")), via.Embed(s.Bo
 
 func TestEmbed_projectsLiveEmbed(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(liveShell{Body: beater{label: "hb"}}))
+	app := vt.Serve(t, via.Handler(liveShell{Body: beater{label: "hb"}}))
 	conn := app.Connect()
 
 	conn.Await(`selector #via-i0`) // the embedded live embed pushes its own container
@@ -486,7 +486,7 @@ func (p *nestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
 // direct children.
 func TestEmbed_liveChildInsideLiveEmbedAtDepthTwo(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
+	app := vt.Serve(t, via.Handler(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
 
 	conn.Await(`selector #via-i0-0`) // the depth-two live child's key composes onto its wrapper embed's ("0"), so it can never alias it
@@ -506,7 +506,7 @@ func (p *plainNestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
 
 func TestEmbed_allowsNestedPlainChild(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(plainNestPage{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(plainNestPage{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "HOST", "the embed renders")
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
@@ -527,7 +527,7 @@ func (p *livePage) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Inner)) 
 // like the State-off-a-live-page guard.
 func TestEmbed_liveChildInsideLivePageIsRefused(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(livePage{Inner: beater{label: "hb"}}))
+	app := vt.Serve(t, via.Handler(livePage{Inner: beater{label: "hb"}}))
 	status, _ := app.Get("/")
 	assert.Equal(t, http.StatusInternalServerError, status,
 		"embedding a live child inside a live parent must abort the render with a 500")
@@ -553,7 +553,7 @@ func (h2 *nestedLiveHost) View() h.H { return h.Div(via.Embed(h2.Inner)) }
 // live or plain.
 func TestEmbed_liveEmbedEmbeddingFurtherChildrenIsRefused(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(nestedLiveHost{}))
+	app := vt.Serve(t, via.Handler(nestedLiveHost{}))
 	status, _ := app.Get("/")
 	assert.Equal(t, http.StatusInternalServerError, status,
 		"a live embed's own View calling Embed must abort the render with a 500")
@@ -573,7 +573,7 @@ func (p *livePlainPage) View() h.H {
 
 func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(livePlainPage{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(livePlainPage{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "LIVEPAGE", "the streaming page renders")
 	assert.Contains(t, body, "BANNER", "the plain child renders in place")
@@ -613,7 +613,7 @@ func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act))
 func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	t.Parallel()
 	extra := false
-	srv := serve(t, via.Register(flipRoot{Child: flipChild{extra: &extra}}))
+	srv := serve(t, via.Handler(flipRoot{Child: flipChild{extra: &extra}}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	rootAction := actionURL(t, page, "r", 0)
 
@@ -651,7 +651,7 @@ func (r *liveRootWithEmbed) View() h.H {
 // Embed, and panicked — killing the stream after the connect handshake.
 func TestLive_rootEmbedSurvivesItsOwnFirstPush(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(liveRootWithEmbed{}))
+	srv := liveServer(t, via.Handler(liveRootWithEmbed{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -706,7 +706,7 @@ func (r *twoLiveEmbedsRoot) View() h.H { return h.Div(via.Embed(r.A), via.Embed(
 // distinct container, exactly once each, on that fresh render.
 func TestPostForm_liveSubmitRendersFreshPageWithDistinctEmbedIds(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(twoLiveEmbedsRoot{A: twoSpeedEmbed{step: 1}, B: twoSpeedEmbedNoAction{step: 1000}}))
+	srv := liveServer(t, via.Handler(twoLiveEmbedsRoot{A: twoSpeedEmbed{step: 1}, B: twoSpeedEmbedNoAction{step: 1000}}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -775,7 +775,7 @@ func (r *rootReadsSessionOnInit) View() h.H {
 // state via the session, not via the deleted live-tree reuse path.
 func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(rootReadsSessionOnInit{}))
+	srv := liveServer(t, via.Handler(rootReadsSessionOnInit{}))
 
 	// liveServer's httptest.NewTestServer only routes through its own
 	// srv.Client()'s transport (an in-memory network, needed for a live
@@ -832,7 +832,7 @@ func (p *initChildHost) View() h.H { return h.Div(h.H1(h.Str("HOST")), via.Embed
 func TestEmbed_runsTheChildsOwnOnInit(t *testing.T) {
 	t.Parallel()
 	hits := 0
-	_, body := do(t, serve(t, via.Register(initChildHost{Kid: childIniter{hits: &hits}})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(initChildHost{Kid: childIniter{hits: &hits}})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "from-child-init", "the child's OnInit must run before its View renders")
 	assert.Equal(t, 1, hits, "the child's OnInit runs exactly once per request-scoped render")
@@ -851,7 +851,7 @@ func (p *notFoundHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
 
 func TestEmbed_childOnInitNotFoundAnswers404(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, serve(t, via.Register(notFoundHost{})), http.MethodGet, "/", "")
+	resp, body := do(t, serve(t, via.Handler(notFoundHost{})), http.MethodGet, "/", "")
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 		"ErrNotFound from an embedded child's OnInit is a 404, exactly as it is from the root's")
@@ -871,7 +871,7 @@ func (p *redirectHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
 
 func TestEmbed_childOnInitRedirectGatesThePage(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(redirectHost{}))
+	srv := serve(t, via.Handler(redirectHost{}))
 	resp, err := (&http.Client{CheckRedirect: noFollow}).Get(srv.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -903,7 +903,7 @@ func (p *livePageWithPlainKid) View() h.H { return h.Div(p.n.Display(), via.Embe
 // patch, not 410 as an unknown live unit.
 func TestDispatch_plainChildOfALivePageStaysPlain(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(livePageWithPlainKid{}))
+	app := vt.Serve(t, via.Handler(livePageWithPlainKid{}))
 	conn := app.Connect()
 	defer conn.Close()
 
@@ -963,7 +963,7 @@ func newDeepRoot(hits *atomic.Int64) deepRoot {
 // the key makes it a property of the tree instead.
 func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
 	t.Parallel()
-	_, page := do(t, serve(t, via.Register(newDeepRoot(&atomic.Int64{}))), http.MethodGet, "/", "")
+	_, page := do(t, serve(t, via.Handler(newDeepRoot(&atomic.Int64{}))), http.MethodGet, "/", "")
 
 	for _, id := range []string{`id="via-i0"`, `id="via-i0-0"`, `id="via-i1"`, `id="via-i1-0"`} {
 		assert.Contains(t, page, id, "every embed in the tree needs its own container")
@@ -985,7 +985,7 @@ func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
 func TestEmbed_plainEmbedActionKeepsItsNestedLiveChildAddressable(t *testing.T) {
 	t.Parallel()
 	hits := &atomic.Int64{}
-	app := vt.Serve(t, via.Register(newDeepRoot(hits)))
+	app := vt.Serve(t, via.Handler(newDeepRoot(hits)))
 	conn := app.Connect()
 	defer conn.Close()
 
@@ -1028,7 +1028,7 @@ func (p *threeDeepPage) View() h.H { return h.Div(via.Embed(p.Outer)) }
 
 func TestEmbed_liveLeafUnderTwoPlainEmbedsKeepsItsPathKey(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(threeDeepPage{}))
+	app := vt.Serve(t, via.Handler(threeDeepPage{}))
 	conn := app.Connect()
 	defer conn.Close()
 
@@ -1065,7 +1065,7 @@ func (p *initRoot) View() h.H {
 // blank child over a populated one.
 func TestEmbed_rootActionPatchInitsNestedChildren(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(initRoot{}))
+	app := vt.Serve(t, via.Handler(initRoot{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, "kid=7", "the GET paints the inited child")
 
@@ -1094,7 +1094,7 @@ func (h2 *initHost) View() h.H { return h.Div(via.Embed(h2.Mid)) }
 // embed, and its nested children are fresh copies that have never been inited.
 func TestEmbed_embedActionPatchInitsNestedChildren(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(initHost{}))
+	app := vt.Serve(t, via.Handler(initHost{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, "kid=7")
 
@@ -1126,7 +1126,7 @@ func (s *twinShell) View() h.H { return h.Main(via.Embed(s.Inner)) }
 // the container id and the dispatch address still use '-'.
 func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(twinShell{}))
+	app := vt.Serve(t, via.Handler(twinShell{}))
 	_, page := app.Get("/")
 
 	binds := regexp.MustCompile(`data-bind="([^"]+)"`).FindAllStringSubmatch(page, -1)
@@ -1183,7 +1183,7 @@ func (r *shiftRoot) View() h.H {
 func TestEmbed_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
 	t.Parallel()
 	flag := &shiftFlag{}
-	app := vt.Serve(t, via.Register(shiftRoot{flag: flag, Form: shiftForm{flag: flag}}))
+	app := vt.Serve(t, via.Handler(shiftRoot{flag: flag, Form: shiftForm{flag: flag}}))
 	_, page := app.Get("/")
 	require.NotContains(t, page, `id="banner"`)
 
