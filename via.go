@@ -930,7 +930,7 @@ func appendLiveEmbeds(ctx *Ctx, out *[]*Ctx) {
 func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 	lc.replace(unit)
 	if unit.isEmbed {
-		unit.push = embedPush(unit.embedKey, unit.embedV, base, stream, lc)
+		unit.push = embedPush(unit.embedKey, unit.embedV, base, stream, lc, unit)
 	} else {
 		unit.push = rootPush(unit.embedV, base, stream, lc, unit)
 	}
@@ -978,6 +978,14 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	// it is keyed by slot and bounded by the page's signal count.
 	rev := lc.rev
 	rev.restore()
+	// Deferred, not called at the end: the DISPLAY render below runs with the
+	// client's values hydrated onto the instance, and a panic in it (which
+	// runPushItem swallows, leaving the stream up) would otherwise leave
+	// attacker-posted values sitting on the instance for the next Tick/Listen
+	// handler to read. body is returned before the defer fires, so the frame
+	// the client sees is unaffected. The leading restore stays: it covers the
+	// window before this defer is registered, and the initOutcome recover path.
+	defer rev.restore()
 	auth, body := render(rev)
 	bind := auth
 	done := map[string]bool{}
@@ -991,19 +999,15 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	if bind != auth {
 		pruneToAuthority(bind, auth)
 	}
-	// The display render's client values are undone HERE, not just before the
-	// next authority render: between pushes a Tick/Listen handler reads the
-	// instance directly, and leaving the client's values on it hands attacker
-	// data to server-side handler code. body is already built, so the frame the
-	// client sees is unaffected.
-	rev.restore()
 	return bind, body
 }
 
 func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
 	var initFailed bool
+	last := from // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	push = func() {
+		lc.flushDirty(last)
 		// A plain child's failed OnInit panics initOutcome from INSIDE this
 		// render, on every frame, and a push has no response to turn that into
 		// a 500/303/404. Dropping the frame loops forever with no
@@ -1030,6 +1034,7 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 			return renderRootBase(inst, false, base, nil, nil, from, rev) // push omits data-signals
 		})
 		bind.push = push
+		last = bind
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
 	}
@@ -1038,13 +1043,16 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 
 // embedPush is rootPush for a live embed: it re-renders at key in Datastar
 // inner mode, so the container's own data-ignore-morph never blocks the push.
-func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream) func() {
+func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
+	last := from // the connect render's bind, until the first push replaces it
 	push = func() {
+		lc.flushDirty(last)
 		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
 			return renderEmbedBind(key, inst, base, nil, rev)
 		})
 		bind.push = push
+		last = bind
 		lc.replace(bind)
 		id := "via-i" + key
 		stream.frame(func(w io.Writer) { writeInnerPatchFrame(w, id, body) })

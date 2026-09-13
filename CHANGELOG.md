@@ -412,6 +412,23 @@ as a re-read of the README rather than a diff.
 
 ### Fixed
 
+- **A `Set` inside a `Tick`/`Listen` handler now reaches the client.** A live
+  push omits `data-signals` (so a morph never clobbers what the user is
+  typing), and the tick path emitted no signal patch of its own — so a server
+  write from a timer or a `topic` listener updated server memory and nothing
+  else, and on a `Bind()`ed slot the push's display render painted the client's
+  own last-posted value straight back over it. Every push now ships the unit's
+  dirty set as its own `patch-signals` frame and drops those slots from the
+  client table first, which is what a live action already did; the action path
+  now goes through that same code rather than its own copy.
+
+- **A panic in a push's display render no longer strands the client's posted
+  values on the live unit.** The stream survives such a panic (it is logged and
+  the frame dropped), but the restore that undoes the display render's
+  hydration was a trailing call, so the unwind skipped it and the next
+  `Tick`/`Listen` handler read client-controlled data off the instance. It is a
+  `defer` now.
+
 - **The live (SSE) path now derives its action table from a render the client
   did not influence.** The two-phase discovery above was plain-only. On a live
   page the unit outlives the request, so a hydrated `Bind()`ed signal became the

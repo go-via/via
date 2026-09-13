@@ -57,6 +57,43 @@ func (s *Session) sid() string {
 	return s.data.sid
 }
 
+// flushDirty ships the signals u's handlers wrote since its last push and
+// stops the client's stale copies from coming back. Every server-driven change
+// on a live connection goes through it — a live action's, and a Tick/Listen
+// handler's, which used to Set into nothing: the display render in livePush
+// re-hydrates lc.client over the instance, so without the delete the client's
+// old value would be painted back over the Set on the very next frame.
+//
+// It runs BEFORE the push's renders so the patch-signals frame precedes the
+// element patch, and so the display render no longer sees the superseded slots.
+func (c *tabStream) flushDirty(u *Ctx) {
+	if u == nil {
+		return
+	}
+	all := u.dirtyAll()
+	if len(all) == 0 {
+		return
+	}
+	// A slot the server wrote is no longer the client's to restate.
+	for slot := range all {
+		delete(c.client, slot)
+	}
+	// A server-driven signal change reaches the client as its own signal-patch:
+	// the element push omits data-signals, so a morph never clobbers what the
+	// user is typing.
+	if raw, err := json.Marshal(all); err == nil {
+		c.pushSignals(string(raw))
+	}
+	clearDirty(u)
+}
+
+func clearDirty(c *Ctx) {
+	clear(c.dirty)
+	for _, isl := range c.embeds {
+		clearDirty(isl)
+	}
+}
+
 // replace registers u as the current bind for its dispatch address, so the
 // next action targets this render's actions/hydrators table.
 func (c *tabStream) replace(u *Ctx) {
