@@ -73,7 +73,9 @@ type Signal[T any] struct {
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field named
-// Count, "$chat_draft" for a Draft inside an embedded Chat — for hand-written
+// Count, "$chat__draft" for a Draft inside an embedded Chat (the DOUBLE
+// underscore marks the embed scope boundary; a plain nested struct joins with
+// a single one) — for hand-written
 // Datastar attributes the typed API does not cover:
 //
 //	h.Div(h.Data("show", p.Open.Ref()), ...)

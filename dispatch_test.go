@@ -1279,3 +1279,118 @@ func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T
 		"without Datastar-Request the body is read as a form, so a JSON tab id must not route")
 	assert.Zero(t, calls)
 }
+
+// validatedForm is a native PostForm whose handler records validation errors
+// on ITSELF and re-seeds the submitted values — the ordinary server-rendered
+// form. What the response must show is the instance Save mutated.
+type validatedForm struct {
+	Name via.Signal[string]
+	err  string
+}
+
+func (f *validatedForm) Save(ctx *via.Ctx) {
+	name := ctx.Request().FormValue("name")
+	if name == "" {
+		f.err = "name is required"
+		return
+	}
+	f.err = "name already taken: " + name
+	f.Name.Set(name)
+}
+
+func (f *validatedForm) errNote() h.H { return h.P(h.ID("err"), h.Str(f.err)) }
+func (f *validatedForm) View() h.H {
+	return via.PostForm(f.Save,
+		h.Input(h.Name("name"), f.Name.Bind()),
+		via.When(f.err != "", f.errNote),
+		h.Button(h.Str("save")))
+}
+
+// formShell wraps any composition, so the form below is submitted from inside
+// a via.Embed rather than at the root.
+type formShell[C any] struct{ Body C }
+
+func (s *formShell[C]) View() h.H { return h.Main(via.Embed(s.Body)) }
+
+// A native form submit inside an Embed must answer with the instance the
+// handler MUTATED. The re-render walks from the root, and via.Embed re-copies
+// the parent's field on every render — so without carrying the acted instance
+// down, the response is a pristine form: the validation error gone and the
+// submitted value back to empty, as if the POST had never happened. The root
+// case (below) always worked, which is what made this so easy to miss.
+func TestNativeForm_insideAnEmbedKeepsTheHandlersMutations(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(formShell[validatedForm]{}))
+	_, page := app.Get("/")
+	url := actionURL(t, page, "0", 0)
+
+	status, body := nativeFormPost(t, app, url, map[string]string{"name": "Widget"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "name already taken: Widget", "the handler's validation error was discarded")
+	assert.Contains(t, body, `"body__name":"Widget"`, "the submitted value was not re-seeded")
+}
+
+// The same form at the root, as the control: it must keep working exactly as
+// before, so a fix that broke the root to fix the embed cannot pass.
+func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(validatedForm{}))
+	_, page := app.Get("/")
+	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "Widget"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "name already taken: Widget")
+	assert.Contains(t, body, `"name":"Widget"`)
+}
+
+// initCounter counts its own OnInit runs. Substituting the acted instance into
+// the response re-render must NOT re-init it — re-initing is exactly what
+// would reload the data the handler just changed — while a fresh sibling embed
+// still gets its own OnInit.
+type initCounter struct {
+	inits int
+	saved string
+}
+
+func (c *initCounter) OnInit(ctx *via.Ctx) error { c.inits++; return nil }
+func (c *initCounter) Save(ctx *via.Ctx)         { c.saved = "true" }
+func (c *initCounter) View() h.H {
+	return via.PostForm(c.Save,
+		h.P(h.ID("inits"), h.Str(c.inits)),
+		h.P(h.ID("saved"), h.Str(c.saved)),
+		h.Button(h.Str("go")))
+}
+
+func TestNativeForm_actedEmbedIsNotReInited(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(formShell[initCounter]{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `<p id="inits">1</p>`)
+
+	status, body := nativeFormPost(t, app, actionURL(t, page, "0", 0), nil)
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, `<p id="saved">true</p>`, "the mutation must survive the re-render")
+	assert.Contains(t, body, `<p id="inits">1</p>`, "the acted embed's OnInit must not run a second time")
+}
+
+// A live page's native form submit that arrives WITHOUT the tab field is a
+// missing-field failure, not a served-plain one — the page was live, which is
+// precisely why the field had to be there. The old message asserted the
+// opposite and sent people looking at their OnInit.
+func TestNativeForm_missingTabFieldSaysWhatActuallyHappened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(liveNamedForm{}))
+		conn := app.Connect()
+		status, body := nativeFormPost(t, app, conn.ActionURL("r", 0), map[string]string{"name": "zed"})
+		assert.Equal(t, http.StatusGone, status)
+		assert.Contains(t, body, "_viatab", "the answer must name the field that was missing")
+		assert.NotContains(t, body, "served plain", "the page was live; that diagnosis is wrong")
+	})
+}
+
+// liveNamedForm is a live unit whose only action is a native PostForm.
+type liveNamedForm struct{ n via.State[int] }
+
+func (f *liveNamedForm) Save(ctx *via.Ctx) { f.n.Set(f.n.Get() + 1) }
+func (f *liveNamedForm) View() h.H {
+	return via.PostForm(f.Save, f.n.Display(), h.Input(h.Name("name")), h.Button(h.Str("go")))
+}

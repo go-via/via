@@ -1105,3 +1105,41 @@ func TestEmbed_embedActionPatchInitsNestedChildren(t *testing.T) {
 	assert.Contains(t, patch, "kid=7",
 		"the embed patch must re-init its own nested children")
 }
+
+// twinStats is embedded twice by the same parent, which is what forces the
+// positional fallback slot prefix (two fields of one type: the field name
+// would be a guess).
+type twinStats struct{ Q via.Signal[string] }
+
+func (s *twinStats) View() h.H {
+	return h.Div(h.Input(s.Q.Bind()), h.Span(h.Data("show", s.Q.Ref()+" != ''")))
+}
+
+type twinShell struct{ Inner twinPage }
+type twinPage struct{ Top, Foot twinStats }
+
+func (p *twinPage) View() h.H  { return h.Div(via.Embed(p.Top), via.Embed(p.Foot)) }
+func (s *twinShell) View() h.H { return h.Main(via.Embed(s.Inner)) }
+
+// The fallback prefix is built from the embed KEY, whose depth separator is
+// '-' — not a JS identifier character. Ref() hands these names straight into
+// Datastar expressions ($body__i0-0__q), where the '-' reads as subtraction,
+// so the slot name must spell the key with '_'. The key itself is unchanged:
+// the container id and the dispatch address still use '-'.
+func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(twinShell{}))
+	_, page := app.Get("/")
+
+	binds := regexp.MustCompile(`data-bind="([^"]+)"`).FindAllStringSubmatch(page, -1)
+	require.Len(t, binds, 2, "both twins must bind their own slot")
+	seen := map[string]bool{}
+	for _, m := range binds {
+		assert.NotContainsf(t, m[1], "-", "slot %q is not a valid JS identifier", m[1])
+		assert.Falsef(t, seen[m[1]], "the two twins share slot %q", m[1])
+		seen[m[1]] = true
+		assert.Containsf(t, page, `data-show="$`+m[1]+` != `, "Ref() must name the same slot Bind() declared")
+	}
+	assert.Contains(t, page, `id="via-i0-0"`, "the embed KEY keeps its '-' separator")
+	assert.Contains(t, seen, "inner__i0_0__q", "the fallback spells the key with underscores")
+}

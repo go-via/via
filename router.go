@@ -106,6 +106,10 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 		http.Error(w, "bad action arg: "+bad.err.Error(), http.StatusBadRequest)
 		return
 	}
+	if un, ok := rec.(unrenderedArg); ok {
+		http.Error(w, un.body(), http.StatusGone)
+		return
+	}
 	log.Printf("via: %s panic: %v\n%s", what, rec, debug.Stack())
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }

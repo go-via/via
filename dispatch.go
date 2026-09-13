@@ -181,7 +181,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	m.dispatchPlain(w, req, mode, embed, act, in, base)
+	m.dispatchPlain(w, req, mode, embed, act, in, base, tab)
 }
 
 // decodeInput decodes an action POST's body per mode: a native PostForm
@@ -336,6 +336,10 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				res = actionResult{badArg: bad.err}
 				return
 			}
+			if un, ok := rec.(unrenderedArg); ok {
+				res = actionResult{gone: un.body()}
+				return
+			}
 			log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
 			res = actionResult{panicked: true}
 		}
@@ -408,9 +412,28 @@ func unknownAction(u *Ctx, act string) string {
 	return "no such action " + act + "; this render does not bind it"
 }
 
+// noStream explains a live unit's action arriving on the plain path. The
+// three ways to get here are genuinely different failures and the old single
+// message ("the page was served plain") asserted the one that is usually
+// false: a page whose unit renders live WAS served live, and what actually
+// went missing is the tab id that routes the POST back to its connection.
+func noStream(mode actionMode, tab string) string {
+	switch {
+	case tab == "" && mode == modeNative:
+		return "this action needs the page's tab id and the form carried no " + tabFormField +
+			" field: via.PostForm renders it, a hand-written <form> must include it"
+	case tab == "":
+		return "this action needs the page's tab id and the request carried no " + tabSignal +
+			" signal: the page never opened its stream, or the signal was filtered out"
+	default:
+		return "this tab id has no open stream for this page: the connection closed, " +
+			"or the id belongs to a page that is gone — reload"
+	}
+}
+
 // dispatchPlain is dispatch's plain path: bind a fresh instance, run
 // OnInit, run the acted-on unit's action, then answer per mode.
-func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, embed string, act string, in map[string]json.RawMessage, base string) {
+func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, embed string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
 	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
 	bind.embedV = inst                                   // so bind.unit(rootAddr)'s liveness reads the same way an embed's does
@@ -432,7 +455,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// A live unit's action only routes through the tab handshake in
 		// dispatch; reaching here means the tab was missing/stale, so fail
 		// closed rather than mutating a throwaway instance.
-		http.Error(w, "this tab has no stream: the page was served plain; a unit must be live from the first render", http.StatusGone)
+		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
 	u.req = req
