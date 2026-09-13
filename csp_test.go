@@ -124,7 +124,7 @@ func TestActionPatch_carriesSecurityHeaders(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "frame-ancestors 'self'")

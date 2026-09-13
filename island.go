@@ -2,29 +2,11 @@ package via
 
 import (
 	"bytes"
-	"strconv"
 	"unsafe"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
 )
-
-// renderPass allocates flat, page-wide island indices during one root-level
-// render — shared by pointer across
-// a whole tree of Embeds so a live descendant's container id (and dispatch
-// address) can never collide with an unrelated one elsewhere on the page. It
-// is created once per renderRootBase call and never forked: an island's own
-// standalone re-render (renderIslandBind) never calls Embed itself (see
-// Embed's godoc on nested composition), so it never needs one of its own.
-type renderPass struct {
-	n int
-}
-
-func (p *renderPass) next() int {
-	idx := p.n
-	p.n++
-	return idx
-}
 
 // Embed renders a child composition — a plain struct field of the parent,
 // seeded at the parent's literal — into its own positional container within the
@@ -58,12 +40,16 @@ func (p *renderPass) next() int {
 // addressed by identity) is a deferred feature; violating either rule
 // panics at render, loud and early, rather than silently misrouting an action.
 //
-// An Embed's position among the page's Embed calls is its identity — the
-// container id, the signal prefix, and the dispatch address are all derived
-// from render order. That position must be the same on every render for the
-// life of a connection: a When wrapped around an Embed must depend only on
-// data fixed by OnInit or the field literal, never on time, a client signal,
-// or shared state that changes while the page is open.
+// An Embed's island KEY is its position among its own parent's Embed calls,
+// composed with the parent's key: the root's children are "0", "1", …, and a
+// child of "0" is "0-0". The container id (via-i0-0), the signal prefix
+// (i0-0_) and the dispatch address (/_via/a/0-0/…) all read that one key, so
+// re-rendering any subtree on its own numbers its descendants identically to
+// the full-page walk. A child's key must be the same on every render for the
+// life of a connection: a When wrapped around an Embed shifts its later
+// SIBLINGS' ordinals, so such a When must depend only on data fixed by OnInit
+// or the field literal, never on time, a client signal, or shared state that
+// changes while the page is open.
 //
 // It panics if the child has no View() method — a wrote-it-wrong error, loud
 // at the first render, never a silent blank or dead region.
@@ -79,10 +65,10 @@ func Embed[C any](child C) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }
 
-// embedViewer is the positional-island wiring behind Embed: it renders v into
-// its own container <div id="via-i{idx}">, binds its signals/actions into an
-// island-scoped Ctx (idx prefixes its slots, so siblings never collide), and
-// appends it to the parent's islands slice so a push or action patches
+// embedViewer is the island wiring behind Embed: it renders v into its own
+// container <div id="via-i{key}">, binds its signals/actions into an
+// island-scoped Ctx (the key prefixes its slots, so siblings never collide),
+// and appends it to the parent's islands slice so a push or action patches
 // exactly this one. A non-Ctx binder is a bare render with no parent to
 // attach to, so it writes nothing.
 func embedViewer(r *hcore.Renderer, inst instance) {
@@ -91,22 +77,14 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 		return
 	}
 
-	ordinal := len(parent.islands) // this parent's k-th Embed call this render
-
-	// pass.next() must advance exactly once per Embed call, or a later
-	// sibling's page-wide index collides with (or skips) this one's.
-	idx := ordinal
-	if parent.pass != nil {
-		idx = parent.pass.next()
-	}
+	key := parent.childKey(len(parent.islands))
 
 	child := newCtx(parent.inSignals)
 	child.isIsland = true
-	child.islandIdx = idx
+	child.islandKey = key
 	child.islandV = inst
 	child.base = parent.base // the mount prefix, so the island's own action URLs carry it too
 	child.declareSeen = parent.declareSeen
-	child.pass = parent.pass
 	child.req = parent.req
 	child.sessions = parent.sessions
 	child.sessW = parent.sessW
@@ -127,12 +105,12 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	// settles child.live, so the container attribute below can only be decided
 	// after it.
 	child.rendered = renderIslandInner(child, inst.v)
-	r.WriteString(`<div id="via-i` + strconv.Itoa(idx) + `"`)
+	r.WriteString(`<div id="via-i` + key + `"`)
 	if child.live {
 		// Datastar only skips a morph when BOTH the existing element and the
 		// incoming fragment carry the attribute — so every root-walk render
 		// marks the container, and a plain root's own patch leaves it alone.
-		// The island's own push targets #via-i{idx} in inner mode instead,
+		// The island's own push targets #via-i{key} in inner mode instead,
 		// which never compares the container, so the push still lands.
 		r.WriteString(` data-ignore-morph`)
 	}
@@ -180,17 +158,18 @@ func renderIslandInner(child *Ctx, v viewer) []byte {
 	return rr.Bytes()
 }
 
-// renderIslandBind re-renders island idx's child (no hydration, so it
-// reflects post-action state) and returns its bind Ctx alongside the inner
-// HTML. A stateless action's response needs the Ctx too: only this render's
+// renderIslandBind re-renders the island at key (no hydration, so it reflects
+// post-action state) and returns its bind Ctx alongside the inner HTML. A
+// stateless action's response needs the Ctx too: only this render's
 // order/initial values (via writeSignalsAttr) let the response ship a
-// Signal.Set the action wrote. A live island's own View can never itself
-// call Embed (see Embed's godoc), so this Ctx needs no render pass or live
-// connection of its own — there is nothing nested left to number or reuse.
-func renderIslandBind(idx int, inst instance, base string) (*Ctx, []byte) {
+// Signal.Set the action wrote. Seeding the Ctx with the island's own key is
+// what keeps a PLAIN island's re-render — whose View may well Embed further
+// children — numbering those children exactly as the full-page walk did,
+// instead of restarting at the root's own key and aliasing onto it.
+func renderIslandBind(key string, inst instance, base string) (*Ctx, []byte) {
 	c := newCtx(nil)
 	c.isIsland = true
-	c.islandIdx = idx
+	c.islandKey = key
 	c.islandV = inst
 	c.base = base
 	return c, renderIslandInner(c, inst.v)

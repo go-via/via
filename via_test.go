@@ -173,11 +173,11 @@ func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site":
 // out of html. The wire id is a hash of the handler's func name (and any ?a=
 // row datum rides with it), so a test posts the URL the page actually
 // shipped rather than a hand-built path.
-func actionURL(t *testing.T, html string, island, n int) string {
+func actionURL(t *testing.T, html string, island string, n int) string {
 	t.Helper()
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + island + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
 	m := regexp.MustCompile(pat).FindAllStringSubmatch(html, -1)
-	require.Greaterf(t, len(m), n, "action %d/%d not found on rendered page:\n%s", island, n, html)
+	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", island, n, html)
 	return m[n][1]
 }
 
@@ -192,9 +192,9 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	for _, want := range []string{
 		`<div id="root"`,
 		`<h1>0</h1>`, // value rendered server-side, not a signal
-		`data-on:click="@post('` + actionURL(t, body, 0, 0) + `'`, // Dec, declared first
-		`data-on:click="@post('` + actionURL(t, body, 0, 1) + `'`, // Inc, declared second
-		`src="/_via/datastar.js">`,                                // module script tag (external, admitted by 'self')
+		`data-on:click="@post('` + actionURL(t, body, "r", 0) + `'`, // Dec, declared first
+		`data-on:click="@post('` + actionURL(t, body, "r", 1) + `'`, // Inc, declared second
+		`src="/_via/datastar.js">`,                                  // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
@@ -220,7 +220,7 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	dec, inc := actionURL(t, page, 0, 0), actionURL(t, page, 0, 1)
+	dec, inc := actionURL(t, page, "r", 0), actionURL(t, page, "r", 1)
 
 	resp, body := do(t, srv, http.MethodPost, inc, "{}") // Inc: 0 -> 1
 	ct := resp.Header.Get("Content-Type")
@@ -241,7 +241,7 @@ func TestUnknownAction_isGone(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz")
+	url := swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz")
 
 	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
@@ -289,7 +289,7 @@ func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	ct := resp.Header.Get("Content-Type")
@@ -316,7 +316,7 @@ func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(noopComp{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := post(t, srv, actionURL(t, page, 0, 0), "{}", sameOrigin())
+	resp, body := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	assert.Empty(t, body)
 }
@@ -335,7 +335,7 @@ func (c *formComp) View() h.H {
 func TestOn_submitWiresAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, 0, 0)+`'`)
+	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, "r", 0)+`'`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
@@ -356,7 +356,7 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(reqEchoer{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	_, body := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+	_, body := post(t, srv, actionURL(t, page, "r", 0), "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
 		"X-Echo":         "hello-from-header",
 	})
@@ -391,7 +391,7 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 	hostile := nul + "vD0" + nul
 	reqBody, err := json.Marshal(map[string]string{slot: hostile})
 	require.NoError(t, err)
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 	digest := url[strings.Index(url, "v=")+2:]
 	_, body := post(t, srv, url, string(reqBody), sameOrigin())
 	p := regexp.MustCompile(`<p>(.*?)</p>`).FindStringSubmatch(body)
@@ -582,7 +582,7 @@ func newTodoList() *todoBox {
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(todoList{box: newTodoList()})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
+	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
 }
 
 // The handler must receive the carried value as a typed parameter and act on it:
@@ -591,7 +591,7 @@ func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the row whose value was sent must be deleted")
 	assert.Contains(t, body, "alpha")
@@ -607,7 +607,7 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
 	// value (2) while keeping alpha's slot and shape digest.
-	url := strings.Replace(actionURL(t, page, 0, 0), "a=1", "a=2", 1)
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=2", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}") // slot 0 (alpha), but arg=2 (bravo)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
@@ -621,7 +621,7 @@ func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := strings.Replace(actionURL(t, page, 0, 0), "a=1", "a=%22abc%22", 1)
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=%22abc%22", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
@@ -643,7 +643,7 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 			t.Parallel()
 			srv := serve(t, via.Register(todoList{box: newTodoList()}))
 			_, page := do(t, srv, http.MethodGet, "/", "")
-			url := strings.Replace(actionURL(t, page, 0, 0), "a=1", tt.a, 1)
+			url := strings.Replace(actionURL(t, page, "r", 0), "a=1", tt.a, 1)
 			resp, body := do(t, srv, http.MethodPost, url, "{}")
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 			assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a missing arg")
@@ -665,7 +665,7 @@ func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
 	srv := serve(t, via.Register(board))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 1), "{}") // island 1, bravo's slot, arg=2
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // island 1, bravo's slot, arg=2
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the island row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
@@ -691,7 +691,7 @@ func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	assert.Contains(t, page, `data-on:change`, "OnChange must bind the change event")
 
-	_, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
+	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	assert.Contains(t, body, "picked", "OnChange's handler did not run")
 }
 
@@ -765,7 +765,7 @@ func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 // rowActionURL picks the action URL carrying ?a={id} out of a rendered list.
 func rowActionURL(t *testing.T, html string, id int) string {
 	t.Helper()
-	m := regexp.MustCompile(`@post\('([^']*_via/a/0/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
+	m := regexp.MustCompile(`@post\('([^']*_via/a/r/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
 	require.NotEmptyf(t, m, "no row action for id %d in:\n%s", id, html)
 	return m[1]
 }
@@ -777,7 +777,7 @@ func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
 	t.Parallel()
 	_, first := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
 	_, second := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
-	assert.Equal(t, actionURL(t, first, 0, 1), actionURL(t, second, 0, 1),
+	assert.Equal(t, actionURL(t, first, "r", 1), actionURL(t, second, "r", 1),
 		"two independent instances must address the same handler identically")
 }
 
@@ -799,10 +799,10 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(twinButtons{count: &store{}}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Equal(t, actionURL(t, page, 0, 0), actionURL(t, page, 0, 1),
+	assert.Equal(t, actionURL(t, page, "r", 0), actionURL(t, page, "r", 1),
 		"two bindings of one handler must share one id")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
@@ -821,7 +821,7 @@ func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testi
 
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz"), "{}")
+	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), "{}")
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
 	assert.NotContains(t, body, ").Inc", "but never the Go method names of the render")

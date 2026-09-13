@@ -88,7 +88,7 @@ func cookieValue(t *testing.T, c *http.Client, base, name string) string {
 // value, so a test can replay a stale session id the jar has already replaced.
 func greetWithRawCookie(t *testing.T, base, name, value string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 1), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 1), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -104,7 +104,7 @@ func greetWithRawCookie(t *testing.T, base, name, value string) string {
 // returns the currently-rendered action URL for island/n. loginComp's and
 // counterComp's View render the same action set regardless of session state,
 // so this is safe to call before any login/session step in the test.
-func actionPath(t *testing.T, c *http.Client, base string, island, n int) string {
+func actionPath(t *testing.T, c *http.Client, base string, island string, n int) string {
 	t.Helper()
 	resp, err := c.Get(base + "/")
 	require.NoError(t, err)
@@ -123,7 +123,7 @@ func jarClient(t *testing.T) *http.Client {
 
 func fireAction(t *testing.T, c *http.Client, base string, n int) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, 0, n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -311,7 +311,7 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 
 	// Fire the first session access on a raw request so we can read the
 	// Set-Cookie attributes the cookiejar would otherwise hide.
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -380,7 +380,7 @@ func TestSession_shortSessionKeyPanicsAtConstruction(t *testing.T) {
 // caller can read the Set-Cookie attributes the jar hides.
 func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, 0, 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -418,7 +418,7 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, 0, 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -580,7 +580,7 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, http.DefaultClient, srv.URL, 0, 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, http.DefaultClient, srv.URL, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")

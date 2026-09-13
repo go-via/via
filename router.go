@@ -161,7 +161,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 
 // Mount registers a page composition at path. Its actions — a @post, a
 // PostForm submit, or a live unit's — post to
-// {path}/_via/a/{island}/{act} (root is island 0). root is taken by value (no
+// {path}/_via/a/{island}/{act} (root is island "r"). root is taken by value (no
 // '&'); the PT constraint makes a missing or mistyped View() a compile error,
 // exactly like Register.
 func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
@@ -195,7 +195,10 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 			return
 		}
 		body := renderRootWith(ctx, inst.v)
-		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, patternBase+"/_via/sse")
+		// ctx.base, not patternBase: a page mounted at /job/{id} must advertise
+		// /job/7/_via/sse. The pattern would be POSTed literally by the browser
+		// and 404, leaving every live island under a parametrised mount dead.
+		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, ctx.base+"/_via/sse")
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{island}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
