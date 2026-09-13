@@ -1,7 +1,7 @@
 // Package topic is an in-process, fire-and-forget fan-out broker for live
-// islands: one Publish reaches every Subscriber. It is the blessed multi-user
+// embeds: one Publish reaches every Subscriber. It is the blessed multi-user
 // seam that keeps the via core free of shared state — apps create a Topic, pipe
-// it into an island via via.Subscribe, and Publish to it from an action or any
+// it into an embed via via.Subscribe, and Publish to it from an action or any
 // goroutine. Durability, replay, and cross-pod delivery are explicitly out of
 // scope: put a real bus or database behind a Topic, never inside it.
 package topic

@@ -27,7 +27,7 @@ import (
 // decoded value to Datastar either way.
 // only restricts which slots are declared. nil declares every slot — the GET
 // first paint, seeding the whole client store. A non-nil only declares just the
-// slots it names: that is how a stateless action patch ships the signals it
+// slots it names: that is how a plain action patch ships the signals it
 // wrote without overwriting the ones it did not, so a value the user is mid-edit
 // survives the morph. If the restriction leaves nothing, no attribute is written.
 func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
@@ -80,7 +80,7 @@ func (s *Signal[T]) Get() T { return s.val }
 // signals an action actually wrote are ever declared, so a signal the user is
 // mid-edit is never overwritten behind them. A live action pushes a
 // patch-signals frame and its element patch carries no declaration at all; a
-// stateless action has no second frame, so its element patch carries a
+// plain action has no second frame, so its element patch carries a
 // data-signals attribute restricted to the dirty slots.
 //
 // Contract: the change reaches the client only for a signal the View actually
@@ -111,7 +111,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
 	// Re-mint when the scope moved: via.Embed copies the child by value, so a
-	// signal the parent's View already bound arrives in the island carrying an
+	// signal the parent's View already bound arrives in the embed carrying an
 	// unprefixed root slot, which would collide in the page's one signal store.
 	if s.slot == "" || (s.bound != nil && !s.bound.slotInScope(s.slot)) {
 		if s.bound != nil {

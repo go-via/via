@@ -1,5 +1,5 @@
 // Command feed is a multi-user broadcast. A server-side publisher sends to a
-// Topic, and every connected browser's island Subscribes and shows the latest
+// Topic, and every connected browser's embed Subscribes and shows the latest
 // message live — one source fanning out to all screens, no client code, no
 // WebSocket. Open it in two tabs to watch them update in lockstep. The View is
 // pure and ctx-free; there is no '&' and no closure at any call site.
@@ -17,7 +17,7 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Feed is a live island fed by a shared Topic. last holds the most recent
+// Feed is a live embed fed by a shared Topic. last holds the most recent
 // broadcast; recv updates it and via element-patches the re-render over SSE.
 type Feed struct {
 	room *topic.Topic[string]

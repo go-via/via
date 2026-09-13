@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A live page must ship the client reconnect manager so a dropped SSE stream is
+// A streaming page must ship the client reconnect manager so a dropped SSE stream is
 // visible (a banner) and a give-up triggers a re-bootstrap reload, instead of
 // freezing the tab silently. Assert the manager's load-bearing branches are
 // present in the page.
 func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(quietIsland{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Register(quietEmbed{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
 		"window.__viaRC",          // single-injection guard
@@ -28,7 +28,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 		"data-via-connection",     // connection-status attribute for app CSS
 		"datastar-patch-elements", // a patch is the only "alive again" signal
 	} {
-		assert.Contains(t, body, want, "live page missing reconnect-manager fragment")
+		assert.Contains(t, body, want, "streaming page missing reconnect-manager fragment")
 	}
 }
 
@@ -40,7 +40,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 // what catches a stray byte added around the script.
 func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, serve(t, via.Register(quietIsland{})), http.MethodGet, "/", "")
+	resp, body := do(t, serve(t, via.Register(quietEmbed{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, `<script>(()=>{if(window.__viaRC)`,
 		"the reconnect script ships bare — its hash, not a nonce, admits it")
@@ -56,16 +56,16 @@ func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	require.True(t, found, "no inline script contained __viaRC — the loop above asserted nothing")
 }
 
-// A stateless page has no SSE stream to lose, so injecting a reconnect manager
+// A plain page has no SSE stream to lose, so injecting a reconnect manager
 // would be dead weight (and a banner that can never clear). It must ship only on
-// live pages.
-func TestReconnect_statelessPageOmitsTheManager(t *testing.T) {
+// streaming pages.
+func TestReconnect_plainPageOmitsTheManager(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newCounter(t), http.MethodGet, "/", "")
 	require.NotEmpty(t, body)
 
 	assert.NotContains(t, body, "window.__viaRC",
-		"stateless page must not ship the reconnect manager")
+		"plain page must not ship the reconnect manager")
 }
 
 // The reconnect blob is a single IIFE; a stray syntax error would silently dead
@@ -73,7 +73,7 @@ func TestReconnect_statelessPageOmitsTheManager(t *testing.T) {
 // Balanced braces/parens is a cheap structural guard against that.
 func TestReconnect_blobIsBalanced(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(quietIsland{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Register(quietEmbed{})), http.MethodGet, "/", "")
 
 	i := strings.Index(body, "(()=>{if(window.__viaRC)")
 	require.GreaterOrEqual(t, i, 0, "reconnect IIFE not found in page")

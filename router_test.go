@@ -58,7 +58,7 @@ func jarPost(t *testing.T, c *http.Client, url string) {
 	resp.Body.Close()
 }
 
-// redirectPage is a stateless page whose @post action calls via.Redirect — a
+// redirectPage is a plain page whose @post action calls via.Redirect — a
 // case that can no longer navigate the browser (only PostForm and OnInit can).
 type redirectPage struct{}
 
@@ -137,7 +137,7 @@ func TestRouter_postActionRedirectDoesNotShipAScript(t *testing.T) {
 }
 
 // OnInit runs per request before the (ctx-free) View, so a page can load
-// session data into its fields and render it. Without it, a stateless page could
+// session data into its fields and render it. Without it, a plain page could
 // never show "the logged-in user" — View has no ctx to read the session from.
 func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	t.Parallel()
@@ -711,17 +711,17 @@ func TestRegister_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
 
-// The unified pipeline carries the live machinery too: a live island mounted on
+// The unified pipeline carries the live machinery too: a live embed mounted on
 // a Router (not just Register) bootstraps the SSE stream from its page — the
 // body carries @post('<base>/_via/sse') and the reconnect manager. Fails if
 // Mount loses the live bootstrap detection.
 func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/live", quietIsland{})
+	r.Mount("/live", quietEmbed{})
 	_, body := do(t, serve(t, r), http.MethodGet, "/live", "")
-	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted live page must bootstrap its own SSE endpoint")
-	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted live page")
+	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted streaming page must bootstrap its own SSE endpoint")
+	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted streaming page")
 }
 
 // jobBar is a live child under a parametrised mount: it reads the mount's
@@ -746,7 +746,7 @@ func (p *jobPage) View() h.H { return h.Main(via.Embed(p.Bar)) }
 
 // A page under a parametrised mount must advertise the CONCRETE SSE path. The
 // pattern base would be POSTed literally by the browser (/job/%7Bid%7D/_via/sse),
-// miss the route, and leave every live island under such a mount dead — while
+// miss the route, and leave every live embed under such a mount dead — while
 // the same page's action URLs already carried the concrete segment, so the two
 // halves of the library disagreed.
 func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) {
@@ -757,7 +757,7 @@ func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) 
 
 	_, page := do(t, srv, http.MethodGet, "/job/7", "")
 	m := regexp.MustCompile(`data-init="@post\('([^']+)'\)"`).FindStringSubmatch(page)
-	require.NotNil(t, m, "a live page must bootstrap its stream:\n%s", page)
+	require.NotNil(t, m, "a streaming page must bootstrap its stream:\n%s", page)
 	assert.Equal(t, "/job/7/_via/sse", m[1], "the advertised stream URL must be the concrete request path")
 
 	lines, cancel := openStreamAt(t, srv, m[1])

@@ -19,7 +19,7 @@ import (
 )
 
 // List[E] is server-authoritative slice state with an Append one-liner — the
-// chat log. Append/Get work without a live island for the unit.
+// chat log. Append/Get work without a live embed for the unit.
 func TestList_appendAddsElementsInOrder(t *testing.T) {
 	t.Parallel()
 	var l via.List[string]
@@ -44,14 +44,14 @@ func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 	status, body := app.Get("/")
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
-		"a page whose View renders State must bootstrap the live stream")
+		"a page whose View renders State must bootstrap the stream")
 
 	c := app.Connect()
 	defer c.Close()
 	assert.NotEmpty(t, c.TabID(), "the connect must hand back a tab id, not 404")
 }
 
-// stateEcho is a live island whose action writes a user-influenced value into
+// stateEcho is a live embed whose action writes a user-influenced value into
 // server State, which is then re-rendered and pushed over the connection's SSE.
 type stateEcho struct{ msg via.State[string] }
 
@@ -63,21 +63,21 @@ func (e *stateEcho) View() h.H {
 	)
 }
 
-// On a live island, State renders its current value into the pushed frame. And
+// On a live embed, State renders its current value into the pushed frame. And
 // because server state routinely carries user-influenced data (a name, a chat
 // message), the value is HTML-escaped on render — a raw value must not break
 // out into markup. Asserted against the real SSE frame: the escaped form is
 // present and the raw form is absent.
-func TestState_rendersEscapedValueOnALiveIsland(t *testing.T) {
+func TestState_rendersEscapedValueOnALiveEmbed(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(stateEcho{}))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Live(conn).Fire()
+	status, _ := app.Action(0).Over(conn).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the render ships over the SSE")
 
 	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;") // the escaped value reaches the client
-	assert.Contains(t, frame, "msg: ", "the frame must re-render the island's State")
+	assert.Contains(t, frame, "msg: ", "the frame must re-render the embed's State")
 	assert.NotContains(t, frame, "<b>Ada", "the raw value must not survive into markup")
 }
 
@@ -112,7 +112,7 @@ func TestList_remove(t *testing.T) {
 
 // A wrong index is a programming error. Remove panics rather than silently
 // doing nothing, because a no-op would hide the bug behind a list that just
-// never changes — the same reason State panics off-island.
+// never changes — the same reason State panics off-embed.
 func TestList_outOfRangeIndexPanics(t *testing.T) {
 	t.Parallel()
 	newList := func() *via.List[string] {
@@ -125,7 +125,7 @@ func TestList_outOfRangeIndexPanics(t *testing.T) {
 
 // Remove must not leave the removed element reachable through the backing
 // array: the freed slot is zeroed, so a pointer row does not keep its target
-// alive for as long as the island's connection lives.
+// alive for as long as the embed's connection lives.
 func TestList_removeZeroesTheFreedSlot(t *testing.T) {
 	t.Parallel()
 	var l via.List[*string]
@@ -137,13 +137,13 @@ func TestList_removeZeroesTheFreedSlot(t *testing.T) {
 	assert.Nil(t, full[1], "the vacated tail slot must be zeroed, not left aliasing the element")
 }
 
-// listIsland is the canonical case item 04 claimed was impossible: a live list
+// listEmbed is the canonical case item 04 claimed was impossible: a live list
 // a user can delete a row from. Each row carries a stable id so the morph
 // matches by identity rather than by position.
-type listIsland struct{ items via.List[string] }
+type listEmbed struct{ items via.List[string] }
 
-func (t *listIsland) DropFirst(ctx *via.Ctx) { t.items.Remove(0) }
-func (t *listIsland) View() h.H {
+func (t *listEmbed) DropFirst(ctx *via.Ctx) { t.items.Remove(0) }
+func (t *listEmbed) View() h.H {
 	return h.Div(
 		t.items.Each(func(s string) h.H {
 			return h.P(h.RawAttr("id", "row-"+s), h.Str(s))
@@ -160,7 +160,7 @@ func (t *listIsland) View() h.H {
 // unit test on Get() cannot see.
 func TestList_removeReachesTheBrowser(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(listIsland{items: newListItems("drop", "keep")}))
+	app := vt.Serve(t, via.Register(listEmbed{items: newListItems("drop", "keep")}))
 	status, first := app.Get("/")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, first, "count-2", "both rows render on the first paint")
@@ -168,27 +168,27 @@ func TestList_removeReachesTheBrowser(t *testing.T) {
 
 	c := app.Connect()
 	defer c.Close()
-	// A live island's action answers 204: the re-render travels on the
+	// A live embed's action answers 204: the re-render travels on the
 	// connection as a patch frame, not in the action's own response body.
-	status, _ = app.Action(0).Live(c).Fire()
+	status, _ = app.Action(0).Over(c).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 	patch := c.Await("count-1")
 	assert.NotContains(t, patch, "row-drop", "the dropped row must be gone from the pushed patch")
 	assert.Contains(t, patch, "row-keep", "the surviving row must still render")
 }
 
-// eachListIsland renders via l.Each(row) — the List method that sugars over
+// eachListEmbed renders via l.Each(row) — the List method that sugars over
 // via.Each(l.Get(), row) — rather than calling via.Each directly.
-type eachListIsland struct{ items via.List[string] }
+type eachListEmbed struct{ items via.List[string] }
 
-func (e *eachListIsland) View() h.H        { return h.Ul(e.items.Each(e.row)) }
-func (e *eachListIsland) row(s string) h.H { return h.Li(h.Str(s)) }
+func (e *eachListEmbed) View() h.H        { return h.Ul(e.items.Each(e.row)) }
+func (e *eachListEmbed) row(s string) h.H { return h.Li(h.Str(s)) }
 
 // List.Each must render every element in order through the List method, not
 // just through the free via.Each function it wraps.
 func TestList_eachRendersRowsInOrder(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(eachListIsland{items: newListItems("one", "two", "three")}))
+	app := vt.Serve(t, via.Register(eachListEmbed{items: newListItems("one", "two", "three")}))
 	status, body := app.Get("/")
 	assert.Equal(t, http.StatusOK, status)
 	assert.Regexp(t, "<li>one</li>.*<li>two</li>.*<li>three</li>", body,
@@ -219,7 +219,7 @@ func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
 	c := app.Connect()
 	defer c.Close()
 
-	status, _ := app.Action(0).Live(c).Fire()
+	status, _ := app.Action(0).Over(c).Fire()
 	require.Equal(t, http.StatusNoContent, status,
 		"a live action answers 204 — its re-render travels on the stream, not in the response")
 	assert.Contains(t, c.Await("n="), "n=1", "the mutation must reach the browser as a patch frame")
@@ -243,7 +243,7 @@ func (p *lateLive) View() h.H {
 	)
 }
 
-// The GET renders the closed branch, so the page is served non-live and opens
+// The GET renders the closed branch, so the page is served plain and opens
 // no SSE stream. An action that opens the branch would leave the tab demanding
 // a connection it never made — every later action 410s. That must be loud at
 // the action that caused it, not a silent freeze.
@@ -254,7 +254,7 @@ func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
 	rec.Body = &bytes.Buffer{}
 	get := httptest.NewRecorder()
 	app.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.NotContains(t, get.Body.String(), "/_via/sse", "page must be served non-live")
+	require.NotContains(t, get.Body.String(), "/_via/sse", "page must be served plain")
 	m := regexp.MustCompile(`@post\('([^']+)'`).FindStringSubmatch(get.Body.String())
 	require.Len(t, m, 2)
 
@@ -265,5 +265,5 @@ func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
 	req.Header.Set("Datastar-Request", "true")
 	app.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, logs.String(), "turned a unit live")
+	require.Contains(t, logs.String(), "made a unit live")
 }

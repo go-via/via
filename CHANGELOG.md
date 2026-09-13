@@ -104,7 +104,7 @@ as a re-read of the README, not a diff.
   `via.Embed`ed child gets its own data-loading hook, before its own `View`,
   with the same answers — `via.ErrNotFound` → 404, `ctx.Redirect` → 303, any
   other error → 500 — even though it fails from inside the parent's render.
-- **`ctx.OnLive(fn)`**: run fn once when this unit's live connection opens.
+- **`ctx.OnConnect(fn)`**: run fn once when this unit's stream opens.
   The acquire half of `OnDispose`, and the only correct place for a
   connection-scoped side effect now that `OnInit` is per-request.
 - **`topic.Topic.Subs() int`**: the live subscription count, for publishing
@@ -185,6 +185,19 @@ as a re-read of the README, not a diff.
   further to find out.
 
 ### Changed
+
+- **Vocabulary: one word per concept.** "live" was carrying three meanings and
+  its opposite was spelled four ways (`stateless`, `plain`, `non-live`,
+  `static`). Now: a page **streams** (the per-tab SSE connection) or is served
+  **plain**; **live** is an adjective on a unit or composition only — a live
+  unit pushes; **embed** replaces "island" as the noun for an embedded child.
+  The rule the vocabulary buys: *a page streams iff it contains a live unit; a
+  live embed may sit under any plain ancestor; a live unit may not contain
+  another live unit.* Renames: `ctx.OnLive` → `ctx.OnConnect`,
+  `vt.App.IslandAction` → `vt.App.EmbedAction`, `vt.Action.Live` →
+  `vt.Action.Over`. Several 410/500 bodies and the nesting panics were reworded
+  to match. **No wire change**: container ids, signal prefixes, action and SSE
+  paths, and the tab/session headers and cookies are all untouched.
 
 - **A native `PostForm` submit inside a live unit now returns the page a
   fresh connection will hold** (fresh instance, `OnInit` run) instead of a

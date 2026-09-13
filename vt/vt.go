@@ -39,19 +39,19 @@ type App struct {
 	fetched  bool
 }
 
-// actionURLRe matches every action URL bound to island in one chunk of
+// actionURLRe matches every action URL bound to embed in one chunk of
 // rendered markup. The action id is content-addressed from the handler's own
 // func name, so a test cannot construct the URL — it reads the one the page
 // actually shipped, which is also what makes the ?a= row datum travel with it.
-func actionURLRe(island string) *regexp.Regexp {
-	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + island + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+func actionURLRe(embed string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + embed + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
 }
 
-// nthActionURL returns the n-th action URL for island in document order
+// nthActionURL returns the n-th action URL for embed in document order
 // within markup — vt addresses actions by render position, which is how a
 // test reads its own View, while the wire addresses them by handler.
-func nthActionURL(markup []byte, island string, n int) (string, bool) {
-	m := actionURLRe(island).FindAllSubmatch(markup, -1)
+func nthActionURL(markup []byte, embed string, n int) (string, bool) {
+	m := actionURLRe(embed).FindAllSubmatch(markup, -1)
 	if n < 0 || n >= len(m) {
 		return "", false
 	}
@@ -65,7 +65,7 @@ func Serve(t testing.TB, handler http.Handler) *App {
 	t.Helper()
 	srv := httptest.NewTestServer(t, handler)
 	// ErrorLog must be set before the first Client()/Start() call: a test that
-	// deliberately drives a render panic (e.g. the off-island State guard)
+	// deliberately drives a render panic (e.g. the off-embed State guard)
 	// would otherwise spam a recovered-panic stack trace to stderr.
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.Client() // forces srv.URL to populate; harmless before any real request
@@ -116,26 +116,26 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (the root is island "r"). The URL is read off the rendered root page at
+// order (the root is embed "r"). The URL is read off the rendered root page at
 // Fire time, not constructed: the wire id is a hash of the handler's func
 // name and any ?a= row datum rides along with it, so a hand-built path would
 // be wrong. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
 func (a *App) Action(n int) *Action {
-	return &Action{app: a, island: "r", n: n, headers: map[string]string{}, body: "{}"}
+	return &Action{app: a, embed: "r", n: n, headers: map[string]string{}, body: "{}"}
 }
 
-// IslandAction builds a POST to the n-th action an embedded island renders,
-// in document order. island is the key an island's own container carries:
+// EmbedAction builds a POST to the n-th action an embed renders,
+// in document order. embed is the key an embed's own container carries:
 // "0" for the root's first Embed, "1" for its second, "0-1" for the second
 // Embed inside the first, and so on (the root is "r"; use Action for that).
-func (a *App) IslandAction(island string, n int) *Action {
-	return &Action{app: a, island: island, n: n, headers: map[string]string{}, body: "{}"}
+func (a *App) EmbedAction(embed string, n int) *Action {
+	return &Action{app: a, embed: embed, n: n, headers: map[string]string{}, body: "{}"}
 }
 
 // page fetches and caches the root page's HTML, so repeated Action/
-// IslandAction calls don't re-render it. Refresh drops the cache when a test
+// EmbedAction calls don't re-render it. Refresh drops the cache when a test
 // needs the current (possibly reshaped) page instead.
 func (a *App) page() string {
 	a.mu.Lock()
@@ -148,7 +148,7 @@ func (a *App) page() string {
 	return a.pageBody
 }
 
-// Refresh drops the cached root page, so the next Action/IslandAction call
+// Refresh drops the cached root page, so the next Action/EmbedAction call
 // re-fetches it. Needed after a mutation that changes the View's rendered
 // shape (a branched View whose action set differs by state).
 func (a *App) Refresh() {
@@ -160,7 +160,7 @@ func (a *App) Refresh() {
 // Action is a builder for an action POST.
 type Action struct {
 	app         *App
-	island      string
+	embed       string
 	n           int
 	raw         string
 	host        string
@@ -169,7 +169,7 @@ type Action struct {
 	originSet   bool
 	secFetchSet bool
 	noOrigin    bool
-	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the stateless page
+	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
 }
 
 // Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
@@ -196,15 +196,15 @@ func (x *Action) SecFetch(s string) *Action {
 	return x
 }
 
-// Tab sets the X-Via-Tab header, routing a live action to a connection's island.
+// Tab sets the X-Via-Tab header, routing a live action to a connection's embed.
 func (x *Action) Tab(id string) *Action { x.headers["X-Via-Tab"] = id; return x }
 
-// Live routes this action against c: its X-Via-Tab header is set to c's tab
-// id, and — unless Raw overrides it — Fire reads the action's URL off c's own
-// pushed markup (see Conn.ActionURL) instead of a separate stateless GET's
+// Over routes this action over c's stream: its X-Via-Tab header is set to c's
+// tab id, and — unless Raw overrides it — Fire reads the action's URL off c's own
+// pushed markup (see Conn.ActionURL) instead of a separate plain GET's
 // render, which can carry a different shape digest than what this connection
 // actually has on screen.
-func (x *Action) Live(c *Conn) *Action {
+func (x *Action) Over(c *Conn) *Action {
 	x.conn = c
 	return x.Tab(c.tabID)
 }
@@ -220,12 +220,12 @@ func (x *Action) Fire() (int, string) {
 	x.app.t.Helper()
 	path := x.raw
 	if path == "" && x.conn != nil {
-		path = x.conn.ActionURL(x.island, x.n)
+		path = x.conn.ActionURL(x.embed, x.n)
 	}
 	if path == "" {
-		u, ok := nthActionURL([]byte(x.app.page()), x.island, x.n)
+		u, ok := nthActionURL([]byte(x.app.page()), x.embed, x.n)
 		if !ok {
-			x.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", x.island, x.n)
+			x.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", x.embed, x.n)
 		}
 		path = u
 	}
@@ -256,7 +256,7 @@ func (x *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Conn is an open SSE stream to a live island, carrying its per-connection tab id.
+// Conn is an open SSE stream to a live embed, carrying its per-connection tab id.
 type Conn struct {
 	t        testing.TB
 	app      *App
@@ -335,27 +335,27 @@ func (a *App) Connect() *Conn {
 // TabID returns the connection's tab id.
 func (c *Conn) TabID() string { return c.tabID }
 
-// ActionURL returns the currently-rendered URL of island's n-th action, in
+// ActionURL returns the currently-rendered URL of embed's n-th action, in
 // document order — read off the LATEST datastar-patch-elements frame that
 // carries one, the same markup a browser's DOM would hold at this point, not a
-// separate stateless GET's render. Before any push has touched this island
+// separate plain GET's render. Before any push has touched this embed
 // (e.g. the very first action after Connect), nothing has been pushed yet
 // either, so this falls back to the page's own initial GET — exactly what a
 // real browser would still be showing.
-func (c *Conn) ActionURL(island string, n int) string {
+func (c *Conn) ActionURL(embed string, n int) string {
 	c.t.Helper()
 	c.mu.Lock()
 	frames := append([][]byte(nil), c.elements...)
 	c.mu.Unlock()
 	for i := len(frames) - 1; i >= 0; i-- {
-		if u, ok := nthActionURL(frames[i], island, n); ok {
+		if u, ok := nthActionURL(frames[i], embed, n); ok {
 			return u
 		}
 	}
-	if u, ok := nthActionURL([]byte(c.app.page()), island, n); ok {
+	if u, ok := nthActionURL([]byte(c.app.page()), embed, n); ok {
 		return u
 	}
-	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", island, n)
+	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", embed, n)
 	return ""
 }
 

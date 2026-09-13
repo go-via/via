@@ -37,16 +37,16 @@ func (p *liveTicker) OnInit(ctx *via.Ctx) error {
 func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Display())) }
 
-// clicker is a live island whose action mutates its own State — the vehicle for
+// clicker is a live embed whose action mutates its own State — the vehicle for
 // testing Click and the $_viatab → X-Via-Tab round-trip.
 type clicker struct{ count via.State[int] }
 
-func (c *clicker) Bump(ctx *via.Ctx)            { c.count.Set(c.count.Get() + 1) }
+func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) View() h.H {
 	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
 
-// form is a stateless page with one bound input — the vehicle for Type and Value.
+// form is a plain page with one bound input — the vehicle for Type and Value.
 type form struct{ name via.Signal[string] }
 
 func (f *form) View() h.H { return h.Div(h.Input(f.name.Bind(), h.RawAttr("placeholder", "name"))) }
@@ -99,17 +99,17 @@ func (c *chat) View() h.H {
 	)
 }
 
-// bClock + bCounter are two LIVE islands multiplexed on one stream: a ticking
+// bClock + bCounter are two LIVE embeds multiplexed on one stream: a ticking
 // clock and a click-driven counter. bDash is the shell (not itself live).
 type bClock struct{ secs via.State[int] }
 
 func (c *bClock) OnInit(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.beat); return nil }
-func (c *bClock) beat(ctx *via.Ctx)            { c.secs.Set(c.secs.Get() + 1) }
-func (c *bClock) View() h.H                    { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
+func (c *bClock) beat(ctx *via.Ctx)         { c.secs.Set(c.secs.Get() + 1) }
+func (c *bClock) View() h.H                 { return h.Div(h.P(h.Str("uptime "), c.secs.Display())) }
 
 type bCounter struct{ n via.State[int] }
 
-func (c *bCounter) Inc(ctx *via.Ctx)             { c.n.Set(c.n.Get() + 1) }
+func (c *bCounter) Inc(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *bCounter) View() h.H {
 	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
 }
@@ -121,21 +121,21 @@ type bDash struct {
 
 func (d *bDash) View() h.H { return h.Div(via.Embed(d.Clock), via.Embed(d.Counter)) }
 
-// Two live islands on one page must update INDEPENDENTLY in a real browser: the
+// Two live embeds on one page must update INDEPENDENTLY in a real browser: the
 // clock's server-push morphs only #via-i0, and a click on the counter routes
 // (via the tab handshake) to #via-i1 and morphs only that — proving Datastar
-// patches each island's container separately over the one shared SSE stream.
-func TestChild_multiplexedIslandsUpdateIndependently(t *testing.T) {
+// patches each embed's container separately over the one shared SSE stream.
+func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
 	s := vtbrowser.Open(t, via.Register(bDash{}))
 
-	// Clock island ticks on its own (no interaction) → server-push morphs #via-i0.
+	// Clock embed ticks on its own (no interaction) → server-push morphs #via-i0.
 	s.WaitFor("#via-i0 p", func(text string) bool {
 		var n int
 		_, err := fmt.Sscanf(text, "uptime %d", &n)
 		return err == nil && n >= 2
-	}, "the clock island to tick past 2 (live push to #via-i0)")
+	}, "the clock embed to tick past 2 (live push to #via-i0)")
 
-	// Counter island: its action must route to #via-i1 via X-Via-Tab and morph
+	// Counter embed: its action must route to #via-i1 via X-Via-Tab and morph
 	// only that container, leaving the clock running.
 	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
 	s.Click("#via-i1 button")
@@ -145,7 +145,7 @@ func TestChild_multiplexedIslandsUpdateIndependently(t *testing.T) {
 
 // pRoot is a PLAIN root (not itself live) with its own action, embedding a
 // live bCounter — the region-ownership case: the root's own action patch
-// must not repaint the live island from its seed value.
+// must not repaint the live embed from its seed value.
 type pRoot struct {
 	hits    int
 	Counter bCounter
@@ -161,10 +161,10 @@ func (p *pRoot) View() h.H {
 }
 
 // A plain root's own action re-renders #root (Datastar's default whole-root
-// morph); the embedded live island's container carries data-ignore-morph, so
-// that patch must leave the island's DOM untouched, and the island's own push
+// morph); the embedded live embed's container carries data-ignore-morph, so
+// that patch must leave the embed's DOM untouched, and the embed's own push
 // (Datastar inner mode) must still land afterward.
-func TestChild_rootActionPatchLeavesLiveIslandAlone(t *testing.T) {
+func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Register(pRoot{}))
 
 	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
@@ -176,7 +176,7 @@ func TestChild_rootActionPatchLeavesLiveIslandAlone(t *testing.T) {
 
 	s.Sleep(300 * time.Millisecond) // give a stray morph time to land, if it were going to
 	if got := s.Text("#via-i0 p"); !strings.Contains(got, "clicks 1") {
-		t.Fatalf("the root's own action patch repainted the live island from its seed: %q", got)
+		t.Fatalf("the root's own action patch repainted the live embed from its seed: %q", got)
 	}
 
 	s.Click("#via-i0 button")
@@ -217,8 +217,8 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// Click drives a live-island action: the count changes only if the $_viatab the
-// SSE set is echoed as the X-Via-Tab header, reaching this connection's island
+// Click drives a live-embed action: the count changes only if the $_viatab the
+// SSE set is echoed as the X-Via-Tab header, reaching this connection's embed
 // and pushing the result back over its stream. WaitTextContains absorbs the
 // round-trip latency.
 func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
@@ -351,7 +351,7 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
-// redirectViaScript is a stateless page whose @post action calls via.Redirect
+// redirectViaScript is a plain page whose @post action calls via.Redirect
 // — which can no longer navigate the browser (only PostForm and OnInit can).
 type redirectViaScript struct{}
 
@@ -391,7 +391,7 @@ type liveFormBrowser struct {
 	n     via.State[int]
 }
 
-func (f *liveFormBrowser) Save(ctx *via.Ctx)        { *f.calls++ }
+func (f *liveFormBrowser) Save(ctx *via.Ctx) { *f.calls++ }
 func (f *liveFormBrowser) View() h.H {
 	return h.Div(
 		f.n.Display(),
@@ -404,8 +404,8 @@ func (f *liveFormBrowser) View() h.H {
 }
 
 // A native PostForm submit from inside a live unit must reach the handler and
-// come back as a fresh 200 page, not fall through to the stateless path's
-// fail-closed 410 "no live connection for this tab" document. Only a real
+// come back as a fresh 200 page, not fall through to the plain path's
+// fail-closed 410 "this tab has no stream" document. Only a real
 // browser can see this: an unfilled `data-attr-value` is not an error, it is
 // silently ignored, so no Go-level assertion catches it (see L1).
 func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
@@ -422,8 +422,8 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("native PostForm submit from a live unit did not return 200: got %v", status)
 	}
-	if got := s.Text("body"); strings.Contains(got, "no live connection for this tab") {
-		t.Fatalf("submit fell through to the stateless 410 fallback: %q", got)
+	if got := s.Text("body"); strings.Contains(got, "this tab has no stream") {
+		t.Fatalf("submit fell through to the plain 410 fallback: %q", got)
 	}
 	s.WaitTextContains("#calls", "1")
 	s.RequireCleanConsole()

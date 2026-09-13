@@ -67,19 +67,26 @@ These aren't slogans: `TestExamples_takeNoAddressOfOrClosureAtViaCallSites`
 fails the build if an example violates the `&`/closure rules, and the sealed
 `h.H` interface makes an untyped node uninjectable.
 
-## Stateless by default, live by what a unit does
+## A page is plain until a composition makes it live
 
-A page is stateless request/response. It becomes a connection-scoped **live
-island** (its own server state, pushed over SSE) the moment it *acts* like
-one — its `OnInit` registered a `ctx.Tick` or a `ctx.Listen`, or its `View`
-rendered a `State[T]`/`List[E]`. There is no marker interface and no second
-hook: `Initer`/`OnInit` is the one lifecycle hook, on a page and on every
-embedded child. The same model spans the spectrum from a fully static page to a
-fully live app.
+A page is served **plain** — request/response, with actions and a morph on
+POST. It **streams** (an SSE connection scoped to that one tab, its own
+server state pushed over it) the moment a composition on it *acts* live: its
+`OnInit` registered a `ctx.Tick` or a `ctx.Listen`, or its `View` rendered a
+`State[T]`/`List[E]`. There is no marker interface and no second hook:
+`Initer`/`OnInit` is the one lifecycle hook, on a page and on every embedded
+child. The same model spans the spectrum from a fully plain page to a fully
+live app.
 
-That verdict is taken from the render that serves the page, and only a live
-page bootstraps the SSE stream — so **liveness has to be render-invariant**. A
-`State.Display` behind a branch that is closed at GET wires the page non-live;
+The whole rule is one line:
+
+> A page streams iff it contains a live unit; a live embed may sit under any
+> plain ancestor; a live unit may not contain another live unit.
+
+That verdict is taken from the render that serves the page, and only a
+streaming page bootstraps the SSE stream — so **liveness has to be
+render-invariant**. A
+`State.Display` behind a branch that is closed at GET wires the page plain;
 an action that later opens the branch would leave the tab demanding a
 connection it never opened, and every action after it would 410. via fails that
 action loudly instead. Render the `State` unconditionally (put the `When`
@@ -88,7 +95,7 @@ action loudly instead. Render the `State` unconditionally (put the `When`
 
 `OnInit` runs on every request that renders the unit — the GET, each action,
 the SSE connect. Register connection-scoped side effects rather than performing
-them: `ctx.OnLive(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
+them: `ctx.OnConnect(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
 when it closes.
 
 ## Security floor (built in)
@@ -99,7 +106,7 @@ The action endpoint and rendered pages are hardened by default:
   CSRF token, and dev/non-browser clients just work); set `WithTrustedOrigin`
   in production to enforce same-origin (plus the listed origins), failing
   closed.
-- A live connection's tab id is a bearer credential for that connection's
+- A stream's tab id is a bearer credential for that connection's
   actions; if it was opened under a session, a dispatch is also checked
   against that same session, so a leaked tab id alone is no longer enough
   once the connecting browser was logged in. An anonymous connection (no
@@ -134,7 +141,7 @@ Built and tested — `-race`-clean, adversarially reviewed, eight runnable
 examples, the whole live stack verified in real headless browsers
 (`vtbrowser/`, `-tags browser`):
 
-- **Hardened stateless core** (`example/counter`): by-value `Register`, origin
+- **Hardened plain core** (`example/counter`): by-value `Register`, origin
   floor, hash-admitted CSP, body cap, panic-recover, compile-time `View`
   constraint, attribute-name allowlist. An action's response self-classifies —
   element-patch when the render changed, `204` when it didn't.
@@ -147,23 +154,23 @@ examples, the whole live stack verified in real headless browsers
   input — keeps its own slot instead of inheriting one from whatever rendered
   first. A signal held through a pointer or slice field has no offset and falls
   back to a render-order name; keep that one's `Bind()` unconditional.
-- **Live islands + `State[T]`** (`example/pulse`): render a `State[T]` or
-  register a `Tick` and a composition becomes a live island with a per-tab SSE
+- **Live embeds + `State[T]`** (`example/pulse`): render a `State[T]` or
+  register a `Tick` and a composition becomes a live embed with a per-tab SSE
   stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
   `Tick` drives the push. `Tick`/`Listen`/action handlers all run on the
   connection's one goroutine — a handler that blocks (I/O, an unbounded
   loop) stalls every other tick, action, and push on that same connection,
   and delays that connection's shutdown until it returns.
-- **Interactive live actions** (`example/chat`): a live-island action routes —
+- **Interactive live actions** (`example/chat`): a live-embed action routes —
   via the `via_tab` handshake (an unguessable per-connection id echoed in the
-  `X-Via-Tab` header) — to *this* connection's island, mutates its state, and the
+  `X-Via-Tab` header) — to *this* connection's embed, mutates its state, and the
   result is pushed over its SSE. The element push omits `data-signals`, and
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose` — one publish
-  fans out to every connected island.
+  fans out to every connected embed.
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
@@ -174,7 +181,7 @@ examples, the whole live stack verified in real headless browsers
   on access (past the TTL, the next read/write treats them as gone) — there
   is no background sweep, so a
   session that is never touched again is not proactively evicted. A session
-  that idles past its TTL while a live stream is still open (the stream
+  that idles past its TTL while a stream is still open (the stream
   itself does nothing to keep it warm) turns every later dispatch on that tab
   into a 403 "session mismatch" until the page is reloaded. The signing
   key resolves
@@ -184,34 +191,34 @@ examples, the whole live stack verified in real headless browsers
   automatically over TLS (so `http://localhost` dev still works);
   `WithSecureCookies` forces it on behind a TLS-terminating proxy.
 - **Resilience floor + reconnect**: a server-side keepalive comment frame
-  (fixed 25s) and a per-frame write deadline (fixed 10s) ride the island's
+  (fixed 25s) and a per-frame write deadline (fixed 10s) ride the embed's
   single goroutine; a failed frame write tears the
-  island down (runs disposers, stops ticks) so a half-open peer — gone without a
+  embed down (runs disposers, stops ticks) so a half-open peer — gone without a
   FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
   Datastar gives up.
-- **Live-island multiplexing** (`example/dashboard`): embed sub-compositions as
+- **Live-embed multiplexing** (`example/dashboard`): embed sub-compositions as
   plain struct fields — `via.Embed(p.Clock)` in the parent's `View`. Each child
   gets its own `OnInit`; a child that neither ticks nor holds `State` is a plain
-  in-place component, one that does is a live island, and all the live children
+  in-place component, one that does is a live embed, and all the live children
   on a page share the tab's *one* SSE stream on one goroutine — each re-renders and patches only its own region
   (`#via-i{n}`, pushed in place — its container is never morphed by a
-  parent's patch), its actions route by island id + the tab handshake, and its
+  parent's patch), its actions route by embed id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. The parent's literal seeds a
   child's dependencies (a shared `*Topic`, a store) at registration; generic
   layouts (`Shell[C]{Body C}`) compose one shell with any page. Ownership is
   by value: the field literal seeds the child, each connection gets its own
   copy (value state stays per-tab), and pointer deps are the deliberate
-  sharing channel. **Known limitation:** a live island cannot itself embed a
-  further live island — nesting is one level deep (the root, or a live child
+  sharing channel. **Known limitation:** a live embed cannot itself embed a
+  further live embed — nesting is one level deep (the root, or a live child
   directly under a plain root, or through further plain `via.Embed`s); it
   panics at render, loud and early, rather than misroute an action. Plain
-  (non-live) composition still nests to any depth. Nested live composition
+   composition still nests to any depth. Nested live composition
   (a dynamic set of live children addressed by identity) is a deferred
   feature. `State` is per connection: a native `PostForm` submit is a
   navigation, opens a new connection, and reseeds it — persist through the
   session or a shared pointer dep, or `Redirect` instead of returning a page.
-  An `Embed`'s identity is its **island key**: its ordinal among its own
+  An `Embed`'s identity is its **embed key**: its ordinal among its own
   parent's `Embed` calls, composed onto the parent's key. The root's children
   are `0`, `1`, …; a child of `0` is `0-0`. One key drives the container id
   (`via-i0-0`), the signal prefix (`i0-0_`) and the dispatch address
@@ -230,7 +237,7 @@ examples, the whole live stack verified in real headless browsers
 - **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
   `r.Mount("/path", Page{})` serves a whole app behind one
   handler, each page's actions namespaced under its mount. `OnInit(*Ctx) error`
-  is the per-request hook that loads session/path data into a stateless page
+  is the per-request hook that loads session/path data into a plain page
   before its ctx-free `View` — return `via.ErrNotFound` for a vanished record
   (404); any other error answers 500, and the View never renders a lie. A
   session check + `ctx.Redirect("/login")` inside `OnInit` is the whole
@@ -243,37 +250,37 @@ examples, the whole live stack verified in real headless browsers
   The forum proves these compose into a full multi-page app.
 
 **The flagship is `example/chat`** — a live, multi-user chat room with a presence
-count, in ~60 lines that read like a static page. Two-browser-verified: a message
+count, in ~60 lines that read like a plain page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
 
 **Restarts and deploys.** Sessions derive from the signing key, so with a
 stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a restart or a rolling
 deploy keeps cookies valid across pods. The CSP is a pure function of the
-Head, so pods with different keys still serve identical policies. Live-island
+Head, so pods with different keys still serve identical policies. Live-embed
 state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
 a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
-An action URL addresses its handler, not its render position: `island` is
-`r` for the page root and the acting island's key otherwise, and `id` in
-`/_via/a/{island}/{id}` is a hash of the handler method's own Go name, so it
+An action URL addresses its handler, not its render position: `embed` is
+`r` for the page root and the acting embed's key otherwise, and `id` in
+`/_via/a/{embed}/{id}` is a hash of the handler method's own Go name, so it
 is the same across renders, instances and builds, and a row's datum rides
 along in `?a=`. A list that grew or shrank since a tab painted therefore keeps
 every URL that tab is holding valid. Dispatch answers `410 Gone` — on both the
-stateless and live paths — for an id the current render does not bind (a
+plain and live paths — for an id the current render does not bind (a
 closed branch, or an `OnInit` that failed to restore the state the `View`
-branches on; the 410 names the handlers that ARE bound), an unknown island, or
+branches on; the 410 names the handlers that ARE bound), an unknown embed, or
 a live action with no connection for its tab.
 Datastar resolves a non-2xx response silently and moves on; a native `<form>`
 submit shows the browser's own error page.
 
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
-lists *of* live islands (per-row actions are done via `OnArg`; fixed
-embeds via `via.Embed` are done); nested live composition (a live island
-embedding a further live island, or an embedded live island's own `View`
+lists *of* live embeds (per-row actions are done via `OnArg`; fixed
+embeds via `via.Embed` are done); nested live composition (a live embed
+embedding a further live embed, or an embedded live embed's own `View`
 calling `Embed` at all — v0.8 refuses both at render instead); and
 at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
@@ -286,7 +293,7 @@ cap is deferred past v0.8.
 **Reconnect.** A dropped stream and its reconnect build an entirely new
 `liveConn`: any action POST still in flight against the old tab id answers 410
 once the old connection is gone, and the client's own reconnect manager is
-what re-bootstraps the page from server truth (also see "Live-island
+what re-bootstraps the page from server truth (also see "Live-embed
 multiplexing" above for the one-level-deep nesting limit).
 
 ## Develop

@@ -43,9 +43,9 @@ type actionResult struct {
 	redirect  string
 	panicked  bool
 	badArg    error  // set when a value-carrying action's ?a= failed to decode (see badActionArg) — answers 400, not 500
-	pushWork  func() // live path only: the dirty-signals + element push, run by liveConn.run right after acking (see liveRunAction)
-	gone      string // live path only: set when the unit/action lookup (run on the island goroutine — see dispatchLive) came up invalid; the reason is the response body
-	forbidden string // live path only: set when the session-bound check (run on the island goroutine — see dispatchLive) rejects the request
+	pushWork  func() // live path only: the dirty-signals + element push, run by tabStream.run right after acking (see liveRunAction)
+	gone      string // live path only: set when the unit/action lookup (run on the stream goroutine — see dispatchOverStream) came up invalid; the reason is the response body
+	forbidden string // live path only: set when the session-bound check (run on the stream goroutine — see dispatchOverStream) rejects the request
 }
 
 // mount bundles a page's per-request wiring — built once in Router.Mount and
@@ -62,56 +62,56 @@ type mount struct {
 	maxLive     int
 }
 
-// unit returns the bind pass's unit Ctx for dispatch address island: "r" is
+// unit returns the bind pass's unit Ctx for dispatch address embed: "r" is
 // the root itself; anything else is a '-'-joined ordinal path walked down the
-// island tree ("0-1" is the root's first Embed's second Embed). nil when this
+// embed tree ("0-1" is the root's first Embed's second Embed). nil when this
 // render holds no such unit.
-func (bind *Ctx) unit(island string) *Ctx {
-	if island == rootAddr {
+func (bind *Ctx) unit(embed string) *Ctx {
+	if embed == rootAddr {
 		return bind
 	}
 	cur := bind
-	for _, seg := range strings.Split(island, "-") {
+	for _, seg := range strings.Split(embed, "-") {
 		k, err := strconv.Atoi(seg)
-		if err != nil || k < 0 || k >= len(cur.islands) {
+		if err != nil || k < 0 || k >= len(cur.embeds) {
 			return nil
 		}
-		cur = cur.islands[k]
+		cur = cur.embeds[k]
 	}
 	return cur
 }
 
-// unit returns the connected live unit for dispatch address island ("r" = root), at any
-// embedding depth, nil when this connection has none. Called on the island
-// goroutine itself (see dispatchLive) so the lookup is atomic with the
+// unit returns the connected live unit for dispatch address embed ("r" = root), at any
+// embedding depth, nil when this connection has none. Called on the embed
+// goroutine itself (see dispatchOverStream) so the lookup is atomic with the
 // dispatch it guards; it still takes the same lock replace does since a
 // future caller reading it from elsewhere shouldn't have to remember to add one.
-func (c *liveConn) unit(island string) *Ctx {
+func (c *tabStream) unit(embed string) *Ctx {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.units[island]
+	return c.units[embed]
 }
 
-// rootAddr is the root unit's dispatch address in /_via/a/{island}/{act}. It
-// is a letter precisely so it cannot collide with an island key, which is
+// rootAddr is the root unit's dispatch address in /_via/a/{embed}/{act}. It
+// is a letter precisely so it cannot collide with an embed key, which is
 // always a '-'-joined path of ordinals.
 const rootAddr = "r"
 
-// unitAddr is c's own dispatch address in /_via/a/{island}/{act} — "r" for the
-// root, the island key for an embedded unit at any depth.
+// unitAddr is c's own dispatch address in /_via/a/{embed}/{act} — "r" for the
+// root, the embed key for an embedded unit at any depth.
 func unitAddr(c *Ctx) string {
-	if c != nil && c.isIsland {
-		return c.islandKey
+	if c != nil && c.isEmbed {
+		return c.embedKey
 	}
 	return rootAddr
 }
 
 // dispatch is the single entry point for every action POST on a mount — a
 // Datastar @post, a native PostForm submit, or a live unit's action — at
-// {base}/_via/a/{island}/{act} (the root is island "r"). One origin floor, one
+// {base}/_via/a/{embed}/{act} (the root is embed "r"). One origin floor, one
 // OnInit, one body decode: the six transports this replaced each
-// re-implemented these and drifted (OnInit never ran on an island action; a
-// live/island action silently dropped ctx.Redirect).
+// re-implemented these and drifted (OnInit never ran on an embed action; a
+// live/embed action silently dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -133,7 +133,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	if mode == modeNative {
 		defer req.MultipartForm.RemoveAll() // drop any spilled temp files
 	}
-	island := req.PathValue("island")
+	embed := req.PathValue("embed")
 	act := req.PathValue("act")
 	base := concreteBase(m.patternBase, req, m.names)
 
@@ -150,20 +150,20 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			// from another mount is otherwise structurally valid here — same
 			// header/field, same action-id space — so this must be checked
 			// explicitly rather than relying on anything else to fail first.
-			http.Error(w, "no such island", http.StatusGone)
+			http.Error(w, "no such embed", http.StatusGone)
 			return
 		}
-		// Every action now echoes the tab id, live or not, so a live page's
+		// Every action now echoes the tab id, live or not, so a streaming page's
 		// PLAIN child posts one too — and its address was never registered on
 		// the connection. Membership is stable (a unit is published before the
-		// tab id is, and never removed), so this check is safe off the island
-		// goroutine, unlike the staleness lookup dispatchLive still does there.
-		if lc.unit(island) != nil {
-			m.dispatchLive(w, req, mode, lc, island, act, in, base)
+		// tab id is, and never removed), so this check is safe off the embed
+		// goroutine, unlike the staleness lookup dispatchOverStream still does there.
+		if lc.unit(embed) != nil {
+			m.dispatchOverStream(w, req, mode, lc, embed, act, in, base)
 			return
 		}
 	}
-	m.dispatchStateless(w, req, mode, island, act, in, base)
+	m.dispatchPlain(w, req, mode, embed, act, in, base)
 }
 
 // decodeInput decodes an action POST's body per mode: a native PostForm
@@ -187,19 +187,19 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 	return decodeActionBody(w, req)
 }
 
-// dispatchLive runs action act against a connected live unit on its
+// dispatchOverStream runs action act against a connected live unit on its
 // connection's serialized goroutine and WAITS for the mutation's result —
-// synchronous, unlike the old fire-and-forget island dispatch, so a
+// synchronous, unlike the old fire-and-forget embed dispatch, so a
 // Redirect, the session cookie, and a panic all resolve on THIS response
-// exactly like a stateless action. The wait is bounded by req.Context() as
+// exactly like a plain action. The wait is bounded by req.Context() as
 // well as the connection closing, so a stalled peer elsewhere on the stream
-// can't park this POST's goroutine forever (see liveConn.run).
-func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island string, act string, in map[string]json.RawMessage, base string) {
+// can't park this POST's goroutine forever (see tabStream.run).
+func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, embed string, act string, in map[string]json.RawMessage, base string) {
 	res, ok := lc.run(req.Context(), func() actionResult {
-		// A closure queued on pulse runs regardless of what its caller does
+		// A closure queued on pushq runs regardless of what its caller does
 		// meanwhile: if req.Context() is already done, run's own second
 		// select has already given up and answered 410 to the client (see
-		// liveConn.run) — applying the action now would double-apply on a
+		// tabStream.run) — applying the action now would double-apply on a
 		// client retry, and passing w into liveRunAction would hand a dead
 		// ResponseWriter to Session().Put (SetCookie -> Header() would race
 		// the server's post-handler teardown). Skip the mutation entirely —
@@ -207,7 +207,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		if req.Context().Err() != nil {
 			return actionResult{gone: "request abandoned"}
 		}
-		// Checked here, on the island goroutine, rather than by the dispatching
+		// Checked here, on the stream goroutine, rather than by the dispatching
 		// request's own goroutine before this closure was posted — a
 		// cookieless dispatch that passed a pre-queue check while the
 		// connection was still unbound could otherwise be applied AFTER a
@@ -218,7 +218,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		if bound := lc.boundSession(); bound != nil {
 			// The connection is bound to a real session — either the one open
 			// at connect, or one a live action minted/rotated afterward (see
-			// liveConn.bindSession) — and a dispatch against it must carry
+			// tabStream.bindSession) — and a dispatch against it must carry
 			// that SAME session (by pointer, not id — a Rotate since connect
 			// moves the pointer to a new id, never a new data object).
 			// Otherwise a leaked tab id is a bearer credential good from any
@@ -228,7 +228,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 				return actionResult{forbidden: "session mismatch"}
 			}
 		}
-		// u is looked up here, on the island goroutine, rather than by the
+		// u is looked up here, on the stream goroutine, rather than by the
 		// dispatching request's own goroutine before this closure was posted —
 		// a concurrent push (a tick, another action, Listen fan-out) replaces
 		// lc.units between the two, so a unit read earlier could already be
@@ -239,9 +239,9 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		// silently dropping the patch. Reading it here makes it current by
 		// construction: nothing else touches lc.units between this line and
 		// the dispatch it guards, both on this same serialized goroutine.
-		u := lc.unit(island)
+		u := lc.unit(embed)
 		if u == nil {
-			return actionResult{gone: "no such island"}
+			return actionResult{gone: "no such embed"}
 		}
 		a, ok := u.actions[act]
 		if !ok {
@@ -250,7 +250,7 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 		return liveRunAction(w, req, m.sessions, lc, u, in, a)
 	})
 	if !ok {
-		http.Error(w, "live connection closed", http.StatusGone)
+		http.Error(w, "stream closed", http.StatusGone)
 		return
 	}
 	if res.forbidden != "" {
@@ -274,13 +274,13 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 			// A native <form> submit is a real navigation: the browser
 			// replaces the whole document with whatever this response
 			// carries. That is the page a brand-new connection will hold —
-			// a fresh instance, OnInit run — exactly like dispatchStateless,
+			// a fresh instance, OnInit run — exactly like dispatchPlain,
 			// not a snapshot of the dying connection's live tree (which the
 			// client's own reconnect is about to reseed anyway once this
 			// response's data-init opens a new SSE stream).
 			inst := m.newInst()
 			ctx := newRootCtx(nil, true, base, nil)
-			ctx.islandV = inst
+			ctx.embedV = inst
 			if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
 				return
 			}
@@ -297,21 +297,21 @@ func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode acti
 // produced (or, before any push, the connect render) — its actions/hydrators
 // table is current because every push is a render, so no render happens here
 // before the action runs. It runs on the connection's serialized goroutine
-// while the triggering POST blocks in liveConn.run — so w is safe to write to
-// here (the session cookie, a queued Redirect) exactly as a stateless action
-// would be. dispatchLive already resolved act against unit.actions before
+// while the triggering POST blocks in tabStream.run — so w is safe to write to
+// here (the session cookie, a queued Redirect) exactly as a plain action
+// would be. dispatchOverStream already resolved act against unit.actions before
 // calling in here. The recover below is a last-resort backstop.
 //
 // The re-render + SSE push (the dirty-signals patch, then the element patch)
-// rides back in res.pushWork instead of running here: liveConn.run sends the
+// rides back in res.pushWork instead of running here: tabStream.run sends the
 // mutation's result to the waiting POST FIRST, then runs pushWork — so a
 // stalled peer's write (up to the write timeout) delays only the NEXT
-// pulse item, never this response, while still running on the connection's
+// push item, never this response, while still running on the connection's
 // one serialized goroutine in the same order the actions themselves ran. A
 // detached goroutine doing this enqueue used to race other such goroutines
 // from concurrent actions, reordering their pushes; returning it as data
 // instead keeps everything on the one goroutine, in order.
-func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *liveConn, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
+func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			if bad, ok := rec.(badActionArg); ok {
@@ -390,19 +390,19 @@ func unknownAction(u *Ctx, act string) string {
 	return "no such action " + act + "; this render does not bind it"
 }
 
-// dispatchStateless is dispatch's non-live path: bind a fresh instance, run
+// dispatchPlain is dispatch's plain path: bind a fresh instance, run
 // OnInit, run the acted-on unit's action, then answer per mode.
-func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island string, act string, in map[string]json.RawMessage, base string) {
+func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, embed string, act string, in map[string]json.RawMessage, base string) {
 	inst := m.newInst()
 	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
-	bind.islandV = inst                                  // so bind.unit(rootAddr)'s liveness reads the same way an embedded island's does
+	bind.embedV = inst                                   // so bind.unit(rootAddr)'s liveness reads the same way an embed's does
 	if runOnInit(inst.v, bind, w, req, m.sessions) != nil {
 		return
 	}
 	rootBefore := renderRootWith(bind, inst.v)
-	u := bind.unit(island)
+	u := bind.unit(embed)
 	if u == nil {
-		http.Error(w, "no such island", http.StatusGone)
+		http.Error(w, "no such embed", http.StatusGone)
 		return
 	}
 	a, ok := u.actions[act]
@@ -414,13 +414,13 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 		// A live unit's action only routes through the tab handshake in
 		// dispatch; reaching here means the tab was missing/stale, so fail
 		// closed rather than mutating a throwaway instance.
-		http.Error(w, "no live connection for this tab", http.StatusGone)
+		http.Error(w, "this tab has no stream: the page was served plain; a unit must be live from the first render", http.StatusGone)
 		return
 	}
 	u.req = req
 	u.sessions = m.sessions
 	u.sessW = w
-	a.fn(u) // no long-lived handler holds this render's Ctx (stateless), so u is its own dispatch Ctx
+	a.fn(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
@@ -430,19 +430,19 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 		return
 	}
 	respond(w, req, mode, u.redirect, nil, func() []byte {
-		return m.rerenderStateless(island, rootBefore, inst, bind, u, base)
+		return m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
 	})
 }
 
-// rerenderStateless re-renders the acted-on unit for a Datastar action's
+// rerenderPlain re-renders the acted-on unit for a Datastar action's
 // response: the root re-render restricted to the signals this action wrote
-// page-wide, or a stateless island's own container WITH a data-signals
-// attribute restricted to the island's own dirty slots — the piece the old
-// island-action handler omitted entirely, silently dropping a Signal.Set
-// inside a stateless island's action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderStateless(island string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
+// page-wide, or a plain embed's own container WITH a data-signals
+// attribute restricted to the embed's own dirty slots — the piece the old
+// embed-action handler omitted entirely, silently dropping a Signal.Set
+// inside a plain embed's action. Returns nil when unchanged (→ 204).
+func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
-	if island == rootAddr {
+	if embed == rootAddr {
 		afterCtx, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
@@ -452,13 +452,13 @@ func (m *mount) rerenderStateless(island string, rootBefore []byte, inst instanc
 		}
 		return after
 	}
-	afterCtx, afterInner := renderIslandBind(u.islandKey, u.islandV, base)
+	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
 	}
 	var buf bytes.Buffer
-	buf.WriteString(`<div id="via-i` + u.islandKey + `"`)
+	buf.WriteString(`<div id="via-i` + u.embedKey + `"`)
 	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)
@@ -467,13 +467,13 @@ func (m *mount) rerenderStateless(island string, rootBefore []byte, inst instanc
 }
 
 // assertRenderInvariantLiveness fails the action that just turned a unit live
-// which the page was served non-live. Liveness is decided by the discovery
+// which the page was served plain. Liveness is decided by the discovery
 // render (a Tick/Listen in OnInit, or a State/List in the View), and the page
 // only bootstraps an SSE stream when that verdict is yes. A unit whose View
 // reaches its State through a branch that was CLOSED at GET is served
-// non-live; a stateless action that opens the branch leaves the tab holding a
+// plain; a plain action that opens the branch leaves the tab holding a
 // unit that now demands a connection it never opened, and every action after
-// it 410s "no live connection" — a frozen tab with no clue why.
+// it 410s "no stream" — a frozen tab with no clue why.
 //
 // It panics (→ 500, logged, the transport's own recover) rather than logging
 // and carrying on: the failure is deterministic for that render path and the
@@ -483,15 +483,14 @@ func assertRenderInvariantLiveness(nowLive bool) {
 	if !nowLive {
 		return
 	}
-	panic("via: this action turned a unit live that the page was served non-live — " +
-		"the tab has no SSE connection and every action after this one would 410. " +
-		"Liveness must not depend on a branch an action can open: render the State " +
-		"unconditionally, or register a Tick/Listen in OnInit so the page is live from " +
-		"the first paint")
+	panic("via: this action made a unit live on a page that was served plain — the tab has no stream. " +
+		"Every action after this one would 410. Liveness must not depend on a branch an action can " +
+		"open: render the State unconditionally, or register a Tick/Listen in OnInit so the page is " +
+		"live from the first render")
 }
 
 // respond is dispatch's one response policy for every action POST — root,
-// island, live, or native form. A queued Redirect wins on a native form
+// embed, live, or native form. A queued Redirect wins on a native form
 // submit (a 303, admitted only when hcore.SafeURL clears the target — SafeURL
 // also gates OnInit's redirect in runOnInit, and rendered link/script/href/src
 // URLs in head.go and h/url.go — one policy, four call sites). A Redirect from

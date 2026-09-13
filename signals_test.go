@@ -194,10 +194,10 @@ func (t *twoSignals) View() h.H {
 	)
 }
 
-// A stateless action's element patch declares ONLY the signals the action wrote.
+// A plain action's element patch declares ONLY the signals the action wrote.
 // Re-declaring every slot would overwrite the whole client store on every
 // action, so a value the user was mid-edit vanished on the next click.
-func TestStatelessAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
+func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(twoSignals{}))
 	_, page := app.Get("/")
@@ -253,7 +253,7 @@ func bindSlots(markup string) []string {
 }
 
 // A signal whose Bind is conditional must never inherit a slot another signal
-// already owns. On a live page the hydrator table is keyed by slot, so an
+// already owns. On a streaming page the hydrator table is keyed by slot, so an
 // aliased slot posts the user's input into the WRONG FIELD.
 func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	t.Parallel()
@@ -263,7 +263,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	_, step0 := app.Get("/")
 	nameSlot := bindSlots(step0)[0]
 
-	status, _ := app.Action(0).Live(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	status, _ := app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status, "the live action acks; the push carries the render")
 
 	step1 := conn.Await("name=Ada")
@@ -273,19 +273,19 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	// Save, with the client store the browser is actually holding: the name it
 	// typed on step 1, under the slot that input had. Nothing has been typed
 	// into the email box yet, so an aliased slot posts the name into Email.
-	status, _ = app.Action(0).Live(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	status, _ = app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 
 	line := conn.Await("saved")
 	assert.Contains(t, line, "name=Ada email=<", "the posted slot must write its own field, never the email's")
 }
 
-// The same aliasing on a stateless page shows up client-side: the instance is
+// The same aliasing on a plain page shows up client-side: the instance is
 // fresh per request, so the wrong-field write lands in the Datastar store — the
 // step-2 input would render bound to the slot still holding step 1's name.
-func TestSignal_conditionalBindKeepsItsOwnSlotOnAStatelessPage(t *testing.T) {
+func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(statelessWizard{}))
+	app := vt.Serve(t, via.Register(plainWizard{}))
 	_, page := app.Get("/")
 	nameSlot := bindSlots(page)[0]
 
@@ -296,13 +296,13 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnAStatelessPage(t *testing.T) {
 	assert.NotContains(t, frag, "Ada", "and so must not render carrying the name the user typed")
 }
 
-// A stateless action's patch declares the dirty slots — plus any slot the
+// A plain action's patch declares the dirty slots — plus any slot the
 // pre-action render did not carry. Without that, an input that appears for the
 // first time in the response ships no declaration at all and the client either
 // has no value for it or, worse, a stale one left by whatever held the slot.
-func TestStatelessAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
+func TestPlainAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(statelessWizard{}))
+	app := vt.Serve(t, via.Register(plainWizard{}))
 	_, page := app.Get("/")
 
 	_, frag := app.Action(0).Body(`{"` + bindSlots(page)[0] + `":"Ada"}`).Fire()
@@ -310,17 +310,17 @@ func TestStatelessAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
 	assert.Contains(t, frag, `"`+emailSlot+`":""`, "the newly-appearing input must be seeded")
 }
 
-// statelessWizard is wizard without the State field, so the page stays
-// stateless and the step round-trips through the client store alone.
-type statelessWizard struct {
+// plainWizard is wizard without the State field, so the page stays
+// plain and the step round-trips through the client store alone.
+type plainWizard struct {
 	Step  via.Signal[int]
 	Name  via.Signal[string]
 	Email via.Signal[string]
 }
 
-func (w *statelessWizard) Next(ctx *via.Ctx) { w.Step.Set(1) }
+func (w *plainWizard) Next(ctx *via.Ctx) { w.Step.Set(1) }
 
-func (w *statelessWizard) View() h.H {
+func (w *plainWizard) View() h.H {
 	if w.Step.Get() == 0 {
 		return h.Div(h.Input(w.Name.Bind()), h.Button(via.On("click", w.Next), h.Str("next")), w.Step.Display())
 	}

@@ -70,7 +70,7 @@ func (p *Poll) ranked() []Option {
 	return out
 }
 
-// PollApp is the page: a stateless composition over the shared Poll, plus a
+// PollApp is the page: a plain composition over the shared Poll, plus a
 // client signal for the new-option input.
 type PollApp struct {
 	poll  *Poll

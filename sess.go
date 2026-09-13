@@ -207,13 +207,13 @@ type Session struct {
 	mgr    *sessionManager
 	id     string // current session id; "" until resolved or created
 	data   *sessionData
-	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a stateless action, OnInit, AND a live action — dispatchLive is synchronous, so a live action's response hasn't gone out yet either
+	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen handler's Ctx); set (and live) in a plain action, OnInit, AND a live action — dispatchOverStream is synchronous, so a live action's response hasn't gone out yet either
 	secure bool
 }
 
 // ensure returns the session's data, creating the session (and issuing the
-// cookie) on first write. A stateless action, OnInit, and a live action
-// (dispatchLive is synchronous, so its response hasn't gone out yet either)
+// cookie) on first write. A plain action, OnInit, and a live action
+// (dispatchOverStream is synchronous, so its response hasn't gone out yet either)
 // all have an open response and can set the cookie normally. A write with no
 // open response at all — a Tick or Listen handler's Ctx — still stores into
 // a fresh session but logs a warning, since the browser will never carry
@@ -266,7 +266,7 @@ func (s *Session) set(key any, value any) {
 // re-sets the cookie on the open response — call it after an auth state change
 // (login, privilege elevation) so a fixed pre-auth id is invalidated. Returns
 // the new id, or "" when no response is open to carry the new cookie (a live
-// action): rotate from a stateless action or OnInit.
+// action): rotate from a plain action or OnInit.
 func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
@@ -320,7 +320,7 @@ func typeKey[T any]() any { return (*T)(nil) }
 // Put stores a typed value in the session, keyed by its type — use it for the
 // one-per-session value like the logged-in user. Sessions are always on and
 // lazy: the first Put issues the cookie, and only where a response is open —
-// a stateless action, OnInit, or a live action (its response hasn't gone
+// a plain action, OnInit, or a live action (its response hasn't gone
 // out yet when the action runs). Put does not rotate the session id — call
 // [Session.Rotate] right after a Put that changes auth state (login,
 // privilege elevation) so a pre-auth id an attacker planted doesn't survive.
