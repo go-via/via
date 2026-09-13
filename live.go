@@ -232,6 +232,14 @@ func (s *stream) frame(write func(io.Writer)) {
 	}
 }
 
+// abort tears the connection down from inside a push — the one exit a render
+// that cannot succeed has, since a push carries no response to answer with.
+// Idempotent, and it silences later frames exactly as a failed write does.
+func (s *stream) abort() {
+	s.failed = true
+	s.cancel()
+}
+
 // runStream drives one or more live units on a single goroutine. Every unit's
 // ticks, subscriptions, dispatched actions (via tabStream.run), AND the
 // keepalive feed through this one goroutine — so all mutation, render, and stream

@@ -1143,3 +1143,56 @@ func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 	assert.Contains(t, page, `id="via-i0-0"`, "the embed KEY keeps its '-' separator")
 	assert.Contains(t, seen, "inner__i0_0__q", "the fallback spells the key with underscores")
 }
+
+// --- acted-instance substitution must check the TYPE, not just the key ---
+
+type shiftFlag struct{ on bool }
+
+type shiftBanner struct{}
+
+func (b *shiftBanner) View() h.H { return h.P(h.ID("banner"), h.Str("banner")) }
+
+type shiftForm struct {
+	flag  *shiftFlag
+	saved string
+}
+
+func (f *shiftForm) Save(ctx *via.Ctx) {
+	f.flag.on = true
+	f.saved = ctx.Request().FormValue("name")
+}
+
+func (f *shiftForm) View() h.H {
+	return via.PostForm(f.Save, h.P(h.ID("saved"), h.Str(f.saved)), h.Input(h.Name("name")), h.Button(h.Str("go")))
+}
+
+// shiftRoot's Embed ORDER changes across the action: the form's own handler
+// opens the branch that prepends the banner embed, so the acted key ("0") is
+// occupied by a shiftBanner on the response re-render while the acted instance
+// is a shiftForm. Substituting by key alone splices the form in where the
+// banner belongs — the banner vanishes, the form renders twice, and the second
+// one carries the form's slot prefix for the wrong type.
+type shiftRoot struct {
+	flag   *shiftFlag
+	Banner shiftBanner
+	Form   shiftForm
+}
+
+func (r *shiftRoot) banner() h.H { return via.Embed(r.Banner) }
+
+func (r *shiftRoot) View() h.H {
+	return h.Div(via.When(r.flag.on, r.banner), via.Embed(r.Form))
+}
+
+func TestEmbed_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
+	t.Parallel()
+	flag := &shiftFlag{}
+	app := vt.Serve(t, via.Register(shiftRoot{flag: flag, Form: shiftForm{flag: flag}}))
+	_, page := app.Get("/")
+	require.NotContains(t, page, `id="banner"`)
+
+	status, body := nativeFormPost(t, app, actionURL(t, page, "0", 0), map[string]string{"name": "zed"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, `id="banner"`, "the type that belongs at the acted key must still render")
+	assert.Equal(t, 1, strings.Count(body, "<form"), "the acted form must not be rendered in the banner's slot as well")
+}

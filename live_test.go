@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -2372,4 +2373,61 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 	// 0b111010 = values 1,3,4,5 completed; 2 panicked.
 	awaitLine(t, lines, "seen=58")
 	assert.EqualValues(t, 5, got.Load(), "every value must still reach the handler")
+}
+
+// flakyKid is a PLAIN child of a LIVE root whose OnInit starts failing after
+// the connect render. A live root re-inits its plain children on every pushed
+// frame, so from then on every frame panics childInit — and a push has no
+// response to turn that into an HTTP answer.
+type flakyKid struct{ inits *atomic.Int32 }
+
+func (k *flakyKid) OnInit(ctx *via.Ctx) error {
+	if k.inits.Add(1) > 1 {
+		return errors.New("kid init boom")
+	}
+	return nil
+}
+
+func (k *flakyKid) View() h.H { return h.P(h.Str("kid")) }
+
+type liveParentFlakyKid struct {
+	Kid flakyKid
+	n   via.State[int]
+}
+
+func (p *liveParentFlakyKid) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.beat)
+	return nil
+}
+func (p *liveParentFlakyKid) beat(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *liveParentFlakyKid) View() h.H         { return h.Div(p.n.Display(), via.Embed(p.Kid)) }
+
+// A frame that can never render must end the stream, not loop silently: the
+// client's reconnect then re-requests the page and gets the real 500/303/404
+// off a path that can answer it.
+func TestLive_childInitFailureOnThePushPathTearsTheStreamDown(t *testing.T) {
+	t.Parallel()
+	inits := &atomic.Int32{}
+	srv := serve(t, via.Register(liveParentFlakyKid{Kid: flakyKid{inits: inits}}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	closed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		require.Fail(t, "the stream never closed: every frame is dropped and the tab has no signal at all")
+	}
 }

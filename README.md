@@ -137,6 +137,18 @@ The action endpoint and rendered pages are hardened by default:
   target from `OnInit` answers 500).
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` and the typed helpers reject injectable names).
+- **Dispatchable iff rendered.** A handler id — and, for `via.OnArg`, the
+  `(handler, arg)` pair — is dispatchable only if the current render bound it;
+  anything else answers 410 before the handler runs. The render that decides
+  this is server state alone: a `Signal` is hydrated from a request only for a
+  slot the render put under client control (`Bind()`, which emits
+  `data-bind`), and the plain action path applies the body AFTER its discovery
+  render. So a `Display()`-only or unrendered signal cannot be set by a client,
+  and a POST cannot open the branch that authorizes it.
+- **Never gate on a signal.** A `Bind()`ed `Signal` is client state by
+  definition — whatever the client last set it to. It is a fine switch for a
+  disclosure the user controls; an authorization gate belongs on session or
+  database state, read in `OnInit`.
 
 ## Status
 

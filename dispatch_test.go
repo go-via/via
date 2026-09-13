@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -1393,4 +1394,154 @@ type liveNamedForm struct{ n via.State[int] }
 func (f *liveNamedForm) Save(ctx *via.Ctx) { f.n.Set(f.n.Get() + 1) }
 func (f *liveNamedForm) View() h.H {
 	return via.PostForm(f.Save, f.n.Display(), h.Input(h.Name("name")), h.Button(h.Str("go")))
+}
+
+// signalGatedAdmin is the security repro: a Signal an OnInit fills from
+// server-side identity, used as the condition of a via.When that renders the
+// privileged rows. The POST body is fully attacker-controlled, so a discovery
+// render hydrated from it would let an anonymous client open the branch, bind
+// the row's (handler, arg) pair, and be authorized by the render it just forged.
+//
+// The gate sits inside a lazily-rendered builder (via.When's build here; an
+// via.Each row or an Embed's View is the same shape) — that is the only place a
+// condition is evaluated DURING the render rather than while View() is being
+// constructed, and therefore the only place a hydration that runs mid-render
+// can reach it.
+type signalGatedAdmin struct {
+	Admin  via.Signal[bool]
+	loaded bool
+	gone   []int
+}
+
+func (a *signalGatedAdmin) OnInit(ctx *via.Ctx) error {
+	a.Admin.Set(ctx.Request().Header.Get("X-Admin") == "yes")
+	a.loaded = true
+	return nil
+}
+
+func (a *signalGatedAdmin) Delete(ctx *via.Ctx, id int) { a.gone = append(a.gone, id) }
+
+func (a *signalGatedAdmin) rows() h.H {
+	return h.Ul(h.Li(h.Button(via.OnArg("click", a.Delete, 7), h.Str("delete 7"))))
+}
+
+func (a *signalGatedAdmin) panel() h.H { return via.When(a.Admin.Get(), a.rows) }
+
+func (a *signalGatedAdmin) View() h.H {
+	return h.Div(
+		h.P(h.Str("deleted: "+fmt.Sprint(a.gone))),
+		h.Input(a.Admin.Bind()),
+		via.When(a.loaded, a.panel),
+	)
+}
+
+// adminPost fires the delete action with body, optionally claiming admin via
+// the header OnInit actually trusts.
+func adminPost(t *testing.T, srv *httptest.Server, url, body string, admin bool) (*http.Response, string) {
+	t.Helper()
+	hdr := map[string]string{"Sec-Fetch-Site": "same-origin"}
+	if admin {
+		hdr["X-Admin"] = "yes"
+	}
+	return post(t, srv, url, body, hdr)
+}
+
+func TestDispatchPlain_postedSignalCannotOpenAServerGatedBranch(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(signalGatedAdmin{}))
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Admin", "yes")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	page := readAll(t, resp)
+	url := actionURL(t, page, "r", 0)
+	require.Contains(t, url, "a=7")
+
+	anon, body := adminPost(t, srv, url, `{"admin":true}`, false)
+	assert.Equal(t, http.StatusGone, anon.StatusCode,
+		"a posted signal must not open the branch that authorizes the action")
+	assert.NotContains(t, body, "deleted: [7]")
+}
+
+func TestDispatchPlain_serverGatedBranchStillDispatchesForAnAuthorizedCaller(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(signalGatedAdmin{}))
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Admin", "yes")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	url := actionURL(t, readAll(t, resp), "r", 0)
+
+	ok, body := adminPost(t, srv, url, `{"admin":true}`, true)
+	assert.Equal(t, http.StatusOK, ok.StatusCode)
+	assert.Contains(t, body, "deleted: [7]")
+}
+
+// echoedSignal is the control for the hydration reorder: a plain action must
+// still SEE the value the client posted, it just must not let that value
+// rewrite the render that authorized it.
+type echoedSignal struct {
+	Name via.Signal[string]
+	saw  string
+}
+
+func (e *echoedSignal) Save(ctx *via.Ctx) { e.saw = e.Name.Get() }
+func (e *echoedSignal) View() h.H {
+	return h.Div(h.P(h.Str("saw: "+e.saw)), h.Input(e.Name.Bind()), h.Button(via.On("click", e.Save)))
+}
+
+func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(echoedSignal{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), `{"name":"zed"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "saw: zed")
+}
+
+// plainRootLiveKid is a PLAIN root (its own View renders no State) carrying a
+// LIVE embed, plus a native PostForm at the root. The submit falls to
+// dispatchPlain — the root is not a registered live unit — and the full page it
+// answers with is what the browser replaces the document with, so it must still
+// bootstrap the stream the live embed needs.
+type plainRootLiveKid struct {
+	Clock embeddedClock
+	name  string
+}
+
+func (p *plainRootLiveKid) Save(ctx *via.Ctx) { p.name = ctx.Request().FormValue("name") }
+func (p *plainRootLiveKid) View() h.H {
+	return h.Div(
+		h.P(h.ID("name"), h.Str(p.name)),
+		via.PostForm(p.Save, h.Input(h.Name("name")), h.Button(h.Str("go"))),
+		via.Embed(p.Clock),
+	)
+}
+
+type embeddedClock struct{ n via.State[int] }
+
+func (c *embeddedClock) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, c.beat)
+	return nil
+}
+func (c *embeddedClock) beat(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
+func (c *embeddedClock) View() h.H         { return h.Div(c.n.Display()) }
+
+func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(plainRootLiveKid{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, "data-init", "the GET must already bootstrap the stream")
+
+	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "zed"})
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, `<p id="name">zed</p>`)
+	assert.Contains(t, body, "data-init", "the live embed is dead after the submit without a bootstrap")
+	assert.Contains(t, body, "/_via/sse", "the bootstrap must name the stream URL")
 }
