@@ -646,10 +646,10 @@ func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 	}
 }
 
-// The header is gone for good: leaving it honoured would keep a channel the
-// browser can be made to attach cross-origin under some configurations, on top
-// of the synchronizer token the signal already is.
-func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
+// The tab id rides as a signal, never as a header. Honouring a header too
+// would keep a channel the browser can be made to attach cross-origin under
+// some configurations, alongside the synchronizer token the signal already is.
+func TestDispatch_ignoresTheXViaTabHeader(t *testing.T) {
 	t.Parallel()
 	calls := 0
 	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))

@@ -275,7 +275,8 @@ The action endpoint and rendered pages are hardened by default:
   `WithSessionTTL`/`WithSessionCookieName` tune it. The cookie is `Secure`
   automatically over TLS (so `http://localhost` dev still works);
   `WithSecureCookies` forces it on behind a TLS-terminating proxy.
-- **Resilience floor + reconnect**: a server-side keepalive comment frame
+- **Resilience floor + reconnect** — what a live stream guarantees on a flaky
+  network, with no knobs to set: a server-side keepalive comment frame
   (fixed 25s) and a per-frame write deadline (fixed 10s) ride the embed's
   single goroutine; a failed frame write tears the
   embed down (runs disposers, stops ticks) so a half-open peer — gone without a
@@ -404,7 +405,7 @@ embedding a further live embed, or an embedded live embed's own `View`
 calling `Embed` at all — v0.8 refuses both at render instead); and
 at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
-for replay). The SSE GET stream applies the same origin floor as the action
+for replay). The SSE GET stream applies the same origin check as the action
 POST and is capped at a fixed number of concurrent connections (10,000; over
 the cap returns 503). The cap is router-wide rather than per IP, so an anonymous client can open
 enough connections on its own to fill the cap and 503 everyone else. A per-IP

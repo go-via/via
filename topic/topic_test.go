@@ -77,9 +77,9 @@ func TestTopic_subsCountsOnlyLiveSubscriptions(t *testing.T) {
 	assert.Zero(t, tp.NumSubs())
 }
 
-// The defect this package was rewritten for: a burst far larger than any
-// per-subscriber buffer must still deliver every value to every subscriber.
-// Drop-on-full lost ~87% of a burst this size.
+// A burst far larger than any per-subscriber buffer must still deliver every
+// value to every subscriber. A drop-on-full fan-out loses ~87% of a burst this
+// size, which is why delivery does not drop.
 func TestTopic_burstIsLosslessForEverySubscriber(t *testing.T) {
 	t.Parallel()
 	const subs, msgs = 100, 1000

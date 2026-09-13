@@ -15,7 +15,8 @@ const maxActionBody = 1 << 20
 // maxActionBody of it is kept in RAM regardless.
 const maxUploadBytes = 8 << 20
 
-// originAllowed reports whether req may invoke a state-changing action. By
+// originAllowed is the "origin floor": the check that a state-changing request
+// comes from a host the app trusts, read off Origin/Sec-Fetch-Site. By
 // default every origin is admitted (the per-tab id is the CSRF token).
 // WithTrustedOrigin turns enforcement on, in this order: the allowlist (which
 // wins over the browser's site label, so cross-origin embedding works), then

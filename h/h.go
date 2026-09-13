@@ -9,8 +9,8 @@
 // signatures, no closures required at user call sites. stdlib only.
 //
 // The renderer/binder plumbing that lets the via package drive dynamic
-// signal/action slots lives in internal/hcore; h re-exports only the user
-// vocabulary — elements, attributes, and Str.
+// signal/action slots is internal; h exposes only the user vocabulary:
+// elements, attributes, and Str.
 package h
 
 import (
@@ -20,20 +20,53 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// H is the single sealed tree type. The render method is unexported, so only
-// types defined in this module can satisfy H — the tree is closed.
+// H is every node of a view: elements, text and attributes alike. It is what
+// View returns and what every element constructor accepts and produces, which
+// is why a view composes with nothing but function calls:
+//
+//	h.Div(h.Class("row"), h.Span(h.Str("hi")))
+//
+// H is sealed. Its only method is unexported, so no package outside via can
+// define a new node type: markup reaches the renderer only through the
+// constructors in this package, and there is no escape hatch for a raw HTML
+// string. If you need markup h has no constructor for, use [El] and [RawAttr];
+// both still escape their values.
+//
+// The zero H is nil, and a nil H renders as nothing. That makes conditional
+// children cheap to write, but prefer via.When for a readable one.
 type H = hcore.H
 
-// Attr marks an H that renders inside the opening tag rather than the body.
+// Attr is an H that renders inside the opening tag instead of the element
+// body: h.Class, h.Href, h.Data, [RawAttr], via.On and Signal.Bind all return
+// one. Because Attr is an H, attributes and children share one variadic
+// argument list and may be interleaved in any order; the renderer sorts them.
+//
+// Attr values are HTML-escaped at render time, and URL-bearing attributes are
+// additionally scheme-checked, so a javascript: URL from user data is
+// neutralised rather than rendered. Attribute NAMES are not escaped: they are
+// validated and an invalid one panics, on the reasoning that a name is written
+// by the programmer, never taken from a request.
 type Attr = hcore.Attr
 
-// El builds a generic element with the given tag and children.
+// El builds an element with an arbitrary tag, for the handful of tags h has no
+// named constructor for (a custom element, an SVG child). The tag is validated
+// and an invalid one panics. Prefer the named constructors: they know which
+// tags are void and must not emit a closing tag.
 func El(tag string, kids ...H) H { return hcore.El(tag, kids...) }
 
-// Stringish constrains the value types Str accepts, avoiding any.
+// Stringish is what [Str] accepts: ~string plus every built-in integer and
+// float type, including named types whose underlying type is one of those.
+// It exists so rendering a number needs no strconv call and no any at the
+// call site.
+//
+// It deliberately does NOT include bool, time.Time, fmt.Stringer or error.
+// Rendering those means choosing a format, and h will not choose one for you:
+// format the value in Go and pass the string.
 type Stringish = hcore.Stringish
 
-// Str builds an escaped static text node from any Stringish value. No any.
+// Str is the only way to put text in a view. The value is HTML-escaped at
+// render time, so a string taken straight from a request or a database is safe
+// here; there is no unescaped counterpart.
 func Str[T Stringish](v T) H { return hcore.Str(v) }
 
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name

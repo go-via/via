@@ -231,7 +231,7 @@ func TestRawAttr_acceptsOrdinaryHTMLAttributeNames(t *testing.T) {
 // names a plugin "on-click" that does not exist and is silently ignored. A name
 // allowlist that rejects ':' and '_' therefore puts the entire client-side
 // vocabulary — events, modifiers, class/attr toggles — out of reach.
-func TestDatastarPluginNamesAreExpressible(t *testing.T) {
+func TestData_rendersDatastarPluginNamesVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ suffix, val, want string }{
 		{"on:click", "@post('/x')", `data-on:click="@post(&#39;/x&#39;)"`},
@@ -266,9 +266,9 @@ func TestRawAttr_rejectsInlineEventHandlers(t *testing.T) {
 	assert.NotPanics(t, func() { h.RawAttr("open", "") })
 }
 
-// The ':' '_' '.' relaxation is scoped to data-*; a plain attribute name has no
+// The ':' '_' '.' relaxation is scoped to data-*: a plain attribute name has no
 // use for them and they would widen the breakout surface for nothing.
-func TestNonDataNamesStillRejectPluginPunctuation(t *testing.T) {
+func TestRawAttr_rejectsPluginPunctuationOutsideDataAttrs(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"xmlns:foo", "a_b", "a.b", "data-", "data-:x"} {
 		assert.Panicsf(t, func() { h.RawAttr(name, "v") }, "RawAttr(%q) must panic", name)

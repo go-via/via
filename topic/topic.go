@@ -18,7 +18,10 @@ type Topic[T any] struct {
 	wakes map[chan<- struct{}]struct{} // scratch, reused by Publish
 }
 
-// New creates an empty Topic.
+// New builds a Topic with no subscribers. A Topic is safe for concurrent use
+// and is meant to live for the process: declare it as a package-level var and
+// let embeds subscribe to it with ctx.Listen. It has no Close; a Topic with no
+// subscribers costs a map lookup per publish.
 func New[T any]() *Topic[T] {
 	return &Topic[T]{
 		subs:  make(map[*Sub[T]]struct{}),

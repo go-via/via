@@ -28,10 +28,9 @@ func (c *tabStream) boundSession() string {
 	return c.sess
 }
 
-// bindSession records sid as this connection's credential on first mint — the
-// connect cookie, or (the gap this closes) a session a live action established
-// after connect. Idempotent: a later Rotate is a no-op here, since the sid
-// survives it.
+// bindSession records sid as this connection's credential on first mint: the
+// connect cookie, or a session a live action established after connect.
+// Idempotent: a later Rotate is a no-op here, since the sid survives it.
 func (c *tabStream) bindSession(sid string) {
 	if sid == "" {
 		return

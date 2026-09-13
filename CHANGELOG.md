@@ -2,7 +2,9 @@
 
 ## v0.8.0 — the v2 core goes mainline
 
-The rebuilt "bare core" replaces the v1 tree. Module path is now
+v0.8 is a rebuild. The v1 tree is replaced by a smaller core with no plugins,
+no subpackages beyond `h` and `topic`, and no configuration knob that a
+constant could serve instead. Module path is now
 `github.com/go-via/via` (no `/v2` suffix); v1 history is merged, the tree is
 the v2 core. **Requires Go 1.27.**
 
@@ -57,7 +59,9 @@ Read this even if you read nothing else. Two defaults moved in the permissive
 direction relative to v1, deliberately, and neither announces itself at
 runtime unless you look:
 
-- **The origin floor is OPEN by default.** v1 enforced; v0.8 accepts an action
+- **Origin enforcement (the "origin floor": the check on every state-changing
+  request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
+  default.** v1 enforced; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, at which point
   enforcement switches on for the whole endpoint. The reasoning: on a LIVE page
   the per-tab id is a synchronizer token and does the load-bearing work, and
@@ -269,7 +273,8 @@ as a re-read of the README rather than a diff.
   works under the strict CSP and an undeclared one stays blocked.
   `InlineStyle` is admitted by its own sha256. Malformed heads panic at
   `Register`; the zero `Head` serves what via served without the option.
-- **Resilience floor**: SSE keepalive comment frames (fixed 25s), per-frame
+- **Resilience floor** — the fixed, non-configurable guarantees a live stream
+  makes about surviving a flaky network: SSE keepalive comment frames (fixed 25s), per-frame
   write deadlines (fixed 10s), half-open teardown, a client reconnect manager
   with a "Reconnecting…" banner and a capped reload-to-re-bootstrap (2), a
   fixed 10,000-connection cap (503 over it).

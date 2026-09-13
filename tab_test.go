@@ -290,9 +290,9 @@ func (p *liveLoginer) View() h.H {
 		h.Button(via.On("click", p.Rotate)))
 }
 
-// A tab connects anonymously, then a live action logs it in (Session().Put)
-// — the connection must stop accepting a cookieless dispatch from that point
-// on, closing the gap H1 was filed for.
+// A tab connects anonymously, then a live action logs it in (Session().Put).
+// From that point on the connection must stop accepting a cookieless dispatch:
+// otherwise a leaked tab id is a bearer token for the logged-in stream.
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))

@@ -255,7 +255,7 @@ type ptrViewer[T any] = interface {
 
 // Ctx is the per-request binder: it names signal slots by field offset and
 // actions by handler identity during a render pass, hydrates signals from the
-// request, and records per-slot initial values. It implements hcore.Binder.
+// request, and records per-slot initial values.
 type Ctx struct {
 	inSignals   map[string]json.RawMessage       // hydrated from the request
 	order       []string                         // slots in assignment order
@@ -1060,8 +1060,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	id := randomToken() // per-connection tab id (echoed as the viatab signal on actions)
 	pushq := make(chan func())
 
-	// The credential dispatch requires a match against, closing the gap where a
-	// leaked tab id was a bearer token good from any origin with no session at
+	// The credential dispatch requires a match against, so that a leaked tab id
+	// is not on its own a bearer token good from any origin with no session at
 	// all (see dispatch). Resolved BEFORE OnInit, which may mint or rotate one:
 	// the point is the identity the browser held when it opened this stream.
 	// An error here is NOT "anonymous": the browser may well hold a valid
