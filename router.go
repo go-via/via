@@ -222,6 +222,10 @@ type Router struct {
 	reg       *registry // tab id → stream goroutine, app-wide
 	liveCount *atomic.Int64
 	maxLive   int
+	// noChange dedupes the dead-click warning per action (see warnNoChange).
+	// Per Router, not per process, so a second app in the same binary — or a
+	// second test — still gets told.
+	noChange sync.Map
 }
 
 // NewRouter builds an empty router. Mount pages onto it, then serve it.
@@ -264,7 +268,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
-		liveCount: r.liveCount, maxLive: r.maxLive,
+		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange,
 	}
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {

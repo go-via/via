@@ -42,8 +42,14 @@ const (
 //     TTL is left, so a store never has to touch expiry on Load.
 //
 // Every method may be called concurrently, and from a request goroutine — honour
-// ctx. Returning an error is reported as "no session" and logged; it never fails
-// the request.
+// ctx. An error never fails the request: it is logged, and a failed Load is
+// treated as "the store could not answer", which is NOT "no session" — via
+// refuses to mint a replacement over a cookie the browser already holds, and
+// drops the write instead.
+//
+// Implement [AtomicSessionStore] as well if the backend can do a conditional
+// write; without it, two requests writing the same session at the same instant
+// can still lose one.
 type SessionStore interface {
 	// Load returns the blob stored under id. ok is false when id is unknown or
 	// expired. err is for backend failures only.
@@ -53,6 +59,27 @@ type SessionStore interface {
 	Save(ctx context.Context, id string, data []byte, ttl time.Duration) error
 	// Delete removes id. Deleting an id that is not there is not an error.
 	Delete(ctx context.Context, id string) error
+}
+
+// AtomicSessionStore is the optional half of [SessionStore], for a backend that
+// can make a write conditional on the revision it read. via writes a session by
+// re-reading the stored blob and overlaying the keys this request touched; with
+// a plain store that read-modify-write is not atomic, so two requests writing at
+// the same instant can still lose one of them. Implement this and via retries
+// the merge until its write applies to the revision it merged against, which
+// closes the window entirely.
+//
+// version is opaque and store-defined; 0 means "no blob stored". Redis does this
+// with WATCH/MULTI or a Lua script, SQL with an UPDATE ... WHERE version = $n.
+// The default memory store implements it.
+type AtomicSessionStore interface {
+	SessionStore
+	// LoadVersion is Load, plus the revision token of the blob returned.
+	LoadVersion(ctx context.Context, id string) (data []byte, version uint64, ok bool, err error)
+	// SaveIf is Save, applied only while the stored revision is still version.
+	// ok is false — with a nil error — when it moved on and the caller must
+	// re-read and retry.
+	SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, version uint64) (ok bool, err error)
 }
 
 // MemorySessionStore returns the default process-local store: a map that is
@@ -65,12 +92,14 @@ func MemorySessionStore() SessionStore {
 type memoryEntry struct {
 	data []byte
 	exp  time.Time
+	ver  uint64
 }
 
 type memoryStore struct {
 	mu     sync.Mutex
 	m      map[string]memoryEntry
 	writes int
+	ver    uint64
 }
 
 func (s *memoryStore) Load(_ context.Context, id string) ([]byte, bool, error) {
@@ -87,14 +116,49 @@ func (s *memoryStore) Load(_ context.Context, id string) ([]byte, bool, error) {
 	return e.data, true, nil
 }
 
+func (s *memoryStore) LoadVersion(_ context.Context, id string) ([]byte, uint64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[id]
+	if !ok {
+		return nil, 0, false, nil
+	}
+	if !e.exp.IsZero() && time.Now().After(e.exp) {
+		delete(s.m, id)
+		return nil, 0, false, nil
+	}
+	return e.data, e.ver, true, nil
+}
+
+func (s *memoryStore) SaveIf(_ context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cur uint64
+	if e, ok := s.m[id]; ok && (e.exp.IsZero() || !time.Now().After(e.exp)) {
+		cur = e.ver
+	}
+	if cur != version {
+		return false, nil
+	}
+	s.store(id, data, ttl)
+	return true, nil
+}
+
 func (s *memoryStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store(id, data, ttl)
+	return nil
+}
+
+// store writes under the held lock and stamps a fresh revision.
+func (s *memoryStore) store(id string, data []byte, ttl time.Duration) {
 	var exp time.Time
 	if ttl > 0 {
 		exp = time.Now().Add(ttl)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[id] = memoryEntry{data: data, exp: exp}
+	s.ver++
+	s.m[id] = memoryEntry{data: data, exp: exp, ver: s.ver}
 	// Expiry is otherwise lazy-on-read, so a session nobody ever revisits is
 	// never reclaimed. Amortised over writes rather than per write: the sweep
 	// is O(n) and a login-heavy burst would otherwise pay it every time.
@@ -107,7 +171,6 @@ func (s *memoryStore) Save(_ context.Context, id string, data []byte, ttl time.D
 			}
 		}
 	}
-	return nil
 }
 
 func (s *memoryStore) Delete(_ context.Context, id string) error {
@@ -129,6 +192,13 @@ type sessionData struct {
 	sid  string
 	vals map[string]json.RawMessage
 	exp  time.Time
+	// dirty is THIS request's write set: the keys it Put or Cleared, a nil
+	// value marking a Clear. Saving overlays only these onto whatever the
+	// store holds now, so a concurrent request writing a DIFFERENT key is not
+	// erased by this one re-encoding its own stale copy. It accumulates for
+	// the life of the handle and is never trimmed: a re-save must be able to
+	// re-apply every write the request made.
+	dirty map[string]json.RawMessage
 }
 
 // sessionBlob is the wire form of a session. Field names are short because
@@ -202,14 +272,16 @@ func (m *sessionManager) sign(id string) string {
 }
 
 // resolve returns the session data for the request's cookie when it verifies
-// and is still in the store. It never creates one — reads must not mint.
-func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool) {
+// and is still in the store. It never creates one — reads must not mint. A nil
+// sessionData with a nil error is "no session"; a non-nil error is "the store
+// could not answer", which callers must not treat as "no session".
+func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error) {
 	if req == nil {
-		return "", nil, false
+		return "", nil, nil
 	}
 	ck, err := req.Cookie(m.cookie)
 	if err != nil {
-		return "", nil, false
+		return "", nil, nil
 	}
 	id, ok := m.verify(ck.Value)
 	if !ok {
@@ -221,13 +293,13 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, bool)
 				"uses the same cookie name with a different key; issuing a fresh session " +
 				"(set WithSessionCookieName or share VIA_SESSION_KEY to stop the clobber)")
 		})
-		return "", nil, false
+		return "", nil, nil
 	}
-	d, ok := m.get(sessionCtx(req), id)
-	if !ok {
-		return "", nil, false
+	d, err := m.get(sessionCtx(req), id)
+	if err != nil {
+		return "", nil, err
 	}
-	return id, d, true
+	return id, d, nil
 }
 
 // sessionCtx detaches the request's context for store calls: a session write
@@ -240,56 +312,137 @@ func sessionCtx(req *http.Request) context.Context {
 	return context.WithoutCancel(req.Context())
 }
 
-func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, bool) {
+// get returns the session stored under id. A nil sessionData with a nil error
+// means "no such session"; a non-nil error means the STORE is unreachable,
+// which is a third state and not the same thing — minting a replacement on a
+// backend blip would overwrite the user's cookie and orphan their real session
+// the moment the backend came back.
+func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, error) {
 	raw, ok, err := m.store.Load(ctx, id)
 	if err != nil {
 		log.Printf("via: session store Load failed: %v", err)
-		return nil, false
+		return nil, err
 	}
 	if !ok {
-		return nil, false
+		return nil, nil
 	}
 	var b sessionBlob
 	if json.Unmarshal(raw, &b) != nil || b.SID == "" {
-		return nil, false
+		return nil, nil
 	}
 	exp := time.Unix(0, b.Exp)
 	if b.Exp > 0 && time.Now().After(exp) {
 		// via's own expiry, so a store that ignores the ttl it was handed
 		// cannot resurrect an idle session.
 		_ = m.store.Delete(ctx, id)
-		return nil, false
+		return nil, nil
 	}
 	if b.Vals == nil {
 		b.Vals = map[string]json.RawMessage{}
 	}
-	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp}
+	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp, dirty: map[string]json.RawMessage{}}
 	if m.ttl > 0 && time.Until(exp) < m.ttl/2 {
 		m.save(ctx, id, d) // sliding idle window, at one write per half-TTL rather than per request
 	}
-	return d, true
+	return d, nil
 }
+
+// save writes d back under id, merging rather than replacing: the blob the
+// store holds RIGHT NOW is re-read and only this request's write set is
+// overlaid onto it. Two requests on one session therefore each keep their own
+// keys, where re-encoding a whole decoded copy silently dropped whichever
+// finished first. What is left is a read-modify-write window of one store
+// round-trip, and last-writer-wins on the SAME key — see [Session].
+//
+// A blob that is absent, corrupt, or carries a different sid falls back to
+// writing d's own values whole, which is also how a freshly minted session and
+// the new id of a Rotate get their first write.
+// sessionSaveRetries caps the CAS loop. Contention on ONE session id is a
+// handful of tabs, not a thundering herd, so exhausting this means the store is
+// pathological and an unconditional write is the lesser evil.
+const sessionSaveRetries = 8
 
 func (m *sessionManager) save(ctx context.Context, id string, d *sessionData) {
 	d.mu.Lock()
-	exp := time.Now().Add(m.ttl)
-	raw, err := json.Marshal(sessionBlob{SID: d.sid, Exp: exp.UnixNano(), Vals: d.vals})
-	if err == nil {
-		d.exp = exp
+	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
+	for k, v := range d.dirty {
+		dirty[k] = v
+	}
+	own := make(map[string]json.RawMessage, len(d.vals))
+	for k, v := range d.vals {
+		own[k] = v
 	}
 	d.mu.Unlock()
-	if err != nil {
-		log.Printf("via: session encode failed: %v", err)
+
+	cas, _ := m.store.(AtomicSessionStore)
+	for attempt := 0; ; attempt++ {
+		var (
+			raw []byte
+			ver uint64
+			ok  bool
+			err error
+		)
+		if cas != nil {
+			raw, ver, ok, err = cas.LoadVersion(ctx, id)
+		} else {
+			raw, ok, err = m.store.Load(ctx, id)
+		}
+		if err != nil {
+			// Writing d's copy over a store that could not be read is exactly
+			// the clobber this merge exists to avoid.
+			log.Printf("via: session store Load failed before save: %v", err)
+			return
+		}
+		vals := make(map[string]json.RawMessage, len(own))
+		for k, v := range own {
+			vals[k] = v
+		}
+		if ok {
+			var b sessionBlob
+			if json.Unmarshal(raw, &b) == nil && b.SID == sid && b.Vals != nil {
+				vals = b.Vals
+			}
+		}
+		for k, v := range dirty {
+			if v == nil {
+				delete(vals, k)
+				continue
+			}
+			vals[k] = v
+		}
+
+		exp := time.Now().Add(m.ttl)
+		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
+		if err != nil {
+			log.Printf("via: session encode failed: %v", err)
+			return
+		}
+		if cas != nil && attempt < sessionSaveRetries {
+			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
+			if err != nil {
+				log.Printf("via: session store SaveIf failed: %v", err)
+				return
+			}
+			if !applied {
+				continue // another request wrote first; re-merge onto its blob
+			}
+		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
+			log.Printf("via: session store Save failed: %v", err)
+			return
+		}
+		d.mu.Lock()
+		// The merged view is what this request should read back too: a Tick
+		// handler holding a connect-time snapshot otherwise keeps serving
+		// values another request has since replaced.
+		d.vals, d.exp = vals, exp
+		d.mu.Unlock()
 		return
-	}
-	if err := m.store.Save(ctx, id, raw, m.ttl); err != nil {
-		log.Printf("via: session store Save failed: %v", err)
 	}
 }
 
 func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
 	id := randomToken() // 128-bit URL-safe token, same generator as the tab id
-	d := &sessionData{sid: randomToken(), vals: map[string]json.RawMessage{}}
+	d := &sessionData{sid: randomToken(), vals: map[string]json.RawMessage{}, dirty: map[string]json.RawMessage{}}
 	m.save(ctx, id, d)
 	return id, d
 }
@@ -302,7 +455,16 @@ func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData)
 	m.save(ctx, newID, d)
 	if oldID != "" {
 		if err := m.store.Delete(ctx, oldID); err != nil {
-			log.Printf("via: session store Delete failed: %v", err)
+			// Returning the new id while the old one still resolves would void
+			// the fixation defence Rotate exists to provide, and void it
+			// exactly when the store is flaky. Overwrite the old id with a
+			// blob that is already expired instead: get deletes it on sight.
+			log.Printf("via: session store Delete failed on rotate, writing an expired tombstone: %v", err)
+			dead, _ := json.Marshal(sessionBlob{SID: d.sid, Exp: time.Now().Add(-time.Minute).UnixNano()})
+			if err := m.store.Save(ctx, oldID, dead, time.Second); err != nil {
+				panic("via: Session.Rotate could neither delete nor invalidate the old session id, " +
+					"so the pre-rotation id is still valid: " + err.Error())
+			}
 		}
 	}
 	return newID
@@ -350,7 +512,20 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 //
 // Each request decodes its own copy, so a write is visible to the next request,
 // not to a request already in flight. A live unit's Tick or Listen handler sees
-// the snapshot taken when its stream connected.
+// the snapshot taken when its stream connected — and refreshed by its own next
+// write.
+//
+// Writes from two in-flight requests on one session are merged per key: each
+// write re-reads the stored blob and overlays only the keys that request
+// touched, so a Put in one tab does not erase a Put of a DIFFERENT type in
+// another. Two requests writing the SAME type resolve last-writer-wins.
+//
+// The merge is a read-modify-write. Against a store that implements
+// [AtomicSessionStore] — the default one does — it retries until it applies to
+// the revision it merged against, so nothing is lost. Against a store that does
+// not, the window between the read and the write is real: a write landing
+// inside another's round-trip is dropped. Either way a session is a value bag,
+// not a counter and not a lock.
 type Session struct {
 	mgr    *sessionManager
 	id     string // "" until resolved or created
@@ -358,6 +533,10 @@ type Session struct {
 	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, AND a live action
 	ctx    context.Context
 	secure bool
+	// down is set when the store could not be read for this request. The
+	// session is then neither present nor absent, and writes are dropped
+	// rather than minting a replacement over the user's real cookie.
+	down bool
 }
 
 func (s *Session) storeCtx() context.Context {
@@ -376,6 +555,16 @@ func (s *Session) ensure() *sessionData {
 	}
 	if s.data != nil {
 		return s.data
+	}
+	if s.down {
+		// The user almost certainly HAS a session; the store just could not say
+		// so. Minting one here would Set-Cookie over their real id and log them
+		// out permanently once the backend recovered — a far worse outcome than
+		// a dropped write, and the store contract already says a backend error
+		// never fails the request.
+		log.Print("via: session write dropped — the session store could not be read for this request, " +
+			"so via will not mint a replacement session over the one the browser already holds")
+		return nil
 	}
 	if s.mgr.randomKey {
 		s.mgr.keyWarnOnce.Do(func() {
@@ -418,6 +607,7 @@ func (s *Session) set(key string, value json.RawMessage) {
 	}
 	d.mu.Lock()
 	d.vals[key] = value
+	d.dirty[key] = value
 	d.mu.Unlock()
 	s.mgr.save(s.storeCtx(), s.id, d)
 }
@@ -429,6 +619,10 @@ func (s *Session) set(key string, value json.RawMessage) {
 // OnInit.
 func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
+		return ""
+	}
+	if s.down {
+		log.Print("via: Session.Rotate skipped — the session store could not be read for this request")
 		return ""
 	}
 	if s.data == nil {
@@ -448,6 +642,7 @@ func (s *Session) clear(key string) {
 	}
 	s.data.mu.Lock()
 	delete(s.data.vals, key)
+	s.data.dirty[key] = nil // tombstone: a Clear must survive the merge, not just be absent from it
 	s.data.mu.Unlock()
 	s.mgr.save(s.storeCtx(), s.id, s.data)
 }
@@ -464,7 +659,10 @@ func (c *Ctx) Session() *Session {
 		s.mgr = c.sessions
 		s.w = c.sessW
 		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
-		if id, d, ok := c.sessions.resolve(c.req); ok {
+		switch id, d, err := c.sessions.resolve(c.req); {
+		case err != nil:
+			s.down = true
+		case d != nil:
 			s.id, s.data = id, d
 		}
 	}

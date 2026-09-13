@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/go-via/via/internal/hcore"
@@ -55,13 +56,17 @@ const tabFormField = "_viatab"
 //
 // Narrowed to the exact shape that produces the defect — a unit that LOADS in
 // OnInit and never re-reads — so an idempotent action on a unit with no OnInit,
-// or on one that already declares Reload, stays silent. It is not deduped: one
-// line per dead click is the point, and adding Reload silences it.
-func warnNoChange(act, name string, v any) {
+// or on one that already declares Reload, stays silent. Deduped per action per
+// process: a legitimately idempotent click is a dead click every time it is
+// made, and one line per click buries the log instead of reading it.
+func (m *mount) warnNoChange(act, name string, v any) {
 	if _, isReloader := v.(Reloader); isReloader {
 		return
 	}
 	if _, isIniter := v.(Initer); !isIniter {
+		return
+	}
+	if _, dup := m.noChange.LoadOrStore(act+"\x00"+name, struct{}{}); dup {
 		return
 	}
 	log.Printf("via: action %s (%s) changed nothing the render shows, so it answers 204 and the UI "+
@@ -94,6 +99,7 @@ type mount struct {
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
 	maxLive     int
+	noChange    *sync.Map // the Router's dead-click warning dedupe (see warnNoChange)
 }
 
 // unit returns the bind pass's unit Ctx for dispatch address embed: "r" is the
@@ -540,7 +546,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	respond(w, req, mode, u.redirect, nil, func() []byte {
 		b := m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
 		if b == nil {
-			warnNoChange(act, a.name, actedViewer(inst, u))
+			m.warnNoChange(act, a.name, actedViewer(inst, u))
 		}
 		return b
 	})
