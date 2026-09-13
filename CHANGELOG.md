@@ -640,5 +640,11 @@ as a re-read of the README, not a diff.
   `Tick`/`Listen` `Put` writes its `Set-Cookie` onto that dead response
   with no warning logged. Establish sessions in `OnInit` or an action
   instead.
+- A `Tick`/`Listen` handle keeps the session id it connected with, so once
+  another request rotates that id away (a login in a plain action), every
+  session write from that handle is dropped with a log for the rest of the
+  stream, and `Rotate` on it is refused rather than re-issuing a cookie over
+  the one the browser now holds. Reads still serve the connect-time snapshot.
+  Reconnecting the stream picks up the new id.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.

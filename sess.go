@@ -206,6 +206,10 @@ type sessionData struct {
 	// rotated away, expired, or recycled. Later writes through the same handle
 	// then short-circuit instead of re-round-tripping the store to relearn it.
 	retired bool
+	// mintFailed records that the store refused the very first write, so a
+	// later dropped write is reported as the store outage it is rather than as
+	// a rotation that never happened.
+	mintFailed bool
 }
 
 // sessionBlob is the wire form of a session. Field names are short because
@@ -375,12 +379,13 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 // CAS loop exists to prevent.
 const sessionSaveRetries = 8
 
-func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) {
+func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
 	d.mu.Lock()
 	if d.retired {
 		d.mu.Unlock()
-		return
+		return false
 	}
+	mintFailed := d.mintFailed
 	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
 	for k, v := range d.dirty {
 		dirty[k] = v
@@ -397,7 +402,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			log.Printf("via: session write gave up after %d CAS attempts — the store is under "+
 				"pathological contention on one session; the write is dropped rather than "+
 				"clobbering the writers that got through", sessionSaveRetries)
-			return
+			return false
 		}
 		var (
 			raw []byte
@@ -414,24 +419,32 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			// Writing d's copy over a store that could not be read is exactly
 			// the clobber this merge exists to avoid.
 			log.Printf("via: session store Load failed before save: %v", err)
-			return
+			return false
 		}
 		var b sessionBlob
-		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid && b.Vals != nil &&
+		// Deliberately no b.Vals != nil clause: get accepts a nil value map as
+		// an empty session, and a store that normalises {} to null would
+		// otherwise yield a session that reads fine and retires on first write.
+		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
 			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
 		if !live && !mint {
-			log.Print("via: session id retired (rotated away or expired); write dropped — " +
-				"writing under it would revive an id that no longer names this session")
+			if mintFailed {
+				log.Print("via: session write dropped — the store rejected this session's first write, " +
+					"so there is nothing under its id to merge into")
+			} else {
+				log.Print("via: session id retired (rotated away or expired); write dropped — " +
+					"writing under it would revive an id that no longer names this session")
+			}
 			d.mu.Lock()
 			d.retired = true
 			d.mu.Unlock()
-			return
+			return false
 		}
 		vals := make(map[string]json.RawMessage, len(own))
 		for k, v := range own {
 			vals[k] = v
 		}
-		if live {
+		if live && b.Vals != nil {
 			vals = b.Vals
 		}
 		for k, v := range dirty {
@@ -446,20 +459,20 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
 		if err != nil {
 			log.Printf("via: session encode failed: %v", err)
-			return
+			return false
 		}
 		if cas != nil {
 			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
 			if err != nil {
 				log.Printf("via: session store SaveIf failed: %v", err)
-				return
+				return false
 			}
 			if !applied {
 				continue // another request wrote first; re-merge onto its blob
 			}
 		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
 			log.Printf("via: session store Save failed: %v", err)
-			return
+			return false
 		}
 		d.mu.Lock()
 		// The merged view is what this request should read back too: a Tick
@@ -467,14 +480,18 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		// values another request has since replaced.
 		d.vals, d.exp = vals, exp
 		d.mu.Unlock()
-		return
+		return true
 	}
 }
 
 func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
 	id := randomToken() // 128-bit URL-safe token, same generator as the tab id
 	d := &sessionData{sid: randomToken(), vals: map[string]json.RawMessage{}, dirty: map[string]json.RawMessage{}}
-	m.save(ctx, id, d, true)
+	if !m.save(ctx, id, d, true) {
+		d.mu.Lock()
+		d.mintFailed = true
+		d.mu.Unlock()
+	}
 	return id, d
 }
 
@@ -666,6 +683,18 @@ func (s *Session) Rotate() string {
 		s.id, s.data = s.mgr.create(s.storeCtx())
 		s.mgr.setCookie(s.w, s.id, s.secure)
 		return s.id
+	}
+	s.data.mu.Lock()
+	retired := s.data.retired
+	s.data.mu.Unlock()
+	if retired {
+		// Another request already rotated this id away, so the browser's cookie
+		// names THAT request's new id. reID would short-circuit on the retired
+		// flag and write nothing, then Set-Cookie an id with no blob behind it —
+		// overwriting a good cookie and logging the user out. Leave it alone.
+		log.Print("via: Session.Rotate skipped — this handle's session id was already rotated away by " +
+			"another request; the cookie the browser now holds is left untouched")
+		return ""
 	}
 	s.id = s.mgr.reID(s.storeCtx(), s.id, s.data)
 	s.mgr.setCookie(s.w, s.id, s.secure)
