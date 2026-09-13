@@ -13,13 +13,17 @@ import (
 
 // Topic is a typed fan-out broker. Its zero value is not usable; call New.
 type Topic[T any] struct {
-	mu   sync.Mutex
-	subs map[*Sub[T]]struct{}
+	mu    sync.Mutex
+	subs  map[*Sub[T]]struct{}
+	wakes map[chan<- struct{}]struct{} // scratch, reused by Publish
 }
 
 // New creates an empty Topic.
 func New[T any]() *Topic[T] {
-	return &Topic[T]{subs: make(map[*Sub[T]]struct{})}
+	return &Topic[T]{
+		subs:  make(map[*Sub[T]]struct{}),
+		wakes: make(map[chan<- struct{}]struct{}),
+	}
 }
 
 // DefaultLimit bounds how many undelivered values one subscriber may hold. It
@@ -75,16 +79,32 @@ func (t *Topic[T]) Subs() int {
 func (t *Topic[T]) Publish(v T) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// One fan-out must reach a multiplexing reader as ONE wake-up, released
+	// only once every subscriber holds v. A reader sweeps its subscriptions
+	// in registration order, so a wake-up released mid-fan-out lets it see a
+	// later subscription's copy of v and miss an earlier one; and a second
+	// token for the same fan-out buys a spurious extra sweep that overlaps
+	// the NEXT publish and splits it the same way. Hence: collect the
+	// distinct wake channels, then signal each exactly once.
 	for s := range t.subs {
-		s.enqueue(v)
+		if wake, ok := s.enqueue(v); ok && wake != nil {
+			t.wakes[wake] = struct{}{}
+		}
 	}
+	for w := range t.wakes {
+		signal(w)
+	}
+	clear(t.wakes)
 }
 
-func (s *Sub[T]) enqueue(v T) {
+// enqueue queues v and returns this subscription's wake channel, which the
+// caller must signal once the whole fan-out is queued. ok is false when v was
+// not queued.
+func (s *Sub[T]) enqueue(v T) (wake chan<- struct{}, ok bool) {
 	s.mu.Lock()
 	if s.stopped {
 		s.mu.Unlock()
-		return
+		return nil, false
 	}
 	if len(s.q) >= s.limit {
 		s.dropped++
@@ -94,16 +114,16 @@ func (s *Sub[T]) enqueue(v T) {
 		if warn {
 			log.Printf("via/topic: subscriber backlog hit its %d-value limit; dropping newest values for this subscriber only", s.limit)
 		}
-		return
+		return nil, false
 	}
 	s.q = append(s.q, v)
-	wake := s.wake
+	wake = s.wake
 	s.mu.Unlock()
 	select {
 	case s.ready <- struct{}{}:
 	default: // already signalled; Drain takes the whole backlog
 	}
-	signal(wake)
+	return wake, true
 }
 
 // signal pokes a coalescing capacity-1 notifier without ever blocking the
