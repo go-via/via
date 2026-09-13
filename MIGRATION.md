@@ -297,7 +297,10 @@ form:
   think about them.** via logs one line at startup when the floor is open.
 - **Sessions are always on** and mint a random per-process key if you configure
   none, warning once. Set `WithSessionKey` or `VIA_SESSION_KEY` or sessions will
-  not survive a restart.
+  not survive a restart. The idle TTL slides on **every** request that carries
+  a valid session cookie — `OnInit` resolves the session eagerly whether or not
+  the page reads it — so a session expires only after a full TTL with no
+  request at all, not after a TTL with no `Get`/`Put`.
 
 ## Wire break: action URLs
 

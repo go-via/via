@@ -1852,3 +1852,84 @@ func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	assert.Contains(t, string(b), "who:true:ann",
 		"and the handler must read the very session the children wrote")
 }
+
+// shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
+// both mint the SAME content-addressed action id (the id hashes the Go func
+// name plus the receiver's offset, and here both are identical). That is the
+// only arrangement in which an embed key denoting different types in the auth
+// and the bind render gets past the action lookup at all.
+type shiftBase struct{ hit bool }
+
+func (s *shiftBase) Hit(ctx *via.Ctx) { s.hit = true }
+
+type shiftA struct{ shiftBase }
+
+func (a *shiftA) View() h.H { return h.Div(h.Str("A"), h.Button(via.On("click", a.Hit))) }
+
+type shiftB struct{ shiftBase }
+
+func (b *shiftB) View() h.H { return h.Div(h.Str("B"), h.Button(via.On("click", b.Hit))) }
+
+// Flip is Bind()ed, so the POST body can flip it — and the When around Embed(A)
+// then shifts B from key "1" up to key "0". via.Embed's docs forbid exactly
+// this When; the dispatcher must still fail closed rather than run A's
+// authorized action against B.
+type shiftPage struct {
+	Flip via.Signal[bool]
+	A    shiftA
+	B    shiftB
+}
+
+func (p *shiftPage) View() h.H {
+	return h.Div(
+		h.Input(p.Flip.Bind()),
+		via.When(!p.Flip.Get(), func() h.H { return via.Embed(p.A) }),
+		via.Embed(p.B),
+	)
+}
+
+func TestDispatchPlain_embedKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(shiftPage{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+
+	aURL, bURL := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
+	require.Equal(t, aURL[strings.LastIndexByte(aURL, '/'):], bURL[strings.LastIndexByte(bURL, '/'):],
+		"the fixture only bites if both embeds mint the same action id")
+
+	resp, body := do(t, srv, http.MethodPost, aURL, `{"flip":true}`)
+	assert.Equal(t, http.StatusGone, resp.StatusCode,
+		"a key whose type changed between the auth and bind renders must not dispatch")
+	assert.Contains(t, body, "no such embed")
+}
+
+// scopeKid's OnInit reads the REQUEST, and its View Bind()s a slot the POST
+// body carries — so the discovery loop takes a second pass and re-inits this
+// child off the cloned Ctx. A pass-2 Ctx with no request scope is the defect
+// class the clone exists to close.
+type scopeKid struct {
+	Q    via.Signal[string]
+	from string
+	seen string
+}
+
+func (k *scopeKid) OnInit(ctx *via.Ctx) error { k.from = ctx.Request().Method; return nil }
+func (k *scopeKid) Save(ctx *via.Ctx)         { k.seen = "method:" + k.from }
+func (k *scopeKid) View() h.H {
+	return h.Div(h.Input(k.Q.Bind()), h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
+}
+
+type scopePage struct{ K scopeKid }
+
+func (p *scopePage) View() h.H { return h.Div(via.Embed(p.K)) }
+
+func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(scopePage{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), `{"k__q":"x"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode,
+		"a hydration pass >= 2 must carry the request, not re-init children against a nil one")
+	assert.Contains(t, body, "method:POST")
+}
