@@ -294,7 +294,7 @@ func ctxOf(b hcore.Binder) *Ctx {
 // signalSlot names the signal at field by its byte offset in the composition,
 // so a signal's wire identity is independent of where the View renders it.
 //
-// Anything else panics. A Signal behind a pointer, slice, array or map field,
+// Anything else panics. A Signal behind a pointer, slice, array, map or interface field,
 // or bound off a value receiver's stack copy, has no field offset: its writes
 // land on memory the render discards, and any invented name is positional, so
 // a conditional Bind hands one signal's slot to another and the next post
@@ -310,7 +310,7 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 	}
 	panic("via: a rendered Signal is not a plain field of its composition — give View a POINTER " +
 		"receiver, and hold every Signal (and every child composition) as a plain struct field, " +
-		"not behind a pointer, slice, array or map")
+		"not behind a pointer, slice, array, map or interface")
 }
 
 // childKey composes onto the parent's key, so a subtree re-rendered on its own
@@ -809,6 +809,10 @@ func inheritRequestScope(ctx, from *Ctx) {
 	ctx.req = from.req
 	ctx.sessions = from.sessions
 	ctx.sessW = from.sessW
+	// The resolved handle, not just the manager: a session minted THIS request
+	// has its cookie on w and nothing in req, so a re-resolve here would miss it
+	// and mint a second id (and a second Set-Cookie).
+	ctx.session = from.session
 	// An EMBED's mutation landed on the copy via.Embed made at the previous
 	// render. A root walk from here would call via.Embed(parent.Field) again
 	// and re-copy the parent's untouched field, throwing it away (validation

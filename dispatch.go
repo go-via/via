@@ -421,16 +421,30 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	rootBefore := renderRootWith(auth, inst.v)
 	bind := auth
 	done := map[string]bool{}
-	for n := 0; hydrateTree(bind, in, done) && n < maxHydratePasses; n++ {
+	n := 0
+	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
+		// A later pass is a WHOLE fresh render, and the handler runs on the
+		// last one — so it must carry auth's request scope or the action runs
+		// on an un-inited copy with no request, no session and no way to set a
+		// cookie (inheritRequestScope also carries the resolved session, which
+		// a re-resolve off req would miss for one OnInit just minted).
 		bind = newBind()
+		inheritRequestScope(bind, auth)
 		rootBefore = renderRootWith(bind, inst.v)
+	}
+	if n == maxHydratePasses {
+		// Never expected: done grows monotonically, so a View would have to
+		// bind a fresh slot on every pass. Loud, because the alternative is a
+		// silently half-hydrated render.
+		log.Printf("via: plain discovery hit the %d-pass cap for action %s; some posted signals may be unapplied", maxHydratePasses, act)
 	}
 	ua := auth.unit(embed)
 	if ua == nil {
 		http.Error(w, "no such embed", http.StatusGone)
 		return
 	}
-	if _, ok := ua.actions[act]; !ok {
+	authAct, ok := ua.actions[act]
+	if !ok {
 		http.Error(w, unknownAction(ua, act), http.StatusGone)
 		return
 	}
@@ -443,6 +457,16 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	if !ok {
 		http.Error(w, unknownAction(u, act), http.StatusGone)
 		return
+	}
+	// The intersection is per (handler, ARG), not per handler: a posted signal
+	// that widens an Each would otherwise widen the accepted arg set too, and
+	// an arg only the client's own body produced would dispatch. a.args is the
+	// very map the slot's closure checks against, so pruning it in place is
+	// what fails the unauthorized arg closed.
+	for k := range a.args {
+		if _, ok := authAct.args[k]; !ok {
+			delete(a.args, k)
+		}
 	}
 	if u.live {
 		// Reaching here means the tab was missing or stale, so fail closed
@@ -498,9 +522,15 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 	return fresh
 }
 
-// maxHydratePasses bounds dispatchPlain's discovery loop. Each pass can only
-// open branches, so it converges; the cap backstops a View whose branch
-// condition oscillates.
+// maxHydratePasses bounds dispatchPlain's discovery loop. The loop cannot
+// oscillate — done only grows, and is bounded by |in ∩ hydrators| — so the cap
+// is a backstop against a pathological View that binds a brand-new slot name on
+// every render, not against divergence. A page whose body carries any Bind()ed
+// slot takes exactly 2 passes (2 renders), which is the floor: the handler has
+// to run on a render that already saw the posted values.
+//
+// Each pass re-renders the whole tree, so an embedded child's OnInit runs once
+// per pass — twice for the common case. Keep OnInit cheap and idempotent.
 const maxHydratePasses = 8
 
 // rerenderPlain re-renders the acted-on unit for a Datastar action's response,

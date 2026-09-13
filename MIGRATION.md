@@ -404,8 +404,8 @@ rather than writing the wrong field at runtime, and both can surface on an
 upgrade in code that compiled fine before.
 
 - A rendered `Signal` that is **not a plain field of its composition** panics.
-  A signal reached through a pointer, slice, array or map field, or bound off a
-  value-receiver `View`, has no field offset: its writes land on memory the
+  A signal reached through a pointer, slice, array, map or INTERFACE field, or
+  bound off a value-receiver `View`, has no field offset: its writes land on memory the
   render discards, and the render-order fallback that used to name it aliased
   one signal's slot onto another under a conditional `Bind()`. The remedy is
   one line — make the `Signal` (and any child composition holding one) a direct

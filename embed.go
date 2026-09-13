@@ -107,6 +107,7 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	child.req = parent.req
 	child.sessions = parent.sessions
 	child.sessW = parent.sessW
+	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	parent.embeds = append(parent.embeds, child)
 
 	// Only a request-scoped render inits: a live push re-renders the whole tree

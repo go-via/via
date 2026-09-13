@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1637,4 +1638,123 @@ func TestDispatchLive_inBranchActionStaysUndispatchableUntilTheBranchIsPushed(t 
 	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"mode":"x"}`).Fire()
 	assert.Equal(t, http.StatusGone, code)
 	assert.Contains(t, body, "does not bind it")
+}
+
+// --- bounded-fixpoint discovery regressions (one root cause, three symptoms).
+//
+// The disclosure fixture above has no embed, no session and no OnArg, which is
+// exactly why all three slipped through: every one of them needs a SECOND
+// discovery pass, which any page with a Bind()ed slot in the posted body takes.
+
+// fixKid is a PLAIN embedded child whose OnInit seeds the state its handler
+// reads — the state a later discovery pass used to skip.
+type fixKid struct {
+	loaded string
+	seen   string
+}
+
+func (k *fixKid) OnInit(ctx *via.Ctx) error { k.loaded = "init"; return nil }
+func (k *fixKid) Save(ctx *via.Ctx)         { k.seen = "seen:" + k.loaded }
+func (k *fixKid) View() h.H {
+	return h.Div(h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
+}
+
+type fixParent struct {
+	Q via.Signal[string]
+	K fixKid
+}
+
+func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Embed(p.K)) }
+
+func TestDispatchPlain_embedActionRunsOnAnInitedCopyAfterASecondPass(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(fixParent{}))
+
+	code, body := app.EmbedAction("0", 0).Body(`{"q":"x"}`).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "<p>seen:init</p>",
+		"a posted Bind()ed signal forces a second discovery pass; the embed's action must still run on a copy whose OnInit ran")
+}
+
+type sessUser struct{ Name string }
+
+// sessInAction mints the session in OnInit and reads it back in the handler —
+// the same request, so the cookie is on the response and never in the request.
+type sessInAction struct {
+	Q   via.Signal[string]
+	who string
+}
+
+func (s *sessInAction) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(sessUser{Name: "ann"})
+	return nil
+}
+
+func (s *sessInAction) Save(ctx *via.Ctx) {
+	u, ok := ctx.Session().Get[sessUser]()
+	s.who = fmt.Sprintf("who:%v:%s", ok, u.Name)
+}
+
+func (s *sessInAction) View() h.H {
+	return h.Div(h.Input(s.Q.Bind()), h.P(h.Str(s.who)), h.Button(via.On("click", s.Save), h.Str("save")))
+}
+
+func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(sessInAction{}))
+	page := fetchPage(t, app, "/")
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), "who:true:ann",
+		"a session created in OnInit must be the same session the handler reads, across discovery passes")
+	assert.LessOrEqual(t, len(resp.Header.Values("Set-Cookie")), 1,
+		"a second pass must not mint a second session and a second Set-Cookie")
+}
+
+// argRows widens its row set from a Bind()ed signal, so a posted body can
+// conjure a row the auth render never produced.
+type argRows struct {
+	Filter via.Signal[string]
+	del    string
+}
+
+func (r *argRows) Del(ctx *via.Ctx, id int) { r.del = "del:" + strconv.Itoa(id) }
+
+func (r *argRows) ids() []int {
+	if r.Filter.Get() == "all" {
+		return []int{1, 2, 3}
+	}
+	return []int{1}
+}
+
+func (r *argRows) View() h.H {
+	return h.Div(
+		h.Input(r.Filter.Bind()),
+		h.Ul(via.Each(r.ids(), func(id int) h.H {
+			return h.Li(h.Button(via.OnArg("click", r.Del, id), h.Str("del")))
+		})),
+		h.P(h.Str(r.del)),
+	)
+}
+
+func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(argRows{}))
+	_, page := app.Get("/")
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=3", 1)
+	require.Contains(t, url, "a=3")
+
+	code, body := app.Action(0).Raw(url).Body(`{"filter":"all"}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"the executed render is an intersection with auth per (handler, arg), not per handler")
+	assert.NotContains(t, body, "del:3")
 }
