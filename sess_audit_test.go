@@ -2,6 +2,7 @@ package via
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -433,5 +434,84 @@ func TestSessionSaveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 	final := auditResolve(t, m, id)
 	if a, ok := final.Get[auditA](); !ok || a.N != 1 {
 		t.Errorf("an unsettled CAS loop wrote unconditionally instead of dropping: %+v ok=%v", a, ok)
+	}
+}
+
+// A handle whose id another request already rotated away must not rotate
+// again: it has nothing to carry to a new id, so re-issuing the cookie would
+// overwrite the good post-rotation cookie the browser holds and log the user
+// out.
+func TestSessionRotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.T) {
+	m := newSessionManager(&config{})
+	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
+	s0.Put(auditA{1})
+	old := s0.id
+
+	pinnedW := httptest.NewRecorder()
+	pinned := auditResolve(t, m, old)
+	pinned.w = pinnedW
+
+	newID := s0.Rotate() // another request rotates the id away
+	if newID == "" || newID == old {
+		t.Fatalf("Rotate returned %q", newID)
+	}
+	pinned.Put(auditA{2}) // dropped; marks the handle retired
+
+	if got := pinned.Rotate(); got != "" {
+		t.Errorf("Rotate through a retired handle returned %q", got)
+	}
+	if cks := pinnedW.Result().Cookies(); len(cks) > 0 {
+		t.Errorf("Rotate through a retired handle issued Set-Cookie %v, clobbering the browser's good cookie", cks)
+	}
+	if _, d, err := m.resolve(auditReq(m, newID)); err != nil || d == nil {
+		t.Fatalf("the post-rotation id stopped resolving (d=%v err=%v)", d, err)
+	}
+	after := auditResolve(t, m, newID)
+	if a, ok := after.Get[auditA](); !ok || a.N != 1 {
+		t.Errorf("the live session was disturbed: %+v ok=%v", a, ok)
+	}
+}
+
+// nullValsStore is a third-party store whose backend normalises an empty
+// object to null — legal JSON for the same session.
+type nullValsStore struct{ SessionStore }
+
+func (s *nullValsStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	return s.SessionStore.Save(ctx, id, nullVals(data), ttl)
+}
+
+func nullVals(data []byte) []byte {
+	var b sessionBlob
+	if json.Unmarshal(data, &b) != nil || len(b.Vals) != 0 {
+		return data
+	}
+	b.Vals = nil
+	out, err := json.Marshal(b)
+	if err != nil {
+		return data
+	}
+	return out
+}
+
+// Read and write must agree on what a session is: get accepts a nil value map
+// as an empty session, so save must not retire the id over the same bytes.
+func TestSessionNilValsSessionReadsAndWritesAlike(t *testing.T) {
+	m := newSessionManager(&config{sessionStore: &nullValsStore{SessionStore: MemorySessionStore()}})
+	id, _ := m.create(context.Background())
+
+	raw, ok, err := m.store.Load(context.Background(), id)
+	if err != nil || !ok {
+		t.Fatalf("precondition: store lost the session (ok=%v err=%v)", ok, err)
+	}
+	if !strings.Contains(string(raw), `"v":null`) {
+		t.Fatalf("precondition: store did not normalise the empty value map: %s", raw)
+	}
+
+	s := auditResolve(t, m, id) // reads fine
+	s.Put(auditA{7})
+
+	after := auditResolve(t, m, id)
+	if a, ok := after.Get[auditA](); !ok || a.N != 7 {
+		t.Errorf("a session that reads fine was retired on its first write: %+v ok=%v", a, ok)
 	}
 }
