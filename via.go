@@ -257,7 +257,6 @@ type ptrViewer[T any] = interface {
 // actions by handler identity during a render pass, hydrates signals from the
 // request, and records per-slot initial values.
 type Ctx struct {
-	inSignals   map[string]json.RawMessage       // hydrated from the request
 	order       []string                         // slots in assignment order
 	initial     map[string]any                   // per-slot value seen at render time
 	actions     map[string]action                // content-addressed action table, keyed by handler identity
@@ -286,8 +285,9 @@ type Ctx struct {
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // embed key of the unit an action just mutated; Embed re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
-	initDone    bool // a Tick/Listen after this would register into a snapshot nobody reads
-	reinit      bool // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	initDone    bool       // a Tick/Listen after this would register into a snapshot nobody reads
+	reinit      bool       // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	rev         *revertSet // live only: how to put the server-authored signal values back after a display render (see livePush)
 }
 
 // Request returns the HTTP request that triggered this handler — headers,
@@ -300,9 +300,8 @@ type Ctx struct {
 func (c *Ctx) Request() *http.Request { return c.req }
 
 // newCtx builds a Ctx with the given hydration map (may be nil for a GET page).
-func newCtx(in map[string]json.RawMessage) *Ctx {
+func newCtx() *Ctx {
 	return &Ctx{
-		inSignals: in,
 		initial:   map[string]any{},
 		actions:   map[string]action{},
 		dirty:     map[string]any{},
@@ -330,7 +329,6 @@ func (c *Ctx) dirtyAll() map[string]any {
 type binderCtx struct{ c *Ctx }
 
 func (b binderCtx) DeclareSignal(slot string, initial any)         { b.c.declareSignal(slot, initial) }
-func (b binderCtx) SignalInit(slot string) (any, bool)             { return b.c.signalInit(slot) }
 func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage)) { b.c.hydrator(slot, fn) }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
@@ -407,18 +405,6 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 		c.order = append(c.order, slot)
 	}
 	c.initial[slot] = initial
-}
-
-// signalInit returns the hydrated raw value for a slot. hcore.Binder.
-func (c *Ctx) signalInit(slot string) (any, bool) {
-	if c.inSignals == nil {
-		return nil, false
-	}
-	raw, ok := c.inSignals[slot]
-	if !ok {
-		return nil, false
-	}
-	return raw, true
 }
 
 // action is one entry in a unit's action table.
@@ -815,10 +801,11 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 // half-typed message vanishing when someone else's arrives). Server-driven
 // signal changes ride an explicit signal-patch instead. only restricts the
 // declaration further, for a plain action's patch.
-func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx) (*Ctx, []byte) {
-	ctx := newRootCtx(nil, declareSignals, base, only)
+func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet) (*Ctx, []byte) {
+	ctx := newRootCtx(declareSignals, base, only)
 	ctx.declareSeen = seen
 	ctx.embedV = inst
+	ctx.rev = rev
 	inheritRequestScope(ctx, from)
 	return ctx, renderRootWith(ctx, inst.v)
 }
@@ -855,8 +842,8 @@ func inheritRequestScope(ctx, from *Ctx) {
 // newRootCtx builds the root bind Ctx for one render. A request-scoped
 // transport takes it before rendering so runOnInit registers the root's
 // Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
-func newRootCtx(in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any) *Ctx {
-	ctx := newCtx(in)
+func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
+	ctx := newCtx()
 	ctx.declare = declareSignals // embeds declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
@@ -959,6 +946,47 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // child of a LIVE root runs its OnInit once per pushed frame — keep it cheap,
 // or hold the data on the live root. A live EMBED may not Embed at all
 // (checkLiveNesting), so embedPush needs none of this.
+// livePush renders one live unit under the same two-phase rule dispatchPlain
+// has always used (I1/I2) and the live path had no version of at all: the
+// AUTHORITY render is the one the client's posted signals did not touch, and it
+// alone decides what is dispatchable.
+//
+// Phase 1 puts the server-authored signal values back — undoing the previous
+// cycle's application of lc.client, which otherwise became the server's own
+// state, because hydration writes straight into a field of an instance that
+// outlives the request — and renders. Phase 2 applies the client's signals to
+// the slots that render made writable and re-renders to fixpoint, exactly as
+// the plain path does, so a Bind()ed signal still steers what the client SEES
+// and a branch it opens still gets the slots inside it hydrated. The frame
+// carries phase 2; the table the connection keeps is phase 2 pruned to phase 1,
+// per handler AND per arg.
+//
+// The authority render runs FIRST and the display render LAST because
+// Signal.bind stamps the dirty sink at render time: the Ctx registered on the
+// connection must be the one a later Set writes through.
+//
+// Cost: one render per push when the client has posted nothing, two once it
+// has — the same floor the plain path pays for a Bind()ed slot.
+func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []byte) {
+	lc.rev.restore()
+	rev := newRevertSet()
+	lc.rev = rev
+	auth, body := render(rev)
+	bind := auth
+	done := map[string]bool{}
+	n := 0
+	for ; n < maxHydratePasses && hydrateTree(bind, lc.client, done); n++ {
+		bind, body = render(rev)
+	}
+	if n == maxHydratePasses {
+		log.Printf("via: live push hit the %d-pass hydration cap; some posted signals may be unapplied", maxHydratePasses)
+	}
+	if bind != auth {
+		pruneToAuthority(bind, auth)
+	}
+	return bind, body
+}
+
 func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
 	var initFailed bool
@@ -985,7 +1013,9 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 			}
 			stream.abort()
 		}()
-		bind, body := renderRootBase(inst, false, base, nil, nil, from) // push omits data-signals
+		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
+			return renderRootBase(inst, false, base, nil, nil, from, rev) // push omits data-signals
+		})
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
@@ -998,7 +1028,9 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream) func() {
 	var push func()
 	push = func() {
-		bind, body := renderEmbedBind(key, inst, base, nil)
+		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
+			return renderEmbedBind(key, inst, base, nil, rev)
+		})
 		bind.push = push
 		lc.replace(bind)
 		id := "via-i" + key
@@ -1078,7 +1110,15 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
-	bind := newRootCtx(connectSig, false, base, nil)
+	//
+	// UN-HYDRATED, unlike every earlier version of this line: the connect body
+	// is the client's, and this render is what decides the connection's action
+	// table and its liveness (I1). The body is kept as lc.client and applied to
+	// the DISPLAY render of every push instead (livePush) — which is the only
+	// place it was ever visible, since connect frames no elements of its own.
+	rev := newRevertSet()
+	bind := newRootCtx(false, base, nil)
+	bind.rev = rev
 	bind.embedV = pv
 	if runOnInit(pv.v, bind, w, req, m.sessions) != nil {
 		return
@@ -1106,6 +1146,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:       map[string]*Ctx{},
 		sess:        connSID,
+		client:      connectSig,
+		rev:         rev,
 	}
 
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn

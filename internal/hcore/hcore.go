@@ -37,8 +37,6 @@ type Binder interface {
 	// initial value, for the page-level data-signals declaration. Idempotent
 	// within a render.
 	DeclareSignal(slot string, initial any)
-	// SignalInit returns the hydrated value for a slot, if the request carried one.
-	SignalInit(slot string) (any, bool)
 	// Hydrator records slot's update function, kept across renders so a live
 	// action can update the underlying value in place without a re-render.
 	Hydrator(slot string, fn func(json.RawMessage))

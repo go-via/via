@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"net/http"
 	"regexp"
@@ -268,7 +269,11 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	status, _ := app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status, "the live action acks; the push carries the render")
 
-	step1 := conn.Await("name=Ada")
+	// "name=" and not "name=Ada": a live push renders the SERVER's value for a
+	// slot the current View no longer binds, exactly as the plain page below
+	// does. The client's posted value is re-applied only where the render still
+	// has a hydrator for it (livePush), so it cannot survive as server state.
+	step1 := conn.Await("name= email=")
 	emailSlot := bindSlots(step1)[0]
 	assert.NotEqual(t, nameSlot, emailSlot, "the email input must not be seated on the name's slot")
 
@@ -279,7 +284,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, status)
 
 	line := conn.Await("saved")
-	assert.Contains(t, line, "name=Ada email=<", "the posted slot must write its own field, never the email's")
+	assert.Contains(t, line, "name= email=<", "the posted slot must write its own field, never the email's")
 }
 
 // The same aliasing on a plain page shows up client-side: the instance is
@@ -497,4 +502,37 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 		"the embed copy must re-mint its slot, not inherit the parent's root-scoped one")
 	assert.True(t, strings.HasPrefix(binds[1][1], "c__"),
 		"embed slot must carry its embed prefix: %s", binds[1][1])
+}
+
+// --- F5(3): one unmarshalable value must cost its own slot, not the page's.
+
+type unmarshalable struct{}
+
+func (unmarshalable) MarshalJSON() ([]byte, error) { return nil, errors.New("via_test: not encodable") }
+
+type mixedSignals struct {
+	Good via.Signal[string]
+	Bad  via.Signal[unmarshalable]
+}
+
+func (m *mixedSignals) View() h.H {
+	return h.Div(h.Input(m.Good.Bind()), h.Input(m.Bad.Bind()))
+}
+
+// The declaration used to be marshalled as one object, so a single bad value
+// emptied data-signals for EVERY signal on the page — silently, with the page
+// still rendering and the client store left bare.
+func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mixedSignals{}))
+	_, page := app.Get("/")
+
+	slots := bindSlots(page)
+	require.Len(t, slots, 2)
+	good, bad := slots[0], slots[1]
+
+	assert.Contains(t, page, `data-signals='{"`+good+`":""}'`,
+		"the slots that DO marshal must still be declared")
+	assert.NotContains(t, page, `"`+bad+`":`, "the offending slot is dropped, not the rest")
+	assert.NotContains(t, page, `<div id="root" data-signals=''`, "and the declaration is not wiped")
 }

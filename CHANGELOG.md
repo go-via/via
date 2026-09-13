@@ -412,6 +412,33 @@ as a re-read of the README rather than a diff.
 
 ### Fixed
 
+- **The live (SSE) path now derives its action table from a render the client
+  did not influence.** The two-phase discovery above was plain-only. On a live
+  page the unit outlives the request, so a hydrated `Bind()`ed signal became the
+  server's own state: it opened a `via.When` branch, the branch's handlers
+  entered the connection's dispatch table, and they stayed callable for the life
+  of the stream — reachable both from the SSE connect body and from the body of
+  any action the client was already allowed to call. Every push now renders the
+  AUTHORITY first (server-authored values only), applies the client's signals to
+  it for a DISPLAY render, and registers the intersection of the two, per
+  handler and per arg. The SSE connect body no longer hydrates the render that
+  decides liveness and actions at all; it is kept and applied to display renders
+  instead. **Breaking:** a `Bind()`ed signal's posted value no longer persists as
+  server state between requests on a live page — it is re-applied to each
+  display render wherever that render still binds the slot, which is exactly
+  what the plain path has always done. Reading one in a `Tick`/`Listen` handler,
+  or in a `View` that no longer `Bind()`s it, now sees the server's value.
+
+- **A `ctx.Param` that no longer decodes answers 404 on the live path too.** It
+  was the plain path's 404 and the live path's 500-plus-stack-dump for the same
+  URL and the same sentinel.
+
+- **One unmarshalable signal value no longer wipes `data-signals` for the whole
+  page.** The declaration was marshalled as a single object, so one value
+  `encoding/json` refused emptied the attribute for every signal on the page,
+  silently, with the page still rendering. The offending slot is now logged and
+  dropped on its own.
+
 - **A client-posted signal can no longer open a server-gated branch.** A
   `Signal` is hydrated from a request only when THIS render put it under client
   control — i.e. only `Bind()` (which emits `data-bind`) makes a slot writable.

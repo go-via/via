@@ -85,7 +85,8 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 		inst = parent.actedInst
 	}
 
-	child := newCtx(parent.inSignals)
+	child := newCtx()
+	child.rev = parent.rev // a hydrated child must be revertable with its parent (see livePush)
 	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
 	child.isEmbed = true
 	child.embedKey = key
@@ -188,8 +189,9 @@ func renderEmbedInner(child *Ctx, v viewer) []byte {
 //
 // from is the request-scoped Ctx this re-render belongs to (nil for a live
 // push); it inits the embed's nested CHILDREN — see inheritRequestScope.
-func renderEmbedBind(key string, inst instance, base string, from *Ctx) (*Ctx, []byte) {
-	c := newCtx(nil)
+func renderEmbedBind(key string, inst instance, base string, from *Ctx, rev *revertSet) (*Ctx, []byte) {
+	c := newCtx()
+	c.rev = rev
 	c.isEmbed = true
 	c.embedKey = key
 	c.embedV = inst

@@ -86,6 +86,7 @@ type actionResult struct {
 	gone      string // live only: the unit/action lookup came up invalid; the reason is the response body
 	initErr   error  // live only: the post-action OnInit re-run failed (see reloadUnit)
 	forbidden string // live only: the session-bound check rejected the request
+	paramMiss bool   // live only: a Param segment did not decode — 404, as on the plain path
 }
 
 // mount bundles a page's per-request wiring, shared by its GET, action, and
@@ -217,9 +218,6 @@ func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (m
 		return nil, true
 	}
 	in := map[string]json.RawMessage{}
-	if req.Body == nil {
-		return in, true
-	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxActionBody))
 	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
@@ -297,6 +295,10 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
 		return
 	}
+	if res.paramMiss {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	if res.panicked {
 		http.Error(w, "action failed", http.StatusInternalServerError)
 		return
@@ -336,6 +338,13 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				res = actionResult{gone: un.body()}
 				return
 			}
+			// Same sentinel, same answer as recoverToHTTP gives the plain path:
+			// the URL names something that does not exist, which is a 404, not
+			// a server fault worth a stack dump.
+			if _, ok := rec.(paramMiss); ok {
+				res = actionResult{paramMiss: true}
+				return
+			}
 			log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
 			res = actionResult{panicked: true}
 		}
@@ -343,6 +352,12 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
 			hydrate(raw)
+			// Remembered so the next push's DISPLAY render still shows what the
+			// client is holding: livePush reverts the instance to its
+			// server-authored values before the authority render, and without
+			// this the client's value would vanish from the frame that follows
+			// its own action. It never reaches the authority render (I1).
+			lc.client[slot] = raw
 		}
 	}
 	// A fresh Ctx per dispatch, not unit itself: a Tick/Listen handler holds
@@ -378,6 +393,13 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// logs it in (H1; bindSession is a no-op once bound).
 	if beforeSession == nil && rc.session != nil && rc.session.data != nil {
 		lc.bindSession(rc.session.sid())
+	}
+
+	// A slot the server wrote is no longer the client's to restate: leaving it
+	// in lc.client would have the next display render put the posted value back
+	// over what this action just Set.
+	for slot := range unit.dirty {
+		delete(lc.client, slot)
 	}
 
 	// A server-driven signal change reaches the client as its own signal-patch:
@@ -446,9 +468,9 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
 	if from != nil {
-		return renderRootBase(inst, true, base, nil, nil, from)
+		return renderRootBase(inst, true, base, nil, nil, from, nil)
 	}
-	ctx := newRootCtx(nil, true, base, nil)
+	ctx := newRootCtx(true, base, nil)
 	ctx.embedV = inst // the root is a unit like any embed, when it is live
 	if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
 		return nil, nil
@@ -467,8 +489,8 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// inside it hydrated too — without this their posted values were silently
 	// dropped. The action must be present in BOTH, so the executed render is an
 	// intersection with auth, never a superset.
-	auth := newRootCtx(nil, true, base, map[string]any{}) // nil only would read as "declare everything"
-	auth.embedV = inst                                    // so auth.unit(rootAddr)'s liveness reads the same way an embed's does
+	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
+	auth.embedV = inst                               // so auth.unit(rootAddr)'s liveness reads the same way an embed's does
 	if runOnInit(inst.v, auth, w, req, m.sessions) != nil {
 		return
 	}
@@ -665,13 +687,10 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 	if embed == rootAddr {
 		// data-signals is a plain action's only channel for a server-side Set,
 		// restricted to what it wrote since re-declaring every slot would
-		// clobber a value the user is mid-edit. A nil `only` would read as
-		// "declare everything".
+		// clobber a value the user is mid-edit. dirtyAll never returns nil,
+		// which would read as "declare everything".
 		only := bind.dirtyAll()
-		if only == nil {
-			only = map[string]any{}
-		}
-		afterCtx, after := renderRootBase(inst, true, base, only, seen, u)
+		afterCtx, after := renderRootBase(inst, true, base, only, seen, u, nil)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
 		}
@@ -680,7 +699,7 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base, u)
+	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base, u, nil)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
@@ -692,6 +711,44 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 	buf.Write(afterInner)
 	buf.WriteString(`</div>`)
 	return buf.Bytes()
+}
+
+// pruneToAuthority intersects a live DISPLAY render's action table with the
+// authority render's, per handler AND per arg — the same intersection
+// dispatchPlain does inline, for the same reason: a posted signal may widen
+// what the client sees and must never widen what it may call.
+//
+// Walked by embed ordinal, since that is the dispatch address. A type mismatch
+// at a key (a When around an Embed that a hydrated signal shifted) fails the
+// whole subtree closed rather than authorizing against a unit the authority
+// render never looked at.
+func pruneToAuthority(bind, auth *Ctx) {
+	if auth == nil || bind.embedV.typ != auth.embedV.typ {
+		clear(bind.actions)
+		for _, child := range bind.embeds {
+			pruneToAuthority(child, nil)
+		}
+		return
+	}
+	for id, a := range bind.actions {
+		authAct, ok := auth.actions[id]
+		if !ok {
+			delete(bind.actions, id)
+			continue
+		}
+		for k := range a.args {
+			if _, ok := authAct.args[k]; !ok {
+				delete(a.args, k)
+			}
+		}
+	}
+	for i, child := range bind.embeds {
+		var ac *Ctx
+		if i < len(auth.embeds) {
+			ac = auth.embeds[i]
+		}
+		pruneToAuthority(child, ac)
+	}
 }
 
 // assertRenderInvariantLiveness fails an action that turned a unit live on a

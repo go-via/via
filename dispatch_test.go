@@ -869,7 +869,11 @@ func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.
 	assert.Contains(t, conn.Await("seen: saw:bob"), "seen: saw:bob")
 }
 
-func TestDispatchLive_inBranchActionStaysUndispatchableUntilTheBranchIsPushed(t *testing.T) {
+// Renamed from ...UntilTheBranchIsPushed: a push no longer authorizes it
+// either. The branch is opened by a Bind()ed signal, so it is the client's
+// render, not the server's — see the posted-signal tests at the end of this
+// file.
+func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(disclosure{keepalive: true}))
 	conn := app.Connect()
@@ -1267,4 +1271,147 @@ func withTab(tab, body string) string {
 	sig["viatab"], _ = json.Marshal(tab)
 	out, _ := json.Marshal(sig)
 	return string(out)
+}
+
+// --- F1: the live path's action table is the render the client did not touch.
+//
+// A live unit outlives the request, so a Bind()ed signal's posted value used to
+// land in the instance and stay there: it opened a gated branch, the branch's
+// handlers entered the connection's table, and they dispatched. The plain path
+// has always refused this (auth ∩ bind); these prove the live path now does too
+// — while still SHOWING the client the branch its own signals opened, which is
+// what keeps two-way binding usable.
+
+type livePriv struct {
+	live     bool
+	IsAdmin  via.Signal[bool]
+	nuked    bool
+	nukedArg int
+}
+
+func (p *livePriv) OnInit(ctx *via.Ctx) error {
+	// The only authority on privilege: server state, never the posted signal.
+	p.IsAdmin.Set(ctx.Request().URL.Query().Get("admin") == "1")
+	if p.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {}) // liveness without a push of its own
+	}
+	return nil
+}
+
+func (p *livePriv) Safe(ctx *via.Ctx)            {}
+func (p *livePriv) Nuke(ctx *via.Ctx)            { p.nuked = true }
+func (p *livePriv) NukeArg(ctx *via.Ctx, id int) { p.nukedArg = id }
+
+func (p *livePriv) admin() h.H {
+	return h.Div(
+		h.Button(via.On("click", p.Nuke), h.Str("nuke")),
+		h.Button(via.OnArg("click", p.NukeArg, 42), h.Str("nukearg")),
+	)
+}
+
+func (p *livePriv) View() h.H {
+	return h.Div(
+		h.Input(p.IsAdmin.Bind()),
+		h.Button(via.On("click", p.Safe), h.Str("safe")),
+		via.When(p.IsAdmin.Get(), p.admin),
+		h.P(h.Str("nuked: "+fmt.Sprint(p.nuked)+"/"+fmt.Sprint(p.nukedArg))),
+	)
+}
+
+func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(livePriv{live: true}))
+	conn := app.ConnectWith(`{"isAdmin":true}`)
+
+	// Connect frames no elements, so drive one push: the display render is
+	// where the connect body is allowed to show.
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, code, "the ungated action must still work")
+	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE what its own signals opened")
+
+	for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
+		url := conn.ActionURL("r", n)
+		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"isAdmin":true}`).Fire()
+		assert.Equal(t, http.StatusGone, code, what+" must not be dispatchable: "+url)
+		assert.Contains(t, body, "does not bind it")
+	}
+	// One more legitimate action, so there is a fresh frame to read the flags off.
+	require.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn).Body(`{"isAdmin":true}`)))
+	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0", "no gated handler may have run")
+}
+
+func TestDispatchLive_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(livePriv{live: true}))
+	conn := app.Connect()
+
+	// A clean connect, then the forgery rides on an action the client IS
+	// allowed to call — the second door, and the one a connect-only fix misses.
+	code, _ := app.Action(0).Over(conn).Body(`{"isAdmin":true}`).Fire()
+	require.Equal(t, http.StatusNoContent, code)
+	require.Contains(t, conn.Await("nuke"), "nuke")
+
+	for n := 1; n <= 2; n++ {
+		url := conn.ActionURL("r", n)
+		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"isAdmin":true}`).Fire()
+		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
+		assert.Contains(t, body, "does not bind it")
+	}
+	require.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn).Body(`{"isAdmin":true}`)))
+	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0")
+}
+
+// mustFire fires a, returning only the status: the live path answers 204 with
+// no body, and the frame is what carries the render.
+func mustFire(t *testing.T, a *vt.Action) int {
+	t.Helper()
+	code, _ := a.Fire()
+	return code
+}
+
+// The plain control: the identical attack, already answered 410 before this
+// change, and the behaviour the live path is now held to.
+func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(livePriv{}))
+	_, privileged := app.Get("/?admin=1")
+
+	for n := 1; n <= 2; n++ {
+		url := actionURL(t, privileged, "r", n)
+		code, body := app.Action(0).Raw(url).Body(`{"isAdmin":true}`).Fire()
+		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
+		assert.Contains(t, body, "does not bind it")
+	}
+}
+
+// --- F3: a Param that no longer decodes is a 404 on either path, never a 500.
+
+type paramLive struct{ live bool }
+
+func (p *paramLive) OnInit(ctx *via.Ctx) error {
+	if p.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {})
+	}
+	return nil
+}
+func (p *paramLive) Boom(ctx *via.Ctx) { _ = ctx.Param[int]("id") }
+func (p *paramLive) View() h.H         { return h.Div(h.Button(via.On("click", p.Boom), h.Str("b"))) }
+
+func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	r.Mount("/p/{id}", paramLive{})
+	r.Mount("/l/{id}", paramLive{live: true})
+	app := vt.Serve(t, r)
+
+	_, plain := app.Get("/p/notanint")
+	code, body := app.Action(0).Raw(actionURL(t, plain, "r", 0)).Fire()
+	require.Equal(t, http.StatusNotFound, code)
+	require.Contains(t, body, "not found")
+
+	_, live := app.Get("/l/notanint")
+	conn := app.ConnectAt("/l/notanint", "{}")
+	code, body = app.Action(0).Over(conn).Raw(actionURL(t, live, "r", 0)).Fire()
+	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
+	assert.Contains(t, body, "not found")
 }
