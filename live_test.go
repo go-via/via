@@ -1994,3 +1994,173 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 	assert.True(t, strings.HasPrefix(binds[1][1], "i0_"),
 		"embed slot must carry its embed prefix: %s", binds[1][1])
 }
+
+// --- topic delivery contract: every handler call lands, renders coalesce ---
+
+// burstUnit counts handler calls and renders separately, which is the whole
+// point of the contract: the two numbers must NOT be equal under a burst.
+type burstUnit struct {
+	bus     *topic.Topic[int]
+	got     *atomic.Int64
+	renders *atomic.Int64
+	sum     via.State[int]
+}
+
+func (b *burstUnit) OnInit(ctx *via.Ctx) error { ctx.Listen(b.bus, b.recv); return nil }
+func (b *burstUnit) recv(ctx *via.Ctx, v int)  { b.got.Add(1); b.sum.Set(b.sum.Get() + v) }
+func (b *burstUnit) View() h.H {
+	b.renders.Add(1)
+	return h.Div(h.Str("sum="), b.sum.Display())
+}
+
+// The defect: a burst wider than the old 64-slot buffer silently skipped
+// handler calls, so a unit that accumulates in its handler got a WRONG answer.
+// Exact counts, not thresholds — a handler call is either lost or it is not.
+// The same burst must also cost far fewer renders than it has messages: every
+// pending value is drained into one batch, handled in order, then pushed once.
+func TestListen_burstLosesNoHandlerCallAndCoalescesRenders(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const msgs = 1000
+		bus := topic.New[int]()
+		var got, renders atomic.Int64
+		srv := liveServer(t, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		go func() { //nolint:staticcheck // drain so a full lines channel never stalls the stream
+			for range lines {
+			}
+		}()
+		synctest.Wait()
+		require.Equal(t, 1, bus.Subs(), "the stream must be subscribed before the burst")
+
+		renders.Store(0)
+		for range msgs {
+			bus.Publish(1)
+		}
+		synctest.Wait()
+
+		assert.Equal(t, int64(msgs), got.Load(), "a handler call was lost: the app's accumulated state is wrong")
+		r := renders.Load()
+		assert.Positive(t, r, "the batch must still produce a render")
+		assert.Less(t, r, int64(msgs), "renders did not coalesce: %d messages cost %d renders", msgs, r)
+		t.Logf("%d messages -> %d handler calls, %d renders", msgs, got.Load(), r)
+	})
+}
+
+// selfPublisher listens to the very topic its handler publishes to. Its
+// handler runs on the stream's push goroutine while the queue's only reader is
+// the subscription goroutine blocked handing the next batch to that same
+// (unbuffered) push channel — so a Publish that could block on a full
+// subscriber queue closes the cycle and wedges the connection for good.
+type selfPublisher struct {
+	bus  *topic.Topic[int]
+	got  *atomic.Int64
+	seen via.State[int]
+}
+
+func (s *selfPublisher) OnInit(ctx *via.Ctx) error { ctx.Listen(s.bus, s.recv); return nil }
+func (s *selfPublisher) recv(ctx *via.Ctx, v int) {
+	s.got.Add(1)
+	s.seen.Set(v)
+	if v > 0 {
+		s.bus.Publish(v - 1)
+	}
+}
+func (s *selfPublisher) View() h.H { return h.Div(h.Str("n="), s.seen.Display()) }
+
+func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+	const seeds = 50
+	bus := topic.New[int]()
+	var got atomic.Int64
+	srv := serve(t, via.Register(selfPublisher{bus: bus, got: &got}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	go func() { //nolint:staticcheck
+		for range lines {
+		}
+	}()
+	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond)
+
+	for range seeds {
+		bus.Publish(1)
+	}
+	// Each seed is handled once and republished once: 2 handler calls apiece.
+	require.Eventually(t, func() bool { return got.Load() == 2*seeds }, 5*time.Second, 5*time.Millisecond,
+		"a unit publishing to the topic it listens to wedged its own stream (%d/%d handler calls)", got.Load(), 2*seeds)
+}
+
+// One client that never reads its socket must not hold up anyone else's
+// delivery: each connection owns its goroutine and its own queue.
+func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
+	t.Parallel()
+	bus := topic.New[int]()
+	var got, renders atomic.Int64
+	srv := serve(t, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+
+	// A stream whose body is never read at all.
+	ctx, stall := context.WithCancel(context.Background())
+	defer stall()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	stuck, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer stuck.Body.Close()
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	require.Eventually(t, func() bool { return bus.Subs() == 2 }, 2*time.Second, 5*time.Millisecond)
+
+	for range 500 {
+		bus.Publish(1)
+	}
+	awaitLine(t, lines, "sum=")
+	require.Eventually(t, func() bool { return got.Load() >= 500 }, 5*time.Second, 5*time.Millisecond,
+		"a healthy client's deliveries were held up by a client that never reads")
+}
+
+// BenchmarkListen_burstFrames quantifies the coalescing half of the fix:
+// renders (and therefore SSE frames + flush syscalls) per published message.
+func BenchmarkListen_burstFrames(b *testing.B) {
+	const msgs = 1000
+	bus := topic.New[int]()
+	var got, renders atomic.Int64
+	srv := serve(b, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer resp.Body.Close()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := resp.Body.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	for bus.Subs() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	var total int64
+	renders.Store(0)
+	got.Store(0)
+	for b.Loop() {
+		for range msgs {
+			bus.Publish(1)
+		}
+		total += msgs
+		for got.Load() < total {
+			time.Sleep(time.Millisecond)
+		}
+	}
+	b.ReportMetric(float64(renders.Load())/float64(total), "renders/msg")
+	b.ReportMetric(float64(got.Load())/float64(total)*100, "%delivered")
+}

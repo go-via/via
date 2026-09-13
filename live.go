@@ -61,6 +61,13 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // is valid only inside OnInit — see Tick for why a call after OnInit returns is
 // a loud no-op.
 //
+// Every published value reaches handler exactly once, in publish order, up to
+// the subscription's queue limit (see topic.Publish for the one case that
+// drops, which logs and is counted). Renders are NOT one per value: a backlog
+// is handled in one batch — all its handler calls run, then a single re-render
+// and a single SSE frame — so a burst costs frames proportional to how fast the
+// client drains, never to how fast the topic publishes.
+//
 // The Subscribe itself is deferred to the moment the stream starts pumping:
 // OnInit also runs on a plain GET and on every plain action, and
 // subscribing there would hand out a Sub nothing will ever Stop.
@@ -77,21 +84,38 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		sub := t.Subscribe()
 		c.OnDispose(sub.Stop)
 		go func() {
-			ch := sub.C()
+			ready := sub.Ready()
 			for {
 				select {
 				case <-reqCtx.Done():
 					return
-				case v, ok := <-ch:
-					if !ok {
+				case <-ready:
+					batch, ok := sub.Drain()
+					if len(batch) == 0 {
+						if !ok {
+							return
+						}
+						continue
+					}
+					// One push item per BATCH, not per value: every handler call
+					// still runs, in publish order, but the re-render and its SSE
+					// frame happen once for the whole backlog. Values published
+					// while this send waits pile up for the next Drain, so a burst
+					// costs a bounded number of frames instead of one each.
+					// The item mutates THIS embed (c) and pushes only THIS embed's
+					// container — so on a multiplex page a fan-out to one embed
+					// never re-renders a sibling.
+					select {
+					case pushq <- func() {
+						for _, v := range batch {
+							handler(c, v)
+						}
+						c.push()
+					}:
+					case <-reqCtx.Done():
 						return
 					}
-					// The enqueued unit mutates THIS embed (c) and pushes only
-					// THIS embed's container — so on a multiplex page a fan-out to
-					// one embed never re-renders a sibling.
-					select {
-					case pushq <- func() { handler(c, v); c.push() }:
-					case <-reqCtx.Done():
+					if !ok {
 						return
 					}
 				}
