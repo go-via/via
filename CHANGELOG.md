@@ -20,18 +20,28 @@ the v2 core. **Requires Go 1.27.**
   value must be JSON-encodable (it panics if not) and a value written under a
   type that has since been renamed reads back as absent.
 
-- **`Reloader`**: `Reload(*via.Ctx) error`, run after an action and before the
+- **`Reloader`**: `OnReload(*via.Ctx) error`, run after an action and before the
   response render, on the plain path and the live path alike. It fixes the
   commonest week-one defect: `OnInit` loads, the handler mutates the store, and
   the render still shows what `OnInit` read, so the action answers 204 and the
-  UI never moves. `Reload` is a second hook rather than a second `OnInit` run
+  UI never moves. `OnReload` is a second hook rather than a second `OnInit` run
   because `OnInit` is an initializer: it mints and defaults the session, seeds
   signals from the request URL, registers `Tick`/`Listen`, and may `Redirect`
   or return `ErrNotFound`, none of which is safe to repeat once a handler has
-  committed a mutation. `Tick`/`Listen` are no-ops inside `Reload` (liveness
+  committed a mutation. `Tick`/`Listen` are no-ops inside `OnReload` (liveness
   stays the GET/connect verdict), and it is skipped when the handler queued a
   `Redirect`. A unit that declares NEITHER hook and answers 204 now logs one
-  line naming `Reload`, so the failure is never silent again.
+  line naming `OnReload`, so the failure is never silent again.
+
+- **Mount and Embed check the lifecycle hooks.** `Initer`/`Reloader` are
+  duck-typed, so a typo or a signature change unhooks a composition silently.
+  A method literally named `OnInit`/`OnReload` whose signature is not
+  `func(*via.Ctx) error` now panics at Mount/Embed, and a method that *does*
+  have that signature under a near-miss name (`Reload`, `OnInitialize`,
+  `Refresh`, …) on a type implementing neither interface logs one line naming
+  the assertion that would have caught it. The assertion itself —
+  `var _ via.Initer = (*Front)(nil)` — is the only airtight form and is now in
+  every example.
 
 ### Security defaults changed
 
@@ -244,7 +254,7 @@ as a re-read of the README rather than a diff.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
   multipart, so a file `<input>` just works; read it with stdlib's
   `ctx.Request().FormFile(name)`; no separate upload verb or type.
-- **`ctx.Redirect`** navigates from OnInit, Reload, a PostForm submit (303)
+- **`ctx.Redirect`** navigates from OnInit, OnReload, a PostForm submit (303)
   and a Datastar `@post` alike. Targets are gated by the shared URL policy;
   unsafe ones are dropped loudly with an element-patch fallback. A `@post`
   answers with a constant `location.assign` script Datastar executes through

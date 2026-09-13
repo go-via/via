@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -1191,4 +1192,102 @@ func TestEmbed_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `id="banner"`, "the type that belongs at the acted key must still render")
 	assert.Equal(t, 1, strings.Count(body, "<form"), "the acted form must not be rendered in the banner's slot as well")
+}
+
+// oninitKid is a plain embed whose only content comes from OnInit. Embed copies
+// it out of the parent's field on EVERY render, so if a push render skips
+// OnInit the child comes back zero-valued.
+type oninitKid struct{ loaded string }
+
+func (k *oninitKid) OnInit(ctx *via.Ctx) error { k.loaded = "FROM_ONINIT"; return nil }
+
+func (k *oninitKid) View() h.H { return h.Span(h.Str("kid="), h.Str(k.loaded)) }
+
+type tickRootWithKid struct {
+	K oninitKid
+	n via.State[int]
+}
+
+func (p *tickRootWithKid) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(2*time.Millisecond, p.tick)
+	return nil
+}
+
+func (p *tickRootWithKid) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+
+func (p *tickRootWithKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.K)) }
+
+// The defect: the first pushed frame rendered the embed zero-valued
+// ("kid=") because a push render ran with doInit false and skipped the
+// child's OnInit — so a live root could compose, but only until it ticked.
+func TestLive_plainEmbedUnderALiveRootKeepsItsOnInitState(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Handler(tickRootWithKid{}))
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	require.Contains(t, page, "kid=FROM_ONINIT", "the GET must render the embed's loaded state")
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	assert.Contains(t, firstElementsFrame(t, lines), "kid=FROM_ONINIT",
+		"a push must not serve the embed zero-valued")
+}
+
+// flakyKid is a PLAIN child of a LIVE root whose OnInit starts failing after
+// the connect render. A live root re-inits its plain children on every pushed
+// frame, so from then on every frame panics initOutcome — and a push has no
+// response to turn that into an HTTP answer.
+type flakyKid struct{ inits *atomic.Int32 }
+
+func (k *flakyKid) OnInit(ctx *via.Ctx) error {
+	if k.inits.Add(1) > 1 {
+		return errors.New("kid init boom")
+	}
+	return nil
+}
+
+func (k *flakyKid) View() h.H { return h.P(h.Str("kid")) }
+
+type liveParentFlakyKid struct {
+	Kid flakyKid
+	n   via.State[int]
+}
+
+func (p *liveParentFlakyKid) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.beat)
+	return nil
+}
+
+func (p *liveParentFlakyKid) beat(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+
+func (p *liveParentFlakyKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Kid)) }
+
+// A frame that can never render must end the stream, not loop silently: the
+// client's reconnect then re-requests the page and gets the real 500/303/404
+// off a path that can answer it.
+func TestLive_childInitFailureOnThePushPathTearsTheStreamDown(t *testing.T) {
+	t.Parallel()
+	inits := &atomic.Int32{}
+	srv := serve(t, via.Handler(liveParentFlakyKid{Kid: flakyKid{inits: inits}}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	closed := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		require.Fail(t, "the stream never closed: every frame is dropped and the tab has no signal at all")
+	}
 }

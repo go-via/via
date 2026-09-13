@@ -240,6 +240,47 @@ func (s *Session) WaitEvalTrue(js, desc string) {
 	}
 }
 
+// signalProbe yields the live Datastar signal store, or null on the very first
+// evaluation (the one that injects the probe). Datastar's bundle is an ES module
+// that exports no global, so a data-json-signals element its MutationObserver
+// hydrates is the only supported way to read a signal value. The probe lives on
+// <body>, outside the #root morph target, so a server push never removes it.
+const signalProbe = `(()=>{let p=document.getElementById('__via_probe');` +
+	`if(!p){p=document.createElement('pre');p.id='__via_probe';p.style.display='none';` +
+	`p.setAttribute('data-json-signals','');document.body.appendChild(p);return null}` +
+	`try{return JSON.parse(p.textContent||'null')}catch(_){return null}})()`
+
+// WaitLiveConnected blocks until this tab's SSE stream has delivered its
+// per-connection tab id. Nothing in the rendered DOM changes on connect, yet an
+// action fired before the id lands posts an empty $viatab and is refused — so
+// the signal itself is the only honest gate for "the tab is live now".
+func (s *Session) WaitLiveConnected() {
+	s.t.Helper()
+	s.WaitEvalTrue(`(()=>{const g=`+signalProbe+`;return !!(g&&g.viatab)})()`,
+		"the SSE stream to deliver this tab's id ($viatab)")
+}
+
+// WaitBoundSignal blocks until the Datastar signal bound to selector (the slot
+// named by its data-bind attribute) holds want. An input's DOM value is set by
+// the keystroke itself, before Datastar's bind runs, so waiting on Value would
+// return while the signal the server will actually read is still stale.
+func (s *Session) WaitBoundSignal(selector, want string) {
+	s.t.Helper()
+	s.WaitEvalTrue(fmt.Sprintf(
+		`(()=>{const el=document.querySelector(%q);if(!el)return false;`+
+			`const k=el.getAttribute('data-bind');if(!k)return false;`+
+			`const g=%s;return !!g&&g[k]===%q})()`, selector, signalProbe, want),
+		fmt.Sprintf("the signal bound to %q to become %q", selector, want))
+}
+
+// WaitLoaded blocks until the document has fully loaded, i.e. every subresource
+// the CSP admitted has settled. The gate for a negative assertion about a
+// render-blocking fetch: if it were going to happen, it happened before this.
+func (s *Session) WaitLoaded() {
+	s.t.Helper()
+	s.WaitEvalTrue(`document.readyState==='complete'`, "the document to finish loading")
+}
+
 // Sleep settles for d. Prefer the Wait* helpers, which poll the DOM and so
 // absorb latency without a fixed delay; reach for Sleep only when there is no
 // observable signal to wait on — e.g. letting the SSE stream connect before a

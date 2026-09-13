@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -767,4 +769,110 @@ func TestSessionStore_expiredBlobIsRefusedEvenWhenTheStoreIgnoresTTL(t *testing.
 	_, after := fireAction(t, c, srv, 1)
 	assert.NotContains(t, after, "hi alice",
 		"via's own expiry stamp must fail an idle session closed")
+}
+
+type sessUser struct{ Name string }
+
+// sessInAction mints the session in OnInit and reads it back in the handler —
+// the same request, so the cookie is on the response and never in the request.
+type sessInAction struct {
+	Q   via.Signal[string]
+	who string
+}
+
+func (s *sessInAction) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(sessUser{Name: "ann"})
+	return nil
+}
+
+func (s *sessInAction) Save(ctx *via.Ctx) {
+	u, ok := ctx.Session().Get[sessUser]()
+	s.who = fmt.Sprintf("who:%v:%s", ok, u.Name)
+}
+
+func (s *sessInAction) View() h.H {
+	return h.Div(h.Input(s.Q.Bind()), h.P(h.Str(s.who)), h.Button(via.On("click", s.Save), h.Str("save")))
+}
+
+func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sessInAction{}))
+	page := fetchPage(t, app, "/")
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), "who:true:ann",
+		"a session created in OnInit must be the same session the handler reads, across discovery passes")
+	assert.LessOrEqual(t, len(resp.Header.Values("Set-Cookie")), 1,
+		"a second pass must not mint a second session and a second Set-Cookie")
+}
+
+// sessKid writes the session from its own OnInit; two of them under a root that
+// never calls Session() is the sibling case.
+type sessKid struct{ Tag string }
+
+func (k *sessKid) OnInit(ctx *via.Ctx) error { ctx.Session().Put(sessUser{Name: "ann"}); return nil }
+
+func (k *sessKid) View() h.H { return h.P(h.Str(k.Tag)) }
+
+type sessSiblings struct {
+	Q    via.Signal[string]
+	A, B sessKid
+	hit  string
+}
+
+func (p *sessSiblings) Save(ctx *via.Ctx) {
+	u, ok := ctx.Session().Get[sessUser]()
+	p.hit = fmt.Sprintf("who:%v:%s", ok, u.Name)
+}
+
+func (p *sessSiblings) View() h.H {
+	return h.Div(
+		h.Input(p.Q.Bind()),
+		via.Embed(p.A), via.Embed(p.B),
+		h.P(h.Str(p.hit)),
+		h.Button(via.On("click", p.Save)),
+	)
+}
+
+func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sessSiblings{}))
+
+	req, err := http.NewRequest(http.MethodGet, app.URL()+"/", nil)
+	require.NoError(t, err)
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"the root resolves the session once per request; siblings must inherit it, not mint their own")
+}
+
+func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sessSiblings{}))
+	page := fetchPage(t, app, "/")
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"a second discovery pass must not re-mint per sibling")
+	assert.Contains(t, string(b), "who:true:ann",
+		"and the handler must read the very session the children wrote")
 }

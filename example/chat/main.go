@@ -41,6 +41,8 @@ type Chat struct {
 	Online via.State[int]     // presence count, pushed over SSE
 }
 
+var _ via.Initer = (*Chat)(nil)
+
 func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
 	ctx.Listen(c.room.presence, c.onPresence)

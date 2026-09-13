@@ -18,6 +18,8 @@ import (
 // re-render over SSE on every beat.
 type Pulse struct{ Beats via.State[int] }
 
+var _ via.Initer = (*Pulse)(nil)
+
 func (p *Pulse) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Second, p.beat)
 	return nil

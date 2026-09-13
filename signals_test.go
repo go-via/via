@@ -459,3 +459,42 @@ func TestLiveSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 			"the pushed re-render must not reflect a signal the client had no right to write")
 	})
 }
+
+type staleChild struct{ S via.Signal[string] }
+
+func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
+
+// The parent binds the child's signal in its OWN View and also Embeds the
+// child. Embed copies the field by value at View-build time, so from the
+// second render on, the copy arrives carrying the root-scoped slot the
+// parent's field minted, colliding with the parent's own.
+type stalePage struct {
+	Beat via.State[int]
+	C    staleChild
+}
+
+func (p *stalePage) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.tick)
+	return nil
+}
+
+func (p *stalePage) tick(ctx *via.Ctx) { p.Beat.Set(p.Beat.Get() + 1) }
+
+func (p *stalePage) View() h.H {
+	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Embed(p.C))
+}
+
+func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(stalePage{}))
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+
+	frame := firstElementsFrame(t, lines)
+	binds := regexp.MustCompile(`data-bind="([a-z0-9_]+)"`).FindAllStringSubmatch(frame, -1)
+	require.Len(t, binds, 2, "frame: %s", frame)
+	assert.NotEqual(t, binds[0][1], binds[1][1],
+		"the embed copy must re-mint its slot, not inherit the parent's root-scoped one")
+	assert.True(t, strings.HasPrefix(binds[1][1], "c__"),
+		"embed slot must carry its embed prefix: %s", binds[1][1])
+}

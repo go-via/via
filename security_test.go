@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
@@ -403,4 +404,326 @@ func sseSessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
 		}
 	}
 	return nil
+}
+
+// unsafeRoot and unsafeEmbed both bump a visible counter alongside an
+// unsafe Redirect, so a rejected redirect's fallback response is provably a
+// normal patch (the counter's new value), not a crash or a hang.
+type unsafeRoot struct{ n int }
+
+func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
+
+func (u *unsafeRoot) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+
+type unsafeEmbed struct{ n int }
+
+func (u *unsafeEmbed) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
+
+func (u *unsafeEmbed) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+
+type unsafeParent struct{ I unsafeEmbed }
+
+func (p *unsafeParent) View() h.H { return h.Div(via.Embed(p.I)) }
+
+func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plain root", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(unsafeRoot{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
+		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
+	})
+
+	t.Run("plain embed", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(unsafeParent{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
+		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
+	})
+
+	t.Run("native form", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(loginForm{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
+		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
+		assert.Empty(t, resp.Header.Get("Location"))
+	})
+}
+
+func TestDispatch_forgedActionIDIsGone(t *testing.T) {
+	t.Run("plain", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(counter{count: &store{}}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		url := actionURL(t, page, "r", 0)
+		for _, n := range []string{"99", "-1", "________"} {
+			resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, n), "{}")
+			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged id=%s must 410, not panic/misroute", n)
+		}
+	})
+
+	t.Run("live", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			app := vt.Serve(t, via.Handler(liveClicker{}))
+			conn := app.Connect()
+			page := fetchPage(t, app, "/")
+			url := actionURL(t, page, "r", 0)
+			for _, n := range []string{"99", "-1", "________"} {
+				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
+				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
+			}
+			// The connection must still be usable — the recovered panic path
+			// this replaces must not be the only thing standing between a
+			// forged n and a crashed stream.
+			status, _ := app.Action(0).Raw(url).Tab(conn.TabID()).Fire()
+			assert.Equal(t, http.StatusNoContent, status)
+		})
+	})
+}
+
+// toggleState is branchedView's shared, per-connection-independent memory: a
+// bool that flips which actions View renders, plus which handler last ran, so
+// a test can observe whether a click actually reached a handler.
+type toggleState struct {
+	mu     sync.Mutex
+	locked bool
+	ran    string
+}
+
+func (s *toggleState) flip() { s.mu.Lock(); s.locked = !s.locked; s.mu.Unlock() }
+
+func (s *toggleState) mark(name string) { s.mu.Lock(); s.ran = name; s.mu.Unlock() }
+
+func (s *toggleState) snapshot() (locked bool, ran string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.locked, s.ran
+}
+
+// branchedView's action SET depends on server state: unlocked renders
+// Save=0, Delete=1, Flip=2; locked removes Save, so every later index shifts
+// down — Delete=0, Flip=1 — the render shape the audit flagged as a live
+// misroute hazard (a branched View shifting every following index),
+// reproduced here on the plain path.
+type branchedView struct{ st *toggleState }
+
+func (b *branchedView) Save(ctx *via.Ctx) { b.st.mark("save") }
+
+func (b *branchedView) Delete(ctx *via.Ctx) { b.st.mark("delete") }
+
+func (b *branchedView) Flip(ctx *via.Ctx) { b.st.flip() }
+
+func (b *branchedView) View() h.H {
+	locked, ran := b.st.snapshot()
+	if locked {
+		return h.Div(
+			h.Button(via.On("click", b.Delete)), // locked: Delete=0
+			h.Button(via.On("click", b.Flip)),   // locked: Flip=1 (Save is gone)
+			h.P(h.Str("locked:"), h.Str(ran)),
+		)
+	}
+	return h.Div(
+		h.Button(via.On("click", b.Save)),   // unlocked: Save=0
+		h.Button(via.On("click", b.Delete)), // unlocked: Delete=1
+		h.Button(via.On("click", b.Flip)),   // unlocked: Flip=2
+		h.P(h.Str("unlocked:"), h.Str(ran)),
+	)
+}
+
+// xmEmbed is a live, dep-free embed mountable at any path — the vehicle for
+// proving a live tab from one mount can't drive another mount's action table.
+type xmEmbed struct {
+	fired *int
+	n     via.State[int]
+}
+
+func (x *xmEmbed) Fire(*via.Ctx) { *x.fired++ }
+
+func (x *xmEmbed) View() h.H {
+	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
+}
+
+func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var aFired, cFired int
+		r := via.NewRouter()
+		r.Mount("/a", xmEmbed{fired: &aFired})
+		r.Mount("/c", xmEmbed{fired: &cFired})
+		srv := liveServer(t, r)
+
+		_, aPage := do(t, srv, http.MethodGet, "/a", "")
+		aURL := actionURL(t, aPage, "r", 0)
+
+		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
+		defer cancel()
+		cTab := awaitTabID(t, cLines)
+		synctest.Wait()
+
+		resp, _ := post(t, srv, aURL, withTab(cTab, "{}"), map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+		})
+		assert.Equal(t, http.StatusGone, resp.StatusCode, "a /c tab must not drive /a's action table")
+		assert.Zero(t, aFired, "the /a action must not have run")
+	})
+}
+
+func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(branchedView{st: &toggleState{}}))
+
+	_, unlocked := do(t, srv, http.MethodGet, "/", "")
+	staleSave := actionURL(t, unlocked, "r", 0)   // Save, only bound while unlocked
+	staleDelete := actionURL(t, unlocked, "r", 1) // Delete, bound in both branches
+	flip := actionURL(t, unlocked, "r", 2)
+
+	// Flip to locked: Save leaves the table and every later index shifts down
+	// by one — under positional routing the pre-flip Delete URL (index 1)
+	// would now land on Flip, silently toggling back to unlocked.
+	resp, lockedBody := do(t, srv, http.MethodPost, flip, "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Contains(t, lockedBody, "locked:", "Flip must have taken effect")
+
+	// The id addresses the handler, so the pre-flip Delete URL still means
+	// Delete — the click does what the button it came from said it does.
+	resp2, after := do(t, srv, http.MethodPost, staleDelete, "{}")
+	assert.Equal(t, http.StatusOK, resp2.StatusCode)
+	assert.Contains(t, after, "locked:", "the stale click must not have misrouted into Flip (back to unlocked)")
+	assert.Contains(t, after, "delete", "it must have run Delete, the handler it named")
+
+	// Save, on the other hand, is not bound by the locked branch at all: 410,
+	// never a misroute into whatever now sits at its old index.
+	resp3, _ := do(t, srv, http.MethodPost, staleSave, "{}")
+	assert.Equal(t, http.StatusGone, resp3.StatusCode,
+		"an action the current render does not bind must 410")
+}
+
+// tabGuard is a live root with one ordinary @post action, so a dispatch either
+// reaches this connection's instance (bumping hits) or does not.
+type tabGuard struct{ hits *int }
+
+func (g *tabGuard) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
+
+func (g *tabGuard) tick(ctx *via.Ctx) {}
+
+func (g *tabGuard) Bump(ctx *via.Ctx) { *g.hits++ }
+
+func (g *tabGuard) View() h.H { return h.Div(h.Button(via.On("click", g.Bump))) }
+
+// The tab id moved from the X-Via-Tab header into the viatab SIGNAL. That is a
+// wire break, not a policy change: a POST that cannot present the connection's
+// tab id must be rejected exactly as the header-based check rejected it, and
+// must not mutate the live unit.
+func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"no signals at all", "{}"},
+		{"empty tab", `{"viatab":""}`},
+		{"forged tab", `{"viatab":"not-a-real-tab"}`},
+		{"tab of the wrong JSON type", `{"viatab":12345}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
+			conn := app.Connect()
+			defer conn.Close()
+
+			status, _ := app.Action(0).Body(tc.body).Fire()
+			assert.Equal(t, http.StatusGone, status,
+				"a live action with no valid tab id must 410, not run against a throwaway instance")
+			assert.Zero(t, calls, "and the connection's unit must not have been touched")
+		})
+	}
+}
+
+// The header is gone for good: leaving it honoured would keep a channel the
+// browser can be made to attach cross-origin under some configurations, on top
+// of the synchronizer token the signal already is.
+func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Via-Tab", conn.TabID())
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "the header must no longer route to a connection")
+	assert.Zero(t, calls)
+}
+
+// And the belt-and-braces half: Datastar-Request still gates the JSON path, so
+// a form-shaped cross-origin POST cannot be dressed up as a signal action.
+func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0),
+		strings.NewReader(`{"viatab":"`+conn.TabID()+`"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.NotEqual(t, http.StatusNoContent, resp.StatusCode,
+		"without Datastar-Request the body is read as a form, so a JSON tab id must not route")
+	assert.Zero(t, calls)
+}
+
+// liveBoundRoot is tabGuard with a Bind()ed slot, so a POST carrying that
+// signal takes a SECOND discovery pass — the pass whose bind Ctx never ran the
+// root's OnInit and so used to read live=false.
+type liveBoundRoot struct {
+	Q    via.Signal[string]
+	hits *int
+}
+
+func (g *liveBoundRoot) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
+
+func (g *liveBoundRoot) tick(ctx *via.Ctx) {}
+
+func (g *liveBoundRoot) Bump(ctx *via.Ctx) { *g.hits++ }
+
+func (g *liveBoundRoot) View() h.H {
+	return h.Div(h.Input(g.Q.Bind()), h.Button(via.On("click", g.Bump)))
+}
+
+func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{`{}`, `{"q":"x"}`} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			app := vt.Serve(t, via.Handler(liveBoundRoot{hits: &calls}))
+			conn := app.Connect()
+			defer conn.Close()
+
+			status, _ := app.Action(0).Body(body).Fire()
+			assert.Equal(t, http.StatusGone, status,
+				"liveness is decided by the auth render; a posted signal that adds a discovery pass must not bypass it")
+			assert.Zero(t, calls, "and the live unit must not have been touched")
+		})
+	}
 }

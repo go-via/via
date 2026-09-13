@@ -53,6 +53,7 @@ func Embed[C any](child C) h.H {
 	// of the connection), so its address is the base its signals offset from.
 	typ := reflect.TypeOf(child)
 	checkViewReceiver(typ)
+	checkHooks(typ, &embedHookWarned)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }

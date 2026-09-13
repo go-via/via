@@ -29,10 +29,11 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
 	"net/http"
 	"net/url"
+
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.
