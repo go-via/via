@@ -1208,6 +1208,56 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 	}
 }
 
+// --- F-1: a live action that FAILS after hydration must not leave the posted
+// values on the instance.
+//
+// liveRunAction hydrates every posted slot into the instance BEFORE running the
+// handler, and the only other restore is livePush's — which never runs when the
+// action returns without a push. A malformed ?a= is the attacker-reachable way
+// in: the arg decode panics from INSIDE act.fn, after hydration. The sibling
+// property for the push path is
+// TestConnect_aTickHandlerNeverSeesThePostedSignalValue.
+
+type tickAfterBadArg struct {
+	Idx  via.Signal[int]
+	seen int
+}
+
+func (p *tickAfterBadArg) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen = p.Idx.Get() })
+	return nil
+}
+
+func (p *tickAfterBadArg) Bump(ctx *via.Ctx, v int) {}
+
+func (p *tickAfterBadArg) View() h.H {
+	return h.Div(
+		h.Input(p.Idx.Bind()),
+		h.Button(via.OnArg("click", p.Bump, 7)),
+		p.Idx.Display(),
+		h.P(h.Str("seen: "+strconv.Itoa(p.seen))),
+	)
+}
+
+func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tickAfterBadArg{}))
+	conn := app.Connect()
+	require.Contains(t, conn.Await("seen: "), "seen: 0")
+
+	url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
+	status, _ := app.Action(0).Raw(url).Body(`{"idx":99}`).Over(conn).Fire()
+	require.Equal(t, http.StatusBadRequest, status)
+
+	// Two ticks: the first could still be the one that raced the dispatch.
+	frame := conn.Await("seen: ")
+	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+	frame = conn.Await("seen: ")
+	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+	// The client still sees what it posted — the display render is unchanged.
+	assert.Contains(t, frame, ">99<", "the display render must still show what the client posted")
+}
+
 // abandonedAction is dispatched with a request context already canceled
 // before ServeHTTP is called, isolating tabStream.run's first select
 // (pulse-send vs. reqCtx.Done, both ready at once) from real round-trip

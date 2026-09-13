@@ -686,6 +686,19 @@ as a re-read of the README rather than a diff.
 - A session that idles past its TTL while a live stream is open turns every
   later dispatch on that tab into a 403 "session mismatch" until the page is
   reloaded — the stream itself does not keep the session warm.
+- A `View` that panics PART-WAY through a live push's display render can lose
+  exactly one later `Signal.Set`. `Signal.bind` stamps the signal's dirty sink
+  at bind time, so the signals rendered before the panic point are left
+  pointing at a `Ctx` the push never installed; a `Tick`/`Listen` `Set` before
+  the next push lands in that orphaned map, the push's `flushDirty` does not
+  see it, and the display render repaints the client's value over it. It
+  self-heals on the following push, and it is not client-driven — the `View`
+  has to panic. Keeping the dirty sink on the CONNECTION instead was
+  considered and rejected: the plain path has no connection, and it reads the
+  acted embed's OWN dirty set (not the page-wide one) to scope that embed's
+  `data-signals` patch, so one shared sink would make an embed's patch
+  re-declare a sibling's slots and clobber a value the user is mid-edit.
+
 - A live connection only binds to a session an action actually MINTS
   (`Session().Put`/`.Rotate`) while none existed at the start of that
   request; a merely read-only `Session().Get` never binds it, even one
