@@ -322,10 +322,15 @@ as a re-read of the README, not a diff.
   that render, decides what is dispatchable), applies the body, and re-renders
   to a fixpoint so a `Bind()`ed `Signal` in a `When` build, an `Each` row, or
   an embed `View` that another `Bind()`ed signal reveals is hydrated too — its
-  posted value used to be dropped server-side and wiped client-side. The action
-  must be bound by BOTH renders, so a posted signal still cannot open the
-  branch that authorizes it. A handler that exists ONLY inside such a branch
-  still answers 410 on a plain page.
+  posted value used to be dropped server-side and wiped client-side. The
+  dispatchable set is the INTERSECTION of the two renders, never a superset,
+  and the intersection is per `(handler, arg)` pair: a posted signal cannot
+  open the branch that authorizes a handler, nor widen an `Each` so that an
+  `OnArg` arg the server-state render never bound becomes dispatchable. A
+  handler that exists ONLY inside such a branch still answers 410 on a plain
+  page. Every discovery pass re-renders the whole tree, so an embedded child's
+  `OnInit` runs once per pass (two passes for a page whose posted body carries
+  any `Bind()`ed slot) — keep `OnInit` cheap and idempotent.
 
   A stateless action's patch now also declares any slot the pre-action render
   did not carry, so an input that appears for the first time in the response is

@@ -170,7 +170,7 @@ examples, the whole live stack verified in real headless browsers
   from whatever rendered first. `sig.Ref()` returns that name as a Datastar
   expression (`"$count"`) for hand-written attributes: `h.Data("show",
   p.Open.Ref())`. A `Signal` must be a plain field of the composition —
-  one reached through a pointer, slice, array or map field, or bound off a
+  one reached through a pointer, slice, array, map or interface field, or bound off a
   value-receiver `View`, has no field name and panics when rendered.
 - **Live embeds + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live embed with a per-tab SSE
