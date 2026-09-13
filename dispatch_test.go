@@ -1994,6 +1994,15 @@ func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 	assert.Contains(t, logs.String(), "changed nothing the render shows")
 	assert.Contains(t, logs.String(), "Reload(*via.Ctx) error",
 		"the 204 must name the hook that fixes it")
+
+	// A legitimately idempotent click is a dead click EVERY time. One line per
+	// click buries the log instead of reading it.
+	logs.Reset()
+	for range 5 {
+		app.Action(0).Fire()
+	}
+	assert.NotContains(t, logs.String(), "changed nothing the render shows",
+		"the dead-click warning must be deduped per action, not repeated per click")
 }
 
 // liveReloader's data lives in the store, not in State — the live push has to
