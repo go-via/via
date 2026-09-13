@@ -2295,3 +2295,81 @@ func (u *triListen) View() h.H {
 	u.renders.Add(1)
 	return h.Div(u.n.Display())
 }
+
+// --- regression: a live root's plain embed keeps what its OnInit loaded ---
+
+// oninitKid is a plain embed whose only content comes from OnInit. Embed copies
+// it out of the parent's field on EVERY render, so if a push render skips
+// OnInit the child comes back zero-valued.
+type oninitKid struct{ loaded string }
+
+func (k *oninitKid) OnInit(ctx *via.Ctx) error { k.loaded = "FROM_ONINIT"; return nil }
+func (k *oninitKid) View() h.H                 { return h.Span(h.Str("kid="), h.Str(k.loaded)) }
+
+type tickRootWithKid struct {
+	K oninitKid
+	n via.State[int]
+}
+
+func (p *tickRootWithKid) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(2*time.Millisecond, p.tick)
+	return nil
+}
+func (p *tickRootWithKid) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *tickRootWithKid) View() h.H         { return h.Div(p.n.Display(), via.Embed(p.K)) }
+
+// The defect: the first pushed frame rendered the embed zero-valued
+// ("kid=") because a push render ran with doInit false and skipped the
+// child's OnInit — so a live root could compose, but only until it ticked.
+func TestLive_plainEmbedUnderALiveRootKeepsItsOnInitState(t *testing.T) {
+	t.Parallel()
+	srv := liveServer(t, via.Register(tickRootWithKid{}))
+
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	require.Contains(t, page, "kid=FROM_ONINIT", "the GET must render the embed's loaded state")
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	assert.Contains(t, firstElementsFrame(t, lines), "kid=FROM_ONINIT",
+		"a push must not serve the embed zero-valued")
+}
+
+// --- regression: one panicking Listen handler costs one value, not the batch ---
+
+type panicListener struct {
+	bus  *topic.Topic[int]
+	got  *atomic.Int64
+	seen *atomic.Int64 // bitmask of the values whose handler ran to completion
+}
+
+func (b *panicListener) OnInit(ctx *via.Ctx) error { ctx.Listen(b.bus, b.recv); return nil }
+func (b *panicListener) recv(ctx *via.Ctx, v int) {
+	b.got.Add(1)
+	if v == 2 {
+		panic("handler blew up on value 2")
+	}
+	b.seen.Or(1 << v)
+}
+func (b *panicListener) View() h.H { return h.Div(h.Str("seen="), h.Str(int(b.seen.Load()))) }
+
+// The defect: the whole drained batch ran as ONE push item, so a panic on value
+// 2 skipped 3,4,5 AND the re-render — a bad value cost the rest of the backlog
+// and the frame the survivors earned.
+func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
+	t.Parallel()
+	bus := topic.New[int]()
+	var got, seen atomic.Int64
+	srv := liveServer(t, via.Register(panicListener{bus: bus, got: &got, seen: &seen}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitTabID(t, lines)
+
+	for v := 1; v <= 5; v++ {
+		bus.Publish(v)
+	}
+
+	// 0b111010 = values 1,3,4,5 completed; 2 panicked.
+	awaitLine(t, lines, "seen=58")
+	assert.EqualValues(t, 5, got.Load(), "every value must still reach the handler")
+}

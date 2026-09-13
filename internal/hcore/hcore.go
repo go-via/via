@@ -349,3 +349,11 @@ func (a bareAttr) isAttr() {}
 // NoAttr is an attribute that renders nothing, for a caller that has decided an
 // attribute should be absent rather than empty.
 func NoAttr() Attr { return noAttr{} }
+
+// EscapeString is writeEscaped as a string function, for the few places that
+// build an attribute value by concatenation instead of through a Renderer.
+func EscapeString(s string) string {
+	var b bytes.Buffer
+	writeEscaped(&b, s)
+	return b.String()
+}

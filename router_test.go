@@ -7,6 +7,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -764,4 +765,95 @@ func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) 
 	defer cancel()
 	awaitTabID(t, lines)
 	awaitLine(t, lines, "pct ")
+}
+
+// slugPage is a LIVE page under a param'd mount: it holds a Tick (so the page
+// gets the data-init="@post('…/_via/sse')" bootstrap), an action binding (so
+// every data-on:@post URL carries the segment too), and a PostForm (so the
+// form action attribute does), and it echoes the raw segment through
+// Param[string] so the escaping can be proven not to corrupt the value.
+type slugPage struct{ slug string }
+
+func (p *slugPage) OnInit(ctx *via.Ctx) error {
+	p.slug = ctx.Param[string]("slug")
+	ctx.Tick(time.Hour, p.tick)
+	return nil
+}
+func (p *slugPage) tick(ctx *via.Ctx) {}
+func (p *slugPage) Bump(ctx *via.Ctx) {}
+func (p *slugPage) View() h.H {
+	return h.Div(
+		h.P(h.Str("slug=["), h.Str(p.slug), h.Str("]")),
+		h.Button(via.On("click", p.Bump), h.Str("b")),
+		via.PostForm(p.Bump, h.Button(h.Str("go"))),
+	)
+}
+
+func slugServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	r := via.NewRouter()
+	r.Mount("/t/{slug}", slugPage{})
+	return serve(t, r)
+}
+
+// A mount param is concatenated into a Datastar expression (@post('…')) inside
+// an HTML attribute, and Datastar EVALUATES that expression as JavaScript under
+// a CSP carrying 'unsafe-eval'. A quote in the segment would close the string
+// literal and run whatever follows. The assertion is on the attribute CONTENT,
+// not the absence of a payload string: the escaped form must be exactly the
+// percent-encoded segment inside one unbroken quoted literal.
+func TestRouter_paramCannotBreakOutOfADatastarExpression(t *testing.T) {
+	t.Parallel()
+	srv := slugServer(t)
+
+	_, page := do(t, srv, http.MethodGet, "/t/x%27%2Balert(1)%2B%27y", "")
+
+	assert.Contains(t, page, `data-init="@post('/t/x%27+alert%281%29+%27y/_via/sse')"`,
+		"the SSE bootstrap must carry the segment percent-encoded, inside one quoted literal")
+	assert.Regexp(t, `data-on:click="@post\('/t/x%27\+alert%281%29\+%27y/_via/a/r/[A-Za-z0-9_-]+'\)"`, page,
+		"every action URL must carry the segment percent-encoded")
+	assert.Regexp(t, `<form method="post" enctype="multipart/form-data" action="/t/x%27\+alert%281%29\+%27y/_via/a/r/[A-Za-z0-9_-]+">`, page,
+		"the PostForm action must carry it too")
+	assert.NotContains(t, page, "@post('/t/x'", "the segment must never terminate the JS string literal")
+}
+
+// The double quote closes the ATTRIBUTE rather than the JS literal, so
+// path-escaping alone is not enough: the value must be HTML-escaped where it is
+// written. (PathEscape leaves '"' alone.)
+func TestRouter_paramCannotBreakOutOfTheAttribute(t *testing.T) {
+	t.Parallel()
+	srv := slugServer(t)
+
+	_, page := do(t, srv, http.MethodGet, `/t/a%22%20onload=alert(1)%20x=%22b`, "")
+
+	assert.Contains(t, page, `data-init="@post('/t/a%22%20onload=alert%281%29%20x=%22b/_via/sse')"`)
+	assert.NotContains(t, page, `" onload=`, "an unescaped quote would graft a live attribute into <body>")
+}
+
+// '&' must not start an entity inside the attribute, and '</script>' must not
+// be able to close an element — both are written escaped.
+func TestRouter_paramAmpersandAndTagAreEscaped(t *testing.T) {
+	t.Parallel()
+	srv := slugServer(t)
+
+	_, page := do(t, srv, http.MethodGet, `/t/a%26amp%3Bb`, "")
+	assert.Contains(t, page, `data-init="@post('/t/a&amp;amp%3Bb/_via/sse')"`,
+		"'&' must be HTML-escaped in the attribute; PathEscape leaves it alone")
+
+	_, page2 := do(t, srv, http.MethodGet, `/t/%3C%2Fscript%3E`, "")
+	assert.Contains(t, page2, `data-init="@post('/t/%3C%2Fscript%3E/_via/sse')"`)
+	assert.NotContains(t, page2, "@post('/t/</script>", "no raw tag may reach an attribute from a segment")
+}
+
+// Escaping must not corrupt the VALUE: a non-ASCII segment still round-trips
+// to Param[string] intact, and the URL it mints is a valid path the mux routes.
+func TestRouter_nonASCIIParamRoundTrips(t *testing.T) {
+	t.Parallel()
+	srv := slugServer(t)
+
+	_, page := do(t, srv, http.MethodGet, "/t/caf%C3%A9-%F0%9F%8E%89", "")
+
+	assert.Contains(t, page, "slug=[café-🎉]", "Param[string] must see the decoded segment")
+	assert.Contains(t, page, `data-init="@post('/t/caf%C3%A9-%F0%9F%8E%89/_via/sse')"`,
+		"the minted URL must be the percent-encoded form the mux decodes back")
 }

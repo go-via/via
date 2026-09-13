@@ -8,6 +8,14 @@ the v2 core. **Requires Go 1.27.**
 
 ### Security defaults changed
 
+- **A mount parameter can no longer break out of a Datastar expression.** A
+  `{slug}` segment was concatenated raw into `data-init="@post('…')"` and into
+  every action/form URL; Datastar evaluates those attributes as JavaScript
+  under a CSP that must carry `'unsafe-eval'`, so a quote in the segment ran
+  attacker script on any mount whose `OnInit` did not coerce it. The segment is
+  now path-escaped where the base is built AND HTML-escaped where the attribute
+  is written. `Param[T]` still sees the decoded value.
+
 Read this even if you read nothing else. Two defaults moved in the permissive
 direction relative to v1, deliberately, and neither announces itself at
 runtime unless you look:
@@ -146,7 +154,9 @@ as a re-read of the README, not a diff.
   order, then re-renders and pushes **once** for the batch, so a burst no
   longer costs one SSE frame per message. Loss is possible only past the queue
   limit, which means the reader is wedged rather than merely behind; it is
-  counted by `Sub.Dropped()` and logged once per subscription. **Breaking:**
+  counted by `Sub.Dropped()` (readable when you hold the `Sub` yourself —
+  `ctx.Listen` owns its subscription, so there it shows up only in the log)
+  and logged once per subscription. **Breaking:**
   `Sub.C() <-chan T` is replaced by `Sub.Ready() <-chan struct{}` plus
   `Sub.Drain() ([]T, bool)`; `Topic.SubscribeLimit(n)` sets a custom limit.
 - **A plain (non-live) page may embed live islands** as sibling struct
@@ -258,8 +268,11 @@ as a re-read of the README, not a diff.
   another live unit.* Renames: `ctx.OnLive` → `ctx.OnConnect`,
   `vt.App.IslandAction` → `vt.App.EmbedAction`, `vt.Action.Live` →
   `vt.Action.Over`. Several 410/500 bodies and the nesting panics were reworded
-  to match. **No wire change**: container ids, signal prefixes, action and SSE
-  paths, and the tab/session headers and cookies are all untouched.
+  to match. **No wire change to ids or routing**: container ids, signal
+  prefixes, action and SSE paths, and the tab/session headers and cookies are
+  all untouched. Some error BODIES did change text (`no such island` → `no such
+  embed`, `live connection closed` → `stream closed`), so a client matching on
+  a 410 body string needs updating; the status codes did not move.
 
 - **A native `PostForm` submit inside a live unit now returns the page a
   fresh connection will hold** (fresh instance, `OnInit` run) instead of a

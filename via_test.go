@@ -989,3 +989,60 @@ func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
 	assert.Equal(t, first, actionURLs(t, via.Register(idTwins{})),
 		"the id is content-addressed, not per-instance")
 }
+
+// --- regression: a slot name that is not one field's unique identity ---
+
+// collidePage mints "a_b" twice: once for the nested A.B (nested struct names
+// join with "_") and once for the sibling field A_b. Two spans bind one slot,
+// one slot is declared, and the hydrator map keeps whichever came last — so a
+// POST writes the WRONG field, silently.
+type collidePage struct {
+	A   struct{ B via.Signal[int] }
+	A_b via.Signal[int]
+}
+
+func (p *collidePage) View() h.H { return h.Div(p.A.B.Bind(), p.A_b.Bind()) }
+
+// fallbackNamePage's field mints "s0", which is also the render-order fallback
+// name for a signal with no field offset — the same silent slot sharing.
+type fallbackNamePage struct {
+	S0 via.Signal[int]
+}
+
+func (p *fallbackNamePage) View() h.H { return h.Div(p.S0.Bind()) }
+
+// embedCollidePage's field A__b mints "a__b" in the PARENT, which is exactly
+// the slot the EMBED of field A gives its own signal B ("a__" + "b").
+type embedKidB struct{ B via.Signal[int] }
+
+func (k *embedKidB) View() h.H { return k.B.Bind() }
+
+type embedCollidePage struct {
+	A    embedKidB
+	A__b via.Signal[int]
+}
+
+func (p *embedCollidePage) View() h.H { return h.Div(via.Embed(p.A), p.A__b.Bind()) }
+
+func assertSlotPanic(t *testing.T, app http.Handler, want string) {
+	t.Helper()
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, logs.String(), want)
+}
+
+func TestSignal_duplicateSlotNamePanics(t *testing.T) {
+	assertSlotPanic(t, via.Register(collidePage{}), "signal slot a_b is minted twice")
+}
+
+func TestSignal_slotNamedLikeARenderOrderFallbackPanics(t *testing.T) {
+	assertSlotPanic(t, via.Register(fallbackNamePage{}), "collides with via's render-order fallback names")
+}
+
+func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {
+	assertSlotPanic(t, via.Register(embedCollidePage{}), "collides with the embed prefix of field a")
+}

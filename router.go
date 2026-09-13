@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"reflect"
 	"runtime/debug"
 	"strings"
@@ -228,7 +229,14 @@ func mountBase(path string) (base string, names []string) {
 func concreteBase(patternBase string, req *http.Request, names []string) string {
 	b := patternBase
 	for _, n := range names {
-		b = strings.Replace(b, "{"+n+"}", req.PathValue(n), 1)
+		// PathEscape, not the raw decoded value: this base is concatenated into
+		// a Datastar expression inside an HTML attribute (@post('<base>/…')),
+		// and Datastar evaluates that expression as JavaScript. A segment
+		// containing a quote would otherwise close the string literal and run
+		// whatever follows. Escaping here also keeps the URL a valid path, and
+		// the value round-trips through Param unchanged because the browser
+		// decodes it back before it reaches the mux.
+		b = strings.Replace(b, "{"+n+"}", url.PathEscape(req.PathValue(n)), 1)
 	}
 	return b
 }
@@ -249,7 +257,10 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool
 	// sends an empty id and gets a graceful 410.
 	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":""}'>`
 	if hasLive {
-		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"` + tabSignal + `":""}'>`
+		// Escaped as well as path-escaped upstream: path-escaping keeps the
+		// value out of the JS string literal, attribute-escaping keeps it out
+		// of the attribute. Neither substitutes for the other.
+		bodyOpen = `</head><body data-init="@post('` + hcore.EscapeString(sseURL) + `')" data-signals='{"` + tabSignal + `":""}'>`
 	}
 	var head strings.Builder
 	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
