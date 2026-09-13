@@ -100,25 +100,46 @@ the SSE connect. Register connection-scoped side effects rather than performing
 them: `ctx.OnConnect(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
 when it closes.
 
-**`Reload` is the other half.** `OnInit` runs BEFORE the handler, so anything
+**`OnReload` is the other half.** `OnInit` runs BEFORE the handler, so anything
 it loaded is stale the moment the handler mutates the store:
 
 ```go
-func (p *Front) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
-func (p *Front) Reload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
-func (p *Front) Vote(ctx *via.Ctx, id int) { p.store.Vote(id) } // no manual refetch
+func (p *Front) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
+
+func (p *Front) OnReload(ctx *via.Ctx) error {
+	p.links = p.store.Front()
+	return nil
+}
+
+func (p *Front) Vote(ctx *via.Ctx, id int) { p.store.Vote(id) } // no refetch
 ```
 
-`Reload(*via.Ctx) error` runs after every action on that unit and before the
+`OnReload(*via.Ctx) error` runs after every action on that unit and before the
 response render, on the plain path and the live path alike. Without it a
 handler that mutates and does not re-read answers `204` with an unchanged UI;
-via now logs one line naming `Reload` when that happens, so it is never silent.
-It is skipped behind a `Redirect` (nothing from that render ships), and
+via now logs one line naming `OnReload` when that happens, so it is never
+silent. It is skipped behind a `Redirect` (nothing from that render ships), and
 `ctx.Tick`/`ctx.Listen` are no-ops inside it, so liveness stays the GET/connect
 verdict. It is a second hook rather than a second `OnInit` run on purpose:
 `OnInit` also mints the session, seeds signals from the request URL and
 registers timers, none of which is safe to repeat once a handler has committed
 a mutation.
+
+**Pin your hooks.** `OnInit` and `OnReload` are duck-typed: a composition opts
+in by having the method, so a rename or a signature change opts it silently
+*out* — it still compiles, and the hook just stops running. One line per hook
+next to the type turns that into a compile error:
+
+```go
+var _ via.Initer = (*Front)(nil)
+var _ via.Reloader = (*Front)(nil)
+```
+
+Mount and Embed catch the two commonest slips on their own — an `OnInit` or
+`OnReload` with the wrong signature panics at boot, and a method that has the
+hook's exact signature under a near-miss name (`Reload`, `OnInitialize`, …) on
+a type implementing neither interface is logged — but only the assertions above
+are airtight.
 
 ## Security floor (built in)
 

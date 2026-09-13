@@ -88,17 +88,21 @@ func TestVoidElement_selfClosesWithoutBody(t *testing.T) {
 func TestNonVoidElements_alwaysEmitClosingTag(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
+		name string
 		node h.H
 		want string
 	}{
-		{h.Div(), "<div></div>"},
-		{h.Span(), "<span></span>"},
-		{h.H1(), "<h1></h1>"},
-		{h.Button(), "<button></button>"},
-		{h.Main(), "<main></main>"},
-		{h.El("section"), "<section></section>"},
+		{"div", h.Div(), "<div></div>"},
+		{"span", h.Span(), "<span></span>"},
+		{"h1", h.H1(), "<h1></h1>"},
+		{"button", h.Button(), "<button></button>"},
+		{"main", h.Main(), "<main></main>"},
+		{"custom element", h.El("section"), "<section></section>"},
 	} {
-		assert.Equal(t, tc.want, render(t, tc.node))
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, render(t, tc.node))
+		})
 	}
 }
 

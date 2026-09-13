@@ -20,6 +20,17 @@ import (
 // session data into its fields and register the timers and subscriptions that
 // make it LIVE — ctx.Tick and ctx.Listen are valid only here. Detected by
 // interface assertion, never reflection.
+//
+// Opting in is having the method, so a rename or a signature change opts you
+// silently OUT: the composition still compiles and the hook simply stops
+// running. Pin it next to the type, and a future rename is a compile error:
+//
+//	var _ via.Initer = (*Front)(nil)
+//
+// Mount and Embed also catch the two commonest slips — an OnInit with the
+// wrong signature panics at boot, and a hook-shaped method with a near-miss
+// name (Reload, OnInitialize, …) on a type that implements neither interface
+// is logged — but the assertion above is the only airtight form.
 type Initer interface{ OnInit(*Ctx) error }
 
 // Reloader re-reads a unit's data AFTER one of its actions ran and BEFORE the
@@ -43,6 +54,8 @@ type Initer interface{ OnInit(*Ctx) error }
 // ctx.Tick and ctx.Listen are no-ops inside it: liveness is the GET/connect
 // verdict (I5). A non-nil error is answered like OnInit's — ErrNotFound is 404,
 // anything else 500 — and a Redirect it queues navigates the tab.
+//
+// Like Initer it is duck-typed, so pin it: var _ via.Reloader = (*Front)(nil).
 type Reloader interface{ OnReload(*Ctx) error }
 
 // ErrNotFound is the sentinel an OnInit returns when the data the page needs no
@@ -226,6 +239,9 @@ type Router struct {
 	// Per Router, not per process, so a second app in the same binary — or a
 	// second test — still gets told.
 	noChange sync.Map
+	// hookWarned dedupes the near-miss hook warning, per Router for the same
+	// reason noChange is.
+	hookWarned sync.Map
 }
 
 // NewRouter builds an empty router. Mount pages onto it, then serve it.
@@ -257,6 +273,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
+	checkHooks(rootType, &r.hookWarned)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
@@ -350,4 +367,108 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string,
 	w.Write([]byte(head.String()))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
+}
+
+// hookNames are via's optional, duck-typed lifecycle hooks. Opting in is having
+// the method; the cost of that is that a typo or a signature drift opts you
+// silently OUT — the composition still compiles and the hook simply never runs.
+var hookNames = []string{"OnInit", "OnReload"}
+
+// hookAliases maps a plausible mis-spelling to the hook it was surely meant to
+// be. Only consulted for methods that ALSO have the hook signature, which is
+// what keeps an ordinary action handler (func(*Ctx), no return) out of it.
+var hookAliases = map[string]string{
+	"Init": "OnInit", "Initialize": "OnInit", "Initialise": "OnInit",
+	"OnInitialize": "OnInit", "OnInitialise": "OnInit", "OnStart": "OnInit",
+	"Reload": "OnReload", "OnReloaded": "OnReload", "Refresh": "OnReload",
+	"OnRefresh": "OnReload", "Reinit": "OnReload", "OnReInit": "OnReload",
+}
+
+var hookSigChecked sync.Map // reflect.Type -> true (only on a CLEAN pass)
+
+// embedHookWarned dedupes Embed's near-miss warning, which would otherwise
+// repeat on every render of the child. Mount passes the Router's own map
+// instead, so a second app in the same binary — or a second test — is still
+// told (see warnNoChange).
+var embedHookWarned sync.Map
+
+// checkHooks catches the two ways a composition can miss a hook it meant to
+// implement. A method literally named OnInit/OnReload with the wrong signature
+// is unambiguous, so it panics here at Mount/Embed rather than serving forever
+// with the hook dead. A near-miss NAME is a heuristic, so it only warns — but
+// only when the method carries the exact hook signature and the real interface
+// is unsatisfied, which is a shape nothing but the mistake produces.
+func checkHooks(t reflect.Type, warned *sync.Map) {
+	if t == nil {
+		return
+	}
+	pt := reflect.PointerTo(t)
+	if _, done := hookSigChecked.Load(t); !done {
+		for _, hook := range hookNames {
+			if m, ok := pt.MethodByName(hook); ok && !hookShaped(m.Type) {
+				panic("via: " + t.String() + "." + hook + " has signature " +
+					withoutReceiver(m.Type) + ", not func(*via.Ctx) error — so " + t.String() +
+					" does NOT implement via." + hookIface(hook) + " and the hook will never run")
+			}
+		}
+		hookSigChecked.Store(t, true)
+	}
+	if _, dup := warned.LoadOrStore(t, true); dup {
+		return
+	}
+	for i := range pt.NumMethod() {
+		m := pt.Method(i)
+		hook, aliased := hookAliases[m.Name]
+		if !aliased || !hookShaped(m.Type) || implementsHook(pt, hook) {
+			continue
+		}
+		log.Printf("via: %s.%s looks like a mis-named %s — it has the hook's exact signature "+
+			"but %s implements no via.%s, so nothing will ever call it. Rename it, or add "+
+			"`var _ via.%s = (*%s)(nil)` so a rename can never silently unhook it again.",
+			t.String(), m.Name, hook, t.String(), hookIface(hook), hookIface(hook), t.Name())
+	}
+}
+
+// hookShaped reports whether a METHOD type (receiver still in In(0)) is
+// func(*Ctx) error.
+func hookShaped(mt reflect.Type) bool {
+	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) &&
+		mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf((*error)(nil)).Elem() &&
+		!mt.IsVariadic()
+}
+
+func withoutReceiver(mt reflect.Type) string {
+	in := make([]string, 0, mt.NumIn()-1)
+	for i := 1; i < mt.NumIn(); i++ {
+		in = append(in, mt.In(i).String())
+	}
+	out := make([]string, 0, mt.NumOut())
+	for i := range mt.NumOut() {
+		out = append(out, mt.Out(i).String())
+	}
+	s := "func(" + strings.Join(in, ", ") + ")"
+	switch len(out) {
+	case 0:
+	case 1:
+		s += " " + out[0]
+	default:
+		s += " (" + strings.Join(out, ", ") + ")"
+	}
+	return s
+}
+
+func implementsHook(pt reflect.Type, hook string) bool {
+	switch hook {
+	case "OnInit":
+		return pt.Implements(reflect.TypeOf((*Initer)(nil)).Elem())
+	default:
+		return pt.Implements(reflect.TypeOf((*Reloader)(nil)).Elem())
+	}
+}
+
+func hookIface(hook string) string {
+	if hook == "OnInit" {
+		return "Initer"
+	}
+	return "Reloader"
 }

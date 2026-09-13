@@ -37,7 +37,7 @@ func auditResolve(t *testing.T, m *sessionManager, id string) *Session {
 
 // A write from one in-flight request must not erase a write of a different type
 // made by another request on the same session.
-func TestSessionConcurrentRequestsDoNotLoseWrites(t *testing.T) {
+func TestSession_concurrentRequestsDoNotLoseWrites(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -58,7 +58,7 @@ func TestSessionConcurrentRequestsDoNotLoseWrites(t *testing.T) {
 
 // A Clear has to survive the merge as a tombstone, not merely be absent from
 // the writing request's own copy.
-func TestSessionClearSurvivesMerge(t *testing.T) {
+func TestSession_clearSurvivesMerge(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -89,7 +89,7 @@ type concKey8 struct{ N int }
 
 // N goroutines, each a separate "request" writing its own distinct type to one
 // session id: every key must be readable afterwards.
-func TestSessionConcurrentDistinctKeysAllSurvive(t *testing.T) {
+func TestSession_concurrentDistinctKeysAllSurvive(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -152,7 +152,7 @@ func TestSessionConcurrentDistinctKeysAllSurvive(t *testing.T) {
 // A Tick/Listen Ctx keeps its connect-time snapshot for the connection's life.
 // Writing through it must not re-encode that snapshot over everything written
 // since.
-func TestSessionTickWriteDoesNotRevertLaterWrites(t *testing.T) {
+func TestSession_tickWriteDoesNotRevertLaterWrites(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -217,7 +217,7 @@ func (f *failStore) Delete(ctx context.Context, id string) error {
 
 // Rotate exists to invalidate a pre-auth id. A store that cannot Delete must not
 // leave that id resolving.
-func TestSessionRotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
+func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -242,7 +242,7 @@ func TestSessionRotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 
 // If the tombstone cannot be written either, failing loudly beats returning a
 // rotation that did not happen.
-func TestSessionRotatePanicsWhenOldIDCannotBeInvalidated(t *testing.T) {
+func TestSession_rotatePanicsWhenOldIDCannotBeInvalidated(t *testing.T) {
 	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -267,7 +267,7 @@ func TestSessionRotatePanicsWhenOldIDCannotBeInvalidated(t *testing.T) {
 
 // A store outage must not be read as "no session": minting one would Set-Cookie
 // over the user's real id and orphan their session once the store recovered.
-func TestSessionStoreOutageDoesNotMintOverExistingCookie(t *testing.T) {
+func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
 	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -319,7 +319,7 @@ func (s *interleaveStore) LoadVersion(ctx context.Context, id string) ([]byte, u
 
 // A write that another request overtook mid-merge must be re-merged onto the
 // blob that landed, not written over it.
-func TestSessionSaveRetriesWhenOvertakenMidMerge(t *testing.T) {
+func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
 	is := &interleaveStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
 	m := newSessionManager(&config{sessionStore: is})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -344,7 +344,7 @@ func TestSessionSaveRetriesWhenOvertakenMidMerge(t *testing.T) {
 // still pinned to that id — a Tick/Listen snapshot, or a plain request resolved
 // just before the Rotate — must NOT re-create a session under it on its next
 // write.
-func TestSessionWriteThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
+func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -374,7 +374,7 @@ func TestSessionWriteThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 // When Delete fails, Rotate leaves an expired tombstone under the old id. A
 // pinned handle writing there must not overwrite the tombstone with live values
 // (which would also refresh its expiry) — that would defeat the tombstone.
-func TestSessionWriteThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
+func TestSession_writeThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
 	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -420,7 +420,7 @@ func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl 
 // against a revision that moved on. Falling back to an unconditional write
 // there applies a stale merge over whichever writers did get through — exactly
 // the lost update the loop exists to prevent. The write must be dropped.
-func TestSessionSaveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
+func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 	cs := &casStuckStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
 	m := newSessionManager(&config{sessionStore: cs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
@@ -441,7 +441,7 @@ func TestSessionSaveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 // again: it has nothing to carry to a new id, so re-issuing the cookie would
 // overwrite the good post-rotation cookie the browser holds and log the user
 // out.
-func TestSessionRotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.T) {
+func TestSession_rotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.T) {
 	m := newSessionManager(&config{})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -495,7 +495,7 @@ func nullVals(data []byte) []byte {
 
 // Read and write must agree on what a session is: get accepts a nil value map
 // as an empty session, so save must not retire the id over the same bytes.
-func TestSessionNilValsSessionReadsAndWritesAlike(t *testing.T) {
+func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
 	m := newSessionManager(&config{sessionStore: &nullValsStore{SessionStore: NewMemorySessionStore()}})
 	id, _ := m.create(context.Background())
 

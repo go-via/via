@@ -3,7 +3,9 @@ package via_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
@@ -13,10 +15,12 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -861,4 +865,410 @@ func TestRouter_nonASCIIParamRoundTrips(t *testing.T) {
 	assert.Contains(t, page, "slug=[café-🎉]", "Param[string] must see the decoded segment")
 	assert.Contains(t, page, `data-init="@post('/t/caf%C3%A9-%F0%9F%8E%89/_via/sse')"`,
 		"the minted URL must be the percent-encoded form the mux decodes back")
+}
+
+type badInitSig struct{ N via.Signal[int] }
+
+func (b *badInitSig) OnInit(*via.Ctx) {}
+func (b *badInitSig) View() h.H       { return h.Div(b.N.Display()) }
+
+type misnamedReload struct{ N via.Signal[int] }
+
+func (m *misnamedReload) Reload(*via.Ctx) error { return nil }
+func (m *misnamedReload) View() h.H             { return h.Div(m.N.Display()) }
+
+type reloadHelper struct{ N via.Signal[int] }
+
+func (r *reloadHelper) Reload(*via.Ctx) error       { return nil }
+func (r *reloadHelper) OnReload(ctx *via.Ctx) error { return r.Reload(ctx) }
+func (r *reloadHelper) View() h.H                   { return h.Div(r.N.Display()) }
+
+type refreshAction struct{ N via.Signal[int] }
+
+func (b *refreshAction) Refresh(*via.Ctx) {}
+func (b *refreshAction) View() h.H        { return h.Div(b.N.Display()) }
+
+func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t,
+		"via: via_test.badInitSig.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — "+
+			"so via_test.badInitSig does NOT implement via.Initer and the hook will never run",
+		func() { via.NewRouter().Mount("/", badInitSig{}) })
+}
+
+func TestMount_warnsOnAMethodShapedLikeAMisnamedHook(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedReload{}) })
+	assert.Contains(t, logged, "misnamedReload.Reload looks like a mis-named OnReload")
+	assert.Contains(t, logged, "var _ via.Reloader = (*misnamedReload)(nil)")
+}
+
+func TestMount_staysQuietWhenTheLookalikeIsJustAHelperTheRealHookCalls(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", reloadHelper{}) })
+	assert.NotContains(t, logged, "mis-named")
+}
+
+func TestMount_staysQuietForAnOrdinaryActionThatSharesAHookLookalikeName(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", refreshAction{}) })
+	assert.NotContains(t, logged, "mis-named")
+}
+
+func captureLog(t *testing.T, fn func()) string {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	fn()
+	return buf.String()
+}
+
+// connReqEchoer reads the connect request in OnInit and a no-op tick forces a
+// push so the read value is observable on the stream.
+type connReqEchoer struct{ host via.State[string] }
+
+func (e *connReqEchoer) OnInit(ctx *via.Ctx) error {
+	e.host.Set(ctx.Request().Host)
+	ctx.Tick(20*time.Millisecond, e.push)
+	return nil
+}
+
+func (e *connReqEchoer) push(ctx *via.Ctx) {}
+
+func (e *connReqEchoer) View() h.H {
+	return h.Div(h.P(h.Str("host: "), e.host.Display()))
+}
+
+// OnInit must see the SSE connect request, so an embed can authorize or
+// inspect the connection at open time. "example.com" is httptest's fixed
+// in-memory network host, not a real loopback address.
+func TestOnInit_seesTheConnectRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(connReqEchoer{}))
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		awaitLine(t, lines, "host: example.com")
+	})
+}
+
+// An OnInit Redirect must gate the SSE connect itself, beyond the page GET
+// and the action route — before A3 the stream handler ran OnInit at all, so
+// a session check left a streaming page's push channel open to anyone who knew
+// the URL even though the page and its actions were protected.
+func TestLive_streamRunsOnInitRedirect(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r.Mount("/secret", secret{})
+	srv := serve(t, r)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/sse", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := (&http.Client{CheckRedirect: noFollow}).Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode,
+		"an OnInit Redirect must gate the SSE connect too, not just the page and action routes")
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+// onInitLive loads a field in OnInit, before the connect render ever runs —
+// a live embed's ticks fire on the connection's own goroutine, so its first
+// pushed frame is the proof OnInit's field reached the persistent instance.
+type onInitLive struct{ label string }
+
+func (p *onInitLive) OnInit(ctx *via.Ctx) error {
+	p.label = "loaded"
+	ctx.Tick(time.Millisecond, func(*via.Ctx) {})
+	return nil
+}
+
+func (p *onInitLive) View() h.H { return h.Div(h.Str(p.label)) }
+
+// OnInit must run before the connect render binds the live unit, so a field
+// it loads is already set by the time the first push renders — before A3 the
+// stream handler never ran OnInit at all.
+func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(onInitLive{}))
+
+		frame := readFirstFrame(t, srv)
+		require.NotEmpty(t, frame)
+		assert.Contains(t, strings.Join(frame, "\n"), "loaded")
+	})
+}
+
+// livePushEmbed is a live embed under a parametrised mount; Bump
+// changes its visible count so its action's push is a real patch.
+type livePushEmbed struct {
+	n    int
+	seen via.State[int]
+}
+
+func (k *livePushEmbed) Bump(ctx *via.Ctx) { k.n++ }
+
+func (k *livePushEmbed) View() h.H {
+	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(via.On("click", k.Bump)))
+}
+
+type livePushParent struct{ I livePushEmbed }
+
+func (p *livePushParent) View() h.H { return h.Div(via.Embed(p.I)) }
+
+// A live push under a parametrised mount must carry the concrete path
+// segment in its action URLs, not the literal "{id}" pattern wildcard —
+// before A3 mount.connect closed over the pattern base instead of computing
+// the concrete base per connection, so every push rendered a dead "{id}" URL.
+func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := via.NewRouter()
+		r.Mount("/thread/{id}", livePushParent{})
+		srv := liveServer(t, r)
+
+		lines, cancel := openStreamAt(t, srv, "/thread/7/_via/sse")
+		defer cancel()
+		tab := awaitTabID(t, lines)
+
+		_, page := do(t, srv, http.MethodGet, "/thread/7", "")
+		resp, _ := post(t, srv, actionURL(t, page, "0", 0), withTab(tab, "{}"), map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "the live action answers 204; the push carries the patch")
+
+		awaitLine(t, lines, "/thread/7/_via/a/0/")
+	})
+}
+
+// paramEmbed is embedded under a parametrised mount; Bump changes its
+// visible count so the action's response is a real patch, not a 204.
+type paramEmbed struct{ n int }
+
+func (k *paramEmbed) Bump(ctx *via.Ctx) { k.n++ }
+
+func (k *paramEmbed) View() h.H { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
+
+type paramParent struct{ I paramEmbed }
+
+func (p *paramParent) View() h.H { return h.Div(via.Embed(p.I)) }
+
+func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	r.Mount("/thread/{id}", paramParent{})
+	srv := serve(t, r)
+
+	_, page := do(t, srv, http.MethodGet, "/thread/7", "")
+	assert.Regexp(t, `@post\('/thread/7/_via/a/0/[A-Za-z0-9_-]+'`, page)
+
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "{id}", "the re-rendered action URL must not carry the pattern wildcard")
+	assert.Contains(t, body, `/thread/7/_via/a/0/`, "the re-rendered action URL must carry the concrete segment")
+}
+
+// staleLoader is the week-one shape: OnInit reads the store into a field, the
+// action mutates the store, and nothing re-reads it — so the response render
+// frames the PRE-action number.
+type staleLoader struct {
+	s     *store
+	shown int
+}
+
+func (p *staleLoader) OnInit(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+
+func (p *staleLoader) Bump(ctx *via.Ctx) { p.s.Add(1) }
+
+func (p *staleLoader) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+// reloadingLoader is staleLoader with the one method that fixes it.
+type reloadingLoader struct {
+	s     *store
+	shown int
+}
+
+func (p *reloadingLoader) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
+
+func (p *reloadingLoader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+
+func (p *reloadingLoader) Bump(ctx *via.Ctx) { p.s.Add(1) }
+
+func (p *reloadingLoader) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(reloadingLoader{s: &store{}}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `<p id="n">0</p>`)
+
+	code, body := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, code, "a OnReload that changes the render must not answer 204")
+	assert.Contains(t, body, `<p id="n">1</p>`,
+		"the action's response must show what the handler wrote, not what OnInit loaded before it")
+}
+
+// Without OnReload the defect is intact — that is the point of the hook being
+// opt-in — but it must no longer be SILENT.
+func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	app := vt.Serve(t, via.Handler(staleLoader{s: &store{}}))
+	app.Get("/")
+	code, _ := app.Action(0).Fire()
+
+	require.Equal(t, http.StatusNoContent, code)
+	assert.Contains(t, logs.String(), "changed nothing the render shows")
+	assert.Contains(t, logs.String(), "OnReload(*via.Ctx) error",
+		"the 204 must name the hook that fixes it")
+
+	// A legitimately idempotent click is a dead click EVERY time. One line per
+	// click buries the log instead of reading it.
+	logs.Reset()
+	for range 5 {
+		app.Action(0).Fire()
+	}
+	assert.NotContains(t, logs.String(), "changed nothing the render shows",
+		"the dead-click warning must be deduped per action, not repeated per click")
+}
+
+// liveReloader's data lives in the store, not in State — the live push has to
+// re-read it or the patched frame carries the pre-action value.
+type liveReloader struct {
+	s     *store
+	shown int
+	beat  via.State[int]
+}
+
+func (p *liveReloader) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
+
+func (p *liveReloader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+
+func (p *liveReloader) Bump(ctx *via.Ctx) { p.s.Add(1) }
+
+func (p *liveReloader) View() h.H {
+	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveReloader{s: &store{}}))
+	conn := app.Connect()
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Less(t, code, 300)
+	assert.Contains(t, conn.Await("n=1"), "n=1",
+		"the pushed frame must carry post-action data, not the connect-time snapshot")
+}
+
+// reloadNotFound models the row an action just deleted: OnReload says the page's
+// data is gone, and that answer must reach the client instead of a stale render.
+type reloadNotFound struct{ gone bool }
+
+func (p *reloadNotFound) OnReload(ctx *via.Ctx) error {
+	if p.gone {
+		return via.ErrNotFound
+	}
+	return nil
+}
+
+func (p *reloadNotFound) Drop(ctx *via.Ctx) { p.gone = true }
+
+func (p *reloadNotFound) View() h.H { return h.Div(h.Button(via.On("click", p.Drop))) }
+
+func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(reloadNotFound{}))
+	app.Get("/")
+	code, body := app.Action(0).Fire()
+	assert.Equal(t, http.StatusNotFound, code)
+	assert.Contains(t, body, "not found")
+}
+
+// reloadRedirector queues its Redirect from OnReload rather than the handler.
+type reloadRedirector struct{}
+
+func (p *reloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
+
+func (p *reloadRedirector) Go(ctx *via.Ctx) {}
+
+func (p *reloadRedirector) View() h.H { return h.Div(h.Button(via.On("click", p.Go))) }
+
+func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(reloadRedirector{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
+
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
+	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
+}
+
+// tickingReload registers a Tick from OnReload on a page served PLAIN. Honouring
+// it would turn the unit live on a page with no stream (I5) and trip the
+// render-invariant panic; OnReload must register nothing.
+type tickingReload struct{ n int }
+
+func (p *tickingReload) OnReload(ctx *via.Ctx) error {
+	ctx.Tick(time.Second, func(*via.Ctx) {})
+	return nil
+}
+
+func (p *tickingReload) Bump(ctx *via.Ctx) { p.n++ }
+
+func (p *tickingReload) View() h.H {
+	return h.Div(h.P(h.Str(p.n)), h.Button(via.On("click", p.Bump)))
+}
+
+func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	app := vt.Serve(t, via.Handler(tickingReload{}))
+	_, page := app.Get("/")
+	require.NotContains(t, page, "data-init", "the page must be served plain")
+
+	code, body := app.Action(0).Fire()
+	assert.Equal(t, http.StatusOK, code, "a Tick in OnReload must be ignored, not fail the action")
+	assert.Contains(t, body, "<p>1</p>")
+	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
+		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
+}
+
+// reloadedEmbed proves the reload targets the ACTED unit: an embed's action
+// must re-read the embed, not the root.
+type reloadedEmbed struct {
+	s     *store
+	shown int
+}
+
+func (p *reloadedEmbed) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+
+func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
+
+func (p *reloadedEmbed) Bump(ctx *via.Ctx) { p.s.Add(1) }
+
+func (p *reloadedEmbed) View() h.H {
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+}
+
+type reloadedEmbedParent struct{ C reloadedEmbed }
+
+func (p *reloadedEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
+
+func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `<p id="n">0</p>`)
+
+	code, body := app.Action(0).Raw(actionURL(t, page, "0", 0)).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, `<p id="n">1</p>`)
 }

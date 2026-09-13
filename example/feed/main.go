@@ -24,6 +24,8 @@ type Feed struct {
 	Last via.State[string]
 }
 
+var _ via.Initer = (*Feed)(nil)
+
 func (f *Feed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(f.room, f.recv)
 	return nil

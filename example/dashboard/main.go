@@ -24,6 +24,8 @@ func (hd *Header) View() h.H {
 // Uptime ticks its own State once a second and pushes only its own region.
 type Uptime struct{ Secs via.State[int] }
 
+var _ via.Initer = (*Uptime)(nil)
+
 func (u *Uptime) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Second, u.beat); return nil }
 func (u *Uptime) beat(ctx *via.Ctx)         { u.Secs.Set(u.Secs.Get() + 1) }
 func (u *Uptime) View() h.H {

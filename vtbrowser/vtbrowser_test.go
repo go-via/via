@@ -74,7 +74,9 @@ type chat struct {
 func (c *chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMsg)
 	ctx.Listen(c.room.presence, c.onPres)
-	c.room.join()
+	// Registered, not performed: OnInit also runs on the plain GET and on every
+	// action, so joining here would count one tab twice.
+	ctx.OnConnect(c.room.join)
 	ctx.OnDispose(c.room.part)
 	return nil
 }
@@ -137,7 +139,7 @@ func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
 
 	// Counter embed: its action must route to #via-i1 via the viatab signal and morph
 	// only that container, leaving the clock running.
-	s.Sleep(400 * time.Millisecond) // let the SSE connect so $viatab is set
+	s.WaitLiveConnected()
 	s.Click("#via-i1 button")
 	s.WaitTextContains("#via-i1 p", "clicks 1")
 	s.RequireCleanConsole()
@@ -167,14 +169,18 @@ func (p *pRoot) View() h.H {
 func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
-	s.Sleep(400 * time.Millisecond) // let the SSE connect so $viatab is set
+	s.WaitLiveConnected()
 	s.Click("#via-i0 button")
 	s.WaitTextContains("#via-i0 p", "clicks 1")
 
 	s.Click("#root > div > button")
 	s.WaitTextContains("#root > div > p", "hits 1")
 
-	s.Sleep(300 * time.Millisecond) // give a stray morph time to land, if it were going to
+	// Datastar applies one patch-elements frame as a single morph, so "hits 1"
+	// being on screen means the whole root patch has already been applied — there
+	// is no later moment for a stray repaint of the embed to arrive from it. The
+	// clicks-2 assertion below is the second line of defence: a repaint from the
+	// seed would make the next click read 1, not 2.
 	if got := s.Text("#via-i0 p"); !strings.Contains(got, "clicks 1") {
 		t.Fatalf("the root's own action patch repainted the live embed from its seed: %q", got)
 	}
@@ -225,7 +231,7 @@ func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	s.WaitTextContains("p", "count: 0")
-	s.Sleep(500 * time.Millisecond) // let the SSE connect so Datastar has $viatab to echo
+	s.WaitLiveConnected()
 	s.Click("button")
 	s.WaitTextContains("p", "count: 1")
 	s.RequireCleanConsole()
@@ -255,7 +261,7 @@ func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	a.WaitTextContains("h1", "online: 2") // both streams connected + presence settled
 
 	a.Type("input", "hello")
-	a.Sleep(250 * time.Millisecond) // let data-bind sync the typed signal
+	a.WaitBoundSignal("input", "hello")
 	a.Click("button")
 
 	b.WaitTextContains("ul", "hello") // fan-out: B received A's message
@@ -336,10 +342,10 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	a.WaitTextContains("h1", "online: 2")
 
 	a.Type("input", "half-typed") // A is composing; has NOT sent
-	a.Sleep(250 * time.Millisecond)
+	a.WaitBoundSignal("input", "half-typed")
 
 	b.Type("input", "from-b")
-	b.Sleep(250 * time.Millisecond)
+	b.WaitBoundSignal("input", "from-b")
 	b.Click("button") // B sends; fans out and pushes to A
 
 	a.WaitTextContains("ul", "from-b") // A received B's fan-out
@@ -351,8 +357,8 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
-// redirectViaScript is a plain page whose @post action calls via.Redirect
-// — which can no longer navigate the browser (only PostForm and OnInit can).
+// redirectViaScript is a plain page whose @post action calls via.Redirect,
+// answered as the hash-admitted one-line navigation script (see redirectInit).
 type redirectViaScript struct{}
 
 func (p *redirectViaScript) Go(ctx *via.Ctx) { ctx.Redirect("/done") }
@@ -360,26 +366,25 @@ func (p *redirectViaScript) View() h.H {
 	return h.Div(h.Button(h.RawAttr("id", "go"), via.On("click", p.Go), h.Str("go")))
 }
 
-// A via.Redirect from a Datastar @post action must NOT navigate the browser —
-// the payoff no httptest can see is that no script is ever inserted into the
-// live document, under the real CSP.
-func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
+// A via.Redirect from a Datastar @post action navigates the browser, and only a
+// real browser proves it: the response is a text/javascript body Datastar
+// appends to <head>, so it lands only if the strict CSP admits it by SHA-256 and
+// Datastar's script branch honours Datastar-Script-Attributes.
+func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
 	app := via.Handler(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
 	s.Click("#go")
-	s.Sleep(700 * time.Millisecond)
 
+	s.WaitEvalTrue(`location.pathname==='/done'`,
+		"the @post Redirect's navigation script to run under the strict CSP")
+
+	// redirectInit removes its own <script> before navigating, so a live document
+	// never carries it — and the new document was never sent one.
 	var inserted bool
-	s.Eval(`[...document.querySelectorAll('head script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
+	s.Eval(`[...document.querySelectorAll('script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
 	if inserted {
-		t.Fatal("a @post Redirect must not ship a navigation script")
+		t.Fatal("the redirect script must remove itself from the document")
 	}
-	var path string
-	s.Eval(`location.pathname`, &path)
-	if path != "/" {
-		t.Fatalf("expected no navigation for a @post Redirect, but went to %q", path)
-	}
-	s.RequireCleanConsole()
 }
 
 // liveFormBrowser is a live root with a native PostForm — the vehicle for
@@ -412,10 +417,13 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	calls := 0
 	s := vtbrowser.Open(t, via.Handler(liveFormBrowser{calls: &calls}))
 
-	s.Sleep(500 * time.Millisecond) // let the SSE connect so $viatab is set
+	s.WaitLiveConnected()
 	s.Type("#name", "alice")
 	s.Click("#save")
-	s.Sleep(500 * time.Millisecond) // let the native submit navigate
+
+	// The submit's response document is the first render with calls == 1, so this
+	// is also the gate that the native navigation finished.
+	s.WaitTextContains("#calls", "1")
 
 	var status float64
 	s.Eval(`performance.getEntriesByType('navigation')[0].responseStatus`, &status)
@@ -425,7 +433,6 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	if got := s.Text("body"); strings.Contains(got, "this tab has no stream") {
 		t.Fatalf("submit fell through to the plain 410 fallback: %q", got)
 	}
-	s.WaitTextContains("#calls", "1")
 	s.RequireCleanConsole()
 }
 
@@ -478,7 +485,9 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 		InlineStyle: `@import url("` + origin + `/app.css");`,
 	}))
 	s := vtbrowser.Open(t, app)
-	s.Sleep(700 * time.Millisecond) // give the (refused) fetch time to happen
+	// An @import is a render-blocking subresource: had style-src admitted it, it
+	// would have been fetched and applied before the load event fired.
+	s.WaitLoaded()
 
 	var red bool
 	s.Eval(styledIsRed, &red)

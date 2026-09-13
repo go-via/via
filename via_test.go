@@ -484,15 +484,15 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
 	// reflect is admitted in exactly three files and only on TYPE-setup paths
 	// that run once per composition type (Mount/Embed) and are memoized: the
-	// action-id func name, the field-name signal table, and the embed's parent
-	// field lookup. Nothing here may run per render — that is the invariant
+	// action-id func name, the field-name signal table, the embed's parent
+	// field lookup, and the hook-shape check. Nothing here may run per render — that is the invariant
 	// this whitelist exists to keep honest.
 	allowed := map[string][]string{
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
 			"reflect.TypeOf", "reflect.ValueOf"},
 		"embed.go":  {"reflect.TypeOf"},
-		"router.go": {"reflect.Type", "reflect.TypeOf"},
+		"router.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
 	}
 	files := coreGoFiles(t)
 	require.NotEmpty(t, files, "expected core sources to scan")
@@ -827,8 +827,8 @@ func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testi
 	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), "{}")
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
-	assert.NotContains(t, body, ").Inc", "but never the Go method names of the render")
-	assert.Contains(t, buf.String(), ").Inc", "the bound handlers go to the server log instead")
+	assert.NotContains(t, body, "Inc", "but never the Go method names of the render")
+	assert.Contains(t, buf.String(), "Inc", "the bound handlers go to the server log instead")
 }
 
 type idCounter struct {

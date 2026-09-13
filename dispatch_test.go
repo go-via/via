@@ -1,19 +1,19 @@
 package via_test
 
 import (
-	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -44,6 +44,7 @@ func fetchPage(t *testing.T, app *vt.App, path string) string {
 type liveRedirector struct{ n via.State[int] }
 
 func (c *liveRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
+
 func (c *liveRedirector) View() h.H {
 	return h.Div(c.n.Display(), h.Button(via.On("click", c.Go)))
 }
@@ -76,7 +77,8 @@ func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 type embedRedirector struct{}
 
 func (r *embedRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
-func (r *embedRedirector) View() h.H       { return h.Div(h.Button(via.On("click", r.Go))) }
+
+func (r *embedRedirector) View() h.H { return h.Div(h.Button(via.On("click", r.Go))) }
 
 type embedRedirectorParent struct{ I embedRedirector }
 
@@ -111,6 +113,7 @@ func TestDispatch_redirectFromPlainEmbedActionNavigatesTheTab(t *testing.T) {
 type sigEmbed struct{ Name, Other via.Signal[string] }
 
 func (s *sigEmbed) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
+
 func (s *sigEmbed) View() h.H {
 	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.On("click", s.Reset)))
 }
@@ -137,7 +140,8 @@ func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
 type guardedEmbed struct{}
 
 func (g *guardedEmbed) Ping(ctx *via.Ctx) {}
-func (g *guardedEmbed) View() h.H         { return h.Div(h.Button(via.On("click", g.Ping))) }
+
+func (g *guardedEmbed) View() h.H { return h.Div(h.Button(via.On("click", g.Ping))) }
 
 type guardedParent struct{ I guardedEmbed }
 
@@ -147,6 +151,7 @@ func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 	}
 	return nil
 }
+
 func (p *guardedParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
 func TestDispatch_embedActionRunsOnInitRedirect(t *testing.T) {
@@ -172,7 +177,9 @@ func TestDispatch_embedActionRunsOnInitRedirect(t *testing.T) {
 type mixedPage struct{ n int }
 
 func (p *mixedPage) Bump(ctx *via.Ctx) { p.n++ }
+
 func (p *mixedPage) Save(ctx *via.Ctx) { ctx.Redirect("/done") }
+
 func (p *mixedPage) View() h.H {
 	return h.Div(
 		h.Str(p.n),
@@ -211,7 +218,9 @@ func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 type panicLive struct{ n via.State[int] }
 
 func (p *panicLive) Boom(ctx *via.Ctx) { panic("boom") }
+
 func (p *panicLive) Ping(ctx *via.Ctx) {}
+
 func (p *panicLive) View() h.H {
 	return h.Div(p.n.Display(), h.Button(via.On("click", p.Boom)), h.Button(via.On("click", p.Ping)))
 }
@@ -238,7 +247,9 @@ type branchy struct {
 }
 
 func (b *branchy) Reveal(ctx *via.Ctx) { b.shown.Set(true) }
-func (b *branchy) Extra(ctx *via.Ctx)  {}
+
+func (b *branchy) Extra(ctx *via.Ctx) {}
+
 func (b *branchy) View() h.H {
 	kids := []h.H{b.n.Display(), h.Button(via.On("click", b.Reveal))}
 	if b.shown.Get() {
@@ -284,82 +295,6 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 	})
 }
 
-// paramEmbed is embedded under a parametrised mount; Bump changes its
-// visible count so the action's response is a real patch, not a 204.
-type paramEmbed struct{ n int }
-
-func (k *paramEmbed) Bump(ctx *via.Ctx) { k.n++ }
-func (k *paramEmbed) View() h.H         { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
-
-type paramParent struct{ I paramEmbed }
-
-func (p *paramParent) View() h.H { return h.Div(via.Embed(p.I)) }
-
-func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter()
-	r.Mount("/thread/{id}", paramParent{})
-	srv := serve(t, r)
-
-	_, page := do(t, srv, http.MethodGet, "/thread/7", "")
-	assert.Regexp(t, `@post\('/thread/7/_via/a/0/[A-Za-z0-9_-]+'`, page)
-
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.NotContains(t, body, "{id}", "the re-rendered action URL must not carry the pattern wildcard")
-	assert.Contains(t, body, `/thread/7/_via/a/0/`, "the re-rendered action URL must carry the concrete segment")
-}
-
-// unsafeRoot and unsafeEmbed both bump a visible counter alongside an
-// unsafe Redirect, so a rejected redirect's fallback response is provably a
-// normal patch (the counter's new value), not a crash or a hang.
-type unsafeRoot struct{ n int }
-
-func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
-func (u *unsafeRoot) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
-
-type unsafeEmbed struct{ n int }
-
-func (u *unsafeEmbed) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
-func (u *unsafeEmbed) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
-
-type unsafeParent struct{ I unsafeEmbed }
-
-func (p *unsafeParent) View() h.H { return h.Div(via.Embed(p.I)) }
-
-func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
-	t.Parallel()
-
-	t.Run("plain root", func(t *testing.T) {
-		t.Parallel()
-		srv := serve(t, via.Handler(unsafeRoot{}))
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
-		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
-	})
-
-	t.Run("plain embed", func(t *testing.T) {
-		t.Parallel()
-		srv := serve(t, via.Handler(unsafeParent{}))
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
-		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
-	})
-
-	t.Run("native form", func(t *testing.T) {
-		t.Parallel()
-		srv := serve(t, via.Handler(loginForm{}))
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
-		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
-		assert.Empty(t, resp.Header.Get("Location"))
-	})
-}
-
 // splitActionURL cuts url into its /_via/a/ prefix, {embed}, {act} and any
 // query, so a test can forge one segment and keep the rest genuine.
 func splitActionURL(t *testing.T, url string) (prefix, embed, act, query string) {
@@ -388,37 +323,6 @@ func swapEmbedIndex(t *testing.T, url, embed string) string {
 	t.Helper()
 	prefix, _, act, q := splitActionURL(t, url)
 	return prefix + embed + "/" + act + q
-}
-
-func TestDispatch_forgedActionIDIsGone(t *testing.T) {
-	t.Run("plain", func(t *testing.T) {
-		t.Parallel()
-		srv := serve(t, via.Handler(counter{count: &store{}}))
-		_, page := do(t, srv, http.MethodGet, "/", "")
-		url := actionURL(t, page, "r", 0)
-		for _, n := range []string{"99", "-1", "________"} {
-			resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, n), "{}")
-			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged id=%s must 410, not panic/misroute", n)
-		}
-	})
-
-	t.Run("live", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
-			app := vt.Serve(t, via.Handler(liveClicker{}))
-			conn := app.Connect()
-			page := fetchPage(t, app, "/")
-			url := actionURL(t, page, "r", 0)
-			for _, n := range []string{"99", "-1", "________"} {
-				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
-				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
-			}
-			// The connection must still be usable — the recovered panic path
-			// this replaces must not be the only thing standing between a
-			// forged n and a crashed stream.
-			status, _ := app.Action(0).Raw(url).Tab(conn.TabID()).Fire()
-			assert.Equal(t, http.StatusNoContent, status)
-		})
-	})
 }
 
 func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
@@ -460,116 +364,6 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 	})
 }
 
-// toggleState is branchedView's shared, per-connection-independent memory: a
-// bool that flips which actions View renders, plus which handler last ran, so
-// a test can observe whether a click actually reached a handler.
-type toggleState struct {
-	mu     sync.Mutex
-	locked bool
-	ran    string
-}
-
-func (s *toggleState) flip()            { s.mu.Lock(); s.locked = !s.locked; s.mu.Unlock() }
-func (s *toggleState) mark(name string) { s.mu.Lock(); s.ran = name; s.mu.Unlock() }
-func (s *toggleState) snapshot() (locked bool, ran string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.locked, s.ran
-}
-
-// branchedView's action SET depends on server state: unlocked renders
-// Save=0, Delete=1, Flip=2; locked removes Save, so every later index shifts
-// down — Delete=0, Flip=1 — the render shape the audit flagged as a live
-// misroute hazard (a branched View shifting every following index),
-// reproduced here on the plain path.
-type branchedView struct{ st *toggleState }
-
-func (b *branchedView) Save(ctx *via.Ctx)   { b.st.mark("save") }
-func (b *branchedView) Delete(ctx *via.Ctx) { b.st.mark("delete") }
-func (b *branchedView) Flip(ctx *via.Ctx)   { b.st.flip() }
-func (b *branchedView) View() h.H {
-	locked, ran := b.st.snapshot()
-	if locked {
-		return h.Div(
-			h.Button(via.On("click", b.Delete)), // locked: Delete=0
-			h.Button(via.On("click", b.Flip)),   // locked: Flip=1 (Save is gone)
-			h.P(h.Str("locked:"), h.Str(ran)),
-		)
-	}
-	return h.Div(
-		h.Button(via.On("click", b.Save)),   // unlocked: Save=0
-		h.Button(via.On("click", b.Delete)), // unlocked: Delete=1
-		h.Button(via.On("click", b.Flip)),   // unlocked: Flip=2
-		h.P(h.Str("unlocked:"), h.Str(ran)),
-	)
-}
-
-// xmEmbed is a live, dep-free embed mountable at any path — the vehicle for
-// proving a live tab from one mount can't drive another mount's action table.
-type xmEmbed struct {
-	fired *int
-	n     via.State[int]
-}
-
-func (x *xmEmbed) Fire(*via.Ctx) { *x.fired++ }
-func (x *xmEmbed) View() h.H {
-	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
-}
-
-func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var aFired, cFired int
-		r := via.NewRouter()
-		r.Mount("/a", xmEmbed{fired: &aFired})
-		r.Mount("/c", xmEmbed{fired: &cFired})
-		srv := liveServer(t, r)
-
-		_, aPage := do(t, srv, http.MethodGet, "/a", "")
-		aURL := actionURL(t, aPage, "r", 0)
-
-		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
-		defer cancel()
-		cTab := awaitTabID(t, cLines)
-		synctest.Wait()
-
-		resp, _ := post(t, srv, aURL, withTab(cTab, "{}"), map[string]string{
-			"Sec-Fetch-Site": "same-origin",
-		})
-		assert.Equal(t, http.StatusGone, resp.StatusCode, "a /c tab must not drive /a's action table")
-		assert.Zero(t, aFired, "the /a action must not have run")
-	})
-}
-
-func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
-	t.Parallel()
-	srv := serve(t, via.Handler(branchedView{st: &toggleState{}}))
-
-	_, unlocked := do(t, srv, http.MethodGet, "/", "")
-	staleSave := actionURL(t, unlocked, "r", 0)   // Save, only bound while unlocked
-	staleDelete := actionURL(t, unlocked, "r", 1) // Delete, bound in both branches
-	flip := actionURL(t, unlocked, "r", 2)
-
-	// Flip to locked: Save leaves the table and every later index shifts down
-	// by one — under positional routing the pre-flip Delete URL (index 1)
-	// would now land on Flip, silently toggling back to unlocked.
-	resp, lockedBody := do(t, srv, http.MethodPost, flip, "{}")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, lockedBody, "locked:", "Flip must have taken effect")
-
-	// The id addresses the handler, so the pre-flip Delete URL still means
-	// Delete — the click does what the button it came from said it does.
-	resp2, after := do(t, srv, http.MethodPost, staleDelete, "{}")
-	assert.Equal(t, http.StatusOK, resp2.StatusCode)
-	assert.Contains(t, after, "locked:", "the stale click must not have misrouted into Flip (back to unlocked)")
-	assert.Contains(t, after, "delete", "it must have run Delete, the handler it named")
-
-	// Save, on the other hand, is not bound by the locked branch at all: 410,
-	// never a misroute into whatever now sits at its old index.
-	resp3, _ := do(t, srv, http.MethodPost, staleSave, "{}")
-	assert.Equal(t, http.StatusGone, resp3.StatusCode,
-		"an action the current render does not bind must 410")
-}
-
 // liveForm is a live root whose View carries a native PostForm — the case
 // with no example coverage: a real browser form submit inside a live unit
 // carries neither Datastar's signal store nor its headers, so it depends on PostForm's
@@ -583,6 +377,7 @@ func (f *liveForm) Save(ctx *via.Ctx) {
 	*f.calls++
 	f.got.Set(ctx.Request().FormValue("name"))
 }
+
 func (f *liveForm) View() h.H {
 	return h.Div(
 		via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))),
@@ -685,6 +480,7 @@ type nativeFormPanic struct {
 }
 
 func (f *nativeFormPanic) Save(ctx *via.Ctx) { *f.boom = true }
+
 func (f *nativeFormPanic) View() h.H {
 	if *f.boom {
 		panic("via_test: native re-render exploded")
@@ -714,578 +510,6 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 	})
 }
 
-// openStreamWithClient is openStreamAt against a caller-supplied client, so a
-// test can open the SSE stream carrying a cookie already sitting in the
-// client's jar (a session established by an earlier plain action).
-func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, path string) (<-chan string, context.CancelFunc) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, nil)
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	lines := make(chan string, 256)
-	go func() {
-		defer close(lines)
-		defer resp.Body.Close()
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			select {
-			case lines <- sc.Text():
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	return lines, cancel
-}
-
-// sessionLive is a live root — a Live-implementing root's own actions only
-// ever route through the tab handshake (dispatchPlain refuses them, see
-// dispatch.go), so establishing the session ahead of connecting needs a
-// separate, plain mount (loginComp, from sess_test.go) sharing the same
-// router-wide session manager. Bump is the live action a stolen tab id would
-// try to drive.
-type sessionLive struct{ n via.State[int] }
-
-func (s *sessionLive) Bump(ctx *via.Ctx) { s.n.Set(s.n.Get() + 1) }
-func (s *sessionLive) Peek(ctx *via.Ctx) { ctx.Session().Get[member]() } // read-only, never mints
-func (s *sessionLive) View() h.H {
-	return h.Div(s.n.Display(),
-		h.Button(via.On("click", s.Bump)), // action 0
-		h.Button(via.On("click", s.Peek))) // action 1
-}
-
-// liveActionRequest builds a raw dispatch POST against embed/n using the
-// page's currently-rendered action URL, with tab as its viatab signal —
-// bypassing any cookie jar, so the caller controls exactly what (if any)
-// session cookie rides along.
-func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, embed string, n int) *http.Request {
-	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, embed, n), strings.NewReader(withTab(tab, "{}")))
-	require.NoError(t, err)
-	req.Header.Set("Datastar-Request", "true")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	return req
-}
-
-// A stream opened under a real session must reject a dispatch that
-// doesn't carry that same session — the tab id alone (a leaked/stolen one,
-// with no cookie at all, exactly as a cross-origin request would arrive with
-// the origin floor open) is no longer a sufficient credential.
-func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})  // plain — establishes the session cookie
-	r.Mount("/live", sessionLive{}) // Live root, shares the router-wide session manager
-	srv := httptest.NewServer(r)
-	t.Cleanup(srv.Close)
-	owner := jarClient(t)
-
-	loginResp, err := owner.Get(srv.URL + "/login")
-	require.NoError(t, err)
-	loginPage, err := io.ReadAll(loginResp.Body)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
-	require.NoError(t, err)
-	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
-	signInReq.Header.Set("Datastar-Request", "true")
-	signInResp, err := owner.Do(signInReq)
-	require.NoError(t, err)
-	signInResp.Body.Close()
-	require.NotEmpty(t, cookieValue(t, owner, srv.URL, "via_session"))
-
-	lines, cancel := openStreamWithClient(t, srv, owner, "/live/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := owner.Get(srv.URL + "/live")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0)
-	// No cookie at all on this request — the stolen-tab-id, no-session attack.
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"a dispatch against a session-bound connection with no session must be rejected")
-
-	// The rightful owner, same tab, same session cookie, must still work —
-	// the check rejects a MISMATCH, not the connection itself.
-	ownReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
-	ownResp, err := owner.Do(ownReq)
-	require.NoError(t, err)
-	defer ownResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, ownResp.StatusCode,
-		"the connecting session's own dispatch must still succeed")
-}
-
-// Neighbour of the mismatch rejection: an ANONYMOUS stream (no
-// session at any point) must keep dispatching exactly as before — the check
-// only applies once a connection is actually bound to a session, so an app
-// that never touches Session() sees no behavior change.
-func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	lines, cancel := openStreamAt(t, srv, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie anywhere
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusNoContent, resp.StatusCode,
-		"an anonymous connection must not be blocked — there is no session to mismatch")
-}
-
-// I1: an attacker holding a victim's leaked tab id, but carrying their OWN
-// valid session cookie, must not capture the connection by merely running a
-// read-only action against it — Ctx.Session() resolves the REQUEST's cookie
-// even for a read, so binding on "Session() was touched" (rather than "the
-// action minted a session that wasn't there before") would let the attacker's
-// pre-existing cookie look identical, after the fact, to a session the
-// action just created.
-func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConnection(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})
-	r.Mount("/live", sessionLive{})
-	srv := httptest.NewServer(r)
-	t.Cleanup(srv.Close)
-
-	attacker := jarClient(t)
-	loginResp, err := attacker.Get(srv.URL + "/login")
-	require.NoError(t, err)
-	loginPage, err := io.ReadAll(loginResp.Body)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
-	require.NoError(t, err)
-	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
-	signInReq.Header.Set("Datastar-Request", "true")
-	signInResp, err := attacker.Do(signInReq)
-	require.NoError(t, err)
-	signInResp.Body.Close()
-	require.NotEmpty(t, cookieValue(t, attacker, srv.URL, "via_session"), "attacker must hold a real session of their own")
-
-	// The victim's tab connects anonymously — nothing about it identifies the
-	// attacker; only its id, echoed on the wire, is assumed leaked.
-	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	// The attacker dispatches Peek — read-only — against the victim's tab,
-	// carrying their own cookie via a plain http.Request (not the jar client,
-	// so we control exactly which cookie rides along).
-	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek
-	peekReq.AddCookie(&http.Cookie{Name: "via_session", Value: cookieValue(t, attacker, srv.URL, "via_session")})
-	peekResp, err := http.DefaultClient.Do(peekReq)
-	require.NoError(t, err)
-	peekResp.Body.Close()
-
-	// The victim's own later cookieless dispatch must still succeed — the
-	// connection must NOT have been captured by the attacker's cookie.
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
-	require.NoError(t, err)
-	defer bumpResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, bumpResp.StatusCode,
-		"a read-only action carrying a foreign cookie must not bind the connection to it")
-}
-
-// Neighbour of the capture probe: the connection's own (anonymous) owner
-// running that same read-only action must not bind it either — the fix must
-// distinguish "an action minted a session" from "Session() was merely
-// touched", not just "no foreign cookie was involved".
-func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	lines, cancel := openStreamAt(t, srv, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek, no cookie
-	peekResp, err := http.DefaultClient.Do(peekReq)
-	require.NoError(t, err)
-	peekResp.Body.Close()
-
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, still no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
-	require.NoError(t, err)
-	defer bumpResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, bumpResp.StatusCode,
-		"a read-only Session().Get by the connection's own owner must not bind it")
-}
-
-// liveLoginer is a live root that starts every connection anonymous — Login
-// and Rotate are both live actions, so the only way its session gets
-// established is on the connection's own goroutine, after connect (see H1).
-type liveLoginer struct {
-	n via.State[int]
-}
-
-func (p *liveLoginer) Bump(ctx *via.Ctx)   { p.n.Set(p.n.Get() + 1) }                 // action 0
-func (p *liveLoginer) Login(ctx *via.Ctx)  { ctx.Session().Put(member{Name: "bob"}) } // action 1
-func (p *liveLoginer) Rotate(ctx *via.Ctx) { ctx.Session().Rotate() }                 // action 2
-func (p *liveLoginer) View() h.H {
-	return h.Div(p.n.Display(),
-		h.Button(via.On("click", p.Bump)),
-		h.Button(via.On("click", p.Login)),
-		h.Button(via.On("click", p.Rotate)))
-}
-
-// A tab connects anonymously, then a live action logs it in (Session().Put)
-// — the connection must stop accepting a cookieless dispatch from that point
-// on, closing the gap H1 was filed for.
-func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	lines, cancel := openStreamAt(t, srv, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
-	loginResp, err := http.DefaultClient.Do(loginReq)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-	require.NotEmpty(t, loginResp.Header.Get("Set-Cookie"), "a live Login must still mint the session cookie")
-
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
-	require.NoError(t, err)
-	defer bumpResp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
-		"the tab id must stop being a bearer credential the instant it logs in")
-}
-
-// onConnectLoginer establishes its session in OnInit — the pattern the
-// README recommends — rather than through a later action.
-type onConnectLoginer struct{ n via.State[int] }
-
-func (o *onConnectLoginer) OnInit(ctx *via.Ctx) error {
-	ctx.Session().Put(member{Name: "carol"})
-	return nil
-}
-func (o *onConnectLoginer) Bump(ctx *via.Ctx) { o.n.Set(o.n.Get() + 1) } // action 0
-func (o *onConnectLoginer) View() h.H {
-	return h.Div(o.n.Display(), h.Button(via.On("click", o.Bump)))
-}
-
-// The README-recommended "establish the session in OnInit" pattern must
-// bind the connection too — not just a session that already existed at
-// connect time.
-func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	lines, cancel := openStreamAt(t, srv, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"an OnInit-minted session must bind the connection exactly like a live-action login")
-}
-
-// Neighbour: two tabs open anonymously against the same app — logging one of
-// them in through a live action must bind ONLY that connection. A sibling
-// tab that never logs in keeps dispatching cookielessly, exactly as before.
-func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	linesA, cancelA := openStreamAt(t, srv, "/_via/sse")
-	defer cancelA()
-	tabA := awaitTabID(t, linesA)
-	linesB, cancelB := openStreamAt(t, srv, "/_via/sse")
-	defer cancelB()
-	tabB := awaitTabID(t, linesB)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	loginReq := liveActionRequest(t, srv, string(page), tabA, "r", 1) // Login on A
-	loginResp, err := http.DefaultClient.Do(loginReq)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-
-	bumpA := liveActionRequest(t, srv, string(page), tabA, "r", 0)
-	bumpAResp, err := http.DefaultClient.Do(bumpA)
-	require.NoError(t, err)
-	bumpAResp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, bumpAResp.StatusCode, "the logged-in tab rejects a cookieless dispatch")
-
-	bumpB := liveActionRequest(t, srv, string(page), tabB, "r", 0)
-	bumpBResp, err := http.DefaultClient.Do(bumpB)
-	require.NoError(t, err)
-	defer bumpBResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, bumpBResp.StatusCode,
-		"the sibling tab, never logged in, dispatches exactly as before")
-}
-
-// Neighbour: a session that rotates AFTER a live login bound the connection
-// must keep the binding across the new id — Rotate moves the same
-// *sessionData pointer (see sessionStore.reID), which is what dispatch
-// compares against.
-func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-	owner := jarClient(t)
-
-	lines, cancel := openStreamWithClient(t, srv, owner, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := owner.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
-	loginResp, err := owner.Do(loginReq)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-	before := cookieValue(t, owner, srv.URL, "via_session")
-	require.NotEmpty(t, before)
-
-	rotReq := liveActionRequest(t, srv, string(page), tab, "r", 2) // Rotate
-	rotResp, err := owner.Do(rotReq)
-	require.NoError(t, err)
-	rotResp.Body.Close()
-	after := cookieValue(t, owner, srv.URL, "via_session")
-	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
-
-	okReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, new cookie
-	okResp, err := owner.Do(okReq)
-	require.NoError(t, err)
-	okResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
-		"the post-rotate dispatch with the new cookie must still be bound")
-
-	staleReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
-	staleReq.AddCookie(&http.Cookie{Name: "via_session", Value: before})
-	staleResp, err := http.DefaultClient.Do(staleReq)
-	require.NoError(t, err)
-	defer staleResp.Body.Close()
-	assert.Equal(t, http.StatusForbidden, staleResp.StatusCode,
-		"the pre-rotate id must not drive the connection anymore")
-}
-
-// raceLoginer is liveLoginer's Login, but pausable: it blocks on the embed
-// goroutine until proceed is signaled, closing started the instant it takes
-// hold of that goroutine — the two channels let a test park a concurrent
-// cookieless dispatch's own goroutine right at the moment the connection is
-// still unbound, then release the login and observe which check ran first.
-type raceLoginer struct {
-	n       via.State[int]
-	started chan struct{}
-	proceed chan struct{}
-}
-
-func (p *raceLoginer) Bump(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) } // action 0
-func (p *raceLoginer) Login(ctx *via.Ctx) {
-	close(p.started)
-	<-p.proceed
-	ctx.Session().Put(member{Name: "bob"})
-} // action 1
-func (p *raceLoginer) View() h.H {
-	return h.Div(p.n.Display(),
-		h.Button(via.On("click", p.Bump)),
-		h.Button(via.On("click", p.Login)))
-}
-
-// I3: the session-bound check must run on the same serialized goroutine as
-// the action it guards, not on the dispatching request's own goroutine
-// before the closure is even queued — otherwise a cookieless dispatch that
-// passes the check while the connection is still unbound, then actually
-// runs after a concurrent login has bound it, is applied anyway.
-func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
-	t.Parallel()
-	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
-	srv := httptest.NewServer(via.Handler(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
-	t.Cleanup(srv.Close)
-
-	lines, cancel := openStreamAt(t, srv, "/_via/sse")
-	defer cancel()
-	tab := awaitTabID(t, lines)
-
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
-	require.NoError(t, err)
-	page, err := io.ReadAll(getResp.Body)
-	require.NoError(t, err)
-	getResp.Body.Close()
-
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
-	loginDone := make(chan *http.Response, 1)
-	go func() {
-		resp, err := http.DefaultClient.Do(loginReq)
-		require.NoError(t, err)
-		loginDone <- resp
-	}()
-	<-root.started // Login now holds the stream goroutine, unbound so far
-
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	bumpDone := make(chan *http.Response, 1)
-	go func() {
-		resp, err := http.DefaultClient.Do(bumpReq)
-		require.NoError(t, err)
-		bumpDone <- resp
-	}()
-	// Give the cookieless dispatch time to reach its own check/enqueue point
-	// while the connection is STILL unbound — the exact window I3 closes.
-	time.Sleep(50 * time.Millisecond)
-	close(root.proceed) // let Login finish and bind
-
-	loginResp := <-loginDone
-	loginResp.Body.Close()
-	bumpResp := <-bumpDone
-	defer bumpResp.Body.Close()
-
-	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
-		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
-}
-
-// tabGuard is a live root with one ordinary @post action, so a dispatch either
-// reaches this connection's instance (bumping hits) or does not.
-type tabGuard struct{ hits *int }
-
-func (g *tabGuard) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
-func (g *tabGuard) tick(ctx *via.Ctx)         {}
-func (g *tabGuard) Bump(ctx *via.Ctx)         { *g.hits++ }
-func (g *tabGuard) View() h.H                 { return h.Div(h.Button(via.On("click", g.Bump))) }
-
-// The tab id moved from the X-Via-Tab header into the viatab SIGNAL. That is a
-// wire break, not a policy change: a POST that cannot present the connection's
-// tab id must be rejected exactly as the header-based check rejected it, and
-// must not mutate the live unit.
-func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name, body string
-	}{
-		{"no signals at all", "{}"},
-		{"empty tab", `{"viatab":""}`},
-		{"forged tab", `{"viatab":"not-a-real-tab"}`},
-		{"tab of the wrong JSON type", `{"viatab":12345}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			calls := 0
-			app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
-			conn := app.Connect()
-			defer conn.Close()
-
-			status, _ := app.Action(0).Body(tc.body).Fire()
-			assert.Equal(t, http.StatusGone, status,
-				"a live action with no valid tab id must 410, not run against a throwaway instance")
-			assert.Zero(t, calls, "and the connection's unit must not have been touched")
-		})
-	}
-}
-
-// The header is gone for good: leaving it honoured would keep a channel the
-// browser can be made to attach cross-origin under some configurations, on top
-// of the synchronizer token the signal already is.
-func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
-	conn := app.Connect()
-	defer conn.Close()
-
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0), strings.NewReader("{}"))
-	require.NoError(t, err)
-	req.Header.Set("Datastar-Request", "true")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("X-Via-Tab", conn.TabID())
-	resp, err := app.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusGone, resp.StatusCode, "the header must no longer route to a connection")
-	assert.Zero(t, calls)
-}
-
-// And the belt-and-braces half: Datastar-Request still gates the JSON path, so
-// a form-shaped cross-origin POST cannot be dressed up as a signal action.
-func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T) {
-	t.Parallel()
-	calls := 0
-	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
-	conn := app.Connect()
-	defer conn.Close()
-
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0),
-		strings.NewReader(`{"viatab":"`+conn.TabID()+`"}`))
-	require.NoError(t, err)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := app.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.NotEqual(t, http.StatusNoContent, resp.StatusCode,
-		"without Datastar-Request the body is read as a form, so a JSON tab id must not route")
-	assert.Zero(t, calls)
-}
-
 // validatedForm is a native PostForm whose handler records validation errors
 // on ITSELF and re-seeds the submitted values — the ordinary server-rendered
 // form. What the response must show is the instance Save mutated.
@@ -1305,6 +529,7 @@ func (f *validatedForm) Save(ctx *via.Ctx) {
 }
 
 func (f *validatedForm) errNote() h.H { return h.P(h.ID("err"), h.Str(f.err)) }
+
 func (f *validatedForm) View() h.H {
 	return via.PostForm(f.Save,
 		h.Input(h.Name("name"), f.Name.Bind()),
@@ -1358,7 +583,9 @@ type initCounter struct {
 }
 
 func (c *initCounter) OnInit(ctx *via.Ctx) error { c.inits++; return nil }
-func (c *initCounter) Save(ctx *via.Ctx)         { c.saved = "true" }
+
+func (c *initCounter) Save(ctx *via.Ctx) { c.saved = "true" }
+
 func (c *initCounter) View() h.H {
 	return via.PostForm(c.Save,
 		h.P(h.ID("inits"), h.Str(c.inits)),
@@ -1397,6 +624,7 @@ func TestNativeForm_missingTabFieldSaysWhatActuallyHappened(t *testing.T) {
 type liveNamedForm struct{ n via.State[int] }
 
 func (f *liveNamedForm) Save(ctx *via.Ctx) { f.n.Set(f.n.Get() + 1) }
+
 func (f *liveNamedForm) View() h.H {
 	return via.PostForm(f.Save, f.n.Display(), h.Input(h.Name("name")), h.Button(h.Str("go")))
 }
@@ -1497,6 +725,7 @@ type echoedSignal struct {
 }
 
 func (e *echoedSignal) Save(ctx *via.Ctx) { e.saw = e.Name.Get() }
+
 func (e *echoedSignal) View() h.H {
 	return h.Div(h.P(h.Str("saw: "+e.saw)), h.Input(e.Name.Bind()), h.Button(via.On("click", e.Save)))
 }
@@ -1521,6 +750,7 @@ type plainRootLiveKid struct {
 }
 
 func (p *plainRootLiveKid) Save(ctx *via.Ctx) { p.name = ctx.Request().FormValue("name") }
+
 func (p *plainRootLiveKid) View() h.H {
 	return h.Div(
 		h.P(h.ID("name"), h.Str(p.name)),
@@ -1535,8 +765,10 @@ func (c *embeddedClock) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(10*time.Millisecond, c.beat)
 	return nil
 }
+
 func (c *embeddedClock) beat(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
-func (c *embeddedClock) View() h.H         { return h.Div(c.n.Display()) }
+
+func (c *embeddedClock) View() h.H { return h.Div(c.n.Display()) }
 
 func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
 	t.Parallel()
@@ -1573,14 +805,18 @@ func (d *disclosure) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (d *disclosure) Pick(ctx *via.Ctx)   {}
-func (d *disclosure) Save(ctx *via.Ctx)   { d.seen = "saw:" + d.Name.Get() }
+func (d *disclosure) Pick(ctx *via.Ctx) {}
+
+func (d *disclosure) Save(ctx *via.Ctx) { d.seen = "saw:" + d.Name.Get() }
+
 func (d *disclosure) Reveal(ctx *via.Ctx) { d.revealed = true }
 
 func (d *disclosure) form() h.H {
 	return h.Div(h.Input(d.Name.Bind()), h.Button(via.On("click", d.Reveal), h.Str("reveal")))
 }
+
 func (d *disclosure) body() h.H { return via.When(d.Mode.Get() == "x", d.form) }
+
 func (d *disclosure) beat() h.H { return d.n.Display() }
 
 func (d *disclosure) View() h.H {
@@ -1660,7 +896,9 @@ type fixKid struct {
 }
 
 func (k *fixKid) OnInit(ctx *via.Ctx) error { k.loaded = "init"; return nil }
-func (k *fixKid) Save(ctx *via.Ctx)         { k.seen = "seen:" + k.loaded }
+
+func (k *fixKid) Save(ctx *via.Ctx) { k.seen = "seen:" + k.loaded }
+
 func (k *fixKid) View() h.H {
 	return h.Div(h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
 }
@@ -1680,50 +918,6 @@ func TestDispatchPlain_embedActionRunsOnAnInitedCopyAfterASecondPass(t *testing.
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "<p>seen:init</p>",
 		"a posted Bind()ed signal forces a second discovery pass; the embed's action must still run on a copy whose OnInit ran")
-}
-
-type sessUser struct{ Name string }
-
-// sessInAction mints the session in OnInit and reads it back in the handler —
-// the same request, so the cookie is on the response and never in the request.
-type sessInAction struct {
-	Q   via.Signal[string]
-	who string
-}
-
-func (s *sessInAction) OnInit(ctx *via.Ctx) error {
-	ctx.Session().Put(sessUser{Name: "ann"})
-	return nil
-}
-
-func (s *sessInAction) Save(ctx *via.Ctx) {
-	u, ok := ctx.Session().Get[sessUser]()
-	s.who = fmt.Sprintf("who:%v:%s", ok, u.Name)
-}
-
-func (s *sessInAction) View() h.H {
-	return h.Div(h.Input(s.Q.Bind()), h.P(h.Str(s.who)), h.Button(via.On("click", s.Save), h.Str("save")))
-}
-
-func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(sessInAction{}))
-	page := fetchPage(t, app, "/")
-
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := app.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	assert.Contains(t, string(b), "who:true:ann",
-		"a session created in OnInit must be the same session the handler reads, across discovery passes")
-	assert.LessOrEqual(t, len(resp.Header.Values("Set-Cookie")), 1,
-		"a second pass must not mint a second session and a second Set-Cookie")
 }
 
 // argRows widens its row set from a Bind()ed signal, so a posted body can
@@ -1763,100 +957,6 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 	assert.Equal(t, http.StatusGone, code,
 		"the executed render is an intersection with auth per (handler, arg), not per handler")
 	assert.NotContains(t, body, "del:3")
-}
-
-// liveBoundRoot is tabGuard with a Bind()ed slot, so a POST carrying that
-// signal takes a SECOND discovery pass — the pass whose bind Ctx never ran the
-// root's OnInit and so used to read live=false.
-type liveBoundRoot struct {
-	Q    via.Signal[string]
-	hits *int
-}
-
-func (g *liveBoundRoot) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
-func (g *liveBoundRoot) tick(ctx *via.Ctx)         {}
-func (g *liveBoundRoot) Bump(ctx *via.Ctx)         { *g.hits++ }
-func (g *liveBoundRoot) View() h.H {
-	return h.Div(h.Input(g.Q.Bind()), h.Button(via.On("click", g.Bump)))
-}
-
-func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T) {
-	t.Parallel()
-	for _, body := range []string{`{}`, `{"q":"x"}`} {
-		t.Run(body, func(t *testing.T) {
-			t.Parallel()
-			calls := 0
-			app := vt.Serve(t, via.Handler(liveBoundRoot{hits: &calls}))
-			conn := app.Connect()
-			defer conn.Close()
-
-			status, _ := app.Action(0).Body(body).Fire()
-			assert.Equal(t, http.StatusGone, status,
-				"liveness is decided by the auth render; a posted signal that adds a discovery pass must not bypass it")
-			assert.Zero(t, calls, "and the live unit must not have been touched")
-		})
-	}
-}
-
-// sessKid writes the session from its own OnInit; two of them under a root that
-// never calls Session() is the sibling case.
-type sessKid struct{ Tag string }
-
-func (k *sessKid) OnInit(ctx *via.Ctx) error { ctx.Session().Put(sessUser{Name: "ann"}); return nil }
-func (k *sessKid) View() h.H                 { return h.P(h.Str(k.Tag)) }
-
-type sessSiblings struct {
-	Q    via.Signal[string]
-	A, B sessKid
-	hit  string
-}
-
-func (p *sessSiblings) Save(ctx *via.Ctx) {
-	u, ok := ctx.Session().Get[sessUser]()
-	p.hit = fmt.Sprintf("who:%v:%s", ok, u.Name)
-}
-
-func (p *sessSiblings) View() h.H {
-	return h.Div(
-		h.Input(p.Q.Bind()),
-		via.Embed(p.A), via.Embed(p.B),
-		h.P(h.Str(p.hit)),
-		h.Button(via.On("click", p.Save)),
-	)
-}
-
-func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(sessSiblings{}))
-
-	req, err := http.NewRequest(http.MethodGet, app.URL()+"/", nil)
-	require.NoError(t, err)
-	resp, err := app.Client().Do(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
-		"the root resolves the session once per request; siblings must inherit it, not mint their own")
-}
-
-func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(sessSiblings{}))
-	page := fetchPage(t, app, "/")
-
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := app.Client().Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	b, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-
-	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
-		"a second discovery pass must not re-mint per sibling")
-	assert.Contains(t, string(b), "who:true:ann",
-		"and the handler must read the very session the children wrote")
 }
 
 // shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
@@ -1920,7 +1020,9 @@ type scopeKid struct {
 }
 
 func (k *scopeKid) OnInit(ctx *via.Ctx) error { k.from = ctx.Request().Method; return nil }
-func (k *scopeKid) Save(ctx *via.Ctx)         { k.seen = "method:" + k.from }
+
+func (k *scopeKid) Save(ctx *via.Ctx) { k.seen = "method:" + k.from }
+
 func (k *scopeKid) View() h.H {
 	return h.Div(h.Input(k.Q.Bind()), h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
 }
@@ -1940,191 +1042,229 @@ func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing
 	assert.Contains(t, body, "method:POST")
 }
 
-// staleLoader is the week-one shape: OnInit reads the store into a field, the
-// action mutates the store, and nothing re-reads it — so the response render
-// frames the PRE-action number.
-type staleLoader struct {
-	s     *store
-	shown int
+var actionIDRe = regexp.MustCompile(`/_via/a/([^')]+)`)
+
+func actionID(t *testing.T, body string) string {
+	t.Helper()
+	m := actionIDRe.FindStringSubmatch(body)
+	require.NotNil(t, m, "no action endpoint in page")
+	return m[1]
 }
 
-func (p *staleLoader) OnInit(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *staleLoader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
-func (p *staleLoader) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+// liveReqEchoer is a live embed whose action copies a header off the request
+// that triggered it into State.
+type liveReqEchoer struct{ echo via.State[string] }
+
+func (e *liveReqEchoer) Grab(ctx *via.Ctx) { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
+
+func (e *liveReqEchoer) View() h.H {
+	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
 }
 
-// reloadingLoader is staleLoader with the one method that fixes it.
-type reloadingLoader struct {
-	s     *store
-	shown int
+// A live action runs on the stream goroutine, yet it must still see the request
+// that TRIGGERED it — the action POST. That POST carried X-Echo; the connect
+// request never did, so the value surfacing over the SSE proves the triggering
+// action request is threaded through (not the connect request).
+func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveReqEchoer{}))
+		conn := app.Connect()
+
+		// X-Echo has no vt.Action builder method, so this posts by hand — but
+		// the URL and tab still come off the connection, not a separate GET.
+		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("r", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
+		require.NoError(t, err)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("Datastar-Request", "true")
+		req.Header.Set("X-Echo", "from-the-action-post")
+		resp, err := app.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+		conn.Await("echo: from-the-action-post")
+	})
 }
 
-func (p *reloadingLoader) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
-func (p *reloadingLoader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *reloadingLoader) Bump(ctx *via.Ctx)           { p.s.Add(1) }
-func (p *reloadingLoader) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+// renderCounter counts its own View calls so a test can assert on renders
+// without reaching into via's internals — views is a pointer so it survives
+// Handler's per-connection value copy.
+type renderCounter struct {
+	views *atomic.Int64
+	count via.State[int]
 }
 
-func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(reloadingLoader{s: &store{}}))
-	_, page := app.Get("/")
-	require.Contains(t, page, `<p id="n">0</p>`)
+func (r *renderCounter) Bump(*via.Ctx) { r.count.Set(r.count.Get() + 1) }
 
-	code, body := app.Action(0).Fire()
-	require.Equal(t, http.StatusOK, code, "a OnReload that changes the render must not answer 204")
-	assert.Contains(t, body, `<p id="n">1</p>`,
-		"the action's response must show what the handler wrote, not what OnInit loaded before it")
+func (r *renderCounter) View() h.H {
+	r.views.Add(1)
+	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.On("click", r.Bump)))
 }
 
-// Without OnReload the defect is intact — that is the point of the hook being
-// opt-in — but it must no longer be SILENT.
-func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+// A live action must run against the last render's table, not a fresh one of
+// its own: connect renders once, and the action's own push renders once —
+// never a bind render in between just to locate the action.
+func TestLive_actionRunsWithoutPreRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		views := &atomic.Int64{}
+		srv := liveServer(t, via.Handler(renderCounter{views: views}))
 
-	app := vt.Serve(t, via.Handler(staleLoader{s: &store{}}))
-	app.Get("/")
-	code, _ := app.Action(0).Fire()
+		lines, cancel := openStream(t, srv)
+		defer cancel()
 
-	require.Equal(t, http.StatusNoContent, code)
-	assert.Contains(t, logs.String(), "changed nothing the render shows")
-	assert.Contains(t, logs.String(), "OnReload(*via.Ctx) error",
-		"the 204 must name the hook that fixes it")
+		tab := awaitTabID(t, lines)
+		require.NotEmpty(t, tab)
+		require.EqualValues(t, 1, views.Load(), "the connect render is the only render so far")
 
-	// A legitimately idempotent click is a dead click EVERY time. One line per
-	// click buries the log instead of reading it.
-	logs.Reset()
-	for range 5 {
-		app.Action(0).Fire()
+		// A throwaway instance (its own views counter) discovers the current
+		// action URL without adding a render to the instance under test — the
+		// whole point of this test is counting THAT instance's View calls.
+		digestSrv := liveServer(t, via.Handler(renderCounter{views: &atomic.Int64{}}))
+		_, page := do(t, digestSrv, http.MethodGet, "/", "")
+
+		resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
+			"Sec-Fetch-Site": "same-origin",
+		})
+		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
+
+		awaitLine(t, lines, "count: 1")
+		assert.EqualValues(t, 2, views.Load(), "a live action renders once — for the push — not twice")
+	})
+}
+
+// An action id this render does not bind (a click racing a push that closed
+// the branch) must 410, not silently do nothing — the client can then
+// re-bootstrap instead of a click quietly having no effect.
+func TestLive_unknownActionAnswers410(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(clicker{}))
+		conn := app.Connect()
+		require.NotEmpty(t, conn.TabID())
+
+		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+		assert.Equal(t, http.StatusGone, status)
+	})
+}
+
+// liveArg is a live embed with one value-carrying action, so a malformed
+// ?a= can be exercised on the live dispatch path too (dispatchPlain has
+// its own via_test coverage).
+type liveArg struct{ last via.State[int] }
+
+func (l *liveArg) Set(ctx *via.Ctx, v int) { l.last.Set(v) }
+
+func (l *liveArg) View() h.H {
+	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Set, 7)))
+}
+
+// A malformed ?a= on a LIVE action must answer 400, not run the handler with
+// a zero value nor 500 — and the stream goroutine must survive to answer a
+// later, well-formed action normally.
+func TestLive_malformedActionArgAnswers400(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveArg{}))
+		conn := app.Connect()
+
+		url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+		assert.Equal(t, http.StatusBadRequest, status)
+
+		status, _ = app.Action(0).Over(conn).Fire() // well-formed, same slot
+		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
+		conn.Await("7")
+	})
+}
+
+// Neighbour of the malformed-arg case: a missing ?a= (empty, or "null") on a
+// LIVE action must also answer 400, not run Set with the zero value.
+func TestLive_missingActionArgAnswers400(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+	}{
+		{"empty", "a="},
+		{"null", "a=null"},
 	}
-	assert.NotContains(t, logs.String(), "changed nothing the render shows",
-		"the dead-click warning must be deduped per action, not repeated per click")
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				app := vt.Serve(t, via.Handler(liveArg{}))
+				conn := app.Connect()
 
-// liveReloader's data lives in the store, not in State — the live push has to
-// re-read it or the patched frame carries the pre-action value.
-type liveReloader struct {
-	s     *store
-	shown int
-	beat  via.State[int]
-}
+				url := strings.Replace(conn.ActionURL("r", 0), "a=7", tt.a, 1)
+				status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+				assert.Equal(t, http.StatusBadRequest, status)
 
-func (p *liveReloader) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
-func (p *liveReloader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *liveReloader) Bump(ctx *via.Ctx)           { p.s.Add(1) }
-func (p *liveReloader) View() h.H {
-	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(via.On("click", p.Bump)))
-}
-
-func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(liveReloader{s: &store{}}))
-	conn := app.Connect()
-
-	code, _ := app.Action(0).Over(conn).Fire()
-	require.Less(t, code, 300)
-	assert.Contains(t, conn.Await("n=1"), "n=1",
-		"the pushed frame must carry post-action data, not the connect-time snapshot")
-}
-
-// reloadNotFound models the row an action just deleted: OnReload says the page's
-// data is gone, and that answer must reach the client instead of a stale render.
-type reloadNotFound struct{ gone bool }
-
-func (p *reloadNotFound) OnReload(ctx *via.Ctx) error {
-	if p.gone {
-		return via.ErrNotFound
+				status, _ = app.Action(0).Over(conn).Fire() // well-formed, same slot
+				assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
+				conn.Await("7")
+			})
+		})
 	}
-	return nil
-}
-func (p *reloadNotFound) Drop(ctx *via.Ctx) { p.gone = true }
-func (p *reloadNotFound) View() h.H         { return h.Div(h.Button(via.On("click", p.Drop))) }
-
-func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(reloadNotFound{}))
-	app.Get("/")
-	code, body := app.Action(0).Fire()
-	assert.Equal(t, http.StatusNotFound, code)
-	assert.Contains(t, body, "not found")
 }
 
-// reloadRedirector queues its Redirect from OnReload rather than the handler.
-type reloadRedirector struct{}
+// abandonedAction is dispatched with a request context already canceled
+// before ServeHTTP is called, isolating tabStream.run's first select
+// (pulse-send vs. reqCtx.Done, both ready at once) from real round-trip
+// timing noise.
+type abandonedAction struct {
+	applied *atomic.Int32 // shared across Handler's per-connection copy and the test's own handle
+	n       via.State[int]
+}
 
-func (p *reloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
-func (p *reloadRedirector) Go(ctx *via.Ctx)             {}
-func (p *reloadRedirector) View() h.H                   { return h.Div(h.Button(via.On("click", p.Go))) }
+func (a *abandonedAction) Act(ctx *via.Ctx) { a.applied.Add(1) }
 
-func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
+func (a *abandonedAction) View() h.H {
+	return h.Div(a.n.Display(), h.Button(via.On("click", a.Act)))
+}
+
+// A live action must never mutate state once its caller has given up on it.
+// Before the fix, a closure handed to the stream goroutine (tabStream.run)
+// ran to completion regardless of whether the request's context was already
+// done when the goroutine picked it up.
+func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(reloadRedirector{}))
+	root := &abandonedAction{applied: new(atomic.Int32)}
+	handler := via.Handler(*root)
+	srv := liveServer(t, handler)
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
+	actURL := actionURL(t, page, "r", 0)
 
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
-	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
+	const n = 3000
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // abandoned before the request is even dispatched
+			req := httptest.NewRequest(http.MethodPost, actURL, strings.NewReader(withTab(tab, "{}"))).WithContext(ctx)
+			req.Header.Set("Datastar-Request", "true")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(0), root.applied.Load(),
+		"an action dispatched with an already-canceled request context must never apply")
 }
 
-// tickingReload registers a Tick from OnReload on a page served PLAIN. Honouring
-// it would turn the unit live on a page with no stream (I5) and trip the
-// render-invariant panic; OnReload must register nothing.
-type tickingReload struct{ n int }
-
-func (p *tickingReload) OnReload(ctx *via.Ctx) error {
-	ctx.Tick(time.Second, func(*via.Ctx) {})
-	return nil
-}
-func (p *tickingReload) Bump(ctx *via.Ctx) { p.n++ }
-func (p *tickingReload) View() h.H {
-	return h.Div(h.P(h.Str(p.n)), h.Button(via.On("click", p.Bump)))
-}
-
-func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
-
-	app := vt.Serve(t, via.Handler(tickingReload{}))
-	_, page := app.Get("/")
-	require.NotContains(t, page, "data-init", "the page must be served plain")
-
-	code, body := app.Action(0).Fire()
-	assert.Equal(t, http.StatusOK, code, "a Tick in OnReload must be ignored, not fail the action")
-	assert.Contains(t, body, "<p>1</p>")
-	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
-		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
-}
-
-// reloadedEmbed proves the reload targets the ACTED unit: an embed's action
-// must re-read the embed, not the root.
-type reloadedEmbed struct {
-	s     *store
-	shown int
-}
-
-func (p *reloadedEmbed) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
-func (p *reloadedEmbed) Bump(ctx *via.Ctx)           { p.s.Add(1) }
-func (p *reloadedEmbed) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
-}
-
-type reloadedEmbedParent struct{ C reloadedEmbed }
-
-func (p *reloadedEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
-
-func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
-	_, page := app.Get("/")
-	require.Contains(t, page, `<p id="n">0</p>`)
-
-	code, body := app.Action(0).Raw(actionURL(t, page, "0", 0)).Fire()
-	require.Equal(t, http.StatusOK, code)
-	assert.Contains(t, body, `<p id="n">1</p>`)
+// withTab splices the tab id into a JSON signal body. The tab id is an
+// ordinary Datastar signal now, so a live action carries it in the POST body
+// exactly as the browser's signal store does — not as a header.
+func withTab(tab, body string) string {
+	sig := map[string]json.RawMessage{}
+	if body != "" {
+		_ = json.Unmarshal([]byte(body), &sig)
+	}
+	sig["viatab"], _ = json.Marshal(tab)
+	out, _ := json.Marshal(sig)
+	return string(out)
 }

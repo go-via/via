@@ -101,6 +101,19 @@ interface: a composition is a live embed when it *acts* like one, meaning its
 `State[T]`/`List[E]`. There is no `Dispose` — `ctx.Listen` auto-disposes with
 the embed.
 
+Both hooks are duck-typed, so a `Initializer` -> `Initer` port that gets the
+method name or signature slightly wrong compiles and then silently does
+nothing. Pin each one you port:
+
+```go
+var _ via.Initer = (*Page)(nil)
+var _ via.Reloader = (*Page)(nil)
+```
+
+Mount and Embed panic on an `OnInit`/`OnReload` with the wrong signature and
+log a near-miss name that carries the right one, but the assertions are the
+only airtight check.
+
 `OnInit` is per-request, not per-connection: it runs on the GET, on every
 action, and on the SSE connect. Pair a connection-scoped acquire with
 `ctx.OnConnect(fn)` and its release with `ctx.OnDispose(fn)`; both run only
