@@ -409,12 +409,8 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// inside it hydrated too — without this their posted values were silently
 	// dropped. The action must be present in BOTH, so the executed render is an
 	// intersection with auth, never a superset.
-	newBind := func() *Ctx {
-		c := newRootCtx(nil, true, base, map[string]any{}) // nil only would read as "declare everything"
-		c.embedV = inst                                    // so c.unit(rootAddr)'s liveness reads the same way an embed's does
-		return c
-	}
-	auth := newBind()
+	auth := newRootCtx(nil, true, base, map[string]any{}) // nil only would read as "declare everything"
+	auth.embedV = inst                                    // so auth.unit(rootAddr)'s liveness reads the same way an embed's does
 	if runOnInit(inst.v, auth, w, req, m.sessions) != nil {
 		return
 	}
@@ -423,17 +419,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	done := map[string]bool{}
 	n := 0
 	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
-		// A later pass is a WHOLE fresh render, and the handler runs on the
-		// last one — so it must carry auth's request scope or the action runs
-		// on an un-inited copy with no request, no session and no way to set a
-		// cookie (inheritRequestScope also carries the resolved session, which
-		// a re-resolve off req would miss for one OnInit just minted).
-		bind = newBind()
-		inheritRequestScope(bind, auth)
-		// The root's OnInit does not re-run here, so nothing else would close
-		// the init window: without this a handler's ctx.Tick registers into a
-		// snapshot nobody reads instead of logging.
-		bind.initDone = auth.initDone
+		bind = rebindFrom(auth)
 		rootBefore = renderRootWith(bind, inst.v)
 	}
 	if n == maxHydratePasses {
@@ -457,6 +443,15 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, "no such embed", http.StatusGone)
 		return
 	}
+	// Same guard, same reason, as the acted-instance substitution in
+	// embedViewer: a When around an Embed that depends on a hydrated signal can
+	// shift ordinals, so one key may denote different types in the auth and
+	// bind renders. Embed's docs forbid such a When; fail closed rather than
+	// run the handler against a unit the authorization never looked at.
+	if ua.embedV.typ != u.embedV.typ {
+		http.Error(w, "no such embed", http.StatusGone)
+		return
+	}
 	a, ok := u.actions[act]
 	if !ok {
 		http.Error(w, unknownAction(u, act), http.StatusGone)
@@ -473,12 +468,9 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		}
 	}
 	if ua.live {
-		// Liveness is read off the AUTH render, never off bind: only auth ran
-		// the root's OnInit, so a Tick/Listen root's bind (pass >= 2, built by
-		// newBind) reads live=false and the fail-closed check silently passed,
-		// mutating a throwaway instance while the client saw 200.
-		// Reaching here means the tab was missing or stale, so fail closed
-		// rather than mutating a throwaway instance.
+		// Liveness is read off the AUTH render, never off bind (I1/I5): only
+		// auth ran the root's OnInit. Reaching here means the tab was missing
+		// or stale, so fail closed rather than mutating a throwaway instance.
 		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
@@ -496,6 +488,43 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	respond(w, req, mode, u.redirect, nil, func() []byte {
 		return m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
 	})
+}
+
+// rebindFrom builds the Ctx for hydration pass >= 2: a CLONE of the auth
+// render with only the per-render tables reset. Three separate defect rounds
+// were one field set on auth and forgotten here (req/sessions/sessW/doInit,
+// then session, then live/initDone), each patched by hand-copying one more
+// field — so the default is inverted: a new Ctx field rides along unless it is
+// reset below, and forgetting one can no longer silently drop a request scope.
+//
+// Reset are exactly the things a render PRODUCES and the next render must
+// produce again (slot order/initials, the action and hydrator tables, the
+// embed tree, the rendered bytes and push closure, this dispatch's dirty set
+// and redirect), plus the root's OnInit registrations — OnInit does not re-run
+// here and nothing on the plain path consumes them. `live` is NOT reset: it is
+// auth's verdict, and a later pass may only widen it (I5).
+//
+// The invariants this loop must preserve:
+//
+//	I1 the authority for actions, args AND liveness is the un-hydrated auth render.
+//	I2 passes >= 2 widen only hydratable slots; the executed action is auth ∩ bind
+//	   per (handler, arg).
+//	I3 one request = one *Session, resolved by runOnInit and propagated by copy;
+//	   only Session.ensure mints.
+//	I4 a Session.w is non-nil iff its response is still writable.
+//	I5 liveness is a GET/auth verdict — a bind pass cannot lower it and a
+//	   re-render cannot raise it.
+func rebindFrom(auth *Ctx) *Ctx {
+	c := *auth
+	c.order, c.initial = nil, map[string]any{}
+	c.actions = map[string]action{}
+	c.hydrators = map[string]func(json.RawMessage){}
+	c.dirty = map[string]any{}
+	c.embeds = nil
+	c.rendered, c.push = nil, nil
+	c.redirect = ""
+	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
+	return &c
 }
 
 // hydrateTree applies the POST body's signals to every slot the discovery

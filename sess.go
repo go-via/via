@@ -194,7 +194,9 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // idle past its TTL stops resolving, but one never accessed again is not
 // actively swept — acceptable because a session is created only on a write
 // (typically login), so growth tracks authenticated sessions, not anonymous
-// traffic.
+// traffic. "Access" means the request, not the app: every request carrying a
+// valid session cookie resolves it (OnInit does so eagerly) and slides the
+// idle window, even when nothing calls Get or Put.
 type Session struct {
 	mgr    *sessionManager
 	id     string // "" until resolved or created
