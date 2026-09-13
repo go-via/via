@@ -1091,7 +1091,17 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// leaked tab id was a bearer token good from any origin with no session at
 	// all (see dispatch). Resolved BEFORE OnInit, which may mint or rotate one:
 	// the point is the identity the browser held when it opened this stream.
-	_, sessDat, _ := m.sessions.resolve(req)
+	// An error here is NOT "anonymous": the browser may well hold a valid
+	// cookie the store just could not answer for. Opening the stream anyway
+	// would leave it permanently unbound — nothing binds it later, since a
+	// live action sees a session that already existed at connect — and the tab
+	// id would be a bearer credential for the connection's whole life. Fail the
+	// connect instead; the client's reconnect logic retries.
+	_, sessDat, err := m.sessions.resolve(req)
+	if err != nil {
+		http.Error(w, "session store unavailable", http.StatusServiceUnavailable)
+		return
+	}
 
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
