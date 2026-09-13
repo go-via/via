@@ -430,6 +430,10 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// a re-resolve off req would miss for one OnInit just minted).
 		bind = newBind()
 		inheritRequestScope(bind, auth)
+		// The root's OnInit does not re-run here, so nothing else would close
+		// the init window: without this a handler's ctx.Tick registers into a
+		// snapshot nobody reads instead of logging.
+		bind.initDone = auth.initDone
 		rootBefore = renderRootWith(bind, inst.v)
 	}
 	if n == maxHydratePasses {
@@ -468,7 +472,11 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 			delete(a.args, k)
 		}
 	}
-	if u.live {
+	if ua.live {
+		// Liveness is read off the AUTH render, never off bind: only auth ran
+		// the root's OnInit, so a Tick/Listen root's bind (pass >= 2, built by
+		// newBind) reads live=false and the fail-closed check silently passed,
+		// mutating a throwaway instance while the client saw 200.
 		// Reaching here means the tab was missing or stale, so fail closed
 		// rather than mutating a throwaway instance.
 		http.Error(w, noStream(mode, tab), http.StatusGone)

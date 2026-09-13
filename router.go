@@ -40,6 +40,13 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	ctx.sessions = sessions
 	ctx.sessW = w
 	ctx.doInit = true // every embedded child's OnInit runs too, inside Embed
+	// Resolve once, eagerly, even with no OnInit: Embed copies the parent's
+	// handle, so a nil here lets each child resolve its own and every Put mint
+	// its own id — two sibling embeds writing the session sent two Set-Cookie
+	// headers and orphaned the first. Resolving alone reads the cookie and
+	// never writes one (only Session.ensure mints), so this cannot create a
+	// session for a request that would not otherwise touch one.
+	ctx.Session()
 	ic, ok := v.(Initer)
 	if !ok {
 		return nil
