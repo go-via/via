@@ -50,7 +50,7 @@ func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, 0, 0), strings.NewReader("{}"))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader("{}"))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
@@ -82,7 +82,7 @@ func TestDispatch_redirectFromStatelessIslandActionDoesNotShipAScript(t *testing
 	srv := serve(t, via.Register(islandRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 1, 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "0", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -117,7 +117,7 @@ func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
 	srv := serve(t, via.Register(sigPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 0), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
 	assert.Contains(t, body, `"i0_f0":"resetted"`, "the Set signal must reach the client")
@@ -148,7 +148,7 @@ func TestDispatch_islandActionRunsOnInitRedirect(t *testing.T) {
 	r.Mount("/g", guardedParent{})
 	srv := serve(t, r)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/1/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/0/0", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -179,16 +179,16 @@ func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 	srv := serve(t, via.Register(mixedPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `@post('`+actionURL(t, page, 0, 0)+`'`, "the @post binding claims its own action id")
-	assert.Contains(t, page, `action="`+actionURL(t, page, 0, 1)+`"`, "PostForm claims an id in the same table")
+	assert.Contains(t, page, `@post('`+actionURL(t, page, "r", 0)+`'`, "the @post binding claims its own action id")
+	assert.Contains(t, page, `action="`+actionURL(t, page, "r", 1)+`"`, "PostForm claims an id in the same table")
 
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the @post action must dispatch")
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.Close()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, 1), &buf)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 1), &buf)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -295,12 +295,12 @@ func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/thread/7", "")
-	assert.Regexp(t, `@post\('/thread/7/_via/a/1/[A-Za-z0-9_-]+'`, page)
+	assert.Regexp(t, `@post\('/thread/7/_via/a/0/[A-Za-z0-9_-]+'`, page)
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 0), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "{id}", "the re-rendered action URL must not carry the pattern wildcard")
-	assert.Contains(t, body, `/thread/7/_via/a/1/`, "the re-rendered action URL must carry the concrete segment")
+	assert.Contains(t, body, `/thread/7/_via/a/0/`, "the re-rendered action URL must carry the concrete segment")
 }
 
 // unsafeRoot and unsafeIsland both bump a visible counter alongside an
@@ -327,7 +327,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(unsafeRoot{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
@@ -337,7 +337,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(unsafeParent{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 1, 0), "{}")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
@@ -347,7 +347,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(loginForm{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "evil")
+		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
 		assert.Empty(t, resp.Header.Get("Location"))
 	})
@@ -388,7 +388,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		url := actionURL(t, page, 0, 0)
+		url := actionURL(t, page, "r", 0)
 		for _, n := range []string{"99", "-1", "________"} {
 			resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, n), "{}")
 			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged id=%s must 410, not panic/misroute", n)
@@ -400,7 +400,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 			app := vt.Serve(t, via.Register(liveClicker{}))
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
-			url := actionURL(t, page, 0, 0)
+			url := actionURL(t, page, "r", 0)
 			for _, n := range []string{"99", "-1", "________"} {
 				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
 				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
@@ -421,7 +421,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 0, 1), "zzzzzzzz"), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 1), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -429,7 +429,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, 1, 0), "zzzzzzzz"), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "0", 0), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -441,7 +441,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 
-			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz"), strings.NewReader("{}"))
+			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), strings.NewReader("{}"))
 			require.NoError(t, err)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			req.Header.Set("Datastar-Request", "true")
@@ -519,7 +519,7 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
-		aURL := actionURL(t, aPage, 0, 0)
+		aURL := actionURL(t, aPage, "r", 0)
 
 		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
 		defer cancel()
@@ -540,9 +540,9 @@ func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
 	srv := serve(t, via.Register(branchedView{st: &toggleState{}}))
 
 	_, unlocked := do(t, srv, http.MethodGet, "/", "")
-	staleSave := actionURL(t, unlocked, 0, 0)   // Save, only bound while unlocked
-	staleDelete := actionURL(t, unlocked, 0, 1) // Delete, bound in both branches
-	flip := actionURL(t, unlocked, 0, 2)
+	staleSave := actionURL(t, unlocked, "r", 0)   // Save, only bound while unlocked
+	staleDelete := actionURL(t, unlocked, "r", 1) // Delete, bound in both branches
+	flip := actionURL(t, unlocked, "r", 2)
 
 	// Flip to locked: Save leaves the table and every later index shifts down
 	// by one — under positional routing the pre-flip Delete URL (index 1)
@@ -623,7 +623,7 @@ func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 		page := fetchPage(t, app, "/")
 		assert.Contains(t, page, `data-attr:value="$_viatab"`,
 			"a live unit's PostForm must reactively fill the fallback field from the tab signal")
-		formURL := actionURL(t, page, 0, 0)
+		formURL := actionURL(t, page, "r", 0)
 
 		status, _ := nativeFormPost(t, app, formURL, map[string]string{
 			"name":    "zed",
@@ -647,7 +647,7 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
-		aFormURL := actionURL(t, aPage, 0, 0)
+		aFormURL := actionURL(t, aPage, "r", 0)
 
 		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
 		defer cancel()
@@ -697,7 +697,7 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 		app := vt.Serve(t, via.Register(nativeFormPanic{boom: boom}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
-		formURL := actionURL(t, page, 0, 0)
+		formURL := actionURL(t, page, "r", 0)
 
 		status, _ := nativeFormPost(t, app, formURL, map[string]string{
 			"name":    "zed",
@@ -758,7 +758,7 @@ func (s *sessionLive) View() h.H {
 // page's currently-rendered action URL, with tab as its X-Via-Tab header —
 // bypassing any cookie jar, so the caller controls exactly what (if any)
 // session cookie rides along.
-func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab string, island, n int) *http.Request {
+func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, island string, n int) *http.Request {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, island, n), strings.NewReader("{}"))
 	require.NoError(t, err)
@@ -787,7 +787,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), 0, 0), strings.NewReader("{}"))
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
 	signInReq.Header.Set("Datastar-Request", "true")
@@ -806,7 +806,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	req := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	// No cookie at all on this request — the stolen-tab-id, no-session attack.
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -817,7 +817,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 
 	// The rightful owner, same tab, same session cookie, must still work —
 	// the check rejects a MISMATCH, not the connection itself.
-	ownReq := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	ownReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	ownResp, err := owner.Do(ownReq)
 	require.NoError(t, err)
 	defer ownResp.Body.Close()
@@ -844,7 +844,7 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie anywhere
+	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie anywhere
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -874,7 +874,7 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 	loginPage, err := io.ReadAll(loginResp.Body)
 	require.NoError(t, err)
 	loginResp.Body.Close()
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), 0, 0), strings.NewReader("{}"))
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
 	signInReq.Header.Set("Datastar-Request", "true")
@@ -898,7 +898,7 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 	// The attacker dispatches Peek — read-only — against the victim's tab,
 	// carrying their own cookie via a plain http.Request (not the jar client,
 	// so we control exactly which cookie rides along).
-	peekReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Peek
+	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek
 	peekReq.AddCookie(&http.Cookie{Name: "via_session", Value: cookieValue(t, attacker, srv.URL, "via_session")})
 	peekResp, err := http.DefaultClient.Do(peekReq)
 	require.NoError(t, err)
@@ -906,7 +906,7 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 
 	// The victim's own later cookieless dispatch must still succeed — the
 	// connection must NOT have been captured by the attacker's cookie.
-	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpResp, err := http.DefaultClient.Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
@@ -933,12 +933,12 @@ func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	peekReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Peek, no cookie
+	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek, no cookie
 	peekResp, err := http.DefaultClient.Do(peekReq)
 	require.NoError(t, err)
 	peekResp.Body.Close()
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, still no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, still no cookie
 	bumpResp, err := http.DefaultClient.Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
@@ -981,13 +981,13 @@ func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispat
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
 	loginResp, err := http.DefaultClient.Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	require.NotEmpty(t, loginResp.Header.Get("Set-Cookie"), "a live Login must still mint the session cookie")
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpResp, err := http.DefaultClient.Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
@@ -1026,7 +1026,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -1055,18 +1055,18 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tabA, 0, 1) // Login on A
+	loginReq := liveActionRequest(t, srv, string(page), tabA, "r", 1) // Login on A
 	loginResp, err := http.DefaultClient.Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
-	bumpA := liveActionRequest(t, srv, string(page), tabA, 0, 0)
+	bumpA := liveActionRequest(t, srv, string(page), tabA, "r", 0)
 	bumpAResp, err := http.DefaultClient.Do(bumpA)
 	require.NoError(t, err)
 	bumpAResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bumpAResp.StatusCode, "the logged-in tab rejects a cookieless dispatch")
 
-	bumpB := liveActionRequest(t, srv, string(page), tabB, 0, 0)
+	bumpB := liveActionRequest(t, srv, string(page), tabB, "r", 0)
 	bumpBResp, err := http.DefaultClient.Do(bumpB)
 	require.NoError(t, err)
 	defer bumpBResp.Body.Close()
@@ -1094,28 +1094,28 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
 	loginResp, err := owner.Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	before := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEmpty(t, before)
 
-	rotReq := liveActionRequest(t, srv, string(page), tab, 0, 2) // Rotate
+	rotReq := liveActionRequest(t, srv, string(page), tab, "r", 2) // Rotate
 	rotResp, err := owner.Do(rotReq)
 	require.NoError(t, err)
 	rotResp.Body.Close()
 	after := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
 
-	okReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, new cookie
+	okReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, new cookie
 	okResp, err := owner.Do(okReq)
 	require.NoError(t, err)
 	okResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
 		"the post-rotate dispatch with the new cookie must still be bound")
 
-	staleReq := liveActionRequest(t, srv, string(page), tab, 0, 0)
+	staleReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	staleReq.AddCookie(&http.Cookie{Name: "via_session", Value: before})
 	staleResp, err := http.DefaultClient.Do(staleReq)
 	require.NoError(t, err)
@@ -1168,7 +1168,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, 0, 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
 	loginDone := make(chan *http.Response, 1)
 	go func() {
 		resp, err := http.DefaultClient.Do(loginReq)
@@ -1177,7 +1177,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	}()
 	<-root.started // Login now holds the island goroutine, unbound so far
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, 0, 0) // Bump, no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpDone := make(chan *http.Response, 1)
 	go func() {
 		resp, err := http.DefaultClient.Do(bumpReq)

@@ -89,14 +89,13 @@ type Ctx struct {
 	session     *Session                         // resolved session handle, cached per Ctx
 	islands     []*Ctx                           // embedded child islands, in positional order (parent binder only)
 	isIsland    bool                             // true when this Ctx binds an embedded island's child View
-	islandIdx   int                              // this island's flat, page-wide index (shared via pass), used in its action path
+	islandKey   string                           // this island's identity: its ordinal among its parent's Embeds, composed with the parent's key ("0", "1", "0-0"); drives container id, signal prefix and dispatch address alike
 	islandV     instance                         // the unit's composition, for re-rendering on action and for offset-derived signal slots
 	rendered    []byte                           // this island's inner HTML from the discovery render (for 204 compare)
 	push        func()                           // re-render THIS island and frame it on the stream (set per live unit)
 	declare     bool                             // whether this render declares page-level data-signals (first paint, not a push)
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
-	pass        *renderPass                      // shared flat-index allocator during a root-level render; nil for an island's own standalone render
 	doInit      bool                             // this render is request-scoped, so every embedded child's OnInit runs before its View (a live push re-render must not re-run them)
 	initDone    bool                             // true once OnInit has returned — a later Tick/Listen would register into a snapshot nobody reads, so they log loudly instead
 }
@@ -202,7 +201,17 @@ func (c *Ctx) signalName() string {
 	return c.slotScope(name)
 }
 
-// slotScope prefixes a slot with the island index: an embedded island binds in
+// childKey is the island key for this Ctx's ordinal'th Embed call: an island's
+// key composes onto its parent's, so a subtree re-rendered on its own (see
+// renderIslandBind) numbers its descendants exactly as the full-page walk did.
+func (c *Ctx) childKey(ordinal int) string {
+	if c.isIsland {
+		return c.islandKey + "-" + strconv.Itoa(ordinal)
+	}
+	return strconv.Itoa(ordinal)
+}
+
+// slotScope prefixes a slot with the island key: an embedded island binds in
 // its own Ctx, so two islands would otherwise mint the same name and collide in
 // the page's one global Datastar store.
 func (c *Ctx) slotScope(name string) string { return c.scopePrefix() + name }
@@ -210,7 +219,7 @@ func (c *Ctx) slotScope(name string) string { return c.scopePrefix() + name }
 // scopePrefix is the island prefix every slot this Ctx mints carries.
 func (c *Ctx) scopePrefix() string {
 	if c.isIsland {
-		return "i" + strconv.Itoa(c.islandIdx) + "_"
+		return "i" + c.islandKey + "_"
 	}
 	return ""
 }
@@ -227,14 +236,15 @@ func (c *Ctx) slotInScope(slot string) bool {
 	return !islandScoped(slot)
 }
 
-// islandScoped reports whether slot carries an "i<idx>_" island prefix. A root
-// slot ("f40", "s2") never can, so the shapes cannot be confused.
+// islandScoped reports whether slot carries an "i<key>_" island prefix, where
+// key is a '-'-joined ordinal path. A root slot ("f40", "s2") never can, so the
+// shapes cannot be confused.
 func islandScoped(slot string) bool {
 	if len(slot) < 3 || slot[0] != 'i' {
 		return false
 	}
 	i := 1
-	for i < len(slot) && slot[i] >= '0' && slot[i] <= '9' {
+	for i < len(slot) && (slot[i] >= '0' && slot[i] <= '9' || slot[i] == '-') {
 		i++
 	}
 	return i > 1 && i < len(slot) && slot[i] == '_'
@@ -420,12 +430,8 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 			return
 		}
 		idx := ctx.actionSlot(handler, handler)
-		island := 0
-		if ctx.isIsland {
-			island = ctx.islandIdx + 1
-		}
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			ctx.base + `/_via/a/` + strconv.Itoa(island) + `/` + idx + `">`)
+			ctx.base + `/_via/a/` + unitAddr(ctx) + `/` + idx + `">`)
 		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
 		for _, c := range children {
 			r.Render(c)
@@ -566,22 +572,19 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // a url-encoded arg), so no user input reaches it and there is no injection
 // surface. Datastar v1's colon syntax (data-on:<event>); the old dash form is
 // parsed as a nonexistent plugin and silently dropped. Every action posts to
-// {base}/_via/a/{island}/{id} — the root is island 0, an embedded child is its
-// islandIdx+1, and id addresses the handler itself, so a list that grew or
+// {base}/_via/a/{island}/{id} — the root is island "r", an embedded child is
+// its island key, and id addresses the handler itself, so a list that grew or
 // shrank since the client's copy was rendered still routes every already-shipped
 // URL. Every POST echoes the tab id (the _viatab local signal, declared empty on
 // <body> and filled by the SSE stream) as the X-Via-Tab header, so a live unit's
 // action routes to THIS connection's instance; on a stateless page it is empty,
 // matches no connection, and dispatch falls through to the stateless path.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
-	base, island := "", 0
+	base := ""
 	if ctx != nil {
 		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{island}/{id}
-		if ctx.isIsland {
-			island = ctx.islandIdx + 1
-		}
 	}
-	path := base + "/_via/a/" + strconv.Itoa(island) + "/" + idx
+	path := base + "/_via/a/" + unitAddr(ctx) + "/" + idx
 	r.WriteString(` data-on:` + event + `="@post('` + path + query + `',{headers:{'X-Via-Tab':$_viatab}})"`)
 }
 
@@ -638,7 +641,6 @@ func newRootCtx(in map[string]json.RawMessage, declareSignals bool, base string,
 	ctx.declare = declareSignals // embedded islands declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
-	ctx.pass = &renderPass{} // fresh page-wide index allocator for this discovery walk
 	return ctx
 }
 
@@ -737,13 +739,13 @@ func appendLiveIslands(ctx *Ctx, out *[]*Ctx) {
 }
 
 // connectUnit wires unit's push closure to stream (whole-page at #root for the
-// root unit, its own #via-i{idx} container for an island) and registers unit on
+// root unit, its own #via-i{key} container for an island) and registers unit on
 // lc as this island's current unit. The unit's OnInit already ran, before its
 // View — the discovery render is what decided it is live at all.
 func connectUnit(unit *Ctx, stream *sseStream, base string, lc *liveConn) {
 	lc.replace(unit)
 	if unit.isIsland {
-		unit.push = islandPush(unit.islandIdx, unit.islandV, base, stream, lc)
+		unit.push = islandPush(unit.islandKey, unit.islandV, base, stream, lc)
 	} else {
 		unit.push = rootPush(unit.islandV, base, stream, lc)
 	}
@@ -764,17 +766,17 @@ func rootPush(inst instance, base string, stream *sseStream, lc *liveConn) func(
 	return push
 }
 
-// islandPush is rootPush for an embedded live island: it re-renders island idx's
-// children in place (Datastar inner mode, so the container's own
+// islandPush is rootPush for an embedded live island: it re-renders the island
+// at key in place (Datastar inner mode, so the container's own
 // data-ignore-morph never blocks the push) and replaces the connection's
 // current unit for it.
-func islandPush(idx int, inst instance, base string, stream *sseStream, lc *liveConn) func() {
+func islandPush(key string, inst instance, base string, stream *sseStream, lc *liveConn) func() {
 	var push func()
 	push = func() {
-		bind, body := renderIslandBind(idx, inst, base)
+		bind, body := renderIslandBind(key, inst, base)
 		bind.push = push
 		lc.replace(bind)
-		id := "via-i" + strconv.Itoa(idx)
+		id := "via-i" + key
 		stream.frame(func(w io.Writer) { writeInnerPatchFrame(w, id, body) })
 	}
 	return push
@@ -884,7 +886,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		pulse:       pulse,
 		done:        streamCtx.Done(),
 		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-		units:       map[int]*Ctx{},
+		units:       map[string]*Ctx{},
 		sess:        sess,
 	}
 

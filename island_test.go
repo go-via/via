@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -234,7 +235,7 @@ func TestMux_liveIslandActionRoutesToItsIslandAndPushes(t *testing.T) {
 		conn := app.Connect()
 
 		// URL id 1 addresses this island; Live routes it to THIS connection's tab.
-		status, _ := app.IslandAction(1, 0).Live(conn).Fire()
+		status, _ := app.IslandAction("0", 0).Live(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
 
 		conn.Await("selector #via-i0") // the action's push must target its own island container
@@ -249,7 +250,7 @@ func TestMux_liveIslandActionWithUnknownTabIsGone(t *testing.T) {
 		app := vt.Serve(t, via.Register(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
 
-		status, _ := app.IslandAction(1, 0).Live(conn).Tab("bogus-tab-id").Fire()
+		status, _ := app.IslandAction("0", 0).Live(conn).Tab("bogus-tab-id").Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }
@@ -259,7 +260,7 @@ func TestMux_liveIslandActionWithUnknownTabIsGone(t *testing.T) {
 func TestMux_liveIslandActionBindingCarriesTabHeader(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(panel{})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
 		"a live island action must carry its island id and the tab header")
 }
 
@@ -352,8 +353,8 @@ func TestEmbed_rendersEachIslandInItsOwnContainerWithScopedActions(t *testing.T)
 		assert.Contains(t, body, want, "embedded islands missing container/scoped-action")
 	}
 	// Each island's action is addressed under its OWN id, not a shared flat one.
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body)
 	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+'`, body)
-	assert.Regexp(t, `@post\('/_via/a/2/[A-Za-z0-9_-]+'`, body)
 }
 
 // An action must route to the island named in its path, mutate that island, and
@@ -363,7 +364,7 @@ func TestEmbed_actionRoutesToItsIslandAndPatchesThatContainer(t *testing.T) {
 	srv := serve(t, via.Register(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 2, 0), "{}") // bump the second island (url id 2)
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "1", 0), "{}") // bump the second island (url id 2)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	assert.Contains(t, body, `id="via-i1"`, "patch must target the acted island's container")
@@ -382,7 +383,7 @@ func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
 	srv := serve(t, via.Register(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 1, 1), "{}") // first island (url id 1), Noop
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // first island (url id 1), Noop
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
@@ -394,7 +395,7 @@ func TestEmbed_unknownIslandOrActionIsGone(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 1, 0)
+	url := actionURL(t, page, "0", 0)
 
 	for _, path := range []string{swapIslandIndex(t, url, "10"), swapActionID(t, url, "zzzzzzzz")} {
 		resp, _ := do(t, srv, http.MethodPost, path, "{}")
@@ -409,7 +410,7 @@ func TestEmbed_siblingIslandsDoNotShareAnActionIndexSpace(t *testing.T) {
 	_, body := do(t, serve(t, via.Register(board{})), http.MethodGet, "/", "")
 	// Both islands address their action under their OWN island segment; neither
 	// uses a page-global flat index.
-	assert.True(t, strings.Contains(body, `/_via/a/1/`) && strings.Contains(body, `/_via/a/2/`),
+	assert.True(t, strings.Contains(body, `/_via/a/0/`) && strings.Contains(body, `/_via/a/1/`),
 		"each island must own a /{island}/{act} table, not a flat page index")
 }
 
@@ -427,7 +428,7 @@ type shell[C any] struct{ Body C }
 func (s *shell[C]) View() h.H { return h.Div(h.H1(h.Str("SHELL")), via.Embed(s.Body)) }
 
 // An embedded child renders in place, inside the layout's frame, wired as a
-// positional island container. Fails if Embed stops wiring the container or
+// island container of its own. Fails if Embed stops wiring the container or
 // renders the child outside the frame.
 func TestEmbed_projectsChildInPlace(t *testing.T) {
 	t.Parallel()
@@ -435,7 +436,7 @@ func TestEmbed_projectsChildInPlace(t *testing.T) {
 
 	assert.Contains(t, body, "SHELL", "the layout frame renders")
 	assert.Contains(t, body, "BANNER", "the embedded content renders inside the frame")
-	assert.Contains(t, body, `id="via-i0"`, "embedded content is wired as a positional island container")
+	assert.Contains(t, body, `id="via-i0"`, "embedded content is wired into an island container keyed by its ordinal")
 	assert.Less(t, strings.Index(body, "SHELL"), strings.Index(body, "BANNER"),
 		"content is embedded in place, after the frame heading")
 }
@@ -486,8 +487,8 @@ func TestEmbed_liveChildInsideLiveIslandAtDepthTwo(t *testing.T) {
 	app := vt.Serve(t, via.Register(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
 
-	conn.Await(`selector #via-i1`) // the depth-two live child gets its own container, distinct from its wrapper island's via-i0
-	conn.Await("hb=")              // and streams its own server state independently
+	conn.Await(`selector #via-i0-0`) // the depth-two live child's key composes onto its wrapper island's ("0"), so it can never alias it
+	conn.Await("hb=")                // and streams its own server state independently
 }
 
 // The guard is about LIVE children only: a plain (stateless) child embedded
@@ -612,7 +613,7 @@ func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	extra := false
 	srv := serve(t, via.Register(flipRoot{Child: flipChild{extra: &extra}}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	rootAction := actionURL(t, page, 0, 0)
+	rootAction := actionURL(t, page, "r", 0)
 
 	extra = true // the child's OWN shape now differs from what the GET rendered
 
@@ -713,7 +714,7 @@ func TestPostForm_liveSubmitRendersFreshPageWithDistinctIslandIds(t *testing.T) 
 	awaitLine(t, lines, `selector #via-i1`)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 1, 0) // island 1 = A's dispatch address (islandIdx 0 + 1)
+	url := actionURL(t, page, "0", 0) // "0" = A's key: the root's first Embed
 	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
 	require.NoError(t, err)
@@ -788,7 +789,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 1, 0) // island 1 = sessionSettingIsland's Login action
+	url := actionURL(t, page, "0", 0) // island 1 = sessionSettingIsland's Login action
 
 	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
@@ -904,9 +905,136 @@ func TestDispatch_plainChildOfALivePageStaysStateless(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, body := app.IslandAction(1, 0).Live(conn).Fire()
+	status, body := app.IslandAction("0", 0).Live(conn).Fire()
 
 	assert.Equal(t, http.StatusOK, status,
 		"a plain child on a live page must dispatch statelessly, not 410 as a missing live unit")
 	assert.Contains(t, body, "kid-hits=1", "its action answers with its own re-rendered container")
+}
+
+// deepCounter is a LIVE leaf whose Signal sits at field offset 0 — the same
+// offset deepPanel.Query occupies, so only the island key keeps the two slots
+// apart on the wire.
+type deepCounter struct {
+	Step via.Signal[int]
+	n    via.State[int]
+}
+
+func (c *deepCounter) Inc(*via.Ctx) { c.n.Set(c.n.Get() + c.Step.Get()) }
+func (c *deepCounter) View() h.H {
+	return h.Div(h.Str("n="), c.n.Display(),
+		h.Input(c.Step.Bind()), h.Button(via.On("click", c.Inc), h.Str("+step")))
+}
+
+// deepPanel is a PLAIN middle island: it has its own Signal and action, and its
+// View Embeds a live child — the shape Embed's godoc once assumed impossible.
+type deepPanel struct {
+	Query via.Signal[string]
+	Kid   deepCounter
+	hits  *atomic.Int64
+}
+
+func (p *deepPanel) Search(*via.Ctx) { p.hits.Add(1) }
+func (p *deepPanel) View() h.H {
+	return h.Section(h.Input(p.Query.Bind()),
+		h.Button(via.On("click", p.Search), h.Str("search")),
+		h.Span(h.Str("hits="), h.Str(int(p.hits.Load()))), via.Embed(p.Kid))
+}
+
+type deepRoot struct {
+	Filter      via.Signal[string]
+	Left, Right deepPanel
+}
+
+func (d *deepRoot) View() h.H {
+	return h.Main(h.Input(d.Filter.Bind()), via.Embed(d.Left), via.Embed(d.Right))
+}
+
+func newDeepRoot(hits *atomic.Int64) deepRoot {
+	return deepRoot{Left: deepPanel{hits: hits}, Right: deepPanel{hits: hits}}
+}
+
+// An island's key composes onto its parent's, so two Embeds of the SAME type
+// side by side — each holding a same-typed child of its own — get four
+// distinct container ids and four distinct signal prefixes. Under the old
+// page-wide counter this held only because one flat walk numbered everything;
+// the key makes it a property of the tree instead.
+func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
+	t.Parallel()
+	_, page := do(t, serve(t, via.Register(newDeepRoot(&atomic.Int64{}))), http.MethodGet, "/", "")
+
+	for _, id := range []string{`id="via-i0"`, `id="via-i0-0"`, `id="via-i1"`, `id="via-i1-0"`} {
+		assert.Contains(t, page, id, "every island in the tree needs its own container")
+	}
+	slots := regexp.MustCompile(`data-bind="([^"]+)"`).FindAllStringSubmatch(page, -1)
+	seen := map[string]bool{}
+	for _, m := range slots {
+		assert.False(t, seen[m[1]], "signal slot %s is bound by two different signals", m[1])
+		seen[m[1]] = true
+	}
+	assert.Len(t, seen, 5, "root filter + two panel queries + two counter steps")
+}
+
+// A PLAIN island's action re-renders that island alone — and its View Embeds a
+// live child, so the re-render must number that child off the island's own key
+// rather than restarting at the root's. Before this, the nested child came back
+// as a DUPLICATE of its parent's container id, with a signal prefix that
+// aliased the parent's own slot and a dispatch address that 410'd on click.
+func TestEmbed_plainIslandActionKeepsItsNestedLiveChildAddressable(t *testing.T) {
+	t.Parallel()
+	hits := &atomic.Int64{}
+	app := vt.Serve(t, via.Register(newDeepRoot(hits)))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, patch := app.IslandAction("0", 0).Live(conn).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Equal(t, int64(1), hits.Load(), "the left panel's own action ran")
+
+	assert.Len(t, regexp.MustCompile(`id="via-i0"`).FindAllString(patch, -1), 1,
+		"the patch must carry the acted island's container exactly once")
+	assert.Contains(t, patch, `id="via-i0-0"`,
+		"the nested live child keeps its composed key in a partial re-render")
+	assert.Contains(t, patch, `data-bind="i0-0_f0"`,
+		"and its signal prefix stays distinct from its parent's i0_")
+	assert.Len(t, regexp.MustCompile(`data-bind="i0_f0"`).FindAllString(patch, -1), 1,
+		"the parent's own Query slot must not be aliased by the nested child's Step")
+
+	childURL := actionURL(t, patch, "0-0", 0)
+	assert.Contains(t, childURL, "/_via/a/0-0/",
+		"the child's button is addressed by its composed key")
+	code, _ := app.Action(0).Raw(childURL).Live(conn).Body(`{"i0-0_f0":5}`).Fire()
+	assert.Equal(t, http.StatusNoContent, code,
+		"the URL the parent's patch handed the browser must still reach the live child")
+	assert.Contains(t, conn.Await("n="), "5", "and drive it")
+}
+
+// threeDeepLeafHost/Mid nest a live leaf under TWO plain islands, so its key is
+// a three-segment path — the depth at which a single composition step is no
+// longer enough to keep the numbering consistent.
+type threeDeepMid struct{ Kid deepCounter }
+
+func (m *threeDeepMid) View() h.H { return h.Div(via.Embed(m.Kid)) }
+
+type threeDeepOuter struct{ Mid threeDeepMid }
+
+func (o *threeDeepOuter) View() h.H { return h.Div(via.Embed(o.Mid)) }
+
+type threeDeepPage struct{ Outer threeDeepOuter }
+
+func (p *threeDeepPage) View() h.H { return h.Div(via.Embed(p.Outer)) }
+
+func TestEmbed_liveLeafUnderTwoPlainIslandsKeepsItsPathKey(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(threeDeepPage{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	_, page := app.Get("/")
+	assert.Contains(t, page, `id="via-i0-0-0"`, "the leaf's key is the path of ordinals down to it")
+	assert.Contains(t, page, `data-bind="i0-0-0_f0"`)
+
+	status, _ := app.IslandAction("0-0-0", 0).Live(conn).Body(`{"i0-0-0_f0":3}`).Fire()
+	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
+	assert.Contains(t, conn.Await("n="), "3")
 }

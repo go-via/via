@@ -255,6 +255,24 @@ as a re-read of the README, not a diff.
 
 ### Fixed
 
+- **Wire break: an island is addressed by its KEY, not a page-wide counter.**
+  An `Embed`ed child's identity is now its ordinal among its own parent's
+  `Embed` calls, composed onto the parent's key — the root's children are
+  `0`, `1`, …, a child of `0` is `0-0` — and the root's dispatch address is
+  `r`. Container id (`via-i0-0`), signal prefix (`i0-0_`) and dispatch
+  address (`/_via/a/0-0/…`) all read that one key. The flat counter it
+  replaces was allocated by a whole-page walk, so a PLAIN island's own action
+  re-render — which renders only its own subtree — restarted numbering at the
+  root: a nested live child came back carrying a DUPLICATE of its parent's
+  container id, a signal prefix that aliased the parent's own slot, and a
+  dispatch address that answered `410 no such action` on click. A tab open
+  across the upgrade holds the old addresses and gets one dead click before a
+  reload, exactly like the action-URL break above.
+- **A live island under a parametrised mount is no longer dead in a browser.**
+  The GET handler advertised the stream as the route PATTERN
+  (`data-init="@post('/job/{id}/_via/sse')"`) while every other URL on the
+  page carried the concrete request path. The browser POSTed the pattern
+  literally, missed the route, and the page's live regions never connected.
 - **A live island's `Embed`ded child is looked up by the right address.**
   `embedViewer` indexed a connection's units by the child's plain island
   index, but `liveConn.replace` keys them by `islandIdx+1` (root is 0) — a
@@ -369,6 +387,17 @@ as a re-read of the README, not a diff.
   actions until it binds to a session (at connect, or on first login
   afterward); an anonymous connection has no session to check against at
   all, so never render, log, or leak a tab id outside its own client.
+- An island's key is its ordinal among its parent's `Embed` calls, so a `When`
+  wrapped around an `Embed` renumbers every LATER sibling of that parent when
+  it flips. Composition made the numbering stable across partial re-renders;
+  it did not make it stable across a shape change, so such a `When` must still
+  depend only on data fixed by `OnInit` or the field literal.
+- A plain island's own stateless action re-renders only that island's subtree,
+  and that re-render does not run its embedded children's `OnInit` — a nested
+  child that loads its data there renders from its field literal in the patch.
+  For a nested LIVE child the container carries `data-ignore-morph`, so the
+  browser drops that stale region and keeps the streamed one; for a nested
+  plain child, load its data in the parent instead.
 - There is no per-IP or per-tab cap on concurrent SSE connections beyond the
   router-wide `WithMaxLiveConnections`; a single client can still open many.
 - Action-body JSON decoding is not strict: unknown signal keys and trailing

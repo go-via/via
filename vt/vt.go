@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -44,14 +43,14 @@ type App struct {
 // rendered markup. The action id is content-addressed from the handler's own
 // func name, so a test cannot construct the URL — it reads the one the page
 // actually shipped, which is also what makes the ?a= row datum travel with it.
-func actionURLRe(island int) *regexp.Regexp {
-	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + strconv.Itoa(island) + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+func actionURLRe(island string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + island + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
 }
 
 // nthActionURL returns the n-th action URL for island in document order
 // within markup — vt addresses actions by render position, which is how a
 // test reads its own View, while the wire addresses them by handler.
-func nthActionURL(markup []byte, island, n int) (string, bool) {
+func nthActionURL(markup []byte, island string, n int) (string, bool) {
 	m := actionURLRe(island).FindAllSubmatch(markup, -1)
 	if n < 0 || n >= len(m) {
 		return "", false
@@ -117,21 +116,21 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (island 0 is the root). The URL is read off the rendered root page at
+// order (the root is island "r"). The URL is read off the rendered root page at
 // Fire time, not constructed: the wire id is a hash of the handler's func
 // name and any ?a= row datum rides along with it, so a hand-built path would
 // be wrong. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
 func (a *App) Action(n int) *Action {
-	return &Action{app: a, island: 0, n: n, headers: map[string]string{}, body: "{}"}
+	return &Action{app: a, island: "r", n: n, headers: map[string]string{}, body: "{}"}
 }
 
 // IslandAction builds a POST to the n-th action an embedded island renders,
-// in document order. island is the URL id an island's own container
-// carries: 1 for the first embedded child, 2 for the second, and so on (0 is
-// the root; use Action for that).
-func (a *App) IslandAction(island, n int) *Action {
+// in document order. island is the key an island's own container carries:
+// "0" for the root's first Embed, "1" for its second, "0-1" for the second
+// Embed inside the first, and so on (the root is "r"; use Action for that).
+func (a *App) IslandAction(island string, n int) *Action {
 	return &Action{app: a, island: island, n: n, headers: map[string]string{}, body: "{}"}
 }
 
@@ -161,7 +160,7 @@ func (a *App) Refresh() {
 // Action is a builder for an action POST.
 type Action struct {
 	app         *App
-	island      int
+	island      string
 	n           int
 	raw         string
 	host        string
@@ -226,7 +225,7 @@ func (x *Action) Fire() (int, string) {
 	if path == "" {
 		u, ok := nthActionURL([]byte(x.app.page()), x.island, x.n)
 		if !ok {
-			x.app.t.Fatalf("vt.Action.Fire: no action %d/%d found on the rendered page", x.island, x.n)
+			x.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", x.island, x.n)
 		}
 		path = u
 	}
@@ -343,7 +342,7 @@ func (c *Conn) TabID() string { return c.tabID }
 // (e.g. the very first action after Connect), nothing has been pushed yet
 // either, so this falls back to the page's own initial GET — exactly what a
 // real browser would still be showing.
-func (c *Conn) ActionURL(island, n int) string {
+func (c *Conn) ActionURL(island string, n int) string {
 	c.t.Helper()
 	c.mu.Lock()
 	frames := append([][]byte(nil), c.elements...)
@@ -356,7 +355,7 @@ func (c *Conn) ActionURL(island, n int) string {
 	if u, ok := nthActionURL([]byte(c.app.page()), island, n); ok {
 		return u
 	}
-	c.t.Fatalf("vt.Conn.ActionURL: no action %d/%d found on the page or any pushed frame", island, n)
+	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", island, n)
 	return ""
 }
 

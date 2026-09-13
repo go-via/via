@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +120,7 @@ func TestRouter_postActionRedirectDoesNotShipAScript(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/x", "")
 
 	for i, target := range []string{"/dest", "javascript:alert(1)"} { // Go, Evil
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, 0, i), strings.NewReader("{}"))
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", i), strings.NewReader("{}"))
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
 		resp, err := c.Do(req)
@@ -148,7 +149,7 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 
 	page := jarGet(t, c, srv.URL+"/p")
 	assert.NotContains(t, page, "hi alice", "no session yet")
-	jarPost(t, c, srv.URL+actionURL(t, page, 0, 0)) // SignIn → sets the session cookie
+	jarPost(t, c, srv.URL+actionURL(t, page, "r", 0)) // SignIn → sets the session cookie
 	assert.Contains(t, jarGet(t, c, srv.URL+"/p"), "hi alice",
 		"OnInit must load the session before the ctx-free View renders")
 }
@@ -160,7 +161,7 @@ func (p *threadPage) OnInit(ctx *via.Ctx) error { p.id = ctx.Param[int]("id"); r
 func (p *threadPage) View() h.H                 { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
 
 // echoPage proves a path param is readable inside an ACTION (not just OnInit) on
-// a param'd mount — the action POST URL carries the {id} segment (/e/7/_via/a/0/0).
+// a param'd mount — the action POST URL carries the {id} segment (/e/7/_via/a/r/0).
 type echoPage struct{ echoed int }
 
 func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = ctx.Param[int]("id") }
@@ -228,9 +229,9 @@ func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 
 	_, page := do(t, srv, http.MethodGet, "/p", "")
 	assert.Contains(t, page, `enctype="multipart/form-data"`, "PostForm must always render a multipart form")
-	assert.Regexp(t, `action="/p/_via/a/0/[A-Za-z0-9_-]+"`, page, "posting to the form's own action endpoint")
+	assert.Regexp(t, `action="/p/_via/a/r/[A-Za-z0-9_-]+"`, page, "posting to the form's own action endpoint")
 
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "me.png", "PNGBYTES")
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "me.png", "PNGBYTES")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "a Redirect in the handler must 303")
 	assert.Equal(t, "me.png", cap.name, "handler must receive the filename")
 	assert.Equal(t, "PNGBYTES", cap.body, "handler must receive the file bytes")
@@ -265,7 +266,7 @@ func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 	before := multipartTempFiles(t)
 
 	big := strings.Repeat("x", 2<<20) // > maxActionBody (1 MiB): the part spills to a temp file
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "big.bin", big)
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "big.bin", big)
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
 
 	// The removal races the client observing the response (the server's own
@@ -286,7 +287,7 @@ func TestPostForm_rejectsOversizeUpload413(t *testing.T) {
 	srv := serve(t, r)
 
 	big := strings.Repeat("x", 9<<20) // > maxUploadBytes (8 MiB)
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/p/_via/a/0/0", "big.bin", big)
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/p/_via/a/r/0", "big.bin", big)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
@@ -326,8 +327,8 @@ func TestRouter_pathParamReadableInAction(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/e/7", "")
-	assert.Regexp(t, `@post\('/e/7/_via/a/0/[A-Za-z0-9_-]+'`, page, "action URL must carry the concrete {id} segment")
-	_, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
+	assert.Regexp(t, `@post\('/e/7/_via/a/r/[A-Za-z0-9_-]+'`, page, "action URL must carry the concrete {id} segment")
+	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	assert.Contains(t, body, "echoed 7", `the action must read ctx.Param[int]("id") from its own POST path`)
 }
 
@@ -355,7 +356,7 @@ func TestRouter_pathParamBadSegmentInActionIs404(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/e/abc", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, 0, 0), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
@@ -388,7 +389,7 @@ func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	r.Mount("/secret", secret{})
 	srv := serve(t, r)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/a/0/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/a/r/0", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -458,7 +459,7 @@ func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar, CheckRedirect: noFollow}
 	loginPage := jarGet(t, c, srv.URL+"/login")
-	postForm(c, t, srv.URL+actionURL(t, loginPage, 0, 0), "name", "alice") // sets acct in the session
+	postForm(c, t, srv.URL+actionURL(t, loginPage, "r", 0), "name", "alice") // sets acct in the session
 	assert.Contains(t, jarGet(t, c, srv.URL+"/secret"), "secret area",
 		"OnInit must not redirect once the session has the required value")
 }
@@ -511,10 +512,10 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	assert.Regexp(t, `<form method="post" enctype="multipart/form-data" action="/login/_via/a/0/[A-Za-z0-9_-]+"`, page,
+	assert.Regexp(t, `<form method="post" enctype="multipart/form-data" action="/login/_via/a/r/[A-Za-z0-9_-]+"`, page,
 		"PostForm must render a native multipart form posting to the form endpoint")
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "alice")
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "via.Redirect must 303")
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 	assert.Contains(t, resp.Header.Get("Set-Cookie"), "via_session",
@@ -534,7 +535,7 @@ func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	mw := multipart.NewWriter(&buf)
 	mw.WriteField("name", "alice")
 	mw.Close()
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/login/_via/a/0/0", &buf)
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/login/_via/a/r/0", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	resp, err := http.DefaultClient.Do(req)
@@ -550,7 +551,7 @@ func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	r.Mount("/login", loginForm{})
 	srv := serve(t, r)
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	url := swapActionID(t, actionURL(t, page, 0, 0), "zzzzzzzz")
+	url := swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz")
 
 	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+url, "name", "alice")
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
@@ -564,7 +565,7 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 	r.Mount("/login", loginForm{})
 	srv := serve(t, r)
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/login/_via/a/0/0", "name", strings.Repeat("x", 9<<20))
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/login/_via/a/r/0", "name", strings.Repeat("x", 9<<20))
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
@@ -577,7 +578,7 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "") // empty → no redirect
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "") // empty → no redirect
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	b, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(b), `<form method="post"`, "no-redirect form post must re-render the page")
@@ -592,7 +593,7 @@ func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "evil")
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 	assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode,
 		"an unsafe redirect target must not be shipped as a Location header")
 	assert.Empty(t, resp.Header.Get("Location"), "no Location header for a rejected redirect")
@@ -611,12 +612,12 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	// Each page renders at its path, with its actions namespaced under it.
 	_, a := do(t, srv, http.MethodGet, "/a", "")
 	assert.Contains(t, a, `<h1>0</h1>`)
-	assert.Contains(t, a, `@post('`+actionURL(t, a, 0, 1)+`'`, "page /a's Inc must post under /a")
+	assert.Contains(t, a, `@post('`+actionURL(t, a, "r", 1)+`'`, "page /a's Inc must post under /a")
 	_, b := do(t, srv, http.MethodGet, "/b", "")
-	assert.Contains(t, b, `@post('`+actionURL(t, b, 0, 1)+`'`, "page /b's Inc must post under /b")
+	assert.Contains(t, b, `@post('`+actionURL(t, b, "r", 1)+`'`, "page /b's Inc must post under /b")
 
 	// Inc on /a; /b must be untouched (independent state + routing).
-	do(t, srv, http.MethodPost, actionURL(t, a, 0, 1), "{}")
+	do(t, srv, http.MethodPost, actionURL(t, a, "r", 1), "{}")
 	_, a2 := do(t, srv, http.MethodGet, "/a", "")
 	assert.Contains(t, a2, `<h1>1</h1>`, "/a's counter must reflect its action")
 	_, b2 := do(t, srv, http.MethodGet, "/b", "")
@@ -624,7 +625,7 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 }
 
 // Mounting at "/" must namespace to the root (no prefix): the page posts to
-// /_via/a/0/{act}, exactly like a single-page Register.
+// /_via/a/r/{act}, exactly like a single-page Register.
 func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -632,8 +633,8 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	srv := serve(t, r)
 
 	_, body := do(t, srv, http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body, "root mount must post to /_via/a/{act} with no prefix")
-	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, 0, 1), "{}")
+	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+'`, body, "root mount must post to /_via/a/{act} with no prefix")
+	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, "r", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, after, `<h1>1</h1>`)
 }
@@ -647,7 +648,7 @@ func TestRouter_mountedActionElementPatches(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/a", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, 0, 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, `<h1>1</h1>`, "mounted action must element-patch the new value")
 }
@@ -692,20 +693,20 @@ func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
 	r.Mount("/x", failInitPage{kind: "missing"})
-	resp, _ := do(t, serve(t, r), http.MethodPost, "/x/_via/a/0/0", "{}")
+	resp, _ := do(t, serve(t, r), http.MethodPost, "/x/_via/a/r/0", "{}")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 // Register is Mount at "/" internally — ONE dispatch pipeline. The observable
 // consequence: a single-page Register(root) serves the router-only transports
-// too (a native PostForm posts to /_via/a/0/0 and 303s). Fails if Register grows
+// too (a native PostForm posts to /_via/a/r/0 and 303s). Fails if Register grows
 // its own separate mux again.
 func TestRegister_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(loginForm{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, 0, 0), "name", "alice")
+	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "Register must serve the form transport like any mount")
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
@@ -721,4 +722,46 @@ func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
 	_, body := do(t, serve(t, r), http.MethodGet, "/live", "")
 	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted live page must bootstrap its own SSE endpoint")
 	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted live page")
+}
+
+// jobBar is a live child under a parametrised mount: it reads the mount's
+// {id} in its own OnInit and ticks, so the page only works if the browser can
+// actually open the stream the page advertised.
+type jobBar struct {
+	id  int
+	pct via.State[int]
+}
+
+func (g *jobBar) OnInit(ctx *via.Ctx) error {
+	g.id = ctx.Param[int]("id")
+	ctx.Tick(15*time.Millisecond, g.poll)
+	return nil
+}
+func (g *jobBar) poll(*via.Ctx) { g.pct.Set(g.pct.Get() + g.id) }
+func (g *jobBar) View() h.H     { return h.Div(h.Str("pct "), g.pct.Display()) }
+
+type jobPage struct{ Bar jobBar }
+
+func (p *jobPage) View() h.H { return h.Main(via.Embed(p.Bar)) }
+
+// A page under a parametrised mount must advertise the CONCRETE SSE path. The
+// pattern base would be POSTed literally by the browser (/job/%7Bid%7D/_via/sse),
+// miss the route, and leave every live island under such a mount dead — while
+// the same page's action URLs already carried the concrete segment, so the two
+// halves of the library disagreed.
+func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	r.Mount("/job/{id}", jobPage{})
+	srv := liveServer(t, r)
+
+	_, page := do(t, srv, http.MethodGet, "/job/7", "")
+	m := regexp.MustCompile(`data-init="@post\('([^']+)'\)"`).FindStringSubmatch(page)
+	require.NotNil(t, m, "a live page must bootstrap its stream:\n%s", page)
+	assert.Equal(t, "/job/7/_via/sse", m[1], "the advertised stream URL must be the concrete request path")
+
+	lines, cancel := openStreamAt(t, srv, m[1])
+	defer cancel()
+	awaitTabID(t, lines)
+	awaitLine(t, lines, "pct ")
 }

@@ -211,12 +211,16 @@ examples, the whole live stack verified in real headless browsers
   feature. `State` is per connection: a native `PostForm` submit is a
   navigation, opens a new connection, and reseeds it — persist through the
   session or a shared pointer dep, or `Redirect` instead of returning a page.
-  An `Embed`'s position among the page's `Embed` calls is its identity
-  (container id, signal prefix, dispatch address); it must be the same on
-  every render for the life of a connection — a `When` around an `Embed`
-  must depend only on data fixed by `OnInit` or the field literal, never on
-  time, a client signal, or shared state that changes while the page is
-  open.
+  An `Embed`'s identity is its **island key**: its ordinal among its own
+  parent's `Embed` calls, composed onto the parent's key. The root's children
+  are `0`, `1`, …; a child of `0` is `0-0`. One key drives the container id
+  (`via-i0-0`), the signal prefix (`i0-0_`) and the dispatch address
+  (`/_via/a/0-0/…`), so re-rendering any subtree on its own numbers its
+  descendants exactly as the whole-page render did. A child's key must be the
+  same on every render for the life of a connection — a `When` around an
+  `Embed` shifts its later **siblings**' ordinals, so such a `When` must
+  depend only on data fixed by `OnInit` or the field literal, never on time, a
+  client signal, or shared state that changes while the page is open.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
   datum — `via.OnArg("click", l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
@@ -252,7 +256,8 @@ the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap — the page comes back from server truth, not from replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
 a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
-An action URL addresses its handler, not its render position: `id` in
+An action URL addresses its handler, not its render position: `island` is
+`r` for the page root and the acting island's key otherwise, and `id` in
 `/_via/a/{island}/{id}` is a hash of the handler method's own Go name, so it
 is the same across renders, instances and builds, and a row's datum rides
 along in `?a=`. A list that grew or shrank since a tab painted therefore keeps

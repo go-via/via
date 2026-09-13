@@ -230,7 +230,7 @@ func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 		getRec := httptest.NewRecorder()
 		getReq := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(getRec, getReq)
-		url := actionURL(t, getRec.Body.String(), 0, 0)
+		url := actionURL(t, getRec.Body.String(), "r", 0)
 
 		actionRec := httptest.NewRecorder()
 		actionReq := httptest.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
@@ -909,7 +909,7 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 
 	resp, _ := post(t, srv, url, "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
@@ -1005,7 +1005,7 @@ func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 
 		// X-Echo has no vt.Action builder method, so this posts by hand — but
 		// the URL and tab still come off the connection, not a separate GET.
-		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL(0, 0), strings.NewReader("{}"))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("r", 0), strings.NewReader("{}"))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
@@ -1077,7 +1077,7 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 }
 
 // pathTicker's Tick reads ctx.Request().URL.Path — a live action's own POST
-// (to /_via/a/0/0) must never be visible from there: before S8, dispatch
+// (to /_via/a/r/0) must never be visible from there: before S8, dispatch
 // wrote req/sessW/redirect directly onto the render-time Ctx a Tick holds for
 // the life of the connection, so firing an action left every later tick
 // reading the ACTION's request instead of the connect one.
@@ -1201,12 +1201,12 @@ func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 		tab := awaitTabID(t, lines)
 
 		_, page := do(t, srv, http.MethodGet, "/thread/7", "")
-		resp, _ := post(t, srv, actionURL(t, page, 1, 0), "{}", map[string]string{
+		resp, _ := post(t, srv, actionURL(t, page, "0", 0), "{}", map[string]string{
 			"Sec-Fetch-Site": "same-origin", "X-Via-Tab": tab,
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "the live action answers 204; the push carries the patch")
 
-		awaitLine(t, lines, "/thread/7/_via/a/1/")
+		awaitLine(t, lines, "/thread/7/_via/a/0/")
 	})
 }
 
@@ -1245,7 +1245,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 		digestSrv := liveServer(t, via.Register(renderCounter{views: &atomic.Int64{}}))
 		_, page := do(t, digestSrv, http.MethodGet, "/", "")
 
-		resp, _ := post(t, srv, actionURL(t, page, 0, 0), "{}", map[string]string{
+		resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", map[string]string{
 			"Sec-Fetch-Site": "same-origin",
 			"X-Via-Tab":      tab,
 		})
@@ -1265,7 +1265,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID())
 
-		url := swapActionID(t, conn.ActionURL(0, 0), "zzzzzzzz")
+		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
 		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
@@ -1333,7 +1333,7 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 		app := vt.Serve(t, via.Register(liveArg{}))
 		conn := app.Connect()
 
-		url := strings.Replace(conn.ActionURL(0, 0), "a=7", "a=%22bad%22", 1)
+		url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
 		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
 		assert.Equal(t, http.StatusBadRequest, status)
 
@@ -1359,7 +1359,7 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 				app := vt.Serve(t, via.Register(liveArg{}))
 				conn := app.Connect()
 
-				url := strings.Replace(conn.ActionURL(0, 0), "a=7", tt.a, 1)
+				url := strings.Replace(conn.ActionURL("r", 0), "a=7", tt.a, 1)
 				status, _ := app.Action(0).Raw(url).Live(conn).Fire()
 				assert.Equal(t, http.StatusBadRequest, status)
 
@@ -1467,7 +1467,7 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -1524,7 +1524,7 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -1583,7 +1583,7 @@ func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T)
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	actURL := actionURL(t, page, 0, 0)
+	actURL := actionURL(t, page, "r", 0)
 
 	const n = 3000
 	var wg sync.WaitGroup
@@ -1678,7 +1678,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 
 	var seen sync.Map // values (int) observed in the counter signal's signals-patch frame
 	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
@@ -1758,7 +1758,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, 0, 0)
+	url := actionURL(t, page, "r", 0)
 
 	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
 	var mu sync.Mutex

@@ -62,42 +62,53 @@ type mount struct {
 	maxLive     int
 }
 
-// unit returns the bind pass's unit Ctx for island id: 0 is the root itself;
-// k>0 is its k-1'th embedded child. nil when there is no such unit.
-func (bind *Ctx) unit(island int) *Ctx {
-	if island == 0 {
+// unit returns the bind pass's unit Ctx for dispatch address island: "r" is
+// the root itself; anything else is a '-'-joined ordinal path walked down the
+// island tree ("0-1" is the root's first Embed's second Embed). nil when this
+// render holds no such unit.
+func (bind *Ctx) unit(island string) *Ctx {
+	if island == rootAddr {
 		return bind
 	}
-	k := island - 1
-	if k < 0 || k >= len(bind.islands) {
-		return nil
+	cur := bind
+	for _, seg := range strings.Split(island, "-") {
+		k, err := strconv.Atoi(seg)
+		if err != nil || k < 0 || k >= len(cur.islands) {
+			return nil
+		}
+		cur = cur.islands[k]
 	}
-	return bind.islands[k]
+	return cur
 }
 
-// unit returns the connected live unit for island id (0 = root), at any
+// unit returns the connected live unit for dispatch address island ("r" = root), at any
 // embedding depth, nil when this connection has none. Called on the island
 // goroutine itself (see dispatchLive) so the lookup is atomic with the
 // dispatch it guards; it still takes the same lock replace does since a
 // future caller reading it from elsewhere shouldn't have to remember to add one.
-func (c *liveConn) unit(island int) *Ctx {
+func (c *liveConn) unit(island string) *Ctx {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.units[island]
 }
 
-// unitAddr is c's own dispatch address in /_via/a/{island}/{act} — 0 for the
-// root, islandIdx+1 for an embedded unit at any depth.
-func unitAddr(c *Ctx) int {
+// rootAddr is the root unit's dispatch address in /_via/a/{island}/{act}. It
+// is a letter precisely so it cannot collide with an island key, which is
+// always a '-'-joined path of ordinals.
+const rootAddr = "r"
+
+// unitAddr is c's own dispatch address in /_via/a/{island}/{act} — "r" for the
+// root, the island key for an embedded unit at any depth.
+func unitAddr(c *Ctx) string {
 	if c != nil && c.isIsland {
-		return c.islandIdx + 1
+		return c.islandKey
 	}
-	return 0
+	return rootAddr
 }
 
 // dispatch is the single entry point for every action POST on a mount — a
 // Datastar @post, a native PostForm submit, or a live unit's action — at
-// {base}/_via/a/{island}/{act} (the root is island 0). One origin floor, one
+// {base}/_via/a/{island}/{act} (the root is island "r"). One origin floor, one
 // OnInit, one body decode: the six transports this replaced each
 // re-implemented these and drifted (OnInit never ran on an island action; a
 // live/island action silently dropped ctx.Redirect).
@@ -122,11 +133,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	if mode == modeNative {
 		defer req.MultipartForm.RemoveAll() // drop any spilled temp files
 	}
-	island, err := strconv.Atoi(req.PathValue("island"))
-	if err != nil {
-		http.Error(w, "no such island", http.StatusGone)
-		return
-	}
+	island := req.PathValue("island")
 	act := req.PathValue("act")
 	base := concreteBase(m.patternBase, req, m.names)
 
@@ -187,7 +194,7 @@ func decodeInput(w http.ResponseWriter, req *http.Request, mode actionMode) (map
 // exactly like a stateless action. The wait is bounded by req.Context() as
 // well as the connection closing, so a stalled peer elsewhere on the stream
 // can't park this POST's goroutine forever (see liveConn.run).
-func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island int, act string, in map[string]json.RawMessage, base string) {
+func (m *mount) dispatchLive(w http.ResponseWriter, req *http.Request, mode actionMode, lc *liveConn, island string, act string, in map[string]json.RawMessage, base string) {
 	res, ok := lc.run(req.Context(), func() actionResult {
 		// A closure queued on pulse runs regardless of what its caller does
 		// meanwhile: if req.Context() is already done, run's own second
@@ -385,10 +392,10 @@ func unknownAction(u *Ctx, act string) string {
 
 // dispatchStateless is dispatch's non-live path: bind a fresh instance, run
 // OnInit, run the acted-on unit's action, then answer per mode.
-func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island int, act string, in map[string]json.RawMessage, base string) {
+func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode actionMode, island string, act string, in map[string]json.RawMessage, base string) {
 	inst := m.newInst()
 	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
-	bind.islandV = inst                                  // so bind.unit(0)'s liveness reads the same way an embedded island's does
+	bind.islandV = inst                                  // so bind.unit(rootAddr)'s liveness reads the same way an embedded island's does
 	if runOnInit(inst.v, bind, w, req, m.sessions) != nil {
 		return
 	}
@@ -433,9 +440,9 @@ func (m *mount) dispatchStateless(w http.ResponseWriter, req *http.Request, mode
 // attribute restricted to the island's own dirty slots — the piece the old
 // island-action handler omitted entirely, silently dropping a Signal.Set
 // inside a stateless island's action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderStateless(island int, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
+func (m *mount) rerenderStateless(island string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
-	if island == 0 {
+	if island == rootAddr {
 		afterCtx, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
@@ -445,13 +452,13 @@ func (m *mount) rerenderStateless(island int, rootBefore []byte, inst instance, 
 		}
 		return after
 	}
-	afterCtx, afterInner := renderIslandBind(u.islandIdx, u.islandV, base)
+	afterCtx, afterInner := renderIslandBind(u.islandKey, u.islandV, base)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
 	}
 	var buf bytes.Buffer
-	buf.WriteString(`<div id="via-i` + strconv.Itoa(u.islandIdx) + `"`)
+	buf.WriteString(`<div id="via-i` + u.islandKey + `"`)
 	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)

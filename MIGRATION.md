@@ -302,7 +302,11 @@ form:
 ## Wire break: action URLs
 
 The action endpoint is `/_via/a/{island}/{id}` with an optional `?a=` row
-datum. There is no `?v=` shape digest and no positional `{n}`: `id` is a hash
+datum. `{island}` is `r` for the page root, or the acting island's key — its
+ordinal among its parent's `Embed` calls, composed onto the parent's, so the
+second `Embed` inside the first is `0-1`. Earlier v0.8 builds used a flat
+page-wide counter with the root at `0` and islands at `n+1`. There is no `?v=`
+shape digest and no positional `{n}`: `id` is a hash
 of the handler method's own Go name (`main.(*Poll).Vote-fm`), stable across
 renders, instances and rebuilds.
 
@@ -321,8 +325,10 @@ a reload. Handler-addressed URLs cannot do that.
 ## Wire break: signal slot names
 
 A `Signal[T]`'s wire name is now its byte offset within the composition
-struct — `f0`, `f48`, `i0_f0` for an embedded island — where v0.8's earlier
-builds (and v1) named it by render order: `s0`, `s1`, `i0_s0`.
+struct — `f0`, `f48`, `i0_f0` for an embedded island, `i0-0_f0` for one nested
+inside it — where v0.8's earlier builds (and v1) named it by render order:
+`s0`, `s1`, `i0_s0`. The island prefix is the island's key, so an island's
+container id (`via-i0-0`), its slots and its dispatch address always agree.
 
 Nothing in your code writes a slot name either, so again there is nothing to
 port; a tab left open across the upgrade holds the old names, posts them, and
@@ -376,11 +382,12 @@ Stated plainly so you can decide whether to wait:
   request's cookie, which predates the `Set-Cookie` the same action just
   wrote. `Redirect` after a session-establishing submit instead of returning
   a page directly.
-- **An `Embed`'s position among the page's `Embed` calls is its identity**
-  (container id, signal prefix, dispatch address). It must be fixed for the
-  life of a connection: a `When` around an `Embed` must depend only on data
-  fixed by `OnInit` or the field literal, never on time, a client signal, or
-  shared state that changes while the page is open.
+- **An `Embed`'s island key — its ordinal among its own parent's `Embed`
+  calls, composed onto the parent's key — is its identity** (container id,
+  signal prefix, dispatch address). A `When` around an `Embed` renumbers that
+  parent's later siblings when it flips, so it must depend only on data fixed
+  by `OnInit` or the field literal, never on time, a client signal, or shared
+  state that changes while the page is open.
 
 ## Staying on v1
 
