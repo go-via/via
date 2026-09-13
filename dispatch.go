@@ -26,13 +26,28 @@ const (
 	modeNative
 )
 
+// tabSignal is the wire name of the per-connection tab id — the CSRF token in
+// this project's threat model. It is an ORDINARY Datastar signal, declared on
+// <body> and filled by the stream's first patch-signals frame, so every @post
+// carries it in the signal store Datastar already sends: no per-action header
+// opt, no bytes on the binding. The leading underscore it used to carry is the
+// one thing that kept Datastar from sending it (its default filter excludes
+// /(^|\.)_/), which is why the rename IS the mechanism.
+//
+// As a signal it sits in the request body, is set by same-origin JS, and is
+// never auto-attached by the browser — a synchronizer token, which is exactly
+// what a CSRF token must be. The Datastar-Request header check stays as
+// belt-and-braces, and originAllowed is untouched.
+//
+// A user signal may not take this name; declareSignal panics if one tries.
+const tabSignal = "viatab"
+
 // tabFormField is the hidden field name via.PostForm renders inside a live
-// unit, carrying the tab id as a fallback for a native <form> submit: a real
-// browser POST cannot set the X-Via-Tab header (that's fetch-only), so the
-// tab id — the CSRF token in this project's threat model — rides in the body
-// instead. It is subject to the exact same per-mount ownership check as the
-// header (see dispatch): accepting it from the body doesn't weaken that
-// check, it only changes where the id is read from.
+// unit, carrying the tab id for a native <form> submit: a real browser POST
+// carries neither Datastar's signal store nor its headers, so the tab id rides
+// in the form body instead. It is subject to the exact same per-mount
+// ownership check as the signal (see dispatch): accepting it from the body
+// doesn't weaken that check, it only changes where the id is read from.
 const tabFormField = "_viatab"
 
 // actionResult is what running an action produced. panicked is set
@@ -137,12 +152,15 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	act := req.PathValue("act")
 	base := concreteBase(m.patternBase, req, m.names)
 
-	tab := req.Header.Get("X-Via-Tab")
-	if tab == "" && mode == modeNative {
-		// Only a native form submit falls back to the body: a Datastar @post
-		// always carries the header, so this never masks a missing header on
-		// the fetch path.
+	tab := ""
+	if mode == modeNative {
 		tab = req.PostFormValue(tabFormField)
+	} else if raw, ok := in[tabSignal]; ok {
+		// A Datastar @post always ships the whole (filtered) signal store, so
+		// the tab id is here or the client never had one. Anything that is not
+		// a JSON string leaves tab empty and falls through to the plain path —
+		// the same graceful answer a stale id gets.
+		_ = json.Unmarshal(raw, &tab)
 	}
 	if lc, ok := m.reg.get(tab); ok {
 		if lc.mount != m {
@@ -424,7 +442,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			_, body := renderRootBase(inst, nil, true, base, nil, nil)
+			_, body := renderRootBase(inst, nil, true, base, nil, nil, u)
 			writeHTMLPage(w, m.cfg, body, false, "")
 		}, nil)
 		return
@@ -443,7 +461,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
 	if embed == rootAddr {
-		afterCtx, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen)
+		afterCtx, after := renderRootPatch(inst, nil, base, bind.dirtyAll(), seen, u)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
 		}
@@ -452,7 +470,7 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base)
+	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base, u)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil

@@ -322,13 +322,52 @@ actions) another user adding or removing a row changed every other open tab's
 digest and silently 410'd ALL of its buttons, including untouched ones, until
 a reload. Handler-addressed URLs cannot do that.
 
+## Wire break: the tab id is a signal, not a header
+
+The per-connection tab id — the CSRF token in via's threat model — used to
+ride as the `X-Via-Tab` request header, spelled out on every single action
+binding (`{headers:{'X-Via-Tab':$_viatab}}`, 33 bytes each). Datastar builds
+request headers per CALL and offers no ancestor inheritance or config hook, so
+there was no way to set it once per page. It DOES send the whole signal store
+with every `@post`, filtering only names matching `/(^|\.)_/` — so the
+underscore in `_viatab` was the only reason the id wasn't already going along.
+
+It is now the ordinary signal `viatab`, and the server reads it out of the
+inbound signals. The header is no longer read at all.
+
+Nothing in your code touches either, so there is nothing to port. A tab open
+across the upgrade posts the old header, is not recognised, gets a `410`, and
+its reconnect manager reloads it.
+
+Security is unchanged, and deliberately so: as a signal the id sits in the
+request body, is set by same-origin JS, and is never auto-attached by the
+browser — a synchronizer token, which is what a CSRF token must be. The
+`Datastar-Request` header check stays as belt-and-braces and the origin floor
+is untouched. `PostForm` is the one exception: a native browser form submit
+carries neither Datastar's signals nor its headers, so it keeps its hidden
+`_viatab` field, now bound to `$viatab`, under the same per-mount ownership
+check.
+
 ## Wire break: signal slot names
 
-A `Signal[T]`'s wire name is now its byte offset within the composition
-struct — `f0`, `f48`, `i0_f0` for an embedded embed, `i0-0_f0` for one nested
-inside it — where v0.8's earlier builds (and v1) named it by render order:
-`s0`, `s1`, `i0_s0`. The embed prefix is the embed's key, so an embed's
-container id (`via-i0-0`), its slots and its dispatch address always agree.
+A `Signal[T]`'s wire name is now its Go FIELD name, first rune lowercased —
+`count`, `chat__draft` for a signal inside an embedded `Chat`,
+`outer__mid__kid__step` for a deeper path — where v0.8's earlier builds named
+it by byte offset (`f0`, `f48`, `i0_f0`) and v1 by render order (`s0`, `s1`).
+The offset is still the internal key, so hydration is unchanged; the name is
+resolved once per composition TYPE at `Mount`/`Embed`, never per render.
+
+A plain nested struct joins its path with ONE underscore, an embed boundary
+with TWO — so a parent that binds `p.C.S` in its own View (`c_s`) and also
+embeds `p.C` (`c__s`) keeps the two copies apart, as it must: they are
+different structs. A parent holding two fields of the child's type is
+genuinely ambiguous (`Embed`'s argument order need not match declaration
+order), so those embeds fall back to the positional key: `i0__s`, `i1__s`.
+
+`Signal[T].Ref()` is the companion: it returns `"$count"` for use in a
+hand-written Datastar expression (`h.Data("show", p.Open.Ref())`), so a name
+you need in raw markup comes off the struct instead of out of the rendered
+HTML.
 
 Nothing in your code writes a slot name either, so again there is nothing to
 port; a tab left open across the upgrade holds the old names, posts them, and

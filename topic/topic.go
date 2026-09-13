@@ -34,6 +34,7 @@ type Sub[T any] struct {
 	ready chan struct{} // capacity 1, coalescing: "there is work"
 
 	mu      sync.Mutex
+	wake    chan<- struct{} // optional extra notifier, see Notify
 	q       []T
 	limit   int
 	dropped int
@@ -96,10 +97,45 @@ func (s *Sub[T]) enqueue(v T) {
 		return
 	}
 	s.q = append(s.q, v)
+	wake := s.wake
 	s.mu.Unlock()
 	select {
 	case s.ready <- struct{}{}:
 	default: // already signalled; Drain takes the whole backlog
+	}
+	signal(wake)
+}
+
+// signal pokes a coalescing capacity-1 notifier without ever blocking the
+// publisher.
+func signal(ch chan<- struct{}) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// Notify routes this subscription's wake-ups to ch as well as to Ready, so ONE
+// reader can multiplex many subscriptions on a single channel — a live
+// connection drives every ctx.Listen from its own select loop instead of
+// spending a goroutine per subscription. ch must be buffered (capacity 1 is
+// enough: wake-ups coalesce and carry no values), and the reader must Drain
+// EVERY subscription it multiplexes on each wake-up, since one token may stand
+// for any number of them.
+//
+// It signals ch immediately when the queue is already non-empty, so a value
+// published between Subscribe and Notify is not stranded, and Stop signals it
+// too, so a reader parked on ch alone still sees the end.
+func (s *Sub[T]) Notify(ch chan<- struct{}) {
+	s.mu.Lock()
+	s.wake = ch
+	pending := len(s.q) > 0 || s.stopped
+	s.mu.Unlock()
+	if pending {
+		signal(ch)
 	}
 }
 
@@ -140,6 +176,8 @@ func (s *Sub[T]) Stop() {
 	}
 	s.mu.Lock()
 	s.stopped = true
+	wake := s.wake
 	s.mu.Unlock()
 	close(s.ready)
+	signal(wake)
 }

@@ -18,9 +18,15 @@ type tickReg struct {
 	fn func(*Ctx)
 }
 
-// subStarter spawns one subscription's reader goroutine, bridging an external
-// channel into the embed's single push loop. via builds these in Listen.
-type subStarter func(reqCtx context.Context, pushq chan<- func())
+// subStarter subscribes one ctx.Listen onto the connection's shared wake
+// channel and returns the listener runStream then polls. via builds these in
+// Listen; nothing here spawns a goroutine.
+type subStarter func(wake chan struct{}) listener
+
+// listener is one live subscription as runStream sees it, erased of its
+// topic's element type. poll takes the whole queued backlog and returns the
+// work item for it, or nil when there was nothing queued.
+type listener struct{ poll func() func() }
 
 // Tick schedules fn to run every d for the life of the unit's connection, and
 // is one of the two things that make a unit LIVE (rendering a State or List is
@@ -77,50 +83,33 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		return
 	}
 	c.live = true
-	c.subs = append(c.subs, func(reqCtx context.Context, pushq chan<- func()) {
+	c.subs = append(c.subs, func(wake chan struct{}) listener {
 		// Both this call and runStream's disposer sweep run on the one
 		// stream goroutine, the starter strictly before the sweep — so the
 		// append needs no lock.
 		sub := t.Subscribe()
+		sub.Notify(wake)
 		c.OnDispose(sub.Stop)
-		go func() {
-			ready := sub.Ready()
-			for {
-				select {
-				case <-reqCtx.Done():
-					return
-				case <-ready:
-					batch, ok := sub.Drain()
-					if len(batch) == 0 {
-						if !ok {
-							return
-						}
-						continue
-					}
-					// One push item per BATCH, not per value: every handler call
-					// still runs, in publish order, but the re-render and its SSE
-					// frame happen once for the whole backlog. Values published
-					// while this send waits pile up for the next Drain, so a burst
-					// costs a bounded number of frames instead of one each.
-					// The item mutates THIS embed (c) and pushes only THIS embed's
-					// container — so on a multiplex page a fan-out to one embed
-					// never re-renders a sibling.
-					select {
-					case pushq <- func() {
-						for _, v := range batch {
-							handler(c, v)
-						}
-						c.push()
-					}:
-					case <-reqCtx.Done():
-						return
-					}
-					if !ok {
-						return
-					}
-				}
+		return listener{poll: func() func() {
+			batch, _ := sub.Drain()
+			if len(batch) == 0 {
+				return nil
 			}
-		}()
+			// One push item per BATCH, not per value: every handler call
+			// still runs, in publish order, but the re-render and its SSE
+			// frame happen once for the whole backlog. Values published
+			// while this item runs pile up for the next Drain, so a burst
+			// costs a bounded number of frames instead of one each.
+			// The item mutates THIS embed (c) and pushes only THIS embed's
+			// container — so on a multiplex page a fan-out to one embed
+			// never re-renders a sibling.
+			return func() {
+				for _, v := range batch {
+					handler(c, v)
+				}
+				c.push()
+			}
+		}}
 	})
 }
 
@@ -246,12 +235,31 @@ func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepali
 			}
 		}
 	}()
+	// One wake channel for the whole connection, shared by every
+	// subscription on it: a Listen used to cost a goroutine per subscription
+	// per connection (8KB of stack each, ~15k goroutines at 5000 tabs x 3
+	// listens) purely to bridge its Ready channel onto this select. Capacity
+	// 1 and coalescing, so a publisher never blocks and N pending values
+	// still cost one sweep.
+	wake := make(chan struct{}, 1)
+	var listeners []listener
 	for _, embed := range embeds {
 		for _, t := range embed.ticks {
 			startTicker(reqCtx, embed, t, pushq)
 		}
 		for _, start := range embed.subs {
-			start(reqCtx, pushq)
+			listeners = append(listeners, start(wake))
+		}
+	}
+	// One token may stand for any number of subscriptions, so every wake
+	// sweeps them ALL — in registration order, which makes handler ordering
+	// across two Listens on one unit deterministic instead of a race between
+	// two reader goroutines.
+	sweep := func() {
+		for _, l := range listeners {
+			if work := l.poll(); work != nil {
+				runPushItem(work)
+			}
 		}
 	}
 	beat := time.NewTicker(interval)
@@ -262,6 +270,8 @@ func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepali
 			return
 		case fn := <-pushq:
 			runPushItem(fn)
+		case <-wake:
+			sweep()
 		case <-beat.C:
 			runPushItem(keepalive)
 		}

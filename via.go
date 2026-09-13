@@ -52,6 +52,137 @@ type instance struct {
 	v    viewer
 	base unsafe.Pointer
 	size uintptr
+	typ  reflect.Type // the composition's struct type, for the field-name signal table
+	sig  *typeSignals // that table, resolved once per type (never per render)
+	// slotPrefix is the signal-name prefix every slot this composition mints
+	// carries — "" for the root, the parent's prefix plus this child's FIELD
+	// name for an embed ("chat_"). It is carried on the instance, not derived
+	// from the embed key, because a live embed's push re-renders the child
+	// with no parent in scope and must still mint the exact same names the
+	// full-page walk did.
+	slotPrefix string
+}
+
+// slotID is the wire-name half of a Signal, split out as a plain non-generic
+// struct embedded FIRST in Signal[T]. That layout is what lets a composition
+// pre-assign every field-held signal's name through a single pointer add — see
+// prebindSignals — instead of reflecting once per signal per render.
+type slotID struct {
+	slot  string // stable wire name
+	scope string // the slot prefix it was minted under; a different one means the signal moved scope
+}
+
+func (*slotID) isViaSignal() {}
+
+var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
+
+// typeSignals is one composition type's signal table: every Signal-typed
+// field's byte offset paired with the wire name its Go field path gives it.
+type typeSignals struct {
+	fields []signalField
+	byOff  map[uintptr]string
+}
+
+type signalField struct {
+	off  uintptr
+	name string
+}
+
+var typeSignalCache sync.Map // reflect.Type -> *typeSignals
+
+// signalsOf builds (once per type, then memoized) the offset -> wire-name table
+// for a composition. The name is the Go FIELD name with its first rune
+// lowercased, joined with "_" through any plain nested struct — so a user
+// writing a raw Datastar expression reads "$count" or "$chat_draft" off the
+// struct instead of reverse-engineering an opaque field offset out of the
+// rendered HTML.
+//
+// "_" and not "." is deliberate: Datastar treats a dotted signal name as a PATH
+// and re-nests it, so "chat.draft" would arrive back from the client as
+// {"chat":{"draft":…}} and never match the flat slot the server looks up.
+func signalsOf(t reflect.Type) *typeSignals {
+	if v, ok := typeSignalCache.Load(t); ok {
+		return v.(*typeSignals)
+	}
+	ts := &typeSignals{byOff: map[uintptr]string{}}
+	var walk func(t reflect.Type, base uintptr, prefix string, depth int)
+	walk = func(t reflect.Type, base uintptr, prefix string, depth int) {
+		if t == nil || t.Kind() != reflect.Struct || depth > 8 { // depth: a self-referential composition must not spin here
+			return
+		}
+		for i := range t.NumField() {
+			f := t.Field(i)
+			name, off := prefix+lowerFirst(f.Name), base+f.Offset
+			if reflect.PointerTo(f.Type).Implements(signalMarker) {
+				ts.fields = append(ts.fields, signalField{off: off, name: name})
+				ts.byOff[off] = name
+				continue
+			}
+			if f.Type.Kind() == reflect.Struct {
+				walk(f.Type, off, name+"_", depth+1)
+			}
+		}
+	}
+	walk(t, 0, "", 0)
+	typeSignalCache.Store(t, ts)
+	return ts
+}
+
+func lowerFirst(s string) string {
+	if s == "" || s[0] < 'A' || s[0] > 'Z' {
+		return s
+	}
+	return string(s[0]+('a'-'A')) + s[1:]
+}
+
+// prebindSignals stamps every field-held Signal in inst with its wire name
+// BEFORE the View runs, so Signal.Ref reads a real name no matter where in the
+// tree the signal is Bound or Displayed — and so an Embed's by-value copy
+// carries the embed's prefix instead of whatever scope the parent last bound it
+// under. One pointer add and two string stores per signal; no reflection.
+func prebindSignals(c *Ctx, inst instance) {
+	if inst.sig == nil || inst.base == nil {
+		return
+	}
+	prefix := c.scopePrefix()
+	for _, f := range inst.sig.fields {
+		id := (*slotID)(unsafe.Add(inst.base, f.off))
+		id.slot, id.scope = prefix+f.name, prefix
+	}
+}
+
+// embedPrefixKey memoizes the parent-type -> child-type field-name lookup.
+type embedPrefixKey struct{ parent, child reflect.Type }
+
+var embedPrefixes sync.Map // embedPrefixKey -> string ("" = ambiguous)
+
+// embedFieldName is the parent field an Embed's child came from. Embed takes
+// the child BY VALUE, so the copy's address says nothing about which field it
+// was selected from; the type does, as long as the parent holds exactly ONE
+// field of it. Two fields of the same type are genuinely ambiguous (Embed's
+// argument order need not match declaration order), so that answers "" and the
+// caller falls back to the positional embed key.
+func embedFieldName(parent, child reflect.Type) string {
+	if parent == nil || child == nil || parent.Kind() != reflect.Struct {
+		return ""
+	}
+	k := embedPrefixKey{parent, child}
+	if v, ok := embedPrefixes.Load(k); ok {
+		return v.(string)
+	}
+	name := ""
+	for i := range parent.NumField() {
+		if parent.Field(i).Type != child {
+			continue
+		}
+		if name != "" {
+			name = "" // more than one candidate: ambiguous
+			break
+		}
+		name = lowerFirst(parent.Field(i).Name)
+	}
+	embedPrefixes.Store(k, name)
+	return name
 }
 
 // ptrViewer is the constraint every Register/Mount call site needs — one named
@@ -161,11 +292,12 @@ func ctxOf(b hcore.Binder) *Ctx {
 }
 
 // signalSlot names the signal at field, which must point into this unit's
-// composition. The name is the field's byte offset within the struct, so a
-// signal's wire identity survives a render that skips an earlier sibling's
-// Bind: render-order slots ("s0","s1",…) are claimed in first-render order and
-// a conditional Bind would hand one signal's slot to another, writing the wrong
-// field on the next post.
+// composition. The name is the Go FIELD name (first rune lowercased, "_"-joined
+// through any plain nested struct, prefixed by the embed path), keyed
+// internally by the field's byte offset — so a signal's wire identity survives
+// a render that skips an earlier sibling's Bind: render-order slots
+// ("s0","s1",…) are claimed in first-render order and a conditional Bind would
+// hand one signal's slot to another, writing the wrong field on the next post.
 //
 // The subtraction is unsigned, so a field BELOW the base wraps to a huge
 // offset and fails the bound check along with one above it. A signal reached
@@ -174,21 +306,38 @@ func ctxOf(b hcore.Binder) *Ctx {
 func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 	if base := c.embedV.base; base != nil && field != nil {
 		if off := uintptr(field) - uintptr(base); off < c.embedV.size {
+			if c.embedV.sig != nil {
+				if name, ok := c.embedV.sig.byOff[off]; ok {
+					return c.slotScope(name)
+				}
+			}
+			// In the composition but absent from its signal table (an
+			// anonymous holder): the offset still names it stably.
 			return c.slotScope("f" + strconv.FormatUint(uint64(off), 10))
 		}
-		// The unit HAS a composition and this signal is not in it. The usual
-		// cause is a value-receiver View: it binds a stack copy, so every
-		// signal on it offsets from the wrong base and silently drops back to
-		// render-order slots — losing exactly the conditional-render safety
-		// the offsets exist for. Say so once.
-		valueReceiverWarning.Do(func() {
-			log.Print("via: a rendered Signal is not addressable inside its composition, so it falls back " +
-				"to a render-order slot that a conditional render can hand to a different signal — " +
-				"give View a POINTER receiver, and hold child compositions as plain struct fields " +
-				"(not through a pointer or slice)")
-		})
 	}
 	return c.signalName()
+}
+
+// warnAddressable fires the value-receiver / indirect-field warning once per
+// process for a rendered Signal that does not live inside this unit's
+// composition. It runs on EVERY bind, not just the naming path: a value
+// receiver binds a stack copy that has already inherited its name from
+// prebindSignals, so the name looks right while every Set lands on a struct
+// the render throws away — silence there is the worst outcome.
+func (c *Ctx) warnAddressable(field unsafe.Pointer) {
+	base := c.embedV.base
+	if base == nil || field == nil {
+		return
+	}
+	if uintptr(field)-uintptr(base) < c.embedV.size {
+		return
+	}
+	valueReceiverWarning.Do(func() {
+		log.Print("via: a rendered Signal is not addressable inside its composition, so its slot and its " +
+			"writes belong to a copy the render discards — give View a POINTER receiver, and hold child " +
+			"compositions as plain struct fields (not through a pointer or slice)")
+	})
 }
 
 var valueReceiverWarning sync.Once
@@ -211,44 +360,24 @@ func (c *Ctx) childKey(ordinal int) string {
 	return strconv.Itoa(ordinal)
 }
 
-// slotScope prefixes a slot with the embed key: an embed binds in
+// slotScope prefixes a slot with this unit's embed path: an embed binds in
 // its own Ctx, so two embeds would otherwise mint the same name and collide in
 // the page's one global Datastar store.
 func (c *Ctx) slotScope(name string) string { return c.scopePrefix() + name }
 
-// scopePrefix is the embed prefix every slot this Ctx mints carries.
-func (c *Ctx) scopePrefix() string {
-	if c.isEmbed {
-		return "i" + c.embedKey + "_"
-	}
-	return ""
-}
+// scopePrefix is the embed prefix every slot this Ctx mints carries. It lives
+// on the instance so a live embed's parentless push re-render reproduces it
+// exactly — see instance.slotPrefix.
+func (c *Ctx) scopePrefix() string { return c.embedV.slotPrefix }
 
-// slotInScope reports whether an already-minted slot belongs to this Ctx. A
-// Signal caches its slot, and via.Embed takes the child BY VALUE: a signal the
-// PARENT's own View already bound arrives in the embed still carrying its
-// unprefixed root slot, which would collide in the page's one signal store.
-// Re-minting is the fix; this is how bind notices it has to.
-func (c *Ctx) slotInScope(slot string) bool {
-	if p := c.scopePrefix(); p != "" {
-		return strings.HasPrefix(slot, p)
-	}
-	return !embedScoped(slot)
-}
-
-// embedScoped reports whether slot carries an "i<key>_" embed prefix, where
-// key is a '-'-joined ordinal path. A root slot ("f40", "s2") never can, so the
-// shapes cannot be confused.
-func embedScoped(slot string) bool {
-	if len(slot) < 3 || slot[0] != 'i' {
-		return false
-	}
-	i := 1
-	for i < len(slot) && (slot[i] >= '0' && slot[i] <= '9' || slot[i] == '-') {
-		i++
-	}
-	return i > 1 && i < len(slot) && slot[i] == '_'
-}
+// slotInScope reports whether an already-minted slot belongs to this Ctx.
+// A Signal caches its slot, and via.Embed takes the child BY VALUE, so a
+// signal the PARENT's own View already bound can arrive in the embed still
+// carrying the parent's prefix — which would collide in the page's one signal
+// store. Re-minting is the fix; this is how bind notices it has to. Field-held
+// signals are already re-stamped by prebindSignals; this covers the
+// render-order carve-out (a signal behind a pointer or slice field).
+func (c *Ctx) slotInScope(scope string) bool { return scope == c.scopePrefix() }
 
 // slotSet collects every slot this render declared, page-wide (the unit's own
 // plus every embed's).
@@ -272,6 +401,13 @@ func (c *Ctx) collectSlots(dst map[string]bool) {
 // a render: the first declaration fixes the order, later ones (e.g. a Bind and a
 // Display of the same signal) only refresh the value. hcore.Binder.
 func (c *Ctx) declareSignal(slot string, initial any) {
+	if slot == tabSignal {
+		// The tab id is a page-level signal of the same name and IS the CSRF
+		// token; a user signal landing on it would overwrite the id the next
+		// action routes by. Loud at the first render, never a silent
+		// mid-session 410 storm.
+		panic("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field")
+	}
 	if _, seen := c.initial[slot]; !seen {
 		c.order = append(c.order, slot)
 	}
@@ -373,27 +509,75 @@ func methodRecv(self unsafe.Pointer) unsafe.Pointer {
 // and for the same reason: the Go name alone drops the receiver, so two
 // instances of one type would collapse onto a single action.
 func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
-	name = "unknown"
 	pc := reflect.ValueOf(fn).Pointer()
-	if f := runtime.FuncForPC(pc); f != nil {
-		name = f.Name()
-	}
+	fnName := funcName(pc)
+	name, isMethod := fnName.name, fnName.method
 	self := funcSelf(fn)
 	ah = actionHandle{code: pc, self: self}
-	key := name
-	if strings.HasSuffix(name, "-fm") {
+	off, scoped := uintptr(0), false
+	if isMethod {
 		recv := methodRecv(self)
 		ah.self = recv // two takes of the same method value are two funcvals; the receiver is the identity
 		if base := c.embedV.base; base != nil && recv != nil {
 			// Unsigned, so a receiver below the base wraps past size and fails
 			// the bound check along with one above it.
-			if off := uintptr(recv) - uintptr(base); off < c.embedV.size {
-				key = name + "@" + strconv.FormatUint(uint64(off), 10)
+			if o := uintptr(recv) - uintptr(base); o < c.embedV.size {
+				off, scoped = o, true
 			}
 		}
 	}
+	return actionIDFor(pc, name, off, scoped), name, ah
+}
+
+// funcNameInfo is the per-code-pointer half of the actionID memo: the Go name
+// and whether it is a method value ("-fm"). Both are fixed by the PC.
+type funcNameInfo struct {
+	name   string
+	method bool
+}
+
+var funcNames sync.Map // uintptr (code pointer) -> funcNameInfo
+
+// funcName resolves a code pointer's Go name once per process.
+// runtime.FuncForPC walks the module's pclntab — ~190ns with the sha256
+// below, which at a thousand bindings is a measurable slice of every render.
+func funcName(pc uintptr) funcNameInfo {
+	if v, ok := funcNames.Load(pc); ok {
+		return v.(funcNameInfo)
+	}
+	info := funcNameInfo{name: "unknown"}
+	if f := runtime.FuncForPC(pc); f != nil {
+		info.name = f.Name()
+	}
+	info.method = strings.HasSuffix(info.name, "-fm")
+	funcNames.Store(pc, info)
+	return info
+}
+
+// actionIDKey is what an action id is a pure function of: the handler's code
+// pointer (which fixes its Go name) and, when the receiver lies inside the
+// unit's composition, that receiver's byte offset.
+type actionIDKey struct {
+	pc     uintptr
+	off    uintptr
+	scoped bool
+}
+
+var actionIDs sync.Map // actionIDKey -> string
+
+func actionIDFor(pc uintptr, name string, off uintptr, scoped bool) string {
+	k := actionIDKey{pc: pc, off: off, scoped: scoped}
+	if v, ok := actionIDs.Load(k); ok {
+		return v.(string)
+	}
+	key := name
+	if scoped {
+		key = name + "@" + strconv.FormatUint(uint64(off), 10)
+	}
 	sum := sha256.Sum256([]byte(key))
-	return base64.RawURLEncoding.EncodeToString(sum[:])[:8], name, ah
+	id := base64.RawURLEncoding.EncodeToString(sum[:])[:8]
+	actionIDs.Store(k, id)
+	return id
 }
 
 // hydrator records slot's update function. A live unit keeps the table from its
@@ -416,8 +600,8 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage)) {
 // and PostForm never collides on an id.
 //
 // It always carries a hidden _viatab field, reactively kept in sync with the
-// $_viatab signal: a native form submit is a plain browser POST, which cannot
-// set the X-Via-Tab header a Datastar @post uses, so dispatch falls back to
+// $viatab signal: a native form submit is a plain browser POST, which carries
+// neither Datastar's signal store nor its headers, so dispatch falls back to
 // this field to route the submit to the connection — under the exact same
 // per-mount ownership check the header gets. On a plain page the signal is
 // the empty string declared on <body>, which matches no connection and falls
@@ -432,7 +616,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		idx := ctx.actionSlot(handler, handler)
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
 			ctx.base + `/_via/a/` + unitAddr(ctx) + `/` + idx + `">`)
-		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$_viatab">`)
+		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
 		for _, c := range children {
 			r.Render(c)
 		}
@@ -575,17 +759,21 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 // {base}/_via/a/{embed}/{id} — the root is embed "r", an embedded child is
 // its embed key, and id addresses the handler itself, so a list that grew or
 // shrank since the client's copy was rendered still routes every already-shipped
-// URL. Every POST echoes the tab id (the _viatab local signal, declared empty on
-// <body> and filled by the SSE stream) as the X-Via-Tab header, so a live unit's
-// action routes to THIS connection's instance; on a plain page it is empty,
-// matches no connection, and dispatch falls through to the plain path.
+// URL. Every POST echoes the tab id (the viatab signal, declared empty on
+// <body> and filled by the SSE stream) inside the signal store Datastar
+// already sends with every @post, so a live unit's action routes to THIS
+// connection's instance; on a plain page it is empty, matches no connection,
+// and dispatch falls through to the plain path. It rides as a signal, not a
+// header, because Datastar builds request headers per CALL (Object.assign over
+// that action's own opts.headers): there is no ancestor inheritance and no
+// config hook, so a header costs 33 bytes on every single binding.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 	base := ""
 	if ctx != nil {
 		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{embed}/{id}
 	}
 	path := base + "/_via/a/" + unitAddr(ctx) + "/" + idx
-	r.WriteString(` data-on:` + event + `="@post('` + path + query + `',{headers:{'X-Via-Tab':$_viatab}})"`)
+	r.WriteString(` data-on:` + event + `="@post('` + path + query + `')"`)
 }
 
 // decodeActionBody decodes the client signals from an action POST under a body
@@ -626,11 +814,30 @@ func decodeActionBody(w http.ResponseWriter, req *http.Request) (map[string]json
 // render path serves the full first paint (only nil), the declaration-free
 // live push (declareSignals false), and the restricted action patch (only
 // non-nil, see renderRootPatch).
-func renderRootBase(inst instance, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, seen map[string]bool) (*Ctx, []byte) {
+func renderRootBase(inst instance, in map[string]json.RawMessage, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx) (*Ctx, []byte) {
 	ctx := newRootCtx(in, declareSignals, base, only)
 	ctx.declareSeen = seen
 	ctx.embedV = inst
+	inheritRequestScope(ctx, from)
 	return ctx, renderRootWith(ctx, inst.v)
+}
+
+// inheritRequestScope carries a request-scoped render's wiring onto a SECOND
+// render of the same request (an action's response re-render). from nil is a
+// live push, which is not request-scoped at all.
+//
+// doInit is the load-bearing part: the acted-on unit's own OnInit already ran
+// for this request, but every nested child rendered here is a fresh copy whose
+// OnInit has never run for it. Skipping them served the child zero-valued,
+// nothing like what the same subtree renders on a GET.
+func inheritRequestScope(ctx, from *Ctx) {
+	if from == nil {
+		return
+	}
+	ctx.doInit = true
+	ctx.req = from.req
+	ctx.sessions = from.sessions
+	ctx.sessW = from.sessW
 }
 
 // newRootCtx builds the root bind Ctx for one render. A request-scoped
@@ -650,6 +857,7 @@ func newRootCtx(in map[string]json.RawMessage, declareSignals bool, base string,
 // checked once the whole walk is done — see checkLiveNesting.
 func renderRootWith(ctx *Ctx, v viewer) []byte {
 	declareSignals, only := ctx.declare, ctx.declareOnly
+	prebindSignals(ctx, ctx.embedV)
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -693,11 +901,11 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 // store, clobbering a value the user is mid-edit. That is the same hazard a live
 // push avoids by omitting the attribute; here the attribute stays, restricted to
 // only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(inst instance, in map[string]json.RawMessage, base string, only map[string]any, seen map[string]bool) (*Ctx, []byte) {
+func renderRootPatch(inst instance, in map[string]json.RawMessage, base string, only map[string]any, seen map[string]bool, from *Ctx) (*Ctx, []byte) {
 	if only == nil {
 		only = map[string]any{} // nil would read as "declare everything"
 	}
-	return renderRootBase(inst, in, true, base, only, seen)
+	return renderRootBase(inst, in, true, base, only, seen, from)
 }
 
 // Register builds an http.Handler serving the root composition. root is taken
@@ -757,7 +965,7 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 func rootPush(inst instance, base string, stream *stream, lc *tabStream) func() {
 	var push func()
 	push = func() {
-		bind, body := renderRootBase(inst, nil, false, base, nil, nil) // push omits data-signals
+		bind, body := renderRootBase(inst, nil, false, base, nil, nil, nil) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
@@ -772,7 +980,7 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream) func() 
 func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream) func() {
 	var push func()
 	push = func() {
-		bind, body := renderEmbedBind(key, inst, base)
+		bind, body := renderEmbedBind(key, inst, base, nil)
 		bind.push = push
 		lc.replace(bind)
 		id := "via-i" + key
@@ -844,7 +1052,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		cancel:  cancel,
 	}
 	keepalive := func() { stream.frame(writeKeepaliveFrame) }
-	id := randomToken() // per-connection tab id (echoed as X-Via-Tab on actions)
+	id := randomToken() // per-connection tab id (echoed as the viatab signal on actions)
 	pushq := make(chan func())
 
 	// Bind the connection to whatever session the connect request's cookie
@@ -922,14 +1130,14 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Register this connection so a live action POST (/_via/a/{embed}/{n} +
-	// X-Via-Tab) routes to the right unit on this connection's goroutine.
+	// the viatab signal) routes to the right unit on this connection's goroutine.
 	m.reg.put(id, lc)
 	defer m.reg.del(id)
 
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	headersSent = true
-	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"_viatab":"`+id+`"}`) })
+	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"`+tabSignal+`":"`+id+`"}`) })
 
 	// The connect response is flushed now — w's headers are long gone. A
 	// Tick/Listen handler runs against this SAME unit Ctx for the life of the

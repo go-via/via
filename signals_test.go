@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -36,7 +37,7 @@ func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Register(numComp{})).Get("/")
 
-	assert.Contains(t, body, `data-signals='{"f0":0}'`, "numeric signal declaration missing/malformed")
+	assert.Contains(t, body, `data-signals='{"n":0}'`, "numeric signal declaration missing/malformed")
 }
 
 // nameComp is a string signal plus a no-op action. The action lets a client
@@ -62,7 +63,7 @@ func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	// Echo the breakout payload back as the signal's own slot; the request shape
 	// (one slot, at field offset 0) matches what the GET page declares, so
 	// dispatch proceeds.
-	payload := `{"f0":"' data-on-load='alert(document.cookie)"}`
+	payload := `{"name":"' data-on-load='alert(document.cookie)"}`
 	_, body := vt.Serve(t, via.Register(nameComp{})).Action(0).Body(payload).Fire()
 
 	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the response — attribute breakout possible")
@@ -201,13 +202,13 @@ func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(twoSignals{}))
 	_, page := app.Get("/")
-	assert.Contains(t, page, `"f0":""`, "the GET first paint declares every slot")
-	assert.Contains(t, page, `"f48":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"written":""`, "the GET first paint declares every slot")
+	assert.Contains(t, page, `"left":""`, "the GET first paint declares every slot")
 
 	status, frag := app.Action(0).Fire()
 	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
-	assert.Contains(t, frag, `"f0":"ada"`, "the written signal is declared")
-	assert.NotContains(t, frag, "f48\":", "the untouched signal must not be re-declared")
+	assert.Contains(t, frag, `"written":"ada"`, "the written signal is declared")
+	assert.NotContains(t, frag, "left\":", "the untouched signal must not be re-declared")
 }
 
 // wizard is the conditional-Bind shape: exactly one of Name/Email is rendered
@@ -360,6 +361,70 @@ func TestSignal_valueReceiverViewWarnsOnSlotFallback(t *testing.T) {
 
 	app := vt.Serve(t, via.Register(valueReceiverView{}))
 	_, page := app.Get("/")
-	assert.Contains(t, page, `data-text="$s0"`, "the fallback slot is render-order, not an offset")
+	assert.Contains(t, page, `data-text="$s"`, "the copy inherits the field name, but the write lands on a discarded struct")
 	assert.Contains(t, logs.String(), "not addressable inside its composition")
+}
+
+// --- field-named slots and Signal.Ref (change 5) ---
+
+// refChild calls Ref BEFORE the signal is Bound anywhere, which is the whole
+// point: a field-held signal is named before the View runs, so a raw Datastar
+// expression can reference it from anywhere in the tree.
+type refChild struct{ Draft via.Signal[string] }
+
+func (c *refChild) View() h.H {
+	return h.Div(h.Data("show", c.Draft.Ref()), h.Input(c.Draft.Bind()))
+}
+
+type refPage struct {
+	Count via.Signal[int]
+	Chat  refChild
+}
+
+func (p *refPage) View() h.H {
+	return h.Div(h.Data("show", p.Count.Ref()), p.Count.Display(), via.Embed(p.Chat))
+}
+
+// A slot is the Go FIELD name, so a user writing a raw Datastar expression
+// reads it off the struct instead of reverse-engineering an opaque field offset
+// out of the rendered HTML. An embed's slots carry its field path.
+func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Register(refPage{})).Get("/")
+
+	assert.Contains(t, body, `data-show="$count"`, "Ref names the root field, ahead of any Bind/Display")
+	assert.Contains(t, body, `data-text="$count"`, "and Display agrees with it")
+	assert.Contains(t, body, `data-show="$chat__draft"`, "an embed's signal is prefixed by its FIELD path")
+	assert.Contains(t, body, `data-bind="chat__draft"`)
+	assert.NotContains(t, body, `"f0"`, "opaque offset slots are gone")
+}
+
+// The embed prefix must survive a live push, which re-renders the child with no
+// parent in scope — so the prefix rides on the instance, not on a parent walk.
+type refLiveChild struct {
+	Draft via.Signal[string]
+	beat  via.State[int]
+}
+
+func (c *refLiveChild) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, c.tick)
+	return nil
+}
+func (c *refLiveChild) tick(ctx *via.Ctx) { c.beat.Set(c.beat.Get() + 1) }
+func (c *refLiveChild) View() h.H         { return h.Div(h.Input(c.Draft.Bind()), c.beat.Display()) }
+
+type refLivePage struct{ Room refLiveChild }
+
+func (p *refLivePage) View() h.H { return h.Div(via.Embed(p.Room)) }
+
+func TestSignal_embedFieldPrefixSurvivesALivePush(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(refLivePage{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `data-bind="room__draft"`)
+
+	conn := app.Connect()
+	defer conn.Close()
+	assert.Contains(t, conn.Await(`data-bind="room__draft"`), `data-bind="room__draft"`,
+		"the push must mint the same field-path slot the first paint did")
 }

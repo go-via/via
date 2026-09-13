@@ -50,11 +50,10 @@ func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader("{}"))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
-		req.Header.Set("X-Via-Tab", conn.TabID())
 		resp, err := app.Client().Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -120,8 +119,8 @@ func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
-	assert.Contains(t, body, `"i0_f0":"resetted"`, "the Set signal must reach the client")
-	assert.NotContains(t, body, `"i0_f48":`,
+	assert.Contains(t, body, `"i__name":"resetted"`, "the Set signal must reach the client")
+	assert.NotContains(t, body, `"i__other":`,
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
 }
 
@@ -441,11 +440,10 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 
-			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), strings.NewReader("{}"))
+			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), strings.NewReader(withTab(conn.TabID(), "{}")))
 			require.NoError(t, err)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			req.Header.Set("Datastar-Request", "true")
-			req.Header.Set("X-Via-Tab", conn.TabID())
 			resp, err := app.Client().Do(req)
 			require.NoError(t, err)
 			defer resp.Body.Close()
@@ -526,9 +524,8 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 		cTab := awaitTabID(t, cLines)
 		synctest.Wait()
 
-		resp, _ := post(t, srv, aURL, "{}", map[string]string{
+		resp, _ := post(t, srv, aURL, withTab(cTab, "{}"), map[string]string{
 			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      cTab,
 		})
 		assert.Equal(t, http.StatusGone, resp.StatusCode, "a /c tab must not drive /a's action table")
 		assert.Zero(t, aFired, "the /a action must not have run")
@@ -567,7 +564,7 @@ func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
 
 // liveForm is a live root whose View carries a native PostForm — the case
 // with no example coverage: a real browser form submit inside a live unit
-// can't set X-Via-Tab (that's fetch-only), so it depends on PostForm's
+// carries neither Datastar's signal store nor its headers, so it depends on PostForm's
 // hidden fallback field to route to the connection at all.
 type liveForm struct {
 	got   via.State[string]
@@ -598,7 +595,7 @@ func multipartForm(t *testing.T, fields map[string]string) (io.Reader, string) {
 	return &buf, mw.FormDataContentType()
 }
 
-// nativeFormPost submits a native form POST with no X-Via-Tab header — the
+// nativeFormPost submits a native form POST with no viatab signal — the
 // one a real browser sends — carrying fields as its multipart body.
 func nativeFormPost(t *testing.T, app *vt.App, url string, fields map[string]string) (int, string) {
 	t.Helper()
@@ -621,7 +618,7 @@ func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 		app := vt.Serve(t, via.Register(liveForm{calls: &calls}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
-		assert.Contains(t, page, `data-attr:value="$_viatab"`,
+		assert.Contains(t, page, `data-attr:value="$viatab"`,
 			"a live unit's PostForm must reactively fill the fallback field from the tab signal")
 		formURL := actionURL(t, page, "r", 0)
 
@@ -755,16 +752,15 @@ func (s *sessionLive) View() h.H {
 }
 
 // liveActionRequest builds a raw dispatch POST against embed/n using the
-// page's currently-rendered action URL, with tab as its X-Via-Tab header —
+// page's currently-rendered action URL, with tab as its viatab signal —
 // bypassing any cookie jar, so the caller controls exactly what (if any)
 // session cookie rides along.
 func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, embed string, n int) *http.Request {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, embed, n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, embed, n), strings.NewReader(withTab(tab, "{}")))
 	require.NoError(t, err)
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("X-Via-Tab", tab)
 	return req
 }
 
@@ -1196,4 +1192,90 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 
 	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
 		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
+}
+
+// --- the tab id is the CSRF token, and it is a signal now (change 3) ---
+
+// tabGuard is a live root with one ordinary @post action, so a dispatch either
+// reaches this connection's instance (bumping hits) or does not.
+type tabGuard struct{ hits *int }
+
+func (g *tabGuard) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, g.tick); return nil }
+func (g *tabGuard) tick(ctx *via.Ctx)         {}
+func (g *tabGuard) Bump(ctx *via.Ctx)         { *g.hits++ }
+func (g *tabGuard) View() h.H                 { return h.Div(h.Button(via.On("click", g.Bump))) }
+
+// The tab id moved from the X-Via-Tab header into the viatab SIGNAL. That is a
+// wire break, not a policy change: a POST that cannot present the connection's
+// tab id must be rejected exactly as the header-based check rejected it, and
+// must not mutate the live unit.
+func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"no signals at all", "{}"},
+		{"empty tab", `{"viatab":""}`},
+		{"forged tab", `{"viatab":"not-a-real-tab"}`},
+		{"tab of the wrong JSON type", `{"viatab":12345}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+			conn := app.Connect()
+			defer conn.Close()
+
+			status, _ := app.Action(0).Body(tc.body).Fire()
+			assert.Equal(t, http.StatusGone, status,
+				"a live action with no valid tab id must 410, not run against a throwaway instance")
+			assert.Zero(t, calls, "and the connection's unit must not have been touched")
+		})
+	}
+}
+
+// The header is gone for good: leaving it honoured would keep a channel the
+// browser can be made to attach cross-origin under some configurations, on top
+// of the synchronizer token the signal already is.
+func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Via-Tab", conn.TabID())
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "the header must no longer route to a connection")
+	assert.Zero(t, calls)
+}
+
+// And the belt-and-braces half: Datastar-Request still gates the JSON path, so
+// a form-shaped cross-origin POST cannot be dressed up as a signal action.
+func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0),
+		strings.NewReader(`{"viatab":"`+conn.TabID()+`"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.NotEqual(t, http.StatusNoContent, resp.StatusCode,
+		"without Datastar-Request the body is read as a form, so a JSON tab id must not route")
+	assert.Zero(t, calls)
 }

@@ -145,8 +145,8 @@ func TestEmbed_embedSignalsAreScopedPerEmbed(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(pair{})), http.MethodGet, "/", "")
 
-	assert.Contains(t, body, "i0_f0", "embed 0's signal must carry an embed-scoped slot")
-	assert.Contains(t, body, "i1_f0", "embed 1's signal must carry an embed-scoped slot")
+	assert.Contains(t, body, "i0__name", "embed 0's signal must carry an embed-scoped slot")
+	assert.Contains(t, body, "i1__name", "embed 1's signal must carry an embed-scoped slot")
 	assert.Contains(t, body, `id="via-i0" data-signals=`, "embed 0 must declare its own signals")
 	assert.Contains(t, body, `id="via-i1" data-signals=`, "embed 1 must declare its own signals")
 }
@@ -170,8 +170,8 @@ func (s *solo) View() h.H { return h.Div(via.Embed(s.X)) }
 
 // A live embed's signal must keep the SAME embed-scoped slot across a push, or
 // the client binding breaks; and the push must NOT re-declare data-signals, or a
-// fan-out would clobber what the user is editing. The GET declares i0_f0 on the
-// container; a tick-driven push re-binds i0_f0 with no data-signals.
+// fan-out would clobber what the user is editing. The GET declares x__draft on
+// the container; a tick-driven push re-binds x__draft with no data-signals.
 func TestMux_liveEmbedSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
 	srv := via.Register(solo{})
@@ -181,12 +181,12 @@ func TestMux_liveEmbedSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	// test independent.
 	_, body := do(t, serve(t, srv), http.MethodGet, "/", "")
 	assert.Contains(t, body, `id="via-i0" data-ignore-morph data-signals=`, "GET must declare the embed's signal")
-	assert.Contains(t, body, `data-bind="i0_f0"`, "the embed signal uses an embed-scoped slot")
+	assert.Contains(t, body, `data-bind="x__draft"`, "the embed signal uses an embed-scoped slot")
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, srv)
 		conn := app.Connect()
-		line := conn.Await(`data-bind="i0_f0"`) // the push re-renders the embed with the same slot
+		line := conn.Await(`data-bind="x__draft"`) // the push re-renders the embed with the same slot
 		assert.NotContains(t, line, "data-signals", "a live push must not re-declare embed signals")
 	})
 }
@@ -255,13 +255,15 @@ func TestMux_liveEmbedActionWithUnknownTabIsGone(t *testing.T) {
 	})
 }
 
-// A live embed's action binding must carry both the embed id and the X-Via-Tab
-// header, so the POST reaches the right embed on the right connection.
-func TestMux_liveEmbedActionBindingCarriesTabHeader(t *testing.T) {
+// A live embed's action binding must carry the embed id. The tab id rides in
+// the signal store Datastar already ships with every @post, so the binding
+// itself stays bare — no per-action headers clause.
+func TestMux_liveEmbedActionBindingCarriesEmbedID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Register(panel{})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+',\{headers:\{'X-Via-Tab':\$_viatab\}\}\)`, body,
-		"a live embed action must carry its embed id and the tab header")
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'\)`, body,
+		"a live embed action must carry its embed id")
+	assert.NotContains(t, body, "X-Via-Tab", "the tab id is a signal now, not a per-action header")
 }
 
 // hitsRoot is a PLAIN root (not itself live) with its own plain action,
@@ -995,15 +997,15 @@ func TestEmbed_plainEmbedActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 		"the patch must carry the acted embed's container exactly once")
 	assert.Contains(t, patch, `id="via-i0-0"`,
 		"the nested live child keeps its composed key in a partial re-render")
-	assert.Contains(t, patch, `data-bind="i0-0_f0"`,
-		"and its signal prefix stays distinct from its parent's i0_")
-	assert.Len(t, regexp.MustCompile(`data-bind="i0_f0"`).FindAllString(patch, -1), 1,
+	assert.Contains(t, patch, `data-bind="i0__kid__step"`,
+		"and its signal prefix stays distinct from its parent's i0__")
+	assert.Len(t, regexp.MustCompile(`data-bind="i0__query"`).FindAllString(patch, -1), 1,
 		"the parent's own Query slot must not be aliased by the nested child's Step")
 
 	childURL := actionURL(t, patch, "0-0", 0)
 	assert.Contains(t, childURL, "/_via/a/0-0/",
 		"the child's button is addressed by its composed key")
-	code, _ := app.Action(0).Raw(childURL).Over(conn).Body(`{"i0-0_f0":5}`).Fire()
+	code, _ := app.Action(0).Raw(childURL).Over(conn).Body(`{"i0__kid__step":5}`).Fire()
 	assert.Equal(t, http.StatusNoContent, code,
 		"the URL the parent's patch handed the browser must still reach the live child")
 	assert.Contains(t, conn.Await("n="), "5", "and drive it")
@@ -1032,9 +1034,74 @@ func TestEmbed_liveLeafUnderTwoPlainEmbedsKeepsItsPathKey(t *testing.T) {
 
 	_, page := app.Get("/")
 	assert.Contains(t, page, `id="via-i0-0-0"`, "the leaf's key is the path of ordinals down to it")
-	assert.Contains(t, page, `data-bind="i0-0-0_f0"`)
+	assert.Contains(t, page, `data-bind="outer__mid__kid__step"`)
 
-	status, _ := app.EmbedAction("0-0-0", 0).Over(conn).Body(`{"i0-0-0_f0":3}`).Fire()
+	status, _ := app.EmbedAction("0-0-0", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
 	assert.Contains(t, conn.Await("n="), "3")
+}
+
+// --- nested OnInit on an action re-render (change 2) ---
+
+// initKid loads its own data in OnInit. A re-render that skips it renders the
+// zero value, which is nothing like what the same subtree shows on a GET.
+type initKid struct{ n int }
+
+func (k *initKid) OnInit(ctx *via.Ctx) error { k.n = 7; return nil }
+func (k *initKid) View() h.H                 { return h.P(h.Str("kid="), h.Str(strconv.Itoa(k.n))) }
+
+type initRoot struct {
+	Kid  initKid
+	hits int
+}
+
+func (p *initRoot) Bump(ctx *via.Ctx) { p.hits++ }
+func (p *initRoot) View() h.H {
+	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(p.hits)),
+		h.Button(via.On("click", p.Bump)), via.Embed(p.Kid))
+}
+
+// A plain ROOT action re-renders the whole page for its patch. The root's own
+// OnInit already ran for this request, but every embedded child in the patch is
+// a fresh copy whose OnInit has not — so it must run here or the patch ships a
+// blank child over a populated one.
+func TestEmbed_rootActionPatchInitsNestedChildren(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(initRoot{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, "kid=7", "the GET paints the inited child")
+
+	status, patch := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, patch, "kid=7",
+		"the action patch must re-init the nested child, not repaint it zero-valued")
+}
+
+type initMid struct {
+	Kid  initKid
+	hits int
+}
+
+func (m *initMid) Note(ctx *via.Ctx) { m.hits++ }
+func (m *initMid) View() h.H {
+	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(m.hits)),
+		h.Button(via.On("click", m.Note)), via.Embed(m.Kid))
+}
+
+type initHost struct{ Mid initMid }
+
+func (h2 *initHost) View() h.H { return h.Div(via.Embed(h2.Mid)) }
+
+// Same rule one level down: a PLAIN embed's own action re-renders just that
+// embed, and its nested children are fresh copies that have never been inited.
+func TestEmbed_embedActionPatchInitsNestedChildren(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(initHost{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, "kid=7")
+
+	status, patch := app.EmbedAction("0", 0).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, patch, "kid=7",
+		"the embed patch must re-init its own nested children")
 }

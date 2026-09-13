@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync/atomic"
@@ -170,11 +171,13 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	if getPattern == "" {
 		getPattern = "/{$}"
 	}
+	rootType := reflect.TypeOf(root)
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
 	newInst := func() instance {
 		inst := root
-		return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst)}
+		return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst),
+			typ: rootType, sig: signalsOf(rootType)}
 	}
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
@@ -236,15 +239,17 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // hash, so no per-response token has to be threaded through here.
 func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
 	writeHeadersWithCSP(w, cfg.csp)
-	// Every page pre-declares the _viatab local signal so $_viatab is always
-	// defined — every action attribute and PostForm echoes it unconditionally,
-	// since liveness is only knowable once the render has ended. On a plain
-	// page it stays "" and dispatch falls through to the plain path; on a
-	// streaming page the patch-signals frame fills it with the real tab id, and a
-	// click before the stream connects sends an empty id and gets a graceful 410.
-	bodyOpen := `</head><body data-signals='{"_viatab":""}'>`
+	// Every page pre-declares the viatab signal so it is always defined and
+	// always sent: Datastar ships the whole signal store with every @post, and
+	// filters out only names matching /(^|\.)_/ — so an ORDINARY name is all
+	// it takes for the tab id to ride along, with no per-action header opt and
+	// no per-attribute bytes. On a plain page it stays "" and dispatch falls
+	// through to the plain path; on a streaming page the patch-signals frame
+	// fills it with the real tab id, and a click before the stream connects
+	// sends an empty id and gets a graceful 410.
+	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":""}'>`
 	if hasLive {
-		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"_viatab":""}'>`
+		bodyOpen = `</head><body data-init="@post('` + sseURL + `')" data-signals='{"` + tabSignal + `":""}'>`
 	}
 	var head strings.Builder
 	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
