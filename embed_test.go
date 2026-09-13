@@ -1041,8 +1041,6 @@ func TestEmbed_liveLeafUnderTwoPlainEmbedsKeepsItsPathKey(t *testing.T) {
 	assert.Contains(t, conn.Await("n="), "3")
 }
 
-// --- nested OnInit on an action re-render (change 2) ---
-
 // initKid loads its own data in OnInit. A re-render that skips it renders the
 // zero value, which is nothing like what the same subtree shows on a GET.
 type initKid struct{ n int }
@@ -1143,8 +1141,6 @@ func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 	assert.Contains(t, page, `id="via-i0-0"`, "the embed KEY keeps its '-' separator")
 	assert.Contains(t, seen, "inner__i0_0__q", "the fallback spells the key with underscores")
 }
-
-// --- acted-instance substitution must check the TYPE, not just the key ---
 
 type shiftFlag struct{ on bool }
 

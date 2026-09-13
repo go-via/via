@@ -225,8 +225,6 @@ func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
 	assert.Contains(t, c.Await("n="), "n=1", "the mutation must reach the browser as a patch frame")
 }
 
-// --- liveness must be render-invariant ---
-
 type lateLive struct {
 	open bool
 	Msg  via.State[string]

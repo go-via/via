@@ -11,35 +11,29 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// writeSignalsAttr writes the page-level Datastar signal declaration as a
-// single-quoted HTML attribute: data-signals='{...}'. The signals map is
-// marshaled to JSON, then escaped for the single-quoted attribute context
-// before being written.
+// writeSignalsAttr writes the Datastar signal declaration as a single-quoted
+// attribute: data-signals='{...}'.
 //
-// json.Marshal already unicode-escapes <, > and & inside string VALUES (to
-// < etc.), so the only HTML-significant character it leaves raw in its
-// output is the single quote. Left verbatim, a string signal carrying an
-// apostrophe would close this single-quoted attribute early and let an attacker
-// graft live attributes (e.g. a data-on-* Datastar expression) onto
-// <div id="root">. We therefore entity-encode the apostrophe for the
-// single-quoted context. Double quotes are left intact: they are legal inside a
-// single-quoted attribute, keep the JSON readable, and the browser hands the
-// decoded value to Datastar either way.
-// only restricts which slots are declared. nil declares every slot — the GET
-// first paint, seeding the whole client store. A non-nil only declares just the
-// slots it names: that is how a plain action patch ships the signals it
-// wrote without overwriting the ones it did not, so a value the user is mid-edit
-// survives the morph. If the restriction leaves nothing, no attribute is written.
+// json.Marshal already unicode-escapes <, > and & inside string VALUES, so the
+// single quote is the only HTML-significant character left raw — and left
+// verbatim a signal carrying an apostrophe would close this attribute early and
+// let an attacker graft a data-on-* expression onto <div id="root">. Double
+// quotes stay intact: legal inside a single-quoted attribute, and the browser
+// hands Datastar the same decoded value either way.
+//
+// only nil declares every slot (the GET first paint). Non-nil declares just the
+// slots named, so a plain action patch ships what it wrote without clobbering a
+// value the user is mid-edit; if that leaves nothing, no attribute is written.
 func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
 	sig := make(map[string]any, len(order))
 	for _, slot := range order {
 		if only != nil {
 			_, dirty := only[slot]
-			// A slot the pre-action render did not carry is a control that has
-			// just appeared (a branch opened). The client store has no value
-			// for it — or, worse, a stale one from whatever occupied the slot
-			// before — so it is seeded here even though the action never wrote
-			// it. seen nil means "no pre-action render to compare against".
+			// A slot the pre-action render did not carry is a control that just
+			// appeared (a branch opened): the client store has no value for it,
+			// or worse a stale one from whatever occupied the slot before, so
+			// seed it even though the action never wrote it. seen nil means
+			// there is no pre-action render to compare against.
 			if !dirty && (seen == nil || seen[slot]) {
 				continue
 			}
@@ -63,8 +57,7 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[strin
 }
 
 // Signal is a client-resident value that round-trips per request and renders as
-// a Datastar text-bound span. T must be JSON-round-trippable; slice 1 exercises
-// int and string.
+// a Datastar text-bound span. T must be JSON-round-trippable.
 type Signal[T any] struct {
 	slotID // MUST stay the first field: prebindSignals stamps the wire name through a pointer add at the field's offset
 	val    T
@@ -72,45 +65,40 @@ type Signal[T any] struct {
 	warned bool // the never-rendered Set warning fired (once per signal)
 }
 
-// Ref returns the signal's Datastar expression — "$count" for a field named
-// Count, "$chat__draft" for a Draft inside an embedded Chat (the DOUBLE
-// underscore marks the embed scope boundary; a plain nested struct joins with
-// a single one) — for hand-written
-// Datastar attributes the typed API does not cover:
+// Ref returns the signal's Datastar expression — "$count" for a field Count,
+// "$chat__draft" for a Draft inside an embedded Chat (the DOUBLE underscore
+// marks the embed boundary; a plain nested struct joins with a single one) —
+// for hand-written Datastar attributes the typed API does not cover:
 //
 //	h.Div(h.Data("show", p.Open.Ref()), ...)
 //
-// A Signal must be a plain field of the composition (through plain nested
-// structs if you like), which is what gives it a name before the View runs, so
-// Ref reads the same name wherever in the tree it is called. One reached
-// through a pointer, slice, array or map field has no field name and panics
-// when rendered.
+// A Signal must be a plain field of the composition, through plain nested
+// structs if you like; that is what names it before the View runs, so Ref reads
+// the same name wherever it is called. One reached through a pointer, slice,
+// array or map field has no field name and panics when rendered.
 func (s *Signal[T]) Ref() string { return "$" + s.slot }
 
 // Get returns the current value.
 func (s *Signal[T]) Get() T { return s.val }
 
-// Set assigns the value and records it as dirty, which is what carries the change
-// to the client. There are two channels and they follow one rule: only the
-// signals an action actually wrote are ever declared, so a signal the user is
-// mid-edit is never overwritten behind them. A live action pushes a
-// patch-signals frame and its element patch carries no declaration at all; a
-// plain action has no second frame, so its element patch carries a
-// data-signals attribute restricted to the dirty slots.
+// Set assigns the value and records it dirty, which is what carries the change
+// to the client. Only the signals an action actually wrote are ever declared,
+// so a signal the user is mid-edit is never overwritten behind them: a live
+// action pushes a patch-signals frame whose element patch declares nothing, a
+// plain action's element patch carries a data-signals restricted to the dirty
+// slots.
 //
 // Contract: the change reaches the client only for a signal the View actually
-// renders (via Bind or Display) — the wire name and the request binding are
-// assigned at render, so a Set on a signal the View never renders updates
-// server memory but emits no patch. Bind/Display the signals an action mutates.
+// renders (Bind or Display) — the wire name and the request binding are
+// assigned at render, so a Set on an unrendered signal updates server memory
+// and emits no patch. Bind or Display the signals an action mutates.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound != nil && s.slot != "" {
 		s.bound.dirty[s.slot] = v
 		return
 	}
-	// No render has bound this signal: the write lands in server memory but no
-	// patch can reach the client. Silent, that reads as "Set does nothing" —
-	// warn once per signal.
+	// Silent, an unbound Set reads as "Set does nothing" — warn once per signal.
 	if !s.warned {
 		s.warned = true
 		log.Print("via: Signal.Set on a signal the View never rendered — the value updates server memory " +
@@ -118,20 +106,16 @@ func (s *Signal[T]) Set(v T) {
 	}
 }
 
-// bind assigns the signal's stable wire name on first render (reused
-// thereafter), hydrates the value from the request if present, and declares the
-// slot for this render's data-signals. Every render entry point (Display, Bind)
-// calls it, so the name is the handle's identity, shared across all of them.
+// bind assigns the signal's wire name, hydrates it from the request when
+// present, and declares the slot for this render's data-signals. Every render
+// entry point calls it, so the name is the handle's identity.
 //
-// writable says whether THIS render put the slot under client control — only
-// Bind() does, by emitting data-bind. A Display()-only signal (and one the View
-// never rendered at all) is a value the server publishes downward, so an
-// inbound value for it is not an echo, it is a forgery: accepting it lets a
-// client overwrite a flag an OnInit set from the session, and the next render
-// that reads that flag opens whatever branch it gates — minting the very
-// (handler, arg) authorization the dispatch is then checked against. So the
-// hydrator is registered for writable slots only, and an unwritable slot's
-// inbound value is ignored on every path.
+// writable is true only for Bind(), which emits data-bind. A Display()-only
+// signal is a value the server publishes downward, so an inbound value for it
+// is not an echo but a forgery — accepting it would let a client overwrite a
+// flag OnInit set from the session and mint its own authorization (see OnArg).
+// So the hydrator is registered for writable slots only, and an unwritable
+// slot's inbound value is ignored on every path.
 func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
@@ -139,10 +123,9 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 		panic("via: a Signal was rendered outside a via render")
 	}
 	// Resolved on EVERY bind, not cached: via.Embed copies the child by value,
-	// so a signal the parent's View already bound arrives in the embed still
-	// carrying the parent's prefix, which would collide in the page's one
-	// signal store. It is a map lookup off the field offset — and the one place
-	// a Signal that is not a plain field of the composition is caught.
+	// so a signal the parent's View already bound arrives still carrying the
+	// parent's prefix and would collide in the page's one signal store. It is
+	// also the one place a Signal that is not a plain field is caught.
 	s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 	if writable {
 		if raw, ok := b.SignalInit(s.slot); ok {
@@ -154,8 +137,8 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 			}
 		}
 		// A live unit keeps this table from its last render rather than
-		// re-rendering before an action, so the hydration a fresh render would
-		// have done from SignalInit above must also be reachable by slot name.
+		// re-rendering before an action, so the hydration SignalInit did above
+		// must also be reachable by slot name.
 		b.Hydrator(s.slot, func(raw json.RawMessage) {
 			var v T
 			if json.Unmarshal(raw, &v) == nil {
@@ -166,10 +149,10 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	b.DeclareSignal(s.slot, s.val)
 }
 
-// Display returns an h.H that renders the signal as a Datastar text-bound span.
-// Pointer receiver, so c.Count.Display() auto-addresses — no '&' at the call
-// site. Displaying the same signal in more than one place reuses its name, so
-// they all update together.
+// Display renders the signal as a Datastar text-bound span. Displaying the same
+// signal in several places reuses its name, so they all update together. Unlike
+// Bind it does NOT make the slot client-writable — an inbound value for a
+// Display-only signal is ignored (see Signal.bind).
 func (s *Signal[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		s.bind(r, false)
@@ -177,10 +160,10 @@ func (s *Signal[T]) Display() h.H {
 	})
 }
 
-// Bind returns a two-way data-bind="<slot>" attribute for an input. It claims
-// and declares the signal's slot at render through the same path as Display, so
-// the binding is non-empty and shares the signal's name regardless of source
-// order or whether the signal is also Displayed.
+// Bind returns a two-way data-bind="<slot>" attribute for an input, sharing the
+// signal's name with Display regardless of source order. Bind is what puts the
+// slot under CLIENT control: its value is thereafter whatever the client last
+// set, so never gate an authorization decision on a Bind()ed signal (see OnArg).
 func (s *Signal[T]) Bind() h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		s.bind(r, true)
@@ -188,8 +171,8 @@ func (s *Signal[T]) Bind() h.Attr {
 	})
 }
 
-// textHandle renders an arbitrary value as escaped text. Internal only; it uses
-// any so it can serve any signal T without appearing on a public signature.
+// textHandle uses any so it can serve any signal T without appearing on a
+// public signature.
 func textHandle(v any) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }

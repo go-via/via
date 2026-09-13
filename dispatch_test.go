@@ -1195,8 +1195,6 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
 }
 
-// --- the tab id is the CSRF token, and it is a signal now (change 3) ---
-
 // tabGuard is a live root with one ordinary @post action, so a dispatch either
 // reaches this connection's instance (bumping hits) or does not.
 type tabGuard struct{ hits *int }

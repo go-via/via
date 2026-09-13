@@ -227,18 +227,11 @@ func (a rawAttr) render(r *Renderer) {
 
 func (a rawAttr) isAttr() {}
 
-// validAttrName reports whether name is a safe HTML attribute name. Only
-// attribute values are escaped at render — an unvalidated name composed from
-// caller data could graft a second attribute or close the tag, so the name is
-// allowlisted here: a leading ASCII letter, then ASCII letters, digits or
-// hyphens.
-//
-// data-* names additionally admit ':', '_' and '.', because that is Datastar's
-// plugin syntax: it splits a key on the FIRST colon, so data-on:click is the
-// `on` plugin with arg `click`, while data-on-click is a plugin literally named
-// "on-click" that does not exist and is silently ignored. Rejecting ':' would
-// put the entire client-side vocabulary (data-on:*, data-class:*, data-attr:*,
-// __debounce.300ms modifiers) out of reach.
+// validAttrName allowlists attribute names: only VALUES are escaped at render,
+// so an unvalidated name composed from caller data could graft a second
+// attribute or close the tag. data-* names additionally admit ':', '_' and '.'
+// — Datastar's plugin syntax, without which its whole client-side vocabulary
+// would be out of reach (see h.Data for the colon-vs-hyphen trap).
 //
 // Inline DOM event handlers are rejected outright: any on* name that is not
 // data-on* executes caller-adjacent strings as script, which is the actual XSS

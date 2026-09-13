@@ -329,8 +329,6 @@ func (w *plainWizard) View() h.H {
 	return h.Div(h.Input(w.Email.Bind()), w.Step.Display())
 }
 
-// --- field-named slots and Signal.Ref (change 5) ---
-
 // refChild calls Ref BEFORE the signal is Bound anywhere, which is the whole
 // point: a field-held signal is named before the View runs, so a raw Datastar
 // expression can reference it from anywhere in the tree.
