@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"reflect"
+	"strings"
 	"unsafe"
 
 	"github.com/go-via/via/h"
@@ -86,7 +87,18 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 
 	key := parent.childKey(len(parent.embeds))
 
+	// An action's response re-render substitutes the instance the handler
+	// actually mutated for this freshly-copied one (see inheritRequestScope).
+	// Its OnInit already ran for this request, so it must not run again —
+	// re-initing is what would reload the very data the handler just changed —
+	// while its nested children are still fresh copies that do need theirs.
+	acted := parent.actedKey != "" && parent.actedKey == key
+	if acted {
+		inst = parent.actedInst
+	}
+
 	child := newCtx(parent.inSignals)
+	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
 	child.isEmbed = true
 	child.embedKey = key
 	// The child's signal prefix is its FIELD name under the parent, composed
@@ -102,8 +114,12 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	} else {
 		// Two fields of the child's type: Embed's argument order need not
 		// match declaration order, so the name would be a guess. Fall back to
-		// the positional key, which is always right, just opaque.
-		inst.slotPrefix = parent.scopePrefix() + "i" + key + "__"
+		// the positional key, which is always right, just opaque. The key's
+		// depth separator is '-', which is not a JS identifier character, and
+		// Ref() hands these names straight to Datastar expressions ($body__i0_0__q) —
+		// so it becomes '_' here. Only the slot name is respelled; the key
+		// itself still addresses the container and the dispatch URL with '-'.
+		inst.slotPrefix = parent.scopePrefix() + "i" + strings.ReplaceAll(key, "-", "_") + "__"
 	}
 	child.embedV = inst
 	child.base = parent.base // the mount prefix, so the embed's own action URLs carry it too
@@ -118,7 +134,9 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	// its data — and re-register its Tick/Listen — once per beat.
 	if parent.doInit {
 		child.doInit = true
-		initChild(child, inst.v)
+		if !acted {
+			initChild(child, inst.v)
+		}
 	}
 
 	// Render first so the child's signal slots (order/initial) are populated,

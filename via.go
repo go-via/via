@@ -268,6 +268,8 @@ type Ctx struct {
 	base        string                           // mount path prefix for action POSTs ("" for the single-page root)
 	redirect    string                           // pending Redirect target, applied after a handler returns
 	doInit      bool                             // this render is request-scoped, so every embedded child's OnInit runs before its View (a live push re-render must not re-run them)
+	actedKey    string                           // embed key of the unit an action just mutated, "" for none; carried down the render so Embed re-uses that instance instead of re-copying the parent's pristine field
+	actedInst   instance                         // the mutated instance itself, substituted for the fresh copy at actedKey
 	initDone    bool                             // true once OnInit has returned — a later Tick/Listen would register into a snapshot nobody reads, so they log loudly instead
 }
 
@@ -474,6 +476,10 @@ type action struct {
 	fn     func(*Ctx)
 	name   string
 	handle actionHandle // runtime identity, compared to catch an id collision
+	// args is the set of ?a= payloads this render actually bound for the
+	// handler, in the exact JSON encoding the binding shipped. nil marks an
+	// argless action (On/PostForm), which carries no arg to check.
+	args map[string]struct{}
 }
 
 // actionSlot registers run under the content-addressed id of ident — the
@@ -498,14 +504,42 @@ type action struct {
 // that hash alike would silently last-wins misroute, so that case panics here
 // instead: the caller must give the children separate via.Embed embeds.
 func (c *Ctx) actionSlot(ident any, run func(*Ctx)) string {
+	return c.claimAction(ident, run, "", false)
+}
+
+// actionSlotArg is actionSlot for a value-carrying action: it additionally
+// records arg (the exact JSON the binding ships as ?a=) in the slot's allowed
+// set, so dispatch can reject a pair this render never produced.
+// run is handed the slot's MERGED arg set — every arg any binding of this
+// handler claimed during the render — so it can authorize its own ?a= after
+// decoding it. The set is created once per slot and mutated in place as later
+// rows claim it, so the closure stored here (the last row's) closes over the
+// finished set no matter which row wrote it.
+func (c *Ctx) actionSlotArg(ident any, run func(rc *Ctx, name string, bound map[string]struct{}), arg string) string {
+	return c.claimAction(ident, run, arg, true)
+}
+
+func (c *Ctx) claimAction(ident any, run any, arg string, valued bool) string {
 	id, name, ah := c.actionID(ident)
-	if prev, dup := c.actions[id]; dup && prev.handle != ah {
+	prev, dup := c.actions[id]
+	if dup && prev.handle != ah {
 		panic("via: two different actions share the action id " + id + ": " + prev.name +
 			" and " + name + " — their receivers are not addressable inside this unit " +
 			"(a closure, or a child held through a pointer/slice field), so via cannot tell " +
 			"them apart; give each child its own via.Embed embed")
 	}
-	c.actions[id] = action{fn: run, name: name, handle: ah}
+	a := action{name: name, handle: ah, args: prev.args}
+	if valued {
+		if a.args == nil {
+			a.args = map[string]struct{}{}
+		}
+		a.args[arg] = struct{}{}
+		args, valued := a.args, run.(func(*Ctx, string, map[string]struct{}))
+		a.fn = func(rc *Ctx) { valued(rc, name, args) }
+	} else {
+		a.fn = run.(func(*Ctx))
+	}
+	c.actions[id] = a
 	return id
 }
 
@@ -743,11 +777,32 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 }
 
 // OnArg wires a named DOM event to an action that carries a value — the
-// row's own datum rides with the event (a query arg), so the handler
-// receives it as a typed parameter and acts on THAT item regardless of its
-// render position. fn is a named method value (e.g. l.Delete); arg is plain
-// data (e.g. todo.ID), not an identifier string. Use it for per-row actions
-// in a list. No '&', no closure.
+// row's own datum rides with the event (a query arg), so the handler receives
+// it as a typed parameter and acts on THAT item regardless of its render
+// POSITION. fn is a named method value (e.g. l.Delete); arg is plain data
+// (e.g. todo.ID), not an identifier string. Use it for per-row actions in a
+// list. No '&', no closure.
+//
+// Position is the only thing the arg frees the handler from; the arg itself
+// is NOT free. Dispatch identity is the (handler, arg) PAIR: the discovery
+// render that precedes every dispatch rebuilds the set of args this request's
+// own render binds for fn, and a POST whose ?a= is not in that set is
+// rejected with 410 before fn ever runs. So an arg a user's render does not
+// produce — another user's row, an id behind a via.When branch closed for
+// them — is not dispatchable by them, and fn may treat its parameter as
+// having passed the same authorization its own render did. That is the
+// dispatchable-iff-rendered property, at the arg level: it is the render, not
+// the handler, that decides which items are reachable, so keep the render
+// honest (filter the list by the caller's identity) and the handler needs no
+// check of its own.
+//
+// The authority is the LATEST render — the discovery render for a plain
+// action, the last push for a live one — exactly as it already is for the
+// handler id. So arg must be a stable IDENTITY (a row's primary key), never a
+// value that moves between renders: a pagination cursor or a count bound as
+// an arg goes stale the moment any push re-renders the button, and the click
+// that was already in flight 410s. State that changes is server state — read
+// it from the composition in an argless On handler instead.
 func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr { return onEventArg(event, fn, arg) }
 
 // badActionArg is the panic sentinel a value-carrying action's slot throws
@@ -756,6 +811,30 @@ func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr { return onEvent
 // 400, not silently handing the handler a zero value it might act on (e.g.
 // deleting row 0). recoverToHTTP and liveRunAction both recognize it.
 type badActionArg struct{ err error }
+
+// unrenderedArg is the panic sentinel a value-carrying action's slot throws
+// when its ?a= decodes fine but names a value THIS request's own render never
+// bound for that handler. recoverToHTTP and liveRunAction both answer it 410.
+//
+// It is the sentinel and not a plain dispatch-site check because the
+// distinction it draws only exists once the arg has been decoded into T: an
+// arg that is not a T at all is malformed input (400), while an arg that is a
+// perfectly good T the render did not offer is an authorization answer (410).
+// Dispatch has no T; the slot's own closure does.
+type unrenderedArg struct {
+	name string
+	raw  string
+	have int
+}
+
+// body is the 410 response text. The diagnosis goes to the log, never the
+// response: the bound set is other rows' identities, and handing it back
+// answers the very question an arg-swapping client is asking.
+func (u unrenderedArg) body() string {
+	log.Printf("via: %s is bound, but not for arg %s; this render binds %d arg(s) for it",
+		u.name, u.raw, u.have)
+	return "this render does not bind that action for that argument"
+}
 
 // onEventArg is onEvent for a value-carrying action: it JSON-encodes arg into the
 // action's query (?a=…) so the client posts the row's datum, and the dispatched
@@ -767,7 +846,16 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 		if ctx == nil {
 			return
 		}
-		idx := ctx.actionSlot(fn, func(rc *Ctx) {
+		// Marshalled BEFORE the slot is claimed: the encoded arg is both what
+		// the binding ships and what dispatch matches against, so an arg that
+		// cannot encode has no authorizable identity and must not be bound at
+		// all — binding it anyway would render a button whose every click 410s.
+		data, err := json.Marshal(arg)
+		if err != nil {
+			log.Printf("via: OnArg(%q): arg does not encode (%v); the binding is dropped", event, err)
+			return
+		}
+		idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
 			if rc.req == nil {
 				return
 			}
@@ -779,13 +867,19 @@ func onEventArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 			if err := json.Unmarshal([]byte(raw), &v); err != nil {
 				panic(badActionArg{err: err})
 			}
+			// The authorization. bound is the set of args the render that
+			// just ran — under THIS request's session, its When branches, its
+			// filtered list — bound for fn, in the exact encoding the binding
+			// shipped. Matching on those bytes means a client echoing the URL
+			// it was served always passes, while any arg it invents (another
+			// user's row, an id behind a branch closed for it, even a
+			// re-spelling of a legitimate one) fails closed.
+			if _, ok := bound[raw]; !ok {
+				panic(unrenderedArg{name: name, raw: strconv.Quote(raw), have: len(bound)})
+			}
 			fn(rc, v)
-		})
-		query := ""
-		if data, err := json.Marshal(arg); err == nil {
-			query = "?a=" + url.QueryEscape(string(data))
-		}
-		writeActionAttr(r, ctx, event, idx, query)
+		}, string(data))
+		writeActionAttr(r, ctx, event, idx, "?a="+url.QueryEscape(string(data)))
 	})
 }
 
@@ -879,6 +973,17 @@ func inheritRequestScope(ctx, from *Ctx) {
 	ctx.req = from.req
 	ctx.sessions = from.sessions
 	ctx.sessW = from.sessW
+	// When from is an EMBED, it is the unit an action just ran against, and
+	// the mutation landed on its own instance — the copy via.Embed made at the
+	// previous render, which the handler's method value is bound to. A root
+	// walk from here would call via.Embed(parent.Field) again and re-copy the
+	// parent's untouched field, throwing that mutation away (validation errors
+	// gone, the submitted values back to empty). Carry the instance down so
+	// the walk substitutes it at its own key. The root case needs nothing: a
+	// root action mutates the very instance the walk starts from.
+	if from.isEmbed {
+		ctx.actedKey, ctx.actedInst = from.embedKey, from.embedV
+	}
 }
 
 // newRootCtx builds the root bind Ctx for one render. A request-scoped

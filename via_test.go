@@ -3,6 +3,7 @@ package via_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1045,4 +1047,184 @@ func TestSignal_slotNamedLikeARenderOrderFallbackPanics(t *testing.T) {
 
 func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {
 	assertSlotPanic(t, via.Register(embedCollidePage{}), "collides with the embed prefix of field a")
+}
+
+// ownedRows is the arg-authorization fixture: a list filtered by owner, plus
+// an admin-only row reachable only through a via.When. Two users see two
+// disjoint sets of ?a= values from ONE handler and one action id — which is
+// the whole point: the action id is content-addressed on the handler, so the
+// arg is the only thing separating alice's row from bob's.
+type ownedRows struct {
+	me    string
+	admin bool
+	rows  map[int]string // id -> owner
+	gone  []int
+}
+
+func newOwnedRows(me string, admin bool) ownedRows {
+	return ownedRows{me: me, admin: admin, rows: map[int]string{1: "alice", 2: "bob", 9: "system"}}
+}
+
+func (o *ownedRows) Delete(ctx *via.Ctx, id int) { o.gone = append(o.gone, id) }
+
+func (o *ownedRows) mine() []int {
+	var out []int
+	for id, owner := range o.rows {
+		if owner == o.me {
+			out = append(out, id)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (o *ownedRows) systemRow() h.H {
+	return h.Li(h.ID("system"), h.Button(via.OnArg("click", o.Delete, 9), h.Str("drop system")))
+}
+
+func (o *ownedRows) row(id int) h.H {
+	return h.Li(h.ID("r"+strconv.Itoa(id)), h.Str(strconv.Itoa(id)),
+		h.Button(via.OnArg("click", o.Delete, id), h.Str("delete")))
+}
+
+func (o *ownedRows) View() h.H {
+	return h.Div(
+		h.P(h.Str("deleted: "+fmt.Sprint(o.gone))),
+		h.Ul(via.Each(o.mine(), o.row)),
+		via.When(o.admin, o.systemRow),
+	)
+}
+
+// The blocker this file's arg checks exist for: bob's render binds Delete for
+// his own row (?a=2), so the handler id is dispatchable by him — but swapping
+// the arg to alice's row (?a=1) over his own valid session must 410, not
+// delete her row. Before the (handler, arg) pair became the dispatch identity
+// this answered 200 and ran Delete(1).
+func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(newOwnedRows("bob", false)))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	require.Contains(t, page, "a=2", "bob's own row must be bound")
+	require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
+
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=2", "a=1", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "an arg bob's render never bound must not dispatch")
+	assert.NotContains(t, body, "deleted: [1]", "alice's row was deleted by an arg swap")
+}
+
+// The same swap over a LIVE connection — bob's own tab, his own session, the
+// handler bound by his own render. The live path resolves the action against
+// the last push's table rather than a fresh render, so it needs its own test.
+func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(liveOwnedRows{}))
+		conn := app.Connect()
+
+		url := strings.Replace(conn.ActionURL("r", 0), "a=2", "a=1", 1)
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+		assert.Equal(t, http.StatusGone, status, "an unrendered arg must not dispatch over a live stream")
+
+		status, _ = app.Action(0).Over(conn).Fire() // the rendered arg, same slot
+		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
+		conn.Await("deleted 2")
+	})
+}
+
+// liveOwnedRows is ownedRows' live twin: one rendered arg (2), a State to make
+// the unit live, and a handler that reports what it was asked to delete.
+type liveOwnedRows struct{ last via.State[string] }
+
+func (l *liveOwnedRows) Delete(ctx *via.Ctx, id int) { l.last.Set("deleted " + strconv.Itoa(id)) }
+func (l *liveOwnedRows) View() h.H {
+	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Delete, 2)))
+}
+
+// An arg rendered only inside a via.When branch that is CLOSED for this
+// request must 410 even though the handler itself is bound elsewhere on the
+// page. This is the check doing its job: the branch, not the handler, is what
+// authorizes the row, and a closed branch is an authorization answer.
+func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
+	t.Parallel()
+	admin := serve(t, via.Register(newOwnedRows("alice", true)))
+	_, adminPage := do(t, admin, http.MethodGet, "/", "")
+	require.Contains(t, adminPage, `id="system"`)
+	systemURL := actionURL(t, adminPage, "r", 1) // the When branch's own binding
+	require.Contains(t, systemURL, "a=9")
+
+	// Same handler, same action id, same URL — but a render with the branch shut.
+	plain := serve(t, via.Register(newOwnedRows("alice", false)))
+	_, plainPage := do(t, plain, http.MethodGet, "/", "")
+	require.NotContains(t, plainPage, `id="system"`)
+	require.Contains(t, plainPage, "a=1", "the handler must still be bound, or this proves nothing")
+
+	resp, body := do(t, plain, http.MethodPost, systemURL, "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.NotContains(t, body, "deleted: [9]")
+}
+
+// The other half of the check: an arg the render DID bind still dispatches
+// normally. A fix that 410s everything would pass the tests above.
+func TestActionArg_renderedArgStillDispatches(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(newOwnedRows("bob", false)))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "deleted: [2]", "bob's own row must still be deletable")
+}
+
+// bigList is via.Each over a large list: ONE handler, one action id, one
+// thousand bound args. It pins that the arg set stays bounded by the render
+// (a set of the very strings the HTML already carries) and that every row in
+// it still dispatches.
+type bigList struct{ hit int }
+
+func (b *bigList) Pick(ctx *via.Ctx, id int) { b.hit = id }
+func (b *bigList) row(id int) h.H            { return h.Li(h.Button(via.OnArg("click", b.Pick, id))) }
+func (b *bigList) View() h.H {
+	ids := make([]int, 1000)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+	return h.Div(h.P(h.Str(b.hit)), h.Ul(via.Each(ids, b.row)))
+}
+
+// Each over 1000 rows: the first, last, and a middle row all dispatch, and an
+// id past the end does not. The set is one entry per rendered binding — the
+// same string the binding already wrote into the HTML — so it cannot outgrow
+// the response it was built from.
+func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Register(bigList{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	base := actionURL(t, page, "r", 0)
+	for _, id := range []string{"1", "500", "1000"} {
+		url := strings.Replace(base, "a=1", "a="+id, 1)
+		resp, body := do(t, srv, http.MethodPost, url, "{}")
+		require.Equalf(t, http.StatusOK, resp.StatusCode, "row %s must dispatch", id)
+		assert.Containsf(t, body, "<p>"+id+"</p>", "row %s did not reach the handler", id)
+	}
+	resp, _ := do(t, srv, http.MethodPost, strings.Replace(base, "a=1", "a=1001", 1), "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "an id past the end of the list must not dispatch")
+}
+
+// The arg set's cost, measured rather than asserted by eye: rendering 1000
+// value-carrying bindings must stay within a small constant per binding. The
+// ceiling is deliberately loose (it is a regression tripwire, not a budget) —
+// what it catches is the set turning into something super-linear, or the args
+// being retained per ROW rather than merged per SLOT.
+func BenchmarkEachArgSet(b *testing.B) {
+	h := via.Register(bigList{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	b.ReportAllocs()
+	for b.Loop() {
+		resp, err := srv.Client().Get(srv.URL)
+		if err != nil {
+			b.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
 }

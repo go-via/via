@@ -51,12 +51,15 @@ any call site, and a missing or mistyped `View` is a compile error.
 
 ## The hard guarantees
 
-- **No reflection in wiring.** The composition is bound by generics and
-  interface assertions, never by reflecting over its fields, methods, or tags
-  (a lint keeps `reflect` out of every core file but `via.go`, which uses it
-  only to take a handler func value's code pointer for its action id — a
-  func's own identity, not a struct's shape). Signal *values* decode via
-  `encoding/json`, which reflects internally — data decoding, not wiring.
+- **No reflection in your wiring.** Nothing you write is bound by name: no
+  tags, no method lookup by string, no struct shape you have to keep in sync
+  with a template. The composition is bound by generics and interface
+  assertions. Internally via does use `reflect` in two narrow places, both
+  about *layout*, never about your identifiers: it takes a handler func
+  value's code pointer for its action id, and it walks a composition's field
+  offsets once per type to name signal slots and find embedded children
+  (`signalsOf`, `embedFieldName`). Signal *values* decode via `encoding/json`,
+  which reflects internally — data decoding, not wiring.
 - **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
 - **No closures at a via call site.** Named method values only.
 - **No `any` in element/child signatures.** The `h.H` tree is sealed.
