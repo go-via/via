@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -328,43 +327,6 @@ func (w *plainWizard) View() h.H {
 		return h.Div(h.Input(w.Name.Bind()), h.Button(via.On("click", w.Next), h.Str("next")), w.Step.Display())
 	}
 	return h.Div(h.Input(w.Email.Bind()), w.Step.Display())
-}
-
-// boxed reaches its signal through a pointer field, so the handle lives outside
-// the composition struct and has no field offset to name itself by.
-type boxed struct{ sig *via.Signal[string] }
-
-func (b *boxed) View() h.H { return h.Div(h.Input(b.sig.Bind())) }
-
-// A signal behind a pointer (or slice) field has no offset within the
-// composition, so it falls back to the documented render-order slot rather
-// than colliding with the field at offset 0.
-func TestSignal_behindAPointerFieldFallsBackToARenderOrderSlot(t *testing.T) {
-	t.Parallel()
-	_, body := vt.Serve(t, via.Register(boxed{sig: &via.Signal[string]{}})).Get("/")
-
-	assert.Equal(t, []string{"s0"}, bindSlots(body), "a pointer-held signal keeps the render-order slot")
-}
-
-// --- slot scope and offset fallback ---
-
-type valueReceiverView struct{ S via.Signal[int] }
-
-// A value receiver binds a STACK COPY: every signal offsets from the wrong
-// base and silently drops back to a render-order slot, losing the
-// conditional-render safety the offsets exist for.
-func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
-
-func TestSignal_valueReceiverViewWarnsOnSlotFallback(t *testing.T) {
-	via.ResetSlotFallbackWarningForTest()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
-
-	app := vt.Serve(t, via.Register(valueReceiverView{}))
-	_, page := app.Get("/")
-	assert.Contains(t, page, `data-text="$s"`, "the copy inherits the field name, but the write lands on a discarded struct")
-	assert.Contains(t, logs.String(), "not addressable inside its composition")
 }
 
 // --- field-named slots and Signal.Ref (change 5) ---

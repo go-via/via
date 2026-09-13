@@ -20,7 +20,6 @@ import (
 	"log"
 	"maps"
 	"reflect"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -69,8 +68,7 @@ type instance struct {
 // pre-assign every field-held signal's name through a single pointer add — see
 // prebindSignals — instead of reflecting once per signal per render.
 type slotID struct {
-	slot  string // stable wire name
-	scope string // the slot prefix it was minted under; a different one means the signal moved scope
+	slot string // stable wire name
 }
 
 func (*slotID) isViaSignal() {}
@@ -135,27 +133,17 @@ func signalsOf(t reflect.Type) *typeSignals {
 }
 
 // checkSlotName panics on a slot name that is not uniquely the client-side
-// identity of one field. Two fields minting the same name (a nested A.B and a
+// identity of one field: two fields minting the same name (a nested A.B and a
 // sibling A_b) share one declared slot and one hydrator entry, so a POST writes
-// whichever field the map happened to keep — a silent wrong-field write. A name
-// shaped like the render-order fallbacks (s0, f16) collides the same way with a
-// signal that has no field offset. Both are programming-time mistakes in a
-// composition's field names, so they fail loudly at first render, not silently
-// at runtime.
+// whichever field the map happened to keep — a silent wrong-field write. It is
+// a programming-time mistake in a composition's field names, so it fails loudly
+// at first render rather than silently at runtime.
 func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 	if minted[name] {
 		panic("via: signal slot " + name + " is minted twice by " + t.String() +
 			" (field " + field + ") — nested struct names join with \"_\", so rename one of the colliding fields")
 	}
-	if fallbackSlot.MatchString(name) {
-		panic("via: signal slot " + name + " on " + t.String() + " (field " + field +
-			") collides with via's render-order fallback names (s0, f16, …) — rename the field")
-	}
 }
-
-// fallbackSlot matches the render-order / offset fallback slot names minted by
-// signalName and signalSlot for a signal with no usable field offset.
-var fallbackSlot = regexp.MustCompile(`^(s|f)\d+$`)
 
 func lowerFirst(s string) string {
 	if s == "" || s[0] < 'A' || s[0] > 'Z' {
@@ -175,8 +163,7 @@ func prebindSignals(c *Ctx, inst instance) {
 	}
 	prefix := c.scopePrefix()
 	for _, f := range inst.sig.fields {
-		id := (*slotID)(unsafe.Add(inst.base, f.off))
-		id.slot, id.scope = prefix+f.name, prefix
+		(*slotID)(unsafe.Add(inst.base, f.off)).slot = prefix + f.name
 	}
 }
 
@@ -241,7 +228,6 @@ type ptrViewer[T any] = interface {
 // hcore.Binder.
 type Ctx struct {
 	inSignals   map[string]json.RawMessage       // hydrated from the request
-	nextSig     int                              // next signal slot index
 	order       []string                         // slots in assignment order
 	initial     map[string]any                   // per-slot value seen at render time
 	actions     map[string]action                // content-addressed action table, keyed by handler identity; dispatch calls each with a fresh per-dispatch Ctx, never this one
@@ -319,7 +305,6 @@ func (c *Ctx) dirtyAll() map[string]any {
 // renderer sees the four binder verbs.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) SignalName() string                             { return b.c.signalName() }
 func (b binderCtx) DeclareSignal(slot string, initial any)         { b.c.declareSignal(slot, initial) }
 func (b binderCtx) SignalInit(slot string) (any, bool)             { return b.c.signalInit(slot) }
 func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage)) { b.c.hydrator(slot, fn) }
@@ -333,63 +318,30 @@ func ctxOf(b hcore.Binder) *Ctx {
 	return nil
 }
 
-// signalSlot names the signal at field, which must point into this unit's
-// composition. The name is the Go FIELD name (first rune lowercased, "_"-joined
-// through any plain nested struct, prefixed by the embed path), keyed
-// internally by the field's byte offset — so a signal's wire identity survives
-// a render that skips an earlier sibling's Bind: render-order slots
-// ("s0","s1",…) are claimed in first-render order and a conditional Bind would
-// hand one signal's slot to another, writing the wrong field on the next post.
+// signalSlot names the signal at field, which must be a plain field of this
+// unit's composition (possibly through nested plain structs). The name is the
+// Go FIELD name — first rune lowercased, "_"-joined, prefixed by the embed
+// path — keyed by the field's byte offset, so a signal's wire identity is
+// independent of where or whether the View renders it.
 //
-// The subtraction is unsigned, so a field BELOW the base wraps to a huge
-// offset and fails the bound check along with one above it. A signal reached
-// through a pointer or slice field lives outside the struct entirely and has no
-// offset — it falls back to the render-order name (see Each's godoc).
+// Anything else panics. A Signal reached through a pointer, slice, array or map
+// field, or bound off a value receiver's stack copy, has no field offset: its
+// writes land on memory the render discards, and any name invented for it is
+// positional, so a conditional Bind hands one signal's slot to another and the
+// next post writes the wrong field. The subtraction is unsigned, so a field
+// BELOW the base wraps to a huge offset and fails the bound check along with
+// one above it.
 func (c *Ctx) signalSlot(field unsafe.Pointer) string {
-	if base := c.embedV.base; base != nil && field != nil {
+	if base := c.embedV.base; base != nil && field != nil && c.embedV.sig != nil {
 		if off := uintptr(field) - uintptr(base); off < c.embedV.size {
-			if c.embedV.sig != nil {
-				if name, ok := c.embedV.sig.byOff[off]; ok {
-					return c.slotScope(name)
-				}
+			if name, ok := c.embedV.sig.byOff[off]; ok {
+				return c.slotScope(name)
 			}
-			// In the composition but absent from its signal table (an
-			// anonymous holder): the offset still names it stably.
-			return c.slotScope("f" + strconv.FormatUint(uint64(off), 10))
 		}
 	}
-	return c.signalName()
-}
-
-// warnAddressable fires the value-receiver / indirect-field warning once per
-// process for a rendered Signal that does not live inside this unit's
-// composition. It runs on EVERY bind, not just the naming path: a value
-// receiver binds a stack copy that has already inherited its name from
-// prebindSignals, so the name looks right while every Set lands on a struct
-// the render throws away — silence there is the worst outcome.
-func (c *Ctx) warnAddressable(field unsafe.Pointer) {
-	base := c.embedV.base
-	if base == nil || field == nil {
-		return
-	}
-	if uintptr(field)-uintptr(base) < c.embedV.size {
-		return
-	}
-	valueReceiverWarning.Do(func() {
-		log.Print("via: a rendered Signal is not addressable inside its composition, so its slot and its " +
-			"writes belong to a copy the render discards — give View a POINTER receiver, and hold child " +
-			"compositions as plain struct fields (not through a pointer or slice)")
-	})
-}
-
-var valueReceiverWarning sync.Once
-
-// signalName allocates the next first-use render-order signal name
-// ("s0","s1",…) — the fallback for a signal with no field offset.
-func (c *Ctx) signalName() string {
-	name := "s" + strconv.Itoa(c.nextSig)
-	c.nextSig++
-	return c.slotScope(name)
+	panic("via: a rendered Signal is not a plain field of its composition — give View a POINTER " +
+		"receiver, and hold every Signal (and every child composition) as a plain struct field, " +
+		"not behind a pointer, slice, array or map")
 }
 
 // childKey is the embed key for this Ctx's ordinal'th Embed call: an embed's
@@ -411,15 +363,6 @@ func (c *Ctx) slotScope(name string) string { return c.scopePrefix() + name }
 // on the instance so a live embed's parentless push re-render reproduces it
 // exactly — see instance.slotPrefix.
 func (c *Ctx) scopePrefix() string { return c.embedV.slotPrefix }
-
-// slotInScope reports whether an already-minted slot belongs to this Ctx.
-// A Signal caches its slot, and via.Embed takes the child BY VALUE, so a
-// signal the PARENT's own View already bound can arrive in the embed still
-// carrying the parent's prefix — which would collide in the page's one signal
-// store. Re-minting is the fix; this is how bind notices it has to. Field-held
-// signals are already re-stamped by prebindSignals; this covers the
-// render-order carve-out (a signal behind a pointer or slice field).
-func (c *Ctx) slotInScope(scope string) bool { return scope == c.scopePrefix() }
 
 // slotSet collects every slot this render declared, page-wide (the unit's own
 // plus every embed's).
@@ -1046,20 +989,6 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 	for _, ch := range c.embeds {
 		checkLiveNesting(ch, underLive || c.live)
 	}
-}
-
-// renderRootPatch renders a plain action's element-patch response. A
-// plain action answers with plain HTML, not an SSE stream, so the
-// data-signals attribute is its only channel for a server-side Set — but
-// re-declaring every slot on every action would overwrite the client's whole
-// store, clobbering a value the user is mid-edit. That is the same hazard a live
-// push avoids by omitting the attribute; here the attribute stays, restricted to
-// only, the slots the action actually wrote. A nil only declares nothing.
-func renderRootPatch(inst instance, in map[string]json.RawMessage, base string, only map[string]any, seen map[string]bool, from *Ctx) (*Ctx, []byte) {
-	if only == nil {
-		only = map[string]any{} // nil would read as "declare everything"
-	}
-	return renderRootBase(inst, in, true, base, only, seen, from)
 }
 
 // Register builds an http.Handler serving the root composition. root is taken

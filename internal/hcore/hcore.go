@@ -33,11 +33,6 @@ type Attr interface {
 // during a render pass. The via package supplies the implementation; h only
 // depends on this interface.
 type Binder interface {
-	// SignalName allocates the next first-use signal name ("s0","s1",…). A
-	// handle calls it once, then caches and reuses the name across renders, so a
-	// signal's identity is the handle, not its render position — a signal bound
-	// to an input and displayed elsewhere share one name.
-	SignalName() string
 	// DeclareSignal records that slot participates in this render with the given
 	// initial value, for the page-level data-signals declaration. Idempotent
 	// within a render.

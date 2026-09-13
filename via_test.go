@@ -1005,14 +1005,6 @@ type collidePage struct {
 
 func (p *collidePage) View() h.H { return h.Div(p.A.B.Bind(), p.A_b.Bind()) }
 
-// fallbackNamePage's field mints "s0", which is also the render-order fallback
-// name for a signal with no field offset — the same silent slot sharing.
-type fallbackNamePage struct {
-	S0 via.Signal[int]
-}
-
-func (p *fallbackNamePage) View() h.H { return h.Div(p.S0.Bind()) }
-
 // embedCollidePage's field A__b mints "a__b" in the PARENT, which is exactly
 // the slot the EMBED of field A gives its own signal B ("a__" + "b").
 type embedKidB struct{ B via.Signal[int] }
@@ -1041,8 +1033,24 @@ func TestSignal_duplicateSlotNamePanics(t *testing.T) {
 	assertSlotPanic(t, via.Register(collidePage{}), "signal slot a_b is minted twice")
 }
 
-func TestSignal_slotNamedLikeARenderOrderFallbackPanics(t *testing.T) {
-	assertSlotPanic(t, via.Register(fallbackNamePage{}), "collides with via's render-order fallback names")
+// boxedSignal reaches its signal through a pointer field, so the handle lives
+// outside the composition struct and has no field offset to name itself by.
+type boxedSignal struct{ S *via.Signal[string] }
+
+func (b *boxedSignal) View() h.H { return h.Div(h.Input(b.S.Bind())) }
+
+// valueReceiverView binds a STACK COPY: every signal offsets from the wrong
+// base, so its writes land on a struct the render throws away.
+type valueReceiverView struct{ S via.Signal[int] }
+
+func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
+
+func TestSignal_behindAPointerFieldPanics(t *testing.T) {
+	assertSlotPanic(t, via.Register(boxedSignal{S: &via.Signal[string]{}}), "not a plain field of its composition")
+}
+
+func TestSignal_valueReceiverViewPanics(t *testing.T) {
+	assertSlotPanic(t, via.Register(valueReceiverView{}), "not a plain field of its composition")
 }
 
 func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {

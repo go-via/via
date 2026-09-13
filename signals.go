@@ -80,12 +80,11 @@ type Signal[T any] struct {
 //
 //	h.Div(h.Data("show", p.Open.Ref()), ...)
 //
-// Valid for a signal held as a struct field of the composition (the normal
-// case): every such signal is named before the View runs, so Ref reads the
-// same name wherever in the tree it is called. A signal reached only through a
-// pointer or slice field has no field name and is named in render order at its
-// first Bind/Display, so Ref on one is empty until then — Bind or Display it
-// first, or hold it as a plain field.
+// A Signal must be a plain field of the composition (through plain nested
+// structs if you like), which is what gives it a name before the View runs, so
+// Ref reads the same name wherever in the tree it is called. One reached
+// through a pointer, slice, array or map field has no field name and panics
+// when rendered.
 func (s *Signal[T]) Ref() string { return "$" + s.slot }
 
 // Get returns the current value.
@@ -136,19 +135,15 @@ func (s *Signal[T]) Set(v T) {
 func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
-	if s.bound != nil {
-		s.bound.warnAddressable(unsafe.Pointer(s))
+	if s.bound == nil {
+		panic("via: a Signal was rendered outside a via render")
 	}
-	// Re-mint when the scope moved: via.Embed copies the child by value, so a
-	// signal the parent's View already bound arrives in the embed carrying an
-	// unprefixed root slot, which would collide in the page's one signal store.
-	if s.slot == "" || (s.bound != nil && !s.bound.slotInScope(s.scope)) {
-		if s.bound != nil {
-			s.slot, s.scope = s.bound.signalSlot(unsafe.Pointer(s)), s.bound.scopePrefix()
-		} else {
-			s.slot, s.scope = b.SignalName(), ""
-		}
-	}
+	// Resolved on EVERY bind, not cached: via.Embed copies the child by value,
+	// so a signal the parent's View already bound arrives in the embed still
+	// carrying the parent's prefix, which would collide in the page's one
+	// signal store. It is a map lookup off the field offset — and the one place
+	// a Signal that is not a plain field of the composition is caught.
+	s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 	if writable {
 		if raw, ok := b.SignalInit(s.slot); ok {
 			if rm, isRaw := raw.(json.RawMessage); isRaw {
