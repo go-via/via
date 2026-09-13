@@ -1615,3 +1615,51 @@ func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
 	// ...and the display render no longer paints the client's 7 back over it.
 	assert.Contains(t, conn.Await(">3<"), ">3<")
 }
+
+// --- F1: a live action's Set must survive its own panic into the NEXT push.
+//
+// liveRunAction used to reset unit.dirty to a fresh map before running the
+// handler, unconditionally. A handler that Set a signal and then panicked (or
+// whose reloadUnit errored) never reached a push, so its dirty entry sat on
+// the instance unflushed — and the reset ahead of the NEXT action wiped it
+// before that action's own push could ship it. flushDirty's clearDirty is the
+// only thing meant to own clearing it, and only right after an actual flush.
+
+type dirtyAfterPanic struct{ X via.Signal[int] }
+
+func (p *dirtyAfterPanic) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {}) // liveness without a push of its own
+	return nil
+}
+func (p *dirtyAfterPanic) SetAndBoom(ctx *via.Ctx) {
+	p.X.Set(1)
+	panic("via_test: action panic after Set")
+}
+func (p *dirtyAfterPanic) Noop(ctx *via.Ctx) {}
+
+func (p *dirtyAfterPanic) View() h.H {
+	return h.Div(
+		h.Input(p.X.Bind()),
+		h.Button(via.On("click", p.SetAndBoom)),
+		h.Button(via.On("click", p.Noop)),
+		p.X.Display(),
+	)
+}
+
+func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(dirtyAfterPanic{}))
+	conn := app.ConnectWith(`{"x":0}`)
+
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusInternalServerError, status, "the handler must panic")
+
+	status, _ = app.Action(1).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+
+	assert.Contains(t, conn.Await(`"x":1`), `"x":1`,
+		"the panicking action's Set must still reach the client on the next push")
+	frame := conn.Await(">1<")
+	assert.Contains(t, frame, ">1<",
+		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
+}

@@ -382,7 +382,11 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// session the action never created (I1).
 	_, beforeSession, _ := sessions.resolve(req)
 	rc := &Ctx{req: req, sessions: sessions, sessW: w}
-	unit.dirty = map[string]any{}
+	// unit.dirty is NOT reset here: clearDirty (via flushDirty, in the actual
+	// push) is the only place that owns clearing it. Resetting unconditionally
+	// on every dispatch dropped an earlier action's Set the moment it panicked
+	// or reloadUnit errored — no push ran to flush it, and this line wiped it
+	// before the next action's push ever saw it.
 	act.fn(rc)
 
 	// Re-load the unit the same way the plain path does: the handler mutated
