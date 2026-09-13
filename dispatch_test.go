@@ -1545,3 +1545,98 @@ func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
 	assert.Contains(t, body, "data-init", "the live embed is dead after the submit without a bootstrap")
 	assert.Contains(t, body, "/_via/sse", "the bootstrap must name the stream URL")
 }
+
+// disclosure is the two-pass discovery repro: a Bind()ed Signal (Mode) chosen
+// by the user opens a lazy branch holding a second Bind()ed Signal (Name) and
+// an in-branch handler. keepalive makes the very same composition live, so both
+// transports are driven through one shape; it never changes after Register, so
+// the liveness verdict stays render-invariant. OnInit seeds Mode from the query
+// only so a test can capture the URL of an in-branch action from an open
+// render — an action POST carries no query, so the discovery render reopens
+// that branch from the posted signal or not at all.
+type disclosure struct {
+	Mode      via.Signal[string]
+	Name      via.Signal[string]
+	keepalive bool
+	n         via.State[int]
+	seen      string
+	revealed  bool
+}
+
+func (d *disclosure) OnInit(ctx *via.Ctx) error {
+	d.Mode.Set(ctx.Request().URL.Query().Get("mode"))
+	return nil
+}
+
+func (d *disclosure) Pick(ctx *via.Ctx)   {}
+func (d *disclosure) Save(ctx *via.Ctx)   { d.seen = "saw:" + d.Name.Get() }
+func (d *disclosure) Reveal(ctx *via.Ctx) { d.revealed = true }
+
+func (d *disclosure) form() h.H {
+	return h.Div(h.Input(d.Name.Bind()), h.Button(via.On("click", d.Reveal), h.Str("reveal")))
+}
+func (d *disclosure) body() h.H { return via.When(d.Mode.Get() == "x", d.form) }
+func (d *disclosure) beat() h.H { return d.n.Display() }
+
+func (d *disclosure) View() h.H {
+	return h.Div(
+		h.Select(d.Mode.Bind(), via.On("change", d.Pick)),
+		via.When(true, d.body),
+		h.P(h.Str("seen: "+d.seen)),
+		h.P(h.Str("revealed: "+fmt.Sprint(d.revealed))),
+		h.Button(via.On("click", d.Save), h.Str("save")),
+		via.When(d.keepalive, d.beat),
+	)
+}
+
+func TestDispatchPlain_hydratesASignalInABranchAnotherPostedSignalOpens(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(disclosure{}))
+
+	code, body := app.Action(1).Body(`{"mode":"x","name":"bob"}`).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "seen: saw:bob",
+		"a Bind()ed signal inside a branch another posted signal opens must still reach the handler")
+	assert.NotContains(t, body, `"name":""`,
+		"the response must not wipe the client's value for that slot")
+}
+
+func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(disclosure{}))
+
+	_, open := app.Get("/?mode=x")
+	url := actionURL(t, open, "r", 1)
+
+	code, body := app.Action(0).Raw(url).Body(`{"mode":"x"}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"a handler is dispatchable only if the render the client did not influence bound it")
+	assert.Contains(t, body, "does not bind it")
+}
+
+func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(disclosure{keepalive: true}))
+	conn := app.Connect()
+
+	code, _ := app.Action(0).Over(conn).Body(`{"mode":"x"}`).Fire()
+	require.Less(t, code, 300, "the disclosure toggle must be accepted")
+	conn.Await("reveal")
+
+	code, _ = app.Action(2).Over(conn).Body(`{"mode":"x","name":"bob"}`).Fire()
+	require.Less(t, code, 300)
+	assert.Contains(t, conn.Await("seen: saw:bob"), "seen: saw:bob")
+}
+
+func TestDispatchLive_inBranchActionStaysUndispatchableUntilTheBranchIsPushed(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(disclosure{keepalive: true}))
+	conn := app.Connect()
+
+	_, open := app.Get("/?mode=x")
+	url := actionURL(t, open, "r", 1)
+
+	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"mode":"x"}`).Fire()
+	assert.Equal(t, http.StatusGone, code)
+	assert.Contains(t, body, "does not bind it")
+}

@@ -312,9 +312,20 @@ as a re-read of the README, not a diff.
   a `Bind()` inside a `When` (a wizard step) could claim a slot another signal
   already owned: on a live page the post then wrote the WRONG FIELD, and on a
   stateless page the new input came up holding the previous occupant's value.
-  A signal reached through a pointer or slice field is outside the struct, has
-  no offset, and keeps the render-order name with the old hazard — keep such a
-  `Bind()` unconditional; keyed per-row signal slots remain future work.
+  A `Signal` reached through a pointer, slice, array or map field — or bound
+  off a value-receiver `View` — is outside the struct, has no offset, and now
+  **panics** on render rather than falling back to a render-order name that
+  carried the old aliasing hazard. Make it a direct struct field. Keyed per-row
+  signal slots remain future work.
+- **A plain action hydrates signals inside a branch another posted signal
+  opens.** Discovery renders once on server state alone (that render, and only
+  that render, decides what is dispatchable), applies the body, and re-renders
+  to a fixpoint so a `Bind()`ed `Signal` in a `When` build, an `Each` row, or
+  an embed `View` that another `Bind()`ed signal reveals is hydrated too — its
+  posted value used to be dropped server-side and wiped client-side. The action
+  must be bound by BOTH renders, so a posted signal still cannot open the
+  branch that authorizes it. A handler that exists ONLY inside such a branch
+  still answers 410 on a plain page.
 
   A stateless action's patch now also declares any slot the pre-action render
   did not carry, so an input that appears for the first time in the response is

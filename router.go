@@ -196,17 +196,11 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 				recoverToHTTP(w, req, rec, "render")
 			}
 		}()
-		inst := newInst()
-		ctx := newRootCtx(nil, true, concreteBase(patternBase, req, names), nil)
-		ctx.embedV = inst                                      // the root is a unit like any embed, when it is live
-		if runOnInit(inst.v, ctx, w, req, r.sessions) != nil { // load session/request data into fields first
-			return
-		}
-		body := renderRootWith(ctx, inst.v)
-		// ctx.base, not patternBase: a page mounted at /job/{id} must advertise
-		// /job/7/_via/sse. The pattern would be POSTed literally by the browser
-		// and 404, leaving every live embed under a parametrised mount dead.
-		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, ctx.base+"/_via/sse")
+		// concreteBase, not patternBase: a page mounted at /job/{id} must
+		// advertise /job/7/_via/sse. The pattern would be POSTed literally by
+		// the browser and 404, leaving every live embed under a parametrised
+		// mount dead.
+		m.writePage(w, req, newInst(), concreteBase(patternBase, req, names), nil)
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{embed}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)

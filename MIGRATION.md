@@ -387,12 +387,8 @@ plain page the new input came up holding the previous occupant's value. An
 offset is a property of the struct, not of what this render happened to draw,
 so a conditional `Bind()` is now safe.
 
-Two carve-outs:
+One carve-out:
 
-- A signal reached through a **pointer or slice field** lives outside the
-  composition struct and has no offset. It falls back to the render-order name
-  (`s0`, `s1`, …), with the old aliasing hazard — keep such a signal's `Bind()`
-  unconditional. Keyed per-row signal slots remain future work.
 - `via.Embed`'s signature is unchanged: the child copy `Embed` already takes by
   value is the offset base, so call sites need no edit.
 
@@ -403,16 +399,18 @@ the client store already held.
 
 ## New startup panics
 
-Two first-render panics were added; both are programming mistakes in a
-composition's FIELD names, and both fail loudly on the first render rather
-than writing the wrong field at runtime. They can surface on an upgrade in
-code that compiled fine before.
+Two first-render panics were added; both fail loudly on the first render
+rather than writing the wrong field at runtime, and both can surface on an
+upgrade in code that compiled fine before.
 
-- A field whose minted slot name looks like via's own render-order fallback
-  (`s0`, `s1`, `f16`, …) panics. A top-level field literally named `S0` mints
-  `s0`, which a signal with no field offset also takes — they would share one
-  declared slot and one hydrator, so a POST would write whichever the map kept.
-  Rename the field.
+- A rendered `Signal` that is **not a plain field of its composition** panics.
+  A signal reached through a pointer, slice, array or map field, or bound off a
+  value-receiver `View`, has no field offset: its writes land on memory the
+  render discards, and the render-order fallback that used to name it aliased
+  one signal's slot onto another under a conditional `Bind()`. The remedy is
+  one line — make the `Signal` (and any child composition holding one) a direct
+  struct field, and give `View` a pointer receiver. Keyed per-row signal slots
+  remain future work.
 - Two fields minting the SAME slot name panic. A nested `A.B` joins with one
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
