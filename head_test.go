@@ -17,12 +17,12 @@ func (headPage) View() h.H { return h.Div(h.Str("hi")) }
 
 func headResp(t *testing.T, head via.Head) (*http.Response, string) {
 	t.Helper()
-	return do(t, headSrv(t, via.WithDocumentHead(head)), http.MethodGet, "/", "")
+	return do(t, headSrv(t, via.WithHead(head)), http.MethodGet, "/", "")
 }
 
 func headSrv(t *testing.T, opts ...via.Option) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(via.Register(headPage{}, opts...))
+	srv := httptest.NewServer(via.Handler(headPage{}, opts...))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -119,7 +119,7 @@ func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 		"style breakout":          {InlineStyle: "a{}</style><script>x</script>"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.Panics(t, func() { via.Register(headPage{}, via.WithDocumentHead(head)) })
+			assert.Panics(t, func() { via.Handler(headPage{}, via.WithHead(head)) })
 		})
 	}
 }

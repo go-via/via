@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"net/http"
 	"strings"
 )
 
@@ -67,16 +66,4 @@ func buildCSP(head Head) string {
 		csp += "font-src 'self' " + strings.Join(head.FontOrigins, " ") + "; "
 	}
 	return csp + "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
-}
-
-// writeSecurityHeaders sets the HTML content type plus nosniff and the strict
-// CSP. Element-patch fragments take the default policy: a fragment carries no
-// document, so its header is inert — only the page's policy governs what runs.
-func writeSecurityHeaders(w http.ResponseWriter) { writeHeadersWithCSP(w, cspHeader) }
-
-func writeHeadersWithCSP(w http.ResponseWriter, csp string) {
-	hdr := w.Header()
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Security-Policy", csp)
 }

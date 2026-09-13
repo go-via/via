@@ -35,7 +35,7 @@ func (c *numComp) View() h.H { return h.Div(c.n.Display()) }
 // verbatim — if the common case regressed, the client would hydrate nothing.
 func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	t.Parallel()
-	_, body := vt.Serve(t, via.Register(numComp{})).Get("/")
+	_, body := vt.Serve(t, via.Handler(numComp{})).Get("/")
 
 	assert.Contains(t, body, `data-signals='{"n":0}'`, "numeric signal declaration missing/malformed")
 }
@@ -65,7 +65,7 @@ func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	// (one slot, at field offset 0) matches what the GET page declares, so
 	// dispatch proceeds.
 	payload := `{"name":"' data-on-load='alert(document.cookie)"}`
-	_, body := vt.Serve(t, via.Register(nameComp{})).Action(0).Body(payload).Fire()
+	_, body := vt.Serve(t, via.Handler(nameComp{})).Action(0).Body(payload).Fire()
 
 	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the response — attribute breakout possible")
 	assert.Contains(t, body, "&#39;", "apostrophe was not entity-encoded")
@@ -90,7 +90,7 @@ func (g *greeting) View() h.H {
 // for hydration.
 func TestSignal_bindAndDisplayShareOneWireName(t *testing.T) {
 	t.Parallel()
-	_, body := vt.Serve(t, via.Register(greeting{})).Get("/")
+	_, body := vt.Serve(t, via.Handler(greeting{})).Get("/")
 
 	bindSlot := attrValue(t, body, "data-bind")
 	assert.NotEmpty(t, bindSlot, "input data-bind must not be empty")
@@ -113,7 +113,7 @@ func (d *displayFirst) View() h.H {
 
 func TestSignal_sharedNameIsOrderIndependent(t *testing.T) {
 	t.Parallel()
-	_, body := vt.Serve(t, via.Register(displayFirst{})).Get("/")
+	_, body := vt.Serve(t, via.Handler(displayFirst{})).Get("/")
 	textExpr := attrValue(t, body, "data-text")
 	bindSlot := attrValue(t, body, "data-bind")
 	assert.Equal(t, "$"+bindSlot, textExpr, "display and bind must share one name regardless of source order")
@@ -139,7 +139,7 @@ func (f *boundForm) View() h.H {
 
 func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(boundForm{}))
+	app := vt.Serve(t, via.Handler(boundForm{}))
 
 	_, page := app.Get("/")
 	getSlot := attrValue(t, page, "data-bind")
@@ -201,7 +201,7 @@ func (t *twoSignals) View() h.H {
 // action, so a value the user was mid-edit vanished on the next click.
 func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(twoSignals{}))
+	app := vt.Serve(t, via.Handler(twoSignals{}))
 	_, page := app.Get("/")
 	assert.Contains(t, page, `"written":""`, "the GET first paint declares every slot")
 	assert.Contains(t, page, `"left":""`, "the GET first paint declares every slot")
@@ -259,7 +259,7 @@ func bindSlots(markup string) []string {
 // aliased slot posts the user's input into the WRONG FIELD.
 func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(wizard{}))
+	app := vt.Serve(t, via.Handler(wizard{}))
 	conn := app.Connect()
 
 	_, step0 := app.Get("/")
@@ -287,7 +287,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 // step-2 input would render bound to the slot still holding step 1's name.
 func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(plainWizard{}))
+	app := vt.Serve(t, via.Handler(plainWizard{}))
 	_, page := app.Get("/")
 	nameSlot := bindSlots(page)[0]
 
@@ -304,7 +304,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 // has no value for it or, worse, a stale one left by whatever held the slot.
 func TestPlainAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(plainWizard{}))
+	app := vt.Serve(t, via.Handler(plainWizard{}))
 	_, page := app.Get("/")
 
 	_, frag := app.Action(0).Body(`{"` + bindSlots(page)[0] + `":"Ada"}`).Fire()
@@ -352,7 +352,7 @@ func (p *refPage) View() h.H {
 // out of the rendered HTML. An embed's slots carry its field path.
 func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
 	t.Parallel()
-	_, body := vt.Serve(t, via.Register(refPage{})).Get("/")
+	_, body := vt.Serve(t, via.Handler(refPage{})).Get("/")
 
 	assert.Contains(t, body, `data-show="$count"`, "Ref names the root field, ahead of any Bind/Display")
 	assert.Contains(t, body, `data-text="$count"`, "and Display agrees with it")
@@ -381,7 +381,7 @@ func (p *refLivePage) View() h.H { return h.Div(via.Embed(p.Room)) }
 
 func TestSignal_embedFieldPrefixSurvivesALivePush(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(refLivePage{}))
+	app := vt.Serve(t, via.Handler(refLivePage{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, `data-bind="room__draft"`)
 
@@ -417,7 +417,7 @@ func (g *gatedFlag) View() h.H {
 
 func TestSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(gatedFlag{}))
+	app := vt.Serve(t, via.Handler(gatedFlag{}))
 	status, frag := app.Action(0).Body(`{"admin":true}`).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
@@ -449,7 +449,7 @@ func (g *liveGatedFlag) View() h.H {
 
 func TestLiveSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveGatedFlag{}))
+		app := vt.Serve(t, via.Handler(liveGatedFlag{}))
 		conn := app.Connect()
 		status, _ := app.Action(0).Over(conn).Body(`{"admin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, status)

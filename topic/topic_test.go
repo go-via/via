@@ -64,17 +64,17 @@ func TestTopic_stopDeregistersAndClosesChannel(t *testing.T) {
 func TestTopic_subsCountsOnlyLiveSubscriptions(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[int]()
-	assert.Zero(t, tp.Subs(), "a fresh topic has no subscribers")
+	assert.Zero(t, tp.NumSubs(), "a fresh topic has no subscribers")
 
 	a, b := tp.Subscribe(), tp.Subscribe()
-	assert.Equal(t, 2, tp.Subs())
+	assert.Equal(t, 2, tp.NumSubs())
 
 	a.Stop()
 	a.Stop() // idempotent: a second Stop must not double-decrement
-	assert.Equal(t, 1, tp.Subs())
+	assert.Equal(t, 1, tp.NumSubs())
 
 	b.Stop()
-	assert.Zero(t, tp.Subs())
+	assert.Zero(t, tp.NumSubs())
 }
 
 // The defect this package was rewritten for: a burst far larger than any

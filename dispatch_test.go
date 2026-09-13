@@ -50,7 +50,7 @@ func (c *liveRedirector) View() h.H {
 
 func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveRedirector{}))
+		app := vt.Serve(t, via.Handler(liveRedirector{}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 
@@ -84,7 +84,7 @@ func (p *embedRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
 func TestDispatch_redirectFromPlainEmbedActionNavigatesTheTab(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(embedRedirectorParent{}))
+	srv := serve(t, via.Handler(embedRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "0", 0), strings.NewReader("{}"))
@@ -121,7 +121,7 @@ func (p *sigPage) View() h.H { return h.Div(via.Embed(p.I)) }
 
 func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(sigPage{}))
+	srv := serve(t, via.Handler(sigPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
@@ -183,7 +183,7 @@ func (p *mixedPage) View() h.H {
 
 func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(mixedPage{}))
+	srv := serve(t, via.Handler(mixedPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	assert.Contains(t, page, `@post('`+actionURL(t, page, "r", 0)+`'`, "the @post binding claims its own action id")
@@ -218,7 +218,7 @@ func (p *panicLive) View() h.H {
 
 func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(panicLive{}))
+		app := vt.Serve(t, via.Handler(panicLive{}))
 		conn := app.Connect()
 
 		status, _ := app.Action(0).Over(conn).Fire()
@@ -257,7 +257,7 @@ func (b *branchy) View() h.H {
 // had it.
 func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(branchy{}))
+		app := vt.Serve(t, via.Handler(branchy{}))
 		conn := app.Connect()
 
 		status, _ := app.Action(0).Over(conn).Fire()
@@ -332,7 +332,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 
 	t.Run("plain root", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(unsafeRoot{}))
+		srv := serve(t, via.Handler(unsafeRoot{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -342,7 +342,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 
 	t.Run("plain embed", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(unsafeParent{}))
+		srv := serve(t, via.Handler(unsafeParent{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -352,7 +352,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 
 	t.Run("native form", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(loginForm{}))
+		srv := serve(t, via.Handler(loginForm{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
@@ -393,7 +393,7 @@ func swapEmbedIndex(t *testing.T, url, embed string) string {
 func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 	t.Run("plain", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(counter{count: &store{}}))
+		srv := serve(t, via.Handler(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		url := actionURL(t, page, "r", 0)
 		for _, n := range []string{"99", "-1", "________"} {
@@ -404,7 +404,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 
 	t.Run("live", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			app := vt.Serve(t, via.Register(liveClicker{}))
+			app := vt.Serve(t, via.Handler(liveClicker{}))
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 			url := actionURL(t, page, "r", 0)
@@ -426,7 +426,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 
 	t.Run("plain root", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(counter{count: &store{}}))
+		srv := serve(t, via.Handler(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 1), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
@@ -434,7 +434,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 
 	t.Run("plain embed", func(t *testing.T) {
 		t.Parallel()
-		srv := serve(t, via.Register(sigPage{}))
+		srv := serve(t, via.Handler(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "0", 0), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
@@ -444,7 +444,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 	// can't call it — see CONVENTIONS.md's synctest carve-out).
 	t.Run("live unit", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			app := vt.Serve(t, via.Register(liveRedirector{}))
+			app := vt.Serve(t, via.Handler(liveRedirector{}))
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 
@@ -542,7 +542,7 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 
 func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(branchedView{st: &toggleState{}}))
+	srv := serve(t, via.Handler(branchedView{st: &toggleState{}}))
 
 	_, unlocked := do(t, srv, http.MethodGet, "/", "")
 	staleSave := actionURL(t, unlocked, "r", 0)   // Save, only bound while unlocked
@@ -623,7 +623,7 @@ func nativeFormPost(t *testing.T, app *vt.App, url string, fields map[string]str
 func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		calls := 0
-		app := vt.Serve(t, via.Register(liveForm{calls: &calls}))
+		app := vt.Serve(t, via.Handler(liveForm{calls: &calls}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 		assert.Contains(t, page, `data-attr:value="$viatab"`,
@@ -699,7 +699,7 @@ func (f *nativeFormPanic) View() h.H {
 func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		boom := new(bool)
-		app := vt.Serve(t, via.Register(nativeFormPanic{boom: boom}))
+		app := vt.Serve(t, via.Handler(nativeFormPanic{boom: boom}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 		formURL := actionURL(t, page, "r", 0)
@@ -835,7 +835,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 // that never touches Session() sees no behavior change.
 func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -924,7 +924,7 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 // touched", not just "no foreign cookie was involved".
 func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -972,7 +972,7 @@ func (p *liveLoginer) View() h.H {
 // on, closing the gap H1 was filed for.
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -1017,7 +1017,7 @@ func (o *onConnectLoginer) View() h.H {
 // connect time.
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -1043,7 +1043,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 // tab that never logs in keeps dispatching cookielessly, exactly as before.
 func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	linesA, cancelA := openStreamAt(t, srv, "/_via/sse")
@@ -1084,7 +1084,7 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 // compares against.
 func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 
@@ -1159,7 +1159,7 @@ func (p *raceLoginer) View() h.H {
 func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
 	t.Parallel()
 	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
-	srv := httptest.NewServer(via.Register(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -1228,7 +1228,7 @@ func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			calls := 0
-			app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+			app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
 			conn := app.Connect()
 			defer conn.Close()
 
@@ -1246,7 +1246,7 @@ func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
 	conn := app.Connect()
 	defer conn.Close()
 
@@ -1268,7 +1268,7 @@ func TestDispatch_theOldTabHeaderIsNoLongerHonoured(t *testing.T) {
 func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	app := vt.Serve(t, via.Register(tabGuard{hits: &calls}))
+	app := vt.Serve(t, via.Handler(tabGuard{hits: &calls}))
 	conn := app.Connect()
 	defer conn.Close()
 
@@ -1326,7 +1326,7 @@ func (s *formShell[C]) View() h.H { return h.Main(via.Embed(s.Body)) }
 // case (below) always worked, which is what made this so easy to miss.
 func TestNativeForm_insideAnEmbedKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(formShell[validatedForm]{}))
+	app := vt.Serve(t, via.Handler(formShell[validatedForm]{}))
 	_, page := app.Get("/")
 	url := actionURL(t, page, "0", 0)
 
@@ -1340,7 +1340,7 @@ func TestNativeForm_insideAnEmbedKeepsTheHandlersMutations(t *testing.T) {
 // before, so a fix that broke the root to fix the embed cannot pass.
 func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(validatedForm{}))
+	app := vt.Serve(t, via.Handler(validatedForm{}))
 	_, page := app.Get("/")
 	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "Widget"})
 	require.Equal(t, http.StatusOK, status)
@@ -1368,7 +1368,7 @@ func (c *initCounter) View() h.H {
 
 func TestNativeForm_actedEmbedIsNotReInited(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(formShell[initCounter]{}))
+	app := vt.Serve(t, via.Handler(formShell[initCounter]{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="inits">1</p>`)
 
@@ -1384,7 +1384,7 @@ func TestNativeForm_actedEmbedIsNotReInited(t *testing.T) {
 // opposite and sent people looking at their OnInit.
 func TestNativeForm_missingTabFieldSaysWhatActuallyHappened(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveNamedForm{}))
+		app := vt.Serve(t, via.Handler(liveNamedForm{}))
 		conn := app.Connect()
 		status, body := nativeFormPost(t, app, conn.ActionURL("r", 0), map[string]string{"name": "zed"})
 		assert.Equal(t, http.StatusGone, status)
@@ -1453,7 +1453,7 @@ func adminPost(t *testing.T, srv *httptest.Server, url, body string, admin bool)
 
 func TestDispatchPlain_postedSignalCannotOpenAServerGatedBranch(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(signalGatedAdmin{}))
+	srv := serve(t, via.Handler(signalGatedAdmin{}))
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
 	require.NoError(t, err)
@@ -1473,7 +1473,7 @@ func TestDispatchPlain_postedSignalCannotOpenAServerGatedBranch(t *testing.T) {
 
 func TestDispatchPlain_serverGatedBranchStillDispatchesForAnAuthorizedCaller(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(signalGatedAdmin{}))
+	srv := serve(t, via.Handler(signalGatedAdmin{}))
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
 	require.NoError(t, err)
@@ -1503,7 +1503,7 @@ func (e *echoedSignal) View() h.H {
 
 func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(echoedSignal{}))
+	srv := serve(t, via.Handler(echoedSignal{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), `{"name":"zed"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1540,7 +1540,7 @@ func (c *embeddedClock) View() h.H         { return h.Div(c.n.Display()) }
 
 func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(plainRootLiveKid{}))
+	app := vt.Serve(t, via.Handler(plainRootLiveKid{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, "data-init", "the GET must already bootstrap the stream")
 
@@ -1554,7 +1554,7 @@ func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
 // disclosure is the two-pass discovery repro: a Bind()ed Signal (Mode) chosen
 // by the user opens a lazy branch holding a second Bind()ed Signal (Name) and
 // an in-branch handler. keepalive makes the very same composition live, so both
-// transports are driven through one shape; it never changes after Register, so
+// transports are driven through one shape; it never changes after Handler, so
 // the liveness verdict stays render-invariant. OnInit seeds Mode from the query
 // only so a test can capture the URL of an in-branch action from an open
 // render — an action POST carries no query, so the discovery render reopens
@@ -1596,7 +1596,7 @@ func (d *disclosure) View() h.H {
 
 func TestDispatchPlain_hydratesASignalInABranchAnotherPostedSignalOpens(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(disclosure{}))
+	app := vt.Serve(t, via.Handler(disclosure{}))
 
 	code, body := app.Action(1).Body(`{"mode":"x","name":"bob"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
@@ -1608,7 +1608,7 @@ func TestDispatchPlain_hydratesASignalInABranchAnotherPostedSignalOpens(t *testi
 
 func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(disclosure{}))
+	app := vt.Serve(t, via.Handler(disclosure{}))
 
 	_, open := app.Get("/?mode=x")
 	url := actionURL(t, open, "r", 1)
@@ -1621,7 +1621,7 @@ func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t
 
 func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(disclosure{keepalive: true}))
+	app := vt.Serve(t, via.Handler(disclosure{keepalive: true}))
 	conn := app.Connect()
 
 	code, _ := app.Action(0).Over(conn).Body(`{"mode":"x"}`).Fire()
@@ -1635,7 +1635,7 @@ func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.
 
 func TestDispatchLive_inBranchActionStaysUndispatchableUntilTheBranchIsPushed(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(disclosure{keepalive: true}))
+	app := vt.Serve(t, via.Handler(disclosure{keepalive: true}))
 	conn := app.Connect()
 
 	_, open := app.Get("/?mode=x")
@@ -1674,7 +1674,7 @@ func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Embed(p.K
 
 func TestDispatchPlain_embedActionRunsOnAnInitedCopyAfterASecondPass(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(fixParent{}))
+	app := vt.Serve(t, via.Handler(fixParent{}))
 
 	code, body := app.EmbedAction("0", 0).Body(`{"q":"x"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
@@ -1707,7 +1707,7 @@ func (s *sessInAction) View() h.H {
 
 func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(sessInAction{}))
+	app := vt.Serve(t, via.Handler(sessInAction{}))
 	page := fetchPage(t, app, "/")
 
 	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
@@ -1754,7 +1754,7 @@ func (r *argRows) View() h.H {
 
 func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(argRows{}))
+	app := vt.Serve(t, via.Handler(argRows{}))
 	_, page := app.Get("/")
 	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=3", 1)
 	require.Contains(t, url, "a=3")
@@ -1786,7 +1786,7 @@ func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T
 		t.Run(body, func(t *testing.T) {
 			t.Parallel()
 			calls := 0
-			app := vt.Serve(t, via.Register(liveBoundRoot{hits: &calls}))
+			app := vt.Serve(t, via.Handler(liveBoundRoot{hits: &calls}))
 			conn := app.Connect()
 			defer conn.Close()
 
@@ -1827,7 +1827,7 @@ func (p *sessSiblings) View() h.H {
 
 func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(sessSiblings{}))
+	app := vt.Serve(t, via.Handler(sessSiblings{}))
 
 	req, err := http.NewRequest(http.MethodGet, app.URL()+"/", nil)
 	require.NoError(t, err)
@@ -1840,7 +1840,7 @@ func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
 
 func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(sessSiblings{}))
+	app := vt.Serve(t, via.Handler(sessSiblings{}))
 	page := fetchPage(t, app, "/")
 
 	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
@@ -1896,7 +1896,7 @@ func (p *shiftPage) View() h.H {
 
 func TestDispatchPlain_embedKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(shiftPage{}))
+	srv := serve(t, via.Handler(shiftPage{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	aURL, bURL := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
@@ -1931,7 +1931,7 @@ func (p *scopePage) View() h.H { return h.Div(via.Embed(p.K)) }
 
 func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(scopePage{}))
+	srv := serve(t, via.Handler(scopePage{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), `{"k__q":"x"}`)
@@ -1960,39 +1960,39 @@ type reloadingLoader struct {
 	shown int
 }
 
-func (p *reloadingLoader) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
-func (p *reloadingLoader) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *reloadingLoader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *reloadingLoader) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
+func (p *reloadingLoader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *reloadingLoader) Bump(ctx *via.Ctx)           { p.s.Add(1) }
 func (p *reloadingLoader) View() h.H {
 	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
 }
 
 func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(reloadingLoader{s: &store{}}))
+	app := vt.Serve(t, via.Handler(reloadingLoader{s: &store{}}))
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="n">0</p>`)
 
 	code, body := app.Action(0).Fire()
-	require.Equal(t, http.StatusOK, code, "a Reload that changes the render must not answer 204")
+	require.Equal(t, http.StatusOK, code, "a OnReload that changes the render must not answer 204")
 	assert.Contains(t, body, `<p id="n">1</p>`,
 		"the action's response must show what the handler wrote, not what OnInit loaded before it")
 }
 
-// Without Reload the defect is intact — that is the point of the hook being
+// Without OnReload the defect is intact — that is the point of the hook being
 // opt-in — but it must no longer be SILENT.
 func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
 
-	app := vt.Serve(t, via.Register(staleLoader{s: &store{}}))
+	app := vt.Serve(t, via.Handler(staleLoader{s: &store{}}))
 	app.Get("/")
 	code, _ := app.Action(0).Fire()
 
 	require.Equal(t, http.StatusNoContent, code)
 	assert.Contains(t, logs.String(), "changed nothing the render shows")
-	assert.Contains(t, logs.String(), "Reload(*via.Ctx) error",
+	assert.Contains(t, logs.String(), "OnReload(*via.Ctx) error",
 		"the 204 must name the hook that fixes it")
 
 	// A legitimately idempotent click is a dead click EVERY time. One line per
@@ -2013,16 +2013,16 @@ type liveReloader struct {
 	beat  via.State[int]
 }
 
-func (p *liveReloader) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
-func (p *liveReloader) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *liveReloader) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *liveReloader) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
+func (p *liveReloader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *liveReloader) Bump(ctx *via.Ctx)           { p.s.Add(1) }
 func (p *liveReloader) View() h.H {
 	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(via.On("click", p.Bump)))
 }
 
 func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(liveReloader{s: &store{}}))
+	app := vt.Serve(t, via.Handler(liveReloader{s: &store{}}))
 	conn := app.Connect()
 
 	code, _ := app.Action(0).Over(conn).Fire()
@@ -2031,11 +2031,11 @@ func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
 		"the pushed frame must carry post-action data, not the connect-time snapshot")
 }
 
-// reloadNotFound models the row an action just deleted: Reload says the page's
+// reloadNotFound models the row an action just deleted: OnReload says the page's
 // data is gone, and that answer must reach the client instead of a stale render.
 type reloadNotFound struct{ gone bool }
 
-func (p *reloadNotFound) Reload(ctx *via.Ctx) error {
+func (p *reloadNotFound) OnReload(ctx *via.Ctx) error {
 	if p.gone {
 		return via.ErrNotFound
 	}
@@ -2046,23 +2046,23 @@ func (p *reloadNotFound) View() h.H         { return h.Div(h.Button(via.On("clic
 
 func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(reloadNotFound{}))
+	app := vt.Serve(t, via.Handler(reloadNotFound{}))
 	app.Get("/")
 	code, body := app.Action(0).Fire()
 	assert.Equal(t, http.StatusNotFound, code)
 	assert.Contains(t, body, "not found")
 }
 
-// reloadRedirector queues its Redirect from Reload rather than the handler.
+// reloadRedirector queues its Redirect from OnReload rather than the handler.
 type reloadRedirector struct{}
 
-func (p *reloadRedirector) Reload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
-func (p *reloadRedirector) Go(ctx *via.Ctx)           {}
-func (p *reloadRedirector) View() h.H                 { return h.Div(h.Button(via.On("click", p.Go))) }
+func (p *reloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
+func (p *reloadRedirector) Go(ctx *via.Ctx)             {}
+func (p *reloadRedirector) View() h.H                   { return h.Div(h.Button(via.On("click", p.Go))) }
 
 func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(reloadRedirector{}))
+	srv := serve(t, via.Handler(reloadRedirector{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
 
@@ -2070,12 +2070,12 @@ func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
 }
 
-// tickingReload registers a Tick from Reload on a page served PLAIN. Honouring
+// tickingReload registers a Tick from OnReload on a page served PLAIN. Honouring
 // it would turn the unit live on a page with no stream (I5) and trip the
-// render-invariant panic; Reload must register nothing.
+// render-invariant panic; OnReload must register nothing.
 type tickingReload struct{ n int }
 
-func (p *tickingReload) Reload(ctx *via.Ctx) error {
+func (p *tickingReload) OnReload(ctx *via.Ctx) error {
 	ctx.Tick(time.Second, func(*via.Ctx) {})
 	return nil
 }
@@ -2089,15 +2089,15 @@ func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
 
-	app := vt.Serve(t, via.Register(tickingReload{}))
+	app := vt.Serve(t, via.Handler(tickingReload{}))
 	_, page := app.Get("/")
 	require.NotContains(t, page, "data-init", "the page must be served plain")
 
 	code, body := app.Action(0).Fire()
-	assert.Equal(t, http.StatusOK, code, "a Tick in Reload must be ignored, not fail the action")
+	assert.Equal(t, http.StatusOK, code, "a Tick in OnReload must be ignored, not fail the action")
 	assert.Contains(t, body, "<p>1</p>")
 	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
-		"Reload is not a late OnInit — registering from it is expected and silently ignored")
+		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
 }
 
 // reloadedEmbed proves the reload targets the ACTED unit: an embed's action
@@ -2107,9 +2107,9 @@ type reloadedEmbed struct {
 	shown int
 }
 
-func (p *reloadedEmbed) Reload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
-func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
-func (p *reloadedEmbed) Bump(ctx *via.Ctx)         { p.s.Add(1) }
+func (p *reloadedEmbed) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error   { return p.OnReload(ctx) }
+func (p *reloadedEmbed) Bump(ctx *via.Ctx)           { p.s.Add(1) }
 func (p *reloadedEmbed) View() h.H {
 	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
 }
@@ -2120,7 +2120,7 @@ func (p *reloadedEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
 
 func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
+	app := vt.Serve(t, via.Handler(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="n">0</p>`)
 

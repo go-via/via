@@ -1,8 +1,8 @@
 # via — reactive web UIs in pure Go
 
-via is a thin layer over `net/http` that adds **effortless composition** and
-**Datastar sugar**, and nothing you have to think about. The server renders
-HTML; the browser is a rendering surface. No build step, no hand-written JS,
+via is a thin layer over `net/http`. Compositions nest by struct embedding, and
+the Datastar attributes that make a page live are generated for you. The server
+renders HTML; the browser is a rendering surface. No build step, no hand-written JS,
 no WebSockets.
 
 ```go
@@ -39,14 +39,14 @@ func (c *Counter) View() h.H {
 
 func main() {
 	store := &Store{}
-	http.Handle("/", via.Register(Counter{count: store}))
+	http.Handle("/", via.Handler(Counter{count: store}))
 	http.ListenAndServe(":8080", nil)
 }
 ```
 
 A composition is a struct. Its `View` is a pure, `ctx`-free function. Actions are
-methods, wired by **named method value** (`via.On("click", c.Inc)`) — no strings, no
-closures. `via.Register` takes the composition **by value**: there is no `&` at
+methods, wired by **named method value** (`via.On("click", c.Inc)`): no strings, no
+closures. `via.Handler` takes the composition **by value**: there is no `&` at
 any call site, and a missing or mistyped `View` is a compile error.
 
 ## The hard guarantees
@@ -59,20 +59,20 @@ any call site, and a missing or mistyped `View` is a compile error.
   value's code pointer for its action id, and it walks a composition's field
   offsets once per type to name signal slots and find embedded children
   (`signalsOf`, `embedFieldName`). Signal *values* decode via `encoding/json`,
-  which reflects internally — data decoding, not wiring.
+  which reflects internally; that is data decoding, and the wiring stays reflection-free.
 - **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
 - **No closures at a via call site.** Named method values only.
 - **No `any` in element/child signatures.** The `h.H` tree is sealed.
 - **Zero `&` at any user call site.** via owns addressing.
 - **`View` is pure and `ctx`-free.**
 
-These aren't slogans: `TestExamples_takeNoAddressOfOrClosureAtViaCallSites`
+`TestExamples_takeNoAddressOfOrClosureAtViaCallSites`
 fails the build if an example violates the `&`/closure rules, and the sealed
 `h.H` interface makes an untyped node uninjectable.
 
 ## A page is plain until a composition makes it live
 
-A page is served **plain** — request/response, with actions and a morph on
+A page is served **plain**: request/response, with actions and a morph on
 POST. It **streams** (an SSE connection scoped to that one tab, its own
 server state pushed over it) the moment a composition on it *acts* live: its
 `OnInit` registered a `ctx.Tick` or a `ctx.Listen`, or its `View` rendered a
@@ -86,7 +86,7 @@ The whole rule is one line:
 > plain ancestor; a live unit may not contain another live unit.
 
 That verdict is taken from the render that serves the page, and only a
-streaming page bootstraps the SSE stream — so **liveness has to be
+streaming page bootstraps the SSE stream, so **liveness has to be
 render-invariant**. A
 `State.Display` behind a branch that is closed at GET wires the page plain;
 an action that later opens the branch would leave the tab demanding a
@@ -95,7 +95,7 @@ action loudly instead. Render the `State` unconditionally (put the `When`
 *inside* the row, not around the `Display`), or register a `Tick`/`Listen` in
 `OnInit` so the page is live from the first paint.
 
-`OnInit` runs on every request that renders the unit — the GET, each action,
+`OnInit` runs on every request that renders the unit: the GET, each action,
 the SSE connect. Register connection-scoped side effects rather than performing
 them: `ctx.OnConnect(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
 when it closes.
@@ -114,7 +114,7 @@ response render, on the plain path and the live path alike. Without it a
 handler that mutates and does not re-read answers `204` with an unchanged UI;
 via now logs one line naming `Reload` when that happens, so it is never silent.
 It is skipped behind a `Redirect` (nothing from that render ships), and
-`ctx.Tick`/`ctx.Listen` are no-ops inside it — liveness stays the GET/connect
+`ctx.Tick`/`ctx.Listen` are no-ops inside it, so liveness stays the GET/connect
 verdict. It is a second hook rather than a second `OnInit` run on purpose:
 `OnInit` also mints the session, seeds signals from the request URL and
 registers timers, none of which is safe to repeat once a handler has committed
@@ -124,7 +124,7 @@ a mutation.
 
 The action endpoint and rendered pages are hardened by default:
 
-- **Origin floor** on `POST` actions — open by default, so dev and
+- **Origin floor** on `POST` actions, open by default, so dev and
   non-browser clients just work; set `WithTrustedOrigin` in production to
   enforce same-origin (plus the listed origins), failing closed. Be precise
   about what the per-tab id does and does not cover:
@@ -150,10 +150,10 @@ The action endpoint and rendered pages are hardened by default:
   actions; if it was opened under a session, a dispatch is also checked
   against that same session, so a leaked tab id alone is no longer enough
   once the connecting browser was logged in. An anonymous connection (no
-  session) has nothing to check against — never render, log, or leak a tab
+  session) has nothing to check against. Never render, log, or leak a tab
   id outside its own client, and set `WithTrustedOrigin` to close the
   cross-origin leg too.
-- **Session fixation defense is opt-in, not automatic**: sessions never
+- **Session fixation defense is opt-in**: sessions never
   rotate their id on their own, so call `Session.Rotate()` at an auth-state
   change (login, logout, privilege elevation) to invalidate a pre-auth id an
   attacker may have planted.
@@ -162,9 +162,9 @@ The action endpoint and rendered pages are hardened by default:
   ignored, not rejected — it is not a strict decode), and a **panic recover**.
 - **`nosniff` + a hash-admitted CSP** on the page and patch responses. The CSP
   includes `'unsafe-eval'` because Datastar compiles `data-*` expressions with
-  the `Function` constructor — without it every action is silently dead in the
+  the `Function` constructor. Without it every action is silently dead in the
   browser. The one inline script via emits (the reconnect manager) is
-  library-controlled, so it's admitted by its own SHA-256 hash — no nonce, no
+  library-controlled, so it's admitted by its own SHA-256 hash: no nonce, no
   per-key state, nothing for an injected `<script>` to borrow. Honest posture:
   the CSP is a seatbelt against *injected* inline script; the load-bearing
   defenses are output escaping, the attribute-name allowlist, and the same URL
@@ -172,7 +172,7 @@ The action endpoint and rendered pages are hardened by default:
   loudly: a Datastar action falls back to its normal element-patch response, a
   native `PostForm` submit falls back to a full-page re-render, and an unsafe
   target from `OnInit` answers 500). A SAFE target navigates from anywhere,
-  including a Datastar `@post` — the response is a one-line
+  including a Datastar `@post`. The response is a one-line
   `location.assign` script the CSP admits by hash, with the target carried in
   a `datastar-script-attributes` header rather than in the script bytes.
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
@@ -192,16 +192,15 @@ The action endpoint and rendered pages are hardened by default:
 
 ## Status
 
-Built and tested — `-race`-clean, adversarially reviewed, eight runnable
-examples, the whole live stack verified in real headless browsers
+`-race`-clean; eight examples; the live stack is verified in headless browsers
 (`vtbrowser/`, `-tags browser`):
 
 - **Hardened plain core** (`example/counter`): by-value `Register`, origin
   floor, hash-admitted CSP, body cap, panic-recover, compile-time `View`
-  constraint, attribute-name allowlist. An action's response self-classifies —
+  constraint, attribute-name allowlist. An action's response self-classifies:
   element-patch when the render changed, `204` when it didn't.
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
-  handle-identity wire names — `Bind()` and `Display()` share one name, so the
+  handle-identity wire names. `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side; `When`/`Each`
   render conditionals and lists. A signal's wire name is its Go FIELD name —
   `count`, and `chat__draft` for one inside an embedded `Chat` — not its render
@@ -221,7 +220,7 @@ examples, the whole live stack verified in real headless browsers
   stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
   `Tick` drives the push. `Tick`/`Listen`/action handlers all run on the
-  connection's one goroutine — a handler that blocks (I/O, an unbounded
+  connection's one goroutine, so a handler that blocks (I/O, an unbounded
   loop) stalls every other tick, action, and push on that same connection,
   and delays that connection's shutdown until it returns.
 - **Interactive live actions** (`example/chat`): a live-embed action routes —
@@ -232,7 +231,7 @@ examples, the whole live stack verified in real headless browsers
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
-  `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose` — one publish
+  `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose`: one publish
   fans out to every connected embed.
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
@@ -241,7 +240,7 @@ examples, the whole live stack verified in real headless browsers
   rotate their id on their own: call `Session.Rotate` at an auth-state change
   (login, logout, privilege elevation) to invalidate a session id an attacker
   may have planted beforehand (fixation defense). Idle sessions expire lazily
-  on access (past the TTL, the next read/write treats them as gone) — there
+  on access (past the TTL, the next read/write treats them as gone); there
   is no background sweep, so a
   session that is never touched again is not proactively evicted. A session
   that idles past its TTL while a stream is still open (the stream
@@ -263,7 +262,7 @@ examples, the whole live stack verified in real headless browsers
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
   Datastar gives up.
 - **Live-embed multiplexing** (`example/dashboard`): embed sub-compositions as
-  plain struct fields — `via.Embed(p.Clock)` in the parent's `View`. Each child
+  plain struct fields: `via.Embed(p.Clock)` in the parent's `View`. Each child
   gets its own `OnInit`; a child that neither ticks nor holds `State` is a plain
   in-place component, one that does is a live embed, and all the live children
   on a page share the tab's *one* SSE stream on one goroutine — each re-renders and patches only its own region
@@ -275,7 +274,7 @@ examples, the whole live stack verified in real headless browsers
   by value: the field literal seeds the child, each connection gets its own
   copy (value state stays per-tab), and pointer deps are the deliberate
   sharing channel. **Known limitation:** a live embed cannot itself embed a
-  further live embed — nesting is one level deep (the root, or a live child
+  further live embed. Nesting is one level deep (the root, or a live child
   directly under a plain root, or through further plain `via.Embed`s); it
   panics at render, loud and early, rather than misroute an action. Plain
    composition still nests to any depth. Nested live composition
@@ -289,7 +288,7 @@ examples, the whole live stack verified in real headless browsers
   (`via-i0-0`), the signal prefix (`i0-0_`) and the dispatch address
   (`/_via/a/0-0/…`), so re-rendering any subtree on its own numbers its
   descendants exactly as the whole-page render did. A child's key must be the
-  same on every render for the life of a connection — a `When` around an
+  same on every render for the life of a connection; a `When` around an
   `Embed` shifts its later **siblings**' ordinals, so such a `When` must
   depend only on data fixed by `OnInit` or the field literal, never on time, a
   client signal, or shared state that changes while the page is open.
@@ -303,10 +302,10 @@ examples, the whole live stack verified in real headless browsers
   `r.Mount("/path", Page{})` serves a whole app behind one
   handler, each page's actions namespaced under its mount. `OnInit(*Ctx) error`
   is the per-request hook that loads session/path data into a plain page
-  before its ctx-free `View` — return `via.ErrNotFound` for a vanished record
+  before its ctx-free `View`; return `via.ErrNotFound` for a vanished record
   (404); any other error answers 500, and the View never renders a lie. A
   session check + `ctx.Redirect("/login")` inside `OnInit` is the whole
-  protected-page story — no separate guard mechanism. `via.PostForm(handler, …)` renders a **native**, always-multipart form whose
+  protected-page story, with no separate guard mechanism. `via.PostForm(handler, …)` renders a **native**, always-multipart form whose
   submit runs server-side and `ctx.Redirect("/…")` issues a 303 — the
   server-rendered auth flow the bundled Datastar can't do.
   The same form handles the avatar upload: a file `<input>` just works, read
@@ -314,14 +313,14 @@ examples, the whole live stack verified in real headless browsers
   `ctx.Param[int]("id")` reads the named `{id}` segment of `"/thread/{id}"`.
   The forum proves these compose into a full multi-page app.
 
-**The flagship is `example/chat`** — a live, multi-user chat room with a presence
-count, in ~60 lines that read like a plain page. Two-browser-verified: a message
-typed in one tab appears in the other, the "N online" header tracks connections,
-and the composer clears on send without clobbering a concurrent draft.
+`example/chat` is the most complete live example: a multi-user chat room with a
+presence count, in ~60 lines. Two-browser-verified — a message typed in one tab
+appears in the other, the "N online" header tracks connections, and the composer
+clears on send without clobbering a concurrent draft.
 
 **Restarts and deploys.** Two separate things have to survive: the cookie and
 the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps
-the COOKIE valid across restarts and pods — it is signed, not stored. The DATA
+the COOKIE valid across restarts and pods; it is signed rather than stored. The DATA
 lives in a `SessionStore`, and the default one is a map in this process's
 memory, so with the key alone a restart still logs everyone out and a second
 pod sees nothing. Pass `WithSessionStore` for a shared, durable store:
@@ -350,7 +349,7 @@ via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))
 
 That is the whole interface. via hands a session over already serialized and
 never asks a store to understand it: rotation is a Save under the new id then a
-Delete of the old, and expiry is the `ttl` handed to Save — via stamps the same
+Delete of the old, and expiry is the `ttl` handed to Save. via stamps the same
 deadline into the blob and refuses an expired Load anyway, so a backend with no
 TTL support is still correct. Values go through `encoding/json`, keyed by the
 Go type `Session.Put` stored them under, so a type a pod cannot decode reads
@@ -360,7 +359,7 @@ The CSP is a pure function of the
 Head, so pods with different keys still serve identical policies. Live-embed
 state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
-re-bootstrap — the page comes back from server truth, not from replayed frames.
+re-bootstrap: the page comes back from server truth rather than replayed frames.
 Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
 a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
 An action URL addresses its handler, not its render position: `embed` is
@@ -386,7 +385,7 @@ at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
 for replay). The SSE GET stream applies the same origin floor as the action
 POST and is capped at a fixed number of concurrent connections (10,000; over
-the cap returns 503) — router-wide, not per IP: an anonymous client can open
+the cap returns 503). The cap is router-wide rather than per IP, so an anonymous client can open
 enough connections on its own to fill the cap and 503 everyone else. A per-IP
 cap is deferred past v0.8.
 

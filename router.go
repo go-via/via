@@ -27,8 +27,8 @@ type Initer interface{ OnInit(*Ctx) error }
 // loads, the handler mutates the store, and the render that answers the action
 // still shows what OnInit loaded — a 204 and a UI that never moves.
 //
-//	func (p *Front) Reload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
-//	func (p *Front) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+//	func (p *Front) OnReload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
+//	func (p *Front) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
 //
 // Why a second hook and not a second OnInit run: OnInit is an INITIALIZER, not
 // a loader. It mints and defaults the session, seeds client signals from the
@@ -36,14 +36,14 @@ type Initer interface{ OnInit(*Ctx) error }
 // all of which are wrong to repeat once a handler has already committed a
 // mutation. Re-running it would overwrite the very session value the handler
 // just Put, and reset a hydrated signal to the ACTION url's (absent) query
-// string. Reload says exactly one thing, so it can run exactly when it should.
+// string. OnReload says exactly one thing, so it can run exactly when it should.
 //
 // It runs on the plain path and the live path alike, once per action, and is
 // skipped when the handler queued a Redirect (nothing from this render ships).
 // ctx.Tick and ctx.Listen are no-ops inside it: liveness is the GET/connect
 // verdict (I5). A non-nil error is answered like OnInit's — ErrNotFound is 404,
 // anything else 500 — and a Redirect it queues navigates the tab.
-type Reloader interface{ Reload(*Ctx) error }
+type Reloader interface{ OnReload(*Ctx) error }
 
 // ErrNotFound is the sentinel an OnInit returns when the data the page needs no
 // longer exists — the request is honest, so the answer is 404, not 500. Wrap it
@@ -111,7 +111,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	return nil
 }
 
-// reloadUnit runs v's Reload after an action, on a Ctx that registers nothing
+// reloadUnit runs v's OnReload after an action, on a Ctx that registers nothing
 // (I5 — liveness is the GET/connect verdict and a reload may not raise it).
 //
 // Nothing is written to w: a Redirect it queues and an error it returns are the
@@ -133,10 +133,10 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 			err = ErrNotFound
 		}
 	}()
-	return ic.Reload(ctx)
+	return ic.OnReload(ctx)
 }
 
-// answerReloadFailure answers a failed Reload the way runOnInit answers a
+// answerReloadFailure answers a failed OnReload the way runOnInit answers a
 // failed OnInit. A queued Redirect is NOT handled here: the caller
 // routes it through respond, which knows the transport.
 func answerReloadFailure(w http.ResponseWriter, err error) {
@@ -144,7 +144,7 @@ func answerReloadFailure(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	log.Printf("via: Reload after an action failed: %q", err)
+	log.Printf("via: OnReload after an action failed: %q", err)
 	http.Error(w, "init failed", http.StatusInternalServerError)
 }
 
@@ -176,7 +176,7 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if ci, ok := rec.(childInit); ok {
+	if ci, ok := rec.(initOutcome); ok {
 		answerInitFailure(w, req, ci)
 		return
 	}
@@ -194,7 +194,7 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 
 // answerInitFailure gives an embedded child's failed OnInit the same answers
 // the root's gets in runOnInit.
-func answerInitFailure(w http.ResponseWriter, req *http.Request, ci childInit) {
+func answerInitFailure(w http.ResponseWriter, req *http.Request, ci initOutcome) {
 	switch {
 	case ci.redirect != "":
 		if !hcore.SafeURL(ci.redirect) {
@@ -248,7 +248,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 // Mount registers a page composition at path, in http.ServeMux pattern syntax.
 // Its actions post to {path}/_via/a/{embed}/{act}. root is taken by value; the
 // PT constraint makes a missing or mistyped View() a compile error, like
-// Register.
+// Handler.
 func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
@@ -325,8 +325,11 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // the strict CSP, then the rendered body. A streaming page also gets the SSE
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token is threaded through here.
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
-	writeHeadersWithCSP(w, cfg.csp)
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool) {
+	hdr := w.Header()
+	hdr.Set("Content-Type", "text/html; charset=utf-8")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+	hdr.Set("Content-Security-Policy", cfg.csp)
 	// Pre-declared on every page so the tab id is always defined and always
 	// sent (see tabSignal for why the name must stay underscore-free). On a
 	// plain page it stays "" and dispatch falls through to the plain path; a
@@ -336,7 +339,7 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool
 	if hasLive {
 		// Attribute-escaped here, path-escaped in concreteBase — both layers
 		// are needed; see concreteBase.
-		bodyOpen = `</head><body data-init="@post('` + hcore.EscapeString(sseURL) + `')" data-signals='{"` + tabSignal + `":""}'>`
+		bodyOpen = `</head><body data-init="@post('` + hcore.EscapeString(base+"/_via/sse") + `')" data-signals='{"` + tabSignal + `":""}'>`
 	}
 	var head strings.Builder
 	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)

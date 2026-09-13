@@ -66,12 +66,12 @@ func TestSessionClearSurvivesMerge(t *testing.T) {
 	id := s0.id
 
 	s1, s2 := auditResolve(t, m, id), auditResolve(t, m, id)
-	s1.Clear[auditA]()
+	s1.Delete[auditA]()
 	s2.Put(auditB{3})
 
 	s3 := auditResolve(t, m, id)
 	if _, ok := s3.Get[auditA](); ok {
-		t.Error("Clear[auditA] was undone by the other request's save")
+		t.Error("Delete[auditA] was undone by the other request's save")
 	}
 	if b, ok := s3.Get[auditB](); !ok || b.N != 3 {
 		t.Errorf("Put[auditB]{3} lost, got %+v ok=%v", b, ok)
@@ -218,7 +218,7 @@ func (f *failStore) Delete(ctx context.Context, id string) error {
 // Rotate exists to invalidate a pre-auth id. A store that cannot Delete must not
 // leave that id resolving.
 func TestSessionRotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
-	fs := &failStore{SessionStore: MemorySessionStore()}
+	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -243,7 +243,7 @@ func TestSessionRotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 // If the tombstone cannot be written either, failing loudly beats returning a
 // rotation that did not happen.
 func TestSessionRotatePanicsWhenOldIDCannotBeInvalidated(t *testing.T) {
-	fs := &failStore{SessionStore: MemorySessionStore()}
+	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -268,7 +268,7 @@ func TestSessionRotatePanicsWhenOldIDCannotBeInvalidated(t *testing.T) {
 // A store outage must not be read as "no session": minting one would Set-Cookie
 // over the user's real id and orphan their session once the store recovered.
 func TestSessionStoreOutageDoesNotMintOverExistingCookie(t *testing.T) {
-	fs := &failStore{SessionStore: MemorySessionStore()}
+	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -304,13 +304,13 @@ func TestSessionStoreOutageDoesNotMintOverExistingCookie(t *testing.T) {
 // it is asked to serve — the exact window a non-atomic read-modify-write leaves
 // open. It makes the lost update deterministic rather than a matter of timing.
 type interleaveStore struct {
-	AtomicSessionStore
+	VersionedSessionStore
 	armed atomic.Bool
 	hook  func()
 }
 
 func (s *interleaveStore) LoadVersion(ctx context.Context, id string) ([]byte, uint64, bool, error) {
-	data, ver, ok, err := s.AtomicSessionStore.LoadVersion(ctx, id)
+	data, ver, ok, err := s.VersionedSessionStore.LoadVersion(ctx, id)
 	if s.armed.CompareAndSwap(true, false) { // disarmed first: the hook saves too
 		s.hook()
 	}
@@ -320,7 +320,7 @@ func (s *interleaveStore) LoadVersion(ctx context.Context, id string) ([]byte, u
 // A write that another request overtook mid-merge must be re-merged onto the
 // blob that landed, not written over it.
 func TestSessionSaveRetriesWhenOvertakenMidMerge(t *testing.T) {
-	is := &interleaveStore{AtomicSessionStore: MemorySessionStore().(AtomicSessionStore)}
+	is := &interleaveStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
 	m := newSessionManager(&config{sessionStore: is})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -375,7 +375,7 @@ func TestSessionWriteThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 // pinned handle writing there must not overwrite the tombstone with live values
 // (which would also refresh its expiry) — that would defeat the tombstone.
 func TestSessionWriteThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
-	fs := &failStore{SessionStore: MemorySessionStore()}
+	fs := &failStore{SessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: fs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -405,7 +405,7 @@ func TestSessionWriteThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
 // casStuckStore never lets a conditional write apply once armed: the CAS loop
 // can retry forever and never settle.
 type casStuckStore struct {
-	AtomicSessionStore
+	VersionedSessionStore
 	armed atomic.Bool
 }
 
@@ -413,7 +413,7 @@ func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl 
 	if s.armed.Load() {
 		return false, nil
 	}
-	return s.AtomicSessionStore.SaveIf(ctx, id, data, ttl, version)
+	return s.VersionedSessionStore.SaveIf(ctx, id, data, ttl, version)
 }
 
 // Contention the CAS loop cannot settle means every merge this request made was
@@ -421,7 +421,7 @@ func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl 
 // there applies a stale merge over whichever writers did get through — exactly
 // the lost update the loop exists to prevent. The write must be dropped.
 func TestSessionSaveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
-	cs := &casStuckStore{AtomicSessionStore: MemorySessionStore().(AtomicSessionStore)}
+	cs := &casStuckStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
 	m := newSessionManager(&config{sessionStore: cs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -496,7 +496,7 @@ func nullVals(data []byte) []byte {
 // Read and write must agree on what a session is: get accepts a nil value map
 // as an empty session, so save must not retire the id over the same bytes.
 func TestSessionNilValsSessionReadsAndWritesAlike(t *testing.T) {
-	m := newSessionManager(&config{sessionStore: &nullValsStore{SessionStore: MemorySessionStore()}})
+	m := newSessionManager(&config{sessionStore: &nullValsStore{SessionStore: NewMemorySessionStore()}})
 	id, _ := m.create(context.Background())
 
 	raw, ok, err := m.store.Load(context.Background(), id)

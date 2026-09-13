@@ -73,7 +73,7 @@ func TestSSE_plainAppHasNoStream(t *testing.T) {
 // client state. Runs at the real 25s cadence — synctest makes the wait free.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(quietEmbed{}))
+		app := vt.Serve(t, via.Handler(quietEmbed{}))
 		conn := app.Connect()
 
 		time.Sleep(24 * time.Second)
@@ -141,7 +141,7 @@ func (s *stalledPeer) Write(p []byte) (int, error) {
 func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
-		handler := via.Register(disposeProbe{disposed: done})
+		handler := via.Handler(disposeProbe{disposed: done})
 		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 
@@ -211,7 +211,7 @@ func (s *stalledAfterConnect) Write(p []byte) (int, error) {
 // even though the action had already succeeded.
 func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		handler := via.Register(liveClicker{})
+		handler := via.Handler(liveClicker{})
 		peer := &stalledAfterConnect{}
 		connReq := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
 		connReq.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -280,7 +280,7 @@ func (f *halfOpenFlusher) Flush() {}
 func TestLive_failedStreamWriteTearsDownTheEmbedSoItDoesNotLeak(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
-		handler := via.Register(disposeProbe{disposed: done})
+		handler := via.Handler(disposeProbe{disposed: done})
 		// httptest.NewRequest's context is never cancelled, so the ONLY thing that
 		// can end the stream here is the failed keepalive write — isolating that path.
 		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
@@ -326,7 +326,7 @@ func liveServer(t testing.TB, handler http.Handler) *httptest.Server {
 
 func newPulse(t *testing.T) *httptest.Server {
 	t.Helper()
-	return liveServer(t, via.Register(pulse{}))
+	return liveServer(t, via.Handler(pulse{}))
 }
 
 // multiline is a live embed whose rendered content contains a newline. The SSE
@@ -479,7 +479,7 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 // the patch, then applying broken HTML.
 func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(multiline{}))
+		srv := liveServer(t, via.Handler(multiline{}))
 
 		frame := readFirstFrame(t, srv)
 		require.NotEmpty(t, frame)
@@ -497,7 +497,7 @@ func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 // A live embed that registers no ticks must still open the stream cleanly.
 func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(quietEmbed{}))
+		srv := liveServer(t, via.Handler(quietEmbed{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -613,7 +613,7 @@ func (d *disposeProbe) View() h.H     { return h.Div(h.Str("probe"), d.n.Display
 func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
-		srv := liveServer(t, via.Register(feed{room: room}))
+		srv := liveServer(t, via.Handler(feed{room: room}))
 
 		l1, c1 := openStream(t, srv)
 		defer c1()
@@ -658,7 +658,7 @@ func TestLive_tickAndSubscribeShareOneEmbedLoopAndTearDownCleanly(t *testing.T) 
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})
-		srv := liveServer(t, via.Register(mixedEmbed{room: room, disposed: done}))
+		srv := liveServer(t, via.Handler(mixedEmbed{room: room, disposed: done}))
 
 		lines, cancel := openStream(t, srv)
 		awaitLine(t, lines, "beats: ") // a tick frame flows
@@ -705,7 +705,7 @@ func (e errorString) Error() string { return string(e) }
 func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	t.Parallel()
 	acquired, disposed := make(chan struct{}), make(chan struct{})
-	resp, _ := do(t, serve(t, via.Register(failInit{acquired: acquired, disposed: disposed})),
+	resp, _ := do(t, serve(t, via.Handler(failInit{acquired: acquired, disposed: disposed})),
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -733,7 +733,7 @@ func (boomOnDiscovery) View() h.H { panic("via_test: discovery render exploded")
 // that as a successful (if empty) connect.
 func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, serve(t, via.Register(boomOnDiscovery{})), http.MethodPost, "/_via/sse", "")
+	resp, body := do(t, serve(t, via.Handler(boomOnDiscovery{})), http.MethodPost, "/_via/sse", "")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.NotEmpty(t, body)
 }
@@ -748,7 +748,7 @@ func (f *notFoundConnect) View() h.H                 { return h.Div(h.Str("x")) 
 
 func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 	t.Parallel()
-	resp, _ := do(t, serve(t, via.Register(notFoundConnect{})), http.MethodPost, "/_via/sse", "")
+	resp, _ := do(t, serve(t, via.Handler(notFoundConnect{})), http.MethodPost, "/_via/sse", "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
@@ -758,7 +758,7 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
 	done := make(chan struct{})
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(disposeProbe{disposed: done}))
+		srv := liveServer(t, via.Handler(disposeProbe{disposed: done}))
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
@@ -797,7 +797,7 @@ func (p *panicThenDisposeProbe) View() h.H     { return h.Div(h.Str("probe"), p.
 func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
-		srv := liveServer(t, via.Register(panicThenDisposeProbe{disposed: done}))
+		srv := liveServer(t, via.Handler(panicThenDisposeProbe{disposed: done}))
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
@@ -818,7 +818,7 @@ func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
-		srv := liveServer(t, via.Register(disposeProbe{disposed: done}))
+		srv := liveServer(t, via.Handler(disposeProbe{disposed: done}))
 
 		lines, cancel := openStream(t, srv)
 		cancel()
@@ -844,7 +844,7 @@ func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
 // falls out of `for sc.Scan()` without ever taking the ctx.Done arm.
 func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(disposeProbe{disposed: make(chan struct{})}))
+	srv := liveServer(t, via.Handler(disposeProbe{disposed: make(chan struct{})}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -876,7 +876,7 @@ func (c *clicker) View() h.H {
 
 func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(clicker{}))
+		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID(), "the SSE must hand the client its tab id")
 
@@ -891,7 +891,7 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 // must 410 so a stale client re-bootstraps, never silently mutate a throwaway.
 func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Register(clicker{}))
+	srv := httptest.NewServer(via.Handler(clicker{}))
 	t.Cleanup(srv.Close)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -944,7 +944,7 @@ func actionID(t *testing.T, body string) string {
 func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := &chatRoom{bus: topic.New[string]()}
-		srv := liveServer(t, via.Register(chatEmbed{room: room}))
+		srv := liveServer(t, via.Handler(chatEmbed{room: room}))
 
 		la, ca := openStream(t, srv)
 		defer ca()
@@ -984,7 +984,7 @@ func (e *liveReqEchoer) View() h.H {
 // action request is threaded through (not the connect request).
 func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveReqEchoer{}))
+		app := vt.Serve(t, via.Handler(liveReqEchoer{}))
 		conn := app.Connect()
 
 		// X-Echo has no vt.Action builder method, so this posts by hand — but
@@ -1022,7 +1022,7 @@ func (e *connReqEchoer) View() h.H {
 // in-memory network host, not a real loopback address.
 func TestOnInit_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(connReqEchoer{}))
+		srv := liveServer(t, via.Handler(connReqEchoer{}))
 
 		lines, cancel := openStream(t, srv)
 		defer cancel()
@@ -1047,7 +1047,7 @@ func (e *tickReqEchoer) View() h.H {
 // a timer, and the connection's is the honest answer.
 func TestTick_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(tickReqEchoer{}))
+		srv := liveServer(t, via.Handler(tickReqEchoer{}))
 
 		lines, cancel := openStream(t, srv)
 		defer cancel()
@@ -1081,7 +1081,7 @@ func (p *pathTicker) View() h.H {
 
 func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(pathTicker{}))
+		app := vt.Serve(t, via.Handler(pathTicker{}))
 		conn := app.Connect()
 
 		// Fire BEFORE the first tick pushes, while the connection's unit is
@@ -1138,7 +1138,7 @@ func (p *onInitLive) View() h.H { return h.Div(h.Str(p.label)) }
 // stream handler never ran OnInit at all.
 func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(onInitLive{}))
+		srv := liveServer(t, via.Handler(onInitLive{}))
 
 		frame := readFirstFrame(t, srv)
 		require.NotEmpty(t, frame)
@@ -1188,7 +1188,7 @@ func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 
 // renderCounter counts its own View calls so a test can assert on renders
 // without reaching into via's internals — views is a pointer so it survives
-// Register's per-connection value copy.
+// Handler's per-connection value copy.
 type renderCounter struct {
 	views *atomic.Int64
 	count via.State[int]
@@ -1206,7 +1206,7 @@ func (r *renderCounter) View() h.H {
 func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		views := &atomic.Int64{}
-		srv := liveServer(t, via.Register(renderCounter{views: views}))
+		srv := liveServer(t, via.Handler(renderCounter{views: views}))
 
 		lines, cancel := openStream(t, srv)
 		defer cancel()
@@ -1218,7 +1218,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 		// A throwaway instance (its own views counter) discovers the current
 		// action URL without adding a render to the instance under test — the
 		// whole point of this test is counting THAT instance's View calls.
-		digestSrv := liveServer(t, via.Register(renderCounter{views: &atomic.Int64{}}))
+		digestSrv := liveServer(t, via.Handler(renderCounter{views: &atomic.Int64{}}))
 		_, page := do(t, digestSrv, http.MethodGet, "/", "")
 
 		resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
@@ -1236,7 +1236,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 // re-bootstrap instead of a click quietly having no effect.
 func TestLive_unknownActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(clicker{}))
+		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID())
 
@@ -1274,7 +1274,7 @@ func (f *flakyRender) View() h.H {
 // action (Fix) must still dispatch and push normally.
 func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(flakyRender{}))
+		app := vt.Serve(t, via.Handler(flakyRender{}))
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID())
 
@@ -1302,7 +1302,7 @@ func (l *liveArg) View() h.H {
 // later, well-formed action normally.
 func TestLive_malformedActionArgAnswers400(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveArg{}))
+		app := vt.Serve(t, via.Handler(liveArg{}))
 		conn := app.Connect()
 
 		url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
@@ -1328,7 +1328,7 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				app := vt.Serve(t, via.Register(liveArg{}))
+				app := vt.Serve(t, via.Handler(liveArg{}))
 				conn := app.Connect()
 
 				url := strings.Replace(conn.ActionURL("r", 0), "a=7", tt.a, 1)
@@ -1363,7 +1363,7 @@ func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
 	defer log.SetOutput(prev)
 
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(reTicker{}))
+		app := vt.Serve(t, via.Handler(reTicker{}))
 		_ = app.Connect()
 		time.Sleep(50 * time.Millisecond)
 		synctest.Wait()
@@ -1399,7 +1399,7 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 
 	room := topic.New[string]()
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(reListener{room: room}))
+		srv := liveServer(t, via.Handler(reListener{room: room}))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)
@@ -1430,7 +1430,7 @@ func (r *racyTicker) View() h.H {
 // about outcomes since the property under test is the absence of a race.
 func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(racyTicker{}))
+	srv := liveServer(t, via.Handler(racyTicker{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -1484,7 +1484,7 @@ func (r *racyNativeForm) View() h.H {
 // -race catches a regression; asserts nothing about outcomes.
 func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(racyNativeForm{}))
+	srv := liveServer(t, via.Handler(racyNativeForm{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -1521,7 +1521,7 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 // (pulse-send vs. reqCtx.Done, both ready at once) from real round-trip
 // timing noise.
 type abandonedAction struct {
-	applied *atomic.Int32 // shared across Register's per-connection copy and the test's own handle
+	applied *atomic.Int32 // shared across Handler's per-connection copy and the test's own handle
 	n       via.State[int]
 }
 
@@ -1537,7 +1537,7 @@ func (a *abandonedAction) View() h.H {
 func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
 	t.Parallel()
 	root := &abandonedAction{applied: new(atomic.Int32)}
-	handler := via.Register(*root)
+	handler := via.Handler(*root)
 	srv := liveServer(t, handler)
 
 	lines, cancel := openStream(t, srv)
@@ -1597,7 +1597,7 @@ func (p *paramInTick) View() h.H { return h.Div() }
 func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 	t.Parallel()
 	panics := make(chan any, 1)
-	srv := liveServer(t, via.Register(paramInTick{panics: panics}))
+	srv := liveServer(t, via.Handler(paramInTick{panics: panics}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -1629,7 +1629,7 @@ func (r *racyDirtySignal) View() h.H {
 // it), a concurrent push could replace the unit in between, dropping values.
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(racyDirtySignal{}))
+	srv := liveServer(t, via.Handler(racyDirtySignal{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -1703,7 +1703,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 // fire-and-forget enqueue could reorder pushes under concurrent dispatch.
 func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(racyDirtySignal{}))
+	srv := liveServer(t, via.Handler(racyDirtySignal{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -1799,17 +1799,17 @@ func (l *listenOnly) View() h.H                    { return h.Div(h.Str("last=")
 func TestListen_plainGetLeaksNoSubscription(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[string]()
-	app := vt.Serve(t, via.Register(listenOnly{bus: bus}))
+	app := vt.Serve(t, via.Handler(listenOnly{bus: bus}))
 
 	for range 3 {
 		status, _ := app.Get("/")
 		require.Equal(t, http.StatusOK, status)
 	}
-	assert.Zero(t, bus.Subs(), "a GET that never opened a stream must leave no subscription behind")
+	assert.Zero(t, bus.NumSubs(), "a GET that never opened a stream must leave no subscription behind")
 
 	c := app.Connect()
 	defer c.Close()
-	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond,
+	require.Eventually(t, func() bool { return bus.NumSubs() == 1 }, 2*time.Second, 5*time.Millisecond,
 		"the connect itself must subscribe exactly once")
 }
 
@@ -1818,12 +1818,12 @@ func TestListen_plainGetLeaksNoSubscription(t *testing.T) {
 func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[string]()
-	app := vt.Serve(t, via.Register(listenOnly{bus: bus}))
+	app := vt.Serve(t, via.Handler(listenOnly{bus: bus}))
 
 	c := app.Connect()
-	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return bus.NumSubs() == 1 }, 2*time.Second, 5*time.Millisecond)
 	c.Close()
-	require.Eventually(t, func() bool { return bus.Subs() == 0 }, 2*time.Second, 5*time.Millisecond,
+	require.Eventually(t, func() bool { return bus.NumSubs() == 0 }, 2*time.Second, 5*time.Millisecond,
 		"closing the stream must stop the subscription it started")
 }
 
@@ -1862,14 +1862,14 @@ func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
 	t.Parallel()
 	var held atomic.Int32
 	beats := topic.New[int]()
-	app := via.Register(leakPage{
+	app := via.Handler(leakPage{
 		A: leakRoom{held: &held, beats: beats},
 		B: leakRoom{held: &held, beats: beats, boom: true},
 	})
 	resp, _ := do(t, serve(t, app), http.MethodPost, "/_via/sse", "")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Zero(t, held.Load(), "an acquire made before the panic was never released")
-	assert.Zero(t, beats.Subs(), "the Listen subscription was never stopped")
+	assert.Zero(t, beats.NumSubs(), "the Listen subscription was never stopped")
 }
 
 // firstElementsFrame drains lines until the first datastar-patch-elements
@@ -1928,7 +1928,7 @@ func (p *stalePage) View() h.H {
 
 func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(stalePage{}))
+	srv := serve(t, via.Handler(stalePage{}))
 	lines, cancel := openStream(t, srv)
 	defer cancel()
 
@@ -1966,7 +1966,7 @@ func TestListen_burstLosesNoHandlerCallAndCoalescesRenders(t *testing.T) {
 		const msgs = 1000
 		bus := topic.New[int]()
 		var got, renders atomic.Int64
-		srv := liveServer(t, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+		srv := liveServer(t, via.Handler(burstUnit{bus: bus, got: &got, renders: &renders}))
 
 		lines, cancel := openStream(t, srv)
 		defer cancel()
@@ -1975,7 +1975,7 @@ func TestListen_burstLosesNoHandlerCallAndCoalescesRenders(t *testing.T) {
 			}
 		}()
 		synctest.Wait()
-		require.Equal(t, 1, bus.Subs(), "the stream must be subscribed before the burst")
+		require.Equal(t, 1, bus.NumSubs(), "the stream must be subscribed before the burst")
 
 		renders.Store(0)
 		for range msgs {
@@ -2017,7 +2017,7 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 	const seeds = 50
 	bus := topic.New[int]()
 	var got atomic.Int64
-	srv := serve(t, via.Register(selfPublisher{bus: bus, got: &got}))
+	srv := serve(t, via.Handler(selfPublisher{bus: bus, got: &got}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -2025,7 +2025,7 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 		for range lines {
 		}
 	}()
-	require.Eventually(t, func() bool { return bus.Subs() == 1 }, 2*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return bus.NumSubs() == 1 }, 2*time.Second, 5*time.Millisecond)
 
 	for range seeds {
 		bus.Publish(1)
@@ -2041,7 +2041,7 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
 	var got, renders atomic.Int64
-	srv := serve(t, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+	srv := serve(t, via.Handler(burstUnit{bus: bus, got: &got, renders: &renders}))
 
 	ctx, stall := context.WithCancel(context.Background())
 	defer stall()
@@ -2054,7 +2054,7 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
-	require.Eventually(t, func() bool { return bus.Subs() == 2 }, 2*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return bus.NumSubs() == 2 }, 2*time.Second, 5*time.Millisecond)
 
 	for range 500 {
 		bus.Publish(1)
@@ -2070,7 +2070,7 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 	const msgs = 1000
 	bus := topic.New[int]()
 	var got, renders atomic.Int64
-	srv := serve(b, via.Register(burstUnit{bus: bus, got: &got, renders: &renders}))
+	srv := serve(b, via.Handler(burstUnit{bus: bus, got: &got, renders: &renders}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
@@ -2088,7 +2088,7 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 			}
 		}
 	}()
-	for bus.Subs() == 0 {
+	for bus.NumSubs() == 0 {
 		time.Sleep(time.Millisecond)
 	}
 	var total int64
@@ -2154,12 +2154,12 @@ func TestListen_handlerOrderIsRegistrationOrderNotAGoroutineRace(t *testing.T) {
 	bus := topic.New[int]()
 	var mu sync.Mutex
 	var seen []string
-	srv := serve(t, via.Register(orderUnit{bus: bus, mu: &mu, seen: &seen}))
+	srv := serve(t, via.Handler(orderUnit{bus: bus, mu: &mu, seen: &seen}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
 	awaitTabID(t, lines)
-	require.Eventually(t, func() bool { return bus.Subs() == 2 }, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return bus.NumSubs() == 2 }, 2*time.Second, time.Millisecond)
 
 	const n = 50
 	for i := range n {
@@ -2188,7 +2188,7 @@ func BenchmarkListen_goroutinesPerConnection(b *testing.B) {
 	bus := topic.New[int]()
 	var got atomic.Int64
 	var renders atomic.Int64
-	srv := serve(b, via.Register(triListen{bus: bus, got: &got, renders: &renders}))
+	srv := serve(b, via.Handler(triListen{bus: bus, got: &got, renders: &renders}))
 
 	const conns = 200
 	base := runtime.NumGoroutine()
@@ -2211,7 +2211,7 @@ func BenchmarkListen_goroutinesPerConnection(b *testing.B) {
 			}
 		}()
 	}
-	for bus.Subs() < conns*3 {
+	for bus.NumSubs() < conns*3 {
 		time.Sleep(time.Millisecond)
 	}
 	perConn := float64(runtime.NumGoroutine()-base) / conns
@@ -2268,7 +2268,7 @@ func (p *tickRootWithKid) View() h.H         { return h.Div(p.n.Display(), via.E
 // child's OnInit — so a live root could compose, but only until it ticked.
 func TestLive_plainEmbedUnderALiveRootKeepsItsOnInitState(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Register(tickRootWithKid{}))
+	srv := liveServer(t, via.Handler(tickRootWithKid{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	require.Contains(t, page, "kid=FROM_ONINIT", "the GET must render the embed's loaded state")
@@ -2302,7 +2302,7 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
 	var got, seen atomic.Int64
-	srv := liveServer(t, via.Register(panicListener{bus: bus, got: &got, seen: &seen}))
+	srv := liveServer(t, via.Handler(panicListener{bus: bus, got: &got, seen: &seen}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -2319,7 +2319,7 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 
 // flakyKid is a PLAIN child of a LIVE root whose OnInit starts failing after
 // the connect render. A live root re-inits its plain children on every pushed
-// frame, so from then on every frame panics childInit — and a push has no
+// frame, so from then on every frame panics initOutcome — and a push has no
 // response to turn that into an HTTP answer.
 type flakyKid struct{ inits *atomic.Int32 }
 
@@ -2350,7 +2350,7 @@ func (p *liveParentFlakyKid) View() h.H         { return h.Div(p.n.Display(), vi
 func TestLive_childInitFailureOnThePushPathTearsTheStreamDown(t *testing.T) {
 	t.Parallel()
 	inits := &atomic.Int32{}
-	srv := serve(t, via.Register(liveParentFlakyKid{Kid: flakyKid{inits: inits}}))
+	srv := serve(t, via.Handler(liveParentFlakyKid{Kid: flakyKid{inits: inits}}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

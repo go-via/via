@@ -45,10 +45,14 @@ func safeURL(u, where string) string {
 // Href is the typed href attribute: http/https/relative URLs pass through, an
 // unsafe scheme is neutralized to "#" and logged — a link must never become a
 // script gadget.
-func Href(u string) Attr { return RawAttr("href", safeURL(u, "href")) }
+//
+// These three go straight to hcore.RawAttr, not h.RawAttr: the name is
+// URL-bearing, so h.RawAttr would run the same gate a second time and log a
+// neutralized URL twice.
+func Href(u string) Attr { return hcore.RawAttr("href", safeURL(u, "href")) }
 
 // Src is the typed src attribute, gated like Href.
-func Src(u string) Attr { return RawAttr("src", safeURL(u, "src")) }
+func Src(u string) Attr { return hcore.RawAttr("src", safeURL(u, "src")) }
 
 // Action is the typed form-action attribute, gated like Href.
-func Action(u string) Attr { return RawAttr("action", safeURL(u, "action")) }
+func Action(u string) Attr { return hcore.RawAttr("action", safeURL(u, "action")) }

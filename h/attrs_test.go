@@ -77,8 +77,8 @@ func TestValueAttrs_eachRendersItsOwnName(t *testing.T) {
 		`cols="80"`:                     h.Cols(80),
 		`maxlength="140"`:               h.MaxLength(140),
 		`minlength="3"`:                 h.MinLength(3),
-		`colspan="2"`:                   h.Colspan(2),
-		`rowspan="3"`:                   h.Rowspan(3),
+		`colspan="2"`:                   h.ColSpan(2),
+		`rowspan="3"`:                   h.RowSpan(3),
 		`tabindex="-1"`:                 h.TabIndex(-1),
 	} {
 		assert.Equal(t, "<div "+want+"></div>", render(t, h.Div(attr)), want)

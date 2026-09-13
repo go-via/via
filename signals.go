@@ -78,7 +78,8 @@ type Signal[T any] struct {
 // array or map field has no field name and panics when rendered.
 func (s *Signal[T]) Ref() string { return "$" + s.slot }
 
-// Get returns the current value.
+// Get returns the server-side value: what the last Set wrote, or what the
+// client posted back for a Bind()ed signal on this request.
 func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and records it dirty, which is what carries the change

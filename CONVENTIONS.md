@@ -20,7 +20,7 @@ test does internally.
 ## Test-First
 
 Reasoning: Writing the test first forces you to define the contract before
-the implementation, and ensures every behavior has a corresponding test.
+the implementation, and every behavior ends up with a corresponding test.
 
 Rule: No implementation before a failing test. The sequence is always:
 write test → confirm it fails correctly → implement → confirm it passes.

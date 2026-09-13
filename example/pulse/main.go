@@ -1,11 +1,10 @@
-// Command pulse is a live embed. Pulse implements OnInit, so via opens a
-// per-tab SSE stream and pushes a re-rendered fragment on every server-side
-// tick — the browser updates with no client code, no WebSocket, no build step.
-// The View is pure and ctx-free; there is no '&' and no closure at any call site.
+// Command pulse is a live embed: OnInit registers a tick, so via opens a per-tab
+// SSE stream and pushes a re-rendered fragment on every beat.
 package main
 
 import (
 	"cmp"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -34,6 +33,6 @@ func (p *Pulse) View() h.H {
 }
 
 func main() {
-	http.Handle("/", via.Register(Pulse{}))
-	http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil)
+	http.Handle("/", via.Handler(Pulse{}))
+	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
 }

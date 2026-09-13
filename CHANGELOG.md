@@ -20,12 +20,12 @@ the v2 core. **Requires Go 1.27.**
   value must be JSON-encodable (it panics if not) and a value written under a
   type that has since been renamed reads back as absent.
 
-- **`Reloader`** — `Reload(*via.Ctx) error`, run after an action and before the
+- **`Reloader`**: `Reload(*via.Ctx) error`, run after an action and before the
   response render, on the plain path and the live path alike. It fixes the
   commonest week-one defect: `OnInit` loads, the handler mutates the store, and
   the render still shows what `OnInit` read, so the action answers 204 and the
   UI never moves. `Reload` is a second hook rather than a second `OnInit` run
-  because `OnInit` is an initializer — it mints and defaults the session, seeds
+  because `OnInit` is an initializer: it mints and defaults the session, seeds
   signals from the request URL, registers `Tick`/`Listen`, and may `Redirect`
   or return `ErrNotFound`, none of which is safe to repeat once a handler has
   committed a mutation. `Tick`/`Listen` are no-ops inside `Reload` (liveness
@@ -55,12 +55,12 @@ runtime unless you look:
   limit of that reasoning: a PLAIN page has no connection and no tab id
   (`viatab` and `_viatab` are empty), so a cross-origin `PostForm` submit is
   accepted with the floor open, and what defends it is the session cookie's
-  `SameSite=Lax` — the request simply arrives unauthenticated. The consequence:
+  `SameSite=Lax`, and the request arrives unauthenticated. The consequence:
   **a production deployment that never calls `WithTrustedOrigin` is running
-  with cross-origin enforcement off.** The option name says what it allows, not that it also flips
-  enforcement, so via now logs one line at startup when the floor is open. Set
+  with cross-origin enforcement off.** The option name describes what it allows
+  and says nothing about it also flipping enforcement, so via now logs one line at startup when the floor is open. Set
   the option in production.
-- **Sessions are always on**, lazily — the cookie is issued on first write. If
+- **Sessions are always on**, lazily: the cookie is issued on first write. If
   no key is configured, via mints a random per-process one and warns once. The
   key signs the COOKIE only; the DATA lives behind the new `SessionStore`
   interface, whose default is a map in this process's memory. Surviving a
@@ -73,10 +73,10 @@ opt out of.
 
 ### Breaking
 
-v0.8 is a rebuild, not an incremental release: the v1 surface (plugins,
+v0.8 is a rebuild rather than an incremental release: the v1 surface (plugins,
 `h.Group`/`h.If` helpers, theme options, `WithoutSSEReconnect`, the old
 composition types) is replaced wholesale by the core below. Treat migration
-as a re-read of the README, not a diff.
+as a re-read of the README rather than a diff.
 
 - **Requires Go 1.27.**
 - **`via.Live` and `OnConnect` are gone: there is ONE hook, `Initer`/`OnInit`.**
@@ -88,9 +88,9 @@ as a re-read of the README, not a diff.
   unit DOES: it is live if its `OnInit` registered a `Tick` or a `Listen`, or
   its `View` rendered a `State`/`List`. A unit whose server state only drives a
   branch (`State.Get()` in an `if`, never `Display()`ed) is not detectable that
-  way — give it a `Tick` or render it.
-- **`OnInit` now runs on every request that renders the unit** — the GET, each
-  action, and the SSE connect — not once per connection. Register
+  way; give it a `Tick` or render it.
+- **`OnInit` now runs on every request that renders the unit**: the GET, each
+  action, and the SSE connect, rather than once per connection. Register
   connection-scoped side effects, never perform them: the new
   `ctx.OnConnect(fn)` is the acquire half of `ctx.OnDispose(fn)` and runs only
   when a stream actually opens. `ctx.Listen` subscribes lazily for the same
@@ -98,25 +98,25 @@ as a re-read of the README, not a diff.
   GET.
 - **A failed `OnInit` runs no disposers**, because nothing was acquired yet:
   the acquire/release pair is `OnConnect`/`OnDispose` and neither half runs.
-- **Every action now echoes the tab id**, live or not — `viatab` is declared
+- **Every action now echoes the tab id**, live or not: `viatab` is declared
   on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
   page sends the empty id, which matches no connection and falls through to the
   stateless path, as does a plain child embedded on a live page.
 - **The tab id is a SIGNAL, not the `X-Via-Tab` header** (wire break). Datastar
-  builds request headers per call — `Object.assign({}, {Accept,
+  builds request headers per call (`Object.assign({}, {Accept,
   'Datastar-Request'}, opts.headers)`, with no ancestor inheritance and no
-  config hook — so a header had to be spelled out on every binding (33 bytes
+  config hook), so a header had to be spelled out on every binding (33 bytes
   each). It filters out only signals matching `/(^|\.)_/`, so dropping the
   leading underscore is all it takes for the tab id to ride in the signal store
   every `@post` already sends. The header is no longer read. Security is
   unchanged: the id is still a synchronizer token set by same-origin JS and
   never auto-attached by the browser, the `Datastar-Request` check stays, and
-  the origin floor is untouched. `PostForm` is the one exception — a native
+  the origin floor is untouched. `PostForm` is the one exception: a native
   form submit carries neither signals nor headers, so it keeps its hidden
   `_viatab` field, now bound to `$viatab`.
-- **A signal's wire name is its Go FIELD name** (wire break) — `count`,
+- **A signal's wire name is its Go FIELD name** (wire break): `count`,
   `chat__draft` for one inside an embedded `Chat`, `outer__mid__kid__step` for
-  a deeper path — replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
+  a deeper path, replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
   The offsets stay as the internal key, so hydration is unchanged and
   reflection runs once per composition TYPE at `Mount`/`Embed`, never per
   render. A plain nested struct joins with one underscore, an embed boundary
@@ -128,10 +128,10 @@ as a re-read of the README, not a diff.
   for hand-written attributes the typed API does not cover:
   `h.Data("show", p.Open.Ref())`. Field-held signals are named before the View
   runs, so `Ref` reads the same name wherever it is called.
-- **`h.SafeURL` is gone.** The URL policy — http/https/relative admitted,
+- **`h.SafeURL` is gone.** The URL policy (http/https/relative admitted,
   `javascript:`/`data:`/protocol-relative refused, including a leading `\` or
   `/\` (WHATWG parsing treats `\` as `/`, so `/\evil.com` is protocol-relative
-  too) — moved to `internal/hcore`, where `h`'s typed attributes and via's
+  too) moved to `internal/hcore`, where `h`'s typed attributes and via's
   `Redirect` gate share one implementation. It was exported only to cross a
   package boundary, and it carried a second copy of the three checks: two
   gates that agreed today is how one of them later admits a `javascript:`
@@ -141,7 +141,7 @@ as a re-read of the README, not a diff.
 - **`via/sess` merged into the root package**: `Session` is a real type with
   `Put`/`Get[T]`/`Clear[T]`/`Rotate` methods, reached via `ctx.Session()`; the
   `sess` subpackage and its `internal/sessbridge` shim are gone.
-- **Bare mutators**: `Signal.Set(v)`, `State.Set(v)`, `List.Append(v)` — no
+- **Bare mutators**: `Signal.Set(v)`, `State.Set(v)`, `List.Append(v)`, with no
   `ctx` argument. State is bare; ctx is for the request.
 - **Composition is `via.Embed`**: child compositions are plain struct fields
   rendered with `via.Embed(p.Field)`. `Slot`, `Child[C]`, `NewChild`, `Fill`
@@ -196,7 +196,7 @@ as a re-read of the README, not a diff.
   `Sub.C() <-chan T` is replaced by `Sub.Ready() <-chan struct{}` plus
   `Sub.Drain() ([]T, bool)`; `Topic.SubscribeLimit(n)` sets a custom limit.
 - **A plain (non-live) page may embed live islands** as sibling struct
-  fields — each streams and patches independently over the page's one
+  fields; each streams and patches independently over the page's one
   connection. **Known limitation:** a live island cannot itself embed
   another live island, and an embedded live island's own `View` cannot call
   `via.Embed` at all — either panics at render, loud and early. Nested live
@@ -213,12 +213,12 @@ as a re-read of the README, not a diff.
   misspelled the way `h.RawAttr("placholder", "x")` can. The booleans are the
   substantive part: an HTML boolean attribute is *present or absent*, and
   `disabled="false"` disables a control in every browser, so the off state now
-  emits no attribute at all — something `RawAttr` could not express.
+  emits no attribute at all, which `RawAttr` could not express.
   `RawAttr` and `Data` stay for everything else.
 
 - **`List[E]` gets `Remove`** alongside `Append`: it panics on an out-of-range
   index rather than silently doing nothing. Rows that can be removed or
-  reordered need a stable `id` so the morph matches by identity, not position.
+  reordered need a stable `id` so the morph matches by identity rather than position.
 - **`List.Each(row)`**: sugar over `via.Each(l.Get(), row)`.
 - **Full HTML5 vocabulary in `h`** (~105 constructors), minus the page-shell
   and footgun tags (`html`, `head`, `script`, `template`, …) — those stay
@@ -231,18 +231,18 @@ as a re-read of the README, not a diff.
   binding, a native `PostForm` submit, or a live unit's — posts through one
   `dispatch`/`respond` pair to `/_via/a/{island}/{n}` (the root is island 0);
   the response mode (element-patch vs a native form's full-page re-render) is
-  read off the request's `Datastar-Request` header, not the route. `/_via/f/`
+  read off the request's `Datastar-Request` header rather than the route. `/_via/f/`
   is gone.
-- **Path params**: `Mount("/thread/{id}", …)` + `ctx.Param[T]("id")` — Go's
+- **Path params**: `Mount("/thread/{id}", …)` + `ctx.Param[T]("id")`, on Go's
   own `http.ServeMux` syntax, named not positional; a segment that doesn't
   decode is an honest 404 on every stateless transport, and naming a segment
   the mount pattern doesn't have panics at request time (a wiring mistake).
 - **`ctx.Listen[T](topic, handler)`**: subscribe + pump + auto-dispose
   in one line.
 - **Arg events**: `via.OnArg` carries a typed render-time datum with the
-  event — a per-row action without an `&` at the call site.
+  event: a per-row action without an `&` at the call site.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
-  multipart, so a file `<input>` just works — read it with stdlib's
+  multipart, so a file `<input>` just works; read it with stdlib's
   `ctx.Request().FormFile(name)`; no separate upload verb or type.
 - **`ctx.Redirect`** navigates from OnInit, Reload, a PostForm submit (303)
   and a Datastar `@post` alike. Targets are gated by the shared URL policy;
@@ -250,9 +250,9 @@ as a re-read of the README, not a diff.
   answers with a constant `location.assign` script Datastar executes through
   its `text/javascript` branch, with the target in a
   `datastar-script-attributes` header so the CSP can admit the bytes by hash.
-- **`WithDocumentHead(via.Head{...})`**: the document shell — `Title`, `Lang`,
+- **`WithDocumentHead(via.Head{...})`**: the document shell. `Title`, `Lang`,
   `Raw` head markup (emitted verbatim after via's own `<meta charset>`), one
-  inline style, and `ScriptOrigins`/`StyleOrigins`/`FontOrigins` — the app's
+  inline style, and `ScriptOrigins`/`StyleOrigins`/`FontOrigins` are the app's
   own origin declaration for whatever `Raw` references, one list per
   directive so a stylesheet CDN isn't also script-trusted. `script-src`,
   `style-src` and `font-src` are derived from those lists, so a declared host
@@ -333,10 +333,10 @@ as a re-read of the README, not a diff.
   the in-memory listener at all.
 - **A live action no longer re-renders before it runs.** It hydrates and
   dispatches against the actions/hydrators table the previous push already
-  built, then pushes once — one render per action, not two. An action id
+  built, then pushes once: one render per action instead of two. An action id
   outside that table (a click racing a push, or a branched `View` that
   shifted it) now answers `410` instead of silently doing nothing.
-- **Signals are addressed by field identity, not by render position.** A
+- **Signals are addressed by field identity rather than render position.** A
   `Signal[T]`'s wire name is its Go field name, keyed internally by its byte
   offset within the composition struct — `count`, `chat__draft` for an
   embedded island — replacing the render-order `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
@@ -372,7 +372,7 @@ as a re-read of the README, not a diff.
   A stateless action's patch now also declares any slot the pre-action render
   did not carry, so an input that appears for the first time in the response is
   seeded instead of inheriting whatever the client store still held.
-- **Actions are addressed by handler, not by render position**
+- **Actions are addressed by handler rather than by render position**
   (`/_via/a/{island}/{id}`, plus `?a=` for a value-carrying action). `id` is a
   short hash of the handler method's fully-qualified Go name, so it is stable
   across renders, across instances and across rebuilds — a deploy does not
@@ -418,7 +418,7 @@ as a re-read of the README, not a diff.
   so a plain root carrying a live `Embed` served a document with no `data-init`
   and the embed was dead after the first submit. Liveness is now read off that
   re-render, exactly as the GET and the live path do.
-- **The acted-instance substitution now checks the TYPE, not just the key.**
+- **The acted-instance substitution now checks the TYPE as well as the key.**
   When a root's `Embed` order shifts between the discovery render and the
   response re-render (the acted embed's own action opened a branch or appended
   to the list the root iterates), the acted key names a slot a different type
@@ -429,7 +429,7 @@ as a re-read of the README, not a diff.
 - **A failing child `OnInit` on the push path no longer kills the stream
   silently.** A plain child of a live root is re-inited on every frame, so one
   whose `OnInit` returns an error/`Redirect`/missing param panicked every
-  frame; each was logged and dropped and the tab simply stopped updating, with
+  frame; each was logged and dropped and the tab stopped updating, with
   no client-visible signal. The stream is now torn down once (logged once), so
   the client reconnects and the GET answers the failure as the 500/303/404 it
   actually is.
@@ -538,7 +538,7 @@ as a re-read of the README, not a diff.
   island-action response rebuilt the container with no `data-signals`
   attribute at all, so a Set that changed only a bound (not displayed) signal
   vanished — server memory updated, browser never told.
-- **`OnInit` now runs on an embedded island's action**, not only the page GET
+- **`OnInit` now runs on an embedded island's action**, where before only the page GET
   and the root's own action — the island-action route used to bypass it
   entirely.
 - **A stateless island's action re-render under a parametrised mount
@@ -606,8 +606,8 @@ as a re-read of the README, not a diff.
 - There is no per-IP or per-tab cap on concurrent SSE connections beyond the
   router-wide `WithMaxLiveConnections`; a single client can still open many.
 - Action-body JSON decoding is not strict: unknown signal keys and trailing
-  bytes after the JSON value are ignored, not rejected.
-- Session idle-TTL eviction is lazy — enforced on the next access, not swept
+  bytes after the JSON value are ignored rather than rejected.
+- Session idle-TTL eviction is lazy, enforced on the next access rather than swept
   proactively — so a session nobody ever touches again outlives its TTL in
   memory.
 - A `Tick` handler that blocks (I/O, an unbounded loop) pins the connection's
@@ -630,7 +630,7 @@ as a re-read of the README, not a diff.
   same connection (a double-click during login): before the connection
   binds it would have applied, but now it answers 403 "session mismatch"
   once, because it is indistinguishable from an attacker's request at
-  that point. This is deliberate, not a bug, but it is a behaviour change.
+  that point. This is deliberate, but it is a behaviour change.
 - A session minted from a `Tick`/`Listen` handler (as opposed to an action
   or `OnInit`) has no open response to carry a cookie, so it is created
   and then orphaned until its TTL. In some configurations this is silent:

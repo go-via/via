@@ -99,7 +99,7 @@ func (c *counter) View() h.H {
 // sequential requests observe persisted server state.
 func newCounter(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(via.Register(counter{count: &store{}}))
+	srv := httptest.NewServer(via.Handler(counter{count: &store{}}))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -251,7 +251,7 @@ func TestUnknownAction_isGone(t *testing.T) {
 // silently starts 400ing bodies real browsers happily sent under v1.
 func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(boundForm{}))
+	app := vt.Serve(t, via.Handler(boundForm{}))
 	status, _ := app.Action(0).Body("{\"name\":\"\xff\"}").Fire()
 	assert.Equal(t, http.StatusOK, status)
 }
@@ -261,7 +261,7 @@ func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 // sent starts failing under the new decoder.
 func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Register(boundForm{}))
+	app := vt.Serve(t, via.Handler(boundForm{}))
 	status, frag := app.Action(0).Body(`{"name":"one","name":"two"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "two")
@@ -313,7 +313,7 @@ func (n *noopComp) View() h.H {
 // annotation (no NoContent call) required.
 func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(noopComp{}))
+	srv := serve(t, via.Handler(noopComp{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -332,7 +332,7 @@ func (c *formComp) View() h.H {
 // needed.
 func TestOn_submitWiresAPostAction(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(formComp{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(formComp{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, "r", 0)+`'`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
@@ -352,7 +352,7 @@ func (r *reqEchoer) View() h.H {
 // of the request must reach the re-rendered response.
 func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(reqEchoer{}))
+	srv := serve(t, via.Handler(reqEchoer{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	_, body := post(t, srv, actionURL(t, page, "r", 0), "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
@@ -382,7 +382,7 @@ func (c *digestEchoer) View() h.H {
 // would match this text too and corrupt it with digest bytes.
 func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(digestEchoer{}))
+	srv := serve(t, via.Handler(digestEchoer{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	slot := attrValue(t, page, "data-bind")
 	nul := string(byte(0))
@@ -403,12 +403,12 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 // ctx.Param) cannot appear here: isViaCall only matches a package-qualified
 // call (via.X), and neither is ever spelled that way.
 var viaCallNames = map[string]bool{
-	"Register": true, "Embed": true, "When": true, "Each": true,
+	"Handler": true, "Embed": true, "When": true, "Each": true,
 	"On": true, "OnArg": true, "PostForm": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
-// passes a closure at a via call site (Register/Embed/On*). A violation that
+// passes a closure at a via call site (Handler/Embed/On*). A violation that
 // compiles silently erodes the design, so this asserts it structurally over the
 // example sources — the canonical user-facing call sites. It is an interim
 // guard; the type-level closure ban is tracked as follow-up.
@@ -585,7 +585,7 @@ func newTodoList() *todoBox {
 // describes which datum it acts on — no closure, no stable-slot scheme.
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Register(todoList{box: newTodoList()})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(todoList{box: newTodoList()})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
 }
 
@@ -593,7 +593,7 @@ func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 // deleting the row whose value rode with the click.
 func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -607,7 +607,7 @@ func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 // can't misroute, because identity rides with the click.
 func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
 	// value (2) while keeping alpha's slot and shape digest.
@@ -623,7 +623,7 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 // 0) — the arg is client-controlled input, so an honest answer is 400.
 func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(todoList{box: newTodoList()}))
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=%22abc%22", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}")
@@ -645,7 +645,7 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			srv := serve(t, via.Register(todoList{box: newTodoList()}))
+			srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 			_, page := do(t, srv, http.MethodGet, "/", "")
 			url := strings.Replace(actionURL(t, page, "r", 0), "a=1", tt.a, 1)
 			resp, body := do(t, srv, http.MethodPost, url, "{}")
@@ -666,7 +666,7 @@ func (b *todoBoard) View() h.H { return h.Div(via.Embed(b.List)) }
 func TestActionArg_worksInsideAPlainEmbed(t *testing.T) {
 	t.Parallel()
 	board := todoBoard{List: todoList{box: newTodoList()}}
-	srv := serve(t, via.Register(board))
+	srv := serve(t, via.Handler(board))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // embed 1, bravo's slot, arg=2
@@ -691,7 +691,7 @@ func (a *changePicker) View() h.H {
 // handler. Fails if the change event stops firing or stops reaching Pick.
 func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(changePicker{}))
+	srv := serve(t, via.Handler(changePicker{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	assert.Contains(t, page, `data-on:change`, "OnChange must bind the change event")
 
@@ -729,7 +729,7 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 	defer log.SetOutput(prev)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(tickSessionWriter{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickSessionWriter{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)
@@ -750,7 +750,7 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 	t.Parallel()
 	box := newTodoList()
-	srv := serve(t, via.Register(todoList{box: box}))
+	srv := serve(t, via.Handler(todoList{box: box}))
 
 	_, tabB := do(t, srv, http.MethodGet, "/", "") // tab B paints, then sits idle
 	bravoFromB := rowActionURL(t, tabB, 2)
@@ -778,8 +778,8 @@ func rowActionURL(t *testing.T, html string, id int) string {
 // not invalidate the URLs open tabs are holding.
 func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
 	t.Parallel()
-	_, first := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
-	_, second := do(t, serve(t, via.Register(counter{count: &store{}})), http.MethodGet, "/", "")
+	_, first := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
+	_, second := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
 	assert.Equal(t, actionURL(t, first, "r", 1), actionURL(t, second, "r", 1),
 		"two independent instances must address the same handler identically")
 }
@@ -800,7 +800,7 @@ func (c *twinButtons) View() h.H {
 
 func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(twinButtons{count: &store{}}))
+	srv := serve(t, via.Handler(twinButtons{count: &store{}}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	assert.Equal(t, actionURL(t, page, "r", 0), actionURL(t, page, "r", 1),
 		"two bindings of one handler must share one id")
@@ -869,7 +869,7 @@ func actionURLs(t *testing.T, h http.Handler) []string {
 
 func TestActionID_twoInstancesOfOneTypeGetDistinctIDs(t *testing.T) {
 	t.Parallel()
-	urls := actionURLs(t, via.Register(idTwins{}))
+	urls := actionURLs(t, via.Handler(idTwins{}))
 	require.Len(t, urls, 2)
 	require.NotEqual(t, urls[0], urls[1],
 		"two instances of one type must not share an action id — A's click would run B")
@@ -877,7 +877,7 @@ func TestActionID_twoInstancesOfOneTypeGetDistinctIDs(t *testing.T) {
 
 func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
 	t.Parallel()
-	urls := actionURLs(t, via.Register(idPair{}))
+	urls := actionURLs(t, via.Handler(idPair{}))
 	require.Len(t, urls, 2)
 	require.NotEqual(t, urls[0], urls[1])
 }
@@ -886,7 +886,7 @@ func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
 // SECOND twin's button must increment the second counter, not the first.
 func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	t.Parallel()
-	app := via.Register(idTwins{})
+	app := via.Handler(idTwins{})
 	urls := actionURLs(t, app)
 	require.Len(t, urls, 2)
 
@@ -916,7 +916,7 @@ func (c *idSameMethodTwice) View() h.H {
 // twice, is one action and must still collapse onto one id.
 func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
 	t.Parallel()
-	urls := actionURLs(t, via.Register(idSameMethodTwice{}))
+	urls := actionURLs(t, via.Handler(idSameMethodTwice{}))
 	require.Len(t, urls, 2)
 	require.Equal(t, urls[0], urls[1])
 }
@@ -935,7 +935,7 @@ func (p *idClosurePair) View() h.H {
 // them apart by identity. That must be loud, never a silent last-wins.
 // Sequential: it captures the global log output.
 func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
-	app := via.Register(idClosurePair{})
+	app := via.Handler(idClosurePair{})
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
@@ -958,7 +958,7 @@ func (g *gridBench) row(int) h.H { return h.Button(via.On("click", g.Hit)) }
 func (g *gridBench) View() h.H { return h.Div(via.Each(g.rows, g.row)) }
 
 func BenchmarkRender_thousandActionBindings(b *testing.B) {
-	handler := via.Register(gridBench{rows: make([]int, 1000)})
+	handler := via.Handler(gridBench{rows: make([]int, 1000)})
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	for b.Loop() {
 		handler.ServeHTTP(httptest.NewRecorder(), req)
@@ -971,12 +971,12 @@ func BenchmarkRender_thousandActionBindings(b *testing.B) {
 // between renders or collapse two receivers onto one id.
 func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
 	t.Parallel()
-	handler := via.Register(idTwins{})
+	handler := via.Handler(idTwins{})
 	first := actionURLs(t, handler)
 	second := actionURLs(t, handler)
 	require.Len(t, first, 2)
 	assert.Equal(t, first, second, "an action URL must survive a re-render, or every open tab 410s")
-	assert.Equal(t, first, actionURLs(t, via.Register(idTwins{})),
+	assert.Equal(t, first, actionURLs(t, via.Handler(idTwins{})),
 		"the id is content-addressed, not per-instance")
 }
 
@@ -1031,7 +1031,7 @@ func assertMountPanic(t *testing.T, want string, mount func()) {
 
 func TestSignal_duplicateSlotNamePanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertMountPanic(t, "signal slot a_b is minted twice", func() { via.Register(collidePage{}) })
+	assertMountPanic(t, "signal slot a_b is minted twice", func() { via.Handler(collidePage{}) })
 }
 
 // boxedSignal reaches its signal through a pointer field, so the handle lives
@@ -1061,23 +1061,23 @@ func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
 func TestSignal_behindAPointerFieldPanicsAtMount(t *testing.T) {
 	t.Parallel()
 	assertMountPanic(t, "holds a via.Signal behind a ptr", func() {
-		via.Register(boxedSignal{S: &via.Signal[string]{}})
+		via.Handler(boxedSignal{S: &via.Signal[string]{}})
 	})
 }
 
 func TestSignal_behindASliceFieldPanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertMountPanic(t, "holds a via.Signal behind a slice", func() { via.Register(slicedSignal{}) })
+	assertMountPanic(t, "holds a via.Signal behind a slice", func() { via.Handler(slicedSignal{}) })
 }
 
 func TestSignal_behindAMapFieldPanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertMountPanic(t, "holds a via.Signal behind a map", func() { via.Register(mappedSignal{}) })
+	assertMountPanic(t, "holds a via.Signal behind a map", func() { via.Handler(mappedSignal{}) })
 }
 
 func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertMountPanic(t, "View has a VALUE receiver", func() { via.Register(valueReceiverView{}) })
+	assertMountPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverView{}) })
 }
 
 // valueReceiverEmbed is only reachable through via.Embed, so its View receiver
@@ -1088,13 +1088,13 @@ func TestSignal_valueReceiverEmbedPanicsAtRender(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
 	rec := httptest.NewRecorder()
-	via.Register(valueReceiverEmbedParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	via.Handler(valueReceiverEmbedParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, logs.String(), "View has a VALUE receiver")
 }
 
 func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {
-	assertSlotPanic(t, via.Register(embedCollidePage{}), "collides with the embed prefix of field a")
+	assertSlotPanic(t, via.Handler(embedCollidePage{}), "collides with the embed prefix of field a")
 }
 
 // ownedRows is the arg-authorization fixture: a list filtered by owner, plus
@@ -1150,7 +1150,7 @@ func (o *ownedRows) View() h.H {
 // this answered 200 and ran Delete(1).
 func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(newOwnedRows("bob", false)))
+	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	require.Contains(t, page, "a=2", "bob's own row must be bound")
 	require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
@@ -1166,7 +1166,7 @@ func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 // the last push's table rather than a fresh render, so it needs its own test.
 func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(liveOwnedRows{}))
+		app := vt.Serve(t, via.Handler(liveOwnedRows{}))
 		conn := app.Connect()
 
 		url := strings.Replace(conn.ActionURL("r", 0), "a=2", "a=1", 1)
@@ -1194,14 +1194,14 @@ func (l *liveOwnedRows) View() h.H {
 // authorizes the row, and a closed branch is an authorization answer.
 func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
 	t.Parallel()
-	admin := serve(t, via.Register(newOwnedRows("alice", true)))
+	admin := serve(t, via.Handler(newOwnedRows("alice", true)))
 	_, adminPage := do(t, admin, http.MethodGet, "/", "")
 	require.Contains(t, adminPage, `id="system"`)
 	systemURL := actionURL(t, adminPage, "r", 1) // the When branch's own binding
 	require.Contains(t, systemURL, "a=9")
 
 	// Same handler, same action id, same URL — but a render with the branch shut.
-	plain := serve(t, via.Register(newOwnedRows("alice", false)))
+	plain := serve(t, via.Handler(newOwnedRows("alice", false)))
 	_, plainPage := do(t, plain, http.MethodGet, "/", "")
 	require.NotContains(t, plainPage, `id="system"`)
 	require.Contains(t, plainPage, "a=1", "the handler must still be bound, or this proves nothing")
@@ -1215,7 +1215,7 @@ func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
 // normally. A fix that 410s everything would pass the tests above.
 func TestActionArg_renderedArgStillDispatches(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(newOwnedRows("bob", false)))
+	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -1244,7 +1244,7 @@ func (b *bigList) View() h.H {
 // the response it was built from.
 func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(bigList{}))
+	srv := serve(t, via.Handler(bigList{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	base := actionURL(t, page, "r", 0)
 	for _, id := range []string{"1", "500", "1000"} {
@@ -1263,7 +1263,7 @@ func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 // what it catches is the set turning into something super-linear, or the args
 // being retained per ROW rather than merged per SLOT.
 func BenchmarkEachArgSet(b *testing.B) {
-	h := via.Register(bigList{})
+	h := via.Handler(bigList{})
 	srv := httptest.NewServer(h)
 	defer srv.Close()
 	b.ReportAllocs()

@@ -1,15 +1,15 @@
-// Command feed is a multi-user broadcast. A server-side publisher sends to a
-// Topic, and every connected browser's embed Subscribes and shows the latest
-// message live — one source fanning out to all screens, no client code, no
-// WebSocket. Open it in two tabs to watch them update in lockstep. The View is
-// pure and ctx-free; there is no '&' and no closure at any call site.
+// Command feed is a multi-user broadcast: one server-side publisher sends to a
+// Topic and every connected browser shows the latest message. Open it in two tabs.
 package main
 
 import (
 	"cmp"
+	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"time"
 
 	"github.com/go-via/via"
@@ -17,11 +17,11 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Feed is a live embed fed by a shared Topic. last holds the most recent
-// broadcast; recv updates it and via element-patches the re-render over SSE.
+// Feed is a live embed fed by a shared Topic. recv updates Last and via
+// element-patches the re-render over SSE.
 type Feed struct {
 	room *topic.Topic[string]
-	last via.State[string]
+	Last via.State[string]
 }
 
 func (f *Feed) OnInit(ctx *via.Ctx) error {
@@ -29,23 +29,35 @@ func (f *Feed) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (f *Feed) recv(ctx *via.Ctx, msg string) { f.last.Set(msg) }
+func (f *Feed) recv(ctx *via.Ctx, msg string) { f.Last.Set(msg) }
 
 func (f *Feed) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Broadcast feed")),
-		h.P(h.Str("latest: "), f.last.Display()),
+		h.P(h.Str("latest: "), f.Last.Display()),
 	)
 }
 
-func main() {
-	room := topic.New[string]()
-	go func() {
-		for n := 1; ; n++ {
-			time.Sleep(time.Second)
+func publish(ctx context.Context, room *topic.Topic[string]) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for n := 1; ; n++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 			room.Publish(fmt.Sprintf("broadcast #%d", n))
 		}
-	}()
-	http.Handle("/", via.Register(Feed{room: room}))
-	http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil)
+	}
+}
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	room := topic.New[string]()
+	go publish(ctx, room)
+
+	http.Handle("/", via.Handler(Feed{room: room}))
+	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
 }

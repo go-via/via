@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// config holds Register's optional settings. The zero set is the dev-friendly
+// config holds Handler's optional settings. The zero set is the dev-friendly
 // default: the action endpoint accepts requests from any origin, and production
 // opts into enforcement with WithTrustedOrigin.
 type config struct {
@@ -30,11 +30,11 @@ const sseHeartbeat = 25 * time.Second
 // per click, since an action POST waits behind this same deadline.
 const sseWriteTimeout = 10 * time.Second
 
-// maxSSEConn caps concurrent live SSE streams per Register; past it a connect
+// maxSSEConn caps concurrent live SSE streams per Handler; past it a connect
 // is refused 503. var rather than const only so a test can shrink it.
 var maxSSEConn = 10_000
 
-// Option configures a Register call.
+// Option configures a Handler call.
 type Option func(*config)
 
 func newConfig(opts []Option) *config {
