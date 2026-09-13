@@ -943,8 +943,8 @@ func (p *idClosurePair) View() h.H {
 
 // Two distinct closures share a Go name ("…View.func1"), so via cannot tell
 // them apart by identity. That must be loud, never a silent last-wins.
+// Sequential: it captures the global log output.
 func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
-	t.Parallel()
 	app := via.Register(idClosurePair{})
 	var logs bytes.Buffer
 	log.SetOutput(&logs)

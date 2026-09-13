@@ -796,6 +796,13 @@ func onEvent(event string, fn func(*Ctx)) h.Attr {
 // honest (filter the list by the caller's identity) and the handler needs no
 // check of its own.
 //
+// That render is server state alone. A Signal never feeds it: an inbound value
+// is accepted only for a slot the render put under client control (Bind), and
+// the plain path applies the body AFTER its discovery render, so a POST cannot
+// open the branch that authorizes it. A Bind()ed signal IS client-controlled,
+// though, so a gate on one is the client's decision to make — an authorization
+// gate belongs on session or database state, never on a signal.
+//
 // The authority is the LATEST render — the discovery render for a plain
 // action, the last push for a live one — exactly as it already is for the
 // handler id. So arg must be a stable IDENTITY (a row's primary key), never a
@@ -1120,7 +1127,34 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // so embedPush needs none of this.
 func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
+	var initFailed bool
 	push = func() {
+		// A plain child whose OnInit fails (an error, a Redirect, a paramMiss)
+		// panics childInit from INSIDE this render, on every frame — and a push
+		// has no response to turn that into the 500/303/404 the request path
+		// would answer. Dropping the frame and looping leaves a live root that
+		// silently pushes nothing forever, which is the one outcome with no
+		// client-visible signal at all. So the stream is torn down instead: the
+		// client's own reconnect re-requests the page, the GET (or the SSE
+		// connect) runs that same OnInit on a path that CAN answer it, and the
+		// user sees the real failure. Rendering the child empty was the other
+		// option and is worse — it serves a page that is quietly wrong, with the
+		// failure only in the server log.
+		defer func() {
+			rec := recover()
+			if rec == nil {
+				return
+			}
+			ci, ok := rec.(childInit)
+			if !ok {
+				panic(rec)
+			}
+			if !initFailed {
+				initFailed = true
+				log.Printf("via: live push aborted — an embedded child's OnInit failed (err=%v redirect=%q); tearing the stream down so the client reconnects and gets the real answer", ci.err, ci.redirect)
+			}
+			stream.abort()
+		}()
 		bind, body := renderRootBase(inst, nil, false, base, nil, nil, from) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)

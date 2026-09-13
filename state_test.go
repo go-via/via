@@ -247,8 +247,8 @@ func (p *lateLive) View() h.H {
 // no SSE stream. An action that opens the branch would leave the tab demanding
 // a connection it never made — every later action 410s. That must be loud at
 // the action that caused it, not a silent freeze.
+// Sequential: it captures the global log output.
 func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
-	t.Parallel()
 	app := via.Register(lateLive{})
 	rec := httptest.NewRecorder()
 	rec.Body = &bytes.Buffer{}

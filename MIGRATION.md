@@ -362,7 +362,12 @@ with TWO — so a parent that binds `p.C.S` in its own View (`c_s`) and also
 embeds `p.C` (`c__s`) keeps the two copies apart, as it must: they are
 different structs. A parent holding two fields of the child's type is
 genuinely ambiguous (`Embed`'s argument order need not match declaration
-order), so those embeds fall back to the positional key: `i0__s`, `i1__s`.
+order), so those embeds fall back to the positional key: `i0__s`, `i1__s`,
+and `i0_0__s` for a nested one. The key's own depth separator is `-`
+(`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS identifier character and
+`Ref()` hands slot names straight to Datastar expressions, so the SLOT spells
+it `_`. Earlier v0.8 builds spelled it `i0-0__s` and produced an expression
+Datastar could not parse.
 
 `Signal[T].Ref()` is the companion: it returns `"$count"` for use in a
 hand-written Datastar expression (`h.Data("show", p.Open.Ref())`), so a name
@@ -395,6 +400,51 @@ A plain action's patch also now declares any slot the pre-action render did
 not carry, alongside the ones the action wrote — that is what seeds an input
 appearing for the first time in the response instead of leaving it on whatever
 the client store already held.
+
+## New startup panics
+
+Two first-render panics were added; both are programming mistakes in a
+composition's FIELD names, and both fail loudly on the first render rather
+than writing the wrong field at runtime. They can surface on an upgrade in
+code that compiled fine before.
+
+- A field whose minted slot name looks like via's own render-order fallback
+  (`s0`, `s1`, `f16`, …) panics. A top-level field literally named `S0` mints
+  `s0`, which a signal with no field offset also takes — they would share one
+  declared slot and one hydrator, so a POST would write whichever the map kept.
+  Rename the field.
+- Two fields minting the SAME slot name panic. A nested `A.B` joins with one
+  underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
+  `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
+  `A__b`. Rename one of them.
+
+## Gating on a signal
+
+A `Signal` is client state. It is hydrated from a request only when the render
+put it under client control — only `Bind()` does that. A `Display()`-only
+signal, or one the `View` never rendered, no longer accepts an inbound value on
+any path, and the plain action path applies the body after its discovery render
+rather than during it. If you were gating a branch on a signal and depending on
+the client's value round-tripping, `Bind()` it; if the gate is an authorization
+decision, move it to session or database state, where it belonged already.
+
+## A volatile `OnArg` arg now 410s
+
+A value-carrying action authorizes its `?a=` against the latest render — the
+discovery render for a plain action, the last push for a live one. An arg that
+render did not bind answers 410 before the handler runs. Apps that bound a
+VOLATILE value as an arg (a pagination cursor, a count) are affected: the value
+goes stale the moment a render moves it, and the in-flight click 410s. Bind a
+stable identity (a row's primary key) and read changing state off the
+composition in an argless `On` handler.
+
+## A live root re-inits its plain children every frame
+
+A live root re-renders its whole tree on every pushed frame, and each plain
+embedded child is a fresh copy — so its `OnInit` runs once per frame. That is
+what keeps such a child from coming back zero-valued, but any side effect in
+that `OnInit` repeats at the frame rate. Keep it cheap and pure, or hold the
+data on the live root and pass it down the field.
 
 ## Known rough edges in v0.8
 

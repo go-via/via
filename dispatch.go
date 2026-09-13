@@ -435,8 +435,10 @@ func noStream(mode actionMode, tab string) string {
 // OnInit, run the acted-on unit's action, then answer per mode.
 func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, embed string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
-	bind := newRootCtx(in, true, base, map[string]any{}) // nil only would read as "declare everything"
-	bind.embedV = inst                                   // so bind.unit(rootAddr)'s liveness reads the same way an embed's does
+	// in is NOT threaded into the render: see hydrateTree. The discovery
+	// render runs on server state alone, and the body is applied to it after.
+	bind := newRootCtx(nil, true, base, map[string]any{}) // nil only would read as "declare everything"
+	bind.embedV = inst                                    // so bind.unit(rootAddr)'s liveness reads the same way an embed's does
 	if runOnInit(inst.v, bind, w, req, m.sessions) != nil {
 		return
 	}
@@ -458,6 +460,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
+	hydrateTree(bind, in)
 	u.req = req
 	u.sessions = m.sessions
 	u.sessW = w
@@ -465,14 +468,43 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			_, body := renderRootBase(inst, nil, true, base, nil, nil, u)
-			writeHTMLPage(w, m.cfg, body, false, "")
+			ctx, body := renderRootBase(inst, nil, true, base, nil, nil, u)
+			// Liveness is read off THIS re-render, exactly as dispatchOverStream
+			// and the GET do. A plain root may still carry a live EMBED; hard-coding
+			// "not live" here shipped that page with no data-init, so the embed
+			// never reconnected and was dead after the first form submit.
+			writeHTMLPage(w, m.cfg, body, len(liveUnits(ctx)) > 0, base+"/_via/sse")
 		}, nil)
 		return
 	}
 	respond(w, req, mode, u.redirect, nil, func() []byte {
 		return m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
 	})
+}
+
+// hydrateTree applies the POST body's signals to every slot the discovery
+// render bound, page-wide, AFTER that render has finished — the plain path's
+// equivalent of liveRunAction's hydrator pass.
+//
+// It is deliberately not done DURING the render (newRootCtx's in argument,
+// which this path used to pass): that render is what decides which branches
+// open, and therefore which handler ids and which OnArg args are dispatchable
+// at all. Hydrating it from the body lets a client flip a Signal an OnInit set
+// from the session — via.When(p.Admin.Get(), …) opened by posting
+// {"admin":true} — and mint the very authorization the dispatch is then checked
+// against, collapsing the dispatchable-iff-rendered property. The live path
+// never had the hole because its action table comes from the last push; this is
+// that same order. A Signal is client state either way: a value the client sent
+// still reaches the handler, it just cannot rewrite the render that authorized it.
+func hydrateTree(c *Ctx, in map[string]json.RawMessage) {
+	for slot, raw := range in {
+		if hydrate, ok := c.hydrators[slot]; ok {
+			hydrate(raw)
+		}
+	}
+	for _, child := range c.embeds {
+		hydrateTree(child, in)
+	}
 }
 
 // rerenderPlain re-renders the acted-on unit for a Datastar action's

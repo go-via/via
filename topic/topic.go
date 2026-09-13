@@ -79,13 +79,18 @@ func (t *Topic[T]) Subs() int {
 func (t *Topic[T]) Publish(v T) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// One fan-out must reach a multiplexing reader as ONE wake-up, released
-	// only once every subscriber holds v. A reader sweeps its subscriptions
-	// in registration order, so a wake-up released mid-fan-out lets it see a
-	// later subscription's copy of v and miss an earlier one; and a second
-	// token for the same fan-out buys a spurious extra sweep that overlaps
-	// the NEXT publish and splits it the same way. Hence: collect the
-	// distinct wake channels, then signal each exactly once.
+	// One fan-out releases ONE wake-up per distinct channel, and only once
+	// every subscriber holds v: a token released mid-fan-out guarantees its
+	// sweep straddles this publish, and a second token for the same fan-out
+	// buys a spurious extra sweep that overlaps the NEXT one. Hence: collect
+	// the distinct wake channels, then signal each exactly once.
+	//
+	// This does NOT make a fan-out atomic for a reader. A sweep already in
+	// flight holds no lock here and polls its subscriptions in registration
+	// order, so it can still drain one before v landed and another after.
+	// Nothing is lost — this publish's token is still pending, so the
+	// straddled subscription is drained on the next sweep. It costs an extra
+	// frame, not a split delivery.
 	for s := range t.subs {
 		if wake, ok := s.enqueue(v); ok && wake != nil {
 			t.wakes[wake] = struct{}{}

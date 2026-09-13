@@ -50,7 +50,7 @@ import (
 // An Embed's embed KEY is its position among its own parent's Embed calls,
 // composed with the parent's key: the root's children are "0", "1", …, and a
 // child of "0" is "0-0". The container id (via-i0-0), the signal prefix
-// (i0-0_) and the dispatch address (/_via/a/0-0/…) all read that one key, so
+// (i0_0__ — the key's '-' is not a JS identifier character) and the dispatch address (/_via/a/0-0/…) all read that one key, so
 // re-rendering any subtree on its own numbers its descendants identically to
 // the full-page walk. A child's key must be the same on every render for the
 // life of a connection: a When wrapped around an Embed shifts its later
@@ -92,7 +92,16 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	// Its OnInit already ran for this request, so it must not run again —
 	// re-initing is what would reload the very data the handler just changed —
 	// while its nested children are still fresh copies that do need theirs.
-	acted := parent.actedKey != "" && parent.actedKey == key
+	// The type guard is not paranoia: a root View whose Embed ORDER shifts
+	// between the discovery render and the response re-render (the acted
+	// embed's own action appended to the List the root iterates) leaves the
+	// acted key pointing at a slot a DIFFERENT type now occupies. Splicing the
+	// instance in there renders the wrong View under the wrong slot prefix and
+	// drops the type that belongs there — and the mutation this substitution
+	// exists to preserve is lost anyway, since the acted type now sits at a
+	// later key as a fresh copy. On a mismatch, fall back to the fresh copy
+	// (and its OnInit) rather than render a lie.
+	acted := parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ
 	if acted {
 		inst = parent.actedInst
 	}

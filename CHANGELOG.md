@@ -57,12 +57,13 @@ as a re-read of the README, not a diff.
   way — give it a `Tick` or render it.
 - **`OnInit` now runs on every request that renders the unit** — the GET, each
   action, and the SSE connect — not once per connection. Register
-  connection-scoped side effects, never perform them: the new `ctx.OnLive(fn)`
-  is the acquire half of `ctx.OnDispose(fn)` and runs only when a stream
-  actually opens. `ctx.Listen` subscribes lazily for the same reason, so a page
-  fetched but never connected no longer orphans a `Sub` per GET.
+  connection-scoped side effects, never perform them: the new
+  `ctx.OnConnect(fn)` is the acquire half of `ctx.OnDispose(fn)` and runs only
+  when a stream actually opens. `ctx.Listen` subscribes lazily for the same
+  reason, so a page fetched but never connected no longer orphans a `Sub` per
+  GET.
 - **A failed `OnInit` runs no disposers**, because nothing was acquired yet:
-  the acquire/release pair is `OnLive`/`OnDispose` and neither half runs.
+  the acquire/release pair is `OnConnect`/`OnDispose` and neither half runs.
 - **Every action now echoes the tab id**, live or not — `viatab` is declared
   on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
   page sends the empty id, which matches no connection and falls through to the
@@ -343,20 +344,80 @@ as a re-read of the README, not a diff.
 
 ### Fixed
 
+- **A client-posted signal can no longer open a server-gated branch.** A
+  `Signal` is hydrated from a request only when THIS render put it under client
+  control — i.e. only `Bind()` (which emits `data-bind`) makes a slot writable.
+  A `Display()`-only signal, or one the `View` never rendered, is state the
+  server publishes downward, and an inbound value for it is now ignored on
+  every path. Separately, the plain action path no longer hydrates during its
+  discovery render at all: the body is applied AFTER that render, the way the
+  live path has always done it. Together these restore
+  dispatchable-iff-rendered — before, a `Signal` an `OnInit` filled from the
+  session could be flipped by the POST body, opening a `via.When` branch and
+  minting the very `(handler, arg)` pair the dispatch was then checked against.
+  **If you were gating a branch on a `Display()`-only or unrendered signal and
+  relying on the client's value, that no longer round-trips: `Bind()` it (and
+  accept that it is then client-controlled), or move the gate to session or
+  database state.**
+- **A native `PostForm` on a plain root no longer kills a live embed on the
+  page.** The full page such a submit answers with is what the browser replaces
+  the document with; it was written with the stream bootstrap hard-coded off,
+  so a plain root carrying a live `Embed` served a document with no `data-init`
+  and the embed was dead after the first submit. Liveness is now read off that
+  re-render, exactly as the GET and the live path do.
+- **The acted-instance substitution now checks the TYPE, not just the key.**
+  When a root's `Embed` order shifts between the discovery render and the
+  response re-render (the acted embed's own action opened a branch or appended
+  to the list the root iterates), the acted key names a slot a different type
+  now occupies. The mutated instance was spliced in there regardless: the
+  wrong `View` rendered under the wrong slot prefix, and the type that belonged
+  there vanished. On a type mismatch via now falls back to the fresh copy and
+  its `OnInit`.
+- **A failing child `OnInit` on the push path no longer kills the stream
+  silently.** A plain child of a live root is re-inited on every frame, so one
+  whose `OnInit` returns an error/`Redirect`/missing param panicked every
+  frame; each was logged and dropped and the tab simply stopped updating, with
+  no client-visible signal. The stream is now torn down once (logged once), so
+  the client reconnects and the GET answers the failure as the 500/303/404 it
+  actually is.
+- **A value-carrying action (`OnArg`) now authorizes its `?a=` against the
+  render.** The discovery render rebuilds the set of args it binds for that
+  handler, and a POST whose `?a=` is not in it answers 410 before the handler
+  runs — so another user's row id, or one behind a `via.When` branch closed for
+  the caller, is not dispatchable. **This is a behaviour change for any app that
+  binds a VOLATILE value as an arg** (a pagination cursor, a count): such an arg
+  goes stale the moment a render moves it and the click 410s. Bind a stable
+  identity (a primary key) and read changing state off the composition instead.
+- **A plain embed's action response keeps the instance the handler mutated.**
+  The re-render walks from the root and `via.Embed` re-copies the parent's
+  field, so a form's validation error and the values the user typed were
+  discarded and the response came back pristine, as if the POST had never
+  happened.
+- **Wire break: the positional embed slot prefix is `i0_0__`, not `i0-0__`.**
+  Only the fallback prefix minted when a parent holds two fields of the child's
+  type is affected. The key's depth separator `-` is not a JS identifier
+  character and `Ref()` hands these names straight to Datastar expressions, so
+  it is spelled `_` in the slot name. Container ids and dispatch URLs still use
+  `-`.
+
 - **A stateless action's response render now runs its nested children's
   `OnInit`.** The acted-on unit's own `OnInit` already ran for the request, but
   every embedded child in the patch is a fresh copy whose `OnInit` never had —
   so a nested child that loads its data there came back zero-valued in the
   patch, nothing like what the same subtree renders on a GET. Both the root
-  patch and a plain embed's own subtree patch are fixed; a live push still
-  skips it, since re-running `OnInit` per beat would reload data and
-  re-register `Tick`/`Listen`.
+  patch and a plain embed's own subtree patch are fixed. A live push does the
+  same, and the cost is real: **a live root re-runs every plain embedded
+  child's `OnInit` once per pushed frame**, so any side effect in such an
+  `OnInit` repeats at the frame rate. Keep a plain child's `OnInit` cheap and
+  free of side effects, or hold the data on the live root and pass it down the
+  field. (A `Tick`/`Listen` registered there is snapshotted at connect and does
+  not accumulate.)
 
 - **Wire break: an island is addressed by its KEY, not a page-wide counter.**
   An `Embed`ed child's identity is now its ordinal among its own parent's
   `Embed` calls, composed onto the parent's key — the root's children are
   `0`, `1`, …, a child of `0` is `0-0` — and the root's dispatch address is
-  `r`. Container id (`via-i0-0`), signal prefix (`i0-0_`) and dispatch
+  `r`. Container id (`via-i0-0`), signal prefix (`i0_0__`) and dispatch
   address (`/_via/a/0-0/…`) all read that one key. The flat counter it
   replaces was allocated by a whole-page walk, so a PLAIN island's own action
   re-render — which renders only its own subtree — restarted numbering at the

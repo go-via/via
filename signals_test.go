@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
@@ -40,16 +41,17 @@ func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	assert.Contains(t, body, `data-signals='{"n":0}'`, "numeric signal declaration missing/malformed")
 }
 
-// nameComp is a string signal plus a no-op action. The action lets a client
-// round-trip an arbitrary string for the signal, which is reflected back into
-// the page-level data-signals declaration on the response.
+// nameComp is a string signal plus a no-op action. The signal is Bound to an
+// input — only a Bound signal is client-writable, and so only a Bound one
+// round-trips an arbitrary string back into the page-level data-signals
+// declaration on the response.
 type nameComp struct{ name via.Signal[string] }
 
 // Touch mutates the round-tripped value so the render changes and a patch (not a
 // 204) is returned, letting the test inspect how the value is reflected.
 func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get() + "!") }
 func (c *nameComp) View() h.H {
-	return h.Div(h.Button(via.On("click", c.Touch), h.Str("x")), c.name.Display())
+	return h.Div(h.Input(c.name.Bind()), h.Button(via.On("click", c.Touch), h.Str("x")), c.name.Display())
 }
 
 // A string signal value is attacker-influenced — it round-trips through the
@@ -427,4 +429,73 @@ func TestSignal_embedFieldPrefixSurvivesALivePush(t *testing.T) {
 	defer conn.Close()
 	assert.Contains(t, conn.Await(`data-bind="room__draft"`), `data-bind="room__draft"`,
 		"the push must mint the same field-path slot the first paint did")
+}
+
+// gatedFlag is the shape the writable-slot rule exists for: a Signal an OnInit
+// fills from server-side identity, which the View only Displays. Nothing puts
+// it under client control, so an inbound value for it is a forgery rather than
+// an echo — and the branch it gates is evaluated inside a lazily-rendered
+// builder, which is where a mid-render hydration would reach it.
+type gatedFlag struct {
+	Admin  via.Signal[bool]
+	loaded bool
+	note   string
+}
+
+func (g *gatedFlag) OnInit(ctx *via.Ctx) error { g.loaded = true; return nil }
+func (g *gatedFlag) Bump(ctx *via.Ctx)         { g.note = "bumped" }
+func (g *gatedFlag) rows() h.H                 { return h.P(h.ID("admin"), h.Str("admin only")) }
+func (g *gatedFlag) panel() h.H                { return via.When(g.Admin.Get(), g.rows) }
+func (g *gatedFlag) View() h.H {
+	return h.Div(
+		h.P(h.ID("note"), h.Str(g.note)),
+		g.Admin.Display(),
+		via.When(g.loaded, g.panel),
+		h.Button(via.On("click", g.Bump), h.Str("bump")),
+	)
+}
+
+func TestSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Register(gatedFlag{}))
+	status, frag := app.Action(0).Body(`{"admin":true}`).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, `<p id="note">bumped</p>`)
+	assert.NotContains(t, frag, "admin only",
+		"a signal the View only Displays is server-published state; the client must not be able to set it")
+}
+
+// liveGatedFlag is gatedFlag on a live unit, where the hydration an action does
+// feeds the NEXT push's render — so an unwritable slot accepted there would
+// open the branch one frame later and make its handlers dispatchable from then on.
+type liveGatedFlag struct {
+	Admin  via.Signal[bool]
+	loaded bool
+	n      via.State[int]
+}
+
+func (g *liveGatedFlag) OnInit(ctx *via.Ctx) error { g.loaded = true; return nil }
+func (g *liveGatedFlag) Bump(ctx *via.Ctx)         { g.n.Set(g.n.Get() + 1) }
+func (g *liveGatedFlag) rows() h.H                 { return h.P(h.ID("admin"), h.Str("admin only")) }
+func (g *liveGatedFlag) panel() h.H                { return via.When(g.Admin.Get(), g.rows) }
+func (g *liveGatedFlag) View() h.H {
+	return h.Div(
+		g.n.Display(),
+		g.Admin.Display(),
+		via.When(g.loaded, g.panel),
+		h.Button(via.On("click", g.Bump), h.Str("bump")),
+	)
+}
+
+func TestLiveSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Register(liveGatedFlag{}))
+		conn := app.Connect()
+		status, _ := app.Action(0).Over(conn).Body(`{"admin":true}`).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		frame := conn.Await(">1<")
+		assert.NotContains(t, frame, "admin only",
+			"the pushed re-render must not reflect a signal the client had no right to write")
+	})
 }

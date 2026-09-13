@@ -123,7 +123,17 @@ func (s *Signal[T]) Set(v T) {
 // thereafter), hydrates the value from the request if present, and declares the
 // slot for this render's data-signals. Every render entry point (Display, Bind)
 // calls it, so the name is the handle's identity, shared across all of them.
-func (s *Signal[T]) bind(r *hcore.Renderer) {
+//
+// writable says whether THIS render put the slot under client control — only
+// Bind() does, by emitting data-bind. A Display()-only signal (and one the View
+// never rendered at all) is a value the server publishes downward, so an
+// inbound value for it is not an echo, it is a forgery: accepting it lets a
+// client overwrite a flag an OnInit set from the session, and the next render
+// that reads that flag opens whatever branch it gates — minting the very
+// (handler, arg) authorization the dispatch is then checked against. So the
+// hydrator is registered for writable slots only, and an unwritable slot's
+// inbound value is ignored on every path.
+func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
 	if s.bound != nil {
@@ -139,24 +149,26 @@ func (s *Signal[T]) bind(r *hcore.Renderer) {
 			s.slot, s.scope = b.SignalName(), ""
 		}
 	}
-	if raw, ok := b.SignalInit(s.slot); ok {
-		if rm, isRaw := raw.(json.RawMessage); isRaw {
-			var v T
-			if json.Unmarshal(rm, &v) == nil {
-				s.val = v
+	if writable {
+		if raw, ok := b.SignalInit(s.slot); ok {
+			if rm, isRaw := raw.(json.RawMessage); isRaw {
+				var v T
+				if json.Unmarshal(rm, &v) == nil {
+					s.val = v
+				}
 			}
 		}
+		// A live unit keeps this table from its last render rather than
+		// re-rendering before an action, so the hydration a fresh render would
+		// have done from SignalInit above must also be reachable by slot name.
+		b.Hydrator(s.slot, func(raw json.RawMessage) {
+			var v T
+			if json.Unmarshal(raw, &v) == nil {
+				s.val = v
+			}
+		})
 	}
 	b.DeclareSignal(s.slot, s.val)
-	// A live unit keeps this table from its last render rather than
-	// re-rendering before an action, so the hydration a fresh render would
-	// have done from SignalInit above must also be reachable by slot name.
-	b.Hydrator(s.slot, func(raw json.RawMessage) {
-		var v T
-		if json.Unmarshal(raw, &v) == nil {
-			s.val = v
-		}
-	})
 }
 
 // Display returns an h.H that renders the signal as a Datastar text-bound span.
@@ -165,7 +177,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer) {
 // they all update together.
 func (s *Signal[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
-		s.bind(r)
+		s.bind(r, false)
 		r.Render(h.Span(h.Data("text", "$"+s.slot), textHandle(s.val)))
 	})
 }
@@ -176,7 +188,7 @@ func (s *Signal[T]) Display() h.H {
 // order or whether the signal is also Displayed.
 func (s *Signal[T]) Bind() h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
-		s.bind(r)
+		s.bind(r, true)
 		r.Render(h.Data("bind", s.slot))
 	})
 }

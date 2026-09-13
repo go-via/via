@@ -35,6 +35,12 @@ func Each[T any](items []T, row func(T) h.H) h.H {
 // condition holds (e.g. reads a value present only when logged in) is never
 // evaluated on the false path. build is a named method value (e.g.
 // c.adminPanel), never a closure at the call site.
+//
+// cond decides what is dispatchable, not just what is drawn: a handler or an
+// OnArg value inside a closed branch is not bound, so it answers 410. Gate on
+// session or database state. A Signal is client state — a Bind()ed one is
+// whatever the client last set it to — so it is a fine switch for a disclosure
+// the user controls, and never an authorization check.
 func When(cond bool, build func() h.H) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		if cond {
