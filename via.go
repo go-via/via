@@ -20,6 +20,7 @@ import (
 	"log"
 	"maps"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
 type typeSignals struct {
 	fields []signalField
 	byOff  map[uintptr]string
+	names  map[string]bool // every minted slot name, for the embed-prefix collision check
 }
 
 type signalField struct {
@@ -105,6 +107,7 @@ func signalsOf(t reflect.Type) *typeSignals {
 		return v.(*typeSignals)
 	}
 	ts := &typeSignals{byOff: map[uintptr]string{}}
+	minted := map[string]bool{}
 	var walk func(t reflect.Type, base uintptr, prefix string, depth int)
 	walk = func(t reflect.Type, base uintptr, prefix string, depth int) {
 		if t == nil || t.Kind() != reflect.Struct || depth > 8 { // depth: a self-referential composition must not spin here
@@ -114,6 +117,8 @@ func signalsOf(t reflect.Type) *typeSignals {
 			f := t.Field(i)
 			name, off := prefix+lowerFirst(f.Name), base+f.Offset
 			if reflect.PointerTo(f.Type).Implements(signalMarker) {
+				checkSlotName(t, f.Name, name, minted)
+				minted[name] = true
 				ts.fields = append(ts.fields, signalField{off: off, name: name})
 				ts.byOff[off] = name
 				continue
@@ -124,9 +129,33 @@ func signalsOf(t reflect.Type) *typeSignals {
 		}
 	}
 	walk(t, 0, "", 0)
+	ts.names = minted
 	typeSignalCache.Store(t, ts)
 	return ts
 }
+
+// checkSlotName panics on a slot name that is not uniquely the client-side
+// identity of one field. Two fields minting the same name (a nested A.B and a
+// sibling A_b) share one declared slot and one hydrator entry, so a POST writes
+// whichever field the map happened to keep — a silent wrong-field write. A name
+// shaped like the render-order fallbacks (s0, f16) collides the same way with a
+// signal that has no field offset. Both are programming-time mistakes in a
+// composition's field names, so they fail loudly at first render, not silently
+// at runtime.
+func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
+	if minted[name] {
+		panic("via: signal slot " + name + " is minted twice by " + t.String() +
+			" (field " + field + ") — nested struct names join with \"_\", so rename one of the colliding fields")
+	}
+	if fallbackSlot.MatchString(name) {
+		panic("via: signal slot " + name + " on " + t.String() + " (field " + field +
+			") collides with via's render-order fallback names (s0, f16, …) — rename the field")
+	}
+}
+
+// fallbackSlot matches the render-order / offset fallback slot names minted by
+// signalName and signalSlot for a signal with no usable field offset.
+var fallbackSlot = regexp.MustCompile(`^(s|f)\d+$`)
 
 func lowerFirst(s string) string {
 	if s == "" || s[0] < 'A' || s[0] > 'Z' {
@@ -180,6 +209,17 @@ func embedFieldName(parent, child reflect.Type) string {
 			break
 		}
 		name = lowerFirst(parent.Field(i).Name)
+	}
+	if name != "" {
+		// An embed scopes its child's slots under name+"__", while a plain
+		// field literally named A__b mints "a__b" in the PARENT — same slot,
+		// two different fields.
+		for own := range signalsOf(parent).names {
+			if strings.HasPrefix(own, name+"__") {
+				panic("via: signal slot " + own + " on " + parent.String() +
+					" collides with the embed prefix of field " + name + " — rename the field")
+			}
+		}
 	}
 	embedPrefixes.Store(k, name)
 	return name
@@ -615,7 +655,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		}
 		idx := ctx.actionSlot(handler, handler)
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			ctx.base + `/_via/a/` + unitAddr(ctx) + `/` + idx + `">`)
+			hcore.EscapeString(ctx.base) + `/_via/a/` + unitAddr(ctx) + `/` + idx + `">`)
 		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
 		for _, c := range children {
 			r.Render(c)
@@ -773,7 +813,7 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{embed}/{id}
 	}
 	path := base + "/_via/a/" + unitAddr(ctx) + "/" + idx
-	r.WriteString(` data-on:` + event + `="@post('` + path + query + `')"`)
+	r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path+query) + `')"`)
 }
 
 // decodeActionBody decodes the client signals from an action POST under a body
@@ -822,9 +862,10 @@ func renderRootBase(inst instance, in map[string]json.RawMessage, declareSignals
 	return ctx, renderRootWith(ctx, inst.v)
 }
 
-// inheritRequestScope carries a request-scoped render's wiring onto a SECOND
-// render of the same request (an action's response re-render). from nil is a
-// live push, which is not request-scoped at all.
+// inheritRequestScope carries a request-scoped render's wiring onto a LATER
+// render off the same request: an action's response re-render, and a live
+// root's push (which re-renders off the connect request for the life of the
+// stream — see rootPush). from nil skips it entirely.
 //
 // doInit is the load-bearing part: the acted-on unit's own OnInit already ran
 // for this request, but every nested child rendered here is a fresh copy whose
@@ -875,7 +916,8 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 
 // checkLiveNesting enforces the two deferred-feature rules on the finished
 // render tree: a live unit may not hold another live unit beneath it, and a
-// live UNIT's View may not call Embed at all. Both were interface
+// live EMBED's View may not call Embed at all (a live ROOT may — its plain
+// children are re-inited on every push, see rootPush). Both were interface
 // assertions made before the render; liveness is now only knowable after it,
 // so the walk runs once here — loud and early, rather than serving a page
 // that silently misroutes an action.
@@ -886,7 +928,7 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 				"embed it directly from a plain ancestor instead")
 		}
 		if c.isEmbed && len(c.embeds) > 0 {
-			panic("via: via.Embed: a live embed's View must not call Embed — keep a live unit's View flat")
+			panic("via: via.Embed: a live embed's View must not call Embed — keep a live embed's View flat")
 		}
 	}
 	for _, ch := range c.embeds {
@@ -954,7 +996,7 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 	if unit.isEmbed {
 		unit.push = embedPush(unit.embedKey, unit.embedV, base, stream, lc)
 	} else {
-		unit.push = rootPush(unit.embedV, base, stream, lc)
+		unit.push = rootPush(unit.embedV, base, stream, lc, unit)
 	}
 }
 
@@ -962,10 +1004,19 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // fresh render's bind Ctx replaces lc.root: it is the one whose actions and
 // hydrators table a live action runs against next, so a live action needs no
 // render of its own — the previous push already built it.
-func rootPush(inst instance, base string, stream *stream, lc *tabStream) func() {
+//
+// from is the connect render's Ctx, and it is what makes a live root's plain
+// EMBEDS survive a push: Embed re-copies each child from the root's field on
+// every render, so a child whose fields were filled by OnInit comes back
+// zero-valued unless that OnInit runs again. The cost is real and worth naming:
+// a plain child of a LIVE root has its OnInit run once per pushed frame, so
+// keep it cheap (or hold the data on the live root and pass it down the field).
+// A live EMBED still may not Embed at all — checkLiveNesting enforces that —
+// so embedPush needs none of this.
+func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
 	push = func() {
-		bind, body := renderRootBase(inst, nil, false, base, nil, nil, nil) // push omits data-signals
+		bind, body := renderRootBase(inst, nil, false, base, nil, nil, from) // push omits data-signals
 		bind.push = push
 		lc.replace(bind)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })

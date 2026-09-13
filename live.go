@@ -69,7 +69,9 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 //
 // Every published value reaches handler exactly once, in publish order, up to
 // the subscription's queue limit (see topic.Publish for the one case that
-// drops, which logs and is counted). Renders are NOT one per value: a backlog
+// drops, which logs and is counted — Listen owns the Sub, so the count is
+// visible in the log, not through Sub.Dropped; hold your own Subscribe if you
+// need to read it). Renders are NOT one per value: a backlog
 // is handled in one batch — all its handler calls run, then a single re-render
 // and a single SSE frame — so a burst costs frames proportional to how fast the
 // client drains, never to how fast the topic publishes.
@@ -104,13 +106,28 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 			// container — so on a multiplex page a fan-out to one embed
 			// never re-renders a sibling.
 			return func() {
+				// One recover per VALUE, and the push runs regardless: the
+				// batch is a frame-rate optimisation, not a failure domain,
+				// so a handler that panics on value k must not swallow
+				// k+1..n or the re-render the surviving values earned.
 				for _, v := range batch {
-					handler(c, v)
+					callListener(c, handler, v)
 				}
 				c.push()
 			}
 		}}
 	})
+}
+
+// callListener runs one handler call under its own recover, logging a panic
+// rather than tearing down the connection's push goroutine.
+func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("via: panic in a Listen handler: %v\n%s", r, debug.Stack())
+		}
+	}()
+	handler(c, v)
 }
 
 // writePatchFrame writes one Datastar element-patch SSE event. The fragment is
@@ -424,9 +441,10 @@ func (r *registry) del(id string) {
 }
 
 // writeSignalsFrame writes one Datastar patch-signals SSE event. via uses it to
-// hand the client its per-connection tab id as the local signal _viatab (the
-// underscore keeps Datastar from echoing it in POST bodies; it rides the
-// X-Via-Tab header instead).
+// hand the client its per-connection tab id as the viatab signal. The name has
+// no leading underscore on purpose: Datastar filters /(^|\.)_/ out of the
+// signal store it posts, so an underscored name would never ride back, and
+// every action POST depends on it doing exactly that.
 func writeSignalsFrame(w io.Writer, signalsJSON string) {
 	_, _ = io.WriteString(w, "event: datastar-patch-signals\ndata: signals ")
 	_, _ = io.WriteString(w, signalsJSON)
