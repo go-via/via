@@ -309,9 +309,13 @@ func (f *Forum) OnInit(ctx *via.Ctx) error {
 		ctx.Redirect("/login")
 		return nil
 	}
-	f.threads = f.store.allThreads()
-	return nil
+	return f.Reload(ctx)
 }
+
+// Reload re-reads the thread list after one of this page's actions ran. Without
+// it New would write a thread the response render never sees, because OnInit
+// filled f.threads before the handler touched the store.
+func (f *Forum) Reload(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
 
 func (f *Forum) New(ctx *via.Ctx) {
 	u, _ := ctx.Session().Get[User]()
@@ -349,14 +353,19 @@ func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
 		return nil
 	}
 	p.id = ctx.Param[int]("id")
+	return p.Reload(ctx)
+}
+
+func (p *ThreadPage) Reload(ctx *via.Ctx) error {
 	p.title, p.posts = p.store.thread(p.id)
 	return nil
 }
 
+// Send needs no Redirect: Reload re-reads the thread, so the reply is in the
+// response render.
 func (p *ThreadPage) Send(ctx *via.Ctx) {
 	u, _ := ctx.Session().Get[User]()
 	p.store.reply(p.id, u.Name, ctx.Request().FormValue("body"))
-	ctx.Redirect("/thread/" + strconv.Itoa(p.id))
 }
 
 func (p *ThreadPage) postRow(po Post) h.H {

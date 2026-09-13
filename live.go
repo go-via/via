@@ -32,6 +32,9 @@ type listener struct{ poll func() func() }
 // element-patch. Valid only inside OnInit: ticks and subs are snapshotted
 // there, so a later call registers nothing and logs loudly.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
+	if c.reinit {
+		return // the post-action re-run; this unit's ticks were snapshotted at GET/connect (I5)
+	}
 	if c.initDone {
 		log.Print("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
 		return
@@ -71,6 +74,9 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // also runs on a plain GET and every plain action, and subscribing there would
 // hand out a Sub nothing will ever Stop.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
+	if c.reinit {
+		return // see Tick
+	}
 	if c.initDone {
 		log.Print("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
 		return
@@ -297,30 +303,46 @@ type tabStream struct {
 	pushSignals func(json string) // emit a patch-signals frame on this stream
 	mu          sync.Mutex        // replace runs on the embed goroutine, unit is read from the dispatching request's
 	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
-	sess        *sessionData      // resolved from the connect cookie; nil when anonymous. Compared by pointer so it survives a Rotate (reID moves the same *sessionData to a fresh id)
+	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
 }
 
 // boundSession is guarded because a live action can bind it after connect,
 // racing a concurrent dispatch's read on its own goroutine.
-func (c *tabStream) boundSession() *sessionData {
+func (c *tabStream) boundSession() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.sess
 }
 
-// bindSession records d as this connection's credential on first mint — the
+// bindSession records sid as this connection's credential on first mint — the
 // connect cookie, or (the gap this closes) a session a live action established
-// after connect. Idempotent: a later Rotate is a no-op here, since dispatch
-// compares by pointer and reID keeps the same *sessionData.
-func (c *tabStream) bindSession(d *sessionData) {
-	if d == nil {
+// after connect. Idempotent: a later Rotate is a no-op here, since the sid
+// survives it.
+func (c *tabStream) bindSession(sid string) {
+	if sid == "" {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sess == nil {
-		c.sess = d
+	if c.sess == "" {
+		c.sess = sid
 	}
+}
+
+// dataSID is sid for a raw session record.
+func dataSID(d *sessionData) string {
+	if d == nil {
+		return ""
+	}
+	return d.sid
+}
+
+// sid is the stable identity of s's session, "" when there is none.
+func (s *Session) sid() string {
+	if s == nil || s.data == nil {
+		return ""
+	}
+	return s.data.sid
 }
 
 // replace registers u as the current bind for its dispatch address, so the

@@ -6,6 +6,33 @@ The rebuilt "bare core" replaces the v1 tree. Module path is now
 `github.com/go-via/via` (no `/v2` suffix); v1 history is merged, the tree is
 the v2 core. **Requires Go 1.27.**
 
+### New
+
+- **`SessionStore` + `WithSessionStore`.** Session data was a per-Router map in
+  process memory: every deploy logged every user out and multi-pod was
+  impossible. `SessionStore` is a three-method blob map (`Load`/`Save`/`Delete`,
+  each taking a `context.Context`) that a user implements against Redis or SQL
+  without reading any of via's internals. Rotation is Save-then-Delete and
+  expiry is the `ttl` handed to Save, so no implementation reimplements either;
+  via also stamps its own deadline into the blob, so a backend with no TTL
+  support stays correct. **Breaking:** session values now round-trip through
+  `encoding/json`, keyed by the Go type's printed name, so a `Session.Put`
+  value must be JSON-encodable (it panics if not) and a value written under a
+  type that has since been renamed reads back as absent.
+
+- **`Reloader`** — `Reload(*via.Ctx) error`, run after an action and before the
+  response render, on the plain path and the live path alike. It fixes the
+  commonest week-one defect: `OnInit` loads, the handler mutates the store, and
+  the render still shows what `OnInit` read, so the action answers 204 and the
+  UI never moves. `Reload` is a second hook rather than a second `OnInit` run
+  because `OnInit` is an initializer — it mints and defaults the session, seeds
+  signals from the request URL, registers `Tick`/`Listen`, and may `Redirect`
+  or return `ErrNotFound`, none of which is safe to repeat once a handler has
+  committed a mutation. `Tick`/`Listen` are no-ops inside `Reload` (liveness
+  stays the GET/connect verdict), and it is skipped when the handler queued a
+  `Redirect`. A unit that declares NEITHER hook and answers 204 now logs one
+  line naming `Reload`, so the failure is never silent again.
+
 ### Security defaults changed
 
 - **A mount parameter can no longer break out of a Datastar expression.** A
@@ -22,17 +49,24 @@ runtime unless you look:
 
 - **The origin floor is OPEN by default.** v1 enforced; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, at which point
-  enforcement switches on for the whole endpoint. The reasoning: the per-tab id
-  is the CSRF token and does the load-bearing work, and local development over
-  plain http has to work with no configuration. The consequence: **a production
-  deployment that never calls `WithTrustedOrigin` is running with cross-origin
-  enforcement off.** The option name says what it allows, not that it also flips
+  enforcement switches on for the whole endpoint. The reasoning: on a LIVE page
+  the per-tab id is a synchronizer token and does the load-bearing work, and
+  local development over plain http has to work with no configuration. The
+  limit of that reasoning: a PLAIN page has no connection and no tab id
+  (`viatab` and `_viatab` are empty), so a cross-origin `PostForm` submit is
+  accepted with the floor open, and what defends it is the session cookie's
+  `SameSite=Lax` — the request simply arrives unauthenticated. The consequence:
+  **a production deployment that never calls `WithTrustedOrigin` is running
+  with cross-origin enforcement off.** The option name says what it allows, not that it also flips
   enforcement, so via now logs one line at startup when the floor is open. Set
   the option in production.
 - **Sessions are always on**, lazily — the cookie is issued on first write. If
-  no key is configured, via mints a random per-process one and warns once:
-  sessions then do not survive a restart or span pods. Set `WithSessionKey` or
-  `VIA_SESSION_KEY`.
+  no key is configured, via mints a random per-process one and warns once. The
+  key signs the COOKIE only; the DATA lives behind the new `SessionStore`
+  interface, whose default is a map in this process's memory. Surviving a
+  restart or spanning pods takes both `WithSessionKey`/`VIA_SESSION_KEY` and
+  `WithSessionStore`; via warns once at the first session mint when the store
+  is the process-local default.
 
 `WithInsecureOrigin` is gone, because there is no longer a secure default to
 opt out of.
@@ -124,7 +158,8 @@ as a re-read of the README, not a diff.
   `WithSessionKey` → `VIA_SESSION_KEY` → random per-process key (warned at
   first mint).
 - **Origin floor is open by default**; `WithTrustedOrigin` turns enforcement
-  on (`WithInsecureOrigin` removed). The per-tab id remains the CSRF token.
+  on (`WithInsecureOrigin` removed). The per-tab id remains the CSRF token on a
+  live page; a plain page relies on the session cookie's `SameSite=Lax`.
 - **`h` is elements + attributes + `Str` only**: the render plumbing
   (`Dyn`/`DynAttr`/`NewRenderer`/`Renderer`/`Binder`) moved behind
   `internal/hcore`.
@@ -209,11 +244,12 @@ as a re-read of the README, not a diff.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
   multipart, so a file `<input>` just works — read it with stdlib's
   `ctx.Request().FormFile(name)`; no separate upload verb or type.
-- **`ctx.Redirect`**: a PostForm/OnInit facility (303). Targets are gated by
-  the shared URL policy; unsafe ones are dropped loudly with an element-patch
-  fallback. A Redirect queued from a Datastar `@post` action cannot navigate
-  the page — it is logged and dropped; use a `PostForm` handler or an
-  `<a href>` instead.
+- **`ctx.Redirect`** navigates from OnInit, Reload, a PostForm submit (303)
+  and a Datastar `@post` alike. Targets are gated by the shared URL policy;
+  unsafe ones are dropped loudly with an element-patch fallback. A `@post`
+  answers with a constant `location.assign` script Datastar executes through
+  its `text/javascript` branch, with the target in a
+  `datastar-script-attributes` header so the CSP can admit the bytes by hash.
 - **`WithDocumentHead(via.Head{...})`**: the document shell — `Title`, `Lang`,
   `Raw` head markup (emitted verbatim after via's own `<meta charset>`), one
   inline style, and `ScriptOrigins`/`StyleOrigins`/`FontOrigins` — the app's
@@ -312,10 +348,11 @@ as a re-read of the README, not a diff.
   a `Bind()` inside a `When` (a wizard step) could claim a slot another signal
   already owned: on a live page the post then wrote the WRONG FIELD, and on a
   stateless page the new input came up holding the previous occupant's value.
-  A `Signal` reached through a pointer, slice, array or map field — or bound
-  off a value-receiver `View` — is outside the struct, has no offset, and now
-  **panics** on render rather than falling back to a render-order name that
-  carried the old aliasing hazard. Make it a direct struct field. Keyed per-row
+  A `Signal` reached through a pointer, slice, array or map field — or held by
+  a composition whose `View` has a value receiver — is outside the struct, has
+  no offset, and now **panics at `Mount`/`Embed`** rather than falling back to
+  a render-order name that carried the old aliasing hazard. A Signal behind an
+  INTERFACE field is invisible to the type walk and still panics on render. Make it a direct struct field. Keyed per-row
   signal slots remain future work.
 - **A plain action hydrates signals inside a branch another posted signal
   opens.** Discovery renders once on server state alone (that render, and only

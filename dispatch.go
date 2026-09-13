@@ -48,6 +48,28 @@ const tabSignal = "viatab"
 // is read from changes.
 const tabFormField = "_viatab"
 
+// warnNoChange breaks the silence of the commonest week-one defect: the handler
+// mutated a store, its unit's OnInit had already loaded the PRE-action data,
+// the re-render is therefore byte-identical, and via answers 204 — a click that
+// does nothing, with nothing in the log to say why.
+//
+// Narrowed to the exact shape that produces the defect — a unit that LOADS in
+// OnInit and never re-reads — so an idempotent action on a unit with no OnInit,
+// or on one that already declares Reload, stays silent. It is not deduped: one
+// line per dead click is the point, and adding Reload silences it.
+func warnNoChange(act, name string, v any) {
+	if _, isReloader := v.(Reloader); isReloader {
+		return
+	}
+	if _, isIniter := v.(Initer); !isIniter {
+		return
+	}
+	log.Printf("via: action %s (%s) changed nothing the render shows, so it answers 204 and the UI "+
+		"does not move. If it mutated data this unit loads in OnInit, that data is stale by now: "+
+		"re-read it in a Reload(*via.Ctx) error method, which via runs after every action on this unit",
+		act, name)
+}
+
 // actionResult is what running an action produced. On the live path it all
 // happens on the connection's own goroutine, so every outcome has to be
 // carried back across the channel rather than answered where it occurred.
@@ -57,6 +79,7 @@ type actionResult struct {
 	badArg    error  // ?a= failed to decode (badActionArg) — 400, not 500
 	pushWork  func() // live only: the dirty-signals + element push, run by tabStream.run right after acking
 	gone      string // live only: the unit/action lookup came up invalid; the reason is the response body
+	initErr   error  // live only: the post-action OnInit re-run failed (see reloadUnit)
 	forbidden string // live only: the session-bound check rejected the request
 }
 
@@ -210,13 +233,13 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// dispatch that passed a pre-queue check while the connection was
 		// unbound could be applied AFTER a concurrent live login bound it. Here
 		// the compare and the run are atomic on one serialized goroutine.
-		if bound := lc.boundSession(); bound != nil {
+		if bound := lc.boundSession(); bound != "" {
 			// A dispatch must carry the SAME session, by pointer not id (a
 			// Rotate moves the pointer to a new id, never a new data object).
 			// Otherwise a leaked tab id is a bearer credential good from any
 			// request, session or none, once the origin floor is open.
 			_, s, _ := m.sessions.resolve(req)
-			if s != bound {
+			if s == nil || s.sid != bound {
 				return actionResult{forbidden: "session mismatch"}
 			}
 		}
@@ -245,6 +268,10 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 	}
 	if res.gone != "" {
 		http.Error(w, res.gone, http.StatusGone)
+		return
+	}
+	if res.initErr != nil {
+		answerReloadFailure(w, res.initErr)
 		return
 	}
 	if res.badArg != nil {
@@ -315,11 +342,23 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	unit.dirty = map[string]any{}
 	act.fn(rc)
 
+	// Re-load the unit the same way the plain path does: the handler mutated
+	// state this unit's OnInit had already read, and the push render below
+	// would otherwise frame the pre-action data. Skipped behind a Redirect —
+	// the tab is navigating away from this render. See Reloader.
+	if rc.redirect == "" {
+		rl := &Ctx{req: req, sessions: sessions, sessW: w, session: rc.Session(), base: unit.base}
+		if err := reloadUnit(unit.embedV.v, rl); err != nil {
+			return actionResult{initErr: err}
+		}
+		rc.redirect = rl.redirect
+	}
+
 	// A session minted on a connection that was anonymous at connect: bind it
 	// now so the tab id stops being a bearer credential the instant this action
 	// logs it in (H1; bindSession is a no-op once bound).
 	if beforeSession == nil && rc.session != nil && rc.session.data != nil {
-		lc.bindSession(rc.session.data)
+		lc.bindSession(rc.session.sid())
 	}
 
 	// A server-driven signal change reaches the client as its own signal-patch:
@@ -479,6 +518,19 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	u.sessW = w
 	a.fn(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
+	// The handler mutated state the acted unit's OnInit had already read, so
+	// the response render below would frame the PRE-action data — a 204 and a
+	// silently unchanged UI. Skipped behind a Redirect: nothing from this
+	// instance gets rendered. See Reloader.
+	if u.redirect == "" {
+		rl := &Ctx{req: req, sessions: m.sessions, sessW: w, session: auth.session, base: base}
+		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
+			answerReloadFailure(w, err)
+			return
+		}
+		u.redirect = rl.redirect
+	}
+
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
 			m.writePage(w, req, inst, base, u)
@@ -486,8 +538,22 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		return
 	}
 	respond(w, req, mode, u.redirect, nil, func() []byte {
-		return m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
+		b := m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
+		if b == nil {
+			warnNoChange(act, a.name, actedViewer(inst, u))
+		}
+		return b
 	})
+}
+
+// actedViewer is the composition the action just mutated: the root, or the
+// embed instance the discovery render bound. Re-loading the ROOT after an embed
+// action would reload the wrong unit and leave the acted one stale.
+func actedViewer(inst instance, u *Ctx) any {
+	if u.isEmbed {
+		return u.embedV.v
+	}
+	return inst.v
 }
 
 // rebindFrom builds the Ctx for hydration pass >= 2: a CLONE of the auth
@@ -625,13 +691,44 @@ func assertRenderInvariantLiveness(nowLive bool) {
 		"live from the first render")
 }
 
+// redirectInit navigates the tab from a Datastar @post action's response.
+//
+// Datastar v1.0.2 answers a text/javascript response by building a <script>,
+// copying the datastar-script-attributes header's JSON onto it as attributes,
+// setting its textContent to the body and appending it to document.head (see
+// the client's Content-Type switch, next to its text/html and application/json
+// branches). So the TARGET rides in an attribute and THESE BYTES NEVER CHANGE —
+// which is what lets the strict CSP admit the script by SHA-256, exactly like
+// reconnectInit, with no per-response nonce to mint or leak. Edit this string
+// and buildCSP re-derives the hash, but the two must stay byte-identical or the
+// browser drops the script and the redirect is silently dead again.
+const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
+	`var u=s.getAttribute('data-via-to');s.remove();if(u)location.assign(u)})()`
+
+// writeRedirectScript answers a @post with the navigation script. The target is
+// JSON-encoded into a header and reaches the DOM through setAttribute, never
+// through the HTML parser, and respond has already cleared it through
+// hcore.SafeURL — so no javascript: target and no attribute escape.
+func writeRedirectScript(w http.ResponseWriter, target string) {
+	attrs, err := json.Marshal(map[string]string{"data-via-to": target})
+	if err != nil {
+		http.Error(w, "redirect failed", http.StatusInternalServerError)
+		return
+	}
+	hdr := w.Header()
+	hdr.Set("Content-Type", "text/javascript; charset=utf-8")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+	hdr.Set("Datastar-Script-Attributes", string(attrs))
+	w.Write([]byte(redirectInit))
+}
+
 // respond is dispatch's one response policy for every action POST — root,
-// embed, live, or native form. A queued Redirect wins on a native submit (303,
-// admitted only when hcore.SafeURL clears the target — the same URL policy
-// runOnInit and rendered href/src URLs use). A Redirect from a @post cannot
-// navigate the page and is logged and dropped. Otherwise renderNative or
-// renderPatch (nil for "unchanged" / "the live push already carried it")
-// decides the body.
+// embed, live, or native form. A queued Redirect wins: a native submit gets a
+// 303, a Datastar @post gets the navigation script above. Either way the target
+// must clear hcore.SafeURL first — the same URL policy runOnInit and rendered
+// href/src URLs use — and an unsafe one is dropped, not followed. Otherwise
+// renderNative or renderPatch (nil for "unchanged" / "the live push already
+// carried it") decides the body.
 func respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect string, renderNative func(), renderPatch func() []byte) {
 	if redirect != "" {
 		switch {
@@ -641,7 +738,8 @@ func respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect
 			http.Redirect(w, req, redirect, http.StatusSeeOther)
 			return
 		default:
-			log.Printf("via: Redirect from a @post action is not supported; use PostForm or a link")
+			writeRedirectScript(w, redirect)
+			return
 		}
 	}
 	if mode == modeNative {

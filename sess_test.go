@@ -1,14 +1,18 @@
 package via_test
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -615,4 +619,152 @@ func TestSession_alwaysOnLazyCookie(t *testing.T) {
 	_, body := fireAction(t, c, base, 1)
 	assert.Contains(t, body, "hi alice",
 		"sessions are always on: a stored value must resolve without any With* option")
+}
+
+// sharedStore is a SessionStore written the way a user's Redis or SQL one is:
+// from outside the package, against the exported interface only, with no
+// knowledge of via's session internals. Blobs in, blobs out.
+type sharedStore struct {
+	mu   sync.Mutex
+	m    map[string][]byte
+	ttls []time.Duration
+}
+
+func newSharedStore() *sharedStore { return &sharedStore{m: map[string][]byte{}} }
+
+func (s *sharedStore) Load(_ context.Context, id string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.m[id]
+	return b, ok, nil
+}
+
+func (s *sharedStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[id] = data
+	s.ttls = append(s.ttls, ttl)
+	return nil
+}
+
+func (s *sharedStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, id)
+	return nil
+}
+
+func (s *sharedStore) keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Sorted(maps.Keys(s.m))
+}
+
+func (s *sharedStore) lastTTL() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ttls) == 0 {
+		return 0
+	}
+	return s.ttls[len(s.ttls)-1]
+}
+
+// storeApp builds a fresh Router over the given store — a redeploy, or a second
+// pod, as far as sessions are concerned.
+func storeApp(t *testing.T, opts ...via.Option) *httptest.Server {
+	t.Helper()
+	r := via.NewRouter(append([]via.Option{via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))}, opts...)...)
+	r.Mount("/p", profilePage{})
+	return serve(t, r)
+}
+
+func TestSessionStore_sharedStoreCarriesSessionsAcrossProcesses(t *testing.T) {
+	t.Parallel()
+	store := newSharedStore()
+	c := jarClient(t)
+
+	a := storeApp(t, via.WithSessionStore(store))
+	page := jarGet(t, c, a.URL+"/p")
+	jarPost(t, c, a.URL+actionURL(t, page, "r", 0))
+	require.Contains(t, jarGet(t, c, a.URL+"/p"), "hi alice", "the session must work on the pod that minted it")
+
+	// A DIFFERENT Router over the SAME key and store: a restart, or a second pod.
+	b := storeApp(t, via.WithSessionStore(store))
+	assert.Contains(t, jarGet(t, c, b.URL+"/p"), "hi alice",
+		"a shared SessionStore must carry the session's DATA to another process, not just its cookie")
+}
+
+// The repro the README used to deny: a stable key alone keeps the COOKIE valid
+// and loses the DATA, because the default store is this process's memory.
+func TestSessionStore_defaultStoreLosesSessionsOnRestart(t *testing.T) {
+	t.Parallel()
+	c := jarClient(t)
+
+	a := storeApp(t)
+	page := jarGet(t, c, a.URL+"/p")
+	jarPost(t, c, a.URL+actionURL(t, page, "r", 0))
+	require.Contains(t, jarGet(t, c, a.URL+"/p"), "hi alice")
+
+	b := storeApp(t)
+	assert.NotContains(t, jarGet(t, c, b.URL+"/p"), "hi alice",
+		"the in-process default cannot outlive its process — WithSessionStore is the fix")
+}
+
+func TestSessionStore_rotateMovesTheBlobToTheNewIDAndDropsTheOld(t *testing.T) {
+	t.Parallel()
+	store := newSharedStore()
+	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	c := jarClient(t)
+
+	fireAction(t, c, srv, 0) // SignIn
+	before := store.keys()
+	require.Len(t, before, 1, "one write, one stored session")
+
+	fireAction(t, c, srv, 3) // Refresh → Rotate
+	after := store.keys()
+	assert.Len(t, after, 1, "Rotate must not leave the pre-rotation id behind")
+	assert.NotEqual(t, before[0], after[0], "Rotate must re-id the session in the store")
+
+	_, body := fireAction(t, c, srv, 1) // Greet
+	assert.Contains(t, body, "hi alice", "the data must ride to the new id")
+}
+
+func TestSessionStore_handsTheConfiguredTTLToEverySave(t *testing.T) {
+	t.Parallel()
+	store := newSharedStore()
+	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionTTL(90*time.Minute),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	fireAction(t, jarClient(t), srv, 0) // SignIn
+
+	assert.Equal(t, 90*time.Minute, store.lastTTL(),
+		"a store must be handed the expiry deadline rather than reimplement TTL")
+}
+
+// A store that ignores the ttl it was handed must still not resurrect an idle
+// session: via stamps its own deadline into the blob.
+func TestSessionStore_expiredBlobIsRefusedEvenWhenTheStoreIgnoresTTL(t *testing.T) {
+	t.Parallel()
+	store := newSharedStore()
+	c := jarClient(t)
+
+	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionTTL(time.Hour),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	fireAction(t, c, srv, 0) // SignIn
+	_, body := fireAction(t, c, srv, 1)
+	require.Contains(t, body, "hi alice")
+
+	// Rewrite the blob's own deadline into the past, leaving the store's entry
+	// live — exactly what a backend with no expiry support leaves behind.
+	for _, k := range store.keys() {
+		raw, _, _ := store.Load(context.Background(), k)
+		var blob map[string]any
+		require.NoError(t, json.Unmarshal(raw, &blob))
+		blob["exp"] = time.Now().Add(-time.Minute).UnixNano()
+		out, err := json.Marshal(blob)
+		require.NoError(t, err)
+		require.NoError(t, store.Save(context.Background(), k, out, time.Hour))
+	}
+	_, after := fireAction(t, c, srv, 1)
+	assert.NotContains(t, after, "hi alice",
+		"via's own expiry stamp must fail an idle session closed")
 }

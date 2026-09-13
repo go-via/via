@@ -52,6 +52,7 @@ func Embed[C any](child C) h.H {
 	// against for the life of this render (and, for a live embed, for the life
 	// of the connection), so its address is the base its signals offset from.
 	typ := reflect.TypeOf(child)
+	checkViewReceiver(typ)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }
@@ -70,7 +71,8 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 
 	// An action's response re-render substitutes the instance the handler
 	// mutated for this fresh copy (see inheritRequestScope); re-running its
-	// OnInit would reload the very data the handler just changed.
+	// OnInit would undo the very change the handler just made — re-reading
+	// mutated data is Reload's job, and dispatch has already run it.
 	//
 	// The type guard is not paranoia: a root View whose Embed ORDER shifts
 	// between the discovery render and the response re-render leaves the acted

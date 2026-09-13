@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -20,6 +21,29 @@ import (
 // make it LIVE — ctx.Tick and ctx.Listen are valid only here. Detected by
 // interface assertion, never reflection.
 type Initer interface{ OnInit(*Ctx) error }
+
+// Reloader re-reads a unit's data AFTER one of its actions ran and BEFORE the
+// response render. It is the fix for via's commonest week-one defect: OnInit
+// loads, the handler mutates the store, and the render that answers the action
+// still shows what OnInit loaded — a 204 and a UI that never moves.
+//
+//	func (p *Front) Reload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
+//	func (p *Front) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+//
+// Why a second hook and not a second OnInit run: OnInit is an INITIALIZER, not
+// a loader. It mints and defaults the session, seeds client signals from the
+// request URL, registers Tick/Listen, and may Redirect or return ErrNotFound —
+// all of which are wrong to repeat once a handler has already committed a
+// mutation. Re-running it would overwrite the very session value the handler
+// just Put, and reset a hydrated signal to the ACTION url's (absent) query
+// string. Reload says exactly one thing, so it can run exactly when it should.
+//
+// It runs on the plain path and the live path alike, once per action, and is
+// skipped when the handler queued a Redirect (nothing from this render ships).
+// ctx.Tick and ctx.Listen are no-ops inside it: liveness is the GET/connect
+// verdict (I5). A non-nil error is answered like OnInit's — ErrNotFound is 404,
+// anything else 500 — and a Redirect it queues navigates the tab.
+type Reloader interface{ Reload(*Ctx) error }
 
 // ErrNotFound is the sentinel an OnInit returns when the data the page needs no
 // longer exists — the request is honest, so the answer is 404, not 500. Wrap it
@@ -86,6 +110,63 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	}
 	return nil
 }
+
+// reloadUnit runs v's Reload after an action, on a Ctx that registers nothing
+// (I5 — liveness is the GET/connect verdict and a reload may not raise it).
+//
+// Nothing is written to w: a Redirect it queues and an error it returns are the
+// caller's to answer, because the right answer differs per transport (a @post
+// navigates by script, a native submit by 303).
+func reloadUnit(v any, ctx *Ctx) (err error) {
+	ic, ok := v.(Reloader)
+	if !ok {
+		return nil
+	}
+	ctx.reinit, ctx.initDone = true, true
+	// A paramMiss means the URL segment no longer decodes — the same 404 the
+	// first OnInit would have answered.
+	defer func() {
+		if rec := recover(); rec != nil {
+			if _, isMiss := rec.(paramMiss); !isMiss {
+				panic(rec)
+			}
+			err = ErrNotFound
+		}
+	}()
+	return ic.Reload(ctx)
+}
+
+// answerReloadFailure answers a failed Reload the way runOnInit answers a
+// failed OnInit. A queued Redirect is NOT handled here: the caller
+// routes it through respond, which knows the transport.
+func answerReloadFailure(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	log.Printf("via: Reload after an action failed: %q", err)
+	http.Error(w, "init failed", http.StatusInternalServerError)
+}
+
+// checkViewReceiver panics on a composition whose View has a VALUE receiver
+// while it holds Signals. View is then called on a copy, so every Signal it
+// binds offsets from a stack address the render throws away — which used to
+// surface as a per-request 500 forever, once per request, with the process
+// serving happily. This makes it a Mount/Embed-time panic instead: fail at
+// boot, not per request.
+func checkViewReceiver(t reflect.Type) {
+	if _, done := valueReceiverChecked.Load(t); done {
+		return
+	}
+	if t != nil && t.Implements(viewerType) && len(signalsOf(t).fields) > 0 {
+		panic("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
+			"View must take a POINTER receiver (func (p *" + t.Name() + ") View() h.H), or every " +
+			"rendered Signal binds against a discarded copy")
+	}
+	valueReceiverChecked.Store(t, true)
+}
+
+var valueReceiverChecked sync.Map // reflect.Type -> true
 
 // recoverToHTTP answers a recovered panic on a request transport: each via
 // sentinel gets the status it means, anything else is a server fault — logged
@@ -171,6 +252,8 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		getPattern = "/{$}"
 	}
 	rootType := reflect.TypeOf(root)
+	checkViewReceiver(rootType)
+	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
 	newInst := func() instance {

@@ -76,10 +76,9 @@ A page is served **plain** — request/response, with actions and a morph on
 POST. It **streams** (an SSE connection scoped to that one tab, its own
 server state pushed over it) the moment a composition on it *acts* live: its
 `OnInit` registered a `ctx.Tick` or a `ctx.Listen`, or its `View` rendered a
-`State[T]`/`List[E]`. There is no marker interface and no second hook:
-`Initer`/`OnInit` is the one lifecycle hook, on a page and on every embedded
-child. The same model spans the spectrum from a fully plain page to a fully
-live app.
+`State[T]`/`List[E]`. There is no marker interface: `OnInit` is the hook that
+starts a unit, on a page and on every embedded child. The same model spans the
+spectrum from a fully plain page to a fully live app.
 
 The whole rule is one line:
 
@@ -101,14 +100,52 @@ the SSE connect. Register connection-scoped side effects rather than performing
 them: `ctx.OnConnect(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
 when it closes.
 
+**`Reload` is the other half.** `OnInit` runs BEFORE the handler, so anything
+it loaded is stale the moment the handler mutates the store:
+
+```go
+func (p *Front) OnInit(ctx *via.Ctx) error { return p.Reload(ctx) }
+func (p *Front) Reload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
+func (p *Front) Vote(ctx *via.Ctx, id int) { p.store.Vote(id) } // no manual refetch
+```
+
+`Reload(*via.Ctx) error` runs after every action on that unit and before the
+response render, on the plain path and the live path alike. Without it a
+handler that mutates and does not re-read answers `204` with an unchanged UI;
+via now logs one line naming `Reload` when that happens, so it is never silent.
+It is skipped behind a `Redirect` (nothing from that render ships), and
+`ctx.Tick`/`ctx.Listen` are no-ops inside it — liveness stays the GET/connect
+verdict. It is a second hook rather than a second `OnInit` run on purpose:
+`OnInit` also mints the session, seeds signals from the request URL and
+registers timers, none of which is safe to repeat once a handler has committed
+a mutation.
+
 ## Security floor (built in)
 
 The action endpoint and rendered pages are hardened by default:
 
-- **Origin floor** on `POST` actions — open by default (the per-tab id is the
-  CSRF token, and dev/non-browser clients just work); set `WithTrustedOrigin`
-  in production to enforce same-origin (plus the listed origins), failing
-  closed.
+- **Origin floor** on `POST` actions — open by default, so dev and
+  non-browser clients just work; set `WithTrustedOrigin` in production to
+  enforce same-origin (plus the listed origins), failing closed. Be precise
+  about what the per-tab id does and does not cover:
+
+  - On a **live** page the tab id is a synchronizer token: it is minted per
+    connection, set by same-origin JS into the request body, and never
+    auto-attached by the browser, so a cross-origin POST cannot produce one.
+    There it does the CSRF work.
+  - On a **plain** page there is no connection and no id: `viatab` is `""`
+    and the `_viatab` form field is empty. A cross-origin multipart `PostForm`
+    submit with an empty id is accepted with the floor open — verified. What
+    defends a plain page is the session cookie's `SameSite=Lax`, which a
+    browser will not attach to a cross-site POST, so the request arrives
+    unauthenticated. Anything a logged-out visitor may do, a cross-origin
+    page may also do.
+  - `WithTrustedOrigin` is what closes that: with at least one origin named,
+    every action POST must prove its source (an allow-listed `Origin`,
+    `Sec-Fetch-Site: same-origin`/`none`, or an `Origin` whose host matches
+    the request Host) and a request that proves nothing is refused 403. That
+    also refuses `curl` and other clients that send no origin signal at all.
+    Set it in production.
 - A stream's tab id is a bearer credential for that connection's
   actions; if it was opened under a session, a dispatch is also checked
   against that same session, so a leaked tab id alone is no longer enough
@@ -134,7 +171,10 @@ The action endpoint and rendered pages are hardened by default:
   gate on every `Redirect` target (`javascript:`/`data:`/`//` are dropped
   loudly: a Datastar action falls back to its normal element-patch response, a
   native `PostForm` submit falls back to a full-page re-render, and an unsafe
-  target from `OnInit` answers 500).
+  target from `OnInit` answers 500). A SAFE target navigates from anywhere,
+  including a Datastar `@post` — the response is a one-line
+  `location.assign` script the CSP admits by hash, with the target carried in
+  a `datastar-script-attributes` header rather than in the script bytes.
 - **HTML/attribute escaping** with an attribute-name allowlist (`h.RawAttr` /
   `h.Data` and the typed helpers reject injectable names).
 - **Dispatchable iff rendered.** A handler id — and, for `via.OnArg`, the
@@ -169,9 +209,13 @@ examples, the whole live stack verified in real headless browsers
   sometimes renders its input) keeps its own slot instead of inheriting one
   from whatever rendered first. `sig.Ref()` returns that name as a Datastar
   expression (`"$count"`) for hand-written attributes: `h.Data("show",
-  p.Open.Ref())`. A `Signal` must be a plain field of the composition —
-  one reached through a pointer, slice, array, map or interface field, or bound off a
-  value-receiver `View`, has no field name and panics when rendered.
+  p.Open.Ref())`. A `Signal` must be a plain field of the composition — one
+  reached through a pointer, slice, array or map field, or held by a
+  composition whose `View` has a value receiver, has no field offset to name
+  itself by. via walks the composition type at `Mount`/`Embed`, so those
+  **panic at startup**, not once per request. The one case the type walk
+  cannot see is a Signal behind an `interface` field; that still panics on
+  the first render that binds it.
 - **Live embeds + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live embed with a per-tab SSE
   stream; `State[T]` is
@@ -205,7 +249,9 @@ examples, the whole live stack verified in real headless browsers
   into a 403 "session mismatch" until the page is reloaded. The signing
   key resolves
   `WithSessionKey` → `VIA_SESSION_KEY` env → a random per-process key (warned on
-  first use — set a stable key so sessions survive restarts and span pods).
+  first use). The key signs the COOKIE; the DATA lives in a
+  `SessionStore`, and the default store is this process's memory, so a
+  restart or a second pod needs `WithSessionStore` as well (see below).
   `WithSessionTTL`/`WithSessionCookieName` tune it. The cookie is `Secure`
   automatically over TLS (so `http://localhost` dev still works);
   `WithSecureCookies` forces it on behind a TLS-terminating proxy.
@@ -273,9 +319,44 @@ count, in ~60 lines that read like a plain page. Two-browser-verified: a message
 typed in one tab appears in the other, the "N online" header tracks connections,
 and the composer clears on send without clobbering a concurrent draft.
 
-**Restarts and deploys.** Sessions derive from the signing key, so with a
-stable key (`WithSessionKey` / `VIA_SESSION_KEY`) a restart or a rolling
-deploy keeps cookies valid across pods. The CSP is a pure function of the
+**Restarts and deploys.** Two separate things have to survive: the cookie and
+the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps
+the COOKIE valid across restarts and pods — it is signed, not stored. The DATA
+lives in a `SessionStore`, and the default one is a map in this process's
+memory, so with the key alone a restart still logs everyone out and a second
+pod sees nothing. Pass `WithSessionStore` for a shared, durable store:
+
+```go
+type redisSessions struct{ c *redis.Client }
+
+func (r redisSessions) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	b, err := r.c.Get(ctx, "via:"+id).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, false, nil
+	}
+	return b, err == nil, err
+}
+
+func (r redisSessions) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	return r.c.Set(ctx, "via:"+id, data, ttl).Err()
+}
+
+func (r redisSessions) Delete(ctx context.Context, id string) error {
+	return r.c.Del(ctx, "via:"+id).Err()
+}
+
+via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))
+```
+
+That is the whole interface. via hands a session over already serialized and
+never asks a store to understand it: rotation is a Save under the new id then a
+Delete of the old, and expiry is the `ttl` handed to Save — via stamps the same
+deadline into the blob and refuses an expired Load anyway, so a backend with no
+TTL support is still correct. Values go through `encoding/json`, keyed by the
+Go type `Session.Put` stored them under, so a type a pod cannot decode reads
+back as absent rather than as someone else's value.
+
+The CSP is a pure function of the
 Head, so pods with different keys still serve identical policies. Live-embed
 state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
