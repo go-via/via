@@ -15,13 +15,19 @@ func TestTopic_publishReachesEverySubscriber(t *testing.T) {
 	tp := topic.New[string]()
 	a, b := tp.Subscribe(), tp.Subscribe()
 	tp.Publish("hi")
-	assert.Equal(t, "hi", <-a.C())
-	assert.Equal(t, "hi", <-b.C())
+	<-a.Ready()
+	<-b.Ready()
+	av, aok := a.Drain()
+	bv, bok := b.Drain()
+	assert.Equal(t, []string{"hi"}, av)
+	assert.Equal(t, []string{"hi"}, bv)
+	assert.True(t, aok)
+	assert.True(t, bok)
 }
 
 // One stuck consumer must not stall the publisher (or every other subscriber):
-// the broker drops to a full buffer rather than blocking. A framework that lets
-// one slow tab freeze the broadcast is unusable.
+// Publish only ever appends to a queue. A framework that lets one slow tab
+// freeze the broadcast is unusable.
 func TestTopic_slowSubscriberDoesNotBlockThePublisher(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[int]()
@@ -48,8 +54,11 @@ func TestTopic_stopDeregistersAndClosesChannel(t *testing.T) {
 	s := tp.Subscribe()
 	s.Stop()
 	tp.Publish("after-stop")
-	_, ok := <-s.C()
-	assert.False(t, ok, "channel must be closed after Stop")
+	_, open := <-s.Ready()
+	assert.False(t, open, "Ready must be closed after Stop")
+	batch, ok := s.Drain()
+	assert.Empty(t, batch, "a publish after Stop must not reach the subscriber")
+	assert.False(t, ok, "Drain must report the subscription finished")
 }
 
 func TestTopic_subsCountsOnlyLiveSubscriptions(t *testing.T) {
@@ -66,4 +75,84 @@ func TestTopic_subsCountsOnlyLiveSubscriptions(t *testing.T) {
 
 	b.Stop()
 	assert.Zero(t, tp.Subs())
+}
+
+// The defect this package was rewritten for: a burst far larger than any
+// per-subscriber buffer must still deliver every value to every subscriber.
+// Drop-on-full lost ~87% of a burst this size.
+func TestTopic_burstIsLosslessForEverySubscriber(t *testing.T) {
+	t.Parallel()
+	const subs, msgs = 100, 1000
+	tp := topic.New[int]()
+	ss := make([]*topic.Sub[int], subs)
+	for i := range ss {
+		ss[i] = tp.Subscribe()
+	}
+	for i := range msgs {
+		tp.Publish(i)
+	}
+	for i, s := range ss {
+		got, _ := s.Drain()
+		if !assert.Len(t, got, msgs, "subscriber %d lost values", i) {
+			t.FailNow()
+		}
+		for j, v := range got {
+			if v != j {
+				t.Fatalf("subscriber %d out of order at %d: got %d", i, j, v)
+			}
+		}
+	}
+}
+
+// Loss past the queue limit is the one documented failure mode, and it must be
+// counted rather than silent.
+func TestTopic_overLimitDropsAreCounted(t *testing.T) {
+	t.Parallel()
+	tp := topic.New[int]()
+	s := tp.SubscribeLimit(4)
+	for i := range 10 {
+		tp.Publish(i)
+	}
+	assert.Equal(t, 6, s.Dropped())
+	batch, _ := s.Drain()
+	assert.Equal(t, []int{0, 1, 2, 3}, batch, "the oldest values survive")
+	assert.Zero(t, tp.Subscribe().Dropped(), "a healthy subscriber drops nothing")
+}
+
+// Values queued before Stop stay drainable: a reader woken by the close must
+// still see everything published before it.
+func TestTopic_stopKeepsAlreadyQueuedValues(t *testing.T) {
+	t.Parallel()
+	tp := topic.New[string]()
+	s := tp.Subscribe()
+	tp.Publish("a")
+	s.Stop()
+	batch, ok := s.Drain()
+	assert.Equal(t, []string{"a"}, batch)
+	assert.True(t, ok, "a non-empty final batch must still be reported deliverable")
+	_, ok = s.Drain()
+	assert.False(t, ok)
+}
+
+// BenchmarkTopic_burstFanOut quantifies the fix: delivered/published under the
+// exact burst that made the old drop-on-full broker lose ~87%.
+func BenchmarkTopic_burstFanOut(b *testing.B) {
+	const subs, msgs = 100, 1000
+	var delivered, published int64
+	for b.Loop() {
+		tp := topic.New[int]()
+		ss := make([]*topic.Sub[int], subs)
+		for i := range ss {
+			ss[i] = tp.Subscribe()
+		}
+		for i := range msgs {
+			tp.Publish(i)
+		}
+		published += subs * msgs
+		for _, s := range ss {
+			got, _ := s.Drain()
+			delivered += int64(len(got))
+		}
+	}
+	b.ReportMetric(float64(delivered)/float64(published)*100, "%delivered")
 }

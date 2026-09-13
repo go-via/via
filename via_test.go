@@ -134,7 +134,7 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 // or SSE frame structure (csp, theme, live, and via's own Content-Type checks),
 // which the vt harness deliberately does not expose; the behavior-only tests
 // (signals, compose, security, state) drive vt instead.
-func serve(t *testing.T, handler http.Handler) *httptest.Server {
+func serve(t testing.TB, handler http.Handler) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)

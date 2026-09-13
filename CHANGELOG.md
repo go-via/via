@@ -109,6 +109,20 @@ as a re-read of the README, not a diff.
   connection-scoped side effect now that `OnInit` is per-request.
 - **`topic.Topic.Subs() int`**: the live subscription count, for publishing
   presence and for proving a subscription was actually released.
+- **`topic` delivery is lossless, and `ctx.Listen` renders once per batch.**
+  The broker used to give each subscriber a 64-value buffer and drop anything
+  past it, so a 1000-message burst to 100 subscribers lost ~87% of it — and
+  since every delivered value drives one `Listen` handler call, an app that
+  counted or accumulated in its handler silently got a wrong answer. Each
+  subscriber now holds an unbounded-up-to-`topic.DefaultLimit` (100k) queue;
+  `Publish` still never blocks, and a unit may publish to a topic it also
+  listens to. `Listen` drains the whole backlog, runs every handler in publish
+  order, then re-renders and pushes **once** for the batch, so a burst no
+  longer costs one SSE frame per message. Loss is possible only past the queue
+  limit, which means the reader is wedged rather than merely behind; it is
+  counted by `Sub.Dropped()` and logged once per subscription. **Breaking:**
+  `Sub.C() <-chan T` is replaced by `Sub.Ready() <-chan struct{}` plus
+  `Sub.Drain() ([]T, bool)`; `Topic.SubscribeLimit(n)` sets a custom limit.
 - **A plain (non-live) page may embed live islands** as sibling struct
   fields — each streams and patches independently over the page's one
   connection. **Known limitation:** a live island cannot itself embed
