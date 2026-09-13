@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -233,10 +235,9 @@ func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 		url := actionURL(t, getRec.Body.String(), "r", 0)
 
 		actionRec := httptest.NewRecorder()
-		actionReq := httptest.NewRequest(http.MethodPost, url, strings.NewReader("{}"))
+		actionReq := httptest.NewRequest(http.MethodPost, url, strings.NewReader(withTab(peer.tab, "{}")))
 		actionReq.Header.Set("Sec-Fetch-Site", "same-origin")
 		actionReq.Header.Set("Datastar-Request", "true")
-		actionReq.Header.Set("X-Via-Tab", peer.tab)
 		actionDone := make(chan struct{})
 		go func() {
 			handler.ServeHTTP(actionRec, actionReq)
@@ -381,7 +382,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 	}()
 
 	// Return the first datastar-patch-ELEMENTS frame, skipping the connect-time
-	// _viatab patch-signals frame that now precedes every stream.
+	// viatab patch-signals frame that now precedes every stream.
 	var frame []string
 	inElements := false
 	deadline := time.After(2 * time.Second)
@@ -465,7 +466,7 @@ func awaitLine(t *testing.T, lines <-chan string, want string) {
 	}
 }
 
-var tabRe = regexp.MustCompile(`"_viatab":"([^"]+)"`)
+var tabRe = regexp.MustCompile(`"viatab":"([^"]+)"`)
 
 // awaitTabID reads the SSE stream until the connect-time signals frame that
 // carries the per-connection tab id, and returns it.
@@ -475,7 +476,7 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 	for {
 		select {
 		case <-deadline:
-			require.Fail(t, "no _viatab signals frame arrived")
+			require.Fail(t, "no viatab signals frame arrived")
 		case line, ok := <-lines:
 			require.True(t, ok, "stream closed before the tab-id frame")
 			if m := tabRe.FindStringSubmatch(line); m != nil {
@@ -911,9 +912,8 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "r", 0)
 
-	resp, _ := post(t, srv, url, "{}", map[string]string{
+	resp, _ := post(t, srv, url, withTab("nonexistent", "{}"), map[string]string{
 		"Sec-Fetch-Site": "same-origin",
-		"X-Via-Tab":      "nonexistent",
 	})
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
@@ -974,9 +974,8 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 		draftSlot := attrValue(t, page, "data-bind")
 		sendID := actionID(t, page)
 
-		resp, _ := post(t, srv, "/_via/a/"+sendID, `{"`+draftSlot+`":"hello-room"}`, map[string]string{
+		resp, _ := post(t, srv, "/_via/a/"+sendID, withTab(tabA, `{"`+draftSlot+`":"hello-room"}`), map[string]string{
 			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tabA,
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
@@ -1005,11 +1004,10 @@ func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 
 		// X-Echo has no vt.Action builder method, so this posts by hand — but
 		// the URL and tab still come off the connection, not a separate GET.
-		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("r", 0), strings.NewReader("{}"))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("r", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
-		req.Header.Set("X-Via-Tab", conn.TabID())
 		req.Header.Set("X-Echo", "from-the-action-post")
 		resp, err := app.Client().Do(req)
 		require.NoError(t, err)
@@ -1201,8 +1199,8 @@ func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 		tab := awaitTabID(t, lines)
 
 		_, page := do(t, srv, http.MethodGet, "/thread/7", "")
-		resp, _ := post(t, srv, actionURL(t, page, "0", 0), "{}", map[string]string{
-			"Sec-Fetch-Site": "same-origin", "X-Via-Tab": tab,
+		resp, _ := post(t, srv, actionURL(t, page, "0", 0), withTab(tab, "{}"), map[string]string{
+			"Sec-Fetch-Site": "same-origin",
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode, "the live action answers 204; the push carries the patch")
 
@@ -1245,9 +1243,8 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 		digestSrv := liveServer(t, via.Register(renderCounter{views: &atomic.Int64{}}))
 		_, page := do(t, digestSrv, http.MethodGet, "/", "")
 
-		resp, _ := post(t, srv, actionURL(t, page, "r", 0), "{}", map[string]string{
+		resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
 			"Sec-Fetch-Site": "same-origin",
-			"X-Via-Tab":      tab,
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
@@ -1475,13 +1472,12 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 200 {
-				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
 				if err != nil {
 					continue
 				}
 				req.Header.Set("Datastar-Request", "true")
 				req.Header.Set("Sec-Fetch-Site", "same-origin")
-				req.Header.Set("X-Via-Tab", tab)
 				resp, err := srv.Client().Do(req)
 				if err == nil {
 					resp.Body.Close()
@@ -1593,10 +1589,9 @@ func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T)
 			defer wg.Done()
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel() // abandoned before the request is even dispatched
-			req := httptest.NewRequest(http.MethodPost, actURL, strings.NewReader("{}")).WithContext(ctx)
+			req := httptest.NewRequest(http.MethodPost, actURL, strings.NewReader(withTab(tab, "{}"))).WithContext(ctx)
 			req.Header.Set("Datastar-Request", "true")
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
-			req.Header.Set("X-Via-Tab", tab)
 			handler.ServeHTTP(httptest.NewRecorder(), req)
 		}()
 	}
@@ -1681,7 +1676,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	url := actionURL(t, page, "r", 0)
 
 	var seen sync.Map // values (int) observed in the counter signal's signals-patch frame
-	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
+	re := regexp.MustCompile(`"n":(\d+)`)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1701,13 +1696,12 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range perGoroutine {
-				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
 				if err != nil {
 					continue
 				}
 				req.Header.Set("Datastar-Request", "true")
 				req.Header.Set("Sec-Fetch-Site", "same-origin")
-				req.Header.Set("X-Via-Tab", tab)
 				resp, err := srv.Client().Do(req)
 				if err == nil {
 					resp.Body.Close()
@@ -1760,7 +1754,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "r", 0)
 
-	re := regexp.MustCompile(`"[fs]\d+":(\d+)`)
+	re := regexp.MustCompile(`"n":(\d+)`)
 	var mu sync.Mutex
 	var seq []int
 	done := make(chan struct{})
@@ -1784,13 +1778,12 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 		go func() {
 			defer wg.Done()
 			for range perGoroutine {
-				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader("{}"))
+				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
 				if err != nil {
 					continue
 				}
 				req.Header.Set("Datastar-Request", "true")
 				req.Header.Set("Sec-Fetch-Site", "same-origin")
-				req.Header.Set("X-Via-Tab", tab)
 				resp, err := srv.Client().Do(req)
 				if err == nil {
 					resp.Body.Close()
@@ -1991,7 +1984,7 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 	require.Len(t, binds, 2, "frame: %s", frame)
 	assert.NotEqual(t, binds[0][1], binds[1][1],
 		"the embed copy must re-mint its slot, not inherit the parent's root-scoped one")
-	assert.True(t, strings.HasPrefix(binds[1][1], "i0_"),
+	assert.True(t, strings.HasPrefix(binds[1][1], "c__"),
 		"embed slot must carry its embed prefix: %s", binds[1][1])
 }
 
@@ -2163,4 +2156,142 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 	}
 	b.ReportMetric(float64(renders.Load())/float64(total), "renders/msg")
 	b.ReportMetric(float64(got.Load())/float64(total)*100, "%delivered")
+}
+
+// withTab splices the tab id into a JSON signal body. The tab id is an
+// ordinary Datastar signal now, so a live action carries it in the POST body
+// exactly as the browser's signal store does — not as a header.
+func withTab(tab, body string) string {
+	sig := map[string]json.RawMessage{}
+	if body != "" {
+		_ = json.Unmarshal([]byte(body), &sig)
+	}
+	sig["viatab"], _ = json.Marshal(tab)
+	out, _ := json.Marshal(sig)
+	return string(out)
+}
+
+// --- Listen runs on the stream's own select loop (change 4) ---
+
+// orderUnit registers TWO Listens on one topic. Each used to own a reader
+// goroutine, so which handler saw a value first was a scheduler race; both now
+// run from the connection's single select loop, in registration order.
+type orderUnit struct {
+	bus  *topic.Topic[int]
+	mu   *sync.Mutex
+	seen *[]string
+}
+
+func (u *orderUnit) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(u.bus, u.first)
+	ctx.Listen(u.bus, u.second)
+	ctx.Tick(time.Hour, u.idle)
+	return nil
+}
+
+func (u *orderUnit) idle(ctx *via.Ctx) {}
+
+func (u *orderUnit) record(tag string, v int) {
+	u.mu.Lock()
+	*u.seen = append(*u.seen, tag+strconv.Itoa(v))
+	u.mu.Unlock()
+}
+
+func (u *orderUnit) first(ctx *via.Ctx, v int)  { u.record("a", v) }
+func (u *orderUnit) second(ctx *via.Ctx, v int) { u.record("b", v) }
+
+func (u *orderUnit) View() h.H { return h.Div(h.Str("order")) }
+
+func TestListen_handlerOrderIsRegistrationOrderNotAGoroutineRace(t *testing.T) {
+	t.Parallel()
+	bus := topic.New[int]()
+	var mu sync.Mutex
+	var seen []string
+	srv := serve(t, via.Register(orderUnit{bus: bus, mu: &mu, seen: &seen}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	awaitTabID(t, lines)
+	require.Eventually(t, func() bool { return bus.Subs() == 2 }, 2*time.Second, time.Millisecond)
+
+	const n = 50
+	for i := range n {
+		bus.Publish(i)
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(seen) == 2*(i+1)
+		}, 2*time.Second, time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var want []string
+	for i := range n {
+		want = append(want, "a"+strconv.Itoa(i), "b"+strconv.Itoa(i))
+	}
+	assert.Equal(t, want, seen, "two Listens on one unit must run in registration order, every time")
+}
+
+// BenchmarkListen_goroutinesPerConnection reports the thing the fold was for:
+// how many goroutines each live connection costs when it holds three Listens.
+// One reader goroutine per subscription per connection was ~1/3 of all
+// goroutines at scale.
+func BenchmarkListen_goroutinesPerConnection(b *testing.B) {
+	bus := topic.New[int]()
+	var got atomic.Int64
+	var renders atomic.Int64
+	srv := serve(b, via.Register(triListen{bus: bus, got: &got, renders: &renders}))
+
+	const conns = 200
+	base := runtime.NumGoroutine()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for range conns {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		go func() {
+			defer resp.Body.Close()
+			buf := make([]byte, 4096)
+			for {
+				if _, err := resp.Body.Read(buf); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	for bus.Subs() < conns*3 {
+		time.Sleep(time.Millisecond)
+	}
+	perConn := float64(runtime.NumGoroutine()-base) / conns
+	for b.Loop() {
+		bus.Publish(1)
+	}
+	b.ReportMetric(perConn, "goroutines/conn")
+}
+
+// triListen is the benchmark's shape: one live unit holding three Listens.
+type triListen struct {
+	bus     *topic.Topic[int]
+	got     *atomic.Int64
+	renders *atomic.Int64
+	n       via.State[int]
+}
+
+func (u *triListen) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(u.bus, u.take)
+	ctx.Listen(u.bus, u.take)
+	ctx.Listen(u.bus, u.take)
+	return nil
+}
+
+func (u *triListen) take(ctx *via.Ctx, v int) { u.got.Add(1) }
+
+func (u *triListen) View() h.H {
+	u.renders.Add(1)
+	return h.Div(u.n.Display())
 }

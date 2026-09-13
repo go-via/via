@@ -148,12 +148,15 @@ examples, the whole live stack verified in real headless browsers
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names — `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side; `When`/`Each`
-  render conditionals and lists. A signal's wire name is its field offset in
-  the composition struct (`f0`, `f48`), not its render order, so a `Bind()`
-  behind a `When` — a wizard step, a branch that only sometimes renders its
-  input — keeps its own slot instead of inheriting one from whatever rendered
-  first. A signal held through a pointer or slice field has no offset and falls
-  back to a render-order name; keep that one's `Bind()` unconditional.
+  render conditionals and lists. A signal's wire name is its Go FIELD name —
+  `count`, and `chat__draft` for one inside an embedded `Chat` — not its render
+  order, so a `Bind()` behind a `When` (a wizard step, a branch that only
+  sometimes renders its input) keeps its own slot instead of inheriting one
+  from whatever rendered first. `sig.Ref()` returns that name as a Datastar
+  expression (`"$count"`) for hand-written attributes: `h.Data("show",
+  p.Open.Ref())`. A signal held through a pointer or slice field has no field
+  name and falls back to a render-order one; keep that one's `Bind()`
+  unconditional.
 - **Live embeds + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live embed with a per-tab SSE
   stream; `State[T]` is
@@ -164,7 +167,8 @@ examples, the whole live stack verified in real headless browsers
   and delays that connection's shutdown until it returns.
 - **Interactive live actions** (`example/chat`): a live-embed action routes —
   via the `via_tab` handshake (an unguessable per-connection id echoed in the
-  `X-Via-Tab` header) — to *this* connection's embed, mutates its state, and the
+  `viatab` signal every `@post` already carries) — to *this* connection's
+  embed, mutates its state, and the
   result is pushed over its SSE. The element push omits `data-signals`, and
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.

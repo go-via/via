@@ -19,6 +19,7 @@ package vt
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -169,6 +170,8 @@ type Action struct {
 	originSet   bool
 	secFetchSet bool
 	noOrigin    bool
+	tab         string
+	tabSet      bool
 	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
 }
 
@@ -196,10 +199,12 @@ func (x *Action) SecFetch(s string) *Action {
 	return x
 }
 
-// Tab sets the X-Via-Tab header, routing a live action to a connection's embed.
-func (x *Action) Tab(id string) *Action { x.headers["X-Via-Tab"] = id; return x }
+// Tab sets the viatab signal in the POST body, routing a live action to a
+// connection's embed — the same channel the real client uses, since Datastar
+// ships the whole (underscore-filtered) signal store with every @post.
+func (x *Action) Tab(id string) *Action { x.tab, x.tabSet = id, true; return x }
 
-// Over routes this action over c's stream: its X-Via-Tab header is set to c's
+// Over routes this action over c's stream: its viatab signal is set to c's
 // tab id, and — unless Raw overrides it — Fire reads the action's URL off c's own
 // pushed markup (see Conn.ActionURL) instead of a separate plain GET's
 // render, which can carry a different shape digest than what this connection
@@ -215,6 +220,26 @@ func (x *Action) NoOrigin() *Action { x.noOrigin = true; return x }
 // Body sets the raw JSON signal body (defaults to "{}").
 func (x *Action) Body(json string) *Action { x.body = json; return x }
 
+// signalBody splices the tab id into the JSON signal body the way the browser
+// would — the tab id is a signal now, not a header. A body Tab was never set
+// on, or one that is not a JSON object (a test feeding deliberate garbage), is
+// posted verbatim.
+func (x *Action) signalBody() string {
+	if !x.tabSet {
+		return x.body
+	}
+	sig := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(x.body), &sig); err != nil {
+		return x.body
+	}
+	sig[tabSignal], _ = json.Marshal(x.tab)
+	out, err := json.Marshal(sig)
+	if err != nil {
+		return x.body
+	}
+	return string(out)
+}
+
 // Fire issues the POST and returns the status code and response body.
 func (x *Action) Fire() (int, string) {
 	x.app.t.Helper()
@@ -229,7 +254,7 @@ func (x *Action) Fire() (int, string) {
 		}
 		path = u
 	}
-	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+path, strings.NewReader(x.body))
+	req, err := http.NewRequest(http.MethodPost, x.app.srv.URL+path, strings.NewReader(x.signalBody()))
 	if err != nil {
 		x.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
@@ -267,7 +292,10 @@ type Conn struct {
 	elements [][]byte // one entry per datastar-patch-elements frame, in arrival order
 }
 
-var tabRE = regexp.MustCompile(`"_viatab":"([^"]+)"`)
+// tabSignal mirrors via's own wire name for the per-connection tab id.
+const tabSignal = "viatab"
+
+var tabRE = regexp.MustCompile(`"` + tabSignal + `":"([^"]+)"`)
 
 // Connect opens the per-tab SSE stream and reads the connect-time signals frame
 // that carries the tab id, so the returned Conn is ready to route actions.
@@ -403,7 +431,7 @@ func (c *Conn) awaitTab() string {
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatal("vt.Connect: no _viatab frame arrived")
+			c.t.Fatal("vt.Connect: no viatab frame arrived")
 		case line, ok := <-c.frames:
 			if !ok {
 				c.t.Fatal("vt.Connect: stream closed before the tab-id frame")

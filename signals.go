@@ -66,11 +66,25 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[strin
 // a Datastar text-bound span. T must be JSON-round-trippable; slice 1 exercises
 // int and string.
 type Signal[T any] struct {
-	slot   string // stable wire name, assigned lazily on first render
+	slotID // MUST stay the first field: prebindSignals stamps the wire name through a pointer add at the field's offset
 	val    T
 	bound  *Ctx // stamped at bind; the pass whose dirty map ships the patch
 	warned bool // the never-rendered Set warning fired (once per signal)
 }
+
+// Ref returns the signal's Datastar expression — "$count" for a field named
+// Count, "$chat_draft" for a Draft inside an embedded Chat — for hand-written
+// Datastar attributes the typed API does not cover:
+//
+//	h.Div(h.Data("show", p.Open.Ref()), ...)
+//
+// Valid for a signal held as a struct field of the composition (the normal
+// case): every such signal is named before the View runs, so Ref reads the
+// same name wherever in the tree it is called. A signal reached only through a
+// pointer or slice field has no field name and is named in render order at its
+// first Bind/Display, so Ref on one is empty until then — Bind or Display it
+// first, or hold it as a plain field.
+func (s *Signal[T]) Ref() string { return "$" + s.slot }
 
 // Get returns the current value.
 func (s *Signal[T]) Get() T { return s.val }
@@ -110,14 +124,17 @@ func (s *Signal[T]) Set(v T) {
 func (s *Signal[T]) bind(r *hcore.Renderer) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
+	if s.bound != nil {
+		s.bound.warnAddressable(unsafe.Pointer(s))
+	}
 	// Re-mint when the scope moved: via.Embed copies the child by value, so a
 	// signal the parent's View already bound arrives in the embed carrying an
 	// unprefixed root slot, which would collide in the page's one signal store.
-	if s.slot == "" || (s.bound != nil && !s.bound.slotInScope(s.slot)) {
+	if s.slot == "" || (s.bound != nil && !s.bound.slotInScope(s.scope)) {
 		if s.bound != nil {
-			s.slot = s.bound.signalSlot(unsafe.Pointer(s))
+			s.slot, s.scope = s.bound.signalSlot(unsafe.Pointer(s)), s.bound.scopePrefix()
 		} else {
-			s.slot = b.SignalName()
+			s.slot, s.scope = b.SignalName(), ""
 		}
 	}
 	if raw, ok := b.SignalInit(s.slot); ok {

@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"reflect"
 	"unsafe"
 
 	"github.com/go-via/via/h"
@@ -66,7 +67,8 @@ func Embed[C any](child C) h.H {
 	// &child, not the parent's field: the copy is what the child's View binds
 	// against for the life of this render (and, for a live embed, for the life
 	// of the connection), so its address is the base its signals offset from.
-	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child)}
+	typ := reflect.TypeOf(child)
+	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }
 
@@ -87,6 +89,22 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	child := newCtx(parent.inSignals)
 	child.isEmbed = true
 	child.embedKey = key
+	// The child's signal prefix is its FIELD name under the parent, composed
+	// onto the parent's own prefix ("chat__", "shell__body__"). The DOUBLE
+	// underscore marks the scope boundary: a plain nested struct joins with a
+	// single one, so a parent that binds p.C.S in its own View (slot "c_s")
+	// and also Embeds p.C (slot "c__s") keeps the two apart — they are
+	// different copies and must never share a slot. It is stamped onto the
+	// instance because a live embed's push re-renders the child with no parent
+	// in scope and must mint the very same names.
+	if name := embedFieldName(parent.embedV.typ, inst.typ); name != "" {
+		inst.slotPrefix = parent.scopePrefix() + name + "__"
+	} else {
+		// Two fields of the child's type: Embed's argument order need not
+		// match declaration order, so the name would be a guess. Fall back to
+		// the positional key, which is always right, just opaque.
+		inst.slotPrefix = parent.scopePrefix() + "i" + key + "__"
+	}
 	child.embedV = inst
 	child.base = parent.base // the mount prefix, so the embed's own action URLs carry it too
 	child.declareSeen = parent.declareSeen
@@ -158,6 +176,7 @@ func initChild(child *Ctx, v any) {
 // renderEmbedInner renders the embed's View with child as the binder, so the
 // child's actions/signals bind into its own tables. Returns the inner HTML (without the container div), already escaped.
 func renderEmbedInner(child *Ctx, v viewer) []byte {
+	prebindSignals(child, child.embedV)
 	rr := hcore.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
 	return rr.Bytes()
@@ -171,11 +190,15 @@ func renderEmbedInner(child *Ctx, v viewer) []byte {
 // what keeps a PLAIN embed's re-render — whose View may well Embed further
 // children — numbering those children exactly as the full-page walk did,
 // instead of restarting at the root's own key and aliasing onto it.
-func renderEmbedBind(key string, inst instance, base string) (*Ctx, []byte) {
+//
+// from is the request-scoped Ctx this re-render belongs to (nil for a live
+// push): it inits the embed's nested CHILDREN — see inheritRequestScope.
+func renderEmbedBind(key string, inst instance, base string, from *Ctx) (*Ctx, []byte) {
 	c := newCtx(nil)
 	c.isEmbed = true
 	c.embedKey = key
 	c.embedV = inst
 	c.base = base
+	inheritRequestScope(c, from)
 	return c, renderEmbedInner(c, inst.v)
 }

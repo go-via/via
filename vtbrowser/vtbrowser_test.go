@@ -38,7 +38,7 @@ func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Display())) }
 
 // clicker is a live embed whose action mutates its own State — the vehicle for
-// testing Click and the $_viatab → X-Via-Tab round-trip.
+// testing Click and the $viatab signal round-trip.
 type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
@@ -135,9 +135,9 @@ func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
 		return err == nil && n >= 2
 	}, "the clock embed to tick past 2 (live push to #via-i0)")
 
-	// Counter embed: its action must route to #via-i1 via X-Via-Tab and morph
+	// Counter embed: its action must route to #via-i1 via the viatab signal and morph
 	// only that container, leaving the clock running.
-	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Sleep(400 * time.Millisecond) // let the SSE connect so $viatab is set
 	s.Click("#via-i1 button")
 	s.WaitTextContains("#via-i1 p", "clicks 1")
 	s.RequireCleanConsole()
@@ -167,7 +167,7 @@ func (p *pRoot) View() h.H {
 func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Register(pRoot{}))
 
-	s.Sleep(400 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Sleep(400 * time.Millisecond) // let the SSE connect so $viatab is set
 	s.Click("#via-i0 button")
 	s.WaitTextContains("#via-i0 p", "clicks 1")
 
@@ -217,15 +217,15 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// Click drives a live-embed action: the count changes only if the $_viatab the
-// SSE set is echoed as the X-Via-Tab header, reaching this connection's embed
+// Click drives a live-embed action: the count changes only if the $viatab the
+// SSE set is sent in the action's signal body, reaching this connection's embed
 // and pushing the result back over its stream. WaitTextContains absorbs the
 // round-trip latency.
 func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
 	s := vtbrowser.Open(t, via.Register(clicker{}))
 
 	s.WaitTextContains("p", "count: 0")
-	s.Sleep(500 * time.Millisecond) // let the SSE connect so Datastar has $_viatab to echo
+	s.Sleep(500 * time.Millisecond) // let the SSE connect so Datastar has $viatab to echo
 	s.Click("button")
 	s.WaitTextContains("p", "count: 1")
 	s.RequireCleanConsole()
@@ -383,7 +383,7 @@ func TestPostActionRedirect_doesNotNavigate(t *testing.T) {
 }
 
 // liveFormBrowser is a live root with a native PostForm — the vehicle for
-// proving, in a real browser, that the hidden $_viatab field is actually
+// proving, in a real browser, that the hidden $viatab field is actually
 // filled (see the L1 fix: `data-attr:value`, not `data-attr-value`, which
 // Datastar's `t.split(/:(.+)/)` key parser silently drops).
 type liveFormBrowser struct {
@@ -412,7 +412,7 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	calls := 0
 	s := vtbrowser.Open(t, via.Register(liveFormBrowser{calls: &calls}))
 
-	s.Sleep(500 * time.Millisecond) // let the SSE connect so $_viatab is set
+	s.Sleep(500 * time.Millisecond) // let the SSE connect so $viatab is set
 	s.Type("#name", "alice")
 	s.Click("#save")
 	s.Sleep(500 * time.Millisecond) // let the native submit navigate

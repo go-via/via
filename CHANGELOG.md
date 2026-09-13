@@ -55,10 +55,36 @@ as a re-read of the README, not a diff.
   fetched but never connected no longer orphans a `Sub` per GET.
 - **A failed `OnInit` runs no disposers**, because nothing was acquired yet:
   the acquire/release pair is `OnLive`/`OnDispose` and neither half runs.
-- **Every action now echoes the tab id**, live or not — `_viatab` is declared
+- **Every action now echoes the tab id**, live or not — `viatab` is declared
   on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
   page sends the empty id, which matches no connection and falls through to the
   stateless path, as does a plain child embedded on a live page.
+- **The tab id is a SIGNAL, not the `X-Via-Tab` header** (wire break). Datastar
+  builds request headers per call — `Object.assign({}, {Accept,
+  'Datastar-Request'}, opts.headers)`, with no ancestor inheritance and no
+  config hook — so a header had to be spelled out on every binding (33 bytes
+  each). It filters out only signals matching `/(^|\.)_/`, so dropping the
+  leading underscore is all it takes for the tab id to ride in the signal store
+  every `@post` already sends. The header is no longer read. Security is
+  unchanged: the id is still a synchronizer token set by same-origin JS and
+  never auto-attached by the browser, the `Datastar-Request` check stays, and
+  the origin floor is untouched. `PostForm` is the one exception — a native
+  form submit carries neither signals nor headers, so it keeps its hidden
+  `_viatab` field, now bound to `$viatab`.
+- **A signal's wire name is its Go FIELD name** (wire break) — `count`,
+  `chat__draft` for one inside an embedded `Chat`, `outer__mid__kid__step` for
+  a deeper path — replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
+  The offsets stay as the internal key, so hydration is unchanged and
+  reflection runs once per composition TYPE at `Mount`/`Embed`, never per
+  render. A plain nested struct joins with one underscore, an embed boundary
+  with two, so a parent that binds `p.C.S` itself (`c_s`) and also embeds
+  `p.C` (`c__s`) keeps the two copies apart. Two fields of the same type in
+  one parent are ambiguous — `Embed`'s argument order need not match
+  declaration order — so those fall back to the positional key (`i0__s`).
+- **`Signal[T].Ref()`** returns the signal's Datastar expression (`"$count"`)
+  for hand-written attributes the typed API does not cover:
+  `h.Data("show", p.Open.Ref())`. Field-held signals are named before the View
+  runs, so `Ref` reads the same name wherever it is called.
 - **`h.SafeURL` is gone.** The URL policy — http/https/relative admitted,
   `javascript:`/`data:`/protocol-relative refused, including a leading `\` or
   `/\` (WHATWG parsing treats `\` as `/`, so `/\evil.com` is protocol-relative
@@ -200,6 +226,28 @@ as a re-read of the README, not a diff.
 
 ### Changed
 
+- **`ctx.Listen` no longer costs a goroutine per subscription per connection.**
+  Each subscription used to run a reader goroutine (8KB of stack) purely to
+  bridge its ready channel onto the connection's select loop — about a third of
+  all goroutines at scale (15k at 5,000 tabs x 3 listens). The connection now
+  owns one coalescing wake channel that every subscription signals
+  (`topic.Sub.Notify`), and `runStream` sweeps its listeners itself. Measured:
+  8 -> 5 goroutines per connection at three listens, and publish-to-handler
+  latency 112us -> 70us. Handler order across two `Listen`s on one unit is now
+  registration order rather than a race between reader goroutines. Delivery is
+  unchanged: no handler call is lost, a backlog still coalesces to one render,
+  a slow client still cannot head-of-line block another, and a unit may still
+  publish to a topic it listens to.
+- **Action ids are memoized.** `actionID` resolved a handler's Go name through
+  `runtime.FuncForPC` and hashed it once per binding PER RENDER (~190ns each).
+  The id is a pure function of the code pointer and the receiver's offset, so
+  it is now computed once per pair. A thousand bindings render in 281us,
+  down from 436us. The receiver-offset folding — which is what keeps two
+  instances of one type from sharing an id — is part of the memo key.
+- **`topic.Sub.Notify(ch)`** routes a subscription's wake-ups to a shared
+  channel alongside `Ready`, so one reader can multiplex many subscriptions on
+  a single select.
+
 - **Vocabulary: one word per concept.** "live" was carrying three meanings and
   its opposite was spelled four ways (`stateless`, `plain`, `non-live`,
   `static`). Now: a page **streams** (the per-tab SSE connection) or is served
@@ -238,10 +286,10 @@ as a re-read of the README, not a diff.
   built, then pushes once — one render per action, not two. An action id
   outside that table (a click racing a push, or a branched `View` that
   shifted it) now answers `410` instead of silently doing nothing.
-- **Signals are addressed by field offset, not by render position.** A
-  `Signal[T]`'s wire name is its byte offset within the composition struct —
-  `f0`, `f48`, `i0_f0` for an embedded island — replacing the render-order
-  `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
+- **Signals are addressed by field identity, not by render position.** A
+  `Signal[T]`'s wire name is its Go field name, keyed internally by its byte
+  offset within the composition struct — `count`, `chat__draft` for an
+  embedded island — replacing the render-order `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
   across the upgrade posts the old names, the server ignores what it does not
   recognise, and the page is correct on reload. `via.Embed`'s signature is
   unchanged — the child copy it already takes by value is the offset base.
@@ -281,6 +329,15 @@ as a re-read of the README, not a diff.
   collapse onto one entry, which is what they mean.
 
 ### Fixed
+
+- **A stateless action's response render now runs its nested children's
+  `OnInit`.** The acted-on unit's own `OnInit` already ran for the request, but
+  every embedded child in the patch is a fresh copy whose `OnInit` never had —
+  so a nested child that loads its data there came back zero-valued in the
+  patch, nothing like what the same subtree renders on a GET. Both the root
+  patch and a plain embed's own subtree patch are fixed; a live push still
+  skips it, since re-running `OnInit` per beat would reload data and
+  re-register `Tick`/`Listen`.
 
 - **Wire break: an island is addressed by its KEY, not a page-wide counter.**
   An `Embed`ed child's identity is now its ordinal among its own parent's
@@ -419,12 +476,6 @@ as a re-read of the README, not a diff.
   it flips. Composition made the numbering stable across partial re-renders;
   it did not make it stable across a shape change, so such a `When` must still
   depend only on data fixed by `OnInit` or the field literal.
-- A plain island's own stateless action re-renders only that island's subtree,
-  and that re-render does not run its embedded children's `OnInit` — a nested
-  child that loads its data there renders from its field literal in the patch.
-  For a nested LIVE child the container carries `data-ignore-morph`, so the
-  browser drops that stale region and keeps the streamed one; for a nested
-  plain child, load its data in the parent instead.
 - There is no per-IP or per-tab cap on concurrent SSE connections beyond the
   router-wide `WithMaxLiveConnections`; a single client can still open many.
 - Action-body JSON decoding is not strict: unknown signal keys and trailing

@@ -16,7 +16,7 @@ package via
 // It also clears the banner on any incoming SSE patch (datastar-patch-elements
 // / datastar-patch-signals): a long-lived SSE stream fires 'retrying' on a drop
 // but emits NO 'started'/'finished' on a successful resume, so an arrived patch
-// (the reconnect re-bootstrap's _viatab signals frame, or via's periodic
+// (the reconnect re-bootstrap's viatab signals frame, or via's periodic
 // keepalive-driven re-handshake) is the only reliable "stream is alive again"
 // signal. Without it the banner stays stuck.
 //

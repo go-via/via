@@ -253,7 +253,7 @@ func TestUnknownAction_isGone(t *testing.T) {
 func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(boundForm{}))
-	status, _ := app.Action(0).Body("{\"f0\":\"\xff\"}").Fire()
+	status, _ := app.Action(0).Body("{\"name\":\"\xff\"}").Fire()
 	assert.Equal(t, http.StatusOK, status)
 }
 
@@ -263,7 +263,7 @@ func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Register(boundForm{}))
-	status, frag := app.Action(0).Body(`{"f0":"one","f0":"two"}`).Fire()
+	status, frag := app.Action(0).Body(`{"name":"one","name":"two"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "two")
 	assert.NotContains(t, frag, "one")
@@ -485,6 +485,16 @@ func isViaCallNamed(call *ast.CallExpr, name string) bool {
 // wiring, and is out of this guard.)
 func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
+	// reflect is admitted in exactly three files and only on TYPE-setup paths
+	// that run once per composition type (Mount/Embed) and are memoized: the
+	// action-id func name, the field-name signal table, and the embed's parent
+	// field lookup. Nothing here may run per render — that is the invariant
+	// this whitelist exists to keep honest.
+	allowed := map[string][]string{
+		"via.go":    {"reflect.PointerTo", "reflect.Struct", "reflect.Type", "reflect.TypeOf", "reflect.ValueOf"},
+		"embed.go":  {"reflect.TypeOf"},
+		"router.go": {"reflect.TypeOf"},
+	}
 	files := coreGoFiles(t)
 	require.NotEmpty(t, files, "expected core sources to scan")
 	for _, file := range files {
@@ -497,14 +507,13 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 				if imp.Path.Value != `"reflect"` {
 					continue
 				}
-				require.Equal(t, "via.go", filepath.Base(file),
-					"%s imports reflect — via wiring must be reflection-free", file)
+				want, ok := allowed[filepath.Base(file)]
+				require.True(t, ok, "%s imports reflect — via wiring must be reflection-free", file)
 				src, err := os.ReadFile(file)
 				require.NoError(t, err)
 				uses := slices.Compact(slices.Sorted(slices.Values(
 					regexp.MustCompile(`reflect\.\w+`).FindAllString(string(src), -1))))
-				assert.Equal(t, []string{"reflect.ValueOf"}, uses,
-					"via.go may only reflect to take a func value's pointer")
+				assert.Equal(t, want, uses, "%s may only reflect on the memoized type-setup path", file)
 			}
 		})
 	}
@@ -942,4 +951,41 @@ func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
 	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, logs.String(), "share the action id")
+}
+
+// --- action id memoization (change 1) ---
+
+// gridBench binds ONE handler a thousand times, which is the shape actionID's
+// cost shows up in: the id is a pure function of (code pointer, receiver
+// offset), so resolving the Go name and hashing it per binding per render was
+// pure waste.
+type gridBench struct{ rows []int }
+
+func (g *gridBench) Hit(ctx *via.Ctx) {}
+
+func (g *gridBench) row(int) h.H { return h.Button(via.On("click", g.Hit)) }
+
+func (g *gridBench) View() h.H { return h.Div(via.Each(g.rows, g.row)) }
+
+func BenchmarkRender_thousandActionBindings(b *testing.B) {
+	handler := via.Register(gridBench{rows: make([]int, 1000)})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	for b.Loop() {
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
+// The memoized id must be stable across renders AND across separately mounted
+// instances of the same type — the cache is keyed on the code pointer plus the
+// receiver's offset, so a key that dropped either half would either churn URLs
+// between renders or collapse two receivers onto one id.
+func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
+	t.Parallel()
+	handler := via.Register(idTwins{})
+	first := actionURLs(t, handler)
+	second := actionURLs(t, handler)
+	require.Len(t, first, 2)
+	assert.Equal(t, first, second, "an action URL must survive a re-render, or every open tab 410s")
+	assert.Equal(t, first, actionURLs(t, via.Register(idTwins{})),
+		"the id is content-addressed, not per-instance")
 }
