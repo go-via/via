@@ -91,12 +91,12 @@ func TestPage_cspAllowsDatastarFunctionEval(t *testing.T) {
 // policy to admit it.
 func TestPage_everyInlineScriptIsAdmittedByItsHash(t *testing.T) {
 	t.Parallel()
-	// newCounter is stateless and ships no inline script at all — a live page
+	// newCounter is plain and ships no inline script at all — a streaming page
 	// is required so the loop below actually has bytes to check.
 	resp, body := do(t, newPulse(t), http.MethodGet, "/", "")
 	csp := resp.Header.Get("Content-Security-Policy")
 	scripts := inlineScripts(t, body)
-	require.NotEmpty(t, scripts, "a live page must ship at least one inline script (the reconnect manager)")
+	require.NotEmpty(t, scripts, "a streaming page must ship at least one inline script (the reconnect manager)")
 	for _, js := range scripts {
 		assert.Contains(t, csp, hashSource(js),
 			"an inline script the page served is not admitted by its own policy")

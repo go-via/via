@@ -66,20 +66,20 @@ func TestDispatch_redirectFromLiveActionDoesNotShipAScript(t *testing.T) {
 	})
 }
 
-// islandRedirector is a STATELESS island (dispatchStateless, not
+// embedRedirector is a PLAIN embed (dispatchPlain, not
 // liveRunAction) whose action queues a Redirect.
-type islandRedirector struct{}
+type embedRedirector struct{}
 
-func (r *islandRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
-func (r *islandRedirector) View() h.H       { return h.Div(h.Button(via.On("click", r.Go))) }
+func (r *embedRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
+func (r *embedRedirector) View() h.H       { return h.Div(h.Button(via.On("click", r.Go))) }
 
-type islandRedirectorParent struct{ I islandRedirector }
+type embedRedirectorParent struct{ I embedRedirector }
 
-func (p *islandRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *embedRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_redirectFromStatelessIslandActionDoesNotShipAScript(t *testing.T) {
+func TestDispatch_redirectFromPlainEmbedActionDoesNotShipAScript(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Register(islandRedirectorParent{}))
+	srv := serve(t, via.Register(embedRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "0", 0), strings.NewReader("{}"))
@@ -91,28 +91,28 @@ func TestDispatch_redirectFromStatelessIslandActionDoesNotShipAScript(t *testing
 	defer resp.Body.Close()
 
 	assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript",
-		"a stateless island's Redirect can no longer navigate; no script ships")
+		"a plain embed's Redirect can no longer navigate; no script ships")
 	assert.Empty(t, resp.Header.Get("datastar-script-attributes"))
 }
 
-// sigIsland's signals are only Bound (never Displayed), so Setting one never
+// sigEmbed's signals are only Bound (never Displayed), so Setting one never
 // changes the rendered HTML — the only way a client sees the new value is the
 // container's data-signals attribute. Other exists solely so Reset's Set of
 // Name has a sibling to leave alone: the response must declare Name and NOT
 // Other, proving the patch is restricted to what the action actually wrote
 // rather than the whole slot table.
-type sigIsland struct{ Name, Other via.Signal[string] }
+type sigEmbed struct{ Name, Other via.Signal[string] }
 
-func (s *sigIsland) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
-func (s *sigIsland) View() h.H {
+func (s *sigEmbed) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
+func (s *sigEmbed) View() h.H {
 	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.On("click", s.Reset)))
 }
 
-type sigPage struct{ I sigIsland }
+type sigPage struct{ I sigEmbed }
 
 func (p *sigPage) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
+func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Register(sigPage{}))
 
@@ -125,14 +125,14 @@ func TestDispatch_signalSetInIslandActionReachesClient(t *testing.T) {
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
 }
 
-// guardedIsland is embedded under a parent whose own OnInit session-gates
+// guardedEmbed is embedded under a parent whose own OnInit session-gates
 // the whole mount, replacing the removed guard mechanism.
-type guardedIsland struct{}
+type guardedEmbed struct{}
 
-func (g *guardedIsland) Ping(ctx *via.Ctx) {}
-func (g *guardedIsland) View() h.H         { return h.Div(h.Button(via.On("click", g.Ping))) }
+func (g *guardedEmbed) Ping(ctx *via.Ctx) {}
+func (g *guardedEmbed) View() h.H         { return h.Div(h.Button(via.On("click", g.Ping))) }
 
-type guardedParent struct{ I guardedIsland }
+type guardedParent struct{ I guardedEmbed }
 
 func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 	if _, ok := ctx.Session().Get[acct](); !ok {
@@ -142,7 +142,7 @@ func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 }
 func (p *guardedParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
-func TestDispatch_islandActionRunsOnInitRedirect(t *testing.T) {
+func TestDispatch_embedActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/g", guardedParent{})
@@ -156,7 +156,7 @@ func TestDispatch_islandActionRunsOnInitRedirect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the parent's OnInit Redirect must gate the island action route")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the parent's OnInit Redirect must gate the embed action route")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
@@ -214,17 +214,17 @@ func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 		app := vt.Serve(t, via.Register(panicLive{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Live(conn).Fire()
+		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusInternalServerError, status, "a live action panic must answer 500")
 
-		status2, _ := app.Action(1).Live(conn).Fire()
+		status2, _ := app.Action(1).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status2, "the connection must survive the panic and keep dispatching")
 	})
 }
 
 // branchy's second button only exists in the View after Reveal
 // fires and its push renders it — the connect-time render and the initial
-// stateless GET both show only Reveal.
+// plain GET both show only Reveal.
 type branchy struct {
 	shown via.State[bool]
 	n     via.State[int]
@@ -243,7 +243,7 @@ func (b *branchy) View() h.H {
 // TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL is C2: a
 // connection's action table can change shape mid-connection (a push adds a
 // button), and the URL for the new action only ever appears in what THIS
-// connection pushed — never in the stateless page vt cached before Connect.
+// connection pushed — never in the plain page vt cached before Connect.
 // Sourcing it from Conn's own pushed markup (vt.Action.Live) finds it and
 // dispatches successfully; sourcing it from the stale page (plain
 // vt.Action) can't find action 1 at all, because the page vt fetched never
@@ -253,7 +253,7 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 		app := vt.Serve(t, via.Register(branchy{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Live(conn).Fire()
+		status, _ := app.Action(0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status, "Reveal must run and push the new button")
 
 		// The pushed element-patch carrying Extra's URL is read off the real
@@ -263,28 +263,28 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 		// under -cpu 1.
 		conn.Await("extra")
 
-		status, _ = app.Action(1).Live(conn).Fire()
+		status, _ = app.Action(1).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status,
 			"Extra's URL only exists in what this connection pushed — vt.Action.Live must read it from there")
 
-		// A stateless GET is a fresh, unrelated instance (shown resets to
+		// A plain GET is a fresh, unrelated instance (shown resets to
 		// false) — it can never carry this connection's action 1, proving
-		// plain vt.Action's stateless-page lookup could not have found it
+		// plain vt.Action's plain-page lookup could not have found it
 		// either; only Conn's own pushed markup has it.
 		page := fetchPage(t, app, "/")
 		assert.NotContains(t, page, "extra",
-			"a fresh stateless render never reflects the live connection's Reveal")
+			"a fresh plain render never reflects the stream's Reveal")
 	})
 }
 
-// paramIsland is embedded under a parametrised mount; Bump changes its
+// paramEmbed is embedded under a parametrised mount; Bump changes its
 // visible count so the action's response is a real patch, not a 204.
-type paramIsland struct{ n int }
+type paramEmbed struct{ n int }
 
-func (k *paramIsland) Bump(ctx *via.Ctx) { k.n++ }
-func (k *paramIsland) View() h.H         { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
+func (k *paramEmbed) Bump(ctx *via.Ctx) { k.n++ }
+func (k *paramEmbed) View() h.H         { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
 
-type paramParent struct{ I paramIsland }
+type paramParent struct{ I paramEmbed }
 
 func (p *paramParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
@@ -303,7 +303,7 @@ func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	assert.Contains(t, body, `/thread/7/_via/a/0/`, "the re-rendered action URL must carry the concrete segment")
 }
 
-// unsafeRoot and unsafeIsland both bump a visible counter alongside an
+// unsafeRoot and unsafeEmbed both bump a visible counter alongside an
 // unsafe Redirect, so a rejected redirect's fallback response is provably a
 // normal patch (the counter's new value), not a crash or a hang.
 type unsafeRoot struct{ n int }
@@ -311,19 +311,19 @@ type unsafeRoot struct{ n int }
 func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
 func (u *unsafeRoot) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
-type unsafeIsland struct{ n int }
+type unsafeEmbed struct{ n int }
 
-func (u *unsafeIsland) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
-func (u *unsafeIsland) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+func (u *unsafeEmbed) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
+func (u *unsafeEmbed) View() h.H       { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
-type unsafeParent struct{ I unsafeIsland }
+type unsafeParent struct{ I unsafeEmbed }
 
 func (p *unsafeParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
 func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stateless root", func(t *testing.T) {
+	t.Run("plain root", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(unsafeRoot{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -333,7 +333,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
 	})
 
-	t.Run("stateless island", func(t *testing.T) {
+	t.Run("plain embed", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(unsafeParent{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -353,9 +353,9 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 	})
 }
 
-// splitActionURL cuts url into its /_via/a/ prefix, {island}, {act} and any
+// splitActionURL cuts url into its /_via/a/ prefix, {embed}, {act} and any
 // query, so a test can forge one segment and keep the rest genuine.
-func splitActionURL(t *testing.T, url string) (prefix, island, act, query string) {
+func splitActionURL(t *testing.T, url string) (prefix, embed, act, query string) {
 	t.Helper()
 	if i := strings.Index(url, "?"); i >= 0 {
 		url, query = url[:i], url[i:]
@@ -368,23 +368,23 @@ func splitActionURL(t *testing.T, url string) (prefix, island, act, query string
 }
 
 // swapActionID rewrites url's {act} segment to an id the render does not
-// bind, keeping island, mount prefix and ?a= genuine.
+// bind, keeping embed, mount prefix and ?a= genuine.
 func swapActionID(t *testing.T, url, act string) string {
 	t.Helper()
-	prefix, island, _, q := splitActionURL(t, url)
-	return prefix + island + "/" + act + q
+	prefix, embed, _, q := splitActionURL(t, url)
+	return prefix + embed + "/" + act + q
 }
 
-// swapIslandIndex rewrites url's {island} segment, keeping a genuine action id
-// on it — an id that resolves on ITS island must not resolve on another.
-func swapIslandIndex(t *testing.T, url, island string) string {
+// swapEmbedIndex rewrites url's {embed} segment, keeping a genuine action id
+// on it — an id that resolves on ITS embed must not resolve on another.
+func swapEmbedIndex(t *testing.T, url, embed string) string {
 	t.Helper()
 	prefix, _, act, q := splitActionURL(t, url)
-	return prefix + island + "/" + act + q
+	return prefix + embed + "/" + act + q
 }
 
 func TestDispatch_forgedActionIDIsGone(t *testing.T) {
-	t.Run("stateless", func(t *testing.T) {
+	t.Run("plain", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -417,7 +417,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stateless root", func(t *testing.T) {
+	t.Run("plain root", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -425,7 +425,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
-	t.Run("stateless island", func(t *testing.T) {
+	t.Run("plain embed", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Register(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -475,7 +475,7 @@ func (s *toggleState) snapshot() (locked bool, ran string) {
 // Save=0, Delete=1, Flip=2; locked removes Save, so every later index shifts
 // down — Delete=0, Flip=1 — the render shape the audit flagged as a live
 // misroute hazard (a branched View shifting every following index),
-// reproduced here on the stateless path.
+// reproduced here on the plain path.
 type branchedView struct{ st *toggleState }
 
 func (b *branchedView) Save(ctx *via.Ctx)   { b.st.mark("save") }
@@ -498,15 +498,15 @@ func (b *branchedView) View() h.H {
 	)
 }
 
-// xmIsland is a live, dep-free island mountable at any path — the vehicle for
+// xmEmbed is a live, dep-free embed mountable at any path — the vehicle for
 // proving a live tab from one mount can't drive another mount's action table.
-type xmIsland struct {
+type xmEmbed struct {
 	fired *int
 	n     via.State[int]
 }
 
-func (x *xmIsland) Fire(*via.Ctx) { *x.fired++ }
-func (x *xmIsland) View() h.H {
+func (x *xmEmbed) Fire(*via.Ctx) { *x.fired++ }
+func (x *xmEmbed) View() h.H {
 	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
 }
 
@@ -514,8 +514,8 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var aFired, cFired int
 		r := via.NewRouter()
-		r.Mount("/a", xmIsland{fired: &aFired})
-		r.Mount("/c", xmIsland{fired: &cFired})
+		r.Mount("/a", xmEmbed{fired: &aFired})
+		r.Mount("/c", xmEmbed{fired: &cFired})
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
@@ -670,7 +670,7 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 
 // nativeFormPanic's View panics on re-render once boom is flipped —
 // reproducing a native <form> submit whose mutation succeeds but whose
-// fresh-instance re-render (dispatchLive, native mode) then panics. boom is
+// fresh-instance re-render (dispatchOverStream, native mode) then panics. boom is
 // a shared pointer, not per-instance State: the fresh instance the render
 // runs against is a different value from the one Save mutated, so only a
 // pointer shared across instances can carry the trigger between them.
@@ -689,7 +689,7 @@ func (f *nativeFormPanic) View() h.H {
 
 // A panic in a native form's post-mutation re-render must answer 500, not
 // hang the POST forever — the render runs on the dispatching POST's own
-// goroutine (see dispatch.go's dispatchLive), outside liveRunAction's own
+// goroutine (see dispatch.go's dispatchOverStream), outside liveRunAction's own
 // recover, after the mutation already succeeded.
 func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -711,7 +711,7 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 
 // openStreamWithClient is openStreamAt against a caller-supplied client, so a
 // test can open the SSE stream carrying a cookie already sitting in the
-// client's jar (a session established by an earlier stateless action).
+// client's jar (a session established by an earlier plain action).
 func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, path string) (<-chan string, context.CancelFunc) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -739,9 +739,9 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 }
 
 // sessionLive is a live root — a Live-implementing root's own actions only
-// ever route through the tab handshake (dispatchStateless refuses them, see
+// ever route through the tab handshake (dispatchPlain refuses them, see
 // dispatch.go), so establishing the session ahead of connecting needs a
-// separate, stateless mount (loginComp, from sess_test.go) sharing the same
+// separate, plain mount (loginComp, from sess_test.go) sharing the same
 // router-wide session manager. Bump is the live action a stolen tab id would
 // try to drive.
 type sessionLive struct{ n via.State[int] }
@@ -754,13 +754,13 @@ func (s *sessionLive) View() h.H {
 		h.Button(via.On("click", s.Peek))) // action 1
 }
 
-// liveActionRequest builds a raw dispatch POST against island/n using the
+// liveActionRequest builds a raw dispatch POST against embed/n using the
 // page's currently-rendered action URL, with tab as its X-Via-Tab header —
 // bypassing any cookie jar, so the caller controls exactly what (if any)
 // session cookie rides along.
-func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, island string, n int) *http.Request {
+func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, embed string, n int) *http.Request {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, island, n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, embed, n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -768,14 +768,14 @@ func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, island str
 	return req
 }
 
-// A live connection opened under a real session must reject a dispatch that
+// A stream opened under a real session must reject a dispatch that
 // doesn't carry that same session — the tab id alone (a leaked/stolen one,
 // with no cookie at all, exactly as a cross-origin request would arrive with
 // the origin floor open) is no longer a sufficient credential.
 func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})  // stateless — establishes the session cookie
+	r.Mount("/login", loginComp{})  // plain — establishes the session cookie
 	r.Mount("/live", sessionLive{}) // Live root, shares the router-wide session manager
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -825,7 +825,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 		"the connecting session's own dispatch must still succeed")
 }
 
-// Neighbour of the mismatch rejection: an ANONYMOUS live connection (no
+// Neighbour of the mismatch rejection: an ANONYMOUS stream (no
 // session at any point) must keep dispatching exactly as before — the check
 // only applies once a connection is actually bound to a session, so an app
 // that never touches Session() sees no behavior change.
@@ -1124,7 +1124,7 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 		"the pre-rotate id must not drive the connection anymore")
 }
 
-// raceLoginer is liveLoginer's Login, but pausable: it blocks on the island
+// raceLoginer is liveLoginer's Login, but pausable: it blocks on the embed
 // goroutine until proceed is signaled, closing started the instant it takes
 // hold of that goroutine — the two channels let a test park a concurrent
 // cookieless dispatch's own goroutine right at the moment the connection is
@@ -1175,7 +1175,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 		require.NoError(t, err)
 		loginDone <- resp
 	}()
-	<-root.started // Login now holds the island goroutine, unbound so far
+	<-root.started // Login now holds the stream goroutine, unbound so far
 
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpDone := make(chan *http.Response, 1)

@@ -32,7 +32,7 @@ import (
 func TestLive_pageBootstrapsTheStreamViaPost(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newPulse(t), http.MethodGet, "/", "")
-	assert.Contains(t, body, `@post('/_via/sse')`, "live page must bootstrap the stream via @post")
+	assert.Contains(t, body, `@post('/_via/sse')`, "streaming page must bootstrap the stream via @post")
 	assert.NotContains(t, body, `@get('/_via/sse')`, "the old @get bootstrap must be gone")
 }
 
@@ -50,9 +50,9 @@ func TestLive_sseEndpointRejectsGet(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "GET /_via/sse must be 405; the stream is POST")
 }
 
-// A stateless app (no live root, no live islands) has no stream: a POST to the
+// A plain app (no live root, no live embeds) has no stream: a POST to the
 // SSE endpoint must 404 rather than open an empty stream.
-func TestSSE_statelessAppHasNoLiveStream(t *testing.T) {
+func TestSSE_plainAppHasNoStream(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
@@ -61,19 +61,19 @@ func TestSSE_statelessAppHasNoLiveStream(t *testing.T) {
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a stateless app must not serve the SSE stream")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a plain app must not serve the SSE stream")
 }
 
-// A live stream must emit a periodic keepalive even on an island with no
+// A stream must emit a periodic keepalive even on an embed with no
 // ticks: a successful write proves the peer is still there, and a FAILED
 // write is the only in-band way to notice a silently-dropped (half-open) peer
-// so the island goroutine and its timers don't leak. It must be an SSE
+// so the stream goroutine and its timers don't leak. It must be an SSE
 // comment frame, not a signal/element patch, so it never mutates client
 // state. This runs at the fixed 25s cadence — synctest makes the wait free in
 // wall time.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Register(quietIsland{}))
+		app := vt.Serve(t, via.Register(quietEmbed{}))
 		conn := app.Connect()
 
 		time.Sleep(24 * time.Second)
@@ -157,7 +157,7 @@ func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 		synctest.Wait()
 		select {
 		case <-done:
-			require.Fail(t, "the island was disposed before the write deadline elapsed")
+			require.Fail(t, "the embed was disposed before the write deadline elapsed")
 		default:
 		}
 
@@ -213,9 +213,9 @@ func (s *stalledAfterConnect) Write(p []byte) (int, error) {
 
 // A stalled reader must not delay an action POST behind the deferred push it
 // triggers: the mutation is already done, and the response must say so,
-// before the write ever gets a chance to block. dispatchLive used to run the
+// before the write ever gets a chance to block. dispatchOverStream used to run the
 // re-render/push inline, so the POST's own goroutine sat parked in
-// liveConn.run for as long as the write took (up to the write timeout, or
+// tabStream.run for as long as the write took (up to the write timeout, or
 // forever if disabled) even though the action had already succeeded.
 func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -285,9 +285,9 @@ func (f *halfOpenFlusher) Flush() {}
 
 // A half-open peer (gone without a FIN) never cancels the request context, so a
 // failed frame write is the only in-band signal that it's gone. The stream must
-// react to it by tearing the island down — running disposers, stopping ticks —
+// react to it by tearing the embed down — running disposers, stopping ticks —
 // not by looping its single goroutine against a dead socket forever.
-func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
+func TestLive_failedStreamWriteTearsDownTheEmbedSoItDoesNotLeak(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
 		handler := via.Register(disposeProbe{disposed: done})
@@ -305,12 +305,12 @@ func TestLive_failedStreamWriteTearsDownTheIslandSoItDoesNotLeak(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			require.Fail(t, "a failed keepalive write must tear the island down (run disposers); it leaked instead")
+			require.Fail(t, "a failed keepalive write must tear the embed down (run disposers); it leaked instead")
 		}
 	})
 }
 
-// pulse is a live island: implementing OnInit opts it into a server-push SSE
+// pulse is a live embed: implementing OnInit opts it into a server-push SSE
 // stream. A server-side ticker increments a beat count; via re-renders and
 // pushes the fragment, so the browser updates with no client code.
 type pulse struct{ beats via.State[int] }
@@ -341,7 +341,7 @@ func newPulse(t *testing.T) *httptest.Server {
 	return liveServer(t, via.Register(pulse{}))
 }
 
-// multiline is a live island whose rendered content contains a newline. The SSE
+// multiline is a live embed whose rendered content contains a newline. The SSE
 // framing must survive it.
 type multiline struct{ s string }
 
@@ -352,11 +352,11 @@ func (m *multiline) OnInit(ctx *via.Ctx) error {
 func (m *multiline) set(*via.Ctx) { m.s = "top\nbottom" }
 func (m *multiline) View() h.H    { return h.Div(h.P(h.Str(m.s))) }
 
-// quietIsland is a live composition that registers no ticks — the stream must
+// quietEmbed is a live composition that registers no ticks — the stream must
 // still open and hold cleanly, not panic or wedge.
-type quietIsland struct{ n via.State[int] }
+type quietEmbed struct{ n via.State[int] }
 
-func (q *quietIsland) View() h.H { return h.Div(h.Str("quiet"), q.n.Display()) }
+func (q *quietEmbed) View() h.H { return h.Div(h.Str("quiet"), q.n.Display()) }
 
 // readFirstFrame returns the lines of the first SSE event from the stream
 // (everything up to the first blank-line terminator), cancelling the request.
@@ -381,7 +381,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 	}()
 
 	// Return the first datastar-patch-ELEMENTS frame, skipping the connect-time
-	// _viatab patch-signals frame that now precedes every live stream.
+	// _viatab patch-signals frame that now precedes every stream.
 	var frame []string
 	inElements := false
 	deadline := time.After(2 * time.Second)
@@ -507,10 +507,10 @@ func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	})
 }
 
-// A live island that registers no ticks must still open the stream cleanly.
+// A live embed that registers no ticks must still open the stream cleanly.
 func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Register(quietIsland{}))
+		srv := liveServer(t, via.Register(quietEmbed{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -527,8 +527,8 @@ func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	})
 }
 
-// A live page must server-render its initial View (no empty flash) and carry a
-// single bootstrap that opens the per-tab SSE stream, or the island never goes
+// A streaming page must server-render its initial View (no empty flash) and carry a
+// single bootstrap that opens the per-tab SSE stream, or the embed never goes
 // live in the browser.
 func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	t.Parallel()
@@ -581,7 +581,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 				}
 				if sawEvent && strings.HasPrefix(line, "data: elements ") {
 					assert.Contains(t, line, `<div id="root"`, "frame must carry the #root morph target")
-					assert.Contains(t, line, "beats: ", "frame must re-render the island")
+					assert.Contains(t, line, "beats: ", "frame must re-render the embed")
 					cancel()
 					return
 				}
@@ -590,7 +590,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 	})
 }
 
-// feed is a live island driven by a shared Topic: every connection subscribes,
+// feed is a live embed driven by a shared Topic: every connection subscribes,
 // and a published message fans out to all of them and is shown live.
 type feed struct {
 	room *topic.Topic[string]
@@ -620,7 +620,7 @@ func (d *disposeProbe) OnInit(ctx *via.Ctx) error {
 func (d *disposeProbe) markDisposed() { close(d.disposed) }
 func (d *disposeProbe) View() h.H     { return h.Div(h.Str("probe"), d.n.Display()) }
 
-// One publish must reach EVERY connected island — that's the multi-user
+// One publish must reach EVERY connected embed — that's the multi-user
 // headline. Two streams subscribe; a single Publish to the shared Topic shows up
 // on both.
 func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
@@ -640,38 +640,38 @@ func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	})
 }
 
-// mixedIsland registers BOTH a tick and a subscription, plus a dispose probe.
-type mixedIsland struct {
+// mixedEmbed registers BOTH a tick and a subscription, plus a dispose probe.
+type mixedEmbed struct {
 	room     *topic.Topic[string]
 	beats    via.State[int]
 	last     via.State[string]
 	disposed chan struct{}
 }
 
-func (m *mixedIsland) OnInit(ctx *via.Ctx) error {
+func (m *mixedEmbed) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(15*time.Millisecond, m.beat)
 	ctx.OnDispose(m.markDispose)
 	ctx.Listen(m.room, m.recv)
 	return nil
 }
-func (m *mixedIsland) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get() + 1) }
-func (m *mixedIsland) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
-func (m *mixedIsland) markDispose()                  { close(m.disposed) }
-func (m *mixedIsland) View() h.H {
+func (m *mixedEmbed) beat(ctx *via.Ctx)             { m.beats.Set(m.beats.Get() + 1) }
+func (m *mixedEmbed) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
+func (m *mixedEmbed) markDispose()                  { close(m.disposed) }
+func (m *mixedEmbed) View() h.H {
 	return h.Div(
 		h.P(h.Str("beats: "), m.beats.Display()),
 		h.P(h.Str("last: "), m.last.Display()),
 	)
 }
 
-// Ticks and subscriptions share one island loop: a ticking island must also
-// deliver published messages, and disconnecting a ticking+subscribed island
+// Ticks and subscriptions share one embed loop: a ticking embed must also
+// deliver published messages, and disconnecting a ticking+subscribed embed
 // must still tear down cleanly (the ticker goroutine exits, disposers run).
-func TestLive_tickAndSubscribeShareOneIslandLoopAndTearDownCleanly(t *testing.T) {
+func TestLive_tickAndSubscribeShareOneEmbedLoopAndTearDownCleanly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})
-		srv := liveServer(t, via.Register(mixedIsland{room: room, disposed: done}))
+		srv := liveServer(t, via.Register(mixedEmbed{room: room, disposed: done}))
 
 		lines, cancel := openStream(t, srv)
 		awaitLine(t, lines, "beats: ") // a tick frame flows
@@ -683,7 +683,7 @@ func TestLive_tickAndSubscribeShareOneIslandLoopAndTearDownCleanly(t *testing.T)
 		select {
 		case <-done:
 		default:
-			require.Fail(t, "OnDispose did not run when a ticking, subscribed island disconnected")
+			require.Fail(t, "OnDispose did not run when a ticking, subscribed embed disconnected")
 		}
 	})
 }
@@ -698,7 +698,7 @@ type failInit struct {
 }
 
 func (f *failInit) OnInit(ctx *via.Ctx) error {
-	ctx.OnLive(f.markAcquired)
+	ctx.OnConnect(f.markAcquired)
 	ctx.OnDispose(f.markDisposed)
 	return errConnectBoom
 }
@@ -712,7 +712,7 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
-// A failed OnInit opens no connection, so neither half of an OnLive/OnDispose
+// A failed OnInit opens no connection, so neither half of an OnConnect/OnDispose
 // pair may run: registering is not acquiring, and a Listen registered before
 // the failure never subscribed either — nothing is left orphaned in a Topic.
 func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
@@ -724,7 +724,7 @@ func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	select {
 	case <-acquired:
-		require.Fail(t, "OnLive ran on a connect that never opened")
+		require.Fail(t, "OnConnect ran on a connect that never opened")
 	default:
 	}
 	select {
@@ -765,7 +765,7 @@ func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-// On disconnect the island's OnDispose must run, so subscriptions and producers
+// On disconnect the embed's OnDispose must run, so subscriptions and producers
 // are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
@@ -877,10 +877,10 @@ func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	}
 }
 
-// clicker is a live island whose action mutates its OWN server State. The proof
+// clicker is a live embed whose action mutates its OWN server State. The proof
 // of correct routing: after the POST, the patch must arrive over THIS
 // connection's SSE (not as the POST body), which only happens if the action ran
-// against this connection's island instance — not a throwaway per-request copy.
+// against this connection's embed instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
@@ -894,14 +894,14 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID(), "the SSE must hand the client its tab id")
 
-		status, _ := app.Action(0).Live(conn).Fire()
+		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
 
 		conn.Await("count: 1") // the mutation reaches THIS connection
 	})
 }
 
-// A live action POST with no/unknown tab id (no live connection to route to)
+// A live action POST with no/unknown tab id (no stream to route to)
 // must 410 so a stale client re-bootstraps, never silently mutate a throwaway.
 func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	t.Parallel()
@@ -918,27 +918,27 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
 
-// chatIsland mirrors example/chat (string messages) for an httptest fan-out
+// chatEmbed mirrors example/chat (string messages) for an httptest fan-out
 // check: a Send on one connection must reach every connection via the Topic.
 type chatRoom struct{ bus *topic.Topic[string] }
 
-type chatIsland struct {
+type chatEmbed struct {
 	room  *chatRoom
 	Draft via.Signal[string]
 	Log   via.List[string]
 }
 
-func (c *chatIsland) OnInit(ctx *via.Ctx) error {
+func (c *chatEmbed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.recv)
 	return nil
 }
-func (c *chatIsland) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
-func (c *chatIsland) Send(ctx *via.Ctx) {
+func (c *chatEmbed) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
+func (c *chatEmbed) Send(ctx *via.Ctx) {
 	c.room.bus.Publish(c.Draft.Get())
 	c.Draft.Set("")
 }
-func (c *chatIsland) row(m string) h.H { return h.Li(h.Str(m)) }
-func (c *chatIsland) View() h.H {
+func (c *chatEmbed) row(m string) h.H { return h.Li(h.Str(m)) }
+func (c *chatEmbed) View() h.H {
 	return h.Div(
 		h.Ul(via.Each(c.Log.Get(), c.row)),
 		h.Form(via.On("submit", c.Send), h.Input(c.Draft.Bind())),
@@ -954,12 +954,12 @@ func actionID(t *testing.T, body string) string {
 	return m[1]
 }
 
-// The headline: a message sent on one connection's live island fans out — via
+// The headline: a message sent on one connection's live embed fans out — via
 // the Room's Topic — to EVERY connection, including a second tab.
 func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := &chatRoom{bus: topic.New[string]()}
-		srv := liveServer(t, via.Register(chatIsland{room: room}))
+		srv := liveServer(t, via.Register(chatEmbed{room: room}))
 
 		la, ca := openStream(t, srv)
 		defer ca()
@@ -969,7 +969,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 		_ = awaitTabID(t, lb)
 
 		// Learn A's Send action id + the Draft signal slot from a page render
-		// (positional/handle identity is deterministic, so it matches A's island).
+		// (positional/handle identity is deterministic, so it matches A's embed).
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		draftSlot := attrValue(t, page, "data-bind")
 		sendID := actionID(t, page)
@@ -985,7 +985,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	})
 }
 
-// liveReqEchoer is a live island whose action copies a header off the request
+// liveReqEchoer is a live embed whose action copies a header off the request
 // that triggered it into State.
 type liveReqEchoer struct{ echo via.State[string] }
 
@@ -994,7 +994,7 @@ func (e *liveReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
 }
 
-// A live action runs on the island goroutine, yet it must still see the request
+// A live action runs on the stream goroutine, yet it must still see the request
 // that TRIGGERED it — the action POST. That POST carried X-Echo; the connect
 // request never did, so the value surfacing over the SSE proves the triggering
 // action request is threaded through (not the connect request).
@@ -1034,7 +1034,7 @@ func (e *connReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("host: "), e.host.Display()))
 }
 
-// OnInit must see the SSE connect request, so an island can authorize or
+// OnInit must see the SSE connect request, so an embed can authorize or
 // inspect the connection at open time (the same request ticks and subscriptions
 // then run under). The request Host is the server's own address; a pushed frame
 // must reflect it — "example.com" is the fixed host of httptest's in-memory
@@ -1061,7 +1061,7 @@ func (e *tickReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
 }
 
-// Ticks (and subscriptions) run under the island ctx, so a tick body reading
+// Ticks (and subscriptions) run under the embed ctx, so a tick body reading
 // ctx.Request() must see the connection's connect request — there is no
 // triggering request for a timer, and the connection's is the honest answer.
 // This locks that inherited contract, distinct from a handler that triggered an
@@ -1112,7 +1112,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 		// observable in this narrow window; waiting for a push first (as the
 		// old version of this test did) replaces the unit with a fresh render
 		// Ctx, making the corruption invisible to any later tick.
-		status, _ := app.Action(0).Live(conn).Fire()
+		status, _ := app.Action(0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n: 1") // the action landed
 
@@ -1125,7 +1125,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 
 // An OnInit Redirect must gate the SSE connect itself, beyond the page GET
 // and the action route — before A3 the stream handler ran OnInit at all, so
-// a session check left a live page's push channel open to anyone who knew
+// a session check left a streaming page's push channel open to anyone who knew
 // the URL even though the page and its actions were protected.
 func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
@@ -1146,7 +1146,7 @@ func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 }
 
 // onInitLive loads a field in OnInit, before the connect render ever runs —
-// a live island's ticks fire on the connection's own goroutine, so its first
+// a live embed's ticks fire on the connection's own goroutine, so its first
 // pushed frame is the proof OnInit's field reached the persistent instance.
 type onInitLive struct{ label string }
 
@@ -1170,19 +1170,19 @@ func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
 	})
 }
 
-// livePushIsland is a live embedded island under a parametrised mount; Bump
+// livePushEmbed is a live embed under a parametrised mount; Bump
 // changes its visible count so its action's push is a real patch.
-type livePushIsland struct {
+type livePushEmbed struct {
 	n    int
 	seen via.State[int]
 }
 
-func (k *livePushIsland) Bump(ctx *via.Ctx) { k.n++ }
-func (k *livePushIsland) View() h.H {
+func (k *livePushEmbed) Bump(ctx *via.Ctx) { k.n++ }
+func (k *livePushEmbed) View() h.H {
 	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(via.On("click", k.Bump)))
 }
 
-type livePushParent struct{ I livePushIsland }
+type livePushParent struct{ I livePushEmbed }
 
 func (p *livePushParent) View() h.H { return h.Div(via.Embed(p.I)) }
 
@@ -1266,7 +1266,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 		require.NotEmpty(t, conn.TabID())
 
 		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
-		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }
@@ -1293,12 +1293,12 @@ func (f *flakyRender) View() h.H {
 }
 
 // A panic in the re-render a dispatched action's pushWork triggers must not
-// take the whole island goroutine down: the action's own result (204) is
+// take the whole stream goroutine down: the action's own result (204) is
 // already sent to the waiting POST before pushWork runs, so a dead goroutine
 // here would strand every action after it behind a stream that looks alive
 // but never dispatches again. Trigger's mutation succeeds and its 204
 // answers; the render it provokes then panics. A second action (Fix) must
-// still be dispatched and pushed normally, proving the island goroutine
+// still be dispatched and pushed normally, proving the stream goroutine
 // survived.
 func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -1306,17 +1306,17 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 		conn := app.Connect()
 		require.NotEmpty(t, conn.TabID())
 
-		status, _ := app.Action(0).Live(conn).Fire()
+		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "the mutation applies and answers before its render panics")
 
-		status, _ = app.Action(1).Live(conn).Fire()
-		assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive to dispatch a second action")
+		status, _ = app.Action(1).Over(conn).Fire()
+		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive to dispatch a second action")
 		conn.Await("n: 1")
 	})
 }
 
-// liveArg is a live island with one value-carrying action, so a malformed
-// ?a= can be exercised on the live dispatch path too (dispatchStateless has
+// liveArg is a live embed with one value-carrying action, so a malformed
+// ?a= can be exercised on the live dispatch path too (dispatchPlain has
 // its own via_test coverage).
 type liveArg struct{ last via.State[int] }
 
@@ -1326,7 +1326,7 @@ func (l *liveArg) View() h.H {
 }
 
 // A malformed ?a= on a LIVE action must answer 400, not run the handler with
-// a zero value nor 500 — and the island goroutine must survive to answer a
+// a zero value nor 500 — and the stream goroutine must survive to answer a
 // later, well-formed action normally.
 func TestLive_malformedActionArgAnswers400(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -1334,11 +1334,11 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 		conn := app.Connect()
 
 		url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
-		status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusBadRequest, status)
 
-		status, _ = app.Action(0).Live(conn).Fire() // well-formed, same slot
-		assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive")
+		status, _ = app.Action(0).Over(conn).Fire() // well-formed, same slot
+		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
 		conn.Await("7")
 	})
 }
@@ -1360,11 +1360,11 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 				conn := app.Connect()
 
 				url := strings.Replace(conn.ActionURL("r", 0), "a=7", tt.a, 1)
-				status, _ := app.Action(0).Raw(url).Live(conn).Fire()
+				status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 				assert.Equal(t, http.StatusBadRequest, status)
 
-				status, _ = app.Action(0).Live(conn).Fire() // well-formed, same slot
-				assert.Equal(t, http.StatusNoContent, status, "the island goroutine must still be alive")
+				status, _ = app.Action(0).Over(conn).Fire() // well-formed, same slot
+				assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
 				conn.Await("7")
 			})
 		})
@@ -1440,8 +1440,8 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 }
 
 // racyTicker ticks as fast as time.Ticker allows so its OnInit-scheduled
-// push races liveConn.replace (island goroutine) against Bump's dispatchLive,
-// which reads liveConn.units via unit() on the POST's own goroutine.
+// push races tabStream.replace (stream goroutine) against Bump's dispatchOverStream,
+// which reads tabStream.units via unit() on the POST's own goroutine.
 type racyTicker struct{ n via.State[int] }
 
 func (r *racyTicker) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Microsecond, r.tick); return nil }
@@ -1451,8 +1451,8 @@ func (r *racyTicker) View() h.H {
 	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
 }
 
-// liveConn.mu guards units: a background tick's push runs replace
-// on the island goroutine while a concurrent action POST reads the same maps
+// tabStream.mu guards units: a background tick's push runs replace
+// on the stream goroutine while a concurrent action POST reads the same maps
 // via unit() on the dispatching request's own goroutine. This test runs both
 // in real (not synctest-serialized) time and depth so -race — or the Go
 // runtime's own concurrent-map-access panic — catches a missing lock; it
@@ -1493,9 +1493,9 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 }
 
 // racyNativeForm ticks as fast as time.Ticker allows so its OnInit-scheduled
-// push races dispatchLive's native-form re-render, which (before the fix) ran
+// push races dispatchOverStream's native-form re-render, which (before the fix) ran
 // renderRootBase against lc.pageRoot on the POST's own goroutine instead of
-// the island goroutine.
+// the stream goroutine.
 type racyNativeForm struct{ n via.State[int] }
 
 func (r *racyNativeForm) OnInit(ctx *via.Ctx) error {
@@ -1508,9 +1508,9 @@ func (r *racyNativeForm) View() h.H {
 	return h.Div(r.n.Display(), via.PostForm(r.Save, h.Button(h.Str("save"))))
 }
 
-// A native <form> submit on a live page re-renders lc.pageRoot in full
-// (dispatchLive's modeNative branch) so the browser gets a whole document, not
-// a patch. That render must run on the island's own serialized goroutine like
+// A native <form> submit on a streaming page re-renders lc.pageRoot in full
+// (dispatchOverStream's modeNative branch) so the browser gets a whole document, not
+// a patch. That render must run on the embed's own serialized goroutine like
 // every other read/write of live state — otherwise it races a concurrent tick.
 // This runs in real (not synctest-serialized) time and concurrency so -race
 // catches a regression; it asserts nothing about outcomes because the
@@ -1552,7 +1552,7 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 // abandonedAction is a trivial live action dispatched with a request context
 // that is already canceled before ServeHTTP is even called — so
 // req.Context().Err() is guaranteed non-nil from the very first instruction
-// dispatch runs, isolating liveConn.run's first select (pulse-send vs.
+// dispatch runs, isolating tabStream.run's first select (pulse-send vs.
 // reqCtx.Done(), both ready at once) from any timing noise in an actual
 // client/server round trip.
 type abandonedAction struct {
@@ -1566,8 +1566,8 @@ func (a *abandonedAction) View() h.H {
 }
 
 // A live action must never mutate state once its own caller has already given
-// up on it — before the fix, a closure handed off to the island goroutine
-// (see liveConn.run) ran to completion regardless of whether the dispatching
+// up on it — before the fix, a closure handed off to the stream goroutine
+// (see tabStream.run) ran to completion regardless of whether the dispatching
 // request's context was already done by the time the goroutine picked it up.
 // Every one of these requests is abandoned from the start (its context is
 // canceled before dispatch even begins), so every response this handler
@@ -1618,7 +1618,7 @@ func (p *paramInTick) OnInit(ctx *via.Ctx) error {
 func (p *paramInTick) check(ctx *via.Ctx) {
 	defer func() {
 		// Non-blocking: the test only ever reads the first result, and Tick
-		// keeps firing every 1ms — a blocking send here wedges the island
+		// keeps firing every 1ms — a blocking send here wedges the embed
 		// goroutine forever once the buffer is full, hanging server Close.
 		select {
 		case p.panics <- recover():
@@ -1649,7 +1649,7 @@ func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 }
 
 // racyDirtySignal is a live counter with nothing else going on — every Inc
-// dispatch's own push (dispatchLive's pushWork replaces lc.units[0] after
+// dispatch's own push (dispatchOverStream's pushWork replaces lc.units[0] after
 // every action, mutating or not) is the race: many concurrent Incs each read
 // the connection's current unit and each replace it, so one dispatch's read
 // can land on a unit a concurrent dispatch's push is about to make stale.
@@ -1666,7 +1666,7 @@ func (r *racyDirtySignal) View() h.H {
 // TestLiveAction_signalPatchSurvivesARacingPush proves every Inc dispatch that
 // acks also ships its value over the SSE stream's signals-patch, even under a
 // storm of concurrent Incs on the same connection. Before the fix
-// (dispatchLive looking up its unit before handing off to the island
+// (dispatchOverStream looking up its unit before handing off to the embed
 // goroutine instead of inside it), a concurrent push could replace the unit
 // in between, and some values in 1..total never arrived.
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
@@ -1827,7 +1827,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 		want[i] = i + 1
 	}
 	require.Equal(t, want, got,
-		"a live connection's pushes must ship in the order their mutations committed")
+		"a stream's pushes must ship in the order their mutations committed")
 }
 
 // listenOnly goes live purely by subscribing: OnInit registers a Listen and
@@ -1876,7 +1876,7 @@ func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
 		"closing the stream must stop the subscription it started")
 }
 
-// --- OnLive acquires must not leak when connect fails ---
+// --- OnConnect acquires must not leak when connect fails ---
 
 type leakRoom struct {
 	held  *atomic.Int32
@@ -1887,7 +1887,7 @@ type leakRoom struct {
 func (r *leakRoom) join() {
 	r.held.Add(1)
 	if r.boom {
-		panic("via_test: OnLive exploded")
+		panic("via_test: OnConnect exploded")
 	}
 }
 func (r *leakRoom) part()                   { r.held.Add(-1) }
@@ -1895,7 +1895,7 @@ func (r *leakRoom) got(ctx *via.Ctx, n int) {}
 
 func (r *leakRoom) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(r.beats, r.got) // makes the unit live
-	ctx.OnLive(r.join)
+	ctx.OnConnect(r.join)
 	ctx.OnDispose(r.part)
 	return nil
 }
@@ -1906,7 +1906,7 @@ type leakPage struct{ A, B leakRoom }
 
 func (p *leakPage) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
 
-// The second unit's OnLive panics after the first has already acquired. The
+// The second unit's OnConnect panics after the first has already acquired. The
 // connect answers 500 — and the first unit's OnDispose must still run, or the
 // acquire is stranded for the life of the process.
 func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
@@ -1990,7 +1990,7 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 	binds := regexp.MustCompile(`data-bind="([a-z0-9_]+)"`).FindAllStringSubmatch(frame, -1)
 	require.Len(t, binds, 2, "frame: %s", frame)
 	assert.NotEqual(t, binds[0][1], binds[1][1],
-		"the island copy must re-mint its slot, not inherit the parent's root-scoped one")
+		"the embed copy must re-mint its slot, not inherit the parent's root-scoped one")
 	assert.True(t, strings.HasPrefix(binds[1][1], "i0_"),
-		"island slot must carry its island prefix: %s", binds[1][1])
+		"embed slot must carry its embed prefix: %s", binds[1][1])
 }

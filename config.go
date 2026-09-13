@@ -21,18 +21,18 @@ type config struct {
 	csp            string
 }
 
-// sseHeartbeat is the live stream's keepalive cadence: a comment frame whose
+// sseHeartbeat is the stream's keepalive cadence: a comment frame whose
 // only job is to keep the connection warm and surface a silently-dropped
-// (half-open) peer as a failed write, so the island goroutine and its timers
+// (half-open) peer as a failed write, so the stream goroutine and its timers
 // don't leak. Fixed — a failed keepalive write is the only in-band detector of
 // a peer that vanished without a FIN, so it is never disabled.
 const sseHeartbeat = 25 * time.Second
 
 // sseWriteTimeout caps how long a single live-stream frame write may block
-// before the stream tears down, so a stalled peer can't pin the island's
+// before the stream tears down, so a stalled peer can't pin the embed's
 // single goroutine. Fixed — disabling it would let a stalled peer pin a
 // net/http goroutine per click (an action POST against a stalled stream waits
-// behind this same deadline, see liveConn.run).
+// behind this same deadline, see tabStream.run).
 const sseWriteTimeout = 10 * time.Second
 
 // maxSSEConn caps the number of concurrent live SSE streams a single Register

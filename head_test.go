@@ -125,7 +125,7 @@ func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 }
 
 // Two apps configured identically must serve byte-identical policies — the same
-// statelessness the hash-based CSP bought, preserved once the head can widen it.
+// plainness the hash-based CSP bought, preserved once the head can widen it.
 func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	t.Parallel()
 	head := via.Head{

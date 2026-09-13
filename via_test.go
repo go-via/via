@@ -169,15 +169,15 @@ func readAll(t *testing.T, resp *http.Response) string {
 
 func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
 
-// actionURL extracts the n-th action URL island rendered, in document order,
+// actionURL extracts the n-th action URL embed rendered, in document order,
 // out of html. The wire id is a hash of the handler's func name (and any ?a=
 // row datum rides with it), so a test posts the URL the page actually
 // shipped rather than a hand-built path.
-func actionURL(t *testing.T, html string, island string, n int) string {
+func actionURL(t *testing.T, html string, embed string, n int) string {
 	t.Helper()
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + island + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + embed + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
 	m := regexp.MustCompile(pat).FindAllStringSubmatch(html, -1)
-	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", island, n, html)
+	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", embed, n, html)
 	return m[n][1]
 }
 
@@ -339,7 +339,7 @@ func TestOn_submitWiresAPostAction(t *testing.T) {
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
-// reqEchoer is a stateless component whose action copies a header off the
+// reqEchoer is a plain component whose action copies a header off the
 // triggering request into a rendered field.
 type reqEchoer struct{ echo string }
 
@@ -563,7 +563,7 @@ func (b *todoBox) remove(id int) {
 	b.items = out
 }
 
-// todoList is a stateless list whose rows each carry a delete action bound to the
+// todoList is a plain list whose rows each carry a delete action bound to the
 // row's id — the per-row-action case. Del receives the id as a typed parameter.
 type todoList struct{ box *todoBox }
 
@@ -651,23 +651,23 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 	}
 }
 
-// todoBoard embeds the todo list as a STATELESS island — per-row value-actions
+// todoBoard embeds the todo list as a PLAIN embed — per-row value-actions
 // must work there too, not only at the root.
 type todoBoard struct{ List todoList }
 
 func (b *todoBoard) View() h.H { return h.Div(via.Embed(b.List)) }
 
-// A value-carrying action inside a stateless embedded island must still deliver
-// its value: the island action path has to expose the request to the slot.
-func TestActionArg_worksInsideAStatelessIsland(t *testing.T) {
+// A value-carrying action inside a plain embed must still deliver
+// its value: the embed action path has to expose the request to the slot.
+func TestActionArg_worksInsideAPlainEmbed(t *testing.T) {
 	t.Parallel()
 	board := todoBoard{List: todoList{box: newTodoList()}}
 	srv := serve(t, via.Register(board))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // island 1, bravo's slot, arg=2
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // embed 1, bravo's slot, arg=2
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.NotContains(t, body, "bravo", "the island row's value-action did not fire")
+	assert.NotContains(t, body, "bravo", "the embed row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
 }
 

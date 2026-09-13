@@ -1,5 +1,5 @@
 // Command chat is the flagship showcase: a live, multi-user chat room with a
-// presence count — and it reads like a static page. Messages typed in one tab
+// presence count — and it reads like a plain page. Messages typed in one tab
 // appear in every connected tab, the "N online" header tracks connections, and
 // there is no hand-written JavaScript, no WebSocket, no build step. Three signal
 // kinds say where each value lives: Signal round-trips to the server, State is
@@ -33,7 +33,7 @@ func NewRoom() *Room {
 func (r *Room) join() { r.presence.Publish(int(r.online.Add(1))) }
 func (r *Room) part() { r.presence.Publish(int(r.online.Add(-1))) }
 
-// Chat is one connected tab's live island.
+// Chat is one connected tab's live embed.
 type Chat struct {
 	room *Room
 
@@ -48,8 +48,8 @@ func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.presence, c.onPresence)
 
 	// Registered, not performed: OnInit also runs on the plain GET and on every
-	// action, and only a real connection gets an OnLive/OnDispose pair.
-	ctx.OnLive(c.room.join)    // tell everyone the head-count rose
+	// action, and only a real connection gets an OnConnect/OnDispose pair.
+	ctx.OnConnect(c.room.join) // tell everyone the head-count rose
 	ctx.OnDispose(c.room.part) // …and that it fell when this tab leaves
 	return nil
 }

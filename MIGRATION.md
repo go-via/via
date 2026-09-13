@@ -46,8 +46,8 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.hits.Set(c.hits.Get() + c.step.Get()) }
 use it for sessions, path params and subscriptions. It is no longer how state
 finds itself.
 
-The knock-on effect is the one to plan for: `via.State[T]` is **island-only**.
-Reading or writing it outside a live island panics with a message naming the
+The knock-on effect is the one to plan for: `via.State[T]` is **embed-only**.
+Reading or writing it outside a live embed panics with a message naming the
 fix. v1's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
 lives. For a value that is genuinely just server state, the v2 counter example
 does not use `State` at all — it injects a plain `*Store` dependency and lets
@@ -60,7 +60,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 
 | v1 | v2 |
 | --- | --- |
-| `StateTab[T]` | `State[T]` (live islands only) |
+| `StateTab[T]` | `State[T]` (live embeds only) |
 | `StateSess[T]` | `ctx.Session().Get` / `.Put` |
 | `StateApp[T]` | your own dependency, injected — via does not own it |
 | `Signal[T]` | `Signal[T]` — client-side reactivity with zero round-trips |
@@ -95,16 +95,16 @@ func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 The v1 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `Initer` — `OnInit(*Ctx) error` — is the one lifecycle hook,
-on a page and on every embedded child. There is no `OnConnect` and no `Live`
-interface: a composition is a live island when it *acts* like one, meaning its
+on a page and on every embedded child. There is no `Connector` and no `Live`
+interface: a composition is a live embed when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
 `State[T]`/`List[E]`. There is no `Dispose` — `ctx.Listen` auto-disposes with
-the island.
+the embed.
 
 `OnInit` is per-request, not per-connection: it runs on the GET, on every
 action, and on the SSE connect. Pair a connection-scoped acquire with
-`ctx.OnLive(fn)` and its release with `ctx.OnDispose(fn)`; both run only when a
-stream actually opens.
+`ctx.OnConnect(fn)` and its release with `ctx.OnDispose(fn)`; both run only
+when a stream actually opens.
 
 ### 3. Composition is `via.Embed`, and roots are taken by value
 
@@ -122,19 +122,19 @@ func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
 
-A live island may be embedded directly by a plain (non-live) root, or by a
+A live embed may be embedded directly by a plain root, or by a
 further plain `via.Embed` under one — each streams and patches independently
-over the page's one connection. **Known limitation:** a live island cannot be
-embedded inside another live composition, and a live island's own `View`
+over the page's one connection. **Known limitation:** a live embed cannot be
+embedded inside another live composition, and a live embed's own `View`
 cannot itself call `via.Embed` — either panics at render. Nested live
 composition (a dynamic set of live children keyed by identity) is a deferred
-feature; plain (non-live) composition still nests to any depth.
+feature; plain composition still nests to any depth.
 
 ### 4. Fan-out is scoped, not global
 
 v1 had process-wide broadcast: `app.Broadcast(script)`,
 `BroadcastSignal(app, sig, val)`, `BroadcastSignals(map)`, `BroadcastNotify`.
-All removed. v2 fans out through a typed topic that islands subscribe to:
+All removed. v2 fans out through a typed topic that embeds subscribe to:
 
 ```go
 var Posts = topic.New[Post]()          // package topic
@@ -147,7 +147,7 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 ```
 
 `ctx.Listen` is subscribe + pump + auto-dispose in one line, scoped to the
-island's lifetime. Publishing is a topic send from anywhere in your app. The
+embed's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
 `ctx.Redirect` is a `PostForm`/`OnInit` facility (a 303 before the View ever
@@ -164,7 +164,7 @@ Entries marked **gone** have no replacement — see "Removed outright" below.
 | Serve | `via.New()`, `via.Mount[Page]` | `via.Register(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook — on the page and on every embedded child |
-| Live island | `Connector.OnConnect` + `Disposer.Dispose` | no interface — a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
+| Live embed | `Connector.OnConnect` + `Disposer.Dispose` | no interface — a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")` — and it is generic over `Stringish` |
 | Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49; `h.RawAttr` covers the rest |
@@ -301,11 +301,11 @@ form:
 
 ## Wire break: action URLs
 
-The action endpoint is `/_via/a/{island}/{id}` with an optional `?a=` row
-datum. `{island}` is `r` for the page root, or the acting island's key — its
+The action endpoint is `/_via/a/{embed}/{id}` with an optional `?a=` row
+datum. `{embed}` is `r` for the page root, or the acting embed's key — its
 ordinal among its parent's `Embed` calls, composed onto the parent's, so the
 second `Embed` inside the first is `0-1`. Earlier v0.8 builds used a flat
-page-wide counter with the root at `0` and islands at `n+1`. There is no `?v=`
+page-wide counter with the root at `0` and embeds at `n+1`. There is no `?v=`
 shape digest and no positional `{n}`: `id` is a hash
 of the handler method's own Go name (`main.(*Poll).Vote-fm`), stable across
 renders, instances and rebuilds.
@@ -325,9 +325,9 @@ a reload. Handler-addressed URLs cannot do that.
 ## Wire break: signal slot names
 
 A `Signal[T]`'s wire name is now its byte offset within the composition
-struct — `f0`, `f48`, `i0_f0` for an embedded island, `i0-0_f0` for one nested
+struct — `f0`, `f48`, `i0_f0` for an embedded embed, `i0-0_f0` for one nested
 inside it — where v0.8's earlier builds (and v1) named it by render order:
-`s0`, `s1`, `i0_s0`. The island prefix is the island's key, so an island's
+`s0`, `s1`, `i0_s0`. The embed prefix is the embed's key, so an embed's
 container id (`via-i0-0`), its slots and its dispatch address always agree.
 
 Nothing in your code writes a slot name either, so again there is nothing to
@@ -338,8 +338,8 @@ correct on reload.
 The bug this fixes: slots were claimed in first-render order, so a `Bind()`
 inside a `When` (a wizard step, a branch that only sometimes renders an input)
 could claim a slot another signal already owned. The input was then wired to
-the wrong field — on a live page the post wrote the wrong signal, on a
-stateless page the new input came up holding the previous occupant's value. An
+the wrong field — on a streaming page the post wrote the wrong signal, on a
+plain page the new input came up holding the previous occupant's value. An
 offset is a property of the struct, not of what this render happened to draw,
 so a conditional `Bind()` is now safe.
 
@@ -352,7 +352,7 @@ Two carve-outs:
 - `via.Embed`'s signature is unchanged: the child copy `Embed` already takes by
   value is the offset base, so call sites need no edit.
 
-A stateless action's patch also now declares any slot the pre-action render did
+A plain action's patch also now declares any slot the pre-action render did
 not carry, alongside the ones the action wrote — that is what seeds an input
 appearing for the first time in the response instead of leaving it on whatever
 the client store already held.
@@ -371,8 +371,8 @@ Stated plainly so you can decide whether to wait:
   SERVER LOG names the handlers the render DID bind, which is the fastest way
   to see it (the response body names only the id that was asked for: the bound
   list is your Go type and method names, and the client is not entitled to
-  them). Datastar resolves a non-2xx response silently; a live page heals on
-  the next push, a stateless one stays dead until reload.
+  them). Datastar resolves a non-2xx response silently; a streaming page heals on
+  the next push, a plain one stays dead until reload.
 - **Per-connection `State` does not survive a native form submit** — it is a
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared
@@ -382,7 +382,7 @@ Stated plainly so you can decide whether to wait:
   request's cookie, which predates the `Set-Cookie` the same action just
   wrote. `Redirect` after a session-establishing submit instead of returning
   a page directly.
-- **An `Embed`'s island key — its ordinal among its own parent's `Embed`
+- **An `Embed`'s embed key — its ordinal among its own parent's `Embed`
   calls, composed onto the parent's key — is its identity** (container id,
   signal prefix, dispatch address). A `When` around an `Embed` renumbers that
   parent's later siblings when it flips, so it must depend only on data fixed

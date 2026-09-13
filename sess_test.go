@@ -101,17 +101,17 @@ func greetWithRawCookie(t *testing.T, base, name, value string) string {
 }
 
 // actionPath fetches base's root page on a bare (cookie-less) client and
-// returns the currently-rendered action URL for island/n. loginComp's and
+// returns the currently-rendered action URL for embed/n. loginComp's and
 // counterComp's View render the same action set regardless of session state,
 // so this is safe to call before any login/session step in the test.
-func actionPath(t *testing.T, c *http.Client, base string, island string, n int) string {
+func actionPath(t *testing.T, c *http.Client, base string, embed string, n int) string {
 	t.Helper()
 	resp, err := c.Get(base + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	return actionURL(t, string(b), island, n)
+	return actionURL(t, string(b), embed, n)
 }
 
 func jarClient(t *testing.T) *http.Client {
@@ -449,7 +449,7 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	assert.False(t, ck.Secure, "a plain-HTTP cookie must not be Secure by default (dev ergonomics)")
 }
 
-// liveSess is a live island that establishes its session in OnInit, so
+// liveSess is a live embed that establishes its session in OnInit, so
 // the cookie rides the SSE connect response itself rather than a later
 // action's.
 type liveSess struct{}
@@ -465,7 +465,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 	srv := httptest.NewServer(via.Register(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
-	ctx := t.Context() // close the stream so the island tears down
+	ctx := t.Context() // close the stream so the embed tears down
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")

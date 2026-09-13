@@ -19,7 +19,7 @@ type State[T any] struct{ val T }
 // Get returns the current value.
 func (s *State[T]) Get() T { return s.val }
 
-// Set assigns the value on the island instance. The change reaches the browser
+// Set assigns the value on this unit instance. The change reaches the browser
 // on the next push — a Tick re-render, an action response, or a stream flush.
 func (s *State[T]) Set(v T) { s.val = v }
 
@@ -29,9 +29,9 @@ func (s *State[T]) Set(v T) { s.val = v }
 // writes the text.
 //
 // Liveness must be render-invariant. The verdict is taken from the render that
-// serves the page, and only a live page bootstraps an SSE stream — so a
+// serves the page, and only a streaming page bootstraps an SSE stream — so a
 // Display reached through a branch that is CLOSED at GET wires the page
-// non-live, and an action that later opens the branch leaves the tab demanding
+// plain, and an action that later opens the branch leaves the tab demanding
 // a connection it never opened. via fails that action loudly rather than
 // letting every action after it 410. Render the State unconditionally (use
 // via.When INSIDE the row, not around the Display), or register a Tick/Listen
@@ -54,7 +54,7 @@ func (s *State[T]) Display() h.H {
 // Like State, rendering one makes its unit live.
 type List[E any] struct{ State[[]E] }
 
-// Append adds v to the end of the list on the per-(tab,island) instance.
+// Append adds v to the end of the list on the per-(tab,embed) instance.
 func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
 
 // Remove deletes the element at i, shifting the rest left. It panics if i is

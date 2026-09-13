@@ -137,7 +137,7 @@ type Router struct {
 	mux       *http.ServeMux
 	cfg       *config
 	sessions  *sessionManager
-	reg       *registry     // live connections (tab id → island goroutine), app-wide
+	reg       *registry     // streams (tab id → stream goroutine), app-wide
 	liveCount *atomic.Int64 // concurrent live SSE streams, capped at maxLive
 	maxLive   int
 }
@@ -161,7 +161,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.Ser
 
 // Mount registers a page composition at path. Its actions — a @post, a
 // PostForm submit, or a live unit's — post to
-// {path}/_via/a/{island}/{act} (root is island "r"). root is taken by value (no
+// {path}/_via/a/{embed}/{act} (root is embed "r"). root is taken by value (no
 // '&'); the PT constraint makes a missing or mistyped View() a compile error,
 // exactly like Register.
 func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
@@ -190,17 +190,17 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		}()
 		inst := newInst()
 		ctx := newRootCtx(nil, true, concreteBase(patternBase, req, names), nil)
-		ctx.islandV = inst                                     // the root is a unit like any embedded island, when it is live
+		ctx.embedV = inst                                      // the root is a unit like any embed, when it is live
 		if runOnInit(inst.v, ctx, w, req, r.sessions) != nil { // load session/request data into fields first
 			return
 		}
 		body := renderRootWith(ctx, inst.v)
 		// ctx.base, not patternBase: a page mounted at /job/{id} must advertise
 		// /job/7/_via/sse. The pattern would be POSTed literally by the browser
-		// and 404, leaving every live island under a parametrised mount dead.
+		// and 404, leaving every live embed under a parametrised mount dead.
 		writeHTMLPage(w, r.cfg, body, len(liveUnits(ctx)) > 0, ctx.base+"/_via/sse")
 	})
-	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{island}/{act}", m.dispatch)
+	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{embed}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
 }
 
@@ -231,16 +231,16 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 }
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under
-// the strict CSP, then the rendered body. A live page also gets the SSE
+// the strict CSP, then the rendered body. A streaming page also gets the SSE
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token has to be threaded through here.
 func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, hasLive bool, sseURL string) {
 	writeHeadersWithCSP(w, cfg.csp)
 	// Every page pre-declares the _viatab local signal so $_viatab is always
 	// defined — every action attribute and PostForm echoes it unconditionally,
-	// since liveness is only knowable once the render has ended. On a stateless
-	// page it stays "" and dispatch falls through to the stateless path; on a
-	// live page the patch-signals frame fills it with the real tab id, and a
+	// since liveness is only knowable once the render has ended. On a plain
+	// page it stays "" and dispatch falls through to the plain path; on a
+	// streaming page the patch-signals frame fills it with the real tab id, and a
 	// click before the stream connects sends an empty id and gets a graceful 410.
 	bodyOpen := `</head><body data-signals='{"_viatab":""}'>`
 	if hasLive {

@@ -1,9 +1,9 @@
-// Command dashboard shows live-island multiplexing: one page, one SSE stream,
+// Command dashboard shows live-embed multiplexing: one page, one SSE stream,
 // several independent regions. The Dashboard is a static shell that embeds child
 // compositions — plain struct fields rendered with via.Embed; each child
 // re-renders and patches only itself. A child with neither server State nor a
 // Tick (Greeting) is a plain in-place component; a child that holds State or
-// ticks (Clock, Counter) is a live island pushed over the shared stream. The parent literal seeds a child's data
+// ticks (Clock, Counter) is a live embed pushed over the shared stream. The parent literal seeds a child's data
 // (Greeting's name). Zero '&', no identifier strings, no closures at any call site.
 package main
 
@@ -23,7 +23,7 @@ func (g *Greeting) View() h.H {
 	return h.Div(h.H2(h.Str("welcome")), h.P(h.Str("hello, "), h.Str(g.name)))
 }
 
-// Clock is a LIVE island: it ticks its own State once a second and pushes only
+// Clock is a LIVE embed: it ticks its own State once a second and pushes only
 // its own region — the counter and greeting are untouched by its updates.
 type Clock struct{ secs via.State[int] }
 
@@ -33,9 +33,9 @@ func (c *Clock) View() h.H {
 	return h.Div(h.H2(h.Str("uptime")), h.P(c.secs.Display(), h.Str("s")))
 }
 
-// Counter is a LIVE island with an action, and it needs no hook at all to be
+// Counter is a LIVE embed with an action, and it needs no hook at all to be
 // one: rendering its State is what earns it a connection. The + button routes
-// to this island on this connection (the tab handshake), mutates its State, and
+// to this embed on this connection (the tab handshake), mutates its State, and
 // the result rides back over the shared stream — patching only its region.
 type Counter struct{ n via.State[int] }
 
