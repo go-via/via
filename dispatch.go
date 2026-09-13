@@ -395,27 +395,13 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 		lc.bindSession(rc.session.sid())
 	}
 
-	// A slot the server wrote is no longer the client's to restate: leaving it
-	// in lc.client would have the next display render put the posted value back
-	// over what this action just Set.
-	for slot := range unit.dirty {
-		delete(lc.client, slot)
-	}
-
-	// A server-driven signal change reaches the client as its own signal-patch:
-	// the element push omits data-signals, so a morph never clobbers what the
-	// user is typing.
-	dirty, push := unit.dirty, unit.push
+	// The dirty set this action wrote is shipped by the push itself
+	// (tabStream.flushDirty), on the one path every server-driven signal change
+	// takes — a Tick/Listen handler's Set included.
+	push := unit.push
 	return actionResult{
 		redirect: rc.redirect,
-		pushWork: func() {
-			if len(dirty) > 0 {
-				if raw, err := json.Marshal(dirty); err == nil {
-					lc.pushSignals(string(raw))
-				}
-			}
-			push() // re-render this unit and frame the element-patch
-		},
+		pushWork: push, // patch-signals, then re-render this unit and frame the element-patch
 	}
 }
 

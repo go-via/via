@@ -1500,3 +1500,68 @@ func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 	// The client must still SEE what it posted — the display render is unchanged.
 	assert.Contains(t, frame, ">ATTACKER<")
 }
+
+// --- F-1: a panic in the DISPLAY render must not strand the client's values
+// on the live instance.
+//
+// runPushItem swallows the panic and the stream survives, so the restore that
+// undoes the display render's hydration has to be a defer, not a trailing call.
+// Otherwise the next Tick handler reads the posted value straight off the
+// instance — the F2 class, through a crashing View instead of a push.
+
+type tickAfterDisplayPanic struct {
+	Idx   via.Signal[int]
+	seen  int
+	blown bool // the display render panics ONCE, so a later push can frame what the handler saw
+}
+
+func (p *tickAfterDisplayPanic) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen = p.Idx.Get() })
+	return nil
+}
+
+func (p *tickAfterDisplayPanic) View() h.H {
+	if p.Idx.Get() != 0 && !p.blown {
+		p.blown = true
+		panic("via_test: index out of range in the display render")
+	}
+	return h.Div(h.Input(p.Idx.Bind()), h.P(h.Str("seen: "+strconv.Itoa(p.seen))))
+}
+
+func TestConnect_aPanickingDisplayRenderLeavesNoPostedValueOnTheInstance(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tickAfterDisplayPanic{}))
+	conn := app.ConnectWith(`{"idx":99}`)
+
+	// The first push's display render panics (frame lost); the ticks after it
+	// are the ones that read the instance the panic unwound out of.
+	frame := conn.Await("seen: ")
+	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+	frame = conn.Await("seen: ")
+	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+}
+
+// --- A Set inside a Tick handler on a Bind()ed slot must reach the client.
+//
+// The display render re-applies lc.client over the instance, so the push has to
+// drop the slot the server just wrote and emit its patch-signals frame — the
+// same thing a live action does.
+
+type tickSetsBoundSignal struct{ N via.Signal[int] }
+
+func (p *tickSetsBoundSignal) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.N.Set(p.N.Get() + 1) })
+	return nil
+}
+func (p *tickSetsBoundSignal) View() h.H { return h.Div(h.Input(p.N.Bind()), p.N.Display()) }
+
+func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tickSetsBoundSignal{}))
+	conn := app.ConnectWith(`{"n":7}`)
+
+	// The signal patch carries the server's value...
+	assert.Contains(t, conn.Await(`"n":3`), `"n":3`)
+	// ...and the display render no longer paints the client's 7 back over it.
+	assert.Contains(t, conn.Await(">3<"), ">3<")
+}
