@@ -31,6 +31,12 @@ func StateOf[T any](v T) State[T] { return State[T]{val: v} }
 
 // Get returns this connection's value. It is server-authoritative: nothing the
 // client sends can change it.
+//
+// Get does NOT make the unit live — only [State.Display] and [List.Each] do,
+// because only a rendered State has anything to push. A unit that holds a State
+// and merely Gets it (say, to build a string its View writes with h.Str) is a
+// PLAIN unit: it opens no stream, and a Set on it reaches no browser. Render
+// the State with Display, or register a Tick/Listen in OnInit.
 func (s *State[T]) Get() T { return s.val }
 
 // Set assigns the value on this unit instance. The change reaches the browser

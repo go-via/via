@@ -322,6 +322,7 @@ type Ctx struct {
 	actedInst   instance
 	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	page        *pageHead       // the document shell's per-page slots, shared by every Ctx in one request's tree
 	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 }
@@ -333,6 +334,16 @@ type Ctx struct {
 // Read-only: the body is already consumed into the request's signals, and a
 // live action runs on the stream goroutine after the POST has acked, so the
 // request's Context may already be done.
+//
+// There is no matching writer. Ctx cannot set a header, a status or a response
+// body — [Ctx.Redirect] is the only response shaping a handler gets — because a
+// live action's "response" is an SSE frame on a connection the POST does not
+// own. So anything that streams bytes to the browser (a file download, a CSV
+// export, an image) is a sibling net/http handler, registered next to the via
+// one and linked to like any other URL:
+//
+//	mux.Handle("/app/", viaRouter)
+//	mux.HandleFunc("/files/{id}", serveAttachment) // http.ServeContent, not via
 func (c *Ctx) Request() *http.Request { return c.req }
 
 // Context returns the context that bounds this unit's work. On a live unit it
@@ -685,6 +696,20 @@ type paramMiss struct {
 //
 // A segment that cannot decode into T answers 404 — never a silent zero value.
 // Naming a segment the mount pattern doesn't have panics.
+//
+// PATH PARAMS SURVIVE AN ACTION; QUERY PARAMS DO NOT. An action POSTs to
+// {mount}/_via/a/{n}/…, built from the mount pattern with its {name} segments
+// filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
+// URL, so the discovery render that decides what is dispatchable runs against
+// the UNFILTERED page: a row that only exists under the filter binds no action
+// in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
+// therefore readable on the GET and empty on every action.
+//
+// So a page's list state — filter, page number, sort, tab — belongs in path
+// params or in the session, never in the query string:
+//
+//	r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
+//	// /tickets?status=open&page=2                    // does NOT
 func (c *Ctx) Param[T any](name string) T {
 	seg := c.req.PathValue(name)
 	if seg == "" && !strings.Contains(c.req.Pattern, "{"+name+"}") {
@@ -706,6 +731,51 @@ func decodeSegment[T any](seg string, name string) T {
 		panic(paramMiss{name: name, seg: seg})
 	}
 	return v
+}
+
+// pageHead is the per-page half of the document shell. It carries only the two
+// slots that vary page to page and have no security weight: the router-wide
+// [Head] still owns lang, raw markup, the inline stylesheet and every CSP
+// origin, so a page cannot widen its own policy. One instance per request tree,
+// shared by every Ctx in it, so an embedded child naming the page works and the
+// last writer wins.
+type pageHead struct {
+	title string
+	desc  string
+}
+
+// Title sets this page's <title>, overriding the router-wide [Head].Title —
+// the fix for a multi-page app in which every page otherwise shares one title.
+// Call it from OnInit, where the page's data is already loaded:
+//
+//	func (p *Ticket) OnInit(ctx *via.Ctx) error {
+//		p.t = p.store.Get(ctx.Param[int]("id"))
+//		ctx.Title("#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject)
+//		return nil
+//	}
+//
+// It shapes the DOCUMENT, so it takes effect on a render that writes one: the
+// GET, and the full-page response to a native <form> submit. An SSE push
+// patches elements inside <body> and never rewrites the head, so a Title set
+// from a Tick or Listen handler does not move a connected tab's tab-strip —
+// render the changing part in the page instead. The empty string clears the
+// override and the router-wide title applies. The value is HTML-escaped.
+//
+// Calling it outside a request-scoped render (a bare render) is a no-op.
+func (c *Ctx) Title(title string) {
+	if c.page != nil {
+		c.page.title = title
+	}
+}
+
+// Description sets this page's <meta name="description">, the [Ctx.Title]
+// companion; empty (the default) emits no element at all. Same timing rule as
+// Title: it lands on a document render, not on an SSE push. The value is
+// HTML-escaped.
+func (c *Ctx) Description(desc string) {
+	if c.page != nil {
+		c.page.desc = desc
+	}
 }
 
 // Redirect navigates the browser to path after the current handler returns,
@@ -883,6 +953,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 		return
 	}
 	ctx.doInit = true
+	ctx.page = from.page
 	ctx.req = from.req
 	ctx.sessions = from.sessions
 	ctx.sessW = from.sessW
@@ -906,6 +977,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 // Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
 func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 	ctx := newCtx()
+	ctx.page = &pageHead{}
 	ctx.declare = declareSignals // embeds declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
@@ -1064,10 +1136,26 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	return bind, body
 }
 
+// UNCHANGED FRAMES ARE DROPPED (the canonical statement; both push closures
+// and the tests refer here as "skipUnchanged").
+//
+// Why both push closures keep the last framed body: a Tick
+// that changes nothing rendered would otherwise ship a byte-identical
+// element-patch every beat, which is the CPU and bandwidth floor of an idle
+// connection at scale (an idle page on a 2s tick sent ~160 identical frames in
+// five minutes). The plain action path has always answered 204 on an unchanged
+// render; this is the live path's version of that.
+//
+// It is element patches ONLY. flushDirty runs first and on its own comparison
+// (the dirty set), so a signal change with an unchanged DOM still ships its
+// patch-signals frame, and a DOM change with no signal change still ships its
+// element patch. The connect handshake's signals frame and the keepalive are
+// likewise untouched, so a half-open peer is still detected on the beat.
 func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
 	var initFailed bool
-	last := from // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
+	var lastBody []byte // nil until the first frame, so the first push always ships
+	last := from        // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	push = func() {
 		lc.flushDirty(last)
 		// A plain child's failed OnInit panics initOutcome from INSIDE this
@@ -1098,6 +1186,10 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 		bind.push = push
 		last = bind
 		lc.replace(bind)
+		if bytes.Equal(body, lastBody) {
+			return // see skipUnchanged
+		}
+		lastBody = append(lastBody[:0], body...)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
 	}
 	return push
@@ -1107,7 +1199,8 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 // inner mode, so the container's own data-ignore-morph never blocks the push.
 func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
-	last := from // the connect render's bind, until the first push replaces it
+	var lastBody []byte // see skipUnchanged
+	last := from        // the connect render's bind, until the first push replaces it
 	push = func() {
 		lc.flushDirty(last)
 		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
@@ -1116,6 +1209,10 @@ func embedPush(key string, inst instance, base string, stream *stream, lc *tabSt
 		bind.push = push
 		last = bind
 		lc.replace(bind)
+		if bytes.Equal(body, lastBody) {
+			return // see skipUnchanged
+		}
+		lastBody = append(lastBody[:0], body...)
 		id := "via-i" + key
 		stream.frame(func(w io.Writer) { writeInnerPatchFrame(w, id, body) })
 	}
@@ -1276,8 +1373,29 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	// Subscriptions are started BEFORE any OnConnect runs, and their queued
+	// values are drained by runStream below. A unit whose OnConnect publishes
+	// (the "join a room" pattern the hook's doc names) would otherwise miss its
+	// OWN join: the starters used to run inside runStream, i.e. after every
+	// OnConnect, so the join was published into a topic this unit had not
+	// subscribed to yet and the first frame showed the pre-join world. The
+	// starters stay off the plain-GET path — this is the SSE handler, and
+	// Ctx.Listen still only records a starter closure at OnInit time.
+	//
+	// One wake channel shared by every subscription: a Listen used to cost a
+	// goroutine per subscription per connection purely to bridge its Ready
+	// channel onto runStream's select. Capacity 1 and coalescing, so a
+	// publisher never blocks and N pending values still cost one sweep.
+	wake := make(chan struct{}, 1)
+	var listeners []listener
 	for _, u := range units {
 		u.streamCtx = streamCtx
+		for _, start := range u.subs {
+			listeners = append(listeners, start(wake))
+		}
+	}
+
+	for _, u := range units {
 		connectUnit(u, stream, base, lc)
 		for _, fn := range u.onConnect {
 			fn()
@@ -1309,5 +1427,14 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	streaming = true
-	runStream(streamCtx, streamLabel, units, pushq, keepalive, sseHeartbeat)
+	runStream(streamCtx, streamLabel, units, listeners, wake, pushq, keepalive, sseHeartbeat)
+}
+
+// pageHead returns this render's per-page head slots, zero when there are none
+// (a bare render).
+func (c *Ctx) pageHead() pageHead {
+	if c.page == nil {
+		return pageHead{}
+	}
+	return *c.page
 }

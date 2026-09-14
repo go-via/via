@@ -558,3 +558,31 @@ func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
 	s.Eval(fire+`('410')`, &ok)
 	s.WaitEvalTrue(`window.__probe===undefined`, "a 410 means the page is stale and must reload")
 }
+
+// The deploy case, and the one no httptest can see: SIGTERM ends every stream
+// cleanly and the server is then GONE for several seconds while the new
+// process starts. The manager used to answer that clean close with a single
+// blind location.reload() on a 500-2000ms timer, so the reload landed on
+// chrome-error://chromewebdata with no script left alive to try again — a
+// permanently dead tab on every rolling restart.
+//
+// The gap here is deliberately longer than that old give-up window. The page
+// must still be alive at the end of it: probing, then reloading once the new
+// server answers, then streaming again.
+func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
+	r := via.NewRouter()
+	r.Mount("/", liveTicker{})
+	s := vtbrowser.Open(t, r)
+	s.WaitLiveConnected()
+	s.WaitTextContains("p", "n: 1")
+
+	r.Close() // the graceful shutdown: every stream ends with a clean close
+
+	next := via.NewRouter()
+	next.Mount("/", liveTicker{})
+	s.Restart(3*time.Second, next)
+
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online'`,
+		"the tab must re-bootstrap onto the new server instead of reloading once into a dead one")
+	s.WaitTextContains("p", "n: 1")
+}

@@ -115,7 +115,9 @@ func (s *stream) abort() {
 // push item pushes only its own embed's container. It always loops, even with
 // no ticks or subs, so an interactive-only embed still receives actions and
 // beats; disposers run on exit.
-func runStream(reqCtx context.Context, label string, embeds []*Ctx, pushq chan func(), keepalive func(), interval time.Duration) {
+// listeners and wake are built by the caller, before any OnConnect runs, so a
+// unit observes its own connect-time publish; runStream only drains them.
+func runStream(reqCtx context.Context, label string, embeds []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
 		for _, embed := range embeds {
 			for _, d := range embed.disposers {
@@ -125,19 +127,9 @@ func runStream(reqCtx context.Context, label string, embeds []*Ctx, pushq chan f
 			}
 		}
 	}()
-	// One wake channel shared by every subscription: a Listen used to cost a
-	// goroutine per subscription per connection (8KB of stack each, ~15k
-	// goroutines at 5000 tabs x 3 listens) purely to bridge its Ready channel
-	// onto this select. Capacity 1 and coalescing, so a publisher never blocks
-	// and N pending values still cost one sweep.
-	wake := make(chan struct{}, 1)
-	var listeners []listener
 	for _, embed := range embeds {
 		for _, t := range embed.ticks {
 			startTicker(reqCtx, embed, t, pushq)
-		}
-		for _, start := range embed.subs {
-			listeners = append(listeners, start(wake))
 		}
 	}
 	// One token may stand for any number of subscriptions, so every wake sweeps

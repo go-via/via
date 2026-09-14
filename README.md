@@ -123,9 +123,8 @@ via now logs one line naming `OnReload` when that happens, so it is never
 silent. It is skipped behind a `Redirect` (nothing from that render ships), and
 `ctx.Tick`/`ctx.Listen` are no-ops inside it, so liveness stays the GET/connect
 verdict. It is a second hook rather than a second `OnInit` run on purpose:
-`OnInit` also mints the session, seeds signals from the request URL and
-registers timers, none of which is safe to repeat once a handler has committed
-a mutation.
+`OnInit` also mints the session and registers timers, neither of which is safe
+to repeat once a handler has committed a mutation.
 
 **Pin your hooks.** `OnInit` and `OnReload` are duck-typed: a composition opts
 in by having the method, so a rename or a signature change opts it silently
@@ -142,6 +141,40 @@ Mount and Embed catch the two commonest slips on their own — an `OnInit` or
 hook's exact signature under a near-miss name (`Reload`, `OnInitialize`, …) on
 a type implementing neither interface is logged — but only the assertions above
 are airtight.
+
+**Page state goes in the path or the session — never the query string.** An
+action POSTs to `{mount}/_via/a/{n}/…`, built from the mount pattern with its
+`{name}` segments filled in and *nothing else*. The page's `?q=urgent&page=2`
+is not on that URL, so the render that decides what is dispatchable runs
+unfiltered: a row that only exists under the filter binds no action there, and
+clicking it answers `410`. `ctx.Request().URL.Query()` reads on the GET and is
+empty on every action.
+
+```go
+r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
+// /tickets?status=open&page=2                    // does NOT
+```
+
+**A page names itself.** `via.WithHead` is router-wide; `ctx.Title` (and
+`ctx.Description`) override it for one page, from `OnInit`, where the data is:
+
+```go
+func (p *Ticket) OnInit(ctx *via.Ctx) error {
+	p.t = p.store.Get(ctx.Param[int]("id"))
+	ctx.Title("#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject)
+	return nil
+}
+```
+
+They shape the *document*, so they land on a render that writes one — the GET
+and a native form submit — not on an SSE push, which only patches elements
+inside `<body>`.
+
+**There is no response writer.** `Ctx` can read the request and `Redirect`;
+it cannot set a header, a status or a body, because a live action's answer is
+an SSE frame on a connection the POST does not own. Anything that streams bytes
+— a file download, a CSV export — is a sibling `net/http` handler next to the
+via one.
 
 ## Security floor (built in)
 
