@@ -4,6 +4,8 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/go-via/via/h"
 )
 
 // config holds Handler's optional settings. The zero set is the dev-friendly
@@ -18,6 +20,7 @@ type config struct {
 	sessionStore   SessionStore
 	sessionTimeout time.Duration
 	head           Head
+	errorPage      func(*Ctx, PageError) h.H
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
