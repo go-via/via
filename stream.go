@@ -190,3 +190,23 @@ func writeSSEHeaders(w http.ResponseWriter) {
 	hdr.Set("Cache-Control", "no-cache")
 	hdr.Set("X-Content-Type-Options", "nosniff")
 }
+
+// canFlush reports whether w can stream, looking THROUGH wrappers the way
+// http.ResponseController does. A raw w.(http.Flusher) is wrong here — any
+// middleware wrapper answers no — and ResponseController.Flush cannot serve as
+// the probe either, because flushing commits a 200 ahead of the checks that
+// follow it.
+func canFlush(w http.ResponseWriter) bool {
+	for {
+		switch v := w.(type) {
+		case interface{ FlushError() error }:
+			return true
+		case http.Flusher:
+			return true
+		case interface{ Unwrap() http.ResponseWriter }:
+			w = v.Unwrap()
+		default:
+			return false
+		}
+	}
+}

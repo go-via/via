@@ -243,7 +243,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 // RAM, the rest spills to a temp file the caller removes.
 func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
-		req.Body = http.MaxBytesReader(w, req.Body, maxUploadBytes)
+		req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, maxUploadBytes)
 		if err := req.ParseMultipartForm(maxActionBody); err != nil {
 			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -255,7 +255,7 @@ func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (m
 		return nil, true
 	}
 	in := map[string]json.RawMessage{}
-	dec := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxActionBody))
+	dec := json.NewDecoder(http.MaxBytesReader(unwrapWriter(w), req.Body, maxActionBody))
 	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -326,6 +326,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, "stream busy", http.StatusServiceUnavailable)
 		return
 	case runClosed:
+		noteErr(w, ErrStaleTab)
 		http.Error(w, "stream closed", http.StatusGone)
 		return
 	case runAbandoned:
@@ -333,6 +334,8 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		return
 	}
 	if res.unavailable != "" {
+		// A store that could not answer is the only producer of unavailable.
+		noteErr(w, ErrStoreDown)
 		http.Error(w, res.unavailable, http.StatusServiceUnavailable)
 		return
 	}
@@ -615,6 +618,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// Liveness is read off the AUTH render, never off bind (I1/I5): only
 		// auth ran the root's OnInit. Reaching here means the tab was missing
 		// or stale, so fail closed rather than mutating a throwaway instance.
+		noteErr(w, ErrStaleTab)
 		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
