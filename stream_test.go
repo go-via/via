@@ -940,3 +940,33 @@ func firstElementsFrame(t *testing.T, lines <-chan string) string {
 		}
 	}
 }
+
+// plainWriter is the ResponseWriter an ordinary middleware hands down: the
+// three methods of the interface plus Unwrap, and no Flusher. The stock
+// net/http writer is a Flusher, so nothing but a wrapper produces this shape.
+type plainWriter struct{ http.ResponseWriter }
+
+func (p plainWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
+
+func TestLive_streamOpensThroughAResponseWriterWrapper(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	r.Mount("/", pulse{})
+	t.Cleanup(r.Close)
+	mw := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		r.ServeHTTP(plainWriter{w}, req)
+	})
+	srv := httptest.NewServer(mw)
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"a middleware that wraps the writer must not cost the app its stream")
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+}

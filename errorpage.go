@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"errors"
 	"html"
 	"log"
 	"net/http"
@@ -21,13 +22,36 @@ type Reason string
 // ReasonInternal (5xx) or ReasonBadRequest (4xx), so a switch with a default
 // is always exhaustive.
 const (
-	ReasonBadRequest  Reason = "bad_request" // 400 — unusable action arg, malformed form or body
-	ReasonForbidden   Reason = "forbidden"   // 403 — untrusted origin, session mismatch
-	ReasonNotFound    Reason = "not_found"   // 404 — no such route, ErrNotFound, undecodable Param
-	ReasonGone        Reason = "gone"        // 410 — the render that would bind this action is gone
-	ReasonTooLarge    Reason = "too_large"   // 413 — body over the cap
-	ReasonInternal    Reason = "internal"    // 500 — a hook or render failed
-	ReasonUnavailable Reason = "unavailable" // 503 — at capacity, shutting down, store down
+	ReasonBadRequest       Reason = "bad_request"        // 400 — unusable action arg, malformed form or body
+	ReasonForbidden        Reason = "forbidden"          // 403 — untrusted origin, session mismatch
+	ReasonNotFound         Reason = "not_found"          // 404 — no such route, ErrNotFound, undecodable Param
+	ReasonMethodNotAllowed Reason = "method_not_allowed" // 405 — the route exists, this method does not (a GET of an action URL)
+	ReasonGone             Reason = "gone"               // 410 — the render that would bind this action is gone
+	ReasonTooLarge         Reason = "too_large"          // 413 — body over the cap
+	ReasonInternal         Reason = "internal"           // 500 — a hook or render failed
+	ReasonUnavailable      Reason = "unavailable"        // 503 — the session store could not answer
+)
+
+// The errors via reports through [PageError].Err for the two failures an app
+// can reasonably answer differently from the rest of their status class. Match
+// with errors.Is; Err is nil for every other failure, so a switch must have a
+// default.
+//
+// There is deliberately no sentinel for the 503s the SSE connect raises (at
+// capacity, shutting down): that route is client-consumed and never renders an
+// error page, so a sentinel for it would be unreachable API. Nor for an unknown
+// action or a cross-mount embed id — both are programming mistakes with the
+// same answer, "something went wrong", not a distinct page.
+var (
+	// ErrStoreDown means the session store could not be read for this request.
+	// The request itself was fine; a dependency is not. Answer it like an
+	// outage — a status page, not a retry prompt.
+	ErrStoreDown = errors.New("via: session store unavailable")
+
+	// ErrStaleTab means the tab that would have bound this action is gone: its
+	// stream closed, or the id belongs to a render that no longer exists. The
+	// one failure a reload actually fixes.
+	ErrStaleTab = errors.New("via: stale tab")
 )
 
 // PageError is everything via knows about a failure it is about to answer.
@@ -63,6 +87,22 @@ type PageError struct {
 // that happen before any page resolves, so there is nothing to embed and
 // ctx.Redirect, ctx.Tick and ctx.Listen are ignored.
 //
+// STYLING AN ACTION FAILURE is a client-side job, deliberately. A @post that
+// answers 400/403/410/503 surfaces its status through Datastar, which fires a
+// datastar-fetch error event on the element that made the request — listen for
+// that and render the banner you want (see reconnect.go for the shape via's own
+// reconnect notice uses). There is no server-rendered equivalent, because an
+// action's response patches elements rather than replacing the document.
+//
+// COST: a failed request that reaches the handler resolves the session a SECOND
+// time — once on the way in, once for the Ctx the handler gets — so an error
+// page is one extra store read per failure. It is off the happy path, but a
+// 404-flooded endpoint pays it per request.
+//
+// [Head].Raw is emitted VERBATIM into the error document's <head>, the same as
+// on a normal page. Anything unsafe there is unsafe here too, on a response the
+// app did not choose to serve.
+//
 // It may not make things worse. Returning nil, or panicking, falls back to the
 // exact plain-text response via would have sent and logs once.
 //
@@ -97,6 +137,8 @@ func reasonFor(status int) Reason {
 		return ReasonForbidden
 	case http.StatusNotFound:
 		return ReasonNotFound
+	case http.StatusMethodNotAllowed:
+		return ReasonMethodNotAllowed
 	case http.StatusGone:
 		return ReasonGone
 	case http.StatusRequestEntityTooLarge:
@@ -135,6 +177,32 @@ type errPageWriter struct {
 
 // Unwrap lets http.NewResponseController reach the real writer.
 func (e *errPageWriter) Unwrap() http.ResponseWriter { return e.ResponseWriter }
+
+// Flush keeps a streaming route working through the wrapper for code that
+// still type-asserts http.Flusher directly. A caught response is buffered until
+// finish, so there is nothing to flush yet.
+func (e *errPageWriter) Flush() {
+	if e.caught {
+		return
+	}
+	e.passed = true
+	// Error ignored: a writer that cannot flush is exactly the no-op wanted here.
+	_ = http.NewResponseController(e.ResponseWriter).Flush()
+}
+
+// unwrapWriter reaches the writer net/http itself installed, past any wrapper.
+// http.MaxBytesReader needs it: it type-asserts an unexported interface on the
+// writer to close the connection the moment a body overruns, and a wrapper
+// hides that — costing a 256KB drain of the oversize body on every 413.
+func unwrapWriter(w http.ResponseWriter) http.ResponseWriter {
+	for {
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return w
+		}
+		w = u.Unwrap()
+	}
+}
 
 func (e *errPageWriter) WriteHeader(code int) {
 	if e.caught || e.passed {
@@ -230,6 +298,7 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 		}
 	}()
 	ctx := newRootCtx(false, "", nil)
+	ctx.errPage = true
 	ctx.req = req
 	ctx.sessions = r.sessions
 	node := r.cfg.errorPage(ctx, pe)

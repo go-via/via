@@ -322,6 +322,7 @@ type Ctx struct {
 	actedInst   instance
 	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	errPage     bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
 	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 }
@@ -696,6 +697,12 @@ type paramMiss struct {
 // A segment that cannot decode into T answers 404 — never a silent zero value.
 // Naming a segment the mount pattern doesn't have panics.
 //
+// IN A [WithErrorPage] HANDLER it returns the zero value instead, for every
+// name: that Ctx is answering a failure that may have happened before any route
+// matched, so there is no pattern to read a segment from — and an error page is
+// the one render that must not be able to fail. Read [Ctx.Request] if the raw
+// path matters there.
+//
 // PATH PARAMS SURVIVE AN ACTION; QUERY PARAMS DO NOT. An action POSTs to
 // {mount}/_via/a/{n}/…, built from the mount pattern with its {name} segments
 // filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
@@ -710,6 +717,10 @@ type paramMiss struct {
 //	r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
 //	// /tickets?status=open&page=2                    // does NOT
 func (c *Ctx) Param[T any](name string) T {
+	if c.errPage {
+		var zero T
+		return zero
+	}
 	seg := c.req.PathValue(name)
 	if seg == "" && !strings.Contains(c.req.Pattern, "{"+name+"}") {
 		panic("via: Param: the mount pattern has no {" + name + "} segment")
@@ -1185,7 +1196,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := w.(http.Flusher); !ok {
+	if !canFlush(w) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}

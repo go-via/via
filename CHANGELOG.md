@@ -37,6 +37,15 @@ the v2 core. **Requires Go 1.27.**
   that panics or returns nil falls back to the plain text and logs once.
   `example/forum` ships one.
 
+  `Reason` stays coarse — one code per status class — and the two failures an
+  app answers differently from the rest of their class arrive as sentinels on
+  `PageError.Err` instead: `via.ErrStoreDown` (a session store that could not
+  answer — an outage, not a retry prompt) and `via.ErrStaleTab` (the one
+  failure a reload fixes). `ReasonMethodNotAllowed` is new, for the `405` a GET
+  of an action URL gets; it used to report as `ReasonBadRequest`. `Ctx.Param`
+  returns the zero value inside an error-page handler rather than panicking —
+  there is no mount pattern to read a segment from when no route matched.
+
 - **A unit sees its own `OnConnect` publish.** The `Listen` subscriptions were
   started inside the stream loop, i.e. AFTER every `OnConnect` fn had already
   run, so the "join a room" pattern `OnConnect`'s own doc names could not work:

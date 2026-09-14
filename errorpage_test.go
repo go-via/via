@@ -2,13 +2,21 @@ package via_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"log"
+	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -240,4 +248,227 @@ func TestWithErrorPage_panicsOnNil(t *testing.T) {
 func TestWithErrorPage_panicsOnConflict(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { via.NewRouter(via.WithErrorPage(errPage), via.WithErrorPage(errPage)) })
+}
+
+type errParams struct{}
+
+func (errParams) OnInit(ctx *via.Ctx) error { ctx.Param[int]("id"); return nil }
+func (errParams) View() h.H                 { return h.Div(h.Str("params")) }
+
+type errLive struct {
+	n via.State[int]
+}
+
+func (l *errLive) Bump(*via.Ctx) { l.n.Set(l.n.Get() + 1) }
+
+func (l *errLive) View() h.H {
+	return h.Div(h.Button(via.On("click", l.Bump), h.Str("+")), l.n.Display())
+}
+
+// nativePost submits a multipart body with no Datastar-Request header — a real
+// <form> navigation, which is the transport an error page covers.
+func nativePost(t *testing.T, c *http.Client, url string, fields map[string]string) (*http.Response, string) {
+	t.Helper()
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	for k, v := range fields {
+		require.NoError(t, mw.WriteField(k, v))
+	}
+	require.NoError(t, mw.Close())
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	var b bytes.Buffer
+	b.ReadFrom(resp.Body)
+	return resp, b.String()
+}
+
+func TestErrorPage_paramReturnsZeroInsteadOfPanicking(t *testing.T) {
+	t.Parallel()
+	got := "unset"
+	n := -1
+	r := via.NewRouter(via.WithErrorPage(func(ctx *via.Ctx, _ via.PageError) h.H {
+		got = ctx.Param[string]("id")
+		n = ctx.Param[int]("id")
+		return h.Div(h.Str("x"))
+	}))
+	r.Mount("/thread/{id}", errParams{})
+	t.Cleanup(r.Close)
+
+	resp, body := errGet(t, r, "/nowhere")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Contains(t, body, "<div>x</div>",
+		"Param must not be able to crash the one render that answers a failure")
+	assert.Equal(t, "", got)
+	assert.Equal(t, 0, n)
+}
+
+func TestErrorPage_paramReturnsZeroOnAnUndecodableSegment(t *testing.T) {
+	t.Parallel()
+	n := -1
+	r := via.NewRouter(via.WithErrorPage(func(ctx *via.Ctx, _ via.PageError) h.H {
+		n = ctx.Param[int]("id")
+		return h.Div(h.Str("x"))
+	}))
+	r.Mount("/thread/{id}", errParams{})
+	t.Cleanup(r.Close)
+
+	resp, body := errGet(t, r, "/thread/abc")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Contains(t, body, "<div>x</div>")
+	assert.Equal(t, 0, n)
+}
+
+func TestErrorPage_sessionWriteNamesTheErrorPageAsTheCause(t *testing.T) {
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	r := via.NewRouter(via.WithErrorPage(func(ctx *via.Ctx, _ via.PageError) h.H {
+		ctx.Session().Put("nope")
+		return h.Div(h.Str("x"))
+	}))
+	r.Mount("/", errOK{})
+	t.Cleanup(r.Close)
+
+	errGet(t, r, "/nowhere")
+	assert.Contains(t, logs.String(), "WithErrorPage handler")
+	assert.NotContains(t, logs.String(), "Tick or Listen handler",
+		"an error page is not a Tick handler — the old message sent readers hunting the wrong cause")
+}
+
+func TestErrorPage_reportsMethodNotAllowed(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	r.Mount("/", errOK{})
+	t.Cleanup(r.Close)
+
+	resp, _ := errGet(t, r, "/_via/a/r/0")
+	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
+	assert.Equal(t, via.ReasonMethodNotAllowed, got.Reason,
+		"a GET of an action URL is a wrong method, not a malformed request")
+}
+
+func TestErrorPage_carriesErrStaleTabOnAnActionWithNoStream(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	r.Mount("/", errLive{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	page := jarGet(t, srv.Client(), srv.URL+"/")
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), nil)
+
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.Equal(t, via.ReasonGone, got.Reason)
+	assert.ErrorIs(t, got.Err, via.ErrStaleTab,
+		"a reload fixes a stale tab and fixes nothing else — that is the distinction worth a sentinel")
+}
+
+func TestErrorPage_rendersOnAnOversizeNativeSubmit(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("too big"))
+	}))
+	r.Mount("/", errOK{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("f", "big.bin")
+	require.NoError(t, err)
+	fw.Write(make([]byte, 9<<20))
+	require.NoError(t, mw.Close())
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/r/0", &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var out bytes.Buffer
+	out.ReadFrom(resp.Body)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	assert.Equal(t, via.ReasonTooLarge, got.Reason)
+	assert.Contains(t, out.String(), "too big")
+}
+
+// flakyStore is a real store that can be switched off mid-test, the way a
+// Redis a pod has just lost its connection to behaves.
+type flakyStore struct {
+	*sharedStore
+	down atomic.Bool
+}
+
+func (f *flakyStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	if f.down.Load() {
+		return nil, false, errors.New("store: connection refused")
+	}
+	return f.sharedStore.Load(ctx, id)
+}
+
+type errLiveSess struct {
+	n via.State[int]
+}
+
+func (l *errLiveSess) OnInit(ctx *via.Ctx) error { ctx.Session().Put("u1"); return nil }
+func (l *errLiveSess) Bump(*via.Ctx)             { l.n.Set(l.n.Get() + 1) }
+
+func (l *errLiveSess) View() h.H {
+	return h.Div(h.Button(via.On("click", l.Bump), h.Str("+")), l.n.Display())
+}
+
+func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
+	t.Parallel()
+	store := &flakyStore{sharedStore: newSharedStore()}
+	var got via.PageError
+	r := via.NewRouter(
+		via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+			got = e
+			return h.Div(h.Str("x"))
+		}),
+		via.WithSessionStore(store),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
+	)
+	r.Mount("/", errLiveSess{})
+	t.Cleanup(r.Close)
+
+	app := vt.Serve(t, r)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+
+	// The session must exist BEFORE the connect: a stream binds the identity the
+	// browser held when it opened, and an unbound stream skips the store read
+	// this test is about.
+	app.Get("/")
+	conn := app.Connect()
+	store.down.Store(true)
+
+	resp, body := nativePost(t, app.Client(), app.URL()+conn.ActionURL("r", 0),
+		map[string]string{"_viatab": conn.TabID()})
+
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.Equal(t, via.ReasonUnavailable, got.Reason)
+	assert.ErrorIs(t, got.Err, via.ErrStoreDown,
+		"a dependency outage wants a status page; the other 503s want a retry prompt")
+	assert.Contains(t, body, "<div>x</div>")
 }

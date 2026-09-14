@@ -632,6 +632,9 @@ type Session struct {
 	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, AND a live action
 	ctx    context.Context
 	secure bool
+	// errPage marks the session of a WithErrorPage render, which has no response
+	// of its own to carry a Set-Cookie.
+	errPage bool
 	// down is set when the store could not be read for this request. The
 	// session is then neither present nor absent, and writes are dropped
 	// rather than minting a replacement over the user's real cookie.
@@ -682,6 +685,9 @@ func (s *Session) ensure() *sessionData {
 	s.id, s.data = id, d
 	if s.w != nil {
 		s.mgr.setCookie(s.w, id, s.secure)
+	} else if s.errPage {
+		log.Print("via: session written from a WithErrorPage handler, where no cookie can be set — the " +
+			"failing response is already committed; treat the session as read-only in an error page")
 	} else {
 		log.Print("via: session created where no cookie can be set (a Tick or Listen handler, which has no " +
 			"request in flight); establish the session in OnInit or an action instead")
@@ -768,6 +774,7 @@ func (c *Ctx) Session() *Session {
 	if c.sessions != nil {
 		s.mgr = c.sessions
 		s.w = c.sessW
+		s.errPage = c.errPage
 		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
 		switch id, d, err := c.sessions.resolve(c.req); {
 		case err != nil:
