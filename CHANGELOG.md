@@ -10,6 +10,38 @@ the v2 core. **Requires Go 1.27.**
 
 ### New
 
+- **`Router.Close`.** There was no shutdown path at all: every stream
+  goroutine, its `Tick` timers and its `Listen` subscriptions hung off
+  `req.Context()`, which `http.Server.Shutdown` does not cancel — so Shutdown
+  blocked on every open tab until its own deadline and then killed them
+  mid-frame. `Close` cancels a router-level context each stream derives from
+  and returns once the last one is gone: streams end with a clean end of
+  response rather than a truncated one, every `OnDispose` runs, an action POST
+  against a closing tab answers `410`, and a connect arriving after `Close` is
+  refused `503`. Call it before `http.Server.Shutdown`; it is safe to call
+  more than once.
+
+- **`StateOf` / `ListOf`.** `State[T]` holds its value in an unexported field,
+  so a parent could not seed an embedded child's state from a composite
+  literal — which is exactly what `Embed` asks you to do. `via.StateOf("lobby")`
+  and `via.ListOf("a", "b")` are the constructors.
+
+- **`Ctx.Context`** returns the context bounding this unit's work — the STREAM
+  context on a live unit, so a `Tick` or `Listen` handler can abandon a slow
+  call when the tab disconnects or the router closes. `Ctx.Request`'s context
+  cannot serve: a live action runs after its POST has acked.
+
+- **`WithSessionStoreTimeout`** caps one session store round-trip (default 5s).
+  Store calls deliberately outlive the request's context, so without it a hung
+  backend pinned the request goroutine indefinitely. A read-modify-write with
+  CAS retries is bounded as a whole, not per attempt.
+
+- **The goroutine model is now stated in the package doc.** `Signal`, `State`,
+  `List`, `Ctx` and `Session` take no lock and are correct only because every
+  callback against one instance runs on one goroutine; each type now says so,
+  and the package doc says which goroutine and what to do instead (publish to
+  a `Topic` the unit `Listen`s to).
+
 - **`SessionStore` + `WithSessionStore`.** Session data was a per-Router map in
   process memory: every deploy logged every user out and multi-pod was
   impossible. `SessionStore` is a three-method blob map (`Load`/`Save`/`Delete`,
@@ -93,6 +125,20 @@ composition types) is replaced wholesale by the core below. Treat migration
 as a re-read of the README rather than a diff.
 
 - **Requires Go 1.27.**
+- **`NewMemorySessionStore` returns `*MemorySessionStore`, not `SessionStore`.**
+  The store implements `VersionedSessionStore` (the CAS path a merge needs),
+  and returning the narrow interface erased that at the type level, so any
+  wrapper built around the return value silently dropped to the lossy merge.
+- **`Signal.Ref` panics on a signal with no wire name** instead of returning a
+  bare `"$"`. A `Signal` reached through a pointer, slice, array or map field
+  has no field name — rendering it already panicked; `Ref` used to hand back an
+  expression that parsed and did nothing.
+- **A nil child now renders as nothing** rather than panicking, matching the
+  documented zero `h.H` and `html/template`: `h.Div(nil)` and the helper that
+  returns `nil` on its empty case are both fine.
+- **The zero `Router` is usable**, like `http.ServeMux`: `new(Router)` no
+  longer nil-dereferences at the first `Mount`. Prefer `NewRouter` when you
+  have options to pass.
 - **`via.Live` and `OnConnect` are gone: there is ONE hook, `Initer`/`OnInit`.**
   `OnConnect(*Ctx) error` and `OnInit(*Ctx) error` had the same signature, the
   same Ctx powers, and ran at the same point; keeping both meant a composition

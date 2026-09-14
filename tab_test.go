@@ -532,3 +532,102 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
 		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
 }
+
+// sessionLiveEmbed puts the same live unit one level down, under a plain root.
+// The session binding is a property of the CONNECTION, so an embed-scoped
+// dispatch must be held to it identically — but the dispatch address gains an
+// embed key, and the session check and the embed lookup are separate sites.
+type sessionLiveEmbed struct{ Child sessionLive }
+
+func (p *sessionLiveEmbed) View() h.H { return h.Div(h.Str("shell"), via.Embed(p.Child)) }
+
+func TestDispatch_liveEmbedActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r.Mount("/login", loginComp{})
+	r.Mount("/live", sessionLiveEmbed{})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	owner := jarClient(t)
+
+	loginResp, err := owner.Get(srv.URL + "/login")
+	require.NoError(t, err)
+	loginPage, err := io.ReadAll(loginResp.Body)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
+	signInReq.Header.Set("Datastar-Request", "true")
+	signInResp, err := owner.Do(signInReq)
+	require.NoError(t, err)
+	signInResp.Body.Close()
+	require.NotEmpty(t, cookieValue(t, owner, srv.URL, "via_session"))
+
+	lines, cancel := openStreamWithClient(t, srv, owner, "/live/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := owner.Get(srv.URL + "/live")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	req := liveActionRequest(t, srv, string(page), tab, "0", 0) // Bump, no cookie at all
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"an embed-scoped dispatch against a session-bound connection with no session must be rejected")
+
+	ownReq := liveActionRequest(t, srv, string(page), tab, "0", 0)
+	ownResp, err := owner.Do(ownReq)
+	require.NoError(t, err)
+	defer ownResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, ownResp.StatusCode,
+		"the connecting session's own embed-scoped dispatch must still succeed")
+}
+
+type liveLoginerEmbed struct{ Child liveLoginer }
+
+func (p *liveLoginerEmbed) View() h.H { return h.Div(h.Str("shell"), via.Embed(p.Child)) }
+
+func TestDispatch_rotateAfterALiveEmbedLoginKeepsTheBindingOnTheNewID(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(liveLoginerEmbed{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+	owner := jarClient(t)
+
+	lines, cancel := openStreamWithClient(t, srv, owner, "/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	getResp, err := owner.Get(srv.URL + "/")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	loginReq := liveActionRequest(t, srv, string(page), tab, "0", 1)
+	loginResp, err := owner.Do(loginReq)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+	before := cookieValue(t, owner, srv.URL, "via_session")
+	require.NotEmpty(t, before)
+
+	rotReq := liveActionRequest(t, srv, string(page), tab, "0", 2)
+	rotResp, err := owner.Do(rotReq)
+	require.NoError(t, err)
+	rotResp.Body.Close()
+	after := cookieValue(t, owner, srv.URL, "via_session")
+	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
+
+	okReq := liveActionRequest(t, srv, string(page), tab, "0", 0)
+	okResp, err := owner.Do(okReq)
+	require.NoError(t, err)
+	defer okResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
+		"the rotated session must still own its embed-scoped connection")
+}

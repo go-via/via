@@ -131,6 +131,11 @@ func (r *revertSet) restore() {
 
 // Signal is a client-resident value that round-trips per request and renders as
 // a Datastar text-bound span. T must be JSON-round-trippable.
+//
+// NOT safe for concurrent use. Call it only from via callbacks (OnInit, an
+// action handler, a Tick or Listen handler); to reach a unit from a goroutine
+// of your own, publish to a [topic.Topic] the unit Listens to. See the package
+// doc for the goroutine model.
 type Signal[T any] struct {
 	slotID // MUST stay the first field: prebindSignals stamps the wire name through a pointer add at the field's offset
 	val    T
@@ -148,8 +153,17 @@ type Signal[T any] struct {
 // A Signal must be a plain field of the composition, through plain nested
 // structs if you like; that is what names it before the View runs, so Ref reads
 // the same name wherever it is called. One reached through a pointer, slice,
-// array or map field has no field name and panics when rendered.
-func (s *Signal[T]) Ref() string { return "$" + s.slot }
+// array or map field has no field name, and Ref on it panics — the same
+// verdict rendering it gives, moved to the call that would otherwise have
+// produced a bare "$" and a silently dead Datastar expression.
+func (s *Signal[T]) Ref() string {
+	if s.slot == "" {
+		panic("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
+			"composition (through plain nested structs if you like), not one reached through a pointer, " +
+			"slice, array or map field; \"$\" alone is not a Datastar expression")
+	}
+	return "$" + s.slot
+}
 
 // Get returns the server-side value: what the last Set wrote, or what the
 // client posted back for a Bind()ed signal on this request.

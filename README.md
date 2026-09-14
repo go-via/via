@@ -1,5 +1,7 @@
 # via — reactive web UIs in pure Go
 
+Requires Go 1.27 or newer (the public API uses generic methods).
+
 via is a thin layer over `net/http`. Compositions nest by struct embedding, and
 the Datastar attributes that make a page live are generated for you. The server
 renders HTML; the browser is a rendering surface. No build step, no hand-written JS,
@@ -210,6 +212,23 @@ The action endpoint and rendered pages are hardened by default:
   definition — whatever the client last set it to. It is a fine switch for a
   disclosure the user controls; an authorization gate belongs on session or
   database state, read in `OnInit`.
+
+## Shutdown
+
+A `Router` owns goroutines — one per live tab, plus its `Tick` timers and
+`Listen` subscriptions. They hang off a context of the router's own, which
+`http.Server.Shutdown` does not cancel, so close the router first:
+
+```go
+<-stop
+r.Close()                 // ends every stream cleanly, runs each OnDispose
+srv.Shutdown(ctx)         // then drain the plain requests
+```
+
+`Close` returns once the last stream goroutine is gone. Open streams end the
+way a closed tab ends — a clean end of response, not a truncated one — an
+action POST against a closing tab answers `410`, and a connect arriving after
+`Close` is refused `503`. It is safe to call more than once.
 
 ## Status
 

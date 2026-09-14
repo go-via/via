@@ -281,6 +281,8 @@ type Conn struct {
 	frames   <-chan string
 	cancel   context.CancelFunc
 	tabID    string
+	closed   chan struct{} // closed when the server ended the stream
+	readErr  error         // what ended it; nil for a clean end-of-response
 	mu       sync.Mutex
 	elements [][]byte // one entry per datastar-patch-elements frame, in arrival order
 }
@@ -327,11 +329,19 @@ func (a *App) ConnectAt(path, body string) *Conn {
 	}
 
 	frames := make(chan string, 256)
-	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel}
+	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel, closed: make(chan struct{})}
 	go func() {
 		defer close(frames)
 		defer resp.Body.Close()
 		sc := bufio.NewScanner(resp.Body)
+		// Recorded before close(closed), so AwaitClose never observes the
+		// channel shut with the error not yet stored.
+		defer func() {
+			c.mu.Lock()
+			c.readErr = sc.Err()
+			c.mu.Unlock()
+			close(c.closed)
+		}()
 		inElements := false
 		for sc.Scan() {
 			line := sc.Text()
@@ -425,6 +435,22 @@ func (c *Conn) Await(needle string) string {
 			}
 		}
 	}
+}
+
+// AwaitClose blocks until the SERVER ends the stream and returns the error that
+// ended it — nil when the response terminated cleanly, which is what a graceful
+// shutdown owes the client; a non-nil error means the client saw a truncated
+// stream. Fails the test if the stream is still open after 2s.
+func (c *Conn) AwaitClose() error {
+	c.t.Helper()
+	select {
+	case <-c.closed:
+	case <-time.After(2 * time.Second):
+		c.t.Fatal("vt.AwaitClose: the stream was still open after 2s")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.readErr
 }
 
 // Close cancels the stream. Idempotent.

@@ -9,6 +9,35 @@
 // edges the caller controls directly — ctx.Param[T]("id"), FormFile("avatar"),
 // Mount("/thread/{id}") — but never as an internal wire-name a caller could
 // desync (see the Field-Embeddable Types convention).
+//
+// # Goroutine model
+//
+// A composition instance is never shared between goroutines by via, and none
+// of its handles take a lock. That is safe because every callback via runs
+// against one instance runs on ONE goroutine:
+//
+//   - A plain request (a GET page, an action POST on a page with no live unit)
+//     gets its OWN instance, copied from the value passed to [Router.Mount].
+//     OnInit, the action handler, OnReload and View all run on that request's
+//     net/http goroutine, and the instance is discarded with the response.
+//   - A live connection (one opened by [Ctx.Tick], [Ctx.Listen], or by
+//     rendering a [State] or [List]) keeps its instance for the life of the
+//     stream, and everything that touches it runs on that stream's single
+//     goroutine: every Tick handler, every Listen handler, every re-render and
+//     every SSE write. A [Ctx.Tick] timer does own a goroutine, but it only
+//     posts work onto the stream goroutine; it never calls your fn itself.
+//     An action POST against a live tab is likewise marshalled onto the stream
+//     goroutine and its HTTP handler waits for the result, so a handler never
+//     runs concurrently with a tick.
+//
+// The rule that follows: [Signal], [State], [List], [Ctx] and [Session] are
+// NOT safe for concurrent use. Call them only from a via callback. To reach a
+// unit from a goroutine of your own — a background worker, a message consumer,
+// an http.Handler outside via — publish to a [topic.Topic] and have the unit
+// [Ctx.Listen] to it; the value is then delivered on the unit's own goroutine.
+//
+//	go func() { prices.Publish(tick) }() // fine: Topic is concurrency-safe
+//	go func() { p.Price.Set(tick) }()    // RACE: Set is not
 package via
 
 import (
@@ -256,6 +285,11 @@ type ptrViewer[T any] = interface {
 // Ctx is the per-request binder: it names signal slots by field offset and
 // actions by handler identity during a render pass, hydrates signals from the
 // request, and records per-slot initial values.
+//
+// NOT safe for concurrent use. Call it only from the via callback it was
+// handed to; to reach a live unit from a goroutine of your own, publish to a
+// [topic.Topic] the unit Listens to. See the package doc for the goroutine
+// model.
 type Ctx struct {
 	order       []string                         // slots in assignment order
 	initial     map[string]any                   // per-slot value seen at render time
@@ -285,9 +319,10 @@ type Ctx struct {
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // embed key of the unit an action just mutated; Embed re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
-	initDone    bool       // a Tick/Listen after this would register into a snapshot nobody reads
-	reinit      bool       // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
-	rev         *revertSet // live only: how to put the server-authored signal values back after a display render (see livePush)
+	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
+	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
+	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 }
 
 // Request returns the HTTP request that triggered this handler — headers,
@@ -298,6 +333,32 @@ type Ctx struct {
 // live action runs on the stream goroutine after the POST has acked, so the
 // request's Context may already be done.
 func (c *Ctx) Request() *http.Request { return c.req }
+
+// Context returns the context that bounds this unit's work. On a live unit it
+// is the STREAM context — cancelled when the tab disconnects or [Router.Close]
+// runs — which is the one a Tick or Listen handler can watch to abandon a slow
+// call instead of finishing it against a dead socket:
+//
+//	func (p *Page) tick(ctx *via.Ctx) {
+//		rows, err := p.db.QueryContext(ctx.Context(), …)
+//		…
+//	}
+//
+// Outside a live unit it is the request's own context, and context.Background
+// when there is no request in scope (a bare render). It is never nil.
+//
+// Note the asymmetry with [Ctx.Request]: a live action's req.Context may
+// already be done by the time the handler runs on the stream goroutine, so
+// prefer this for anything that outlives the POST.
+func (c *Ctx) Context() context.Context {
+	if c.streamCtx != nil {
+		return c.streamCtx
+	}
+	if c.req != nil {
+		return c.req.Context()
+	}
+	return context.Background()
+}
 
 // newCtx builds a Ctx with the given hydration map (may be nil for a GET page).
 func newCtx() *Ctx {
@@ -1085,6 +1146,21 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer m.liveCount.Add(-1)
+	// A connect arriving after Router.Close is refused rather than opened and
+	// torn down a microsecond later, so a client reconnecting into a shutdown
+	// gets one deterministic answer. The AfterFunc below is what makes the race
+	// with a Close landing just after this check harmless: it fires immediately
+	// on an already-cancelled router context.
+	if m.routerCtx != nil {
+		select {
+		case <-m.routerCtx.Done():
+			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+			return
+		default:
+		}
+		m.live.Add(1)
+		defer m.live.Done()
+	}
 	headersSent := false
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -1103,6 +1179,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// only signal it's gone, so the stream needs a context it can cancel.
 	streamCtx, cancel := context.WithCancel(req.Context())
 	defer cancel()
+	// Router.Close reaches the stream through here rather than through the
+	// context chain: req.Context() is net/http's, and http.Server.Shutdown does
+	// not cancel it, so nothing else would ever end this goroutine, its Tick
+	// timers or its Listen subscriptions.
+	if m.routerCtx != nil {
+		defer context.AfterFunc(m.routerCtx, cancel)()
+	}
 	stream := &stream{
 		w:       w,
 		rc:      http.NewResponseController(w),
@@ -1189,6 +1272,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	for _, u := range units {
+		u.streamCtx = streamCtx
 		connectUnit(u, stream, base, lc)
 		for _, fn := range u.onConnect {
 			fn()

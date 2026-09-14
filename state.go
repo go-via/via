@@ -12,7 +12,22 @@ import (
 // never reaches the client as a signal: it is server-rendered as literal text
 // and morphed into the live DOM when it changes, with no client-side hook to
 // write it at all. Rendering one MAKES its unit live.
+//
+// NOT safe for concurrent use. Call it only from via callbacks (OnInit, an
+// action handler, a Tick or Listen handler); to reach a unit from a goroutine
+// of your own, publish to a [topic.Topic] the unit Listens to. See the package
+// doc for the goroutine model.
 type State[T any] struct{ val T }
+
+// StateOf seeds a State with v, so a parent can hand an embedded child its
+// starting value from a composite literal:
+//
+//	type Page struct{ Chat Chat }
+//	p := Page{Chat: Chat{Room: via.StateOf("lobby")}}
+//
+// The stored value is unexported (see the Field-Embeddable Types convention),
+// so this constructor is the only way to write one outside a callback.
+func StateOf[T any](v T) State[T] { return State[T]{val: v} }
 
 // Get returns this connection's value. It is server-authoritative: nothing the
 // client sends can change it.
@@ -44,7 +59,12 @@ func (s *State[T]) Display() h.H {
 // Rows morph BY POSITION unless each carries a stable id, so give the row an
 // h.ID(…) when the order can change. Like State, rendering one makes its unit
 // live.
+//
+// NOT safe for concurrent use — same rule as [State].
 type List[E any] struct{ State[[]E] }
+
+// ListOf seeds a List with the given elements — the [StateOf] of lists.
+func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v}} }
 
 // Append adds v to the end of this connection's list and schedules the push,
 // like any Set. It re-slices in place when there is capacity, so appending in a

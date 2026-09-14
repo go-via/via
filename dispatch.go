@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -101,6 +102,10 @@ type mount struct {
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
 	maxLive     int
 	noChange    *sync.Map // the Router's dead-click warning dedupe (see warnNoChange)
+	// routerCtx bounds every stream this mount opens, so Router.Close can end
+	// them; live counts the streams still running, so Close can wait.
+	routerCtx context.Context
+	live      *sync.WaitGroup
 }
 
 // unit returns the bind pass's unit Ctx for dispatch address embed: "r" is the

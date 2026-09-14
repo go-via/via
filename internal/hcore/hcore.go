@@ -58,8 +58,13 @@ func NewRenderer(b Binder) *Renderer {
 // slots; nil outside a via render.
 func (r *Renderer) Binder() Binder { return r.ctx }
 
-// Render appends node's markup to the buffer.
-func (r *Renderer) Render(node H) { node.render(r) }
+// Render appends node's markup to the buffer. A nil node renders as nothing.
+func (r *Renderer) Render(node H) {
+	if node == nil {
+		return
+	}
+	node.render(r)
+}
 
 // Bytes returns the accumulated output without copying.
 func (r *Renderer) Bytes() []byte { return r.buf.Bytes() }
@@ -129,6 +134,12 @@ func (e element) render(r *Renderer) {
 	}
 	r.WriteString(">")
 	for _, k := range e.kids {
+		// A nil child is the documented "renders as nothing" (h.H's godoc), and
+		// a helper returning nil on an empty case is the idiom that produces
+		// one — rendering it would nil-deref instead.
+		if k == nil {
+			continue
+		}
 		if _, ok := k.(Attr); !ok {
 			k.render(r)
 		}

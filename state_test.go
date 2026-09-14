@@ -265,3 +265,49 @@ func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, logs.String(), "made a unit live")
 }
+
+// seededChild is embedded by value, so its starting State must come from a
+// composite literal and not from a Set inside a callback.
+type seededChild struct {
+	Room  via.State[string]
+	Lines via.List[string]
+}
+
+func (c *seededChild) View() h.H {
+	return h.Div(h.P(c.Room.Display()), h.Ul(c.Lines.Each(liLine)))
+}
+
+func liLine(s string) h.H { return h.Li(h.Str(s)) }
+
+type seededParent struct{ Child seededChild }
+
+func (p *seededParent) View() h.H { return h.Div(via.Embed(p.Child)) }
+
+func TestStateOf_seedsAChildEmbeddedByValue(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(seededParent{
+		Child: seededChild{Room: via.StateOf("lobby")},
+	}))
+
+	code, body := app.Get("/")
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "lobby")
+}
+
+func TestListOf_seedsEveryElementInOrder(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(seededParent{
+		Child: seededChild{Lines: via.ListOf("first", "second")},
+	}))
+
+	_, body := app.Get("/")
+	assert.Contains(t, body, "<li>first</li><li>second</li>")
+}
+
+func TestListOf_withNoElementsRendersAnEmptyList(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(seededParent{Child: seededChild{Lines: via.ListOf[string]()}}))
+
+	_, body := app.Get("/")
+	assert.Contains(t, body, "<ul></ul>")
+}
