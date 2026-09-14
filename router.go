@@ -1,6 +1,7 @@
 package via
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -228,13 +229,27 @@ func answerInitFailure(w http.ResponseWriter, req *http.Request, ci initOutcome)
 // http.Handler. Sessions are configured on the router (one cookie for the whole
 // app) and shared across mounts; each page's actions are namespaced under its
 // mount path, so two pages can declare the same action without colliding.
+//
+// A Router owns goroutines (one per live tab, plus its tickers), so shut it
+// down with [Router.Close] — http.Server.Shutdown alone will not, and will
+// block on every open SSE stream until its own deadline.
+//
+// The zero Router is usable and configures itself on first use, like
+// http.ServeMux; reach for [NewRouter] whenever you have options to pass.
 type Router struct {
+	once      sync.Once
 	mux       *http.ServeMux
 	cfg       *config
 	sessions  *sessionManager
 	reg       *registry // tab id → stream goroutine, app-wide
 	liveCount *atomic.Int64
 	maxLive   int
+	// ctx bounds every stream this router opens; Close cancels it and waits on
+	// live, so a stream's own goroutine, its tickers and its disposers are all
+	// finished by the time Close returns.
+	ctx    context.Context
+	cancel context.CancelFunc
+	live   sync.WaitGroup
 	// noChange dedupes the dead-click warning per action (see warnNoChange).
 	// Per Router, not per process, so a second app in the same binary — or a
 	// second test — still gets told.
@@ -244,28 +259,73 @@ type Router struct {
 	hookWarned sync.Map
 }
 
-// NewRouter builds an empty router. Mount pages onto it, then serve it.
-// Options (WithSessionKey, WithTrustedOrigin, …) configure the whole app.
+// NewRouter builds an empty router. Mount pages onto it, then serve it, and
+// [Router.Close] it when the server is shutting down. Options (WithSessionKey,
+// WithTrustedOrigin, …) configure the whole app.
 func NewRouter(opts ...Option) *Router {
-	cfg := newConfig(opts)
-	sm := newSessionManager(cfg)
-	r := &Router{mux: http.NewServeMux(), cfg: cfg, sessions: sm,
-		reg: newRegistry(), liveCount: &atomic.Int64{}, maxLive: maxSSEConn}
-	r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/javascript")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Write(datastarJS)
-	})
+	r := &Router{}
+	r.init(opts)
 	return r
 }
 
-func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) { r.mux.ServeHTTP(w, req) }
+// init builds the router's state exactly once, so `new(Router)` works like the
+// zero http.ServeMux instead of nil-dereferencing at the first Mount.
+func (r *Router) init(opts []Option) {
+	r.once.Do(func() {
+		r.cfg = newConfig(opts)
+		r.sessions = newSessionManager(r.cfg)
+		r.mux = http.NewServeMux()
+		r.reg = newRegistry()
+		r.liveCount = &atomic.Int64{}
+		r.maxLive = maxSSEConn
+		r.ctx, r.cancel = context.WithCancel(context.Background())
+		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/javascript")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Write(datastarJS)
+		})
+	})
+}
+
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	r.init(nil)
+	r.mux.ServeHTTP(w, req)
+}
+
+// Close shuts the router's live half down and returns once it is quiet. Call it
+// BEFORE http.Server.Shutdown: a stream's goroutine, its Tick timers and its
+// Listen subscriptions hang off a context of the router's own, which Shutdown
+// does not cancel — so without this Shutdown blocks on every open tab until its
+// own deadline expires and then kills them mid-frame.
+//
+//	srv := &http.Server{Handler: r}
+//	…
+//	<-stop
+//	r.Close()
+//	srv.Shutdown(ctx)
+//
+// Every open stream ends the way a closed tab ends: the handler returns
+// normally, so the response terminates cleanly rather than truncating, and
+// each unit's OnDispose runs. An action POST in flight against a closing tab
+// resolves either as its normal response or as 410 Gone, the same answer it
+// gets against a tab that has just disconnected — never silently dropped. A
+// connect arriving after Close is refused 503.
+//
+// Close does NOT stop serving plain pages; that is http.Server.Shutdown's job.
+// It is safe to call more than once and from any goroutine, and every call
+// waits for the same drain.
+func (r *Router) Close() {
+	r.init(nil)
+	r.cancel()
+	r.live.Wait()
+}
 
 // Mount registers a page composition at path, in http.ServeMux pattern syntax.
 // Its actions post to {path}/_via/a/{embed}/{act}. root is taken by value; the
 // PT constraint makes a missing or mistyped View() a compile error, like
 // Handler.
 func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
+	r.init(nil)
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
 	if getPattern == "" {
@@ -286,6 +346,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange,
+		routerCtx: r.ctx, live: &r.live,
 	}
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {

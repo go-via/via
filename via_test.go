@@ -1276,3 +1276,76 @@ func BenchmarkEachArgSet(b *testing.B) {
 		resp.Body.Close()
 	}
 }
+
+// liveOwned promotes ownedRows' whole ownership model — two users, disjoint
+// ?a= sets, one handler id — onto a unit that can be live, so the arg check
+// can be held to the same claim off the root unit it is held to on it. The
+// live twin below it (liveOwnedRows) proves only that an UNRENDERED arg 410s;
+// what matters is that ANOTHER USER's arg does, with his row left intact.
+type liveOwned struct {
+	ownedRows
+	live bool
+}
+
+func (l *liveOwned) OnInit(ctx *via.Ctx) error {
+	if l.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {})
+	}
+	return nil
+}
+
+// ownedEmbedPage is the same model one level down: the dispatch address gains
+// an embed key, which is the part the root-only tests never exercise.
+type ownedEmbedPage struct{ Rows liveOwned }
+
+func (p *ownedEmbedPage) View() h.H { return h.Div(h.Str("page"), via.Embed(p.Rows)) }
+
+func bobsRows(live bool) liveOwned {
+	return liveOwned{ownedRows: newOwnedRows("bob", false), live: live}
+}
+
+func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) {
+	t.Parallel()
+	shapes := []struct {
+		name    string
+		handler http.Handler
+		embed   string
+		live    bool
+	}{
+		{"live root", via.Handler(bobsRows(true)), "r", true},
+		{"plain embed", via.Handler(ownedEmbedPage{Rows: bobsRows(false)}), "0", false},
+		{"live embed", via.Handler(ownedEmbedPage{Rows: bobsRows(true)}), "0", true},
+	}
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			app := vt.Serve(t, shape.handler)
+			_, page := app.Get("/")
+			require.Contains(t, page, "a=2", "bob's own row must be bound")
+			require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
+
+			own := actionURL(t, page, shape.embed, 0)
+			stolen := strings.Replace(own, "a=2", "a=1", 1)
+			require.NotEqual(t, own, stolen, "the swap must actually change the URL")
+
+			var conn *vt.Conn
+			attack, legit := app.Action(0).Raw(stolen), app.Action(0).Raw(own)
+			if shape.live {
+				conn = app.Connect()
+				attack, legit = attack.Over(conn), legit.Over(conn)
+			}
+
+			code, body := attack.Fire()
+			assert.Equal(t, http.StatusGone, code, "alice's arg must not dispatch off bob's render")
+			assert.NotContains(t, body, "deleted: [1", "alice's row was deleted by an arg swap")
+
+			code, body = legit.Fire()
+			require.Contains(t, []int{http.StatusOK, http.StatusNoContent}, code,
+				"bob's own row must still dispatch")
+			if shape.live {
+				body = conn.Await("deleted: [")
+			}
+			assert.Contains(t, body, "deleted: [2]", "only bob's own row may have been deleted")
+		})
+	}
+}

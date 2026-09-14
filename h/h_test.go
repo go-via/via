@@ -274,3 +274,22 @@ func TestRawAttr_rejectsPluginPunctuationOutsideDataAttrs(t *testing.T) {
 		assert.Panicsf(t, func() { h.RawAttr(name, "v") }, "RawAttr(%q) must panic", name)
 	}
 }
+
+// maybe is the helper shape that produces a nil child: nothing to render for
+// this case, so it returns the zero H.
+func maybe(show bool) h.H {
+	if !show {
+		return nil
+	}
+	return h.Span(h.Str("shown"))
+}
+
+func TestEl_rendersANilChildAsNothing(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "<div><b></b></div>", render(t, h.Div(nil, h.B(), nil)))
+}
+
+func TestEl_rendersANilFromAHelperAsNothing(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "<div><span>shown</span></div>", render(t, h.Div(maybe(true), maybe(false))))
+}

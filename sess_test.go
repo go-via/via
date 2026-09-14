@@ -880,3 +880,72 @@ func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	assert.Contains(t, string(b), "who:true:ann",
 		"and the handler must read the very session the children wrote")
 }
+
+// hangingStore is the backend that has stopped answering: every call blocks
+// until its context is done, which without a store deadline is never — session
+// calls deliberately outlive the request's own context.
+// abort exists only so a REGRESSION fails loudly instead of hanging: without
+// it a store that never returns also blocks httptest's Close forever.
+type hangingStore struct {
+	calls chan struct{}
+	abort chan struct{}
+}
+
+func (s *hangingStore) block(ctx context.Context) error {
+	select {
+	case s.calls <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.abort:
+		return context.Canceled
+	}
+}
+
+func (s *hangingStore) Load(ctx context.Context, _ string) ([]byte, bool, error) {
+	return nil, false, s.block(ctx)
+}
+func (s *hangingStore) Save(ctx context.Context, _ string, _ []byte, _ time.Duration) error {
+	return s.block(ctx)
+}
+func (s *hangingStore) Delete(ctx context.Context, _ string) error { return s.block(ctx) }
+
+type sessWritePage struct{}
+
+func (sessWritePage) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(acct{Name: "alice"})
+	return nil
+}
+func (sessWritePage) View() h.H { return h.P(h.Str("ok")) }
+
+func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
+	t.Parallel()
+	store := &hangingStore{calls: make(chan struct{}, 1), abort: make(chan struct{})}
+	r := via.NewRouter(
+		via.WithSessionStore(store),
+		via.WithSessionStoreTimeout(50*time.Millisecond),
+	)
+	r.Mount("/", sessWritePage{})
+	app := vt.Serve(t, r)
+
+	done := make(chan int, 1)
+	go func() {
+		code, _ := app.Get("/")
+		done <- code
+	}()
+	<-store.calls
+
+	select {
+	case code := <-done:
+		assert.Equal(t, http.StatusOK, code, "a store timeout must not fail the request")
+	case <-time.After(3 * time.Second):
+		// Released before the assertion: httptest's Close waits on the pinned
+		// request, so a regression would otherwise hang the suite instead of
+		// reporting this line.
+		close(store.abort)
+		<-done
+		assert.Fail(t, "a hung session store pinned the request past its store timeout")
+	}
+}

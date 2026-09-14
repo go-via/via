@@ -536,3 +536,19 @@ func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
 	assert.NotContains(t, page, `"`+bad+`":`, "the offending slot is dropped, not the rest")
 	assert.NotContains(t, page, `<div id="root" data-signals=''`, "and the declaration is not wiped")
 }
+
+// refHolder reaches its signal through a POINTER field, which has no field
+// name to mint a wire name from.
+type refHolder struct{ Sig *via.Signal[int] }
+
+func (r *refHolder) View() h.H { return h.Div(h.Data("show", r.Sig.Ref())) }
+
+func TestSignalRef_panicsOnASignalWithNoWireName(t *testing.T) {
+	t.Parallel()
+	r := &refHolder{Sig: &via.Signal[int]{}}
+
+	assert.PanicsWithValue(t, "via: Signal.Ref on a signal with no wire name — a Signal must be a plain "+
+		"field of the composition (through plain nested structs if you like), not one reached through a "+
+		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
+		func() { r.Sig.Ref() })
+}

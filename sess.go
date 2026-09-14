@@ -17,9 +17,13 @@ import (
 )
 
 const (
-	defaultSessionTTL    = 24 * time.Hour
-	defaultSessionCookie = "via_session"
-	minSessionKeyLen     = 16 // bytes; below this an HMAC-SHA256 key is guessable
+	defaultSessionTTL = 24 * time.Hour
+	// defaultSessionStoreTimeout bounds one store operation. Store calls
+	// deliberately outlive the request's context (see sessionCtx), so without a
+	// deadline of their own a hung backend pins the goroutine indefinitely.
+	defaultSessionStoreTimeout = 5 * time.Second
+	defaultSessionCookie       = "via_session"
+	minSessionKeyLen           = 16 // bytes; below this an HMAC-SHA256 key is guessable
 )
 
 // SessionStore is where session state lives between requests. The default is a
@@ -88,8 +92,12 @@ type VersionedSessionStore interface {
 // NewMemorySessionStore returns the default process-local store: a map that is
 // lost on restart and invisible to every other pod. Use it explicitly only to
 // make that choice visible at the call site.
-func NewMemorySessionStore() SessionStore {
-	return &memoryStore{m: map[string]memoryEntry{}}
+//
+// It returns the concrete type, not the [SessionStore] interface: the store
+// also implements [VersionedSessionStore], and a wrapper built around the
+// interface would silently drop the CAS path and take the lossy merge instead.
+func NewMemorySessionStore() *MemorySessionStore {
+	return &MemorySessionStore{m: map[string]memoryEntry{}}
 }
 
 type memoryEntry struct {
@@ -98,14 +106,19 @@ type memoryEntry struct {
 	ver  uint64
 }
 
-type memoryStore struct {
+// MemorySessionStore is the process-local default store — a map guarded by a
+// mutex, with CAS support ([VersionedSessionStore]). Build one with
+// [NewMemorySessionStore]; the zero value is not usable.
+type MemorySessionStore struct {
 	mu     sync.Mutex
 	m      map[string]memoryEntry
 	writes int
 	ver    uint64
 }
 
-func (s *memoryStore) Load(_ context.Context, id string) ([]byte, bool, error) {
+// Load implements [SessionStore]. An entry past its TTL is deleted on sight
+// and reported absent.
+func (s *MemorySessionStore) Load(_ context.Context, id string) ([]byte, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.m[id]
@@ -119,7 +132,9 @@ func (s *memoryStore) Load(_ context.Context, id string) ([]byte, bool, error) {
 	return e.data, true, nil
 }
 
-func (s *memoryStore) LoadVersion(_ context.Context, id string) ([]byte, uint64, bool, error) {
+// LoadVersion implements [VersionedSessionStore]. The revision is a
+// process-wide counter, so it changes on any write, not only this id's.
+func (s *MemorySessionStore) LoadVersion(_ context.Context, id string) ([]byte, uint64, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.m[id]
@@ -133,7 +148,9 @@ func (s *memoryStore) LoadVersion(_ context.Context, id string) ([]byte, uint64,
 	return e.data, e.ver, true, nil
 }
 
-func (s *memoryStore) SaveIf(_ context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error) {
+// SaveIf implements [VersionedSessionStore]. An absent or expired entry reads
+// as version 0, so a first write must pass 0.
+func (s *MemorySessionStore) SaveIf(_ context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var cur uint64
@@ -147,7 +164,9 @@ func (s *memoryStore) SaveIf(_ context.Context, id string, data []byte, ttl time
 	return true, nil
 }
 
-func (s *memoryStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error {
+// Save implements [SessionStore]. A ttl of 0 or less stores the blob without
+// an expiry.
+func (s *MemorySessionStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store(id, data, ttl)
@@ -155,7 +174,7 @@ func (s *memoryStore) Save(_ context.Context, id string, data []byte, ttl time.D
 }
 
 // store writes under the held lock and stamps a fresh revision.
-func (s *memoryStore) store(id string, data []byte, ttl time.Duration) {
+func (s *MemorySessionStore) store(id string, data []byte, ttl time.Duration) {
 	var exp time.Time
 	if ttl > 0 {
 		exp = time.Now().Add(ttl)
@@ -176,7 +195,8 @@ func (s *memoryStore) store(id string, data []byte, ttl time.Duration) {
 	}
 }
 
-func (s *memoryStore) Delete(_ context.Context, id string) error {
+// Delete implements [SessionStore]. Deleting an absent id is not an error.
+func (s *MemorySessionStore) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.m, id)
@@ -227,9 +247,10 @@ type sessionManager struct {
 	key          []byte
 	cookie       string
 	ttl          time.Duration
-	forceSecure  bool      // WithSecureCookies: set Secure even when req.TLS is nil
-	randomKey    bool      // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
-	memoryStore  bool      // no WithSessionStore: sessions die with the process
+	forceSecure  bool // WithSecureCookies: set Secure even when req.TLS is nil
+	randomKey    bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
+	memoryStore  bool // no WithSessionStore: sessions die with the process
+	storeTimeout time.Duration
 	keyWarnOnce  sync.Once // warn about the random key at the FIRST session mint, not at boot
 	storeWarn    sync.Once // warn about the process-local store at the FIRST session mint
 	mismatchOnce sync.Once // warn once about signature-mismatch cookies (the two-apps clobber)
@@ -266,12 +287,17 @@ func newSessionManager(cfg *config) *sessionManager {
 	if name == "" {
 		name = defaultSessionCookie
 	}
+	timeout := cfg.sessionTimeout
+	if timeout <= 0 {
+		timeout = defaultSessionStoreTimeout
+	}
 	store, inMemory := cfg.sessionStore, false
 	if store == nil {
 		store, inMemory = NewMemorySessionStore(), true
 	}
 	return &sessionManager{store: store, key: key, cookie: name, ttl: ttl,
-		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory}
+		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory,
+		storeTimeout: timeout}
 }
 
 // sign returns the signature appended to the id in the cookie, so a tampered
@@ -313,6 +339,16 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error
 	return id, d, nil
 }
 
+// bounded caps one store operation. Applied at the sessionManager entry points
+// rather than at each m.store call, so a save's CAS retry loop is bounded as a
+// whole instead of restarting its clock on every attempt.
+func (m *sessionManager) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if m.storeTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, m.storeTimeout)
+}
+
 // sessionCtx detaches the request's context for store calls: a session write
 // must land even when the client hung up mid-request, and a live unit's Ctx
 // holds a request whose context is already done.
@@ -329,6 +365,8 @@ func sessionCtx(req *http.Request) context.Context {
 // backend blip would overwrite the user's cookie and orphan their real session
 // the moment the backend came back.
 func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, error) {
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
 	raw, ok, err := m.store.Load(ctx, id)
 	if err != nil {
 		log.Printf("via: session store Load failed: %v", err)
@@ -396,6 +434,8 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 	}
 	d.mu.Unlock()
 
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
 	cas, _ := m.store.(VersionedSessionStore)
 	for attempt := 0; ; attempt++ {
 		if cas != nil && attempt >= sessionSaveRetries {
@@ -499,6 +539,8 @@ func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
 // captured pre-rotation id no longer resolves. sid is untouched: it is the
 // session's identity, and a live connection bound to it stays bound.
 func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData) string {
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
 	newID := randomToken()
 	m.save(ctx, newID, d, true)
 	if oldID != "" {
@@ -579,6 +621,10 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 //
 // A write through a handle whose id has been rotated away or has expired is
 // also dropped, with a log: reviving that id would undo [Session.Rotate].
+//
+// The handle itself is NOT safe for concurrent use — only the stored data is
+// merged across requests. Call it from the via callback that handed it to you;
+// see the package doc for the goroutine model.
 type Session struct {
 	mgr    *sessionManager
 	id     string // "" until resolved or created

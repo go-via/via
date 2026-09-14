@@ -16,6 +16,7 @@ type config struct {
 	sessionCookie  string
 	sessionSecure  bool
 	sessionStore   SessionStore
+	sessionTimeout time.Duration
 	head           Head
 	csp            string
 }
@@ -132,6 +133,18 @@ func WithSessionStore(s SessionStore) Option {
 			panic("via: WithSessionStore(nil)")
 		}
 		c.sessionStore = s
+	}
+}
+
+// WithSessionStoreTimeout caps how long one session store round-trip may take
+// (default 5s; a value of 0 or less restores the default). Without it a hung
+// backend pins the request goroutine for as long as it hangs — session calls
+// deliberately survive client cancellation, so the request's own context is no
+// escape. A read-modify-write with retries (see [Session]) is bounded as a
+// whole, not per attempt.
+func WithSessionStoreTimeout(d time.Duration) Option {
+	return func(c *config) {
+		c.sessionTimeout = d
 	}
 }
 

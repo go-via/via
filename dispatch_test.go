@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1492,25 +1493,48 @@ type twoLivePage struct {
 
 func (p *twoLivePage) View() h.H { return h.Div(via.Embed(p.Priv), via.Embed(p.Clock)) }
 
+var beatRE = regexp.MustCompile(`beat: (\d+)`)
+
+// awaitBeat blocks until the Clock has pushed a beat >= n, discarding Priv's
+// own frames on the way — the point is only that the sibling kept pushing
+// between two of Priv's attempts, not which exact frame carried it.
+func awaitBeat(t *testing.T, conn *vt.Conn, n int) {
+	t.Helper()
+	for {
+		m := beatRE.FindStringSubmatch(conn.Await("beat: "))
+		require.NotNil(t, m)
+		got, err := strconv.Atoi(m[1])
+		require.NoError(t, err)
+		if got >= n {
+			return
+		}
+	}
+}
+
 func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(twoLivePage{Priv: livePriv{live: true}}))
 	conn := app.Connect()
 
-	// The sibling must push at least once BEFORE the forgery: that push is what
-	// used to swap the connection's revert set out from under Priv.
-	require.Contains(t, conn.Await("beat: 1"), "beat: 1")
+	// Looped rather than fired once: the stranding bug is a race between the
+	// sibling's push swapping the connection's revert set out and Priv's own
+	// hydration noting its undo into it, so pinning ONE interleaving pins a
+	// schedule, not the invariant. Three rounds, each with a fresh beat in
+	// between, is the same attack against three different orderings.
+	for beat := 1; beat <= 3; beat++ {
+		awaitBeat(t, conn, beat)
 
-	// The forgery rides on an action Priv IS allowed to call.
-	code, _ := app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
-	require.Equal(t, http.StatusNoContent, code)
-	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
+		// The forgery rides on an action Priv IS allowed to call.
+		code, _ := app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
 
-	for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
-		url := conn.ActionURL("0", n)
-		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"priv__isAdmin":true}`).Fire()
-		assert.Equal(t, http.StatusGone, code, what+" must not be dispatchable: "+url)
-		assert.Contains(t, body, "does not bind it")
+		for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
+			url := conn.ActionURL("0", n)
+			code, body := app.Action(0).Over(conn).Raw(url).Body(`{"priv__isAdmin":true}`).Fire()
+			assert.Equal(t, http.StatusGone, code, "round %d: %s must not be dispatchable: %s", beat, what, url)
+			assert.Contains(t, body, "does not bind it")
+		}
 	}
 	require.Equal(t, http.StatusNoContent,
 		mustFire(t, app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
@@ -1662,4 +1686,295 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 	frame := conn.Await(">1<")
 	assert.Contains(t, frame, ">1<",
 		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
+}
+
+// --- F1 matrix: the shapes the root-level When above does not cover.
+//
+// The gate is the same one livePriv uses — a client-writable Signal whose only
+// authority is OnInit — but the thing it gates moves: an Each row, an Embed
+// inside the branch, and that Embed one level deeper. The check funnels through
+// u.actions[act] today, so one of these may look redundant; they are not, since
+// the per-embed intersection (pruneToAuthority) and the unit lookup are
+// separate sites and a refactor splits them.
+
+// gatedHits is shared by pointer so a child taken BY VALUE into an Embed can
+// still report, from the root's always-rendered markup, that it ran.
+type gatedHits = atomic.Int64
+
+type gatedEach struct {
+	live    bool
+	hits    *gatedHits
+	IsAdmin via.Signal[bool]
+}
+
+func (g *gatedEach) OnInit(ctx *via.Ctx) error {
+	g.IsAdmin.Set(ctx.Request().URL.Query().Get("admin") == "1")
+	if g.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {})
+	}
+	return nil
+}
+
+func (g *gatedEach) Safe(ctx *via.Ctx)         {}
+func (g *gatedEach) Nuke(ctx *via.Ctx, id int) { g.hits.Add(int64(id)) }
+func (g *gatedEach) secret() []int {
+	if g.IsAdmin.Get() {
+		return []int{7}
+	}
+	return nil
+}
+func (g *gatedEach) row(id int) h.H {
+	return h.Li(h.Button(via.OnArg("click", g.Nuke, id), h.Str("nuke")))
+}
+
+func (g *gatedEach) View() h.H {
+	return h.Div(
+		h.Input(g.IsAdmin.Bind()),
+		h.Button(via.On("click", g.Safe), h.Str("safe")),
+		h.Ul(via.Each(g.secret(), g.row)),
+		h.P(h.Str("nuked: "+fmt.Sprint(g.hits.Load()))),
+	)
+}
+
+type gatedChild struct{ hits *gatedHits }
+
+func (c *gatedChild) Nuke(ctx *via.Ctx) { c.hits.Add(7) }
+func (c *gatedChild) View() h.H         { return h.Div(h.Button(via.On("click", c.Nuke), h.Str("nuke"))) }
+
+type gatedMid struct{ Leaf gatedChild }
+
+func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Embed(m.Leaf)) }
+
+// gatedEmbedPage puts the gated action inside an Embed the root's When wraps.
+// The Clock rides in its OWN When so the live and plain variants each keep a
+// stable ordinal for the life of a connection — p.live is fixed by the field
+// literal, which is the only kind of condition Embed's TRAP allows.
+type gatedEmbedPage struct {
+	live    bool
+	deep    bool
+	hits    *gatedHits
+	IsAdmin via.Signal[bool]
+	Clock   livePrivClock
+	Child   gatedChild
+	Mid     gatedMid
+}
+
+func (p *gatedEmbedPage) OnInit(ctx *via.Ctx) error {
+	p.IsAdmin.Set(ctx.Request().URL.Query().Get("admin") == "1")
+	return nil
+}
+
+func (p *gatedEmbedPage) Safe(ctx *via.Ctx) {}
+func (p *gatedEmbedPage) clock() h.H        { return via.Embed(p.Clock) }
+func (p *gatedEmbedPage) gated() h.H {
+	if p.deep {
+		return via.Embed(p.Mid)
+	}
+	return via.Embed(p.Child)
+}
+
+func (p *gatedEmbedPage) View() h.H {
+	return h.Div(
+		h.Input(p.IsAdmin.Bind()),
+		h.Button(via.On("click", p.Safe), h.Str("safe")),
+		via.When(p.live, p.clock),
+		via.When(p.IsAdmin.Get(), p.gated),
+		h.P(h.Str("nuked: "+fmt.Sprint(p.hits.Load()))),
+	)
+}
+
+// gatedShape is one cell's geometry: how to build the two apps, and where the
+// gated action sits once the branch is open on each of them.
+type gatedShape struct {
+	name        string
+	plain, live func(hits *gatedHits) http.Handler
+	plainEmbed  string
+	liveEmbed   string
+	gatedN      int
+}
+
+var gatedShapes = []gatedShape{{
+	name:       "Each row",
+	plain:      func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits}) },
+	live:       func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits, live: true}) },
+	plainEmbed: "r", liveEmbed: "r", gatedN: 1,
+}, {
+	name: "Embed inside a When",
+	plain: func(hits *gatedHits) http.Handler {
+		return via.Handler(gatedEmbedPage{hits: hits, Child: gatedChild{hits: hits}})
+	},
+	live: func(hits *gatedHits) http.Handler {
+		return via.Handler(gatedEmbedPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
+	},
+	plainEmbed: "0", liveEmbed: "1", gatedN: 0,
+}, {
+	name: "depth-2 embed",
+	plain: func(hits *gatedHits) http.Handler {
+		return via.Handler(gatedEmbedPage{hits: hits, deep: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+	},
+	live: func(hits *gatedHits) http.Handler {
+		return via.Handler(gatedEmbedPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+	},
+	plainEmbed: "0-0", liveEmbed: "1-0", gatedN: 0,
+}}
+
+const forgedAdmin = `{"isAdmin":true}`
+
+// assertGateHeld is the triple every cell asserts: the refusal is a 410, the
+// handler did not run, and nothing the attacker posted survived into the
+// server's own account of what happened.
+func assertGateHeld(t *testing.T, hits *gatedHits, code int, body string) {
+	t.Helper()
+	assert.Equal(t, http.StatusGone, code, "a gated action must not be dispatchable: %s", body)
+	assert.Zero(t, hits.Load(), "a gated handler ran")
+}
+
+func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
+	t.Parallel()
+	for _, shape := range gatedShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			hits := &gatedHits{}
+			app := vt.Serve(t, shape.plain(hits))
+
+			_, privileged := app.Get("/?admin=1")
+			url := actionURL(t, privileged, shape.plainEmbed, shape.gatedN)
+
+			code, body := app.Action(0).Raw(url).Body(forgedAdmin).Fire()
+			assertGateHeld(t, hits, code, body)
+			assert.NotContains(t, body, ">nuke<", "the refused render must not ship the gated branch")
+
+			_, after := app.Get("/")
+			assert.Contains(t, after, "nuked: 0")
+		})
+	}
+}
+
+// gatedURL is the URL a privileged render ships for the gated action — the
+// same id an unprivileged connection would have to call, since an action id is
+// content-addressed on its handler. Scraped rather than pushed because a When
+// that a posted signal opens around an Embed never reaches the client frame at
+// all (see TestDispatchLive_anEmbedOpenedByAPostedSignalIsNeverPushed), so the
+// realistic attacker here is one replaying a URL he saw while privileged.
+func gatedURL(t *testing.T, app *vt.App, embed string, n int) string {
+	t.Helper()
+	_, privileged := app.Get("/?admin=1")
+	require.Contains(t, privileged, ">nuke<", "the privileged render must bind the gated action")
+	return actionURL(t, privileged, embed, n)
+}
+
+func TestConnect_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
+	t.Parallel()
+	for _, shape := range gatedShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			hits := &gatedHits{}
+			app := vt.Serve(t, shape.live(hits))
+			url := gatedURL(t, app, shape.liveEmbed, shape.gatedN)
+			conn := app.ConnectWith(forgedAdmin)
+
+			// Connect frames no elements, so one ungated action with a CLEAN
+			// body forces the display render the forged connect body rode in for.
+			require.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn)))
+
+			code, body := app.Action(0).Over(conn).Raw(url).Fire()
+			assertGateHeld(t, hits, code, body)
+
+			assert.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn)),
+				"the stream goroutine must still be alive")
+			assert.Zero(t, hits.Load(), "no gated handler may have run")
+		})
+	}
+}
+
+func TestDispatchLive_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
+	t.Parallel()
+	for _, shape := range gatedShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			hits := &gatedHits{}
+			app := vt.Serve(t, shape.live(hits))
+			url := gatedURL(t, app, shape.liveEmbed, shape.gatedN)
+			conn := app.Connect()
+
+			// A clean connect: the forgery rides on an action the client IS
+			// allowed to call, which is the door a connect-only fix misses.
+			require.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn).Body(forgedAdmin)))
+
+			code, body := app.Action(0).Over(conn).Raw(url).Body(forgedAdmin).Fire()
+			assertGateHeld(t, hits, code, body)
+
+			assert.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn).Body(forgedAdmin)),
+				"the stream goroutine must still be alive")
+			assert.Zero(t, hits.Load(), "no gated handler may have run")
+		})
+	}
+}
+
+// --- F2, the other handler kind: Listen runs on the same live instance
+// between pushes that Tick does (dispatch.go names both), so the restore that
+// undoes a display render's hydration has to cover it identically. There is no
+// plain cell to fill here by construction — ctx.Listen is valid only on a live
+// unit — so the axis is root vs. embed.
+
+type listenReadsSignal struct {
+	bus  *topic.Topic[string]
+	Name via.Signal[string]
+	seen string
+}
+
+func (p *listenReadsSignal) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.bus, func(_ *via.Ctx, v string) { p.seen = p.Name.Get() + "/" + v })
+	return nil
+}
+
+func (p *listenReadsSignal) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.P(h.Str("seen: ["+p.seen+"]")))
+}
+
+type listenEmbedPage struct{ Child listenReadsSignal }
+
+func (p *listenEmbedPage) View() h.H { return h.Div(h.Str("page"), via.Embed(p.Child)) }
+
+func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
+	t.Parallel()
+	shapes := []struct {
+		name        string
+		handler     func(bus *topic.Topic[string]) http.Handler
+		connectBody string
+	}{{
+		name:        "root",
+		handler:     func(bus *topic.Topic[string]) http.Handler { return via.Handler(listenReadsSignal{bus: bus}) },
+		connectBody: `{"name":"ATTACKER"}`,
+	}, {
+		name: "embed",
+		handler: func(bus *topic.Topic[string]) http.Handler {
+			return via.Handler(listenEmbedPage{Child: listenReadsSignal{bus: bus}})
+		},
+		connectBody: `{"child__name":"ATTACKER"}`,
+	}}
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			bus := topic.New[string]()
+			app := vt.Serve(t, shape.handler(bus))
+			conn := app.ConnectWith(shape.connectBody)
+
+			require.Eventually(t, func() bool { return bus.NumSubs() == 1 }, time.Second, time.Millisecond,
+				"the Listen must be subscribed before anything is published to it")
+
+			// Connect frames no elements, so the FIRST publish is only there to
+			// drive a push: that push's display render is what applies the
+			// connect body to the live instance. The second is the one whose
+			// handler reads the instance afterwards.
+			bus.Publish("one")
+			require.Contains(t, conn.Await(">ATTACKER<"), ">ATTACKER<",
+				"the client must still SEE what it posted")
+
+			bus.Publish("two")
+			frame := conn.Await("/two]")
+			assert.Contains(t, frame, "seen: [/two]", "the Listen handler read the client's value: %s", frame)
+			assert.NotContains(t, frame, "ATTACKER/two")
+		})
+	}
 }

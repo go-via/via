@@ -1272,3 +1272,137 @@ func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, `<p id="n">1</p>`)
 }
+
+// closablePage is live by way of a Tick, so Close has a stream goroutine, a
+// ticker and a disposer to shut down.
+type closablePage struct {
+	n     via.State[int]
+	gone  chan struct{}
+	beats chan struct{}
+}
+
+func (p *closablePage) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.beat)
+	ctx.OnDispose(p.dispose)
+	return nil
+}
+func (p *closablePage) beat(ctx *via.Ctx) {
+	p.n.Set(p.n.Get() + 1)
+	select {
+	case p.beats <- struct{}{}:
+	default:
+	}
+}
+func (p *closablePage) dispose()      { close(p.gone) }
+func (p *closablePage) Bump(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *closablePage) View() h.H {
+	return h.Div(h.Button(via.On("click", p.Bump), h.Str("bump")), h.Span(p.n.Display()))
+}
+
+func closableRouter(t *testing.T) (*via.Router, *closablePage) {
+	t.Helper()
+	p := &closablePage{gone: make(chan struct{}), beats: make(chan struct{}, 1)}
+	r := via.NewRouter()
+	// By value, like every Mount: the channels are what the test observes and a
+	// copy shares them.
+	r.Mount("/", *p)
+	return r, p
+}
+
+func TestRouterClose_endsAnOpenStreamWithoutTruncatingIt(t *testing.T) {
+	t.Parallel()
+	r, _ := closableRouter(t)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	conn.Await("datastar-patch-elements")
+
+	r.Close()
+
+	assert.NoError(t, conn.AwaitClose(), "a closed router must end the response cleanly, not truncate it")
+}
+
+func TestRouterClose_waitsForDisposersToRun(t *testing.T) {
+	t.Parallel()
+	r, p := closableRouter(t)
+	app := vt.Serve(t, r)
+	app.Connect().Await("datastar-patch-elements")
+
+	r.Close()
+
+	select {
+	case <-p.gone:
+	default:
+		assert.Fail(t, "Close returned before the unit's OnDispose ran")
+	}
+}
+
+func TestRouterClose_refusesANewStream(t *testing.T) {
+	t.Parallel()
+	r, _ := closableRouter(t)
+	app := vt.Serve(t, r)
+	r.Close()
+
+	req, err := http.NewRequest(http.MethodPost, app.URL()+"/_via/sse", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+}
+
+func TestRouterClose_answersALiveActionOnAClosedTabWith410(t *testing.T) {
+	t.Parallel()
+	r, _ := closableRouter(t)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	conn.Await("datastar-patch-elements")
+	r.Close()
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	assert.Equal(t, http.StatusGone, code, "an action on a shut-down tab must be refused, not dropped")
+}
+
+func TestRouterClose_isSafeToCallTwice(t *testing.T) {
+	t.Parallel()
+	r, _ := closableRouter(t)
+	app := vt.Serve(t, r)
+	app.Connect().Await("datastar-patch-elements")
+
+	r.Close()
+	r.Close()
+}
+
+func TestRouterClose_stopsTheTickGoroutine(t *testing.T) {
+	t.Parallel()
+	r, p := closableRouter(t)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	<-p.beats
+	r.Close()
+	require.NoError(t, conn.AwaitClose())
+
+	// Drain whatever the last live tick already queued, then prove the timer
+	// is gone rather than merely between beats.
+	select {
+	case <-p.beats:
+	default:
+	}
+	select {
+	case <-p.beats:
+		assert.Fail(t, "a Tick fired after Close returned")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {
+	t.Parallel()
+	r := new(via.Router)
+	r.Mount("/", greetPage{})
+	app := vt.Serve(t, r)
+
+	code, body := app.Get("/")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "hi ")
+}

@@ -320,7 +320,7 @@ func (s *interleaveStore) LoadVersion(ctx context.Context, id string) ([]byte, u
 // A write that another request overtook mid-merge must be re-merged onto the
 // blob that landed, not written over it.
 func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
-	is := &interleaveStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
+	is := &interleaveStore{VersionedSessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: is})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
@@ -421,7 +421,7 @@ func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl 
 // there applies a stale merge over whichever writers did get through — exactly
 // the lost update the loop exists to prevent. The write must be dropped.
 func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
-	cs := &casStuckStore{VersionedSessionStore: NewMemorySessionStore().(VersionedSessionStore)}
+	cs := &casStuckStore{VersionedSessionStore: NewMemorySessionStore()}
 	m := newSessionManager(&config{sessionStore: cs})
 	s0 := &Session{mgr: m, w: httptest.NewRecorder()}
 	s0.Put(auditA{1})
