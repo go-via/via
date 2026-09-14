@@ -51,6 +51,145 @@ methods, wired by **named method value** (`via.On("click", c.Inc)`): no strings,
 closures. `via.Handler` takes the composition **by value**: there is no `&` at
 any call site, and a missing or mistyped `View` is a compile error.
 
+## Tour
+
+Five steps, each one a whole `main.go`. Everything else in this README is
+detail on one of them.
+
+**1. An action.** A `View` method, a handler method, `via.On` to wire them. No
+signals, no stream — a POST and a morph.
+
+```go
+type Counter struct{ n *atomic.Int64 }
+
+func (c *Counter) Inc(ctx *via.Ctx) { c.n.Add(1) }
+
+func (c *Counter) View() h.H {
+	return h.Div(
+		h.H1(h.Str(c.n.Load())),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
+	)
+}
+
+func main() { http.Handle("/", via.Handler(Counter{n: new(atomic.Int64)})) }
+```
+
+**2. `Signal` — client state.** `Bind()` on an input and `Display()` elsewhere
+share one wire name (the Go FIELD name), so the text tracks the input entirely
+in the browser, with no request at all.
+
+```go
+type Greeting struct{ Name via.Signal[string] }
+
+func (g *Greeting) View() h.H {
+	return h.Div(
+		h.Input(g.Name.Bind(), h.Placeholder("your name")),
+		h.P(h.Str("Hello, "), g.Name.Display()),
+	)
+}
+```
+
+**3. `State` + `Topic` + `Listen` — server state shared across tabs.** `State`
+is per connection, so the shared number lives in your own store; a `Topic`
+publish fans the change out and each tab's `Listen` copies it into that tab's
+`State`, which element-patches over SSE. Registering the `Listen` in `OnInit`
+is what makes the page live.
+
+```go
+type Shared struct {
+	n     *atomic.Int64      // the real shared value
+	room  *topic.Topic[int64]
+	Count via.State[int64]   // this connection's view of it
+}
+
+var _ via.Initer = (*Shared)(nil)
+
+func (s *Shared) OnInit(ctx *via.Ctx) error {
+	s.Count.Set(s.n.Load())
+	ctx.Listen(s.room, s.recv)
+	return nil
+}
+
+func (s *Shared) recv(ctx *via.Ctx, v int64) { s.Count.Set(v) }
+func (s *Shared) Inc(ctx *via.Ctx)           { s.room.Publish(s.n.Add(1)) }
+
+func (s *Shared) View() h.H {
+	return h.Div(
+		h.H1(s.Count.Display()),
+		h.Button(via.On("click", s.Inc), h.Str("+")),
+	)
+}
+
+func main() {
+	http.Handle("/", via.Handler(Shared{n: new(atomic.Int64), room: topic.New[int64]()}))
+}
+```
+
+**4. `PostForm` + `Session` + `Redirect`.** A native, always-multipart form
+whose submit runs server-side; read fields with stdlib, keep the result in the
+typed session, redirect on success and just re-render on failure.
+
+```go
+type User struct{ Name string }
+
+type Login struct{ err string }
+
+func (l *Login) Submit(ctx *via.Ctx) {
+	name := strings.TrimSpace(ctx.Request().FormValue("name"))
+	if name == "" {
+		l.err = "name is required" // no Redirect: the page re-renders with the error
+		return
+	}
+	ctx.Session().Put(User{Name: name}) // Get[User]() / Delete[User]() read it back
+	ctx.Session().Rotate()              // fixation defense on an auth-state change
+	ctx.Redirect("/")
+}
+
+func (l *Login) View() h.H {
+	return via.PostForm(l.Submit,
+		h.Input(h.Name("name"), h.Placeholder("name")),
+		h.Button(h.Type("submit"), h.Str("Log in")),
+		via.When(l.err != "", func() h.H { return h.P(h.Str(l.err)) }),
+	)
+}
+```
+
+**5. A multi-page app.** `NewRouter` + `Mount` namespaces each page's actions
+under its mount; `OnInit` loads path/session data before the ctx-free `View`;
+`WithErrorPage` renders failures as documents. Set `WithTrustedOrigin` in
+production, and `Close` the router before the server.
+
+```go
+type Thread struct{ id int }
+
+var _ via.Initer = (*Thread)(nil)
+
+func (t *Thread) OnInit(ctx *via.Ctx) error {
+	t.id = ctx.Param[int]("id")
+	if t.id > 99 {
+		return via.ErrNotFound // 404
+	}
+	return nil
+}
+
+func (t *Thread) View() h.H { return h.H1(h.Str(t.id)) }
+
+func errorPage(ctx *via.Ctx, e via.PageError) h.H {
+	return h.Div(h.H1(h.Str(e.Status)), h.P(h.Str(string(e.Reason))))
+}
+
+func main() {
+	app := via.NewRouter(
+		via.WithTrustedOrigin("https://example.com"),
+		via.WithErrorPage(errorPage),
+	)
+	app.Mount("/", Home{})
+	app.Mount("/thread/{id}", Thread{})
+	defer app.Close()
+	http.ListenAndServe(":8080", app)
+}
+```
+
 ## The hard guarantees
 
 - **No reflection in your wiring.** Nothing you write is bound by name: no
@@ -73,6 +212,13 @@ fails the build if an example violates the `&`/closure rules, and the sealed
 `h.H` interface makes an untyped node uninjectable.
 
 ## A page is plain until a composition makes it live
+
+**`State` is per connection, not per app.** Each tab gets its own copy, so a
+counter two tabs are supposed to share does not live in a `State`: it lives in a
+store you own, changes are announced on a `topic.Topic`, and each tab's
+`ctx.Listen` handler copies the new value into that tab's `State`. That is the
+whole shared-live-state recipe (step 3 of the Tour, and `example/feed`); reach
+for it before anything else here.
 
 A page is served **plain**: request/response, with actions and a morph on
 POST. It **streams** (an SSE connection scoped to that one tab, its own
@@ -192,8 +338,11 @@ func (p *Charts) PageMeta() via.Meta {
 
 The policy is built **once per mount**, off the literal you mounted, so it costs
 nothing per request — one page's CDN never widens another page's policy. That
-is also why `Assets` must be a **constant of the type**: via re-reads it on
-every document render and panics if it moved with request data. A relative URL
+is also why `Assets` must be a **constant of the type**: via fingerprints it at
+`Mount` from the zero-data literal, re-reads it on every document render, and
+panics if the two differ. That panic is on the request path, so what you
+actually see is **every GET of that page answering `500 render failed`** — the
+sentence naming the type sits in the server log, above the stack. A relative URL
 is covered by `'self'`, an absolute one contributes its origin, and an inline
 script or style is admitted by the sha256 of its exact bytes. `Head.Raw` refuses
 a `<script>` or `<style>` outright — via never parses `Raw`, so the CSP could
@@ -292,14 +441,12 @@ way a closed tab ends — a clean end of response, not a truncated one — an
 action POST against a closing tab answers `410`, and a connect arriving after
 `Close` is refused `503`. It is safe to call more than once.
 
-## Status
+## The feature map
 
-`-race`-clean; eight examples; the live stack is verified in headless browsers
-(`vtbrowser/`, `-tags browser`):
+Each capability, the example that demonstrates it, and the traps that come with
+it.
 
-- **Hardened plain core** (`example/counter`): by-value `Register`, origin
-  floor, hash-admitted CSP, body cap, panic-recover, compile-time `View`
-  constraint, attribute-name allowlist. An action's response self-classifies:
+- **Plain core** (`example/counter`): an action's response self-classifies —
   element-patch when the render changed, `204` when it didn't.
 - **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names. `Bind()` and `Display()` share one name, so the
@@ -335,7 +482,7 @@ action POST against a closing tab answers `410`, and a connect arriving after
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose`: one publish
   fans out to every connected embed.
-- **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Clear[T]`,
+- **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Delete[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
   write — apps that never store anything stay cookieless. Sessions do not
@@ -417,9 +564,7 @@ action POST against a closing tab answers `410`, and a connect arriving after
   The forum proves these compose into a full multi-page app.
 
 `example/chat` is the most complete live example: a multi-user chat room with a
-presence count, in ~60 lines. Two-browser-verified — a message typed in one tab
-appears in the other, the "N online" header tracks connections, and the composer
-clears on send without clobbering a concurrent draft.
+presence count, in ~60 lines.
 
 **Restarts and deploys.** Two separate things have to survive: the cookie and
 the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps
