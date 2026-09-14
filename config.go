@@ -18,7 +18,6 @@ type config struct {
 	sessionStore   SessionStore
 	sessionTimeout time.Duration
 	head           Head
-	csp            string
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
@@ -46,7 +45,6 @@ func newConfig(opts []Option) *config {
 		opt(c)
 	}
 	c.head.validate()
-	c.csp = buildCSP(c.head)
 	if len(c.trustedOrigins) == 0 {
 		originWarnOnce.Do(func() {
 			log.Print("via: action endpoint accepts requests from any origin — the per-tab id is still " +

@@ -26,7 +26,9 @@ func sha256Source(src string) string {
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
 
-// cspHeader is the strict Content-Security-Policy every HTML response carries.
+// cspHeader is the strict Content-Security-Policy an element-patch response
+// carries. A patch is a fragment, not a document: it loads no assets of its
+// own, so it gets the floor policy and not any mount's widened one.
 //
 // via admits its own inline scripts BY HASH, not by nonce. A hash authorises
 // exactly the bytes via ships, so publishing it costs nothing and leaves no
@@ -39,31 +41,85 @@ func sha256Source(src string) string {
 // it. Drop it and every action binding is silently dead in the browser while
 // every server-side test passes.
 //
-// style-src carries no inline allowance: via emits no <style> element and no
-// style attribute (the reconnect banner sets .style via the CSSOM, which CSP
-// does not gate). A Head's InlineStyle adds its own hash.
-var cspHeader = buildCSP(Head{})
+// style-src carries no inline allowance by default: via emits no <style>
+// element and no style attribute (the reconnect banner sets .style via the
+// CSSOM, which CSP does not gate). A declared inline Style adds its own hash.
+var cspHeader = buildCSP(Assets{}, Assets{})
 
-// buildCSP derives the policy from the Head alone, so it is exactly as wide as
-// the app declared and stays a pure function of the config — every pod serving
-// that config serves byte-identical bytes.
-func buildCSP(head Head) string {
-	var script strings.Builder
-	script.WriteString("script-src 'self' 'unsafe-eval' " + sha256Source(reconnectInit) + " " + sha256Source(redirectInit))
-	for _, o := range head.ScriptOrigins {
-		script.WriteString(" " + o)
+// buildCSP derives a mount's policy from the router-wide assets plus that
+// mount's own, so it is exactly as wide as the app declared and stays a pure
+// function of the declaration — every pod serving that config serves
+// byte-identical bytes. Called once per mount, never per request.
+func buildCSP(global, page Assets) string {
+	script := &srcSet{}
+	script.add("'self'", "'unsafe-eval'", sha256Source(reconnectInit), sha256Source(redirectInit))
+	style := &srcSet{}
+	style.add("'self'")
+	font, img := &srcSet{}, &srcSet{}
+	font.add("'self'")
+	img.add("'self'")
+	base := [4]int{len(script.src), len(style.src), len(font.src), len(img.src)}
+
+	for _, a := range [2]Assets{global, page} {
+		for _, s := range a.Scripts {
+			if s.Inline != "" {
+				script.add(sha256Source(s.Inline))
+			}
+			script.addOrigin(s.Src)
+		}
+		for _, s := range a.Styles {
+			if s.Inline != "" {
+				style.add(sha256Source(s.Inline))
+			}
+			style.addOrigin(s.Href)
+		}
+		for _, p := range a.Preload {
+			switch p.As {
+			case "script":
+				script.addOrigin(p.Href)
+			case "style":
+				style.addOrigin(p.Href)
+			case "font":
+				font.addOrigin(p.Href)
+			case "image":
+				img.addOrigin(p.Href)
+			}
+		}
+		font.add(a.FontOrigins...)
 	}
-	var style strings.Builder
-	style.WriteString("style-src 'self'")
-	for _, o := range head.StyleOrigins {
-		style.WriteString(" " + o)
+
+	csp := "default-src 'self'; script-src " + script.join() + "; style-src " + style.join() + "; "
+	if len(font.src) > base[2] {
+		csp += "font-src " + font.join() + "; "
 	}
-	if head.InlineStyle != "" {
-		style.WriteString(" " + sha256Source(head.InlineStyle))
-	}
-	csp := "default-src 'self'; " + script.String() + "; " + style.String() + "; "
-	if len(head.FontOrigins) > 0 {
-		csp += "font-src 'self' " + strings.Join(head.FontOrigins, " ") + "; "
+	if len(img.src) > base[3] {
+		csp += "img-src " + img.join() + "; "
 	}
 	return csp + "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 }
+
+// srcSet accumulates one directive's sources in declaration order, without
+// repeats — two pages on the same CDN must not double it in the header.
+type srcSet struct {
+	src  []string
+	seen map[string]bool
+}
+
+func (s *srcSet) add(vals ...string) {
+	for _, v := range vals {
+		if v == "" || s.seen[v] {
+			continue
+		}
+		if s.seen == nil {
+			s.seen = map[string]bool{}
+		}
+		s.seen[v] = true
+		s.src = append(s.src, v)
+	}
+}
+
+// addOrigin admits the origin of an absolute asset URL; a relative one is
+// already covered by 'self'.
+func (s *srcSet) addOrigin(rawURL string) { s.add(originOf(rawURL)) }
+
+func (s *srcSet) join() string { return strings.Join(s.src, " ") }

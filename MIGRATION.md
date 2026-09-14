@@ -115,13 +115,15 @@ var _ via.Reloader = (*Page)(nil)
 ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
-  not `func(*via.Ctx) error`, or one named `Title` that is not `func() string`.
+  not `func(*via.Ctx) error`, or one named `PageMeta` that is not
+  `func() via.Meta`. A leftover v1-era `Title() string` is warned about: it is
+  no longer a hook and nothing calls it.
 - **Warns**: a near-miss NAME that carries the exact hook signature while the
   real interface is unsatisfied. The names it knows are `Init`, `Initialize`,
   `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for `OnInit`, and
   `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for
-  `OnReload`, and `PageTitle`, `GetTitle`, `DocumentTitle`, `TitleOf`,
-  `PageName`, `TitleString` for `Title`. A v1 `Reloader.Reload` left unrenamed
+  `OnReload`, and `Meta`, `Metadata`, `PageMetadata`, `GetPageMeta`,
+  `DocumentMeta`, `PageInfo` for `PageMeta`. A v1 `Reloader.Reload` left unrenamed
   is in this set, so it is warned about — and only warned about, on stderr,
   once per type.
 - **Silent**: everything else. A leftover `Connector.OnConnect` or
@@ -215,7 +217,12 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
-| Per-page title | — | a `Title() string` method on the MOUNTED root (`via.Titler`); `Head.Title` is the fallback |
+| Per-page metadata | — | a `PageMeta() via.Meta` method on the MOUNTED root (`via.PageMetaer`) — title, description, canonical, robots, OG/Twitter, and the page's own assets |
+| Per-page assets & CSP | — | `Meta.Assets` (`Script`/`Style`/`Preload`/`FontOrigins`); the CSP is built per mount from `Head.Assets` + the page's own |
+| `WithHead{Title}` | — | **gone** — `PageMeta().Title` |
+| `WithHead{InlineStyle}` | — | **gone** — `Head.Assets.Styles: []via.Style{{Inline: css}}` |
+| `WithHead{ScriptOrigins/StyleOrigins}` | — | **gone** — declare the `Script`/`Style` itself in `Assets`; via derives the origin |
+| `WithHead{FontOrigins}` | — | `Head.Assets.FontOrigins` |
 | Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
 | Render plumbing | `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` | **gone** — behind `internal/hcore` |
 
@@ -469,27 +476,36 @@ surface on an upgrade in code that compiled fine before.
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
   `A__b`. Rename one of them.
 
-## The page title is a method on the root
+## The page's metadata is a method on the root
 
 `via.WithHead` is router-wide, so a multi-page app would serve one `<title>`
-everywhere. A mounted page overrides it by declaring one:
+everywhere. A mounted page declares its own document with `PageMeta`:
 
 ```go
-func (p *ThreadPage) Title() string { return p.subject + " — Forum" }
+func (p *ThreadPage) PageMeta() via.Meta {
+	return via.Meta{
+		Title:       p.subject + " — Forum",
+		Description: "Discussion: " + p.subject,
+		OG:          map[string]string{"title": p.subject, "type": "article"},
+	}
+}
 
-var _ via.Titler = (*ThreadPage)(nil)
+var _ via.PageMetaer = (*ThreadPage)(nil)
 ```
 
-Three rules worth knowing before porting:
+Four rules worth knowing before porting:
 
-- It is a **method, not a field**, because real titles are data-dependent. It
+- It is a **method, not a field**, because real metadata is data-dependent. It
   runs after `OnInit` and after `OnReload`, so the data is loaded. A
-  composition that already has a `Title` *field* must rename the field — Go
+  composition that already has a `PageMeta` *field* must rename the field — Go
   forbids a method and a field sharing a name.
-- Only the **mounted root's** counts. An embedded child's `Title` is ignored;
+- Only the **mounted root's** counts. An embedded child's `PageMeta` is ignored;
   `Embed` logs one line when it sees one.
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
+- `Assets` is the one field that is **not** inert: it decides the mount's CSP,
+  is read once at `Mount` off the literal you mounted, and must be a constant of
+  the type. Making it depend on request data panics on the first GET.
 
 ## Gating on a signal
 

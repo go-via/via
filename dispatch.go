@@ -132,6 +132,12 @@ type mount struct {
 	// them; live counts the streams still running, so Close can wait.
 	routerCtx context.Context
 	live      *sync.WaitGroup
+	// csp is this mount's Content-Security-Policy, built once at Mount from the
+	// router-wide assets plus the root's own PageMeta().Assets; assetsFP is the
+	// fingerprint of the latter, re-checked on every document render so a
+	// data-dependent Assets cannot silently outrun the policy.
+	csp      string
+	assetsFP string
 }
 
 // unit returns the bind pass's unit Ctx for dispatch address embed: "r" is the
@@ -521,7 +527,7 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	if ctx == nil {
 		return
 	}
-	writeHTMLPage(w, m.cfg, body, base, len(liveUnits(ctx)) > 0, pageTitleOf(inst.v))
+	writeHTMLPage(w, m, body, base, len(liveUnits(ctx)) > 0, inst.v)
 }
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
