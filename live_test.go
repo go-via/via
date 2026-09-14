@@ -1029,3 +1029,98 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 	awaitLine(t, lines, "seen=58")
 	assert.EqualValues(t, 5, got.Load(), "every value must still reach the handler")
 }
+
+// --- A unit must observe its OWN OnConnect publish.
+//
+// OnConnect's doc names "join a room" as the pattern, and a room's own join is
+// the first thing its viewer count has to reflect. The Listen starters used to
+// run inside runStream — i.e. after every OnConnect — so the join was published
+// into a topic this unit had not subscribed to yet: a fresh tab showed the
+// pre-join count until some OTHER tab joined or left. example/chat's presence
+// count had exactly this defect.
+
+type connectPublisher struct {
+	bus *topic.Topic[int]
+	N   via.State[int]
+}
+
+var _ via.Initer = (*connectPublisher)(nil)
+
+func (p *connectPublisher) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.bus, p.onCount)
+	ctx.OnConnect(p.join)
+	return nil
+}
+func (p *connectPublisher) join()                       { p.bus.Publish(1) }
+func (p *connectPublisher) onCount(ctx *via.Ctx, n int) { p.N.Set(n) }
+func (p *connectPublisher) View() h.H {
+	return h.Div(h.P(h.Str("count: "), p.N.Display()))
+}
+
+func TestConnect_aUnitSeesItsOwnOnConnectPublish(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(connectPublisher{bus: topic.New[int]()}))
+	conn := app.Connect()
+
+	assert.Contains(t, conn.Await("count: "), "count: 1",
+		"the first frame after connect must reflect the unit's own OnConnect publish")
+}
+
+// --- A push whose render is byte-identical to the last one ships no frame.
+//
+// The plain action path has always answered 204 on an unchanged render; the
+// live path used to push a byte-identical element patch on every single tick.
+// An idle page on a 2s tick sent ~160 identical frames in five minutes, which
+// is the CPU and bandwidth floor of every idle connection at scale.
+
+type unchangedTick struct {
+	want *atomic.Int64
+	N    via.State[int]
+}
+
+var _ via.Initer = (*unchangedTick)(nil)
+
+func (p *unchangedTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, p.tick)
+	return nil
+}
+func (p *unchangedTick) tick(*via.Ctx) { p.N.Set(int(p.want.Load())) }
+func (p *unchangedTick) View() h.H {
+	return h.Div(h.P(h.Str("n: "), p.N.Display()))
+}
+
+// countFrames drains what is buffered right now and returns how many lines
+// carry needle.
+func countFrames(c *vt.Conn, needle string) int {
+	n := 0
+	for {
+		line, ok := c.Peek()
+		if !ok {
+			return n
+		}
+		if strings.Contains(line, needle) {
+			n++
+		}
+	}
+}
+
+func TestConnect_anUnchangedTickRenderShipsNoFrame(t *testing.T) {
+	t.Parallel()
+	want := &atomic.Int64{}
+	app := vt.Serve(t, via.Handler(unchangedTick{want: want}))
+	conn := app.Connect()
+
+	require.Contains(t, conn.Await("n: "), "n: 0", "the first push always ships")
+
+	// ~40 further ticks, every one of them rendering the same bytes.
+	time.Sleep(200 * time.Millisecond)
+	assert.Zero(t, countFrames(conn, "n: 0"),
+		"an unchanged tick render must not ship an element patch")
+
+	// A real change still ships — exactly once.
+	want.Store(7)
+	require.Contains(t, conn.Await("n: 7"), "n: 7")
+	time.Sleep(200 * time.Millisecond)
+	assert.Zero(t, countFrames(conn, "n: 7"),
+		"the ticks after the change repeat the same bytes and must ship nothing")
+}

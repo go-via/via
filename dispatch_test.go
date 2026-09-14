@@ -1349,6 +1349,7 @@ type livePriv struct {
 	IsAdmin  via.Signal[bool]
 	nuked    bool
 	nukedArg int
+	safeN    int
 }
 
 func (p *livePriv) OnInit(ctx *via.Ctx) error {
@@ -1360,7 +1361,11 @@ func (p *livePriv) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *livePriv) Safe(ctx *via.Ctx)            {}
+// Safe counts its calls and the View renders the count: an action whose render
+// is byte-identical to the last frame now ships no frame at all (see
+// skipUnchanged), so a test that reads its assertions off the NEXT frame has to
+// give the render something that actually moves.
+func (p *livePriv) Safe(ctx *via.Ctx)            { p.safeN++ }
 func (p *livePriv) Nuke(ctx *via.Ctx)            { p.nuked = true }
 func (p *livePriv) NukeArg(ctx *via.Ctx, id int) { p.nukedArg = id }
 
@@ -1376,7 +1381,7 @@ func (p *livePriv) View() h.H {
 		h.Input(p.IsAdmin.Bind()),
 		h.Button(via.On("click", p.Safe), h.Str("safe")),
 		via.When(p.IsAdmin.Get(), p.admin),
-		h.P(h.Str("nuked: "+fmt.Sprint(p.nuked)+"/"+fmt.Sprint(p.nukedArg))),
+		h.P(h.Str("nuked: "+fmt.Sprint(p.nuked)+"/"+fmt.Sprint(p.nukedArg)+" safe: "+fmt.Sprint(p.safeN))),
 	)
 }
 
@@ -1562,14 +1567,16 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 type tickReadsSignal struct {
 	Name via.Signal[string]
 	seen string
+	beat int // rendered so consecutive tick frames differ; see skipUnchanged
 }
 
 func (p *tickReadsSignal) OnInit(ctx *via.Ctx) error {
-	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen = p.Name.Get() })
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen, p.beat = p.Name.Get(), p.beat+1 })
 	return nil
 }
 func (p *tickReadsSignal) View() h.H {
-	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.P(h.Str("seen: ["+p.seen+"]")))
+	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(),
+		h.P(h.Str("seen: ["+p.seen+"] beat "+strconv.Itoa(p.beat))))
 }
 
 func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
@@ -1597,11 +1604,12 @@ func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 type tickAfterDisplayPanic struct {
 	Idx   via.Signal[int]
 	seen  int
+	beat  int  // rendered so consecutive tick frames differ; see skipUnchanged
 	blown bool // the display render panics ONCE, so a later push can frame what the handler saw
 }
 
 func (p *tickAfterDisplayPanic) OnInit(ctx *via.Ctx) error {
-	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen = p.Idx.Get() })
+	ctx.Tick(5*time.Millisecond, func(*via.Ctx) { p.seen, p.beat = p.Idx.Get(), p.beat+1 })
 	return nil
 }
 
@@ -1610,7 +1618,8 @@ func (p *tickAfterDisplayPanic) View() h.H {
 		p.blown = true
 		panic("via_test: index out of range in the display render")
 	}
-	return h.Div(h.Input(p.Idx.Bind()), h.P(h.Str("seen: "+strconv.Itoa(p.seen))))
+	return h.Div(h.Input(p.Idx.Bind()),
+		h.P(h.Str("seen: "+strconv.Itoa(p.seen)+" beat "+strconv.Itoa(p.beat))))
 }
 
 func TestConnect_aPanickingDisplayRenderLeavesNoPostedValueOnTheInstance(t *testing.T) {

@@ -18,6 +18,7 @@ package vtbrowser
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -130,6 +131,34 @@ func (s *Session) navigate() {
 func (s *Session) Reload() {
 	s.t.Helper()
 	s.navigate()
+}
+
+// Restart is a deploy: it takes the app's server off the air, leaves it down
+// for the given gap, then serves handler again on the SAME host:port the tab
+// is still pointed at. Nothing navigates the tab — recovering is the page's own
+// job, which is the whole point of the reconnect manager.
+//
+// The address is reclaimed with a fresh listener rather than a fresh
+// httptest.Server, which would pick a new port and prove nothing.
+func (s *Session) Restart(gap time.Duration, handler http.Handler) {
+	s.t.Helper()
+	addr := s.srv.Listener.Addr().String()
+	// The browser keeps its HTTP/1.1 connections alive, and httptest.Server.Close
+	// waits for every one of them; a kept-alive socket the tab is not using
+	// still counts, so Close would block for the whole test timeout.
+	s.srv.CloseClientConnections()
+	s.srv.Close()
+	time.Sleep(gap)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.t.Fatalf("vtbrowser: re-listen on %s: %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	s.t.Cleanup(func() { srv.CloseClientConnections(); srv.Close() })
+	s.srv = srv
 }
 
 // Click dispatches a real mouse click on the first node matching the CSS

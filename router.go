@@ -43,12 +43,11 @@ type Initer interface{ OnInit(*Ctx) error }
 //	func (p *Front) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
 //
 // Why a second hook and not a second OnInit run: OnInit is an INITIALIZER, not
-// a loader. It mints and defaults the session, seeds client signals from the
-// request URL, registers Tick/Listen, and may Redirect or return ErrNotFound —
-// all of which are wrong to repeat once a handler has already committed a
-// mutation. Re-running it would overwrite the very session value the handler
-// just Put, and reset a hydrated signal to the ACTION url's (absent) query
-// string. OnReload says exactly one thing, so it can run exactly when it should.
+// a loader. It mints and defaults the session, registers Tick/Listen, and may
+// Redirect or return ErrNotFound — all of which are wrong to repeat once a
+// handler has already committed a mutation. Re-running it would overwrite the
+// very session value the handler just Put. OnReload says exactly one thing, so
+// it can run exactly when it should.
 //
 // It runs on the plain path and the live path alike, once per action, and is
 // skipped when the handler queued a Redirect (nothing from this render ships).
@@ -408,7 +407,7 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // the strict CSP, then the rendered body. A streaming page also gets the SSE
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token is threaded through here.
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool) {
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool, page pageHead) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")
@@ -426,7 +425,7 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string,
 	}
 	var head strings.Builder
 	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
-	cfg.head.render(&head)
+	cfg.head.render(&head, page)
 	head.WriteString(`<script type="module" src="/_via/datastar.js"></script>` +
 		reconnectScript(hasLive) +
 		bodyOpen)

@@ -23,7 +23,7 @@ func TestRunStream_keepalivePanicDoesNotKillTheLoop(t *testing.T) {
 		}
 		done := make(chan struct{})
 		go func() {
-			runStream(reqCtx, "", nil, pushq, keepalive, time.Millisecond)
+			runStream(reqCtx, "", nil, nil, make(chan struct{}, 1), pushq, keepalive, time.Millisecond)
 			close(done)
 		}()
 

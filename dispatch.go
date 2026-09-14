@@ -521,7 +521,7 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	if ctx == nil {
 		return
 	}
-	writeHTMLPage(w, m.cfg, body, base, len(liveUnits(ctx)) > 0)
+	writeHTMLPage(w, m.cfg, body, base, len(liveUnits(ctx)) > 0, ctx.pageHead())
 }
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {

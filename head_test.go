@@ -137,3 +137,89 @@ func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	require.NotEmpty(t, r1.Header.Get("Content-Security-Policy"))
 	assert.Equal(t, r1.Header.Get("Content-Security-Policy"), r2.Header.Get("Content-Security-Policy"))
 }
+
+// --- Per-page title.
+//
+// Head is router-wide, so every page in a multi-page app used to share one
+// <title>. Ctx.Title/Ctx.Description are the per-page override, set where the
+// page's data is: OnInit. They must escape, must not widen the CSP, and must
+// survive an embedded unit setting them.
+
+type titledPage struct {
+	title string
+	desc  string
+	Child titledChild
+}
+
+var _ via.Initer = (*titledPage)(nil)
+
+func (p *titledPage) OnInit(ctx *via.Ctx) error {
+	ctx.Title(p.title)
+	ctx.Description(p.desc)
+	return nil
+}
+func (p *titledPage) View() h.H { return h.Div(h.Str("hi"), via.Embed(p.Child)) }
+
+type titledChild struct{ title string }
+
+var _ via.Initer = (*titledChild)(nil)
+
+func (c *titledChild) OnInit(ctx *via.Ctx) error {
+	if c.title != "" {
+		ctx.Title(c.title)
+	}
+	return nil
+}
+func (c *titledChild) View() h.H { return h.Span(h.Str("child")) }
+
+func titledBody(t *testing.T, p titledPage, opts ...via.Option) (*http.Response, string) {
+	t.Helper()
+	srv := httptest.NewServer(via.Handler(p, opts...))
+	t.Cleanup(srv.Close)
+	return do(t, srv, http.MethodGet, "/", "")
+}
+
+func TestTitle_aPageOverridesTheRouterWideTitle(t *testing.T) {
+	t.Parallel()
+	_, body := titledBody(t, titledPage{title: "Ticket #7"}, via.WithHead(via.Head{Title: "Helpdesk"}))
+
+	assert.Contains(t, body, "<title>Ticket #7</title>")
+	assert.NotContains(t, body, "<title>Helpdesk</title>",
+		"the per-page title replaces the router-wide one, it does not add a second")
+}
+
+func TestTitle_anUnsetPageKeepsTheRouterWideTitle(t *testing.T) {
+	t.Parallel()
+	_, body := titledBody(t, titledPage{}, via.WithHead(via.Head{Title: "Helpdesk"}))
+
+	assert.Contains(t, body, "<title>Helpdesk</title>")
+	assert.NotContains(t, body, `name="description"`, "an unset Description emits no element")
+}
+
+func TestTitle_titleAndDescriptionAreEscaped(t *testing.T) {
+	t.Parallel()
+	_, body := titledBody(t, titledPage{title: `</title><script>x()</script>`, desc: `a "quoted" <b>`})
+
+	assert.NotContains(t, body, "<script>x()</script>", "the title must not be able to close its element")
+	assert.Contains(t, body, "&lt;/title&gt;")
+	assert.Contains(t, body, `content="a &#34;quoted&#34; &lt;b&gt;"`)
+}
+
+func TestTitle_anEmbeddedUnitCanNameThePage(t *testing.T) {
+	t.Parallel()
+	_, body := titledBody(t, titledPage{title: "outer", Child: titledChild{title: "inner"}})
+
+	assert.Contains(t, body, "<title>inner</title>",
+		"one page head per request tree: the last writer wins, so an embed can name the page")
+}
+
+// A per-page title must not be a way to widen the policy: the CSP is derived
+// from the router-wide Head alone and must be byte-identical whatever a page
+// sets.
+func TestTitle_doesNotTouchTheCSP(t *testing.T) {
+	t.Parallel()
+	plain, _ := titledBody(t, titledPage{})
+	titled, _ := titledBody(t, titledPage{title: "x", desc: "y"})
+
+	assert.Equal(t, plain.Header.Get("Content-Security-Policy"), titled.Header.Get("Content-Security-Policy"))
+}

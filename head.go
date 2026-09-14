@@ -73,9 +73,21 @@ func (hd Head) validate() {
 // render writes the head's elements. Raw and InlineStyle are emitted verbatim:
 // the app's own markup, and "</style" — the one sequence that could end the
 // element early — is rejected at startup.
-func (hd Head) render(b *strings.Builder) {
-	if hd.Title != "" {
-		b.WriteString("<title>" + html.EscapeString(hd.Title) + "</title>")
+//
+// page is the per-request override (see Ctx.Title): a non-empty title replaces
+// the router-wide one and a non-empty description adds the meta element. Both
+// are escaped here, and neither touches the CSP — which is why a page is
+// allowed to set them and not the rest of the Head.
+func (hd Head) render(b *strings.Builder, page pageHead) {
+	title := hd.Title
+	if page.title != "" {
+		title = page.title
+	}
+	if page.desc != "" {
+		b.WriteString(`<meta name="description" content="` + html.EscapeString(page.desc) + `">`)
+	}
+	if title != "" {
+		b.WriteString("<title>" + html.EscapeString(title) + "</title>")
 	}
 	b.WriteString(hd.Raw)
 	if hd.InlineStyle != "" {

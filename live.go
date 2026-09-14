@@ -66,9 +66,10 @@ func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
 // handler calls, then one re-render and one SSE frame — so a burst costs frames
 // proportional to how fast the client drains, not how fast the topic publishes.
 //
-// The Subscribe is deferred to the moment the stream starts pumping: OnInit
-// also runs on a plain GET and every plain action, and subscribing there would
-// hand out a Sub nothing will ever Stop.
+// The Subscribe is deferred to the SSE handler: OnInit also runs on a plain GET
+// and every plain action, and subscribing there would hand out a Sub nothing
+// will ever Stop. It happens before any OnConnect fn runs, so a unit that
+// publishes on connect observes its own publish.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if c.reinit {
 		return // see Tick

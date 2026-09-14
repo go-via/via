@@ -8,7 +8,58 @@ constant could serve instead. Module path is now
 `github.com/go-via/via` (no `/v2` suffix); v1 history is merged, the tree is
 the v2 core. **Requires Go 1.27.**
 
+### Documented (behaviour unchanged)
+
+- Query strings do NOT reach action handlers. An action POSTs to
+  `{mount}/_via/a/{n}/…`, built from the mount pattern's path params and
+  nothing else, so the discovery render runs unfiltered and a row that only
+  exists under `?q=` answers `410` when clicked. Page state — filter, page,
+  sort, tab — belongs in path params or the session. On `Ctx.Param` and in the
+  README.
+- `State.Get` does NOT make a unit live; only `State.Display` and `List.Each`
+  do. A unit that only `Get`s a State is silently plain. On `State.Get`.
+- `Ctx` has no response writer, so a file download is a sibling `net/http`
+  handler. On `Ctx.Request`.
+- The README and the `Reloader` godoc claimed `OnInit` "seeds signals from the
+  request URL". No such code path exists or ever existed; the claim is deleted.
+
 ### New
+
+- **A unit sees its own `OnConnect` publish.** The `Listen` subscriptions were
+  started inside the stream loop, i.e. AFTER every `OnConnect` fn had already
+  run, so the "join a room" pattern `OnConnect`'s own doc names could not work:
+  a presence unit that published its join on connect and rendered the count
+  from its `Listen` showed the PRE-join count in a fresh tab until some other
+  tab joined or left. `example/chat`'s online count had exactly this defect.
+  Subscriptions now start before the first `OnConnect`, still only on the SSE
+  handler, so a plain GET still leaks no subscription.
+
+- **An unchanged live render ships no frame.** The plain path has always
+  answered `204` when an action changes nothing the render shows; the live path
+  pushed a byte-identical element patch on every tick regardless. An idle page
+  on a 2s tick sent ~160 identical frames in five minutes — the CPU and
+  bandwidth floor of every idle connection. A push whose rendered bytes match
+  the last frame's is now dropped. Signal patches are unaffected: they are
+  framed separately off the dirty set, so a signal change with an unchanged DOM
+  still ships, and so does the reverse.
+
+- **`Ctx.Title` and `Ctx.Description`.** `via.WithHead` is router-wide, so
+  every page in a multi-page app shared one `<title>` and `OnInit` had no way
+  to change it. Both are set from `OnInit`, override the router-wide `Head`,
+  are HTML-escaped, and touch no CSP-relevant slot — the `Head` still owns lang,
+  raw markup, the inline stylesheet and every origin list, so a page cannot
+  widen its own policy. They shape the document, so they land on a render that
+  writes one (the GET, a native form submit), not on an SSE push.
+
+- **The reconnect manager backs off instead of reloading into a dead server.**
+  The re-bootstrap was a single blind `location.reload()` on a 500-2000ms
+  timer. A real deploy's gap is seconds, so the reload landed on
+  `chrome-error://chromewebdata` with no script left alive to try again — a
+  permanently dead tab on every rolling restart. It now probes the page URL
+  with capped exponential backoff (500ms → 8s, ~20 attempts) and reloads only
+  once the server answers; an incoming patch cancels the probe, so a stream
+  that recovers on its own never triggers a reload. The clean-close detection
+  and the 410/403 branches are unchanged.
 
 - **`Router.Close`.** There was no shutdown path at all: every stream
   goroutine, its `Tick` timers and its `Listen` subscriptions hung off

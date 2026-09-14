@@ -35,8 +35,14 @@ package via
 // A sessionStorage counter bounds reloads to 3 per episode so a server that
 // stays down can't pin the tab in a reload loop. One IIFE, so a double injection
 // is a no-op via the window guard.
+//
+// The give-up used to be a single blind location.reload() on a 500-2000ms
+// timer. A deploy's gap is seconds, not milliseconds, so that reload landed on
+// chrome-error://chromewebdata with no script left to retry — a permanently
+// dead tab on every rolling restart. It now probes the page URL with capped
+// exponential backoff and reloads only once the server answers.
 const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
-	`var K='__via_rc_reloads',b;` +
+	`var K='__via_rc_reloads',b,gen=0,fails=0;` +
 	`function conn(s){document.documentElement.setAttribute('data-via-connection',s)}` +
 	`conn('online');` +
 	`function show(m){if(!b){b=document.createElement('div');b.id='via-reconnect-banner';` +
@@ -45,12 +51,24 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`background:#b45309;color:#fff';(document.body||document.documentElement).appendChild(b)}` +
 	`b.textContent=m;b.style.display='block'}` +
 	`function hide(){if(b)b.style.display='none'}` +
-	`function ok(){conn('online');hide()}` +
-	`function stop(m){conn('offline');show(m)}` +
+	`function ok(){gen++;fails=0;conn('online');hide()}` +
+	`function stop(m){gen++;conn('offline');show(m)}` +
+	// The re-bootstrap PROBES before it reloads. A reload fired blind lands on
+	// chrome-error://chromewebdata the moment the server is still down — which
+	// every real deploy is, for seconds — and the browser gives up there with
+	// no script left alive to try again. So: ask for this page until it answers,
+	// backing off 500ms → 8s, and only then reload. gen cancels an in-flight
+	// probe the instant a real patch proves the stream came back on its own.
+	`function probe(d,g){setTimeout(function(){if(g!==gen)return;` +
+	`fetch(location.href,{cache:'no-store',credentials:'same-origin'}).then(function(r){` +
+	`if(g!==gen)return;if(!r.ok)throw 0;` +
+	`try{sessionStorage.setItem(K,+(sessionStorage.getItem(K)||0)+1)}catch(_){}` +
+	`location.reload()}).catch(function(){if(g!==gen)return;` +
+	`if(++fails>20){stop('Connection lost. Please refresh the page.');return}` +
+	`probe(Math.min(d*2,8000),g)})},d+Math.floor(Math.random()*250))}` +
 	`function lost(m){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
 	`if(n>=2){show('Connection lost. Please refresh the page.');return}` +
-	`show(m);try{sessionStorage.setItem(K,n+1)}catch(_){}` +
-	`setTimeout(function(){location.reload()},500+Math.floor(Math.random()*1500))}` +
+	`show(m);fails=0;probe(500,++gen)}` +
 	// An incoming patch is the only reliable "stream is alive again" signal: a
 	// long-lived SSE @post fires 'retrying' on a drop but NO 'started'/'finished'
 	// on a successful resume. The bundled Datastar surfaces incoming patches

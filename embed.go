@@ -108,6 +108,7 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	child.embedV = inst
 	child.base = parent.base // the mount prefix, so the embed's own action URLs carry it too
 	child.declareSeen = parent.declareSeen
+	child.page = parent.page // ctx.Title from an embedded unit names the whole page
 	child.req = parent.req
 	child.sessions = parent.sessions
 	child.sessW = parent.sessW
