@@ -155,24 +155,49 @@ r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
 // /tickets?status=open&page=2                    // does NOT
 ```
 
-**A page names itself.** `via.WithHead` is router-wide; a page overrides its
-`<title>` by declaring one — a method, not a field, because a real title is
-data-dependent. It is read after `OnInit` (and `OnReload`), so the data is
-already loaded:
+**A page describes itself.** `via.WithHead` is router-wide; a page declares its
+own title, description, social cards and assets with one `PageMeta` method —
+a method, not a field, because real metadata is data-dependent. It is read after
+`OnInit` (and `OnReload`), so the data is already loaded:
 
 ```go
-func (p *Ticket) Title() string {
-	return "#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject
+func (p *Ticket) PageMeta() via.Meta {
+	return via.Meta{Title: "#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject}
 }
 
-var _ via.Titler = (*Ticket)(nil) // duck-typed like OnInit — pin it
+var _ via.PageMetaer = (*Ticket)(nil) // duck-typed like OnInit — pin it
 ```
 
-Only the **mounted root's** `Title` counts: a nested unit may not rename the
+Only the **mounted root's** `PageMeta` counts: a nested unit may not rename the
 page it happens to sit in, and `Embed` logs one line when it sees a child
-declaring one. An empty string keeps the router-wide title. It shapes the
-*document*, so it lands on a render that writes one — the GET and a native form
-submit — not on an SSE push, which only patches elements inside `<body>`.
+declaring one. It shapes the *document*, so it lands on a render that writes one
+— the GET and a native form submit — not on an SSE push, which only patches
+elements inside `<body>`.
+
+Every field but one is inert: escaped text, free to vary with the request.
+`Assets` is not — it is the page's scripts, styles and preloads, and it decides
+that mount's `Content-Security-Policy`:
+
+```go
+func (p *Charts) PageMeta() via.Meta {
+	return via.Meta{
+		Title: "Charts",
+		Assets: via.Assets{
+			Scripts: []via.Script{{Src: "https://cdn.example/c.js", Module: true}},
+			Styles:  []via.Style{{Inline: "svg{display:block}"}},
+		},
+	}
+}
+```
+
+The policy is built **once per mount**, off the literal you mounted, so it costs
+nothing per request — one page's CDN never widens another page's policy. That
+is also why `Assets` must be a **constant of the type**: via re-reads it on
+every document render and panics if it moved with request data. A relative URL
+is covered by `'self'`, an absolute one contributes its origin, and an inline
+script or style is admitted by the sha256 of its exact bytes. `Head.Raw` refuses
+a `<script>` or `<style>` outright — via never parses `Raw`, so the CSP could
+not admit it and the browser would block it with no signal at all.
 
 **There is no response writer.** `Ctx` can read the request and `Redirect`;
 it cannot set a header, a status or a body, because a live action's answer is

@@ -888,39 +888,51 @@ type refreshAction struct{ N via.Signal[int] }
 func (b *refreshAction) Refresh(*via.Ctx) {}
 func (b *refreshAction) View() h.H        { return h.Div(b.N.Display()) }
 
-type badTitleSig struct{ N via.Signal[int] }
+type badMetaSig struct{ N via.Signal[int] }
 
-func (b *badTitleSig) Title(string) string { return "" }
-func (b *badTitleSig) View() h.H           { return h.Div(b.N.Display()) }
+func (b *badMetaSig) PageMeta(string) via.Meta { return via.Meta{} }
+func (b *badMetaSig) View() h.H                { return h.Div(b.N.Display()) }
 
-type misnamedTitle struct{ N via.Signal[int] }
+type misnamedMeta struct{ N via.Signal[int] }
 
-func (m *misnamedTitle) PageTitle() string { return "x" }
-func (m *misnamedTitle) View() h.H         { return h.Div(m.N.Display()) }
+func (m *misnamedMeta) Metadata() via.Meta { return via.Meta{Title: "x"} }
+func (m *misnamedMeta) View() h.H          { return h.Div(m.N.Display()) }
 
-type titleHelper struct{ N via.Signal[int] }
+type metaHelper struct{ N via.Signal[int] }
 
-func (r *titleHelper) GetTitle() string { return "x" }
-func (r *titleHelper) Title() string    { return r.GetTitle() }
-func (r *titleHelper) View() h.H        { return h.Div(r.N.Display()) }
+func (r *metaHelper) Metadata() via.Meta { return via.Meta{Title: "x"} }
+func (r *metaHelper) PageMeta() via.Meta { return r.Metadata() }
+func (r *metaHelper) View() h.H          { return h.Div(r.N.Display()) }
 
-func TestMount_panicsOnATitleCarryingTheWrongSignature(t *testing.T) {
+type legacyTitle struct{ N via.Signal[int] }
+
+func (l *legacyTitle) Title() string { return "x" }
+func (l *legacyTitle) View() h.H     { return h.Div(l.N.Display()) }
+
+func TestMount_panicsOnAPageMetaCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
-		"via: via_test.badTitleSig.Title has signature func(string) string, not func() string — "+
-			"so via_test.badTitleSig does NOT implement via.Titler and the hook will never run",
-		func() { via.NewRouter().Mount("/", badTitleSig{}) })
+		"via: via_test.badMetaSig.PageMeta has signature func(string) via.Meta, not func() via.Meta — "+
+			"so via_test.badMetaSig does NOT implement via.PageMetaer and the hook will never run",
+		func() { via.NewRouter().Mount("/", badMetaSig{}) })
 }
 
-func TestMount_warnsOnAMethodShapedLikeAMisnamedTitle(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedTitle{}) })
-	assert.Contains(t, logged, "misnamedTitle.PageTitle looks like a mis-named Title")
-	assert.Contains(t, logged, "var _ via.Titler = (*misnamedTitle)(nil)")
+func TestMount_warnsOnAMethodShapedLikeAMisnamedPageMeta(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedMeta{}) })
+	assert.Contains(t, logged, "misnamedMeta.Metadata looks like a mis-named PageMeta")
+	assert.Contains(t, logged, "var _ via.PageMetaer = (*misnamedMeta)(nil)")
 }
 
-func TestMount_staysQuietWhenTheTitleLookalikeIsAHelperTitleCalls(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", titleHelper{}) })
+func TestMount_staysQuietWhenThePageMetaLookalikeIsAHelperItCalls(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", metaHelper{}) })
 	assert.NotContains(t, logged, "mis-named")
+}
+
+// Title was the hook PageMeta replaced. A leftover one still compiles and still
+// looks like it names the page, so the drop must be loud.
+func TestMount_warnsOnALeftoverTitleMethod(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", legacyTitle{}) })
+	assert.Contains(t, logged, "legacyTitle.Title is no longer a via hook")
 }
 
 func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {

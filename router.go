@@ -3,6 +3,7 @@ package via
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -352,6 +353,13 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live,
 	}
+	// The CSP is derived from the root's declaration ONCE, here, off the
+	// zero-data literal: one string per mount, none per request. renderPage
+	// re-reads it and panics if the request-time value disagrees.
+	lit := root
+	assets := pageMetaOf(PT(&lit)).Assets
+	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
+	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets), assets.fingerprint()
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
@@ -407,11 +415,16 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // the strict CSP, then the rendered body. A streaming page also gets the SSE
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token is threaded through here.
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool, page string) {
+func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, hasLive bool, root any) {
+	meta := pageMetaOf(root)
+	if fp := meta.Assets.fingerprint(); fp != m.assetsFP {
+		panic("via: PageMeta().Assets of " + typeName(root) +
+			" depends on request data; assets must be a constant of the type")
+	}
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Security-Policy", cfg.csp)
+	hdr.Set("Content-Security-Policy", m.csp)
 	// Pre-declared on every page so the tab id is always defined and always
 	// sent (see tabSignal for why the name must stay underscore-free). On a
 	// plain page it stays "" and dispatch falls through to the plain path; a
@@ -424,8 +437,11 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string,
 		bodyOpen = `</head><body data-init="@post('` + hcore.EscapeString(base+"/_via/sse") + `')" data-signals='{"` + tabSignal + `":""}'>`
 	}
 	var head strings.Builder
-	head.WriteString(`<!doctype html>` + cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
-	cfg.head.render(&head, page)
+	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
+	meta.render(&head)
+	head.WriteString(m.cfg.head.Raw)
+	m.cfg.head.Assets.render(&head)
+	meta.Assets.render(&head)
 	head.WriteString(`<script type="module" src="/_via/datastar.js"></script>` +
 		reconnectScript(hasLive) +
 		bodyOpen)
@@ -450,7 +466,7 @@ type hookSpec struct {
 var hookSpecs = []hookSpec{
 	{name: "OnInit", iface: "Initer", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Initer]},
 	{name: "OnReload", iface: "Reloader", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Reloader]},
-	{name: "Title", iface: "Titler", want: "func() string", shaped: stringShaped, implements: implementsAs[Titler], rootOnly: true},
+	{name: "PageMeta", iface: "PageMetaer", want: "func() via.Meta", shaped: metaShaped, implements: implementsAs[PageMetaer], rootOnly: true},
 }
 
 // hookAliases maps a plausible mis-spelling to the hook it was surely meant to
@@ -461,8 +477,8 @@ var hookAliases = map[string]string{
 	"OnInitialize": "OnInit", "OnInitialise": "OnInit", "OnStart": "OnInit",
 	"Reload": "OnReload", "OnReloaded": "OnReload", "Refresh": "OnReload",
 	"OnRefresh": "OnReload", "Reinit": "OnReload", "OnReInit": "OnReload",
-	"PageTitle": "Title", "GetTitle": "Title", "DocumentTitle": "Title",
-	"TitleOf": "Title", "PageName": "Title", "TitleString": "Title",
+	"Meta": "PageMeta", "Metadata": "PageMeta", "PageMetadata": "PageMeta",
+	"GetPageMeta": "PageMeta", "DocumentMeta": "PageMeta", "PageInfo": "PageMeta",
 }
 
 func hookByName(name string) hookSpec {
@@ -525,6 +541,13 @@ func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
 			}
 		}
 	}
+	// Title was the hook PageMeta replaced. A leftover one is dead code that
+	// still compiles and still looks like it names the page, so say so.
+	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[PageMetaer](pt) {
+		log.Printf("via: %s.Title is no longer a via hook — the document is named by "+
+			"PageMeta() via.Meta now, so nothing will ever call it. Return via.Meta{Title: …} instead.",
+			t.String())
+	}
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
 		name, aliased := hookAliases[m.Name]
@@ -550,11 +573,22 @@ func ctxErrShaped(mt reflect.Type) bool {
 		!mt.IsVariadic()
 }
 
-// stringShaped reports whether a METHOD type is func() string.
+// stringShaped reports whether a METHOD type is func() string — the retired
+// Title hook's shape, kept only to recognise a leftover one.
 func stringShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf("") &&
 		!mt.IsVariadic()
 }
+
+// metaShaped reports whether a METHOD type is func() via.Meta.
+func metaShaped(mt reflect.Type) bool {
+	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf(Meta{}) &&
+		!mt.IsVariadic()
+}
+
+// typeName names the composition behind a root pointer for a panic message,
+// without reflect: every root reaches here as *T from Mount's own PT.
+func typeName(root any) string { return fmt.Sprintf("%T", root) }
 
 func withoutReceiver(mt reflect.Type) string {
 	in := make([]string, 0, mt.NumIn()-1)

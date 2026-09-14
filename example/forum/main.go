@@ -56,7 +56,7 @@ func (s *SignUp) Submit(ctx *via.Ctx) {
 	ctx.Redirect("/forum")
 }
 
-func (s *SignUp) Title() string { return "Sign up — Forum" }
+func (s *SignUp) PageMeta() via.Meta { return via.Meta{Title: "Sign up — Forum"} }
 
 func (s *SignUp) View() h.H {
 	return page("Sign up",
@@ -88,7 +88,7 @@ func (l *Login) Submit(ctx *via.Ctx) {
 	ctx.Redirect("/forum")
 }
 
-func (l *Login) Title() string { return "Sign in — Forum" }
+func (l *Login) PageMeta() via.Meta { return via.Meta{Title: "Sign in — Forum"} }
 
 func (l *Login) View() h.H {
 	return page("Log in",
@@ -152,7 +152,7 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx) {
 
 func (p *Profile) avatarImg() h.H { return h.Img(h.Src(p.user.Avatar), h.Width(96)) }
 
-func (p *Profile) Title() string { return "Your profile — Forum" }
+func (p *Profile) PageMeta() via.Meta { return via.Meta{Title: "Your profile — Forum"} }
 
 func (p *Profile) View() h.H {
 	return page("Profile - "+p.user.Name,
@@ -202,7 +202,7 @@ func (f *Forum) row(t Thread) h.H {
 	return h.Li(link("/thread/"+strconv.Itoa(t.ID), t.Title), h.Str(" - "+t.Author))
 }
 
-func (f *Forum) Title() string { return "Threads — Forum" }
+func (f *Forum) PageMeta() via.Meta { return via.Meta{Title: "Threads — Forum"} }
 
 func (f *Forum) View() h.H {
 	return page("Forum",
@@ -227,15 +227,20 @@ type ThreadPage struct {
 
 var _ via.Initer = (*ThreadPage)(nil)
 var _ via.Reloader = (*ThreadPage)(nil)
-var _ via.Titler = (*ThreadPage)(nil)
+var _ via.PageMetaer = (*ThreadPage)(nil)
 
-// Title runs after OnReload, so the tab strip names the thread that was just
-// loaded — the case a Head field could not serve.
-func (p *ThreadPage) Title() string {
+// PageMeta runs after OnReload, so the tab strip names the thread that was
+// just loaded — the case a Head field could not serve. Assets is absent here
+// because it may not depend on the loaded thread; only the inert slots may.
+func (p *ThreadPage) PageMeta() via.Meta {
 	if !p.found {
-		return "No such thread — Forum"
+		return via.Meta{Title: "No such thread — Forum", Robots: "noindex"}
 	}
-	return p.subject + " — Forum"
+	return via.Meta{
+		Title:       p.subject + " — Forum",
+		Description: "Discussion: " + p.subject,
+		OG:          map[string]string{"title": p.subject, "type": "article"},
+	}
 }
 
 func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
@@ -293,10 +298,10 @@ func main() {
 	}
 
 	store := newStore()
-	// Head is router-wide; each page's own Title() method overrides it.
+	// Head is router-wide; each page names itself with PageMeta().
 	app := via.NewRouter(
 		via.WithSessionKey([]byte(key)),
-		via.WithHead(via.Head{Lang: "en", Title: "Forum"}),
+		via.WithHead(via.Head{Lang: "en"}),
 	)
 
 	app.Mount("/signup", SignUp{store: store})

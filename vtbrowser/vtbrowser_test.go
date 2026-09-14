@@ -436,7 +436,7 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// --- WithHead under the derived CSP ---
+// --- Declared assets under the derived CSP ---
 
 // styledPage is the vehicle for the head tests: one element whose colour comes
 // only from a stylesheet, so "did the sheet load" is directly observable.
@@ -459,14 +459,13 @@ func cdn(t testing.TB, css string) string {
 
 const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color === "rgb(255, 0, 0)"`
 
-// The payoff of declaring StyleOrigins: an off-origin stylesheet the app
-// references in Raw must actually load and apply. No httptest can see this —
-// the server ships the same bytes whether or not the browser fetches them.
+// The payoff of declaring a Style: an off-origin stylesheet must actually load
+// and apply. No httptest can see this — the server ships the same bytes whether
+// or not the browser fetches them.
 func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
-		Raw:          `<link rel="stylesheet" href="` + origin + `/app.css">`,
-		StyleOrigins: []string{origin},
+		Assets: via.Assets{Styles: []via.Style{{Href: origin + "/app.css"}}},
 	}))
 	s := vtbrowser.Open(t, app)
 	s.WaitEvalTrue(styledIsRed, "the declared off-origin stylesheet loaded and applied under the derived CSP")
@@ -474,15 +473,15 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 }
 
 // The other half of the same claim: the policy is exactly as wide as what was
-// declared. An @import inside InlineStyle points at an origin the Head never
-// named in StyleOrigins, so style-src does not cover it and the browser
-// blocks it. This is the documented limitation, pinned so it cannot silently
-// become a hole: if StyleOrigins ever widened to a wildcard, this test would
-// go green for the wrong reason and the assertion below would start failing.
+// declared. An @import inside an inline Style points at an origin nothing ever
+// declared, so style-src does not cover it and the browser blocks it. This is
+// the documented limitation, pinned so it cannot silently become a hole: if a
+// declaration ever widened to a wildcard, this test would go green for the
+// wrong reason and the assertion below would start failing.
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
-		InlineStyle: `@import url("` + origin + `/app.css");`,
+		Assets: via.Assets{Styles: []via.Style{{Inline: `@import url("` + origin + `/app.css");`}}},
 	}))
 	s := vtbrowser.Open(t, app)
 	// An @import is a render-blocking subresource: had style-src admitted it, it
@@ -585,4 +584,54 @@ func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online'`,
 		"the tab must re-bootstrap onto the new server instead of reloading once into a dead one")
 	s.WaitTextContains("p", "n: 1")
+}
+
+// --- Per-mount assets, in a real browser ---
+
+// jsCDN serves one off-origin script that stamps a global, so "did it execute"
+// is directly observable.
+func jsCDN(t testing.TB, js string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript")
+		w.Write([]byte(js))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// scriptPage declares its assets from a field fixed at Mount, which is what
+// keeps PageMeta().Assets constant while still pointing at a test server's
+// ephemeral port.
+type scriptPage struct{ Src string }
+
+func (p *scriptPage) PageMeta() via.Meta {
+	return via.Meta{
+		Title: "scripted",
+		Assets: via.Assets{
+			Scripts: []via.Script{
+				{Src: p.Src + "/a.js", Defer: true},
+				{Inline: `window.__inline = true`},
+			},
+			Styles: []via.Style{{Inline: "#styled{color:red}"}},
+		},
+	}
+}
+
+func (p *scriptPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
+
+// The only real proof of the feature: a script a page declared in PageMeta
+// must EXECUTE under that mount's own CSP — an off-origin one by origin, an
+// inline one by hash — and its inline style must apply. Every server-side test
+// passes identically whether the browser ran the script or refused it.
+func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
+	origin := jsCDN(t, `window.__external = true`)
+	r := via.NewRouter()
+	r.Mount("/", scriptPage{Src: origin})
+	s := vtbrowser.Open(t, r)
+
+	s.WaitEvalTrue(`window.__external === true`, "the declared off-origin script executed")
+	s.WaitEvalTrue(`window.__inline === true`, "the declared inline script was admitted by its hash")
+	s.WaitEvalTrue(styledIsRed, "the declared inline style was admitted by its hash")
+	s.RequireCleanConsole() // a CSP-blocked script surfaces as a console error
 }

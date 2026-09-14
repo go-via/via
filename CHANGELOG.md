@@ -43,20 +43,50 @@ the v2 core. **Requires Go 1.27.**
   framed separately off the dirty set, so a signal change with an unchanged DOM
   still ships, and so does the reverse.
 
-- **`via.Titler` — a page names itself.** `via.WithHead` is router-wide, so
-  every page in a multi-page app shared one `<title>`. A root composition now
-  declares its own by having a `Title() string` method, duck-typed like
-  `OnInit` and read after it (and after `OnReload`), so a data-dependent title
-  works. Only the MOUNTED root's counts — an embedded child's is ignored, and
-  `Embed` logs one line naming the type, because a shared per-request head
-  would let any nested unit silently rename the page. The value is
-  HTML-escaped and touches no CSP-relevant slot: the `Head` still owns lang,
-  raw markup, the inline stylesheet and every origin list, so a page cannot
-  widen its own policy. It shapes the document, so it lands on a render that
-  writes one (the GET, a native form submit), not on an SSE push. `Mount` and
-  `Embed` extend the hook check to it: a method named `Title` with the wrong
-  signature panics at boot, and a near-miss name (`PageTitle`, `GetTitle`, …)
-  carrying `func() string` on a type implementing no `via.Titler` is logged.
+- **`via.PageMetaer` — a page describes itself, and owns its own CSP.** A root
+  composition declares its document with one `PageMeta() via.Meta` method,
+  duck-typed like `OnInit` and read after it (and after `OnReload`), so
+  data-dependent metadata works. `Meta` carries `Title`, `Description`,
+  `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to vary
+  with the request — plus `Assets`, which is not. Only the MOUNTED root's counts:
+  an embedded child's is ignored and `Embed` logs one line naming the type,
+  because a shared per-request head would let any nested unit silently rename
+  the page.
+
+  `Meta.Assets` (`Script`, `Style`, `Preload`, `FontOrigins`) makes the
+  **Content-Security-Policy per mount**: it is built once at `Mount` from the
+  router-wide `Head.Assets` plus that page's own — one string per mount, zero
+  work per request — so one page's CDN never widens another page's policy. A
+  relative URL is covered by `'self'`, an absolute one contributes its origin,
+  an inline script or style is admitted by the sha256 of its exact bytes, and a
+  `Preload` widens the directive its `As` names. Element-patch responses keep
+  the floor policy: a fragment loads nothing.
+
+  Because the policy is built before any request, `Assets` MUST be a constant of
+  the type. via re-reads it on every document render and panics if it moved —
+  a data-dependent script src is caught on the first GET instead of being
+  silently blocked in the browser. Boot-time validation panics on a `Script`
+  setting both or neither of `Src`/`Inline`, an `Inline` containing `</script`
+  or `</style`, an absolute URL that is not http(s), and a `Preload.As` outside
+  script/style/font/image.
+
+  `Mount` and `Embed` extend the hook check to it: a method named `PageMeta`
+  with the wrong signature panics at boot, and a near-miss name (`Meta`,
+  `Metadata`, …) carrying `func() via.Meta` on a type implementing no
+  `via.PageMetaer` is logged.
+
+- **BREAKING: `Head` is now `{Lang, Raw, Assets}`.** `Head.Title` is
+  `PageMeta().Title`; `Head.InlineStyle` is `Assets.Styles`; `ScriptOrigins` and
+  `StyleOrigins` are gone — declare the script or stylesheet itself and via
+  derives the origin; `Head.FontOrigins` moved to `Assets.FontOrigins`. The
+  `Title() string` hook and `via.Titler` are gone (a leftover `Title` method is
+  warned about at boot).
+
+- **`Head.Raw` refuses scripts and styles.** via emits `Raw` verbatim and never
+  parses it, so `buildCSP` never saw an inline `<script>` hidden in there: the
+  browser blocked it with no via-side signal at all. A `Raw` containing
+  `<script` or `<style` now panics at startup, naming `Head.Assets` as the place
+  to declare it.
 
 - **`Ctx.OnConnect` and `Ctx.OnDispose` warn when called too late.** Both
   appended silently to a snapshot nobody reads again when called after `OnInit`
