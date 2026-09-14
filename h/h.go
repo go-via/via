@@ -1,16 +1,65 @@
-// Package h is the via HTML DSL and renderer.
+// Package h is the via HTML DSL: markup as ordinary Go function calls.
 //
-// The tree is built from a single sealed interface, H. Two flavours implement
-// it: element/text nodes (rendered in the element body) and attributes
-// (rendered inside the opening tag). The Attr marker partitions the two.
+// # Three kinds of node
 //
-// Hard guarantees of this package: no user-facing identifier strings beyond the
-// tag/attr names the caller passes, no reflection, no any in the element/child
-// signatures, no closures required at user call sites. stdlib only.
+// Everything is an [H], a sealed interface, and a view is nothing but nested
+// calls:
 //
-// The renderer/binder plumbing that lets the via package drive dynamic
-// signal/action slots is internal; h exposes only the user vocabulary:
-// elements, attributes, and Str.
+//		h.Div(h.Class("row"), h.Href("/x"), h.Span(h.Str("hi")))
+//
+//	  - ELEMENTS are one exported function per HTML5 tag, named after the tag
+//	    with the first letter capitalised: h.Div, h.Ul, h.Textarea, h.Blockquote.
+//	    They take children variadically and return H. The table lives in
+//	    elements.go. A handful of tags are deliberately absent — html, head,
+//	    body, script, style, title, base, meta, link, template, slot, data —
+//	    because via owns the document shell and the CSP'd asset tags; declare
+//	    those through via.Head / via.Meta instead. Anything else exotic goes
+//	    through [El].
+//	  - ATTRIBUTES are one exported function per attribute, named the same way:
+//	    h.Class, h.Name, h.Type, h.Value, h.Placeholder, h.Href, h.Disabled. The
+//	    table lives in attrs.go (URL-valued ones in url.go). They return [Attr],
+//	    which is itself an H, so attributes and children share one argument list
+//	    and may be interleaved in any order — the renderer sorts them into the
+//	    opening tag. Boolean attributes (h.Disabled, h.Required, h.Checked) take
+//	    a bool and render as a bare name when true and as NOTHING when false,
+//	    because disabled="false" still disables a control. [RawAttr] spells an
+//	    attribute h has no helper for.
+//	  - TEXT is [Str], which accepts a string or any built-in numeric type, so
+//	    h.Str(count) needs no strconv call.
+//
+// A nil H renders as nothing, so a conditional child costs nothing; prefer
+// via.When and via.Each for a readable one.
+//
+// # Escaping
+//
+// Text and attribute VALUES are HTML-escaped at render time, always, with no
+// opt-out: there is no raw-HTML constructor anywhere in this package, and H is
+// sealed so no other package can add one. URL-bearing attributes (h.Href,
+// h.Src, h.Action, and a via Redirect target) are additionally scheme-checked,
+// so a javascript: or data: URL arriving from user data is dropped rather than
+// rendered. Attribute NAMES are not escaped — they are validated against an
+// allowlist and an invalid one PANICS, on the reasoning that a name is written
+// by the programmer and never taken from a request.
+//
+// # The Datastar escape hatch
+//
+// via generates the data-* attributes that make a page live (via.On,
+// Signal.Bind, State.Display). [Data] is the door to the rest of Datastar's
+// vocabulary for the cases the typed API does not cover:
+//
+//	h.Div(h.Data("show", p.Open.Ref()), ...)   // renders data-show="$open"
+//
+// Data validates the key the same way RawAttr does and escapes the expression.
+// Note that Datastar splits a key on ":", so data-attr-value must be written as
+// h.Data("attr:value", …) — and no Go test can catch the difference.
+//
+// # Guarantees
+//
+// No user-facing identifier strings beyond the tag/attr names the caller
+// passes, no reflection, no any in the element/child signatures, no closures
+// required at a call site, stdlib only. The renderer/binder plumbing via uses
+// to drive dynamic signal and action slots is internal; h exposes only the
+// vocabulary: elements, attributes, and Str.
 package h
 
 import (
