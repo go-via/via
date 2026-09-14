@@ -30,11 +30,20 @@ func (p *Pulse) beat(ctx *via.Ctx) { p.Beats.Set(p.Beats.Get() + 1) }
 func (p *Pulse) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Server pulse")),
-		h.P(h.Str("beats since you connected: "), p.Beats.Display()),
+		h.P(h.ID("pulse-state"), h.Str("beats since you connected: "), p.Beats.Display()),
 	)
 }
 
 func main() {
-	http.Handle("/", via.Handler(Pulse{}))
+	// via publishes the live connection's state as data-via-connection on
+	// <html>, so an app can style its own UI for a drop instead of taking the
+	// library's default banner as its only affordance. Nothing else in this
+	// file reacts to a lost stream — this one rule is the whole integration.
+	http.Handle("/", via.Handler(Pulse{}, via.WithHead(via.Head{
+		Title: "Server pulse",
+		InlineStyle: `[data-via-connection="offline"] body{opacity:.5}` +
+			`[data-via-connection="offline"] #pulse-state::after{content:" (disconnected)"}` +
+			`[data-via-connection="connecting"] #pulse-state::after{content:" (reconnecting...)"}`,
+	})))
 	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
 }

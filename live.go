@@ -112,7 +112,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("via: panic in a Listen handler: %v\n%s", r, debug.Stack())
+			log.Printf("via: panic in a Listen handler [unit=%T]: %v\n%s", c.embedV.v, r, debug.Stack())
 		}
 	}()
 	handler(c, v)

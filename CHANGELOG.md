@@ -21,6 +21,30 @@ the v2 core. **Requires Go 1.27.**
   refused `503`. Call it before `http.Server.Shutdown`; it is safe to call
   more than once.
 
+- **A clean stream close now reaches the user.** The bundled Datastar client
+  defaults each `@post` to `retry:"auto"`, and under `"auto"` a response body
+  that simply ENDS resolves rather than retrying: it fires `finished` and never
+  `retrying`/`retries-failed`. So a graceful deploy — or `Router.Close` — left
+  every tab looking alive while every click answered `410`, with nothing on
+  screen and nothing in the log. The reconnect manager now reads `finished` on
+  the SSE `@post` (the one fetch mounted on `<body>`) as a drop: banner,
+  `data-via-connection="offline"`, and the existing jittered reload. It also
+  listens for Datastar's `datastar-fetch` `error` events — a `410` reloads the
+  stale tab once, a `403`/`5xx` shows the banner without a reload loop.
+
+- **One 410 became three answers.** A dispatch that could not run answered
+  `410 stream closed` whether the tab had gone, the client had hung up, or the
+  connection's goroutine was pinned inside a blocking `Tick`/`Listen`/action
+  handler. The pinned case — which also stops keepalives, so the connection is
+  cut by a proxy and the goroutine leaks for the life of the process — now
+  answers `503 stream busy` and logs once per tab with the tab id and the unit
+  type. A session-store outage during a dispatch answers `503 session store
+  unavailable` instead of `403 session mismatch`, matching what the connect
+  already did. A refusal at the stream cap, and every live panic, now carry the
+  tab, unit and action in the log; the unknown-action log (which prints the
+  render's whole action table) is deduped per id so a garbage-id loop cannot
+  dump it at line rate.
+
 - **`StateOf` / `ListOf`.** `State[T]` holds its value in an unexported field,
   so a parent could not seed an embedded child's state from a composite
   literal — which is exactly what `Embed` asks you to do. `via.StateOf("lobby")`

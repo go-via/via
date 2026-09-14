@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-via/via/internal/hcore"
 )
@@ -76,6 +77,26 @@ func (m *mount) warnNoChange(act, name string, v any) {
 		act, name)
 }
 
+// warnAtCapacity breaks the silence of a router-wide refusal. The cap is
+// router-wide with no per-IP share, so one client CAN fill it and lock every
+// other tab out; a per-IP cap is a 1.0 change, but the operator at least has to
+// be told which wall was hit and which knob moves it.
+//
+// Rate-limited to one line a minute rather than deduped for the life of the
+// process: unlike a wiring mistake, being at capacity comes and goes, and a
+// refusal storm would otherwise be the loudest thing in the log.
+func (m *mount) warnAtCapacity(open int64) {
+	now := time.Now().UnixNano()
+	last := m.capWarn.Load()
+	if now-last < int64(time.Minute) || !m.capWarn.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf("via: refusing an SSE connect with 503: %d of %d live streams already open for this router. "+
+		"There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused "+
+		"until one closes. The limit is the maxSSEConn constant — raise it only with the memory to back it.",
+		open, m.maxLive)
+}
+
 // actionResult is what running an action produced. On the live path it all
 // happens on the connection's own goroutine, so every outcome has to be
 // carried back across the channel rather than answered where it occurred.
@@ -88,6 +109,10 @@ type actionResult struct {
 	initErr   error  // live only: the post-action OnInit re-run failed (see reloadUnit)
 	forbidden string // live only: the session-bound check rejected the request
 	paramMiss bool   // live only: a Param segment did not decode — 404, as on the plain path
+	// unavailable is a 503: the request was well-formed and the tab is live,
+	// but a dependency (the session store) could not answer. Distinct from
+	// forbidden so a store blip stops being reported as a security rejection.
+	unavailable string
 }
 
 // mount bundles a page's per-request wiring, shared by its GET, action, and
@@ -101,7 +126,8 @@ type mount struct {
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
 	maxLive     int
-	noChange    *sync.Map // the Router's dead-click warning dedupe (see warnNoChange)
+	noChange    *sync.Map     // the Router's dead-click warning dedupe (see warnNoChange, unknownAction)
+	capWarn     *atomic.Int64 // unix nanos of the last at-capacity log, router-wide (see warnAtCapacity)
 	// routerCtx bounds every stream this mount opens, so Router.Close can end
 	// them; live counts the streams still running, so Close can wait.
 	routerCtx context.Context
@@ -242,7 +268,7 @@ func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (m
 // wait is bounded by req.Context() as well as the connection closing, so a
 // stalled peer elsewhere can't park this POST's goroutine forever.
 func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, embed string, act string, in map[string]json.RawMessage, base string) {
-	res, ok := lc.run(req.Context(), func() actionResult {
+	res, outcome := lc.run(req.Context(), func() actionResult {
 		// A queued closure runs regardless of what its caller did meanwhile: if
 		// req.Context() is already done, run has given up and answered 410, so
 		// applying the action now would double-apply on a client retry, and w
@@ -260,7 +286,14 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 			// Rotate moves the pointer to a new id, never a new data object).
 			// Otherwise a leaked tab id is a bearer credential good from any
 			// request, session or none, once the origin floor is open.
-			_, s, _ := m.sessions.resolve(req)
+			// The store error is kept, not discarded: a store that could not
+			// answer yields s == nil, which used to read as "wrong session"
+			// and answer 403. A blip is not a rejection, and the developer got
+			// only sess.go's "Load failed" with nothing tying it to the 403.
+			_, s, err := m.sessions.resolve(req)
+			if err != nil {
+				return actionResult{unavailable: "session store unavailable"}
+			}
 			if s == nil || s.sid != bound {
 				return actionResult{forbidden: "session mismatch"}
 			}
@@ -276,12 +309,25 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		}
 		a, ok := u.actions[act]
 		if !ok {
-			return actionResult{gone: unknownAction(u, act)}
+			return actionResult{gone: m.unknownAction(u, act)}
 		}
 		return liveRunAction(w, req, m.sessions, lc, u, in, a)
 	})
-	if !ok {
+	switch outcome {
+	case runPinned:
+		// 503, not 410: the tab is fine and the action is legitimate — this
+		// connection's goroutine is simply not answering. See warnPinned.
+		http.Error(w, "stream busy", http.StatusServiceUnavailable)
+		return
+	case runClosed:
 		http.Error(w, "stream closed", http.StatusGone)
+		return
+	case runAbandoned:
+		http.Error(w, "request abandoned", http.StatusGone)
+		return
+	}
+	if res.unavailable != "" {
+		http.Error(w, res.unavailable, http.StatusServiceUnavailable)
 		return
 	}
 	if res.forbidden != "" {
@@ -350,7 +396,8 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				res = actionResult{paramMiss: true}
 				return
 			}
-			log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
+			log.Printf("via: live action panic [tab=%s unit=%T act=%s]: %v\n%s",
+				lc.id, unit.embedV.v, act.name, rec, debug.Stack())
 			res = actionResult{panicked: true}
 		}
 	}()
@@ -427,13 +474,20 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // closed, or (the common wiring mistake) an OnInit that failed to restore the
 // UI state the View branches on. The bound list goes to the log only: it is a
 // map of the render's Go type and method names.
-func unknownAction(u *Ctx, act string) string {
-	have := make([]string, 0, len(u.actions))
-	for id, a := range u.actions {
-		have = append(have, id+" ("+a.name+")")
+//
+// Deduped per unknown id per process, like warnNoChange: the line dumps the
+// whole action table, so an unauthenticated POST loop over garbage ids would
+// otherwise print the render's method names at line rate — a log-flood
+// amplifier and a disclosure channel in one.
+func (m *mount) unknownAction(u *Ctx, act string) string {
+	if _, dup := m.noChange.LoadOrStore("unknownAction\x00"+act, struct{}{}); !dup {
+		have := make([]string, 0, len(u.actions))
+		for id, a := range u.actions {
+			have = append(have, id+" ("+a.name+")")
+		}
+		sort.Strings(have)
+		log.Printf("via: no such action %s; this render binds: %s", act, strings.Join(have, ", "))
 	}
-	sort.Strings(have)
-	log.Printf("via: no such action %s; this render binds: %s", act, strings.Join(have, ", "))
 	return "no such action " + act + "; this render does not bind it"
 }
 
@@ -519,7 +573,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	}
 	authAct, ok := ua.actions[act]
 	if !ok {
-		http.Error(w, unknownAction(ua, act), http.StatusGone)
+		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
 		return
 	}
 	u := bind.unit(embed)
@@ -538,7 +592,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	}
 	a, ok := u.actions[act]
 	if !ok {
-		http.Error(w, unknownAction(u, act), http.StatusGone)
+		http.Error(w, m.unknownAction(u, act), http.StatusGone)
 		return
 	}
 	// The intersection is per (handler, ARG), not per handler: a posted signal

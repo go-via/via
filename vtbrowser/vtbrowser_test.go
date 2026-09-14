@@ -499,3 +499,62 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	// simply not applying is the whole of the evidence — and RequireCleanConsole
 	// would be wrong here either way, since a block is the expected outcome.
 }
+
+// The 3am case a headless assertion cannot see: a graceful shutdown ends every
+// stream by RETURNING, i.e. a clean 200 close. The bundled datastar.js defaults
+// each @post to retry:"auto", and under "auto" a body that ends falls through
+// to its resolve path — it fires `finished` and never `retrying` or
+// `retries-failed`. The manager used to read `finished` as "all good" and hide
+// the banner, so the tab looked alive while every click 410'd, with nothing on
+// screen and nothing in the log.
+//
+// Router.Close is that exact close, from inside the library. After it the tab
+// must say offline and show the banner.
+func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
+	r := via.NewRouter()
+	r.Mount("/", liveTicker{})
+	s := vtbrowser.Open(t, r)
+	s.WaitLiveConnected()
+	s.WaitTextContains("p", "n: 1")
+
+	r.Close()
+
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
+		"a clean stream close must mark the connection offline")
+	s.WaitEvalTrue(`(function(){var b=document.getElementById('via-reconnect-banner');`+
+		`return !!b&&b.style.display!=='none'&&b.textContent.length>0})()`,
+		"a clean stream close must put a visible banner on screen")
+}
+
+// Datastar's fetch driver reports a >= 400 response through a `datastar-fetch`
+// event of type "error" carrying the code as a string in detail.argsRaw.status
+// (its onopen hook, in the bundled datastar.js). A 410 means this tab is stale
+// — its stream is gone, or the current render no longer binds the action — and
+// only a reload fixes it. A 403/5xx is the server's condition, and reloading
+// into it would be a loop, so that one is a banner and nothing more.
+//
+// Driven by dispatching the event directly: what is under test is the
+// manager's branch table, and provoking a real 410 and a real 403 on the same
+// page would confound them with the stream close.
+func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(clicker{}))
+	s.WaitLiveConnected()
+
+	const fire = `(function(s){document.dispatchEvent(new CustomEvent('datastar-fetch',` +
+		`{detail:{type:'error',el:document.body,argsRaw:{status:s}}}));return true})`
+
+	var ok bool
+	s.Eval(`(function(){window.__probe=1;return true})()`, &ok)
+	s.Eval(fire+`('403')`, &ok)
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
+		"a 403 must be surfaced as a lost connection")
+	s.Sleep(2500 * time.Millisecond) // longer than the manager's 500-2000ms reload jitter
+	var probe int
+	s.Eval(`window.__probe||0`, &probe)
+	if probe != 1 {
+		t.Fatal("a 403 must not reload: the server would answer the same way again")
+	}
+
+	s.Eval(fire+`('410')`, &ok)
+	s.WaitEvalTrue(`window.__probe===undefined`, "a 410 means the page is stale and must reload")
+}

@@ -115,13 +115,13 @@ func (s *stream) abort() {
 // push item pushes only its own embed's container. It always loops, even with
 // no ticks or subs, so an interactive-only embed still receives actions and
 // beats; disposers run on exit.
-func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepalive func(), interval time.Duration) {
+func runStream(reqCtx context.Context, label string, embeds []*Ctx, pushq chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
 		for _, embed := range embeds {
 			for _, d := range embed.disposers {
 				// runPushItem, not a bare call: a disposer is user code, and one
 				// panicking must not skip the rest and leak what they release.
-				runPushItem(d)
+				runPushItem(label, d)
 			}
 		}
 	}()
@@ -146,7 +146,7 @@ func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepali
 	sweep := func() {
 		for _, l := range listeners {
 			if work := l.poll(); work != nil {
-				runPushItem(work)
+				runPushItem(label, work)
 			}
 		}
 	}
@@ -157,11 +157,11 @@ func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepali
 		case <-reqCtx.Done():
 			return
 		case fn := <-pushq:
-			runPushItem(fn)
+			runPushItem(label, fn)
 		case <-wake:
 			sweep()
 		case <-beat.C:
-			runPushItem(keepalive)
+			runPushItem(label, keepalive)
 		}
 	}
 }
@@ -169,11 +169,13 @@ func runStream(reqCtx context.Context, embeds []*Ctx, pushq chan func(), keepali
 // runPushItem recovers per item, so one bad render logs and drops that item
 // instead of unwinding runStream: an action's result is already sent to the
 // waiting POST by the time pushWork runs, so without this the stream would die
-// silently after a 204 the client already saw as success.
-func runPushItem(fn func()) {
+// silently after a 204 the client already saw as success. label carries the
+// connection's identity, so a busy deploy's stacks group by tab and unit
+// instead of being read one by one.
+func runPushItem(label string, fn func()) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: live push panic: %v\n%s", rec, debug.Stack())
+			log.Printf("via: live push panic%s: %v\n%s", label, rec, debug.Stack())
 		}
 	}()
 	fn()

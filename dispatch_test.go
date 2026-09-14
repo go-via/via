@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"regexp"
 	"strconv"
@@ -1250,11 +1252,20 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 	status, _ := app.Action(0).Raw(url).Body(`{"idx":99}`).Over(conn).Fire()
 	require.Equal(t, http.StatusBadRequest, status)
 
-	// Two ticks: the first could still be the one that raced the dispatch.
-	frame := conn.Await("seen: ")
-	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
-	frame = conn.Await("seen: ")
-	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+	// Drained rather than counted: the 5ms tick keeps frames in the pipe that
+	// were rendered BEFORE the dispatch, and under load there are more than the
+	// two this used to assume — so "the second frame" was sometimes a stale one
+	// that had never seen the posted value. The invariant under test holds on
+	// every frame regardless; only the display value needs the first
+	// post-dispatch frame.
+	var frame string
+	for range 20 {
+		frame = conn.Await("seen: ")
+		assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
+		if strings.Contains(frame, ">99<") {
+			break
+		}
+	}
 	// The client still sees what it posted — the display render is unchanged.
 	assert.Contains(t, frame, ">99<", "the display render must still show what the client posted")
 }
@@ -2031,4 +2042,210 @@ func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 			assert.NotContains(t, frame, "ATTACKER/two")
 		})
 	}
+}
+
+// pinnedLive holds the connection's single goroutine hostage inside a Tick
+// handler — the exact shape a blocking call in user code produces: keepalives
+// stop too, so the connection is torn down by a proxy and the goroutine leaks
+// for the life of the process.
+type pinnedLive struct {
+	n      via.State[int]
+	block  chan struct{}
+	pinned chan struct{} // buffered: signalled without blocking, on every beat
+}
+
+func (p *pinnedLive) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(5*time.Millisecond, p.hold)
+	return nil
+}
+
+func (p *pinnedLive) hold(ctx *via.Ctx) {
+	select {
+	case p.pinned <- struct{}{}:
+	default:
+	}
+	<-p.block
+}
+
+func (p *pinnedLive) Bump(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
+
+func (p *pinnedLive) View() h.H {
+	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump), h.Str("+")))
+}
+
+// A blocked Tick/Listen/action handler owns the connection's goroutine, so the
+// dispatch never reaches it. Answering 410 "stream closed" blamed the client
+// for a server-side hang and told the operator nothing — the tab and its stream
+// are both fine. It must be a 503 (the condition is transient and server-side)
+// and it must say so in the log, once, with the tab id and the unit type.
+func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
+	restore := via.SetPinnedDeadlineForTest(150 * time.Millisecond)
+	defer restore()
+
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	p := pinnedLive{block: make(chan struct{}), pinned: make(chan struct{}, 1)}
+	defer close(p.block)
+	app := vt.Serve(t, via.Handler(p))
+	conn := app.Connect()
+	defer conn.Close()
+	select {
+	case <-p.pinned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("precondition: the tick handler never took the connection goroutine")
+	}
+
+	for range 3 {
+		status, body := app.Action(0).Over(conn).Fire()
+		assert.Equal(t, http.StatusServiceUnavailable, status,
+			"a dispatch onto a pinned goroutine is a server-side stall, not a closed stream")
+		assert.Contains(t, body, "stream busy")
+	}
+
+	out := logs.String()
+	assert.Contains(t, out, "queue not drained",
+		"a pinned connection must be named in the log — nothing else reports it")
+	assert.Contains(t, out, "tab="+conn.TabID())
+	assert.Contains(t, out, "via_test.pinnedLive", "the log must name the unit type to go read")
+	assert.Equal(t, 1, strings.Count(out, "queue not drained"),
+		"a pinned goroutine stays pinned; one line per connection, not one per click")
+}
+
+// A dispatch on a session-bound connection compares the request's session with
+// the connection's. When the STORE cannot answer, the resolve yields no session
+// — which used to read as "wrong session" and answer 403, reporting a backend
+// blip as a security rejection while the only log line was sess.go's "Load
+// failed" with nothing tying it to the refusal. A store outage is a 503, the
+// same answer the connect already gives.
+func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
+	t.Parallel()
+	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
+	app := vt.Serve(t, via.Handler(sessBoundLive{},
+		via.WithSessionStore(store),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Less(t, status, 300, "precondition: the bound connection dispatches while the store is up")
+
+	store.mu.Lock()
+	store.down = true
+	store.mu.Unlock()
+
+	status, body := app.Action(0).Over(conn).Fire()
+	assert.Equal(t, http.StatusServiceUnavailable, status,
+		"a store that cannot answer is an outage, not a session mismatch")
+	assert.Contains(t, body, "session store unavailable")
+	assert.NotContains(t, body, "session mismatch")
+}
+
+// sessBoundLive establishes a session in OnInit so its stream is bound to one,
+// which is what puts a dispatch on the session-compare path.
+type sessBoundLive struct{ n via.State[int] }
+
+func (s *sessBoundLive) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(member{Name: "bob"})
+	return nil
+}
+func (s *sessBoundLive) Bump(ctx *via.Ctx) { s.n.Set(s.n.Get() + 1) }
+func (s *sessBoundLive) View() h.H {
+	return h.Div(s.n.Display(), h.Button(via.On("click", s.Bump), h.Str("+")))
+}
+
+// The unknown-action log prints the render's whole action table — every bound
+// id and the Go method name behind it. Unthrottled, a client posting garbage
+// ids dumps that table at line rate: a log-flood amplifier and a disclosure
+// channel at once. One line per distinct unknown id, like warnNoChange.
+func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	app := vt.Serve(t, via.Handler(bumpLive{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	for range 5 {
+		status, _ := app.Action(0).Over(conn).Raw("/_via/a/r/deadbeef").Fire()
+		require.Equal(t, http.StatusGone, status)
+	}
+	for range 5 {
+		status, _ := app.Action(0).Over(conn).Raw("/_via/a/r/cafebabe").Fire()
+		require.Equal(t, http.StatusGone, status)
+	}
+
+	out := logs.String()
+	assert.Equal(t, 1, strings.Count(out, "no such action deadbeef"),
+		"a repeated garbage id must not re-dump the action table")
+	assert.Equal(t, 1, strings.Count(out, "no such action cafebabe"),
+		"the dedupe is per id, so a genuinely new mistake is still reported")
+}
+
+// bumpLive is the minimal live, session-free unit with one action.
+type bumpLive struct{ n via.State[int] }
+
+func (b *bumpLive) Bump(ctx *via.Ctx) { b.n.Set(b.n.Get() + 1) }
+func (b *bumpLive) View() h.H {
+	return h.Div(b.n.Display(), h.Button(via.On("click", b.Bump), h.Str("+")))
+}
+
+// A 503 at the connection cap told nobody anything: the operator saw tabs fail
+// to go live with no line in the log naming the wall they hit. Rate-limited
+// rather than deduped forever — being at capacity comes and goes, unlike a
+// wiring mistake.
+func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	restore := via.SetMaxSSEConnForTest(1)
+	app := vt.Serve(t, via.Handler(bumpLive{}))
+	restore()
+
+	conn := app.Connect()
+	defer conn.Close()
+
+	for range 3 {
+		status, body := app.Action(0).Over(conn).Raw("/_via/sse").Fire()
+		require.Equal(t, http.StatusServiceUnavailable, status)
+		require.Contains(t, body, "stream capacity reached")
+	}
+
+	out := logs.String()
+	assert.Contains(t, out, "1 of 1 live streams", "the log must name the current count and the cap")
+	assert.Contains(t, out, "maxSSEConn", "the log must name the knob that moves the wall")
+	assert.Equal(t, 1, strings.Count(out, "refusing an SSE connect"),
+		"a refusal storm must not become the loudest thing in the log")
+}
+
+// A panic's stack says where, never which tab or which unit. On a busy deploy
+// that is the difference between grouping the failures and reading them one by
+// one.
+func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	app := vt.Serve(t, via.Handler(panicLive{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusInternalServerError, status)
+
+	out := logs.String()
+	assert.Contains(t, out, "tab="+conn.TabID(), "a panic log must carry the tab it came from")
+	assert.Contains(t, out, "unit=*via_test.panicLive", "a panic log must name the unit type")
+	assert.Contains(t, out, "panicLive).Boom", "a panic log must name the action that blew up")
 }

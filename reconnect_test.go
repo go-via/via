@@ -27,6 +27,11 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 		"n>=2",                    // terminal state: max 2 reloads, then a pinned banner
 		"data-via-connection",     // connection-status attribute for app CSS
 		"datastar-patch-elements", // a patch is the only "alive again" signal
+		"d.el===document.body",    // a clean close of the SSE @post IS a drop (blocker: retry:"auto" fires only 'finished')
+		"'error'",                 // datastar-fetch error carries the HTTP status
+		"argsRaw",                 // ...in detail.argsRaw.status, per the bundled datastar.js
+		"s===410",                 // a stale tab reloads once
+		"s===403||s>=500",         // a server-side refusal is a banner, never a reload loop
 	} {
 		assert.Contains(t, body, want, "streaming page missing reconnect-manager fragment")
 	}

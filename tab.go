@@ -6,6 +6,8 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // tabStream is a connected tab's live units, kept in the registry so a POST
@@ -25,6 +27,9 @@ type tabStream struct {
 	// action reaches them through pushq — so neither takes mu.
 	client map[string]json.RawMessage // the slots the client last posted, re-applied to every DISPLAY render (livePush)
 	rev    *revertSet                 // how to undo that application before the next AUTHORITY render
+
+	id           string      // the per-connection tab id, for correlating a log line with a tab
+	pinnedLogged atomic.Bool // warnPinned is once per connection, not once per click
 }
 
 // boundSession is guarded because a live action can bind it after connect,
@@ -102,24 +107,47 @@ func (c *tabStream) replace(u *Ctx) {
 	c.units[unitAddr(u)] = u
 }
 
+// runOutcome says WHY a dispatch did not produce a result. One 410 for three
+// unrelated causes was the whole defect: a closed tab, a client that hung up,
+// and an embed goroutine pinned by a blocking Tick/Listen/action handler are
+// three different operational problems and only the first is the client's to
+// fix.
+type runOutcome int
+
+const (
+	runOK runOutcome = iota
+	runClosed
+	runAbandoned
+	runPinned
+)
+
+// pinnedDeadline is how long a dispatch waits for the embed goroutine to reach
+// it before declaring the goroutine pinned. Well past any sane handler, and
+// short enough to answer before a load balancer or client deadline does — the
+// old code waited on req.Context() alone, so the pinned case was invisible and
+// arrived as a 410 that blamed the client.
+var pinnedDeadline = 5 * time.Second
+
 // run posts fn onto the embed goroutine and WAITS for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
 // triggered it. The result channel is buffered so a late send never blocks a
-// goroutine that already gave up, and every wait is guarded on both c.done and
-// reqCtx so a POST racing a closed tab, or one whose deadline fires while the
-// goroutine is busy elsewhere, returns false (→ 410) instead of blocking.
+// goroutine that already gave up, and every wait is guarded on c.done, reqCtx
+// and pinnedDeadline so a POST racing a closed tab, one whose client hung up,
+// and one whose goroutine never arrives are told apart rather than collapsed.
 //
 // res.pushWork runs AFTER result is sent, still on this goroutine: the POST
 // proceeds at once while pushWork stays serialized in the order its mutation
 // ran. A detached goroutine would race other actions' and push out of order.
-func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionResult, bool) {
+func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionResult, runOutcome) {
 	result := make(chan actionResult, 1)
+	pinned := time.NewTimer(pinnedDeadline)
+	defer pinned.Stop()
 	select {
 	case c.pushq <- func() {
 		var res actionResult
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("via: live action panic: %v\n%s", rec, debug.Stack())
+				log.Printf("via: live action panic [tab=%s unit=%s]: %v\n%s", c.id, c.unitType(), rec, debug.Stack())
 				res = actionResult{panicked: true}
 			}
 			result <- res
@@ -130,18 +158,50 @@ func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionR
 		res = fn()
 	}:
 	case <-c.done:
-		return actionResult{}, false
+		return actionResult{}, runClosed
 	case <-reqCtx.Done():
-		return actionResult{}, false
+		return actionResult{}, runAbandoned
+	case <-pinned.C:
+		c.warnPinned()
+		return actionResult{}, runPinned
 	}
 	select {
 	case res := <-result:
-		return res, true
+		return res, runOK
 	case <-c.done:
-		return actionResult{}, false
+		return actionResult{}, runClosed
 	case <-reqCtx.Done():
-		return actionResult{}, false
+		return actionResult{}, runAbandoned
+	case <-pinned.C:
+		c.warnPinned()
+		return actionResult{}, runPinned
 	}
+}
+
+// unitType names the Go type driving this connection, for a log line that has
+// to point at the handler to go read.
+func (c *tabStream) unitType() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if u := c.units[rootAddr]; u != nil && u.embedV.typ != nil {
+		return u.embedV.typ.String()
+	}
+	return "unknown"
+}
+
+// warnPinned fires once per connection: a pinned goroutine stays pinned, and
+// every subsequent click would repeat the line. Keepalives stop too
+// (runStream's beat is on the same goroutine), so the connection is torn down
+// by a proxy and silently leaked for the life of the process — this line is the
+// only signal that happened.
+func (c *tabStream) warnPinned() {
+	if c.pinnedLogged.Swap(true) {
+		return
+	}
+	log.Printf("via: live action queue not drained within %s [tab=%s unit=%s] — the connection's goroutine is "+
+		"blocked inside a Tick, Listen or action handler, so its keepalives have stopped too and every action on "+
+		"this tab answers 503 until it returns. Move blocking work off the handler.",
+		pinnedDeadline, c.id, c.unitType())
 }
 
 // registry maps a per-connection tab id to its live embed. A local of each
