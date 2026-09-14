@@ -74,17 +74,14 @@ func (hd Head) validate() {
 // the app's own markup, and "</style" — the one sequence that could end the
 // element early — is rejected at startup.
 //
-// page is the per-request override (see Ctx.Title): a non-empty title replaces
-// the router-wide one and a non-empty description adds the meta element. Both
-// are escaped here, and neither touches the CSP — which is why a page is
-// allowed to set them and not the rest of the Head.
-func (hd Head) render(b *strings.Builder, page pageHead) {
+// page is the root composition's own declaration (see [Titler]): a non-empty
+// title replaces the router-wide one. It is escaped here and touches no CSP
+// slot — which is why a page is allowed to declare it and not the rest of the
+// Head.
+func (hd Head) render(b *strings.Builder, page string) {
 	title := hd.Title
-	if page.title != "" {
-		title = page.title
-	}
-	if page.desc != "" {
-		b.WriteString(`<meta name="description" content="` + html.EscapeString(page.desc) + `">`)
+	if page != "" {
+		title = page
 	}
 	if title != "" {
 		b.WriteString("<title>" + html.EscapeString(title) + "</title>")
@@ -145,3 +142,39 @@ func validOrigins(name string, list []string) {
 }
 
 func quote(s string) string { return `"` + s + `"` }
+
+// Titler lets the ROOT page composition name itself, overriding the
+// router-wide [Head].Title — the fix for a multi-page app in which every page
+// otherwise shares one title. It is a method rather than a struct field
+// because a real title is data-dependent, and it runs AFTER OnInit (and
+// OnReload), so the data is already loaded:
+//
+//	func (p *Ticket) Title() string { return "#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject }
+//
+// It shapes the DOCUMENT, so it takes effect on a render that writes one: the
+// GET, and the full-page response to a native <form> submit. An SSE push
+// patches elements inside <body> and never rewrites the head, so a title that
+// changes while a tab is connected does not move the tab strip — render the
+// changing part in the page instead. Returning "" keeps the router-wide title.
+// The value is HTML-escaped.
+//
+// ONLY THE ROOT'S counts. An embedded child's Title is ignored — a nested unit
+// may not rename the page it happens to sit in — and Embed logs one line
+// naming the type when it sees one, because the method looks like it works.
+//
+// There is deliberately no Description sibling: see the duck-typed-method rule
+// in AGENTS.md. A future need is one Meta hook subsuming Title, not a fifth
+// method.
+//
+// Duck-typed like [Initer], so pin it: var _ via.Titler = (*Ticket)(nil).
+type Titler interface{ Title() string }
+
+// pageTitleOf reads the root's declaration at write time — after OnInit and
+// OnReload have loaded the data a title is usually derived from. "" when the
+// root declares none, which keeps the router-wide [Head].Title.
+func pageTitleOf(root any) string {
+	if t, ok := root.(Titler); ok {
+		return t.Title()
+	}
+	return ""
+}

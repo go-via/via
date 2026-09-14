@@ -322,7 +322,6 @@ type Ctx struct {
 	actedInst   instance
 	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
-	page        *pageHead       // the document shell's per-page slots, shared by every Ctx in one request's tree
 	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 }
@@ -733,51 +732,6 @@ func decodeSegment[T any](seg string, name string) T {
 	return v
 }
 
-// pageHead is the per-page half of the document shell. It carries only the two
-// slots that vary page to page and have no security weight: the router-wide
-// [Head] still owns lang, raw markup, the inline stylesheet and every CSP
-// origin, so a page cannot widen its own policy. One instance per request tree,
-// shared by every Ctx in it, so an embedded child naming the page works and the
-// last writer wins.
-type pageHead struct {
-	title string
-	desc  string
-}
-
-// Title sets this page's <title>, overriding the router-wide [Head].Title —
-// the fix for a multi-page app in which every page otherwise shares one title.
-// Call it from OnInit, where the page's data is already loaded:
-//
-//	func (p *Ticket) OnInit(ctx *via.Ctx) error {
-//		p.t = p.store.Get(ctx.Param[int]("id"))
-//		ctx.Title("#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject)
-//		return nil
-//	}
-//
-// It shapes the DOCUMENT, so it takes effect on a render that writes one: the
-// GET, and the full-page response to a native <form> submit. An SSE push
-// patches elements inside <body> and never rewrites the head, so a Title set
-// from a Tick or Listen handler does not move a connected tab's tab-strip —
-// render the changing part in the page instead. The empty string clears the
-// override and the router-wide title applies. The value is HTML-escaped.
-//
-// Calling it outside a request-scoped render (a bare render) is a no-op.
-func (c *Ctx) Title(title string) {
-	if c.page != nil {
-		c.page.title = title
-	}
-}
-
-// Description sets this page's <meta name="description">, the [Ctx.Title]
-// companion; empty (the default) emits no element at all. Same timing rule as
-// Title: it lands on a document render, not on an SSE push. The value is
-// HTML-escaped.
-func (c *Ctx) Description(desc string) {
-	if c.page != nil {
-		c.page.desc = desc
-	}
-}
-
 // Redirect navigates the browser to path after the current handler returns,
 // from anywhere: OnInit (before the View ever renders), OnReload, a PostForm
 // submit, and a Datastar @post action — plain, embedded, or live. path must be
@@ -953,7 +907,6 @@ func inheritRequestScope(ctx, from *Ctx) {
 		return
 	}
 	ctx.doInit = true
-	ctx.page = from.page
 	ctx.req = from.req
 	ctx.sessions = from.sessions
 	ctx.sessW = from.sessW
@@ -977,7 +930,6 @@ func inheritRequestScope(ctx, from *Ctx) {
 // Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
 func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 	ctx := newCtx()
-	ctx.page = &pageHead{}
 	ctx.declare = declareSignals // embeds declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
@@ -1428,13 +1380,4 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	streaming = true
 	runStream(streamCtx, streamLabel, units, listeners, wake, pushq, keepalive, sseHeartbeat)
-}
-
-// pageHead returns this render's per-page head slots, zero when there are none
-// (a bare render).
-func (c *Ctx) pageHead() pageHead {
-	if c.page == nil {
-		return pageHead{}
-	}
-	return *c.page
 }

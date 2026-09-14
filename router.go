@@ -337,7 +337,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
-	checkHooks(rootType, &r.hookWarned)
+	checkHooks(rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
@@ -407,7 +407,7 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 // the strict CSP, then the rendered body. A streaming page also gets the SSE
 // bootstrap and the reconnect manager. via's inline scripts are admitted by
 // hash, so no per-response token is threaded through here.
-func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool, page pageHead) {
+func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string, hasLive bool, page string) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")
@@ -434,10 +434,24 @@ func writeHTMLPage(w http.ResponseWriter, cfg *config, body []byte, base string,
 	w.Write([]byte(`</body></html>`))
 }
 
-// hookNames are via's optional, duck-typed lifecycle hooks. Opting in is having
-// the method; the cost of that is that a typo or a signature drift opts you
+// hookSpecs are via's optional, duck-typed hooks. Opting in is having the
+// method; the cost of that is that a typo or a signature drift opts you
 // silently OUT — the composition still compiles and the hook simply never runs.
-var hookNames = []string{"OnInit", "OnReload"}
+// rootOnly marks the ones only a MOUNTED page's own methods are read from.
+type hookSpec struct {
+	name       string
+	iface      string
+	want       string
+	shaped     func(reflect.Type) bool
+	implements func(reflect.Type) bool
+	rootOnly   bool
+}
+
+var hookSpecs = []hookSpec{
+	{name: "OnInit", iface: "Initer", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Initer]},
+	{name: "OnReload", iface: "Reloader", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Reloader]},
+	{name: "Title", iface: "Titler", want: "func() string", shaped: stringShaped, implements: implementsAs[Titler], rootOnly: true},
+}
 
 // hookAliases maps a plausible mis-spelling to the hook it was surely meant to
 // be. Only consulted for methods that ALSO have the hook signature, which is
@@ -447,6 +461,21 @@ var hookAliases = map[string]string{
 	"OnInitialize": "OnInit", "OnInitialise": "OnInit", "OnStart": "OnInit",
 	"Reload": "OnReload", "OnReloaded": "OnReload", "Refresh": "OnReload",
 	"OnRefresh": "OnReload", "Reinit": "OnReload", "OnReInit": "OnReload",
+	"PageTitle": "Title", "GetTitle": "Title", "DocumentTitle": "Title",
+	"TitleOf": "Title", "PageName": "Title", "TitleString": "Title",
+}
+
+func hookByName(name string) hookSpec {
+	for _, h := range hookSpecs {
+		if h.name == name {
+			return h
+		}
+	}
+	panic("via: no hook named " + name)
+}
+
+func implementsAs[T any](pt reflect.Type) bool {
+	return pt.Implements(reflect.TypeOf((*T)(nil)).Elem())
 }
 
 var hookSigChecked sync.Map // reflect.Type -> true (only on a CLEAN pass)
@@ -457,23 +486,29 @@ var hookSigChecked sync.Map // reflect.Type -> true (only on a CLEAN pass)
 // told (see warnNoChange).
 var embedHookWarned sync.Map
 
-// checkHooks catches the two ways a composition can miss a hook it meant to
-// implement. A method literally named OnInit/OnReload with the wrong signature
-// is unambiguous, so it panics here at Mount/Embed rather than serving forever
-// with the hook dead. A near-miss NAME is a heuristic, so it only warns — but
-// only when the method carries the exact hook signature and the real interface
-// is unsatisfied, which is a shape nothing but the mistake produces.
-func checkHooks(t reflect.Type, warned *sync.Map) {
+// checkHooks catches the ways a composition can miss a hook it meant to
+// implement. A method literally named OnInit/OnReload/Title/Description with
+// the wrong signature is unambiguous, so it panics here at Mount/Embed rather
+// than serving forever with the hook dead. A near-miss NAME is a heuristic, so
+// it only warns — but only when the method carries the exact hook signature and
+// the real interface is unsatisfied, which is a shape nothing but the mistake
+// produces.
+//
+// root says whether t is being MOUNTED. Only the root's Title is read, so a
+// correctly-shaped one on an embedded child is reported: it is a warning and
+// not a panic because the very same type may legitimately be a mounted page
+// elsewhere in the app, and panicking would outlaw that.
+func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
 	if t == nil {
 		return
 	}
 	pt := reflect.PointerTo(t)
 	if _, done := hookSigChecked.Load(t); !done {
-		for _, hook := range hookNames {
-			if m, ok := pt.MethodByName(hook); ok && !hookShaped(m.Type) {
-				panic("via: " + t.String() + "." + hook + " has signature " +
-					withoutReceiver(m.Type) + ", not func(*via.Ctx) error — so " + t.String() +
-					" does NOT implement via." + hookIface(hook) + " and the hook will never run")
+		for _, hook := range hookSpecs {
+			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
+				panic("via: " + t.String() + "." + hook.name + " has signature " +
+					withoutReceiver(m.Type) + ", not " + hook.want + " — so " + t.String() +
+					" does NOT implement via." + hook.iface + " and the hook will never run")
 			}
 		}
 		hookSigChecked.Store(t, true)
@@ -481,24 +516,43 @@ func checkHooks(t reflect.Type, warned *sync.Map) {
 	if _, dup := warned.LoadOrStore(t, true); dup {
 		return
 	}
+	if !root {
+		for _, hook := range hookSpecs {
+			if hook.rootOnly && hook.implements(pt) {
+				log.Printf("via: %s.%s is ignored — only the MOUNTED page's %s names the document, "+
+					"and %s is embedded. Move it to the root composition, or fold the value into the "+
+					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name)
+			}
+		}
+	}
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
-		hook, aliased := hookAliases[m.Name]
-		if !aliased || !hookShaped(m.Type) || implementsHook(pt, hook) {
+		name, aliased := hookAliases[m.Name]
+		if !aliased {
+			continue
+		}
+		hook := hookByName(name)
+		if !hook.shaped(m.Type) || hook.implements(pt) {
 			continue
 		}
 		log.Printf("via: %s.%s looks like a mis-named %s — it has the hook's exact signature "+
 			"but %s implements no via.%s, so nothing will ever call it. Rename it, or add "+
 			"`var _ via.%s = (*%s)(nil)` so a rename can never silently unhook it again.",
-			t.String(), m.Name, hook, t.String(), hookIface(hook), hookIface(hook), t.Name())
+			t.String(), m.Name, hook.name, t.String(), hook.iface, hook.iface, t.Name())
 	}
 }
 
-// hookShaped reports whether a METHOD type (receiver still in In(0)) is
+// ctxErrShaped reports whether a METHOD type (receiver still in In(0)) is
 // func(*Ctx) error.
-func hookShaped(mt reflect.Type) bool {
+func ctxErrShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) &&
 		mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf((*error)(nil)).Elem() &&
+		!mt.IsVariadic()
+}
+
+// stringShaped reports whether a METHOD type is func() string.
+func stringShaped(mt reflect.Type) bool {
+	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf("") &&
 		!mt.IsVariadic()
 }
 
@@ -520,20 +574,4 @@ func withoutReceiver(mt reflect.Type) string {
 		s += " (" + strings.Join(out, ", ") + ")"
 	}
 	return s
-}
-
-func implementsHook(pt reflect.Type, hook string) bool {
-	switch hook {
-	case "OnInit":
-		return pt.Implements(reflect.TypeOf((*Initer)(nil)).Elem())
-	default:
-		return pt.Implements(reflect.TypeOf((*Reloader)(nil)).Elem())
-	}
-}
-
-func hookIface(hook string) string {
-	if hook == "OnInit" {
-		return "Initer"
-	}
-	return "Reloader"
 }

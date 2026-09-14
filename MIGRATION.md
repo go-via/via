@@ -115,13 +115,15 @@ var _ via.Reloader = (*Page)(nil)
 ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
-  not `func(*via.Ctx) error`.
+  not `func(*via.Ctx) error`, or one named `Title` that is not `func() string`.
 - **Warns**: a near-miss NAME that carries the exact hook signature while the
   real interface is unsatisfied. The names it knows are `Init`, `Initialize`,
   `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for `OnInit`, and
   `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for
-  `OnReload`. A v1 `Reloader.Reload` left unrenamed is in this set, so it is
-  warned about — and only warned about, on stderr, once per type.
+  `OnReload`, and `PageTitle`, `GetTitle`, `DocumentTitle`, `TitleOf`,
+  `PageName`, `TitleString` for `Title`. A v1 `Reloader.Reload` left unrenamed
+  is in this set, so it is warned about — and only warned about, on stderr,
+  once per type.
 - **Silent**: everything else. A leftover `Connector.OnConnect` or
   `Disposer.Dispose` from v1 is now an ordinary method nothing calls; the type
   walk has no name to match it against, so it says nothing at all. A `Signal`
@@ -213,6 +215,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
+| Per-page title | — | a `Title() string` method on the MOUNTED root (`via.Titler`); `Head.Title` is the fallback |
 | Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
 | Render plumbing | `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` | **gone** — behind `internal/hcore` |
 
@@ -465,6 +468,28 @@ surface on an upgrade in code that compiled fine before.
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
   `A__b`. Rename one of them.
+
+## The page title is a method on the root
+
+`via.WithHead` is router-wide, so a multi-page app would serve one `<title>`
+everywhere. A mounted page overrides it by declaring one:
+
+```go
+func (p *ThreadPage) Title() string { return p.subject + " — Forum" }
+
+var _ via.Titler = (*ThreadPage)(nil)
+```
+
+Three rules worth knowing before porting:
+
+- It is a **method, not a field**, because real titles are data-dependent. It
+  runs after `OnInit` and after `OnReload`, so the data is loaded. A
+  composition that already has a `Title` *field* must rename the field — Go
+  forbids a method and a field sharing a name.
+- Only the **mounted root's** counts. An embedded child's `Title` is ignored;
+  `Embed` logs one line when it sees one.
+- It shapes the **document**, so it lands on the GET and on a native form
+  submit. An SSE push patches inside `<body>` and never rewrites the head.
 
 ## Gating on a signal
 

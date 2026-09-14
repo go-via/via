@@ -155,20 +155,24 @@ r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
 // /tickets?status=open&page=2                    // does NOT
 ```
 
-**A page names itself.** `via.WithHead` is router-wide; `ctx.Title` (and
-`ctx.Description`) override it for one page, from `OnInit`, where the data is:
+**A page names itself.** `via.WithHead` is router-wide; a page overrides its
+`<title>` by declaring one — a method, not a field, because a real title is
+data-dependent. It is read after `OnInit` (and `OnReload`), so the data is
+already loaded:
 
 ```go
-func (p *Ticket) OnInit(ctx *via.Ctx) error {
-	p.t = p.store.Get(ctx.Param[int]("id"))
-	ctx.Title("#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject)
-	return nil
+func (p *Ticket) Title() string {
+	return "#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject
 }
+
+var _ via.Titler = (*Ticket)(nil) // duck-typed like OnInit — pin it
 ```
 
-They shape the *document*, so they land on a render that writes one — the GET
-and a native form submit — not on an SSE push, which only patches elements
-inside `<body>`.
+Only the **mounted root's** `Title` counts: a nested unit may not rename the
+page it happens to sit in, and `Embed` logs one line when it sees a child
+declaring one. An empty string keeps the router-wide title. It shapes the
+*document*, so it lands on a render that writes one — the GET and a native form
+submit — not on an SSE push, which only patches elements inside `<body>`.
 
 **There is no response writer.** `Ctx` can read the request and `Redirect`;
 it cannot set a header, a status or a body, because a live action's answer is

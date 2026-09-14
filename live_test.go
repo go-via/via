@@ -446,6 +446,44 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 		"a Listen call after OnInit must log loudly instead of silently registering nothing")
 }
 
+// lateRegistrar's beat calls OnConnect and OnDispose on the already-connected
+// Ctx. Both used to append silently to a snapshot nobody reads again — the fn
+// simply never ran — while the sibling Tick/Listen calls warned.
+type lateRegistrar struct{ n via.State[int] }
+
+func (r *lateRegistrar) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, r.beat)
+	return nil
+}
+
+func (r *lateRegistrar) beat(ctx *via.Ctx) {
+	r.n.Set(r.n.Get() + 1)
+	ctx.OnConnect(func() { panic("a late OnConnect must never run") })
+	ctx.OnDispose(func() { panic("a late OnDispose must never run") })
+}
+
+func (r *lateRegistrar) View() h.H { return h.Div(r.n.Display()) }
+
+// Sequential: it captures the global log output.
+func TestLive_onConnectAndOnDisposeAfterConnectAreLoudNoOps(t *testing.T) {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(lateRegistrar{}))
+		_ = app.Connect()
+		time.Sleep(50 * time.Millisecond)
+		synctest.Wait()
+	})
+
+	assert.Contains(t, buf.String(), "OnConnect called after OnInit returned",
+		"a late OnConnect must log instead of registering into a snapshot nobody reads")
+	assert.Contains(t, buf.String(), "OnDispose called after OnInit returned",
+		"a late OnDispose must log instead of registering into a snapshot nobody reads")
+}
+
 // racyTicker ticks as fast as time.Ticker allows so its OnInit-scheduled
 // push races tabStream.replace (stream goroutine) against Bump's dispatchOverStream,
 // which reads tabStream.units via unit() on the POST's own goroutine.

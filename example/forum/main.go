@@ -56,6 +56,8 @@ func (s *SignUp) Submit(ctx *via.Ctx) {
 	ctx.Redirect("/forum")
 }
 
+func (s *SignUp) Title() string { return "Sign up — Forum" }
+
 func (s *SignUp) View() h.H {
 	return page("Sign up",
 		via.PostForm(s.Submit,
@@ -85,6 +87,8 @@ func (l *Login) Submit(ctx *via.Ctx) {
 	ctx.Session().Rotate()
 	ctx.Redirect("/forum")
 }
+
+func (l *Login) Title() string { return "Sign in — Forum" }
 
 func (l *Login) View() h.H {
 	return page("Log in",
@@ -148,6 +152,8 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx) {
 
 func (p *Profile) avatarImg() h.H { return h.Img(h.Src(p.user.Avatar), h.Width(96)) }
 
+func (p *Profile) Title() string { return "Your profile — Forum" }
+
 func (p *Profile) View() h.H {
 	return page("Profile - "+p.user.Name,
 		via.When(p.user.Avatar != "", p.avatarImg),
@@ -196,6 +202,8 @@ func (f *Forum) row(t Thread) h.H {
 	return h.Li(link("/thread/"+strconv.Itoa(t.ID), t.Title), h.Str(" - "+t.Author))
 }
 
+func (f *Forum) Title() string { return "Threads — Forum" }
+
 func (f *Forum) View() h.H {
 	return page("Forum",
 		h.Ul(via.Each(f.threads, f.row)),
@@ -210,15 +218,25 @@ func (f *Forum) View() h.H {
 // --- /thread/{id} (session-gated in OnInit; reads the {id} segment via Param) ---
 
 type ThreadPage struct {
-	store *Store
-	id    int
-	title string
-	posts []Post
-	found bool
+	store   *Store
+	id      int
+	subject string
+	posts   []Post
+	found   bool
 }
 
 var _ via.Initer = (*ThreadPage)(nil)
 var _ via.Reloader = (*ThreadPage)(nil)
+var _ via.Titler = (*ThreadPage)(nil)
+
+// Title runs after OnReload, so the tab strip names the thread that was just
+// loaded — the case a Head field could not serve.
+func (p *ThreadPage) Title() string {
+	if !p.found {
+		return "No such thread — Forum"
+	}
+	return p.subject + " — Forum"
+}
 
 func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
 	if _, ok := ctx.Session().Get[User](); !ok {
@@ -230,7 +248,7 @@ func (p *ThreadPage) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *ThreadPage) OnReload(ctx *via.Ctx) error {
-	p.title, p.posts, p.found = p.store.thread(p.id)
+	p.subject, p.posts, p.found = p.store.thread(p.id)
 	return nil
 }
 
@@ -259,7 +277,7 @@ func (p *ThreadPage) View() h.H {
 	if !p.found {
 		return page("No such thread", link("/forum", "Back to the forum"))
 	}
-	return page(p.title,
+	return page(p.subject,
 		h.Ul(via.Each(p.posts, p.postRow)),
 		p.replyForm(),
 		link("/forum", "Back to the forum"),
@@ -275,7 +293,11 @@ func main() {
 	}
 
 	store := newStore()
-	app := via.NewRouter(via.WithSessionKey([]byte(key)))
+	// Head is router-wide; each page's own Title() method overrides it.
+	app := via.NewRouter(
+		via.WithSessionKey([]byte(key)),
+		via.WithHead(via.Head{Lang: "en", Title: "Forum"}),
+	)
 
 	app.Mount("/signup", SignUp{store: store})
 	app.Mount("/login", Login{store: store})

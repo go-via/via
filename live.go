@@ -44,15 +44,34 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 // every request that renders the unit, so an acquire there would fire on
 // requests that never become a connection. Valid only inside OnInit, and it
 // does not itself make a unit live: on a unit nothing else made live, fn never
-// runs.
-func (c *Ctx) OnConnect(fn func()) { c.onConnect = append(c.onConnect, fn) }
+// runs. Like Tick, a call after OnInit returned registers nothing and logs.
+func (c *Ctx) OnConnect(fn func()) {
+	if c.reinit {
+		return // see Tick
+	}
+	if c.initDone {
+		log.Print("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
+		return
+	}
+	c.onConnect = append(c.onConnect, fn)
+}
 
 // OnDispose registers a teardown function run when the unit's connection
 // closes — stop subscriptions, release producers. fn is a named method value
 // (e.g. sub.Stop). Valid only inside OnInit, and only meaningful on a unit
 // something else has already made live: a unit that never ticks, listens, or
-// renders State opens no connection to tear down.
-func (c *Ctx) OnDispose(fn func()) { c.disposers = append(c.disposers, fn) }
+// renders State opens no connection to tear down. Like Tick, a call after
+// OnInit returned registers nothing and logs.
+func (c *Ctx) OnDispose(fn func()) {
+	if c.reinit {
+		return // see Tick
+	}
+	if c.initDone {
+		log.Print("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")
+		return
+	}
+	c.disposers = append(c.disposers, fn)
+}
 
 // Listen wires a unit to a Topic: it subscribes, pumps every published value
 // into handler on the unit's own goroutine (serialized with Tick, so unit state
@@ -84,7 +103,9 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		// goroutine, the starter strictly first, so the append needs no lock.
 		sub := t.Subscribe()
 		sub.WakeOn(wake)
-		c.OnDispose(sub.Stop)
+		// Not c.OnDispose: this runs at stream start, long after OnInit
+		// returned, and the public method rejects (and logs) a late call.
+		c.disposers = append(c.disposers, sub.Stop)
 		return listener{poll: func() func() {
 			batch, _ := sub.Drain()
 			if len(batch) == 0 {

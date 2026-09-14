@@ -888,6 +888,41 @@ type refreshAction struct{ N via.Signal[int] }
 func (b *refreshAction) Refresh(*via.Ctx) {}
 func (b *refreshAction) View() h.H        { return h.Div(b.N.Display()) }
 
+type badTitleSig struct{ N via.Signal[int] }
+
+func (b *badTitleSig) Title(string) string { return "" }
+func (b *badTitleSig) View() h.H           { return h.Div(b.N.Display()) }
+
+type misnamedTitle struct{ N via.Signal[int] }
+
+func (m *misnamedTitle) PageTitle() string { return "x" }
+func (m *misnamedTitle) View() h.H         { return h.Div(m.N.Display()) }
+
+type titleHelper struct{ N via.Signal[int] }
+
+func (r *titleHelper) GetTitle() string { return "x" }
+func (r *titleHelper) Title() string    { return r.GetTitle() }
+func (r *titleHelper) View() h.H        { return h.Div(r.N.Display()) }
+
+func TestMount_panicsOnATitleCarryingTheWrongSignature(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t,
+		"via: via_test.badTitleSig.Title has signature func(string) string, not func() string — "+
+			"so via_test.badTitleSig does NOT implement via.Titler and the hook will never run",
+		func() { via.NewRouter().Mount("/", badTitleSig{}) })
+}
+
+func TestMount_warnsOnAMethodShapedLikeAMisnamedTitle(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedTitle{}) })
+	assert.Contains(t, logged, "misnamedTitle.PageTitle looks like a mis-named Title")
+	assert.Contains(t, logged, "var _ via.Titler = (*misnamedTitle)(nil)")
+}
+
+func TestMount_staysQuietWhenTheTitleLookalikeIsAHelperTitleCalls(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", titleHelper{}) })
+	assert.NotContains(t, logged, "mis-named")
+}
+
 func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,

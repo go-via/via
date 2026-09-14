@@ -3,6 +3,7 @@ package via_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/go-via/via"
@@ -138,48 +139,52 @@ func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	assert.Equal(t, r1.Header.Get("Content-Security-Policy"), r2.Header.Get("Content-Security-Policy"))
 }
 
-// --- Per-page title.
+// --- Per-page title, declared by the ROOT composition.
 //
-// Head is router-wide, so every page in a multi-page app used to share one
-// <title>. Ctx.Title/Ctx.Description are the per-page override, set where the
-// page's data is: OnInit. They must escape, must not widen the CSP, and must
-// survive an embedded unit setting them.
+// Head is router-wide, so every page in a multi-page app would otherwise share
+// one <title>. Titler is the per-page override: a method, because a real title
+// is data-dependent, read after OnInit and only from the mounted root.
 
 type titledPage struct {
 	title string
-	desc  string
 	Child titledChild
 }
 
-var _ via.Initer = (*titledPage)(nil)
+var _ via.Titler = (*titledPage)(nil)
 
-func (p *titledPage) OnInit(ctx *via.Ctx) error {
-	ctx.Title(p.title)
-	ctx.Description(p.desc)
-	return nil
-}
-func (p *titledPage) View() h.H { return h.Div(h.Str("hi"), via.Embed(p.Child)) }
+func (p *titledPage) Title() string { return p.title }
+func (p *titledPage) View() h.H     { return h.Div(h.Str("hi"), via.Embed(p.Child)) }
 
 type titledChild struct{ title string }
 
-var _ via.Initer = (*titledChild)(nil)
+func (c *titledChild) Title() string { return c.title }
+func (c *titledChild) View() h.H     { return h.Span(h.Str("child")) }
 
-func (c *titledChild) OnInit(ctx *via.Ctx) error {
-	if c.title != "" {
-		ctx.Title(c.title)
-	}
-	return nil
+// A title derived from data OnInit loads — the case a struct field could not
+// serve, and the reason Title is a method read after the hook has run.
+type loadedTitlePage struct {
+	store   map[string]string
+	subject string
 }
-func (c *titledChild) View() h.H { return h.Span(h.Str("child")) }
 
-func titledBody(t *testing.T, p titledPage, opts ...via.Option) (*http.Response, string) {
+var _ via.Initer = (*loadedTitlePage)(nil)
+var _ via.Titler = (*loadedTitlePage)(nil)
+
+func (p *loadedTitlePage) OnInit(*via.Ctx) error { p.subject = p.store["7"]; return nil }
+func (p *loadedTitlePage) Title() string         { return "Ticket #7 — " + p.subject }
+func (p *loadedTitlePage) View() h.H             { return h.Div(h.Str(p.subject)) }
+
+func titledBody[T any, PT interface {
+	*T
+	View() h.H
+}](t *testing.T, p T, opts ...via.Option) (*http.Response, string) {
 	t.Helper()
-	srv := httptest.NewServer(via.Handler(p, opts...))
+	srv := httptest.NewServer(via.Handler[T, PT](p, opts...))
 	t.Cleanup(srv.Close)
 	return do(t, srv, http.MethodGet, "/", "")
 }
 
-func TestTitle_aPageOverridesTheRouterWideTitle(t *testing.T) {
+func TestTitle_aRootPageOverridesTheRouterWideTitle(t *testing.T) {
 	t.Parallel()
 	_, body := titledBody(t, titledPage{title: "Ticket #7"}, via.WithHead(via.Head{Title: "Helpdesk"}))
 
@@ -188,38 +193,76 @@ func TestTitle_aPageOverridesTheRouterWideTitle(t *testing.T) {
 		"the per-page title replaces the router-wide one, it does not add a second")
 }
 
-func TestTitle_anUnsetPageKeepsTheRouterWideTitle(t *testing.T) {
+func TestTitle_anEmptyTitleKeepsTheRouterWideOne(t *testing.T) {
 	t.Parallel()
 	_, body := titledBody(t, titledPage{}, via.WithHead(via.Head{Title: "Helpdesk"}))
 
 	assert.Contains(t, body, "<title>Helpdesk</title>")
-	assert.NotContains(t, body, `name="description"`, "an unset Description emits no element")
 }
 
-func TestTitle_titleAndDescriptionAreEscaped(t *testing.T) {
+func TestTitle_readsDataLoadedByOnInit(t *testing.T) {
 	t.Parallel()
-	_, body := titledBody(t, titledPage{title: `</title><script>x()</script>`, desc: `a "quoted" <b>`})
+	_, body := titledBody(t, loadedTitlePage{store: map[string]string{"7": "Printer on fire"}})
+
+	assert.Contains(t, body, "<title>Ticket #7 — Printer on fire</title>",
+		"Title must run AFTER OnInit, or it sees the zero value")
+}
+
+func TestTitle_isEscaped(t *testing.T) {
+	t.Parallel()
+	_, body := titledBody(t, titledPage{title: `</title><script>x()</script>`})
 
 	assert.NotContains(t, body, "<script>x()</script>", "the title must not be able to close its element")
 	assert.Contains(t, body, "&lt;/title&gt;")
-	assert.Contains(t, body, `content="a &#34;quoted&#34; &lt;b&gt;"`)
 }
 
-func TestTitle_anEmbeddedUnitCanNameThePage(t *testing.T) {
+// The defect the *Ctx.Title shape had: one head shared down the request tree
+// let any nested child silently rename the page.
+func TestTitle_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 	t.Parallel()
-	_, body := titledBody(t, titledPage{title: "outer", Child: titledChild{title: "inner"}})
+	_, body := titledBody(t, titledPage{title: "outer", Child: titledChild{title: "inner"}},
+		via.WithHead(via.Head{Title: "router-wide"}))
 
-	assert.Contains(t, body, "<title>inner</title>",
-		"one page head per request tree: the last writer wins, so an embed can name the page")
+	assert.Contains(t, body, "<title>outer</title>")
+	assert.NotContains(t, body, "inner", "only the MOUNTED root's Title names the document")
+}
+
+// The warning is once per TYPE per process (embedHookWarned), so a -count>1 run
+// would see an empty log on every pass but the first: capture it once.
+func TestTitle_warnsWhenAnEmbedDeclaresOne(t *testing.T) {
+	logged := warnChildOnce(t)
+
+	assert.Contains(t, logged, "warnChild.Title is ignored")
 }
 
 // A per-page title must not be a way to widen the policy: the CSP is derived
 // from the router-wide Head alone and must be byte-identical whatever a page
-// sets.
+// declares.
+var warnChildOnce = func() func(*testing.T) string {
+	var once sync.Once
+	var out string
+	return func(t *testing.T) string {
+		t.Helper()
+		once.Do(func() {
+			out = captureLog(t, func() { titledBody(t, warnPage{Child: warnChild{title: "inner"}}) })
+		})
+		return out
+	}
+}()
+
+type warnPage struct{ Child warnChild }
+
+func (p *warnPage) View() h.H { return h.Div(via.Embed(p.Child)) }
+
+type warnChild struct{ title string }
+
+func (c *warnChild) Title() string { return c.title }
+func (c *warnChild) View() h.H     { return h.Span(h.Str("child")) }
+
 func TestTitle_doesNotTouchTheCSP(t *testing.T) {
 	t.Parallel()
 	plain, _ := titledBody(t, titledPage{})
-	titled, _ := titledBody(t, titledPage{title: "x", desc: "y"})
+	titled, _ := titledBody(t, titledPage{title: "x"})
 
 	assert.Equal(t, plain.Header.Get("Content-Security-Policy"), titled.Header.Get("Content-Security-Policy"))
 }

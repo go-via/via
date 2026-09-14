@@ -53,7 +53,7 @@ func Embed[C any](child C) h.H {
 	// of the connection), so its address is the base its signals offset from.
 	typ := reflect.TypeOf(child)
 	checkViewReceiver(typ)
-	checkHooks(typ, &embedHookWarned)
+	checkHooks(typ, &embedHookWarned, false)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	return hcore.Dyn(func(r *hcore.Renderer) { embedViewer(r, inst) })
 }
@@ -108,7 +108,6 @@ func embedViewer(r *hcore.Renderer, inst instance) {
 	child.embedV = inst
 	child.base = parent.base // the mount prefix, so the embed's own action URLs carry it too
 	child.declareSeen = parent.declareSeen
-	child.page = parent.page // ctx.Title from an embedded unit names the whole page
 	child.req = parent.req
 	child.sessions = parent.sessions
 	child.sessW = parent.sessW
