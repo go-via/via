@@ -43,13 +43,25 @@ the v2 core. **Requires Go 1.27.**
   framed separately off the dirty set, so a signal change with an unchanged DOM
   still ships, and so does the reverse.
 
-- **`Ctx.Title` and `Ctx.Description`.** `via.WithHead` is router-wide, so
-  every page in a multi-page app shared one `<title>` and `OnInit` had no way
-  to change it. Both are set from `OnInit`, override the router-wide `Head`,
-  are HTML-escaped, and touch no CSP-relevant slot — the `Head` still owns lang,
+- **`via.Titler` — a page names itself.** `via.WithHead` is router-wide, so
+  every page in a multi-page app shared one `<title>`. A root composition now
+  declares its own by having a `Title() string` method, duck-typed like
+  `OnInit` and read after it (and after `OnReload`), so a data-dependent title
+  works. Only the MOUNTED root's counts — an embedded child's is ignored, and
+  `Embed` logs one line naming the type, because a shared per-request head
+  would let any nested unit silently rename the page. The value is
+  HTML-escaped and touches no CSP-relevant slot: the `Head` still owns lang,
   raw markup, the inline stylesheet and every origin list, so a page cannot
-  widen its own policy. They shape the document, so they land on a render that
-  writes one (the GET, a native form submit), not on an SSE push.
+  widen its own policy. It shapes the document, so it lands on a render that
+  writes one (the GET, a native form submit), not on an SSE push. `Mount` and
+  `Embed` extend the hook check to it: a method named `Title` with the wrong
+  signature panics at boot, and a near-miss name (`PageTitle`, `GetTitle`, …)
+  carrying `func() string` on a type implementing no `via.Titler` is logged.
+
+- **`Ctx.OnConnect` and `Ctx.OnDispose` warn when called too late.** Both
+  appended silently to a snapshot nobody reads again when called after `OnInit`
+  returned — the fn simply never ran — while the sibling `ctx.Tick` and
+  `ctx.Listen` logged. All four now behave the same.
 
 - **The reconnect manager backs off instead of reloading into a dead server.**
   The re-bootstrap was a single blind `location.reload()` on a 500-2000ms
