@@ -1707,8 +1707,16 @@ type gatedEach struct {
 	IsAdmin via.Signal[bool]
 }
 
+// gateIsOpen reads the ONLY authority the gate has: this request. The path
+// form exists because a stream connect is a POST to <mount>/_via/sse and
+// carries no query, so the genuinely-privileged control below needs a mount.
+func gateIsOpen(ctx *via.Ctx) bool {
+	req := ctx.Request()
+	return req.URL.Query().Get("admin") == "1" || strings.HasPrefix(req.URL.Path, "/admin")
+}
+
 func (g *gatedEach) OnInit(ctx *via.Ctx) error {
-	g.IsAdmin.Set(ctx.Request().URL.Query().Get("admin") == "1")
+	g.IsAdmin.Set(gateIsOpen(ctx))
 	if g.live {
 		ctx.Tick(time.Hour, func(*via.Ctx) {})
 	}
@@ -1760,7 +1768,7 @@ type gatedEmbedPage struct {
 }
 
 func (p *gatedEmbedPage) OnInit(ctx *via.Ctx) error {
-	p.IsAdmin.Set(ctx.Request().URL.Query().Get("admin") == "1")
+	p.IsAdmin.Set(gateIsOpen(ctx))
 	return nil
 }
 
@@ -1788,15 +1796,22 @@ func (p *gatedEmbedPage) View() h.H {
 type gatedShape struct {
 	name        string
 	plain, live func(hits *gatedHits) http.Handler
-	plainEmbed  string
-	liveEmbed   string
-	gatedN      int
+	// mountLive re-registers the same live unit on a router, so the genuinely
+	// privileged control can reach it at a path OnInit reads as admin. It is a
+	// closure because Router.Mount is generic over the unit type.
+	mountLive  func(r *via.Router, path string, hits *gatedHits)
+	plainEmbed string
+	liveEmbed  string
+	gatedN     int
 }
 
 var gatedShapes = []gatedShape{{
-	name:       "Each row",
-	plain:      func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits}) },
-	live:       func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits, live: true}) },
+	name:  "Each row",
+	plain: func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits}) },
+	live:  func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits, live: true}) },
+	mountLive: func(r *via.Router, path string, hits *gatedHits) {
+		r.Mount(path, gatedEach{hits: hits, live: true})
+	},
 	plainEmbed: "r", liveEmbed: "r", gatedN: 1,
 }, {
 	name: "Embed inside a When",
@@ -1806,6 +1821,9 @@ var gatedShapes = []gatedShape{{
 	live: func(hits *gatedHits) http.Handler {
 		return via.Handler(gatedEmbedPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
+	mountLive: func(r *via.Router, path string, hits *gatedHits) {
+		r.Mount(path, gatedEmbedPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
+	},
 	plainEmbed: "0", liveEmbed: "1", gatedN: 0,
 }, {
 	name: "depth-2 embed",
@@ -1814,6 +1832,9 @@ var gatedShapes = []gatedShape{{
 	},
 	live: func(hits *gatedHits) http.Handler {
 		return via.Handler(gatedEmbedPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+	},
+	mountLive: func(r *via.Router, path string, hits *gatedHits) {
+		r.Mount(path, gatedEmbedPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
 	plainEmbed: "0-0", liveEmbed: "1-0", gatedN: 0,
 }}
@@ -1827,6 +1848,39 @@ func assertGateHeld(t *testing.T, hits *gatedHits, code int, body string) {
 	t.Helper()
 	assert.Equal(t, http.StatusGone, code, "a gated action must not be dispatchable: %s", body)
 	assert.Zero(t, hits.Load(), "a gated handler ran")
+	// The refusal has to be the authorization answer — this render binds no
+	// such action, or no such embed — and not a routing or parse miss, which
+	// would pass this test while proving nothing about the gate.
+	assert.True(t,
+		strings.Contains(body, "does not bind it") ||
+			strings.Contains(body, "no such action") ||
+			strings.Contains(body, "no such embed"),
+		"the 410 must name the closed branch, not a routing miss: %s", body)
+}
+
+// The other half of every cell: with the branch genuinely open — the gate set
+// by OnInit from the request, never by a posted signal — the SAME url must
+// dispatch. A fix that 410s everything would satisfy the assertions above.
+func TestDispatchLive_aGatedActionStillDispatchesWhenTheBranchIsGenuinelyOpen(t *testing.T) {
+	t.Parallel()
+	for _, shape := range gatedShapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			hits := &gatedHits{}
+			r := via.NewRouter()
+			shape.mountLive(r, "/admin", hits)
+			app := vt.Serve(t, r)
+
+			_, page := app.Get("/admin")
+			require.Contains(t, page, ">nuke<", "the privileged mount must bind the gated action")
+			url := actionURL(t, page, shape.liveEmbed, shape.gatedN)
+			conn := app.ConnectAt("/admin", "{}")
+
+			code, body := app.Action(0).Over(conn).Raw(url).Fire()
+			require.Equal(t, http.StatusNoContent, code, "the privileged dispatch was refused: %s", body)
+			assert.NotZero(t, hits.Load(), "the gated handler must run for a genuinely privileged connection")
+		})
+	}
 }
 
 func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
