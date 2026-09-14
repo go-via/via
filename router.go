@@ -202,7 +202,11 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 		http.Error(w, un.body(), http.StatusGone)
 		return
 	}
-	log.Printf("via: %s panic: %v\n%s", what, rec, debug.Stack())
+	route := ""
+	if req != nil {
+		route = " [" + req.Method + " " + req.URL.Path + "]"
+	}
+	log.Printf("via: %s panic%s: %v\n%s", what, route, rec, debug.Stack())
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
@@ -244,6 +248,7 @@ type Router struct {
 	reg       *registry // tab id → stream goroutine, app-wide
 	liveCount *atomic.Int64
 	maxLive   int
+	capWarn   atomic.Int64 // see mount.warnAtCapacity
 	// ctx bounds every stream this router opens; Close cancels it and waits on
 	// live, so a stream's own goroutine, its tickers and its disposers are all
 	// finished by the time Close returns.
@@ -345,7 +350,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
-		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange,
+		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live,
 	}
 

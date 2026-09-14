@@ -45,6 +45,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"maps"
@@ -1140,8 +1141,9 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// Increment-then-check so the gauge can't be raced past the limit.
-	if m.liveCount.Add(1) > int64(m.maxLive) {
+	if n := m.liveCount.Add(1); n > int64(m.maxLive) {
 		m.liveCount.Add(-1)
+		m.warnAtCapacity(n - 1)
 		http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
 		return
 	}
@@ -1235,6 +1237,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	streamLabel := fmt.Sprintf(" [tab=%s unit=%T]", id, pv.v)
+
 	var connSID string
 	if sessDat != nil {
 		connSID = sessDat.sid
@@ -1244,6 +1248,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// the current unit on every render — a live action always runs against the
 	// last render's actions/hydrators.
 	lc := &tabStream{
+		id:          id,
 		mount:       m,
 		pushq:       pushq,
 		done:        streamCtx.Done(),
@@ -1266,7 +1271,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 		for _, u := range units {
 			for _, d := range u.disposers {
-				runPushItem(d)
+				runPushItem(streamLabel, d)
 			}
 		}
 	}()
@@ -1304,5 +1309,5 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	streaming = true
-	runStream(streamCtx, units, pushq, keepalive, sseHeartbeat)
+	runStream(streamCtx, streamLabel, units, pushq, keepalive, sseHeartbeat)
 }
