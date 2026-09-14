@@ -114,6 +114,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	oerr := ic.OnInit(ctx)
 	ctx.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
 	if oerr != nil {
+		noteErr(w, oerr)
 		if errors.Is(oerr, ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 		} else {
@@ -154,6 +155,7 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 // failed OnInit. A queued Redirect is NOT handled here: the caller
 // routes it through respond, which knows the transport.
 func answerReloadFailure(w http.ResponseWriter, err error) {
+	noteErr(w, err)
 	if errors.Is(err, ErrNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -207,6 +209,7 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 		route = " [" + req.Method + " " + req.URL.Path + "]"
 	}
 	log.Printf("via: %s panic%s: %v\n%s", what, route, rec, debug.Stack())
+	noteErr(w, fmt.Errorf("via: %s panic: %v", what, rec))
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
@@ -222,8 +225,10 @@ func answerInitFailure(w http.ResponseWriter, req *http.Request, ci initOutcome)
 		}
 		http.Redirect(w, req, ci.redirect, http.StatusSeeOther)
 	case errors.Is(ci.err, ErrNotFound):
+		noteErr(w, ci.err)
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
+		noteErr(w, ci.err)
 		log.Printf("via: OnInit failed: %q", ci.err)
 		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
@@ -262,6 +267,10 @@ type Router struct {
 	// hookWarned dedupes the near-miss hook warning, per Router for the same
 	// reason noChange is.
 	hookWarned sync.Map
+	// errCSP is the router-wide floor an error page renders under; see
+	// WithErrorPage for why it is never a mount's own, wider policy.
+	errCSP      string
+	errPageWarn sync.Once
 }
 
 // NewRouter builds an empty router. Mount pages onto it, then serve it, and
@@ -284,6 +293,7 @@ func (r *Router) init(opts []Option) {
 		r.liveCount = &atomic.Int64{}
 		r.maxLive = maxSSEConn
 		r.ctx, r.cancel = context.WithCancel(context.Background())
+		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{})
 		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -294,7 +304,13 @@ func (r *Router) init(opts []Option) {
 
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.init(nil)
-	r.mux.ServeHTTP(w, req)
+	ew := r.wrapForErrorPage(w, req)
+	if ew == nil {
+		r.mux.ServeHTTP(w, req)
+		return
+	}
+	r.mux.ServeHTTP(ew, req)
+	ew.finish()
 }
 
 // Close shuts the router's live half down and returns once it is quiet. Call it

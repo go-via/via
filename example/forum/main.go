@@ -37,6 +37,25 @@ func link(href, text string) h.H { return h.A(h.Href(href), h.Str(text)) }
 
 func note(msg string) func() h.H { return func() h.H { return h.P(h.Str(msg)) } }
 
+// errorPage turns via's plain-text failures into documents. It runs for a
+// mistyped URL as well as for a thread that no longer exists, so it may not
+// assume any page resolved - ctx carries the request and the session, nothing
+// more.
+func errorPage(ctx *via.Ctx, e via.PageError) h.H {
+	home := "/login"
+	if _, ok := ctx.Session().Get[User](); ok {
+		home = "/forum"
+	}
+	switch e.Reason {
+	case via.ReasonNotFound:
+		return page("No such page", h.P(h.Str("That thread or URL is gone.")), link(home, "Back to the forum"))
+	case via.ReasonForbidden:
+		return page("Not allowed", h.P(h.Str("Sign in again and retry.")), link("/login", "Log in"))
+	default:
+		return page("Something broke", h.P(h.Str(e.Detail)), link(home, "Back to the forum"))
+	}
+}
+
 // --- /signup ---
 
 type SignUp struct {
@@ -302,6 +321,7 @@ func main() {
 	app := via.NewRouter(
 		via.WithSessionKey([]byte(key)),
 		via.WithHead(via.Head{Lang: "en"}),
+		via.WithErrorPage(errorPage),
 	)
 
 	app.Mount("/signup", SignUp{store: store})

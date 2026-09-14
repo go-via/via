@@ -463,8 +463,19 @@ Head, so pods with different keys still serve identical policies. Live-embed
 state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap: the page comes back from server truth rather than replayed frames.
-Error pages are plain `http.Error` text for now (404 for `via.ErrNotFound` /
-a decode-miss `Param`, 500 for the rest); a `WithErrorPage` hook is post-1.0.
+Failures answer as plain `http.Error` text by default (404 for
+`via.ErrNotFound` / a decode-miss `Param`, 500 for the rest).
+`WithErrorPage(func(*via.Ctx, via.PageError) h.H)` renders them as documents
+instead, for the responses a browser will render as a page — a GET, a route
+matching no mount, a native `<form>` submit. A Datastar `@post` and the SSE
+connect keep their plain text: the client consumes those bodies and already
+surfaces the failure itself. Switch on `PageError.Reason`
+(`ReasonNotFound`, `ReasonForbidden`, `ReasonGone`, …) rather than on the
+body text. The page renders under the ROUTER-WIDE CSP floor — it can run
+before any mount resolves, so it never carries a mount's per-page assets and
+cannot widen one's policy — and a handler that panics or returns nil falls
+back to the plain text via would have sent, logged once. See
+`example/forum`.
 An action URL addresses its handler, not its render position: `embed` is
 `r` for the page root and the acting embed's key otherwise, and `id` in
 `/_via/a/{embed}/{id}` is a hash of the handler method's own Go name, so it

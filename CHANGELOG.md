@@ -25,6 +25,18 @@ the v2 core. **Requires Go 1.27.**
 
 ### New
 
+- **`WithErrorPage` renders failures as HTML documents.**
+  `via.WithErrorPage(func(*via.Ctx, via.PageError) h.H)` replaces via's
+  plain-text bodies for the responses a browser renders as a page: a GET of a
+  mounted page, a route matching no mount, and a native `<form>` submit. A
+  Datastar `@post` and the SSE connect are client-consumed and keep their
+  plain text. `PageError` carries the status, a stable `Reason` code to switch
+  on, the plain-text `Detail`, and the underlying error when there is one.
+  Statuses and reasons are unchanged — this changes the body only. The page
+  renders under the router-wide CSP floor, never a mount's own, and a handler
+  that panics or returns nil falls back to the plain text and logs once.
+  `example/forum` ships one.
+
 - **A unit sees its own `OnConnect` publish.** The `Listen` subscriptions were
   started inside the stream loop, i.e. AFTER every `OnConnect` fn had already
   run, so the "join a room" pattern `OnConnect`'s own doc names could not work:
