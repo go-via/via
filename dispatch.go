@@ -132,6 +132,7 @@ type mount struct {
 	// them; live counts the streams still running, so Close can wait.
 	routerCtx context.Context
 	live      *sync.WaitGroup
+	liveMu    *sync.RWMutex
 	// csp is this mount's Content-Security-Policy, built once at Mount from the
 	// router-wide assets plus the root's own PageMeta().Assets; assetsFP is the
 	// fingerprint of the latter, re-checked on every document render so a

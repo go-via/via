@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -294,7 +295,7 @@ func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 
 // The warning is once per TYPE per process (childHookWarned), so a -count>1 run
 // would see an empty log on every pass but the first: capture it once.
-func TestPageMeta_warnsWhenAnChildDeclaresOne(t *testing.T) {
+func TestPageMeta_warnsWhenAChildDeclaresOne(t *testing.T) {
 	logged := warnChildOnce(t)
 
 	assert.Contains(t, logged, "warnChild.PageMeta is ignored")
@@ -402,7 +403,12 @@ func TestPageMeta_panicsAtMountWhenAssetsDependOnData(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
 		"via: PageMeta().Assets of *via_test.varyingAssetPage depends on the page's data; "+
-			"the CSP is built once at Mount, so assets must be a constant of the type",
+			"the CSP is built once at Mount, so assets must be a constant of the type. "+
+			"via read the assets twice — once off the mounted literal and once off a copy "+
+			"with its zero fields filled in with synthetic values, standing in for what "+
+			"OnInit would load — and got two different answers. Move the asset into the "+
+			"mounted literal, declare it router-wide with WithHead, or hold it in a "+
+			"package-level var.",
 		func() { via.NewRouter().Mount("/", varyingAssetPage{}) })
 }
 
@@ -463,3 +469,101 @@ func (badAssetPage) PageMeta() via.Meta {
 	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}}
 }
 func (badAssetPage) View() h.H { return h.Div(h.Str("x")) }
+
+// The boot probe writes into a COPY of the mounted literal, and a sync.Mutex's
+// zero state is an invariant: perturbing it makes the next Lock a runtime throw
+// that no recover can catch, so the process dies at Mount with no via wording.
+// A page holding a mutex (directly, or through a store) is the ordinary shape.
+type mutexAssetPage struct {
+	mu    sync.Mutex
+	once  sync.Once
+	since time.Time
+	store *mutexStore
+	cdn   string
+}
+
+type mutexStore struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (s *mutexStore) bump() int { s.mu.Lock(); defer s.mu.Unlock(); s.n++; return s.n }
+
+func (p *mutexAssetPage) PageMeta() via.Meta {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.once.Do(func() {})
+	_ = p.since.IsZero()
+	if p.store != nil {
+		p.store.bump()
+	}
+	return via.Meta{Title: "mutex", Assets: via.Assets{Scripts: []via.Script{{Src: p.cdn + "/app.js"}}}}
+}
+func (p *mutexAssetPage) View() h.H { return h.Div(h.Str("x")) }
+
+func TestMount_probeLeavesForeignStructsAlone(t *testing.T) {
+	t.Parallel()
+	require.NotPanics(t, func() {
+		r := via.NewRouter()
+		r.Mount("/", mutexAssetPage{cdn: "https://cdn.example", store: &mutexStore{}})
+		t.Cleanup(r.Close)
+		srv := httptest.NewServer(r)
+		t.Cleanup(srv.Close)
+		resp, body := do(t, srv, http.MethodGet, "/", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, body, "https://cdn.example/app.js")
+	})
+}
+
+// The skip rule must not disarm the probe: a page that ALSO holds a mutex still
+// gets its scalar fields filled, so data-dependent assets are caught at boot.
+type mutexVaryingAssetPage struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (p *mutexVaryingAssetPage) OnInit(*via.Ctx) error { p.n = 1; return nil }
+func (p *mutexVaryingAssetPage) PageMeta() via.Meta {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.n == 0 {
+		return via.Meta{}
+	}
+	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{Src: "/late.js"}}}}
+}
+func (p *mutexVaryingAssetPage) View() h.H { return h.Div(h.Str("x")) }
+
+func TestMount_probeStillCatchesDataDependentAssetsPastAMutex(t *testing.T) {
+	t.Parallel()
+	require.PanicsWithValue(t,
+		"via: PageMeta().Assets of *via_test.mutexVaryingAssetPage depends on the page's data; "+
+			"the CSP is built once at Mount, so assets must be a constant of the type. "+
+			"via read the assets twice — once off the mounted literal and once off a copy "+
+			"with its zero fields filled in with synthetic values, standing in for what "+
+			"OnInit would load — and got two different answers. Move the asset into the "+
+			"mounted literal, declare it router-wide with WithHead, or hold it in a "+
+			"package-level var.",
+		func() { via.NewRouter().Mount("/", mutexVaryingAssetPage{}) })
+}
+
+// A PageMeta that refuses the probe's synthetic data skips the boot check. That
+// is the right call — the values are the probe's invention — but it must be
+// said out loud, or the author believes a guard ran that did not.
+type probeRefusingPage struct{ n int }
+
+func (p *probeRefusingPage) PageMeta() via.Meta {
+	if p.n != 0 {
+		panic("no")
+	}
+	return via.Meta{Title: "ok"}
+}
+func (p *probeRefusingPage) View() h.H { return h.Div(h.Str("x")) }
+
+// Not parallel: captureLog swaps the process-wide log writer.
+func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
+	logged := captureLog(t, func() {
+		require.NotPanics(t, func() { via.NewRouter().Mount("/", probeRefusingPage{}) })
+	})
+	assert.Contains(t, logged, "*via_test.probeRefusingPage")
+	assert.Contains(t, logged, "SKIPPED")
+}
