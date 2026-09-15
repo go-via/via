@@ -1,6 +1,9 @@
 # via — reactive web UIs in pure Go
 
-Requires Go 1.27 or newer (the public API uses generic methods).
+> **Requires Go 1.27 or newer.** The public API uses generic methods
+> (`ctx.Param[int]("id")`, `ctx.Session().Get[User]()`). On an older toolchain
+> those read as ordinary syntax errors, not as a version complaint — check
+> `go version` first if the examples below will not compile.
 
 via is a thin layer over `net/http`. Compositions nest by struct embedding, and
 the Datastar attributes that make a page live are generated for you. The server
@@ -11,6 +14,7 @@ no WebSockets.
 package main
 
 import (
+	"log"
 	"net/http"
 	"sync"
 
@@ -42,7 +46,7 @@ func (c *Counter) View() h.H {
 func main() {
 	store := &Store{}
 	http.Handle("/", via.Handler(Counter{count: store}))
-	http.ListenAndServe(":8080", nil)
+	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
@@ -154,12 +158,16 @@ func (l *Login) View() h.H {
 }
 ```
 
-**5. A multi-page app.** `NewRouter` + `Mount` namespaces each page's actions
-under its mount; `OnInit` loads path/session data before the ctx-free `View`;
+**5. A multi-page app.** Self-contained, like every step above. `NewRouter` +
+`Mount` namespaces each page's actions under its mount; `OnInit` loads path/session data before the ctx-free `View`;
 `WithErrorPage` renders failures as documents. Set `WithTrustedOrigin` in
 production, and `Close` the router before the server.
 
 ```go
+type Home struct{}
+
+func (p *Home) View() h.H { return h.A(h.Href("/thread/1"), h.Str("thread 1")) }
+
 type Thread struct{ id int }
 
 var _ via.Initer = (*Thread)(nil)
@@ -186,7 +194,8 @@ func main() {
 	app.Mount("/", Home{})
 	app.Mount("/thread/{id}", Thread{})
 	defer app.Close()
-	http.ListenAndServe(":8080", app)
+	log.Fatal(http.ListenAndServe(":8080", app)) // never drop this error: a port
+	// already in use otherwise looks like a page that simply does not respond
 }
 ```
 

@@ -1099,7 +1099,7 @@ func TestSignal_valueReceiverChildPanicsAtRender(t *testing.T) {
 	assert.Contains(t, logs.String(), "View has a VALUE receiver")
 }
 
-func TestSignal_slotCollidingWithAnChildPrefixPanics(t *testing.T) {
+func TestSignal_slotCollidingWithAChildPrefixPanics(t *testing.T) {
 	assertSlotPanic(t, via.Handler(childCollidePage{}), "collides with the child prefix of field a")
 }
 

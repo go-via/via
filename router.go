@@ -260,6 +260,10 @@ type Router struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	live   sync.WaitGroup
+	// liveMu orders a stream's live.Add against Close's Wait. Without it a
+	// connect that has passed the ctx.Done check can Add while Close is parked
+	// in Wait, which is a WaitGroup misuse throw.
+	liveMu sync.RWMutex
 	// noChange dedupes the dead-click warning per action (see warnNoChange).
 	// Per Router, not per process, so a second app in the same binary — or a
 	// second test — still gets told.
@@ -338,6 +342,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 func (r *Router) Close() {
 	r.init(nil)
 	r.cancel()
+	// Bracket the connect-side Add: once this returns, every Add that raced
+	// the cancel has happened, and every later one sees a cancelled ctx and
+	// never runs.
+	// A barrier, not a critical section: taking the write lock waits out any
+	// connect already between the ctx check and its live.Add.
+	r.liveMu.Lock()
+	//lint:ignore SA2001 see above
+	r.liveMu.Unlock()
 	r.live.Wait()
 }
 
@@ -367,7 +379,7 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
-		routerCtx: r.ctx, live: &r.live,
+		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
 	// The CSP is derived from the root's declaration ONCE, here, off the
 	// zero-data literal: one string per mount, none per request. renderPage
@@ -381,11 +393,22 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	// what OnInit does — must produce the same assets. A page that fails this
 	// would otherwise boot fine and 500 every request.
 	probe := root
-	perturbZeroFields(reflect.ValueOf(&probe).Elem(), 0)
-	if fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets }); read && fp != m.assetsFP {
+	perturbZeroFields(reflect.ValueOf(&probe).Elem(), rootType.PkgPath(), 0)
+	fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets })
+	switch {
+	case !read:
+		log.Printf("via: %s.PageMeta() panicked on synthetic data, so the boot check that "+
+			"PageMeta().Assets is constant was SKIPPED for this mount. An asset derived from "+
+			"data OnInit loads will not be caught here; it will fail on the first request.",
+			reflect.PointerTo(rootType).String())
+	case fp != m.assetsFP:
 		panic("via: PageMeta().Assets of " + reflect.PointerTo(rootType).String() +
 			" depends on the page's data; the CSP is built once at Mount, so assets " +
-			"must be a constant of the type")
+			"must be a constant of the type. via read the assets twice — once off the " +
+			"mounted literal and once off a copy with its zero fields filled in with " +
+			"synthetic values, standing in for what OnInit would load — and got two " +
+			"different answers. Move the asset into the mounted literal, declare it " +
+			"router-wide with WithHead, or hold it in a package-level var.")
 	}
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
@@ -506,6 +529,68 @@ var hookAliases = map[string]string{
 	"OnRefresh": "OnReload", "Reinit": "OnReload", "OnReInit": "OnReload",
 	"Meta": "PageMeta", "Metadata": "PageMeta", "PageMetadata": "PageMeta",
 	"GetPageMeta": "PageMeta", "DocumentMeta": "PageMeta", "PageInfo": "PageMeta",
+	"Connect": "OnInit", "OnConnect": "OnInit",
+}
+
+// aliasFor resolves a method name to the hook it was surely meant to be. The
+// match is case-insensitive and tolerates one edit, because the typos that
+// actually happen in the wild ("Oninit", "OnConect") are exactly the ones an
+// exact table misses. Only names of 5 characters or more are fuzzy-matched, and
+// only methods that ALREADY have a hook's signature ever reach here, so an
+// unrelated method has to be a single keystroke off a hook name to trip it.
+func aliasFor(method string) (string, bool) {
+	if hook, ok := hookAliases[method]; ok {
+		return hook, true
+	}
+	lower := strings.ToLower(method)
+	for cand, hook := range aliasCandidates {
+		if lower == cand {
+			return hook, true
+		}
+	}
+	if len(lower) < 5 {
+		return "", false
+	}
+	for cand, hook := range aliasCandidates {
+		if withinOneEdit(lower, cand) {
+			return hook, true
+		}
+	}
+	return "", false
+}
+
+// aliasCandidates is hookAliases plus the hook names themselves, lowercased.
+// A correctly-spelled-but-mis-cased hook ("Oninit") is a typo like any other.
+var aliasCandidates = func() map[string]string {
+	m := make(map[string]string, len(hookAliases)+len(hookSpecs))
+	for alias, hook := range hookAliases {
+		m[strings.ToLower(alias)] = hook
+	}
+	for _, h := range hookSpecs {
+		m[strings.ToLower(h.name)] = h.name
+	}
+	return m
+}()
+
+// withinOneEdit reports whether a and b are one insertion, deletion or
+// substitution apart (Levenshtein distance <= 1).
+func withinOneEdit(a, b string) bool {
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	if len(a)-len(b) > 1 {
+		return false
+	}
+	for i := 0; i < len(b); i++ {
+		if a[i] == b[i] {
+			continue
+		}
+		if len(a) == len(b) {
+			return a[i+1:] == b[i+1:]
+		}
+		return a[i+1:] == b[i:]
+	}
+	return true
 }
 
 func hookByName(name string) hookSpec {
@@ -577,7 +662,7 @@ func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
 	}
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
-		name, aliased := hookAliases[m.Name]
+		name, aliased := aliasFor(m.Name)
 		if !aliased {
 			continue
 		}
@@ -656,7 +741,13 @@ func probeAssets(read func() Assets) (fp string, ok bool) {
 // motivating case). Reference kinds are left nil — a PageMeta deriving assets
 // from a slice OnInit fills escapes this probe, which is why the render-time
 // comparison stays.
-func perturbZeroFields(v reflect.Value, depth int) {
+//
+// Struct fields whose type comes from outside the page's own package are left
+// completely alone, because their zero value is load-bearing: writing 1 into a
+// sync.Mutex's state word makes the next Lock() a RUNTIME THROW that no recover
+// can catch, and time.Time's wall/ext are just as private. The page's own
+// package is the only one whose invariants the author controls.
+func perturbZeroFields(v reflect.Value, pkg string, depth int) {
 	if depth > 4 || v.Kind() != reflect.Struct {
 		return
 	}
@@ -670,7 +761,10 @@ func perturbZeroFields(v reflect.Value, depth int) {
 		f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
 		switch f.Kind() {
 		case reflect.Struct:
-			perturbZeroFields(f, depth+1)
+			if foreignStruct(f.Type(), pkg) {
+				continue
+			}
+			perturbZeroFields(f, pkg, depth+1)
 		case reflect.String:
 			if f.IsZero() {
 				f.SetString("via-probe")
@@ -693,4 +787,19 @@ func perturbZeroFields(v reflect.Value, depth int) {
 			}
 		}
 	}
+}
+
+// foreignStruct reports whether a struct type is off-limits to the probe: one
+// declared outside the page's own package, or one of the stdlib types whose
+// zero value is an invariant even if a page somehow shared their package.
+func foreignStruct(t reflect.Type, pkg string) bool {
+	switch t.PkgPath() {
+	case "sync", "sync/atomic", "time":
+		return true
+	case pkg:
+		return false
+	}
+	// An anonymous struct (PkgPath "") is written in the page's own source, so
+	// it is the author's to perturb.
+	return t.PkgPath() != ""
 }

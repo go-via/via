@@ -552,7 +552,7 @@ func (s *formShell[C]) View() h.H { return h.Main(via.Child(s.Body)) }
 // down, the response is a pristine form: the validation error gone and the
 // submitted value back to empty, as if the POST had never happened. The root
 // case (below) always worked, which is what made this so easy to miss.
-func TestNativeForm_insideAnChildKeepsTheHandlersMutations(t *testing.T) {
+func TestNativeForm_insideAChildKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(formShell[validatedForm]{}))
 	_, page := app.Get("/")

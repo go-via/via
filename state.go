@@ -13,6 +13,12 @@ import (
 // and morphed into the live DOM when it changes, with no client-side hook to
 // write it at all. Rendering one MAKES its unit live.
 //
+// The zero State is ready to use, so a page normally leaves it zero and writes
+// its starting value in OnInit with [State.Set]. Use [StateOf] instead when the
+// starting value comes from OUTSIDE the unit — a parent seeding an embedded
+// child from a composite literal, where there is no OnInit of the child's to
+// run. The two are the same job from opposite ends; pick by who owns the value.
+//
 // NOT safe for concurrent use. Call it only from via callbacks (OnInit, an
 // action handler, a Tick or Listen handler); to reach a unit from a goroutine
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
@@ -20,7 +26,9 @@ import (
 type State[T any] struct{ val T }
 
 // StateOf seeds a State with v, so a parent can hand an embedded child its
-// starting value from a composite literal:
+// starting value from a composite literal. A unit seeding its OWN state wants
+// the zero [State] plus a [State.Set] in OnInit instead — that one can read the
+// request, the path params and the session; a literal cannot:
 //
 //	type Page struct{ Chat Chat }
 //	p := Page{Chat: Chat{Room: via.StateOf("lobby")}}
@@ -69,7 +77,8 @@ func (s *State[T]) Display() h.H {
 // NOT safe for concurrent use — same rule as [State].
 type List[E any] struct{ State[[]E] }
 
-// ListOf seeds a List with the given elements — the [StateOf] of lists.
+// ListOf seeds a List with the given elements — the [StateOf] of lists, and the
+// same choice against a zero List filled in OnInit.
 func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v}} }
 
 // Append adds v to the end of this connection's list and schedules the push,

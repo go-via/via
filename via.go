@@ -925,7 +925,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).
 	ctx.session = from.session
-	// An CHILD's mutation landed on the copy via.Child made at the previous
+	// A CHILD's mutation landed on the copy via.Child made at the previous
 	// render. A root walk from here would call via.Child(parent.Field) again
 	// and re-copy the parent's untouched field, throwing it away (validation
 	// errors gone, submitted values back to empty) — so carry the instance down
@@ -1222,13 +1222,19 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// with a Close landing just after this check harmless: it fires immediately
 	// on an already-cancelled router context.
 	if m.routerCtx != nil {
+		// Under liveMu so the check and the Add are one step against Close: an
+		// Add landing while Close is already parked in Wait is a WaitGroup
+		// misuse throw, not a recoverable panic.
+		m.liveMu.RLock()
 		select {
 		case <-m.routerCtx.Done():
+			m.liveMu.RUnlock()
 			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
 			return
 		default:
 		}
 		m.live.Add(1)
+		m.liveMu.RUnlock()
 		defer m.live.Done()
 	}
 	headersSent := false

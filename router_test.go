@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -1473,4 +1474,90 @@ func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {
 	code, body := app.Get("/")
 	assert.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "hi ")
+}
+
+// An exact-case alias table misses the typos that actually happen. Case and a
+// single dropped letter are the two, so both must warn.
+type miscasedInit struct{ N via.Signal[int] }
+
+func (m *miscasedInit) Oninit(*via.Ctx) error { return nil }
+func (m *miscasedInit) View() h.H             { return h.Div(m.N.Display()) }
+
+type droppedLetterConnect struct{ N via.Signal[int] }
+
+func (d *droppedLetterConnect) OnConect(*via.Ctx) error { return nil }
+func (d *droppedLetterConnect) View() h.H               { return h.Div(d.N.Display()) }
+
+func TestMount_warnsOnAMiscasedHookName(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", miscasedInit{}) })
+	assert.Contains(t, logged, "miscasedInit.Oninit looks like a mis-named OnInit")
+}
+
+func TestMount_warnsOnAHookNameOneLetterOff(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", droppedLetterConnect{}) })
+	assert.Contains(t, logged, "droppedLetterConnect.OnConect looks like a mis-named OnInit")
+}
+
+// The near-miss check must not fire for an ordinary method that merely shares a
+// hook's signature — being one keystroke off a hook NAME is the whole trigger.
+type unrelatedHookShapedMethod struct{ N via.Signal[int] }
+
+func (u *unrelatedHookShapedMethod) Validate(*via.Ctx) error { return nil }
+func (u *unrelatedHookShapedMethod) Save(*via.Ctx) error     { return nil }
+func (u *unrelatedHookShapedMethod) View() h.H               { return h.Div(u.N.Display()) }
+
+func TestMount_staysQuietForUnrelatedMethodsWithAHookSignature(t *testing.T) {
+	logged := captureLog(t, func() { via.NewRouter().Mount("/", unrelatedHookShapedMethod{}) })
+	assert.NotContains(t, logged, "mis-named")
+}
+
+// Close waits on the live WaitGroup, and a connect that has passed the
+// cancelled-context check must never Add behind it: that is a WaitGroup misuse
+// throw, which no per-connection recover can catch.
+// Close's contract is that the drain is COMPLETE when it returns: every stream
+// it let in has run its OnDispose. A connect that passes the shutting-down
+// check must therefore join the WaitGroup before Close can park in Wait — or
+// Close returns while a stream is still starting up behind it.
+type closePage struct {
+	opened, disposed *atomic.Int64
+	n                via.State[int]
+}
+
+func (c *closePage) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, c.tick)
+	ctx.OnDispose(func() { c.disposed.Add(1) })
+	c.opened.Add(1)
+	return nil
+}
+func (c *closePage) tick(*via.Ctx) {}
+func (c *closePage) View() h.H     { return h.Div(c.n.Display()) }
+
+func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
+	for range 50 {
+		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
+		r := via.NewRouter()
+		r.Mount("/", closePage{opened: opened, disposed: disposed})
+		srv := httptest.NewServer(r)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := srv.Client().Do(req)
+			if err == nil {
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+		}()
+		// Long enough for the connect to clear the shutting-down check, short
+		// enough that it is still setting the stream up.
+		time.Sleep(300 * time.Microsecond)
+		r.Close()
+		// OnInit runs before the WaitGroup would be joined by a racing connect,
+		// so an un-drained one shows up here as an opened stream with no
+		// disposal — Close having returned over a live goroutine.
+		require.Equal(t, opened.Load(), disposed.Load(), "Close returned before a stream it admitted was drained")
+		<-done
+		srv.Close()
+	}
 }
