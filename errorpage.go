@@ -178,16 +178,15 @@ type errPageWriter struct {
 // Unwrap lets http.NewResponseController reach the real writer.
 func (e *errPageWriter) Unwrap() http.ResponseWriter { return e.ResponseWriter }
 
-// Flush keeps a streaming route working through the wrapper for code that
-// still type-asserts http.Flusher directly. A caught response is buffered until
-// finish, so there is nothing to flush yet.
-func (e *errPageWriter) Flush() {
+// commit reports whether this write may reach the real writer, marking the
+// response committed when it may. A caught response is buffered until finish
+// instead, so nothing downstream may see it yet.
+func (e *errPageWriter) commit() bool {
 	if e.caught {
-		return
+		return false
 	}
 	e.passed = true
-	// Error ignored: a writer that cannot flush is exactly the no-op wanted here.
-	_ = http.NewResponseController(e.ResponseWriter).Flush()
+	return true
 }
 
 // unwrapWriter reaches the writer net/http itself installed, past any wrapper.
@@ -205,25 +204,26 @@ func unwrapWriter(w http.ResponseWriter) http.ResponseWriter {
 }
 
 func (e *errPageWriter) WriteHeader(code int) {
-	if e.caught || e.passed {
+	if e.passed {
 		return
 	}
-	if code >= 400 {
+	if !e.caught && code >= 400 {
 		e.caught, e.status = true, code
 		return
 	}
-	e.passed = true
+	if !e.commit() {
+		return
+	}
 	e.ResponseWriter.WriteHeader(code)
 }
 
 func (e *errPageWriter) Write(p []byte) (int, error) {
-	if e.caught {
+	if !e.commit() {
 		if n := errPageBodyCap - e.body.Len(); n > 0 {
 			e.body.Write(p[:min(n, len(p))])
 		}
 		return len(p), nil
 	}
-	e.passed = true
 	return e.ResponseWriter.Write(p)
 }
 
@@ -251,6 +251,10 @@ func noteErr(w http.ResponseWriter, err error) {
 // wrapForErrorPage decides whether this request's failures are DOCUMENT
 // responses. A Datastar @post and the SSE connect are client-consumed, so they
 // stay plain text (see WithErrorPage).
+//
+// A new STREAMING route has to be excluded here too: the wrapper buffers a
+// >=400 response until finish, and a flush that reaches the real writer past it
+// would commit a bare 200 ahead of the error page.
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {
 	if r.cfg.errorPage == nil ||
 		req.Header.Get("Datastar-Request") == "true" ||
