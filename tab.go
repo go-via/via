@@ -18,7 +18,7 @@ type tabStream struct {
 	pushq       chan func()       // serialization channel, shared by all this connection's units
 	done        <-chan struct{}   // closed on disconnect
 	pushSignals func(json string) // emit a patch-signals frame on this stream
-	mu          sync.Mutex        // replace runs on the embed goroutine, unit is read from the dispatching request's
+	mu          sync.Mutex        // replace runs on the child goroutine, unit is read from the dispatching request's
 	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
 	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
 
@@ -94,7 +94,7 @@ func (c *tabStream) flushDirty(u *Ctx) {
 
 func clearDirty(c *Ctx) {
 	clear(c.dirty)
-	for _, isl := range c.embeds {
+	for _, isl := range c.children {
 		clearDirty(isl)
 	}
 }
@@ -109,7 +109,7 @@ func (c *tabStream) replace(u *Ctx) {
 
 // runOutcome says WHY a dispatch did not produce a result. One 410 for three
 // unrelated causes was the whole defect: a closed tab, a client that hung up,
-// and an embed goroutine pinned by a blocking Tick/Listen/action handler are
+// and a child goroutine pinned by a blocking Tick/Listen/action handler are
 // three different operational problems and only the first is the client's to
 // fix.
 type runOutcome int
@@ -121,14 +121,14 @@ const (
 	runPinned
 )
 
-// pinnedDeadline is how long a dispatch waits for the embed goroutine to reach
+// pinnedDeadline is how long a dispatch waits for the child goroutine to reach
 // it before declaring the goroutine pinned. Well past any sane handler, and
 // short enough to answer before a load balancer or client deadline does — the
 // old code waited on req.Context() alone, so the pinned case was invisible and
 // arrived as a 410 that blamed the client.
 var pinnedDeadline = 5 * time.Second
 
-// run posts fn onto the embed goroutine and WAITS for its actionResult, so a
+// run posts fn onto the child goroutine and WAITS for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
 // triggered it. The result channel is buffered so a late send never blocks a
 // goroutine that already gave up, and every wait is guarded on c.done, reqCtx
@@ -183,8 +183,8 @@ func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionR
 func (c *tabStream) unitType() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if u := c.units[rootAddr]; u != nil && u.embedV.typ != nil {
-		return u.embedV.typ.String()
+	if u := c.units[rootAddr]; u != nil && u.unitV.typ != nil {
+		return u.unitV.typ.String()
 	}
 	return "unknown"
 }
@@ -204,7 +204,7 @@ func (c *tabStream) warnPinned() {
 		pinnedDeadline, c.id, c.unitType())
 }
 
-// registry maps a per-connection tab id to its live embed. A local of each
+// registry maps a per-connection tab id to its live child. A local of each
 // Handler call, never global.
 type registry struct {
 	mu sync.Mutex

@@ -17,7 +17,7 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Feed is a live embed fed by a shared Topic. recv updates Last and via
+// Feed is a live child fed by a shared Topic. recv updates Last and via
 // element-patches the re-render over SSE.
 type Feed struct {
 	room *topic.Topic[string]

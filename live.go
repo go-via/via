@@ -113,7 +113,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 			}
 			// One push item per BATCH: values published while this item runs
 			// pile up for the next Drain, so a burst costs a bounded number of
-			// frames. The item pushes only THIS embed's container, so a fan-out
+			// frames. The item pushes only THIS child's container, so a fan-out
 			// never re-renders a sibling.
 			return func() {
 				// One recover per VALUE, and the push runs regardless: the
@@ -134,13 +134,13 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("via: panic in a Listen handler [unit=%T]: %v\n%s", c.embedV.v, r, debug.Stack())
+			log.Printf("via: panic in a Listen handler [unit=%T]: %v\n%s", c.unitV.v, r, debug.Stack())
 		}
 	}()
 	handler(c, v)
 }
 
-func startTicker(reqCtx context.Context, embed *Ctx, t tickReg, pushq chan<- func()) {
+func startTicker(reqCtx context.Context, child *Ctx, t tickReg, pushq chan<- func()) {
 	go func() {
 		tk := time.NewTicker(t.d)
 		defer tk.Stop()
@@ -149,10 +149,10 @@ func startTicker(reqCtx context.Context, embed *Ctx, t tickReg, pushq chan<- fun
 			case <-reqCtx.Done():
 				return
 			case <-tk.C:
-				// Push only this embed's container, so a tick never re-renders
+				// Push only this child's container, so a tick never re-renders
 				// a sibling.
 				select {
-				case pushq <- func() { t.fn(embed); embed.push() }:
+				case pushq <- func() { t.fn(child); child.push() }:
 				case <-reqCtx.Done():
 					return
 				}

@@ -145,7 +145,7 @@ type Signal[T any] struct {
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
 // "$chat__draft" for a Draft inside an embedded Chat (the DOUBLE underscore
-// marks the embed boundary; a plain nested struct joins with a single one) —
+// marks the child boundary; a plain nested struct joins with a single one) —
 // for hand-written Datastar attributes the typed API does not cover:
 //
 //	h.Div(h.Data("show", p.Open.Ref()), ...)
@@ -213,7 +213,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	if s.bound == nil {
 		panic("via: a Signal was rendered outside a via render")
 	}
-	// Resolved on EVERY bind, not cached: via.Embed copies the child by value,
+	// Resolved on EVERY bind, not cached: via.Child copies the child by value,
 	// so a signal the parent's View already bound arrives still carrying the
 	// parent's prefix and would collide in the page's one signal store. It is
 	// also the one place a Signal that is not a plain field is caught.

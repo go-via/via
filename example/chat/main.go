@@ -4,10 +4,14 @@ package main
 
 import (
 	"cmp"
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -31,7 +35,7 @@ func NewRoom() *Room {
 func (r *Room) join() { r.presence.Publish(int(r.online.Add(1))) }
 func (r *Room) part() { r.presence.Publish(int(r.online.Add(-1))) }
 
-// Chat is one connected tab's live embed.
+// Chat is one connected tab's live child.
 type Chat struct {
 	room *Room
 
@@ -83,7 +87,28 @@ func (c *Chat) View() h.H {
 }
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
 	room := NewRoom()
-	http.Handle("/", via.Handler(Chat{room: room}))
-	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
+	// via.Handler returns the *Router, so the live half is reachable: every
+	// open tab is a goroutine of its own, and only Close drains them.
+	r := via.Handler(Chat{room: room})
+	srv := &http.Server{Addr: cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), Handler: r}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+	<-ctx.Done()
+
+	// Close FIRST: it ends every stream the way a closed tab does, so Shutdown
+	// has no open SSE response left to block on until its own deadline.
+	r.Close()
+	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shut); err != nil {
+		log.Print(err)
+	}
 }

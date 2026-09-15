@@ -37,7 +37,7 @@ func (p *liveTicker) OnInit(ctx *via.Ctx) error {
 func (p *liveTicker) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *liveTicker) View() h.H         { return h.Div(h.P(h.Str("n: "), p.n.Display())) }
 
-// clicker is a live embed whose action mutates its own State — the vehicle for
+// clicker is a live child whose action mutates its own State — the vehicle for
 // testing Click and the $viatab signal round-trip.
 type clicker struct{ count via.State[int] }
 
@@ -101,7 +101,7 @@ func (c *chat) View() h.H {
 	)
 }
 
-// bClock + bCounter are two LIVE embeds multiplexed on one stream: a ticking
+// bClock + bCounter are two LIVE children multiplexed on one stream: a ticking
 // clock and a click-driven counter. bDash is the shell (not itself live).
 type bClock struct{ secs via.State[int] }
 
@@ -121,23 +121,23 @@ type bDash struct {
 	Counter bCounter
 }
 
-func (d *bDash) View() h.H { return h.Div(via.Embed(d.Clock), via.Embed(d.Counter)) }
+func (d *bDash) View() h.H { return h.Div(via.Child(d.Clock), via.Child(d.Counter)) }
 
-// Two live embeds on one page must update INDEPENDENTLY in a real browser: the
+// Two live children on one page must update INDEPENDENTLY in a real browser: the
 // clock's server-push morphs only #via-i0, and a click on the counter routes
 // (via the tab handshake) to #via-i1 and morphs only that — proving Datastar
-// patches each embed's container separately over the one shared SSE stream.
-func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
+// patches each child's container separately over the one shared SSE stream.
+func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(bDash{}))
 
-	// Clock embed ticks on its own (no interaction) → server-push morphs #via-i0.
+	// Clock child ticks on its own (no interaction) → server-push morphs #via-i0.
 	s.WaitFor("#via-i0 p", func(text string) bool {
 		var n int
 		_, err := fmt.Sscanf(text, "uptime %d", &n)
 		return err == nil && n >= 2
-	}, "the clock embed to tick past 2 (live push to #via-i0)")
+	}, "the clock child to tick past 2 (live push to #via-i0)")
 
-	// Counter embed: its action must route to #via-i1 via the viatab signal and morph
+	// Counter child: its action must route to #via-i1 via the viatab signal and morph
 	// only that container, leaving the clock running.
 	s.WaitLiveConnected()
 	s.Click("#via-i1 button")
@@ -147,7 +147,7 @@ func TestChild_multiplexedEmbedsUpdateIndependently(t *testing.T) {
 
 // pRoot is a PLAIN root (not itself live) with its own action, embedding a
 // live bCounter — the region-ownership case: the root's own action patch
-// must not repaint the live embed from its seed value.
+// must not repaint the live child from its seed value.
 type pRoot struct {
 	hits    int
 	Counter bCounter
@@ -158,15 +158,15 @@ func (p *pRoot) View() h.H {
 	return h.Div(
 		h.P(h.Str("hits "), h.Str(p.hits)),
 		h.Button(via.On("click", p.Hit), h.Str("hit")),
-		via.Embed(p.Counter),
+		via.Child(p.Counter),
 	)
 }
 
 // A plain root's own action re-renders #root (Datastar's default whole-root
-// morph); the embedded live embed's container carries data-ignore-morph, so
-// that patch must leave the embed's DOM untouched, and the embed's own push
+// morph); the embedded live child's container carries data-ignore-morph, so
+// that patch must leave the child's DOM untouched, and the child's own push
 // (Datastar inner mode) must still land afterward.
-func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
+func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
 	s.WaitLiveConnected()
@@ -178,11 +178,11 @@ func TestChild_rootActionPatchLeavesLiveEmbedAlone(t *testing.T) {
 
 	// Datastar applies one patch-elements frame as a single morph, so "hits 1"
 	// being on screen means the whole root patch has already been applied — there
-	// is no later moment for a stray repaint of the embed to arrive from it. The
+	// is no later moment for a stray repaint of the child to arrive from it. The
 	// clicks-2 assertion below is the second line of defence: a repaint from the
 	// seed would make the next click read 1, not 2.
 	if got := s.Text("#via-i0 p"); !strings.Contains(got, "clicks 1") {
-		t.Fatalf("the root's own action patch repainted the live embed from its seed: %q", got)
+		t.Fatalf("the root's own action patch repainted the live child from its seed: %q", got)
 	}
 
 	s.Click("#via-i0 button")
@@ -223,8 +223,8 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// Click drives a live-embed action: the count changes only if the $viatab the
-// SSE set is sent in the action's signal body, reaching this connection's embed
+// Click drives a live-child action: the count changes only if the $viatab the
+// SSE set is sent in the action's signal body, reaching this connection's child
 // and pushing the result back over its stream. WaitTextContains absorbs the
 // round-trip latency.
 func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {

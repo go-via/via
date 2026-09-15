@@ -70,7 +70,7 @@ the v2 core. **Requires Go 1.27.**
   data-dependent metadata works. `Meta` carries `Title`, `Description`,
   `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to vary
   with the request — plus `Assets`, which is not. Only the MOUNTED root's counts:
-  an embedded child's is ignored and `Embed` logs one line naming the type,
+  an embedded child's is ignored and `Child` logs one line naming the type,
   because a shared per-request head would let any nested unit silently rename
   the page.
 
@@ -84,14 +84,19 @@ the v2 core. **Requires Go 1.27.**
   the floor policy: a fragment loads nothing.
 
   Because the policy is built before any request, `Assets` MUST be a constant of
-  the type. via re-reads it on every document render and panics if it moved —
-  a data-dependent script src is caught on the first GET instead of being
-  silently blocked in the browser. Boot-time validation panics on a `Script`
+  the type, and via proves it AT `Mount`: it reads `PageMeta` a second time off
+  a probe copy of the mounted literal with its zero fields filled in — what
+  `OnInit` does — and refuses the mount, naming the type, if the assets moved.
+  A field the literal itself set is left alone: that value is fixed for the life
+  of the mount, so a CDN base handed to the literal stays legal. The render-time
+  comparison stays for what the probe cannot reach (assets grown from a slice
+  `OnInit` fills), so a data-dependent script src is caught at boot or on the
+  first GET, never silently blocked in the browser. Boot-time validation panics on a `Script`
   setting both or neither of `Src`/`Inline`, an `Inline` containing `</script`
   or `</style`, an absolute URL that is not http(s), and a `Preload.As` outside
   script/style/font/image.
 
-  `Mount` and `Embed` extend the hook check to it: a method named `PageMeta`
+  `Mount` and `Child` extend the hook check to it: a method named `PageMeta`
   with the wrong signature panics at boot, and a near-miss name (`Meta`,
   `Metadata`, …) carrying `func() via.Meta` on a type implementing no
   `via.PageMetaer` is logged.
@@ -135,6 +140,12 @@ the v2 core. **Requires Go 1.27.**
   refused `503`. Call it before `http.Server.Shutdown`; it is safe to call
   more than once.
 
+  `via.Handler` returns the `*Router` it builds, not an `http.Handler`, so
+  `Close` is reachable from the entry point every single-page app starts with —
+  no type assertion, nothing to document around. `*Router` implements
+  `ServeHTTP`, so existing call sites are unchanged. `example/chat` shows the
+  whole shutdown path: SIGINT, `r.Close()`, then `srv.Shutdown`.
+
 - **A clean stream close now reaches the user.** The bundled Datastar client
   defaults each `@post` to `retry:"auto"`, and under `"auto"` a response body
   that simply ENDS resolves rather than retrying: it fires `finished` and never
@@ -161,7 +172,7 @@ the v2 core. **Requires Go 1.27.**
 
 - **`StateOf` / `ListOf`.** `State[T]` holds its value in an unexported field,
   so a parent could not seed an embedded child's state from a composite
-  literal — which is exactly what `Embed` asks you to do. `via.StateOf("lobby")`
+  literal — which is exactly what `Child` asks you to do. `via.StateOf("lobby")`
   and `via.ListOf("a", "b")` are the constructors.
 
 - **`Ctx.Context`** returns the context bounding this unit's work — the STREAM
@@ -205,10 +216,10 @@ the v2 core. **Requires Go 1.27.**
   `Redirect`. A unit that declares NEITHER hook and answers 204 now logs one
   line naming `OnReload`, so the failure is never silent again.
 
-- **Mount and Embed check the lifecycle hooks.** `Initer`/`Reloader` are
+- **Mount and Child check the lifecycle hooks.** `Initer`/`Reloader` are
   duck-typed, so a typo or a signature change unhooks a composition silently.
   A method literally named `OnInit`/`OnReload` whose signature is not
-  `func(*via.Ctx) error` now panics at Mount/Embed, and a method that *does*
+  `func(*via.Ctx) error` now panics at Mount/Child, and a method that *does*
   have that signature under a near-miss name (`Reload`, `OnInitialize`,
   `Refresh`, …) on a type implementing neither interface logs one line naming
   the assertion that would have caught it. The assertion itself —
@@ -316,11 +327,11 @@ as a re-read of the README rather than a diff.
   `chat__draft` for one inside an embedded `Chat`, `outer__mid__kid__step` for
   a deeper path, replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
   The offsets stay as the internal key, so hydration is unchanged and
-  reflection runs once per composition TYPE at `Mount`/`Embed`, never per
-  render. A plain nested struct joins with one underscore, an embed boundary
+  reflection runs once per composition TYPE at `Mount`/`Child`, never per
+  render. A plain nested struct joins with one underscore, a child boundary
   with two, so a parent that binds `p.C.S` itself (`c_s`) and also embeds
   `p.C` (`c__s`) keeps the two copies apart. Two fields of the same type in
-  one parent are ambiguous — `Embed`'s argument order need not match
+  one parent are ambiguous — `Child`'s argument order need not match
   declaration order — so those fall back to the positional key (`i0__s`).
 - **`Signal[T].Ref()`** returns the signal's Datastar expression (`"$count"`)
   for hand-written attributes the typed API does not cover:
@@ -341,9 +352,9 @@ as a re-read of the README rather than a diff.
   `sess` subpackage and its `internal/sessbridge` shim are gone.
 - **Bare mutators**: `Signal.Set(v)`, `State.Set(v)`, `List.Append(v)`, with no
   `ctx` argument. State is bare; ctx is for the request.
-- **Composition is `via.Embed`**: child compositions are plain struct fields
-  rendered with `via.Embed(p.Field)`. `Slot`, `Child[C]`, `NewChild`, `Fill`
-  and the `.Embed` method are gone. Generic layouts: `Shell[C]{Body C}`.
+- **Composition is `via.Child`**: child compositions are plain struct fields
+  rendered with `via.Child(p.Field)`. `Slot`, `Child[C]`, `NewChild`, `Fill`
+  and the `.Child` method are gone. Generic layouts: `Shell[C]{Body C}`.
 - **`via.Mount(r, …)` is `r.Mount(…)`**: the router owns its mounts.
 - **`via.Param[T](ctx, n)` is `ctx.Param[T](n)`; `via.Redirect(ctx, path)` is
   `ctx.Redirect(path)`**: request-scoped verbs are Ctx methods.
@@ -369,7 +380,7 @@ as a re-read of the README rather than a diff.
 ### Added
 
 - **Embedded children get `OnInit` too.** Only the root's ever ran; now every
-  `via.Embed`ed child gets its own data-loading hook, before its own `View`,
+  `via.Child`ed child gets its own data-loading hook, before its own `View`,
   with the same answers — `via.ErrNotFound` → 404, `ctx.Redirect` → 303, any
   other error → 500 — even though it fails from inside the parent's render.
 - **`ctx.OnConnect(fn)`**: run fn once when this unit's stream opens.
@@ -397,7 +408,7 @@ as a re-read of the README rather than a diff.
   fields; each streams and patches independently over the page's one
   connection. **Known limitation:** a live island cannot itself embed
   another live island, and an embedded live island's own `View` cannot call
-  `via.Embed` at all — either panics at render, loud and early. Nested live
+  `via.Child` at all — either panics at render, loud and early. Nested live
   composition is deferred; plain (non-live) composition still nests to any
   depth.
 - **Typed attribute helpers in `h`**: `ID`, `Class`, `Style`, `Type`, `Name`,
@@ -498,16 +509,16 @@ as a re-read of the README rather than a diff.
   its opposite was spelled four ways (`stateless`, `plain`, `non-live`,
   `static`). Now: a page **streams** (the per-tab SSE connection) or is served
   **plain**; **live** is an adjective on a unit or composition only — a live
-  unit pushes; **embed** replaces "island" as the noun for an embedded child.
+  unit pushes; **child** replaces "island" as the noun for an embedded child.
   The rule the vocabulary buys: *a page streams iff it contains a live unit; a
-  live embed may sit under any plain ancestor; a live unit may not contain
+  live child may sit under any plain ancestor; a live unit may not contain
   another live unit.* Renames: `ctx.OnLive` → `ctx.OnConnect`,
-  `vt.App.IslandAction` → `vt.App.EmbedAction`, `vt.Action.Live` →
+  `vt.App.IslandAction` → `vt.App.ChildAction`, `vt.Action.Live` →
   `vt.Action.Over`. Several 410/500 bodies and the nesting panics were reworded
   to match. **No wire change to ids or routing**: container ids, signal
   prefixes, action and SSE paths, and the tab/session headers and cookies are
   all untouched. Some error BODIES did change text (`no such island` → `no such
-  embed`, `live connection closed` → `stream closed`), so a client matching on
+  child`, `live connection closed` → `stream closed`), so a client matching on
   a 410 body string needs updating; the status codes did not move.
 
 - **A native `PostForm` submit inside a live unit now returns the page a
@@ -540,7 +551,7 @@ as a re-read of the README rather than a diff.
   offset within the composition struct — `count`, `chat__draft` for an
   embedded island — replacing the render-order `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
   across the upgrade posts the old names, the server ignores what it does not
-  recognise, and the page is correct on reload. `via.Embed`'s signature is
+  recognise, and the page is correct on reload. `via.Child`'s signature is
   unchanged — the child copy it already takes by value is the offset base.
 
   It fixes conditional `Bind()`. Slots were claimed in first-render order, so
@@ -549,7 +560,7 @@ as a re-read of the README rather than a diff.
   stateless page the new input came up holding the previous occupant's value.
   A `Signal` reached through a pointer, slice, array or map field — or held by
   a composition whose `View` has a value receiver — is outside the struct, has
-  no offset, and now **panics at `Mount`/`Embed`** rather than falling back to
+  no offset, and now **panics at `Mount`/`Child`** rather than falling back to
   a render-order name that carried the old aliasing hazard. A Signal behind an
   INTERFACE field is invisible to the type walk and still panics on render. Make it a direct struct field. Keyed per-row
   signal slots remain future work.
@@ -557,7 +568,7 @@ as a re-read of the README rather than a diff.
   opens.** Discovery renders once on server state alone (that render, and only
   that render, decides what is dispatchable), applies the body, and re-renders
   to a fixpoint so a `Bind()`ed `Signal` in a `When` build, an `Each` row, or
-  an embed `View` that another `Bind()`ed signal reveals is hydrated too — its
+  a child `View` that another `Bind()`ed signal reveals is hydrated too — its
   posted value used to be dropped server-side and wiped client-side. The
   dispatchable set is the INTERSECTION of the two renders, never a superset,
   and the intersection is per `(handler, arg)` pair: a posted signal cannot
@@ -666,15 +677,15 @@ as a re-read of the README rather than a diff.
   relying on the client's value, that no longer round-trips: `Bind()` it (and
   accept that it is then client-controlled), or move the gate to session or
   database state.**
-- **A native `PostForm` on a plain root no longer kills a live embed on the
+- **A native `PostForm` on a plain root no longer kills a live child on the
   page.** The full page such a submit answers with is what the browser replaces
   the document with; it was written with the stream bootstrap hard-coded off,
-  so a plain root carrying a live `Embed` served a document with no `data-init`
-  and the embed was dead after the first submit. Liveness is now read off that
+  so a plain root carrying a live `Child` served a document with no `data-init`
+  and the child was dead after the first submit. Liveness is now read off that
   re-render, exactly as the GET and the live path do.
 - **The acted-instance substitution now checks the TYPE as well as the key.**
-  When a root's `Embed` order shifts between the discovery render and the
-  response re-render (the acted embed's own action opened a branch or appended
+  When a root's `Child` order shifts between the discovery render and the
+  response re-render (the acted child's own action opened a branch or appended
   to the list the root iterates), the acted key names a slot a different type
   now occupies. The mutated instance was spliced in there regardless: the
   wrong `View` rendered under the wrong slot prefix, and the type that belonged
@@ -695,12 +706,12 @@ as a re-read of the README rather than a diff.
   binds a VOLATILE value as an arg** (a pagination cursor, a count): such an arg
   goes stale the moment a render moves it and the click 410s. Bind a stable
   identity (a primary key) and read changing state off the composition instead.
-- **A plain embed's action response keeps the instance the handler mutated.**
-  The re-render walks from the root and `via.Embed` re-copies the parent's
+- **A plain child's action response keeps the instance the handler mutated.**
+  The re-render walks from the root and `via.Child` re-copies the parent's
   field, so a form's validation error and the values the user typed were
   discarded and the response came back pristine, as if the POST had never
   happened.
-- **Wire break: the positional embed slot prefix is `i0_0__`, not `i0-0__`.**
+- **Wire break: the positional child slot prefix is `i0_0__`, not `i0-0__`.**
   Only the fallback prefix minted when a parent holds two fields of the child's
   type is affected. The key's depth separator `-` is not a JS identifier
   character and `Ref()` hands these names straight to Datastar expressions, so
@@ -712,7 +723,7 @@ as a re-read of the README rather than a diff.
   every embedded child in the patch is a fresh copy whose `OnInit` never had —
   so a nested child that loads its data there came back zero-valued in the
   patch, nothing like what the same subtree renders on a GET. Both the root
-  patch and a plain embed's own subtree patch are fixed. A live push does the
+  patch and a plain child's own subtree patch are fixed. A live push does the
   same, and the cost is real: **a live root re-runs every plain embedded
   child's `OnInit` once per pushed frame**, so any side effect in such an
   `OnInit` repeats at the frame rate. Keep a plain child's `OnInit` cheap and
@@ -721,8 +732,8 @@ as a re-read of the README rather than a diff.
   not accumulate.)
 
 - **Wire break: an island is addressed by its KEY, not a page-wide counter.**
-  An `Embed`ed child's identity is now its ordinal among its own parent's
-  `Embed` calls, composed onto the parent's key — the root's children are
+  A `Child`ed child's identity is now its ordinal among its own parent's
+  `Child` calls, composed onto the parent's key — the root's children are
   `0`, `1`, …, a child of `0` is `0-0` — and the root's dispatch address is
   `r`. Container id (`via-i0-0`), signal prefix (`i0_0__`) and dispatch
   address (`/_via/a/0-0/…`) all read that one key. The flat counter it
@@ -738,10 +749,10 @@ as a re-read of the README rather than a diff.
   (`data-init="@post('/job/{id}/_via/sse')"`) while every other URL on the
   page carried the concrete request path. The browser POSTed the pattern
   literally, missed the route, and the page's live regions never connected.
-- **A live island's `Embed`ded child is looked up by the right address.**
-  `embedViewer` indexed a connection's units by the child's plain island
+- **A live island's embedded child is looked up by the right address.**
+  `childViewer` indexed a connection's units by the child's plain island
   index, but `liveConn.replace` keys them by `islandIdx+1` (root is 0) — a
-  live root that embeds anything re-entered `Embed` on its own render and
+  live root that embeds anything re-entered `Child` on its own render and
   panicked on the first push; a plain root with one live island reseeded a
   by-value copy instead of the connected instance on a native re-render; two
   live islands collided on the same address, duplicating one and losing the
@@ -852,8 +863,8 @@ as a re-read of the README rather than a diff.
   actions until it binds to a session (at connect, or on first login
   afterward); an anonymous connection has no session to check against at
   all, so never render, log, or leak a tab id outside its own client.
-- An island's key is its ordinal among its parent's `Embed` calls, so a `When`
-  wrapped around an `Embed` renumbers every LATER sibling of that parent when
+- An island's key is its ordinal among its parent's `Child` calls, so a `When`
+  wrapped around a `Child` renumbers every LATER sibling of that parent when
   it flips. Composition made the numbering stable across partial re-renders;
   it did not make it stable across a shape change, so such a `When` must still
   depend only on data fixed by `OnInit` or the field literal.
@@ -879,8 +890,8 @@ as a re-read of the README rather than a diff.
   self-heals on the following push, and it is not client-driven — the `View`
   has to panic. Keeping the dirty sink on the CONNECTION instead was
   considered and rejected: the plain path has no connection, and it reads the
-  acted embed's OWN dirty set (not the page-wide one) to scope that embed's
-  `data-signals` patch, so one shared sink would make an embed's patch
+  acted child's OWN dirty set (not the page-wide one) to scope that child's
+  `data-signals` patch, so one shared sink would make a child's patch
   re-declare a sibling's slots and clobber a value the user is mid-edit.
 
 - A live connection only binds to a session an action actually MINTS
@@ -913,5 +924,17 @@ as a re-read of the README rather than a diff.
   stream, and `Rotate` on it is refused rather than re-issuing a cookie over
   the one the browser now holds. Reads still serve the connect-time snapshot.
   Reconnecting the stream picks up the new id.
+
+### Verification
+
+- The suite is `-race`-clean, and eight examples build and run against the tree.
+- The live stack is verified in real headless browsers, not just against the
+  Go transport: `vtbrowser/`, behind `-tags browser` (chromedp). `example/chat`
+  is verified with two browsers against one server — a message typed in one
+  reaches the other, and the presence count moves in both.
+- The hardened core carries a test per claim: by-value `Handler`/`Mount`, the
+  origin floor, the hash-admitted CSP, the request body cap, panic-recovery on
+  every transport path, the compile-time `View` constraint, and the
+  attribute-name allowlist.
 
 Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.

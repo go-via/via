@@ -16,7 +16,7 @@ import (
 // present in the page.
 func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Handler(quietEmbed{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
 		"window.__viaRC",          // single-injection guard
@@ -45,7 +45,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 // what catches a stray byte added around the script.
 func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	t.Parallel()
-	resp, body := do(t, serve(t, via.Handler(quietEmbed{})), http.MethodGet, "/", "")
+	resp, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, `<script>(()=>{if(window.__viaRC)`,
 		"the reconnect script ships bare — its hash, not a nonce, admits it")
@@ -78,7 +78,7 @@ func TestReconnect_plainPageOmitsTheManager(t *testing.T) {
 // Balanced braces/parens is a cheap structural guard against that.
 func TestReconnect_blobIsBalanced(t *testing.T) {
 	t.Parallel()
-	_, body := do(t, serve(t, via.Handler(quietEmbed{})), http.MethodGet, "/", "")
+	_, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
 
 	i := strings.Index(body, "(()=>{if(window.__viaRC)")
 	require.GreaterOrEqual(t, i, 0, "reconnect IIFE not found in page")

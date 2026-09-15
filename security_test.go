@@ -20,7 +20,7 @@ import (
 )
 
 // sseStatus opens the SSE stream (POST /_via/sse) with exactly the given headers
-// and returns the status, cancelling immediately so a 200 stream's embed
+// and returns the status, cancelling immediately so a 200 stream's child
 // goroutine tears down.
 func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) int {
 	t.Helper()
@@ -43,7 +43,7 @@ func sseStatus(t *testing.T, srv *httptest.Server, headers map[string]string) in
 // allowlisted) source.
 func TestSSE_enforcementRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietChild{}, via.WithTrustedOrigin("https://childder.example")))
 	assert.Equal(t, http.StatusForbidden,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
@@ -53,7 +53,7 @@ func TestSSE_enforcementRejectsCrossSiteOrigin(t *testing.T) {
 // closed, exactly as the action endpoint does.
 func TestSSE_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietChild{}, via.WithTrustedOrigin("https://childder.example")))
 	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, nil))
 }
 
@@ -61,7 +61,7 @@ func TestSSE_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 // same-origin) must still connect.
 func TestSSE_enforcementAllowsSameOrigin(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin("https://embedder.example")))
+	srv := serve(t, via.Handler(quietChild{}, via.WithTrustedOrigin("https://childder.example")))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}))
 }
@@ -70,19 +70,19 @@ func TestSSE_enforcementAllowsSameOrigin(t *testing.T) {
 // per-tab id is the CSRF token): a cross-site connect must succeed.
 func TestSSE_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(quietEmbed{}))
+	srv := serve(t, via.Handler(quietChild{}))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
 }
 
-// A known cross-origin embedder allowlisted with WithTrustedOrigin must still be
-// able to open the stream, so the floor doesn't break a deliberate embed.
+// A known cross-origin childder allowlisted with WithTrustedOrigin must still be
+// able to open the stream, so the floor doesn't break a deliberate child.
 func TestSSE_allowsTrustedCrossOrigin(t *testing.T) {
 	t.Parallel()
-	const embedder = "https://embedder.example"
-	srv := serve(t, via.Handler(quietEmbed{}, via.WithTrustedOrigin(embedder)))
+	const childder = "https://childder.example"
+	srv := serve(t, via.Handler(quietChild{}, via.WithTrustedOrigin(childder)))
 	assert.Equal(t, http.StatusOK,
-		sseStatus(t, srv, map[string]string{"Origin": embedder, "Sec-Fetch-Site": "cross-site"}))
+		sseStatus(t, srv, map[string]string{"Origin": childder, "Sec-Fetch-Site": "cross-site"}))
 }
 
 // Each stream holds an stream goroutine + timers; left uncapped, a client
@@ -92,7 +92,7 @@ func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
 	// Not t.Parallel(): SetMaxSSEConnForTest mutates package state shared with
 	// any concurrently-Registering test.
 	restore := via.SetMaxSSEConnForTest(1)
-	srv := serve(t, via.Handler(quietEmbed{}))
+	srv := serve(t, via.Handler(quietChild{}))
 	restore()
 
 	_, release := openStream(t, srv) // takes the only slot; asserts it connected (200)
@@ -107,7 +107,7 @@ func TestSSE_overTheConnectionCapIsRefused(t *testing.T) {
 // would wedge the app at its limit forever.
 func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 	restore := via.SetMaxSSEConnForTest(1)
-	srv := serve(t, via.Handler(quietEmbed{}))
+	srv := serve(t, via.Handler(quietChild{}))
 	restore()
 
 	_, release := openStream(t, srv)
@@ -125,8 +125,8 @@ func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 // not share a counter, or a busy app would throttle an unrelated one.
 func TestSSE_capIsPerRegister(t *testing.T) {
 	restore := via.SetMaxSSEConnForTest(1)
-	a := serve(t, via.Handler(quietEmbed{}))
-	b := serve(t, via.Handler(quietEmbed{}))
+	a := serve(t, via.Handler(quietChild{}))
+	b := serve(t, via.Handler(quietChild{}))
 	restore()
 
 	_, release := openStream(t, a) // fills A's only slot
@@ -150,7 +150,7 @@ func (p *panicComp) View() h.H {
 // mutate server state, or any page on the web can drive the counter (CSRF).
 func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
 	status, _ := app.Action(1).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
@@ -164,7 +164,7 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 // must be rejected.
 func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).SecFetch("same-site").Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))).Action(1).SecFetch("same-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -173,7 +173,7 @@ func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 // floor must fail closed rather than silently trust it.
 func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example"))).Action(1).NoOrigin().Fire()
+	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -246,7 +246,7 @@ func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
-// WithTrustedOrigin allowlists a specific cross-origin embedder; that origin
+// WithTrustedOrigin allowlists a specific cross-origin childder; that origin
 // must be allowed even when the browser labels the request cross-site.
 func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {
 	t.Parallel()
@@ -273,7 +273,7 @@ func TestOriginFloor_matchesHostCaseAndDefaultPortInsensitively(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 			status, body := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusOK, status, "a normalized same-origin request must be allowed")
 			assert.Contains(t, body, "<h1>1</h1>", "and must mutate server state")
@@ -292,7 +292,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 			status, _ := app.Action(1).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusForbidden, status)
 		})
@@ -306,7 +306,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 // to their own https document.)
 func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	t.Parallel()
-	app := vt.ServeTLS(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://embedder.example")))
+	app := vt.ServeTLS(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
 	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Fire()
 	assert.Equal(t, http.StatusForbidden, down, "http Origin on a TLS request is a scheme downgrade")
@@ -316,7 +316,7 @@ func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
-// liveSessStream is a live embed (its State makes the root a live unit) that
+// liveSessStream is a live child (its State makes the root a live unit) that
 // establishes its session in OnInit, so the connect response carries the cookie.
 type liveSessStream struct{ n via.State[int] }
 
@@ -406,7 +406,7 @@ func sseSessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
 	return nil
 }
 
-// unsafeRoot and unsafeEmbed both bump a visible counter alongside an
+// unsafeRoot and unsafeChild both bump a visible counter alongside an
 // unsafe Redirect, so a rejected redirect's fallback response is provably a
 // normal patch (the counter's new value), not a crash or a hang.
 type unsafeRoot struct{ n int }
@@ -415,15 +415,15 @@ func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)
 
 func (u *unsafeRoot) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
-type unsafeEmbed struct{ n int }
+type unsafeChild struct{ n int }
 
-func (u *unsafeEmbed) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
+func (u *unsafeChild) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
 
-func (u *unsafeEmbed) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+func (u *unsafeChild) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
 
-type unsafeParent struct{ I unsafeEmbed }
+type unsafeParent struct{ I unsafeChild }
 
-func (p *unsafeParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *unsafeParent) View() h.H { return h.Div(via.Child(p.I)) }
 
 func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 	t.Parallel()
@@ -438,7 +438,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
 	})
 
-	t.Run("plain embed", func(t *testing.T) {
+	t.Run("plain child", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(unsafeParent{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -538,16 +538,16 @@ func (b *branchedView) View() h.H {
 	)
 }
 
-// xmEmbed is a live, dep-free embed mountable at any path — the vehicle for
+// xmChild is a live, dep-free child mountable at any path — the vehicle for
 // proving a live tab from one mount can't drive another mount's action table.
-type xmEmbed struct {
+type xmChild struct {
 	fired *int
 	n     via.State[int]
 }
 
-func (x *xmEmbed) Fire(*via.Ctx) { *x.fired++ }
+func (x *xmChild) Fire(*via.Ctx) { *x.fired++ }
 
-func (x *xmEmbed) View() h.H {
+func (x *xmChild) View() h.H {
 	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
 }
 
@@ -555,8 +555,8 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var aFired, cFired int
 		r := via.NewRouter()
-		r.Mount("/a", xmEmbed{fired: &aFired})
-		r.Mount("/c", xmEmbed{fired: &cFired})
+		r.Mount("/a", xmChild{fired: &aFired})
+		r.Mount("/c", xmChild{fired: &cFired})
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")

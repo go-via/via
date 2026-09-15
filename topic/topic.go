@@ -1,6 +1,6 @@
-// Package topic is an in-process fan-out broker for live embeds: one Publish
+// Package topic is an in-process fan-out broker for live children: one Publish
 // reaches every Subscriber. It is the blessed multi-user seam that keeps the
-// via core free of shared state — apps create a Topic, pipe it into an embed
+// via core free of shared state — apps create a Topic, pipe it into a child
 // via ctx.Listen, and Publish to it from an action or any goroutine.
 // Durability, replay, and cross-pod delivery are explicitly out of scope: put a
 // real bus or database behind a Topic, never inside it.
@@ -20,7 +20,7 @@ type Topic[T any] struct {
 
 // New builds a Topic with no subscribers. A Topic is safe for concurrent use
 // and is meant to live for the process: declare it as a package-level var and
-// let embeds subscribe to it with ctx.Listen. It has no Close; a Topic with no
+// let children subscribe to it with ctx.Listen. It has no Close; a Topic with no
 // subscribers costs a map lookup per publish.
 func New[T any]() *Topic[T] {
 	return &Topic[T]{

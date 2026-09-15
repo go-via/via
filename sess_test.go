@@ -107,17 +107,17 @@ func greetWithRawCookie(t *testing.T, base, name, value string) string {
 }
 
 // actionPath fetches base's root page on a bare (cookie-less) client and
-// returns the currently-rendered action URL for embed/n. loginComp's and
+// returns the currently-rendered action URL for child/n. loginComp's and
 // counterComp's View render the same action set regardless of session state,
 // so this is safe to call before any login/session step in the test.
-func actionPath(t *testing.T, c *http.Client, base string, embed string, n int) string {
+func actionPath(t *testing.T, c *http.Client, base string, child string, n int) string {
 	t.Helper()
 	resp, err := c.Get(base + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	return actionURL(t, string(b), embed, n)
+	return actionURL(t, string(b), child, n)
 }
 
 func jarClient(t *testing.T) *http.Client {
@@ -459,7 +459,7 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	assert.False(t, ck.Secure, "a plain-HTTP cookie must not be Secure by default (dev ergonomics)")
 }
 
-// liveSess is a live embed that establishes its session in OnInit, so
+// liveSess is a live child that establishes its session in OnInit, so
 // the cookie rides the SSE connect response itself rather than a later
 // action's.
 type liveSess struct{}
@@ -475,7 +475,7 @@ func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 	srv := httptest.NewServer(via.Handler(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
-	ctx := t.Context() // close the stream so the embed tears down
+	ctx := t.Context() // close the stream so the child tears down
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -841,13 +841,13 @@ func (p *sessSiblings) Save(ctx *via.Ctx) {
 func (p *sessSiblings) View() h.H {
 	return h.Div(
 		h.Input(p.Q.Bind()),
-		via.Embed(p.A), via.Embed(p.B),
+		via.Child(p.A), via.Child(p.B),
 		h.P(h.Str(p.hit)),
 		h.Button(via.On("click", p.Save)),
 	)
 }
 
-func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
+func TestSession_siblingChildsShareOneSessionPerRequest(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(sessSiblings{}))
 
@@ -860,7 +860,7 @@ func TestSession_siblingEmbedsShareOneSessionPerRequest(t *testing.T) {
 		"the root resolves the session once per request; siblings must inherit it, not mint their own")
 }
 
-func TestSession_siblingEmbedsShareOneSessionAcrossHydratePasses(t *testing.T) {
+func TestSession_siblingChildsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(sessSiblings{}))
 	page := fetchPage(t, app, "/")

@@ -13,7 +13,7 @@ func SetMaxSSEConnForTest(n int) (restore func()) {
 }
 
 // SetPinnedDeadlineForTest shortens the wait before a dispatch declares the
-// embed goroutine pinned, so a test need not block for the production value.
+// child goroutine pinned, so a test need not block for the production value.
 func SetPinnedDeadlineForTest(d time.Duration) (restore func()) {
 	prev := pinnedDeadline
 	pinnedDeadline = d

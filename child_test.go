@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// beater is a LIVE embeddable embed: it ticks its own State, so each one pushes
+// beater is a LIVE embeddable child: it ticks its own State, so each one pushes
 // independently over the shared connection.
 type beater struct {
 	label string
@@ -34,28 +34,28 @@ func (b *beater) View() h.H {
 	return h.Div(h.P(h.Str(b.label+"="), b.n.Display()))
 }
 
-// duo embeds two live beaters; it does NOT itself implement OnInit — it is a
+// duo children two live beaters; it does NOT itself implement OnInit — it is a
 // multiplex parent whose live children share one SSE stream.
 type duo struct{ A, B beater }
 
-func (d *duo) View() h.H { return h.Div(via.Embed(d.A), via.Embed(d.B)) }
+func (d *duo) View() h.H { return h.Div(via.Child(d.A), via.Child(d.B)) }
 
-// Each live embed must push its OWN container over the one shared stream: a tick
-// in embed 0 patches #via-i0, a tick in embed 1 patches #via-i1 — independently,
-// on a parent that is not itself a live embed.
-func TestMux_eachLiveEmbedPushesItsOwnContainer(t *testing.T) {
+// Each live child must push its OWN container over the one shared stream: a tick
+// in child 0 patches #via-i0, a tick in child 1 patches #via-i1 — independently,
+// on a parent that is not itself a live child.
+func TestMux_eachLiveChildPushesItsOwnContainer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(duo{}))
 		conn := app.Connect()
 
-		conn.Await(`selector #via-i0`) // embed 0 pushed its container
-		conn.Await(`selector #via-i1`) // embed 1 pushed its container, independently
+		conn.Await(`selector #via-i0`) // child 0 pushed its container
+		conn.Await(`selector #via-i1`) // child 1 pushed its container, independently
 	})
 }
 
-// liveProbe is an embedded LIVE embed (State alone makes it live) that
+// liveProbe is an embedded LIVE child (State alone makes it live) that
 // registers an OnConnect/OnDispose pair, so a test can prove whether the pair ran
-// at all. failerEmbed's OnInit errors; panickerEmbed's panics.
+// at all. failerChild's OnInit errors; panickerChild's panics.
 type liveProbe struct {
 	acquired chan struct{}
 	n        via.State[int]
@@ -68,17 +68,17 @@ func (d *liveProbe) OnInit(ctx *via.Ctx) error {
 func (d *liveProbe) markAcquired() { close(d.acquired) }
 func (d *liveProbe) View() h.H     { return h.Div(h.Str("ok"), d.n.Display()) }
 
-type failerEmbed struct{}
+type failerChild struct{}
 
-func (f *failerEmbed) OnInit(ctx *via.Ctx) error { return errors.New("init boom") }
-func (f *failerEmbed) View() h.H                 { return h.Div(h.Str("x")) }
+func (f *failerChild) OnInit(ctx *via.Ctx) error { return errors.New("init boom") }
+func (f *failerChild) View() h.H                 { return h.Div(h.Str("x")) }
 
 type failPair struct {
 	A liveProbe
-	B failerEmbed
+	B failerChild
 }
 
-func (p *failPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+func (p *failPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
 // An embedded child's OnInit runs inside the parent's render, before any unit
 // has a stream: a failure there must abort the whole connect with a 500 and
@@ -99,18 +99,18 @@ func TestMux_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	}
 }
 
-// panickerEmbed's OnInit panics instead of returning an error.
-type panickerEmbed struct{}
+// panickerChild's OnInit panics instead of returning an error.
+type panickerChild struct{}
 
-func (p *panickerEmbed) OnInit(ctx *via.Ctx) error { panic("init boom") }
-func (p *panickerEmbed) View() h.H                 { return h.Div(h.Str("x")) }
+func (p *panickerChild) OnInit(ctx *via.Ctx) error { panic("init boom") }
+func (p *panickerChild) View() h.H                 { return h.Div(h.Str("x")) }
 
 type panicPair struct {
 	A liveProbe
-	B panickerEmbed
+	B panickerChild
 }
 
-func (p *panicPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+func (p *panicPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
 func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
@@ -127,7 +127,7 @@ func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	}
 }
 
-// namer has a client Signal — two of them as sibling embeds must not collide on
+// namer has a client Signal — two of them as sibling children must not collide on
 // the same slot name.
 type namer struct{ name via.Signal[string] }
 
@@ -135,24 +135,24 @@ func (n *namer) View() h.H { return h.Div(n.name.Bind(), h.Span(n.name.Display()
 
 type pair struct{ X, Y namer }
 
-func (p *pair) View() h.H { return h.Div(via.Embed(p.X), via.Embed(p.Y)) }
+func (p *pair) View() h.H { return h.Div(via.Child(p.X), via.Child(p.Y)) }
 
-// Sibling embeds that each declare a Signal must get DISTINCT slot names —
-// without a per-embed prefix both would claim the same offset slot and clobber
+// Sibling children that each declare a Signal must get DISTINCT slot names —
+// without a per-child prefix both would claim the same offset slot and clobber
 // each other in
-// the page's global Datastar store. Each embed also declares its own signals on
+// the page's global Datastar store. Each child also declares its own signals on
 // its container so they reach the store.
-func TestEmbed_embedSignalsAreScopedPerEmbed(t *testing.T) {
+func TestChild_childSignalsAreScopedPerChild(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(pair{})), http.MethodGet, "/", "")
 
-	assert.Contains(t, body, "i0__name", "embed 0's signal must carry an embed-scoped slot")
-	assert.Contains(t, body, "i1__name", "embed 1's signal must carry an embed-scoped slot")
-	assert.Contains(t, body, `id="via-i0" data-signals=`, "embed 0 must declare its own signals")
-	assert.Contains(t, body, `id="via-i1" data-signals=`, "embed 1 must declare its own signals")
+	assert.Contains(t, body, "i0__name", "child 0's signal must carry a child-scoped slot")
+	assert.Contains(t, body, "i1__name", "child 1's signal must carry a child-scoped slot")
+	assert.Contains(t, body, `id="via-i0" data-signals=`, "child 0 must declare its own signals")
+	assert.Contains(t, body, `id="via-i1" data-signals=`, "child 1 must declare its own signals")
 }
 
-// liveNamer is a LIVE embed carrying BOTH a client Signal and ticking State —
+// liveNamer is a LIVE child carrying BOTH a client Signal and ticking State —
 // the chat-composer-in-multiplex case: the push must keep the Signal bound.
 type liveNamer struct {
 	draft via.Signal[string]
@@ -167,13 +167,13 @@ func (n *liveNamer) View() h.H {
 
 type solo struct{ X liveNamer }
 
-func (s *solo) View() h.H { return h.Div(via.Embed(s.X)) }
+func (s *solo) View() h.H { return h.Div(via.Child(s.X)) }
 
-// A live embed's signal must keep the SAME embed-scoped slot across a push, or
+// A live child's signal must keep the SAME child-scoped slot across a push, or
 // the client binding breaks; and the push must NOT re-declare data-signals, or a
 // fan-out would clobber what the user is editing. The GET declares x__draft on
 // the container; a tick-driven push re-binds x__draft with no data-signals.
-func TestMux_liveEmbedSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
+func TestMux_liveChildSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
 	srv := via.Handler(solo{})
 
@@ -181,18 +181,18 @@ func TestMux_liveEmbedSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	// bubble — it needs no fake time and this keeps the two halves of the
 	// test independent.
 	_, body := do(t, serve(t, srv), http.MethodGet, "/", "")
-	assert.Contains(t, body, `id="via-i0" data-ignore-morph data-signals=`, "GET must declare the embed's signal")
-	assert.Contains(t, body, `data-bind="x__draft"`, "the embed signal uses an embed-scoped slot")
+	assert.Contains(t, body, `id="via-i0" data-ignore-morph data-signals=`, "GET must declare the child's signal")
+	assert.Contains(t, body, `data-bind="x__draft"`, "the child signal uses a child-scoped slot")
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, srv)
 		conn := app.Connect()
-		line := conn.Await(`data-bind="x__draft"`) // the push re-renders the embed with the same slot
-		assert.NotContains(t, line, "data-signals", "a live push must not re-declare embed signals")
+		line := conn.Await(`data-bind="x__draft"`) // the push re-renders the child with the same slot
+		assert.NotContains(t, line, "data-signals", "a live push must not re-declare child signals")
 	})
 }
 
-// greeter renders a seeded field — the vehicle for proving an embed child can
+// greeter renders a seeded field — the vehicle for proving a child can
 // receive constructor data (a dep) rather than only its zero value.
 type greeter struct{ who string }
 
@@ -200,21 +200,21 @@ func (g *greeter) View() h.H { return h.Div(h.P(h.Str("hi "), h.Str(g.who))) }
 
 type greetPage struct{ G greeter }
 
-func (p *greetPage) View() h.H { return h.Div(via.Embed(p.G)) }
+func (p *greetPage) View() h.H { return h.Div(via.Child(p.G)) }
 
-// An embed child must be able to receive injected data beyond its zero
+// A child must be able to receive injected data beyond its zero
 // value — the parent's literal seeds it by value (no '&'), and the per-connection copy
-// keeps it isolated. Without seeding, a real embed (chat needing a *Room) is
+// keeps it isolated. Without seeding, a real child (chat needing a *Room) is
 // impossible.
-func TestEmbed_newEmbedSeedsTheChild(t *testing.T) {
+func TestChild_newChildSeedsTheChild(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(greetPage{G: greeter{who: "alice"}})
 	_, body := do(t, serve(t, app), http.MethodGet, "/", "")
 	assert.Contains(t, body, "hi alice", "the parent literal must seed the embedded child")
 }
 
-// liveClicker is a LIVE embed with State + an action (dep-free, so a zero-value
-// Embed works) — the vehicle for routing a live action to its own embed.
+// liveClicker is a LIVE child with State + an action (dep-free, so a zero-value
+// Child works) — the vehicle for routing a live action to its own child.
 type liveClicker struct{ n via.State[int] }
 
 func (c *liveClicker) Bump(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
@@ -222,54 +222,54 @@ func (c *liveClicker) View() h.H {
 	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
 }
 
-// panel embeds two live clickers.
+// panel children two live clickers.
 type panel struct{ A, B liveClicker }
 
-func (p *panel) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+func (p *panel) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-// A live embed's action must route over the shared connection to THAT embed's
+// A live child's action must route over the shared connection to THAT child's
 // goroutine (via the tab handshake), mutate its State, and push the result to
 // its own #via-i{n} — not the sibling, not the whole page.
-func TestMux_liveEmbedActionRoutesToItsEmbedAndPushes(t *testing.T) {
+func TestMux_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect()
 
-		// URL id 1 addresses this embed; Live routes it to THIS connection's tab.
-		status, _ := app.EmbedAction("0", 0).Over(conn).Fire()
+		// URL id 1 addresses this child; Live routes it to THIS connection's tab.
+		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
 
-		conn.Await("selector #via-i0") // the action's push must target its own embed container
+		conn.Await("selector #via-i0") // the action's push must target its own child container
 		conn.Await("c=1")
 	})
 }
 
 // A live mux action with an unknown tab must fail closed (410) so a stale client
 // re-bootstraps rather than mutating a throwaway.
-func TestMux_liveEmbedActionWithUnknownTabIsGone(t *testing.T) {
+func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
 
-		status, _ := app.EmbedAction("0", 0).Over(conn).Tab("bogus-tab-id").Fire()
+		status, _ := app.ChildAction("0", 0).Over(conn).Tab("bogus-tab-id").Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }
 
-// A live embed's action binding must carry the embed id. The tab id rides in
+// A live child's action binding must carry the child id. The tab id rides in
 // the signal store Datastar already ships with every @post, so the binding
 // itself stays bare — no per-action headers clause.
-func TestMux_liveEmbedActionBindingCarriesEmbedID(t *testing.T) {
+func TestMux_liveChildActionBindingCarriesChildID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'\)`, body,
-		"a live embed action must carry its embed id")
+		"a live child action must carry its child id")
 	assert.NotContains(t, body, "X-Via-Tab", "the tab id is a signal now, not a per-action header")
 }
 
 // hitsRoot is a PLAIN root (not itself live) with its own plain action,
-// embedding a LIVE embed (liveClicker) — the region-ownership case: the
-// root's own action patch must not repaint the embed from its seed value.
+// embedding a LIVE child (liveClicker) — the region-ownership case: the
+// root's own action patch must not repaint the child from its seed value.
 type hitsRoot struct {
 	hits int
 	Isl  liveClicker
@@ -279,49 +279,49 @@ func (r *hitsRoot) Hit(ctx *via.Ctx) { r.hits++ }
 func (r *hitsRoot) View() h.H {
 	return h.Div(
 		h.Span(h.Str("hits:"), h.Str(r.hits)),
-		via.Embed(r.Isl),
+		via.Child(r.Isl),
 		h.Button(via.On("click", r.Hit), h.Str("hit")),
 	)
 }
 
 // A plain root's own action re-renders only itself (Datastar's default,
-// whole-root morph) — its embedded live embed's container must carry
+// whole-root morph) — its embedded live child's container must carry
 // data-ignore-morph on every root-walk render, so that patch never repaints
-// the embed from its seed value.
-func TestEmbed_plainRootPatchLeavesLiveEmbedRegionAlone(t *testing.T) {
+// the child from its seed value.
+func TestChild_plainRootPatchLeavesLiveChildRegionAlone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(hitsRoot{}))
 
 		status, body := app.Get("/")
 		assert.Equal(t, http.StatusOK, status)
 		assert.Contains(t, body, `id="via-i0" data-ignore-morph`,
-			"a live embed's container must be marked so a root patch skips it")
+			"a live child's container must be marked so a root patch skips it")
 
 		status, body = app.Action(0).Fire()
 		assert.Equal(t, http.StatusOK, status)
 		assert.Contains(t, body, "hits:1", "the root's own action must take effect")
 		assert.Contains(t, body, `id="via-i0" data-ignore-morph`,
-			"the root patch must still mark the live embed's container")
+			"the root patch must still mark the live child's container")
 	})
 }
 
-// A parent that embeds live embeds (but isn't itself a live composition) must
-// bootstrap the SSE stream on its GET page, so its embeds can connect.
-func TestMux_parentWithLiveEmbedsEmitsTheBootstrap(t *testing.T) {
+// A parent that embeds live children (but isn't itself a live composition) must
+// bootstrap the SSE stream on its GET page, so its children can connect.
+func TestMux_parentWithLiveChildsEmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(duo{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
-		"a parent with live embeds must bootstrap the stream")
+		"a parent with live children must bootstrap the stream")
 }
 
-// A parent whose embeds are NOT live must stay streamless — no
-// bootstrap, so a purely interactive (plain-action) multi-embed page pays
+// A parent whose children are NOT live must stay streamless — no
+// bootstrap, so a purely interactive (plain-action) multi-child page pays
 // for no SSE connection.
-func TestEmbed_parentWithNoLiveEmbedsOmitsTheBootstrap(t *testing.T) {
+func TestChild_parentWithNoLiveChildsOmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
 	assert.NotContains(t, body, "@post('/_via/sse')",
-		"plain embeds must not trigger an SSE bootstrap")
+		"plain children must not trigger an SSE bootstrap")
 }
 
 // kid is an embeddable child composition with its own action and state.
@@ -337,84 +337,84 @@ func (k *kid) View() h.H {
 	)
 }
 
-// board embeds two kids as sibling embeds.
+// board children two kids as sibling children.
 type board struct{ A, B kid }
 
-func (b *board) View() h.H { return h.Div(via.Embed(b.A), via.Embed(b.B)) }
+func (b *board) View() h.H { return h.Div(via.Child(b.A), via.Child(b.B)) }
 
-// Each embed must render into its own positional container and wire
-// its actions to an embed-scoped path, so sibling embeds stay independent and
+// Each child must render into its own positional container and wire
+// its actions to a child-scoped path, so sibling children stay independent and
 // a patch can target exactly one of them.
-func TestEmbed_rendersEachEmbedInItsOwnContainerWithScopedActions(t *testing.T) {
+func TestChild_rendersEachChildInItsOwnContainerWithScopedActions(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
-		`id="via-i0"`, // first embed's container
-		`id="via-i1"`, // second embed's container
+		`id="via-i0"`, // first child's container
+		`id="via-i1"`, // second child's container
 	} {
-		assert.Contains(t, body, want, "embeds missing container/scoped-action")
+		assert.Contains(t, body, want, "children missing container/scoped-action")
 	}
-	// Each embed's action is addressed under its OWN id, not a shared flat one.
+	// Each child's action is addressed under its OWN id, not a shared flat one.
 	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body)
 	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+'`, body)
 }
 
-// An action must route to the embed named in its path, mutate that embed, and
-// the response must patch that embed's container (not #root, not its sibling).
-func TestEmbed_actionRoutesToItsEmbedAndPatchesThatContainer(t *testing.T) {
+// An action must route to the child named in its path, mutate that child, and
+// the response must patch that child's container (not #root, not its sibling).
+func TestChild_actionRoutesToItsChildAndPatchesThatContainer(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "1", 0), "{}") // bump the second embed (url id 2)
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "1", 0), "{}") // bump the second child (url id 2)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	assert.Contains(t, body, `id="via-i1"`, "patch must target the acted embed's container")
-	assert.Contains(t, body, "n=1", "the acted embed must reflect its mutation")
-	// The patch must be embed-scoped, not a whole-page re-render — otherwise
-	// sibling embeds get clobbered and the multiplex point is lost.
-	assert.NotContains(t, body, `id="via-i0"`, "patch must not include the sibling embed")
-	assert.NotContains(t, body, `id="root"`, "patch must be the embed container, not #root")
+	assert.Contains(t, body, `id="via-i1"`, "patch must target the acted child's container")
+	assert.Contains(t, body, "n=1", "the acted child must reflect its mutation")
+	// The patch must be child-scoped, not a whole-page re-render — otherwise
+	// sibling children get clobbered and the multiplex point is lost.
+	assert.NotContains(t, body, `id="via-i0"`, "patch must not include the sibling child")
+	assert.NotContains(t, body, `id="root"`, "patch must be the child container, not #root")
 }
 
-// An action that changes nothing the embed's View reads returns 204, not a
-// redundant patch the browser would morph onto itself — the per-embed analogue
+// An action that changes nothing the child's View reads returns 204, not a
+// redundant patch the browser would morph onto itself — the per-child analogue
 // of the flat path's no-op contract.
-func TestEmbed_actionWithNoVisibleChangeReturns204(t *testing.T) {
+func TestChild_actionWithNoVisibleChangeReturns204(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // first embed (url id 1), Noop
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // first child (url id 1), Noop
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 }
 
-// A non-existent embed or action id must fail closed (410) so a stale client
-// re-bootstraps rather than misrouting onto the wrong embed. Only the embed
+// A non-existent child or action id must fail closed (410) so a stale client
+// re-bootstraps rather than misrouting onto the wrong child. Only the child
 // or action segment is forged; the rest of the URL is read off the rendered
 // page (like TestLive_unknownActionAnswers410).
-func TestEmbed_unknownEmbedOrActionIsGone(t *testing.T) {
+func TestChild_unknownChildOrActionIsGone(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(board{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "0", 0)
 
-	for _, path := range []string{swapEmbedIndex(t, url, "10"), swapActionID(t, url, "zzzzzzzz")} {
+	for _, path := range []string{swapChildIndex(t, url, "10"), swapActionID(t, url, "zzzzzzzz")} {
 		resp, _ := do(t, srv, http.MethodPost, path, "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode, "out-of-range %s must be 410", path)
 	}
 }
 
-// Verify the scoped action path is genuinely distinct per embed (regression
-// guard against a flat shared index leaking across embeds).
-func TestEmbed_siblingEmbedsDoNotShareAnActionIndexSpace(t *testing.T) {
+// Verify the scoped action path is genuinely distinct per child (regression
+// guard against a flat shared index leaking across children).
+func TestChild_siblingChildsDoNotShareAnActionIndexSpace(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(board{})), http.MethodGet, "/", "")
-	// Both embeds address their action under their OWN embed segment; neither
+	// Both children address their action under their OWN child segment; neither
 	// uses a page-global flat index.
 	assert.True(t, strings.Contains(body, `/_via/a/0/`) && strings.Contains(body, `/_via/a/1/`),
-		"each embed must own a /{embed}/{act} table, not a flat page index")
+		"each child must own a /{child}/{act} table, not a flat page index")
 }
 
 // banner is a plain composition embedded by a layout.
@@ -422,111 +422,111 @@ type banner struct{}
 
 func (b *banner) View() h.H { return h.P(h.Str("BANNER")) }
 
-// shell is a generic layout: it renders a frame and embeds whatever composition
+// shell is a generic layout: it renders a frame and children whatever composition
 // its Body field holds — plain struct-field composition, no wrapper type. This
-// is the content projection via.Embed exists for: one shell composes with any
+// is the content projection via.Child exists for: one shell composes with any
 // page, and the field type names the content statically.
 type shell[C any] struct{ Body C }
 
-func (s *shell[C]) View() h.H { return h.Div(h.H1(h.Str("SHELL")), via.Embed(s.Body)) }
+func (s *shell[C]) View() h.H { return h.Div(h.H1(h.Str("SHELL")), via.Child(s.Body)) }
 
 // An embedded child renders in place, inside the layout's frame, wired as a
-// embed container of its own. Fails if Embed stops wiring the container or
+// child container of its own. Fails if Child stops wiring the container or
 // renders the child outside the frame.
-func TestEmbed_projectsChildInPlace(t *testing.T) {
+func TestChild_projectsChildInPlace(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(shell[banner]{})), http.MethodGet, "/", "")
 
 	assert.Contains(t, body, "SHELL", "the layout frame renders")
 	assert.Contains(t, body, "BANNER", "the embedded content renders inside the frame")
-	assert.Contains(t, body, `id="via-i0"`, "embedded content is wired into an embed container keyed by its ordinal")
+	assert.Contains(t, body, `id="via-i0"`, "embedded content is wired into a child container keyed by its ordinal")
 	assert.Less(t, strings.Index(body, "SHELL"), strings.Index(body, "BANNER"),
 		"content is embedded in place, after the frame heading")
 }
 
 // liveShell is a PLAIN layout (no OnInit) whose Body field holds a LIVE
-// embed. The page must bootstrap its SSE stream and the embedded live embed
+// child. The page must bootstrap its SSE stream and the embedded live child
 // must push its own container and render its server State — proving plain
 // struct-field composition rides the live multiplex machinery.
 type liveShell struct{ Body beater }
 
-func (s *liveShell) View() h.H { return h.Div(h.H1(h.Str("APP")), via.Embed(s.Body)) }
+func (s *liveShell) View() h.H { return h.Div(h.H1(h.Str("APP")), via.Child(s.Body)) }
 
-func TestEmbed_projectsLiveEmbed(t *testing.T) {
+func TestChild_projectsLiveChild(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(liveShell{Body: beater{label: "hb"}}))
 	conn := app.Connect()
 
-	conn.Await(`selector #via-i0`) // the embedded live embed pushes its own container
+	conn.Await(`selector #via-i0`) // the embedded live child pushes its own container
 	conn.Await("hb=")              // and renders its own server State through the field
 }
 
-// Embed panics when the child lacks a View() — a wrote-it-wrong error surfaces
+// Child panics when the child lacks a View() — a wrote-it-wrong error surfaces
 // loudly at the first render, never as a silent blank region.
-func TestEmbed_panicsWithoutView(t *testing.T) {
+func TestChild_panicsWithoutView(t *testing.T) {
 	t.Parallel()
 	require.PanicsWithValue(t,
-		"via: via.Embed(child) requires child to have a View() method",
-		func() { via.Embed(struct{ X int }{}) },
+		"via: via.Child(child) requires child to have a View() method",
+		func() { via.Child(struct{ X int }{}) },
 	)
 }
 
-// nestHost is a PLAIN embed (itself embedded by a page) whose own View
+// nestHost is a PLAIN child (itself embedded by a page) whose own View
 // embeds a LIVE child — the two-deep composition B1 makes work.
 type nestHost struct{ Inner beater }
 
-func (n *nestHost) View() h.H { return h.Div(via.Embed(n.Inner)) }
+func (n *nestHost) View() h.H { return h.Div(via.Child(n.Inner)) }
 
 type nestPage struct{ Host nestHost }
 
-func (p *nestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
+func (p *nestPage) View() h.H { return h.Div(via.Child(p.Host)) }
 
-// A live embed nested two levels deep (a plain page embeds a plain embed
+// A live child nested two levels deep (a plain page embeds a plain child
 // that embeds a live child) must still get discovered, wired, and streamed —
-// embed discovery walks the embedded tree at any depth, not just the page's
+// child discovery walks the embedded tree at any depth, not just the page's
 // direct children.
-func TestEmbed_liveChildInsideLiveEmbedAtDepthTwo(t *testing.T) {
+func TestChild_liveChildInsideLiveChildAtDepthTwo(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
 
-	conn.Await(`selector #via-i0-0`) // the depth-two live child's key composes onto its wrapper embed's ("0"), so it can never alias it
+	conn.Await(`selector #via-i0-0`) // the depth-two live child's key composes onto its wrapper child's ("0"), so it can never alias it
 	conn.Await("hb=")                // and streams its own server state independently
 }
 
 // The guard is about LIVE children only: a plain child embedded
-// inside an embed still renders in place. Fails if the guard over-reaches to
+// inside a child still renders in place. Fails if the guard over-reaches to
 // all nesting.
 type plainNestHost struct{ Inner banner }
 
-func (n *plainNestHost) View() h.H { return h.Div(h.H2(h.Str("HOST")), via.Embed(n.Inner)) }
+func (n *plainNestHost) View() h.H { return h.Div(h.H2(h.Str("HOST")), via.Child(n.Inner)) }
 
 type plainNestPage struct{ Host plainNestHost }
 
-func (p *plainNestPage) View() h.H { return h.Div(via.Embed(p.Host)) }
+func (p *plainNestPage) View() h.H { return h.Div(via.Child(p.Host)) }
 
-func TestEmbed_allowsNestedPlainChild(t *testing.T) {
+func TestChild_allowsNestedPlainChild(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(plainNestPage{})), http.MethodGet, "/", "")
 
-	assert.Contains(t, body, "HOST", "the embed renders")
+	assert.Contains(t, body, "HOST", "the child renders")
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
 
 // livePage is a LIVE root (implements OnInit) whose View embeds a LIVE
-// embed — nested live composition, refused at render.
+// child — nested live composition, refused at render.
 type livePage struct {
 	Inner beater
 	n     via.State[int]
 }
 
-func (p *livePage) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Inner)) }
+func (p *livePage) View() h.H { return h.Div(p.n.Display(), via.Child(p.Inner)) }
 
 // A live root embedding a live child is nested live composition, cut from
-// v0.8 (deferred alongside keyed live embeds) — it must abort the render
+// v0.8 (deferred alongside keyed live children) — it must abort the render
 // with a 500, not serve a page that silently misroutes an action, exactly
 // like the State-off-a-live-page guard.
-func TestEmbed_liveChildInsideLivePageIsRefused(t *testing.T) {
+func TestChild_liveChildInsideLivePageIsRefused(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(livePage{Inner: beater{label: "hb"}}))
 	status, _ := app.Get("/")
@@ -534,45 +534,45 @@ func TestEmbed_liveChildInsideLivePageIsRefused(t *testing.T) {
 		"embedding a live child inside a live parent must abort the render with a 500")
 }
 
-// nestedLiveEmbed is itself a live embed (embedded from a plain root) whose
-// own View calls Embed again — the other nested-composition shape A1 cuts:
+// nestedLiveChild is itself a live child (embedded from a plain root) whose
+// own View calls Child again — the other nested-composition shape A1 cuts:
 // an embedded live unit's own independent re-render never re-walks a parent,
-// so it has nothing to keep a further Embed's addressing stable against.
-type nestedLiveEmbed struct {
+// so it has nothing to keep a further Child's addressing stable against.
+type nestedLiveChild struct {
 	Child banner
 	n     via.State[int]
 }
 
-func (n *nestedLiveEmbed) View() h.H { return h.Div(n.n.Display(), via.Embed(n.Child)) }
+func (n *nestedLiveChild) View() h.H { return h.Div(n.n.Display(), via.Child(n.Child)) }
 
-type nestedLiveHost struct{ Inner nestedLiveEmbed }
+type nestedLiveHost struct{ Inner nestedLiveChild }
 
-func (h2 *nestedLiveHost) View() h.H { return h.Div(via.Embed(h2.Inner)) }
+func (h2 *nestedLiveHost) View() h.H { return h.Div(via.Child(h2.Inner)) }
 
-// An embedded live embed calling Embed inside its own View must also abort
+// An embedded live child calling Child inside its own View must also abort
 // the render — regardless of whether the further-embedded child is itself
 // live or plain.
-func TestEmbed_liveEmbedEmbeddingFurtherChildrenIsRefused(t *testing.T) {
+func TestChild_liveChildChilddingFurtherChildrenIsRefused(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(nestedLiveHost{}))
 	status, _ := app.Get("/")
 	assert.Equal(t, http.StatusInternalServerError, status,
-		"a live embed's own View calling Embed must abort the render with a 500")
+		"a live child's own View calling Child must abort the render with a 500")
 }
 
 // The guard is about LIVE children only: a streaming page may still embed a plain
 // child — the whole-page push re-renders it in place, which is its
-// normal semantics. Fails if the guard over-reaches to all embeds.
+// normal semantics. Fails if the guard over-reaches to all children.
 type livePlainPage struct {
 	Inner banner
 	n     via.State[int]
 }
 
 func (p *livePlainPage) View() h.H {
-	return h.Div(h.H1(h.Str("LIVEPAGE")), p.n.Display(), via.Embed(p.Inner))
+	return h.Div(h.H1(h.Str("LIVEPAGE")), p.n.Display(), via.Child(p.Inner))
 }
 
-func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
+func TestChild_allowsPlainChildInLivePage(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(livePlainPage{})), http.MethodGet, "/", "")
 
@@ -581,7 +581,7 @@ func TestEmbed_allowsPlainChildInLivePage(t *testing.T) {
 }
 
 // flipChild's own action count depends on a pointer shared with its parent —
-// a legitimate cross-instance dependency (Embed's own godoc: "pointer deps
+// a legitimate cross-instance dependency (Child's own godoc: "pointer deps
 // are intentionally shared"), used here purely to flip the CHILD's shape
 // independently of the root between the root's GET and its later action.
 type flipChild struct{ extra *bool }
@@ -595,7 +595,7 @@ func (c *flipChild) View() h.H {
 	return h.Div(h.Button(via.On("click", c.Bump)))
 }
 
-// flipRoot has its own dispatchable action (embed 0) and embeds flipChild —
+// flipRoot has its own dispatchable action (child 0) and children flipChild —
 // the vehicle for proving the root's OWN action URL survives a child-only
 // shape change.
 type flipRoot struct {
@@ -604,14 +604,14 @@ type flipRoot struct {
 }
 
 func (r *flipRoot) Act(*via.Ctx) { r.hits++ }
-func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act)), via.Embed(r.Child)) }
+func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act)), via.Child(r.Child)) }
 
 // A child's shape changing between a page's GET and a later click on the
 // PARENT's own button must not 410 that click. An action id addresses its
 // handler, so nothing about a sibling's render can invalidate it — the A6 bug
 // (a whole-page shape digest that only refreshed on the parent's own next
 // push) is structurally gone.
-func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
+func TestChild_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	t.Parallel()
 	extra := false
 	srv := serve(t, via.Handler(flipRoot{Child: flipChild{extra: &extra}}))
@@ -625,34 +625,34 @@ func TestEmbed_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 		"a child-only shape change must not stale the parent's own already-rendered action")
 }
 
-// embedRootChild is a plain (plain) Embed child of a live root — enough to
+// childRootChild is a plain (plain) child of a live root — enough to
 // trigger the reuse lookup on the root's own first push.
-type embedRootChild struct{}
+type childRootChild struct{}
 
-func (embedRootChild) View() h.H { return h.Div(h.Str("child")) }
+func (childRootChild) View() h.H { return h.Div(h.Str("child")) }
 
-type liveRootWithEmbed struct {
+type liveRootWithChild struct {
 	n     via.State[int]
-	Child embedRootChild
+	Child childRootChild
 }
 
-func (r *liveRootWithEmbed) OnInit(ctx *via.Ctx) error {
+func (r *liveRootWithChild) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, r.tick)
 	return nil
 }
-func (r *liveRootWithEmbed) tick(ctx *via.Ctx) { r.n.Set(r.n.Get() + 1) }
-func (r *liveRootWithEmbed) View() h.H {
-	return h.Div(r.n.Display(), via.Embed(r.Child))
+func (r *liveRootWithChild) tick(ctx *via.Ctx) { r.n.Set(r.n.Get() + 1) }
+func (r *liveRootWithChild) View() h.H {
+	return h.Div(r.n.Display(), via.Child(r.Child))
 }
 
 // A live root's own first push must not treat itself as an already-connected
-// Embed child: before the off-by-one fix, the reuse lookup used the raw
-// embed index (0) instead of the dispatch address (1), so a live root's
+// child: before the off-by-one fix, the reuse lookup used the raw
+// child index (0) instead of the dispatch address (1), so a live root's
 // first push resolved unit(0) to ITSELF, re-entered its own View through
-// Embed, and panicked — killing the stream after the connect handshake.
-func TestLive_rootEmbedSurvivesItsOwnFirstPush(t *testing.T) {
+// Child, and panicked — killing the stream after the connect handshake.
+func TestLive_rootChildSurvivesItsOwnFirstPush(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Handler(liveRootWithEmbed{}))
+	srv := liveServer(t, via.Handler(liveRootWithChild{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -661,53 +661,53 @@ func TestLive_rootEmbedSurvivesItsOwnFirstPush(t *testing.T) {
 	awaitLine(t, lines, `id="via-i0"`)
 }
 
-// twoSpeedEmbed is a live embed whose Tick step is distinguishable from a
+// twoSpeedChild is a live child whose Tick step is distinguishable from a
 // sibling's, so which instance ended up under which container id is provable.
 // It has the Noop action so a native form submit against it exists to
 // trigger dispatchOverStream's full-page re-render.
-type twoSpeedEmbed struct {
+type twoSpeedChild struct {
 	step int
 	n    via.State[int]
 }
 
-func (b *twoSpeedEmbed) OnInit(ctx *via.Ctx) error {
+func (b *twoSpeedChild) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, b.tick)
 	return nil
 }
-func (b *twoSpeedEmbed) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
-func (b *twoSpeedEmbed) Noop(ctx *via.Ctx) {}
-func (b *twoSpeedEmbed) View() h.H {
+func (b *twoSpeedChild) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
+func (b *twoSpeedChild) Noop(ctx *via.Ctx) {}
+func (b *twoSpeedChild) View() h.H {
 	return h.Div(h.Str(strconv.Itoa(b.n.Get())), via.PostForm(b.Noop, h.Button(h.Str("go"))))
 }
 
-type twoSpeedEmbedNoAction struct {
+type twoSpeedChildNoAction struct {
 	step int
 	n    via.State[int]
 }
 
-func (b *twoSpeedEmbedNoAction) OnInit(ctx *via.Ctx) error {
+func (b *twoSpeedChildNoAction) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Millisecond, b.tick)
 	return nil
 }
-func (b *twoSpeedEmbedNoAction) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
-func (b *twoSpeedEmbedNoAction) View() h.H         { return h.Div(h.Str(strconv.Itoa(b.n.Get()))) }
+func (b *twoSpeedChildNoAction) tick(ctx *via.Ctx) { b.n.Set(b.n.Get() + b.step) }
+func (b *twoSpeedChildNoAction) View() h.H         { return h.Div(h.Str(strconv.Itoa(b.n.Get()))) }
 
-type twoLiveEmbedsRoot struct {
-	A twoSpeedEmbed
-	B twoSpeedEmbedNoAction
+type twoLiveChildsRoot struct {
+	A twoSpeedChild
+	B twoSpeedChildNoAction
 }
 
-func (r *twoLiveEmbedsRoot) View() h.H { return h.Div(via.Embed(r.A), via.Embed(r.B)) }
+func (r *twoLiveChildsRoot) View() h.H { return h.Div(via.Child(r.A), via.Child(r.B)) }
 
 // A native <form> submit inside a live unit now answers with the page a
 // fresh connection will hold (a fresh instance, seeded from the field
 // literal, not the dying connection's ticked state) — the reuse path that
 // used to patch the response together from the connection's own live tree
-// is gone (see Embed's godoc). Both embeds must still get their own
+// is gone (see Child's godoc). Both children must still get their own
 // distinct container, exactly once each, on that fresh render.
-func TestPostForm_liveSubmitRendersFreshPageWithDistinctEmbedIds(t *testing.T) {
+func TestPostForm_liveSubmitRendersFreshPageWithDistinctChildIds(t *testing.T) {
 	t.Parallel()
-	srv := liveServer(t, via.Handler(twoLiveEmbedsRoot{A: twoSpeedEmbed{step: 1}, B: twoSpeedEmbedNoAction{step: 1000}}))
+	srv := liveServer(t, via.Handler(twoLiveChildsRoot{A: twoSpeedChild{step: 1}, B: twoSpeedChildNoAction{step: 1000}}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -717,7 +717,7 @@ func TestPostForm_liveSubmitRendersFreshPageWithDistinctEmbedIds(t *testing.T) {
 	awaitLine(t, lines, `selector #via-i1`)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "0", 0) // "0" = A's key: the root's first Embed
+	url := actionURL(t, page, "0", 0) // "0" = A's key: the root's first Child
 	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
 	require.NoError(t, err)
@@ -736,27 +736,27 @@ func TestPostForm_liveSubmitRendersFreshPageWithDistinctEmbedIds(t *testing.T) {
 	require.Len(t, matchesB, 1, "via-i1 must appear exactly once, not duplicated")
 }
 
-// sessionSettingEmbed is a live embed whose OnInit establishes the
+// sessionSettingChild is a live child whose OnInit establishes the
 // session (so its cookie reaches the browser on the connect response,
 // before any action fires) and whose Login action re-Puts a different value
 // into that SAME session — an in-place mutation, not a fresh cookie.
-type sessionSettingEmbed struct{ n via.State[int] }
+type sessionSettingChild struct{ n via.State[int] }
 
-func (s *sessionSettingEmbed) OnInit(ctx *via.Ctx) error {
+func (s *sessionSettingChild) OnInit(ctx *via.Ctx) error {
 	ctx.Session().Put(member{Name: "anon"})
 	return nil
 }
-func (s *sessionSettingEmbed) Login(ctx *via.Ctx) { ctx.Session().Put(member{Name: "zed"}) }
-func (s *sessionSettingEmbed) View() h.H {
+func (s *sessionSettingChild) Login(ctx *via.Ctx) { ctx.Session().Put(member{Name: "zed"}) }
+func (s *sessionSettingChild) View() h.H {
 	return h.Div(s.n.Display(), via.PostForm(s.Login, h.Button(h.Str("go"))))
 }
 
 // rootReadsSessionOnInit is a plain root whose OnInit loads the session
 // value into a field — the fresh instance dispatchOverStream's native path now
-// renders must see whatever the live embed's action last Put, since it
+// renders must see whatever the live child's action last Put, since it
 // reads the SAME session object the action just mutated.
 type rootReadsSessionOnInit struct {
-	Isl  sessionSettingEmbed
+	Isl  sessionSettingChild
 	name string
 }
 
@@ -767,7 +767,7 @@ func (r *rootReadsSessionOnInit) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 func (r *rootReadsSessionOnInit) View() h.H {
-	return h.Div(h.Str(r.name), via.Embed(r.Isl))
+	return h.Div(h.Str(r.name), via.Child(r.Isl))
 }
 
 // A native form submit's fresh-instance re-render runs OnInit on the POST
@@ -792,7 +792,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "0", 0) // embed 1 = sessionSettingEmbed's Login action
+	url := actionURL(t, page, "0", 0) // child 1 = sessionSettingChild's Login action
 
 	body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
 	req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
@@ -826,11 +826,11 @@ func (c *childIniter) View() h.H { return h.Div(h.Str(c.label)) }
 
 type initChildHost struct{ Kid childIniter }
 
-func (p *initChildHost) View() h.H { return h.Div(h.H1(h.Str("HOST")), via.Embed(p.Kid)) }
+func (p *initChildHost) View() h.H { return h.Div(h.H1(h.Str("HOST")), via.Child(p.Kid)) }
 
 // An embedded child is a unit like any other, so its OnInit runs before its
 // own View — the data-loading hook that used to be the root's alone.
-func TestEmbed_runsTheChildsOwnOnInit(t *testing.T) {
+func TestChild_runsTheChildsOwnOnInit(t *testing.T) {
 	t.Parallel()
 	hits := 0
 	_, body := do(t, serve(t, via.Handler(initChildHost{Kid: childIniter{hits: &hits}})), http.MethodGet, "/", "")
@@ -848,9 +848,9 @@ func (c *notFoundChild) View() h.H                 { return h.Div(h.Str("never")
 
 type notFoundHost struct{ Kid notFoundChild }
 
-func (p *notFoundHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
+func (p *notFoundHost) View() h.H { return h.Div(via.Child(p.Kid)) }
 
-func TestEmbed_childOnInitNotFoundAnswers404(t *testing.T) {
+func TestChild_childOnInitNotFoundAnswers404(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, serve(t, via.Handler(notFoundHost{})), http.MethodGet, "/", "")
 
@@ -868,9 +868,9 @@ func (c *redirectChild) View() h.H                 { return h.Div(h.Str("never")
 
 type redirectHost struct{ Kid redirectChild }
 
-func (p *redirectHost) View() h.H { return h.Div(via.Embed(p.Kid)) }
+func (p *redirectHost) View() h.H { return h.Div(via.Child(p.Kid)) }
 
-func TestEmbed_childOnInitRedirectGatesThePage(t *testing.T) {
+func TestChild_childOnInitRedirectGatesThePage(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(redirectHost{}))
 	resp, err := (&http.Client{CheckRedirect: noFollow}).Get(srv.URL + "/")
@@ -896,7 +896,7 @@ type livePageWithPlainKid struct {
 	Kid plainKid
 }
 
-func (p *livePageWithPlainKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Kid)) }
+func (p *livePageWithPlainKid) View() h.H { return h.Div(p.n.Display(), via.Child(p.Kid)) }
 
 // Every action now echoes the tab id, live or not — so a streaming page's PLAIN
 // child posts one too, against an address the connection never registered.
@@ -908,7 +908,7 @@ func TestDispatch_plainChildOfALivePageStaysPlain(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, body := app.EmbedAction("0", 0).Over(conn).Fire()
+	status, body := app.ChildAction("0", 0).Over(conn).Fire()
 
 	assert.Equal(t, http.StatusOK, status,
 		"a plain child on a streaming page must dispatch on the plain path, not 410 as a missing live unit")
@@ -916,7 +916,7 @@ func TestDispatch_plainChildOfALivePageStaysPlain(t *testing.T) {
 }
 
 // deepCounter is a LIVE leaf whose Signal sits at field offset 0 — the same
-// offset deepPanel.Query occupies, so only the embed key keeps the two slots
+// offset deepPanel.Query occupies, so only the child key keeps the two slots
 // apart on the wire.
 type deepCounter struct {
 	Step via.Signal[int]
@@ -929,8 +929,8 @@ func (c *deepCounter) View() h.H {
 		h.Input(c.Step.Bind()), h.Button(via.On("click", c.Inc), h.Str("+step")))
 }
 
-// deepPanel is a PLAIN middle embed: it has its own Signal and action, and its
-// View Embeds a live child — the shape Embed's godoc once assumed impossible.
+// deepPanel is a PLAIN middle child: it has its own Signal and action, and its
+// View embeds a live child — the shape Child's godoc once assumed impossible.
 type deepPanel struct {
 	Query via.Signal[string]
 	Kid   deepCounter
@@ -941,7 +941,7 @@ func (p *deepPanel) Search(*via.Ctx) { p.hits.Add(1) }
 func (p *deepPanel) View() h.H {
 	return h.Section(h.Input(p.Query.Bind()),
 		h.Button(via.On("click", p.Search), h.Str("search")),
-		h.Span(h.Str("hits="), h.Str(int(p.hits.Load()))), via.Embed(p.Kid))
+		h.Span(h.Str("hits="), h.Str(int(p.hits.Load()))), via.Child(p.Kid))
 }
 
 type deepRoot struct {
@@ -950,24 +950,24 @@ type deepRoot struct {
 }
 
 func (d *deepRoot) View() h.H {
-	return h.Main(h.Input(d.Filter.Bind()), via.Embed(d.Left), via.Embed(d.Right))
+	return h.Main(h.Input(d.Filter.Bind()), via.Child(d.Left), via.Child(d.Right))
 }
 
 func newDeepRoot(hits *atomic.Int64) deepRoot {
 	return deepRoot{Left: deepPanel{hits: hits}, Right: deepPanel{hits: hits}}
 }
 
-// An embed's key composes onto its parent's, so two Embeds of the SAME type
+// A child's key composes onto its parent's, so two Children of the SAME type
 // side by side — each holding a same-typed child of its own — get four
 // distinct container ids and four distinct signal prefixes. Under the old
 // page-wide counter this held only because one flat walk numbered everything;
 // the key makes it a property of the tree instead.
-func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
+func TestChild_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
 	t.Parallel()
 	_, page := do(t, serve(t, via.Handler(newDeepRoot(&atomic.Int64{}))), http.MethodGet, "/", "")
 
 	for _, id := range []string{`id="via-i0"`, `id="via-i0-0"`, `id="via-i1"`, `id="via-i1-0"`} {
-		assert.Contains(t, page, id, "every embed in the tree needs its own container")
+		assert.Contains(t, page, id, "every child in the tree needs its own container")
 	}
 	slots := regexp.MustCompile(`data-bind="([^"]+)"`).FindAllStringSubmatch(page, -1)
 	seen := map[string]bool{}
@@ -978,24 +978,24 @@ func TestEmbed_siblingsOfTheSameTypeGetDistinctKeys(t *testing.T) {
 	assert.Len(t, seen, 5, "root filter + two panel queries + two counter steps")
 }
 
-// A PLAIN embed's action re-renders that embed alone, and its View Embeds a
-// live child, so the re-render must number that child off the embed's own key
+// A PLAIN child's action re-renders that child alone, and its View embeds a
+// live child, so the re-render must number that child off the child's own key
 // rather than restarting at the root's. Numbering from the root gives the
 // nested child a container id duplicating its parent's, a signal prefix that
 // aliases the parent's own slot, and a dispatch address that 410s on click.
-func TestEmbed_plainEmbedActionKeepsItsNestedLiveChildAddressable(t *testing.T) {
+func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) {
 	t.Parallel()
 	hits := &atomic.Int64{}
 	app := vt.Serve(t, via.Handler(newDeepRoot(hits)))
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, patch := app.EmbedAction("0", 0).Over(conn).Fire()
+	status, patch := app.ChildAction("0", 0).Over(conn).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Equal(t, int64(1), hits.Load(), "the left panel's own action ran")
 
 	assert.Len(t, regexp.MustCompile(`id="via-i0"`).FindAllString(patch, -1), 1,
-		"the patch must carry the acted embed's container exactly once")
+		"the patch must carry the acted child's container exactly once")
 	assert.Contains(t, patch, `id="via-i0-0"`,
 		"the nested live child keeps its composed key in a partial re-render")
 	assert.Contains(t, patch, `data-bind="i0__kid__step"`,
@@ -1012,22 +1012,22 @@ func TestEmbed_plainEmbedActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	assert.Contains(t, conn.Await("n="), "5", "and drive it")
 }
 
-// threeDeepLeafHost/Mid nest a live leaf under TWO plain embeds, so its key is
+// threeDeepLeafHost/Mid nest a live leaf under TWO plain children, so its key is
 // a three-segment path — the depth at which a single composition step is no
 // longer enough to keep the numbering consistent.
 type threeDeepMid struct{ Kid deepCounter }
 
-func (m *threeDeepMid) View() h.H { return h.Div(via.Embed(m.Kid)) }
+func (m *threeDeepMid) View() h.H { return h.Div(via.Child(m.Kid)) }
 
 type threeDeepOuter struct{ Mid threeDeepMid }
 
-func (o *threeDeepOuter) View() h.H { return h.Div(via.Embed(o.Mid)) }
+func (o *threeDeepOuter) View() h.H { return h.Div(via.Child(o.Mid)) }
 
 type threeDeepPage struct{ Outer threeDeepOuter }
 
-func (p *threeDeepPage) View() h.H { return h.Div(via.Embed(p.Outer)) }
+func (p *threeDeepPage) View() h.H { return h.Div(via.Child(p.Outer)) }
 
-func TestEmbed_liveLeafUnderTwoPlainEmbedsKeepsItsPathKey(t *testing.T) {
+func TestChild_liveLeafUnderTwoPlainChildsKeepsItsPathKey(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(threeDeepPage{}))
 	conn := app.Connect()
@@ -1037,7 +1037,7 @@ func TestEmbed_liveLeafUnderTwoPlainEmbedsKeepsItsPathKey(t *testing.T) {
 	assert.Contains(t, page, `id="via-i0-0-0"`, "the leaf's key is the path of ordinals down to it")
 	assert.Contains(t, page, `data-bind="outer__mid__kid__step"`)
 
-	status, _ := app.EmbedAction("0-0-0", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
+	status, _ := app.ChildAction("0-0-0", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
 	assert.Contains(t, conn.Await("n="), "3")
 }
@@ -1057,14 +1057,14 @@ type initRoot struct {
 func (p *initRoot) Bump(ctx *via.Ctx) { p.hits++ }
 func (p *initRoot) View() h.H {
 	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(p.hits)),
-		h.Button(via.On("click", p.Bump)), via.Embed(p.Kid))
+		h.Button(via.On("click", p.Bump)), via.Child(p.Kid))
 }
 
 // A plain ROOT action re-renders the whole page for its patch. The root's own
 // OnInit already ran for this request, but every embedded child in the patch is
 // a fresh copy whose OnInit has not — so it must run here or the patch ships a
 // blank child over a populated one.
-func TestEmbed_rootActionPatchInitsNestedChildren(t *testing.T) {
+func TestChild_rootActionPatchInitsNestedChildren(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(initRoot{}))
 	_, page := app.Get("/")
@@ -1084,25 +1084,25 @@ type initMid struct {
 func (m *initMid) Note(ctx *via.Ctx) { m.hits++ }
 func (m *initMid) View() h.H {
 	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(m.hits)),
-		h.Button(via.On("click", m.Note)), via.Embed(m.Kid))
+		h.Button(via.On("click", m.Note)), via.Child(m.Kid))
 }
 
 type initHost struct{ Mid initMid }
 
-func (h2 *initHost) View() h.H { return h.Div(via.Embed(h2.Mid)) }
+func (h2 *initHost) View() h.H { return h.Div(via.Child(h2.Mid)) }
 
-// Same rule one level down: a PLAIN embed's own action re-renders just that
-// embed, and its nested children are fresh copies that have never been inited.
-func TestEmbed_embedActionPatchInitsNestedChildren(t *testing.T) {
+// Same rule one level down: a PLAIN child's own action re-renders just that
+// child, and its nested children are fresh copies that have never been inited.
+func TestChild_childActionPatchInitsNestedChildren(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(initHost{}))
 	_, page := app.Get("/")
 	require.Contains(t, page, "kid=7")
 
-	status, patch := app.EmbedAction("0", 0).Fire()
+	status, patch := app.ChildAction("0", 0).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, patch, "kid=7",
-		"the embed patch must re-init its own nested children")
+		"the child patch must re-init its own nested children")
 }
 
 // twinStats is embedded twice by the same parent, which is what forces the
@@ -1117,15 +1117,15 @@ func (s *twinStats) View() h.H {
 type twinShell struct{ Inner twinPage }
 type twinPage struct{ Top, Foot twinStats }
 
-func (p *twinPage) View() h.H  { return h.Div(via.Embed(p.Top), via.Embed(p.Foot)) }
-func (s *twinShell) View() h.H { return h.Main(via.Embed(s.Inner)) }
+func (p *twinPage) View() h.H  { return h.Div(via.Child(p.Top), via.Child(p.Foot)) }
+func (s *twinShell) View() h.H { return h.Main(via.Child(s.Inner)) }
 
-// The fallback prefix is built from the embed KEY, whose depth separator is
+// The fallback prefix is built from the child KEY, whose depth separator is
 // '-' — not a JS identifier character. Ref() hands these names straight into
 // Datastar expressions ($body__i0-0__q), where the '-' reads as subtraction,
 // so the slot name must spell the key with '_'. The key itself is unchanged:
 // the container id and the dispatch address still use '-'.
-func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
+func TestChild_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(twinShell{}))
 	_, page := app.Get("/")
@@ -1139,7 +1139,7 @@ func TestEmbed_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 		seen[m[1]] = true
 		assert.Containsf(t, page, `data-show="$`+m[1]+` != `, "Ref() must name the same slot Bind() declared")
 	}
-	assert.Contains(t, page, `id="via-i0-0"`, "the embed KEY keeps its '-' separator")
+	assert.Contains(t, page, `id="via-i0-0"`, "the child KEY keeps its '-' separator")
 	assert.Contains(t, seen, "inner__i0_0__q", "the fallback spells the key with underscores")
 }
 
@@ -1163,8 +1163,8 @@ func (f *shiftForm) View() h.H {
 	return via.PostForm(f.Save, h.P(h.ID("saved"), h.Str(f.saved)), h.Input(h.Name("name")), h.Button(h.Str("go")))
 }
 
-// shiftRoot's Embed ORDER changes across the action: the form's own handler
-// opens the branch that prepends the banner embed, so the acted key ("0") is
+// shiftRoot's Child ORDER changes across the action: the form's own handler
+// opens the branch that prepends the banner child, so the acted key ("0") is
 // occupied by a shiftBanner on the response re-render while the acted instance
 // is a shiftForm. Substituting by key alone splices the form in where the
 // banner belongs — the banner vanishes, the form renders twice, and the second
@@ -1175,13 +1175,13 @@ type shiftRoot struct {
 	Form   shiftForm
 }
 
-func (r *shiftRoot) banner() h.H { return via.Embed(r.Banner) }
+func (r *shiftRoot) banner() h.H { return via.Child(r.Banner) }
 
 func (r *shiftRoot) View() h.H {
-	return h.Div(via.When(r.flag.on, r.banner), via.Embed(r.Form))
+	return h.Div(via.When(r.flag.on, r.banner), via.Child(r.Form))
 }
 
-func TestEmbed_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
+func TestChild_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
 	t.Parallel()
 	flag := &shiftFlag{}
 	app := vt.Serve(t, via.Handler(shiftRoot{flag: flag, Form: shiftForm{flag: flag}}))
@@ -1194,7 +1194,7 @@ func TestEmbed_actedInstanceIsNotSplicedIntoASlotOfAnotherType(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(body, "<form"), "the acted form must not be rendered in the banner's slot as well")
 }
 
-// oninitKid is a plain embed whose only content comes from OnInit. Embed copies
+// oninitKid is a plain child whose only content comes from OnInit. Child copies
 // it out of the parent's field on EVERY render, so if a push render skips
 // OnInit the child comes back zero-valued.
 type oninitKid struct{ loaded string }
@@ -1215,22 +1215,22 @@ func (p *tickRootWithKid) OnInit(ctx *via.Ctx) error {
 
 func (p *tickRootWithKid) tick(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 
-func (p *tickRootWithKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.K)) }
+func (p *tickRootWithKid) View() h.H { return h.Div(p.n.Display(), via.Child(p.K)) }
 
-// The defect: the first pushed frame rendered the embed zero-valued
+// The defect: the first pushed frame rendered the child zero-valued
 // ("kid=") because a push render ran with doInit false and skipped the
 // child's OnInit — so a live root could compose, but only until it ticked.
-func TestLive_plainEmbedUnderALiveRootKeepsItsOnInitState(t *testing.T) {
+func TestLive_plainChildUnderALiveRootKeepsItsOnInitState(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Handler(tickRootWithKid{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	require.Contains(t, page, "kid=FROM_ONINIT", "the GET must render the embed's loaded state")
+	require.Contains(t, page, "kid=FROM_ONINIT", "the GET must render the child's loaded state")
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
 	assert.Contains(t, firstElementsFrame(t, lines), "kid=FROM_ONINIT",
-		"a push must not serve the embed zero-valued")
+		"a push must not serve the child zero-valued")
 }
 
 // flakyKid is a PLAIN child of a LIVE root whose OnInit starts failing after
@@ -1260,7 +1260,7 @@ func (p *liveParentFlakyKid) OnInit(ctx *via.Ctx) error {
 
 func (p *liveParentFlakyKid) beat(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 
-func (p *liveParentFlakyKid) View() h.H { return h.Div(p.n.Display(), via.Embed(p.Kid)) }
+func (p *liveParentFlakyKid) View() h.H { return h.Div(p.n.Display(), via.Child(p.Kid)) }
 
 // A frame that can never render must end the stream, not loop silently: the
 // client's reconnect then re-requests the page and gets the real 500/303/404

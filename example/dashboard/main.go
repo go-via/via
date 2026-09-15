@@ -1,4 +1,4 @@
-// Command dashboard shows live-embed multiplexing: one page, one SSE stream,
+// Command dashboard shows live-child multiplexing: one page, one SSE stream,
 // several independent regions that re-render and patch only themselves.
 package main
 
@@ -32,8 +32,8 @@ func (u *Uptime) View() h.H {
 	return h.Div(h.H2(h.Str("uptime")), h.P(u.Secs.Display(), h.Str("s")))
 }
 
-// Queue is a live embed with actions and no hook at all: rendering its State is
-// what earns it a connection. A click routes to this embed on this connection,
+// Queue is a live child with actions and no hook at all: rendering its State is
+// what earns it a connection. A click routes to this child on this connection,
 // mutates its State, and patches only this region.
 type Queue struct{ Pending via.State[int] }
 
@@ -63,9 +63,9 @@ type Dashboard struct {
 func (d *Dashboard) View() h.H {
 	return h.Div(
 		h.H1(h.Str("dashboard")),
-		via.Embed(d.Header),
-		via.Embed(d.Uptime),
-		via.Embed(d.Queue),
+		via.Child(d.Header),
+		via.Child(d.Uptime),
+		via.Child(d.Queue),
 	)
 }
 

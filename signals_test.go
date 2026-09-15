@@ -349,24 +349,24 @@ type refPage struct {
 }
 
 func (p *refPage) View() h.H {
-	return h.Div(h.Data("show", p.Count.Ref()), p.Count.Display(), via.Embed(p.Chat))
+	return h.Div(h.Data("show", p.Count.Ref()), p.Count.Display(), via.Child(p.Chat))
 }
 
 // A slot is the Go FIELD name, so a user writing a raw Datastar expression
 // reads it off the struct instead of reverse-engineering an opaque field offset
-// out of the rendered HTML. An embed's slots carry its field path.
+// out of the rendered HTML. A child's slots carry its field path.
 func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(refPage{})).Get("/")
 
 	assert.Contains(t, body, `data-show="$count"`, "Ref names the root field, ahead of any Bind/Display")
 	assert.Contains(t, body, `data-text="$count"`, "and Display agrees with it")
-	assert.Contains(t, body, `data-show="$chat__draft"`, "an embed's signal is prefixed by its FIELD path")
+	assert.Contains(t, body, `data-show="$chat__draft"`, "a child's signal is prefixed by its FIELD path")
 	assert.Contains(t, body, `data-bind="chat__draft"`)
 	assert.NotContains(t, body, `"f0"`, "opaque offset slots are gone")
 }
 
-// The embed prefix must survive a live push, which re-renders the child with no
+// The child prefix must survive a live push, which re-renders the child with no
 // parent in scope — so the prefix rides on the instance, not on a parent walk.
 type refLiveChild struct {
 	Draft via.Signal[string]
@@ -382,9 +382,9 @@ func (c *refLiveChild) View() h.H         { return h.Div(h.Input(c.Draft.Bind())
 
 type refLivePage struct{ Room refLiveChild }
 
-func (p *refLivePage) View() h.H { return h.Div(via.Embed(p.Room)) }
+func (p *refLivePage) View() h.H { return h.Div(via.Child(p.Room)) }
 
-func TestSignal_embedFieldPrefixSurvivesALivePush(t *testing.T) {
+func TestSignal_childFieldPrefixSurvivesALivePush(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(refLivePage{}))
 	_, page := app.Get("/")
@@ -469,8 +469,8 @@ type staleChild struct{ S via.Signal[string] }
 
 func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
 
-// The parent binds the child's signal in its OWN View and also Embeds the
-// child. Embed copies the field by value at View-build time, so from the
+// The parent binds the child's signal in its OWN View and also embeds the
+// child. Child copies the field by value at View-build time, so from the
 // second render on, the copy arrives carrying the root-scoped slot the
 // parent's field minted, colliding with the parent's own.
 type stalePage struct {
@@ -486,7 +486,7 @@ func (p *stalePage) OnInit(ctx *via.Ctx) error {
 func (p *stalePage) tick(ctx *via.Ctx) { p.Beat.Set(p.Beat.Get() + 1) }
 
 func (p *stalePage) View() h.H {
-	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Embed(p.C))
+	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Child(p.C))
 }
 
 func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
@@ -499,9 +499,9 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 	binds := regexp.MustCompile(`data-bind="([a-z0-9_]+)"`).FindAllStringSubmatch(frame, -1)
 	require.Len(t, binds, 2, "frame: %s", frame)
 	assert.NotEqual(t, binds[0][1], binds[1][1],
-		"the embed copy must re-mint its slot, not inherit the parent's root-scoped one")
+		"the child copy must re-mint its slot, not inherit the parent's root-scoped one")
 	assert.True(t, strings.HasPrefix(binds[1][1], "c__"),
-		"embed slot must carry its embed prefix: %s", binds[1][1])
+		"child slot must carry its child prefix: %s", binds[1][1])
 }
 
 // --- F5(3): one unmarshalable value must cost its own slot, not the page's.

@@ -188,7 +188,7 @@ type metaPage struct {
 var _ via.PageMetaer = (*metaPage)(nil)
 
 func (p *metaPage) PageMeta() via.Meta { return via.Meta{Title: p.title} }
-func (p *metaPage) View() h.H          { return h.Div(h.Str("hi"), via.Embed(p.Child)) }
+func (p *metaPage) View() h.H          { return h.Div(h.Str("hi"), via.Child(p.Child)) }
 
 type metaChild struct{ title string }
 
@@ -292,9 +292,9 @@ func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 	assert.NotContains(t, body, "inner", "only the MOUNTED root's PageMeta names the document")
 }
 
-// The warning is once per TYPE per process (embedHookWarned), so a -count>1 run
+// The warning is once per TYPE per process (childHookWarned), so a -count>1 run
 // would see an empty log on every pass but the first: capture it once.
-func TestPageMeta_warnsWhenAnEmbedDeclaresOne(t *testing.T) {
+func TestPageMeta_warnsWhenAnChildDeclaresOne(t *testing.T) {
 	logged := warnChildOnce(t)
 
 	assert.Contains(t, logged, "warnChild.PageMeta is ignored")
@@ -314,7 +314,7 @@ var warnChildOnce = func() func(*testing.T) string {
 
 type warnPage struct{ Child warnChild }
 
-func (p *warnPage) View() h.H { return h.Div(via.Embed(p.Child)) }
+func (p *warnPage) View() h.H { return h.Div(via.Child(p.Child)) }
 
 type warnChild struct{ title string }
 
@@ -395,13 +395,56 @@ func (p *varyingAssetPage) PageMeta() via.Meta {
 }
 func (p *varyingAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
+// The CSP is built at Mount, so the disagreement is caught THERE: via reads
+// PageMeta a second time off a probe copy of the literal with its zero fields
+// filled in — what OnInit does — and refuses the mount if the assets moved.
+func TestPageMeta_panicsAtMountWhenAssetsDependOnData(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t,
+		"via: PageMeta().Assets of *via_test.varyingAssetPage depends on the page's data; "+
+			"the CSP is built once at Mount, so assets must be a constant of the type",
+		func() { via.NewRouter().Mount("/", varyingAssetPage{}) })
+}
+
+// A field the mounted literal already filled is NOT data: it is fixed for the
+// life of the mount, so assets derived from it are constant and must mount.
+type litAssetPage struct{ cdn string }
+
+func (p *litAssetPage) PageMeta() via.Meta {
+	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{Src: p.cdn + "/app.js"}}}}
+}
+func (p *litAssetPage) View() h.H { return h.Div(h.Str("x")) }
+
+func TestPageMeta_assetsFromTheMountedLiteralAreConstant(t *testing.T) {
+	t.Parallel()
+	assert.NotPanics(t, func() {
+		via.NewRouter().Mount("/", litAssetPage{cdn: "https://cdn.example"})
+	})
+	_, body := metaBody(t, litAssetPage{cdn: "https://cdn.example"})
+	assert.Contains(t, body, `src="https://cdn.example/app.js"`)
+}
+
+// The boot probe fills scalars, not slices, so assets grown from a slice OnInit
+// loads get past it — which is exactly why the render-time comparison stays.
+type lateAssetPage struct{ extra []string }
+
+func (p *lateAssetPage) OnInit(*via.Ctx) error { p.extra = []string{"/late.js"}; return nil }
+func (p *lateAssetPage) PageMeta() via.Meta {
+	var sc []via.Script
+	for _, src := range p.extra {
+		sc = append(sc, via.Script{Src: src})
+	}
+	return via.Meta{Assets: via.Assets{Scripts: sc}}
+}
+func (p *lateAssetPage) View() h.H { return h.Div(h.Str("x")) }
+
 // Not parallel: captureLog swaps the process-wide log writer.
-func TestPageMeta_panicsWhenAssetsDependOnRequestData(t *testing.T) {
+func TestPageMeta_panicsOnRenderWhenAssetsTheProbeCannotSeeMove(t *testing.T) {
 	logged := captureLog(t, func() {
-		resp, _ := metaBody(t, varyingAssetPage{})
+		resp, _ := metaBody(t, lateAssetPage{})
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	})
-	assert.Contains(t, logged, "PageMeta().Assets of *via_test.varyingAssetPage depends on request data; "+
+	assert.Contains(t, logged, "PageMeta().Assets of *via_test.lateAssetPage depends on request data; "+
 		"assets must be a constant of the type")
 }
 

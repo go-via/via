@@ -17,7 +17,7 @@ Read three, in this order — each adds exactly one idea to the last:
 
 After that, pick by what you need: `feed` for `Topic` + `ctx.Listen` (state
 shared across tabs — `State` alone is per connection), `poll` for `via.OnArg`
-per-row actions, `dashboard` for several live embeds on one stream, `chat` for
+per-row actions, `dashboard` for several live children on one stream, `chat` for
 all of it at once, `forum` for the multi-page/router/session/upload side.
 
 | example | what it shows |

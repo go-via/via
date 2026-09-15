@@ -21,7 +21,7 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 // writeInnerPatchFrame patches the CHILDREN of #id, never comparing id's own
 // element: mode inner hands the client a DocumentFragment, and the both-sided
 // data-ignore-morph check only fires when the incoming node is an Element. That
-// is how a live embed's push still lands on a container the root-walk render
+// is how a live child's push still lands on a container the root-walk render
 // marked data-ignore-morph.
 func writeInnerPatchFrame(w io.Writer, id string, fragment []byte) {
 	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
@@ -70,10 +70,10 @@ func (e *errWriter) Write(p []byte) (int, error) {
 // stream serializes every write and tears the stream down on the FIRST write
 // or flush failure. A half-open peer (vanished without a FIN) never cancels the
 // request context, so a failed frame write is the only in-band signal it's
-// gone; cancelling stops the embed goroutine, its tickers and subscriptions and
+// gone; cancelling stops the child goroutine, its tickers and subscriptions and
 // runs disposers instead of leaking them against a dead socket. The per-frame
 // deadline keeps a stalled-but-alive peer from pinning the goroutine forever.
-// All calls run on the embed goroutine, so it needs no lock.
+// All calls run on the child goroutine, so it needs no lock.
 type stream struct {
 	w       io.Writer
 	rc      *http.ResponseController
@@ -112,24 +112,24 @@ func (s *stream) abort() {
 // runStream drives one or more live units on a single goroutine: every unit's
 // ticks, subscriptions, dispatched actions and the keepalive feed through it,
 // so all mutation, render and stream writes are serialized without a lock. Each
-// push item pushes only its own embed's container. It always loops, even with
-// no ticks or subs, so an interactive-only embed still receives actions and
+// push item pushes only its own child's container. It always loops, even with
+// no ticks or subs, so an interactive-only child still receives actions and
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(reqCtx context.Context, label string, embeds []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
+func runStream(reqCtx context.Context, label string, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
-		for _, embed := range embeds {
-			for _, d := range embed.disposers {
+		for _, child := range children {
+			for _, d := range child.disposers {
 				// runPushItem, not a bare call: a disposer is user code, and one
 				// panicking must not skip the rest and leak what they release.
 				runPushItem(label, d)
 			}
 		}
 	}()
-	for _, embed := range embeds {
-		for _, t := range embed.ticks {
-			startTicker(reqCtx, embed, t, pushq)
+	for _, child := range children {
+		for _, t := range child.ticks {
+			startTicker(reqCtx, child, t, pushq)
 		}
 	}
 	// One token may stand for any number of subscriptions, so every wake sweeps

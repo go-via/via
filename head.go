@@ -38,8 +38,10 @@ type Head struct {
 //
 // Assets is not inert — it decides the page's Content-Security-Policy, which is
 // built once at Mount. It must therefore be a CONSTANT of the type: via reads
-// it at Mount from the zero-data literal and again on every document render,
-// and panics if the two differ.
+// it at Mount from the mounted literal, again at Mount from a probe copy whose
+// zero fields are filled in, and again on every document render. It panics if
+// any two disagree — at Mount for a page the probe can see through, on the
+// first render for one it cannot.
 type Meta struct {
 	// Title is the document title. Empty means no <title> element.
 	Title string
@@ -116,15 +118,16 @@ type Preload struct {
 //
 // Assets is the exception and is checked as one: it is read at Mount from the
 // literal you mounted, before any request, because the CSP is built there — one
-// string per mount, none per request. A PageMeta whose Assets vary with request
-// data panics on the first GET.
+// string per mount, none per request. A PageMeta whose Assets vary with the
+// page's data panics at Mount; one that varies on something the boot probe
+// cannot reach (a slice OnInit fills) panics on the first GET instead.
 //
 // It shapes the DOCUMENT, so it takes effect on a render that writes one: the
 // GET, and the full-page response to a native <form> submit. An SSE push
 // patches elements inside <body> and never rewrites the head.
 //
 // ONLY THE ROOT'S counts. An embedded child's PageMeta is ignored — a nested
-// unit may not rename the page it happens to sit in — and Embed logs one line
+// unit may not rename the page it happens to sit in — and Child logs one line
 // naming the type when it sees one, because the method looks like it works.
 //
 // Duck-typed like [Initer], so pin it: var _ via.PageMetaer = (*Ticket)(nil).
@@ -132,7 +135,7 @@ type PageMetaer interface{ PageMeta() Meta }
 
 // pageMetaOf reads the root's declaration. At write time that is after OnInit
 // and OnReload have loaded the data metadata is usually derived from; at Mount
-// it is the zero-data literal, which is what makes the Assets constancy check
+// it is the literal you mounted, which is what makes the Assets constancy check
 // meaningful.
 func pageMetaOf(root any) Meta {
 	if m, ok := root.(PageMetaer); ok {
