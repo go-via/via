@@ -57,6 +57,12 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 				return
 			}
 		}
+		// A caller can end the stream from the server side without cancelling
+		// ctx, so a scan error here isn't necessarily a bug — just log it so
+		// a spurious "frame never arrived" failure carries the real reason.
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			t.Logf("sse scan ended: %v", err)
+		}
 	}()
 	return lines, cancel
 }

@@ -375,6 +375,9 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 		for sc.Scan() {
 			lines <- sc.Text()
 		}
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			assert.NoError(t, err, "sse scan failed")
+		}
 		close(lines)
 	}()
 
@@ -442,6 +445,13 @@ func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan strin
 			case <-ctx.Done():
 				return
 			}
+		}
+		// A caller can end the stream from the server side (e.g. forcing a
+		// disconnect) without cancelling ctx, so a scan error here isn't
+		// necessarily a bug — just log it so a spurious "frame never
+		// arrived" failure elsewhere in the test carries the real reason.
+		if err := sc.Err(); err != nil && ctx.Err() == nil {
+			t.Logf("sse scan ended: %v", err)
 		}
 	}()
 	return lines, cancel
@@ -560,6 +570,9 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 			sc := bufio.NewScanner(resp.Body)
 			for sc.Scan() {
 				lines <- sc.Text()
+			}
+			if err := sc.Err(); err != nil && ctx.Err() == nil {
+				assert.NoError(t, err, "sse scan failed")
 			}
 			close(lines)
 		}()
@@ -786,9 +799,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	const goroutines, perGoroutine = 8, 100
 	var wg sync.WaitGroup
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range perGoroutine {
 				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
 				if err != nil {
@@ -801,7 +812,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 					resp.Body.Close()
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -863,9 +874,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	const goroutines, perGoroutine = 8, 100
 	var wg sync.WaitGroup
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range perGoroutine {
 				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
 				if err != nil {
@@ -878,7 +887,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 					resp.Body.Close()
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 
