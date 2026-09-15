@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -969,4 +970,67 @@ func TestLive_streamOpensThroughAResponseWriterWrapper(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a middleware that wraps the writer must not cost the app its stream")
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+}
+
+// wrapRW is the ResponseWriter a user's own middleware installs — a logger, a
+// gzip layer, anything that needs to see the bytes. It answers Unwrap (as
+// net/http asks middleware to) but not Flush, which is the shape a raw
+// w.(http.Flusher) assertion gets wrong.
+type wrapRW struct{ http.ResponseWriter }
+
+func (w wrapRW) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// via must find the flusher THROUGH a user's middleware. A raw http.Flusher
+// assertion answers no for the wrapper above, and the connect would 500
+// "streaming unsupported" — so every live page behind an ordinary logging or
+// compression middleware would simply never go live.
+func TestLive_connectsThroughAMiddlewareThatWrapsTheWriter(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(disposeProbe{disposed: make(chan struct{})})
+	srv := serve(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		app.ServeHTTP(wrapRW{ResponseWriter: w}, req)
+	}))
+
+	lines, cancel := openStream(t, srv)
+	defer cancel()
+	require.NotNil(t, lines)
+}
+
+// deadRW is a ResponseWriter and nothing more — no Flush, no Unwrap, the shape
+// a middleware that buffers the whole response entirely leaves behind. It
+// records what via answered so the outer handler can mirror it back.
+type deadRW struct {
+	hdr  http.Header
+	code int
+	body strings.Builder
+}
+
+func (d *deadRW) Header() http.Header         { return d.hdr }
+func (d *deadRW) Write(p []byte) (int, error) { return d.body.Write(p) }
+func (d *deadRW) WriteHeader(code int)        { d.code = code }
+
+// The other end of the probe: a writer that genuinely cannot stream must be
+// refused BEFORE the stream goroutine and its timers are allocated, and with a
+// status that says why. Flushing to find out would commit a 200 first.
+func TestLive_connectIsRefusedWhenTheWriterCannotStream(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(disposeProbe{disposed: make(chan struct{})})
+	srv := serve(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		d := &deadRW{hdr: w.Header(), code: http.StatusOK}
+		app.ServeHTTP(d, req)
+		w.WriteHeader(d.code)
+		io.WriteString(w, d.body.String())
+	}))
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"a connect on a writer that cannot stream must be refused, not half-opened")
+	assert.Contains(t, string(b), "streaming unsupported")
 }

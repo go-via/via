@@ -180,6 +180,15 @@ the v2 core. **Requires Go 1.27.**
   call when the tab disconnects or the router closes. `Ctx.Request`'s context
   cannot serve: a live action runs after its POST has acked.
 
+- **`WithMaxSSEConn` and `WithPinnedDeadline`** expose the two operational
+  ceilings that were compiled-in package vars. `WithMaxSSEConn(n)` sets how
+  many live SSE streams one Router serves at once (default 10000; past it a
+  connect is 503) — it is a memory budget, and the right value is the box's,
+  not via's. `WithPinnedDeadline(d)` sets how long an action POST waits for the
+  tab's stream goroutine before answering 503 and logging the tab as pinned
+  (default 5s) — set it under the load balancer's own timeout so via answers
+  first. Both take a value of 0 or less as "restore the default".
+
 - **`WithSessionStoreTimeout`** caps one session store round-trip (default 5s).
   Store calls deliberately outlive the request's context, so without it a hung
   backend pinned the request goroutine indefinitely. A read-modify-write with

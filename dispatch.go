@@ -93,7 +93,7 @@ func (m *mount) warnAtCapacity(open int64) {
 	}
 	log.Printf("via: refusing an SSE connect with 503: %d of %d live streams already open for this router. "+
 		"There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused "+
-		"until one closes. The limit is the maxSSEConn constant — raise it only with the memory to back it.",
+		"until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it.",
 		open, m.maxLive)
 }
 

@@ -122,11 +122,11 @@ const (
 )
 
 // pinnedDeadline is how long a dispatch waits for the child goroutine to reach
-// it before declaring the goroutine pinned. Well past any sane handler, and
-// short enough to answer before a load balancer or client deadline does — the
-// old code waited on req.Context() alone, so the pinned case was invisible and
-// arrived as a 410 that blamed the client.
-var pinnedDeadline = 5 * time.Second
+// it before declaring the goroutine pinned (see WithPinnedDeadline). Well past
+// any sane handler, and short enough to answer before a load balancer or client
+// deadline does — the old code waited on req.Context() alone, so the pinned
+// case was invisible and arrived as a 410 that blamed the client.
+func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDeadline }
 
 // run posts fn onto the child goroutine and WAITS for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
@@ -140,7 +140,7 @@ var pinnedDeadline = 5 * time.Second
 // ran. A detached goroutine would race other actions' and push out of order.
 func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionResult, runOutcome) {
 	result := make(chan actionResult, 1)
-	pinned := time.NewTimer(pinnedDeadline)
+	pinned := time.NewTimer(c.pinnedDeadline())
 	defer pinned.Stop()
 	select {
 	case c.pushq <- func() {
@@ -201,7 +201,7 @@ func (c *tabStream) warnPinned() {
 	log.Printf("via: live action queue not drained within %s [tab=%s unit=%s] — the connection's goroutine is "+
 		"blocked inside a Tick, Listen or action handler, so its keepalives have stopped too and every action on "+
 		"this tab answers 503 until it returns. Move blocking work off the handler.",
-		pinnedDeadline, c.id, c.unitType())
+		c.pinnedDeadline(), c.id, c.unitType())
 }
 
 // registry maps a per-connection tab id to its live child. A local of each

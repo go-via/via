@@ -472,3 +472,32 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 		"a dependency outage wants a status page; the other 503s want a retry prompt")
 	assert.Contains(t, body, "<div>x</div>")
 }
+
+// gatePage's OnInit sends every visitor away. The error-page wrapper sits in
+// front of it on a plain GET (only Datastar POSTs and the SSE route are
+// exempt), so this is what proves the wrapper passes a non-error response
+// through instead of holding it: a login gate that got swallowed would strand
+// every unauthenticated visitor on a blank 200.
+type gatePage struct{}
+
+func (p *gatePage) OnInit(ctx *via.Ctx) error { ctx.Redirect("/login"); return nil }
+func (p *gatePage) View() h.H                 { return h.Div(h.Str("secret")) }
+
+func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithErrorPage(errPage))
+	r.Mount("/secret", gatePage{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := c.Get(srv.URL + "/secret")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the wrapper caught a redirect it must pass through")
+	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
