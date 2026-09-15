@@ -1,21 +1,26 @@
 package via_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -948,4 +953,740 @@ func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
 		<-done
 		assert.Fail(t, "a hung session store pinned the request past its store timeout")
 	}
+}
+
+// --- Session merge, rotation and store-outage behaviour ------------------
+//
+// Two requests writing one session, a handle whose id was rotated away under
+// it, a store that will not settle a conditional write: all of it is reachable
+// over HTTP with a user-written SessionStore, so these drive the real server
+// rather than forging a Session by hand. The stores below are the deterministic
+// part — they fire a whole second request from inside one store call, so the
+// interleave a race would only sometimes produce happens every run.
+
+type auditA struct{ N int }
+type auditB struct{ N int }
+
+// auditPage exposes one action per write the tests below need; Show copies both
+// session values into the render, which is the only way a ctx-free View can
+// surface what the store actually holds.
+type auditPage struct{ shown string }
+
+func (p *auditPage) PutA1(ctx *via.Ctx) { ctx.Session().Put(auditA{1}) }
+func (p *auditPage) PutA2(ctx *via.Ctx) { ctx.Session().Put(auditA{2}) }
+func (p *auditPage) PutB9(ctx *via.Ctx) { ctx.Session().Put(auditB{9}) }
+func (p *auditPage) PutB3(ctx *via.Ctx) { ctx.Session().Put(auditB{3}) }
+func (p *auditPage) DelA(ctx *via.Ctx)  { ctx.Session().Delete[auditA]() }
+func (p *auditPage) Rot(ctx *via.Ctx)   { ctx.Session().Rotate() }
+
+// PutA2ReadB writes and then reads the OTHER key back through the same handle:
+// a merge that refreshed the store but not this request's own view would show
+// the pre-merge snapshot here.
+func (p *auditPage) PutA2ReadB(ctx *via.Ctx) {
+	ctx.Session().Put(auditA{2})
+	b, ok := ctx.Session().Get[auditB]()
+	p.shown = "readback=" + auditVal(b.N, ok)
+}
+
+func (p *auditPage) PutA2Rotate(ctx *via.Ctx) {
+	ctx.Session().Put(auditA{2})
+	ctx.Session().Rotate()
+}
+
+// PutTwice writes twice through one handle: if the id was retired under it, the
+// first write learns that from the store and the second short-circuits on it.
+func (p *auditPage) PutTwice(ctx *via.Ctx) {
+	ctx.Session().Put(auditA{2})
+	ctx.Session().Put(auditB{9})
+}
+
+func (p *auditPage) Show(ctx *via.Ctx) {
+	a, aok := ctx.Session().Get[auditA]()
+	b, bok := ctx.Session().Get[auditB]()
+	p.shown = "A=" + auditVal(a.N, aok) + " B=" + auditVal(b.N, bok)
+}
+
+func auditVal(n int, ok bool) string {
+	if !ok {
+		return "-"
+	}
+	return strconv.Itoa(n)
+}
+
+func (p *auditPage) View() h.H {
+	return h.Div(
+		h.P(h.Str(p.shown)),
+		h.Button(via.On("click", p.PutA1), h.Str("a1")),       // 0
+		h.Button(via.On("click", p.PutA2), h.Str("a2")),       // 1
+		h.Button(via.On("click", p.PutB9), h.Str("b9")),       // 2
+		h.Button(via.On("click", p.PutB3), h.Str("b3")),       // 3
+		h.Button(via.On("click", p.DelA), h.Str("dela")),      // 4
+		h.Button(via.On("click", p.Rot), h.Str("rot")),        // 5
+		h.Button(via.On("click", p.PutA2ReadB), h.Str("arb")), // 6
+		h.Button(via.On("click", p.PutA2Rotate), h.Str("ar")), // 7
+		h.Button(via.On("click", p.PutTwice), h.Str("two")),   // 8
+		h.Button(via.On("click", p.Show), h.Str("show")),      // 9
+	)
+}
+
+const (
+	audPutA1 = iota
+	audPutA2
+	audPutB9
+	audPutB3
+	audDelA
+	audRot
+	audPutA2ReadB
+	audPutA2Rotate
+	audPutTwice
+	audShow
+)
+
+const auditKey = "a-test-signing-key-32-bytes-long"
+
+// auditServer serves auditPage and resolves its action URLs once, so a test can
+// POST without a page GET in between — the store hooks below count store calls,
+// and an interleaved GET would move the count they arm on.
+func auditServer(t *testing.T, opts ...via.Option) (base string, acts []string) {
+	t.Helper()
+	srv := httptest.NewServer(via.Handler(auditPage{},
+		append([]via.Option{via.WithSessionKey([]byte(auditKey))}, opts...)...))
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	for n := range audShow + 1 {
+		acts = append(acts, actionURL(t, string(b), "r", n))
+	}
+	return srv.URL, acts
+}
+
+// auditPost fires one action on c and returns the response, which carries both
+// the re-rendered body and any Set-Cookie the session issued.
+func auditPost(t *testing.T, c *http.Client, base, act string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+act, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
+}
+
+// auditPostAs fires an action presenting an explicit session cookie value —
+// a second browser sharing the cookie, or a replay of an id the jar has since
+// replaced.
+func auditPostAs(t *testing.T, base, act, cookie string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+act, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Cookie", "via_session="+cookie)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp, string(b)
+}
+
+func sessionCookieOf(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	for _, ck := range resp.Cookies() {
+		if ck.Name == "via_session" {
+			return ck.Value
+		}
+	}
+	return ""
+}
+
+// gapStore fires hook once, right after the nth store read it serves, so a test
+// can land a whole second request inside another request's read-modify-write
+// window. Load and LoadVersion are armed separately: the merge window opens at
+// a different call depending on whether the store does conditional writes.
+type gapStore struct {
+	inner    via.SessionStore
+	loads    atomic.Int64
+	loadAt   atomic.Int64
+	verLoads atomic.Int64
+	verAt    atomic.Int64
+	hook     atomic.Pointer[func()]
+}
+
+func (s *gapStore) armLoad(n int64, hook func()) {
+	s.hook.Store(&hook)
+	s.loads.Store(0)
+	s.loadAt.Store(n)
+}
+
+func (s *gapStore) armLoadVersion(n int64, hook func()) {
+	s.hook.Store(&hook)
+	s.verLoads.Store(0)
+	s.verAt.Store(n)
+}
+
+func (s *gapStore) fire(at *atomic.Int64, count *atomic.Int64) {
+	n := at.Load()
+	if n <= 0 || count.Add(1) != n {
+		return
+	}
+	at.Store(0) // disarmed before the hook runs: the hook reads this store too
+	(*s.hook.Load())()
+}
+
+func (s *gapStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	data, ok, err := s.inner.Load(ctx, id)
+	s.fire(&s.loadAt, &s.loads)
+	return data, ok, err
+}
+
+func (s *gapStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	return s.inner.Save(ctx, id, data, ttl)
+}
+
+func (s *gapStore) Delete(ctx context.Context, id string) error { return s.inner.Delete(ctx, id) }
+
+// casGapStore is gapStore with the conditional-write half, so via takes the CAS
+// path; plainGapStore (a gapStore alone) is the store that has no such path.
+type casGapStore struct{ *gapStore }
+
+func (s *casGapStore) LoadVersion(ctx context.Context, id string) ([]byte, uint64, bool, error) {
+	data, ver, ok, err := s.inner.(via.VersionedSessionStore).LoadVersion(ctx, id)
+	s.fire(&s.verAt, &s.verLoads)
+	return data, ver, ok, err
+}
+
+func (s *casGapStore) SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, ver uint64) (bool, error) {
+	return s.inner.(via.VersionedSessionStore).SaveIf(ctx, id, data, ttl, ver)
+}
+
+func newPlainGap(inner via.SessionStore) *gapStore { return &gapStore{inner: inner} }
+
+func newCASGap(inner via.VersionedSessionStore) *casGapStore {
+	return &casGapStore{gapStore: &gapStore{inner: inner}}
+}
+
+// failStore is a store whose backend can be taken down mid-test, one method at
+// a time. It keeps the CAS half of the store it wraps, so a test that fails
+// Delete still exercises the conditional-write path.
+type failStore struct {
+	*via.MemorySessionStore
+	mu                       sync.Mutex
+	loadErr, saveErr, delErr error
+}
+
+func (f *failStore) err(which *error) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return *which
+}
+
+func (f *failStore) set(which *error, e error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*which = e
+}
+
+func (f *failStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	if e := f.err(&f.loadErr); e != nil {
+		return nil, false, e
+	}
+	return f.MemorySessionStore.Load(ctx, id)
+}
+
+func (f *failStore) LoadVersion(ctx context.Context, id string) ([]byte, uint64, bool, error) {
+	if e := f.err(&f.loadErr); e != nil {
+		return nil, 0, false, e
+	}
+	return f.MemorySessionStore.LoadVersion(ctx, id)
+}
+
+func (f *failStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	if e := f.err(&f.saveErr); e != nil {
+		return e
+	}
+	return f.MemorySessionStore.Save(ctx, id, data, ttl)
+}
+
+func (f *failStore) SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, ver uint64) (bool, error) {
+	if e := f.err(&f.saveErr); e != nil {
+		return false, e
+	}
+	return f.MemorySessionStore.SaveIf(ctx, id, data, ttl, ver)
+}
+
+func (f *failStore) Delete(ctx context.Context, id string) error {
+	if e := f.err(&f.delErr); e != nil {
+		return e
+	}
+	return f.MemorySessionStore.Delete(ctx, id)
+}
+
+func newFailStore() *failStore { return &failStore{MemorySessionStore: via.NewMemorySessionStore()} }
+
+// A write from one in-flight request must not erase a write of a different type
+// made by another request on the same session. The hook lands the second
+// request between this one's read and its write, which is the window a save
+// that re-encoded its own decoded copy would lose.
+func TestSession_concurrentRequestsDoNotLoseWrites(t *testing.T) {
+	t.Parallel()
+	store := newPlainGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	sid := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, sid)
+
+	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
+	auditPost(t, c, base, acts[audPutA2])
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "A=2 B=9", "a concurrent write of a different type was lost")
+}
+
+// A Clear has to survive the merge as a tombstone, not merely be absent from
+// the clearing request's own copy.
+func TestSession_clearSurvivesMerge(t *testing.T) {
+	t.Parallel()
+	store := newPlainGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPutB9])
+	sid := cookieValue(t, c, base, "via_session")
+
+	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB3], sid) })
+	auditPost(t, c, base, acts[audDelA])
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "A=- B=3", "the Delete was undone by the other request's save, or its write was lost")
+}
+
+type conc1 struct{ N int }
+type conc2 struct{ N int }
+type conc3 struct{ N int }
+type conc4 struct{ N int }
+type conc5 struct{ N int }
+type conc6 struct{ N int }
+type conc7 struct{ N int }
+type conc8 struct{ N int }
+
+// fanoutPage writes eight DISTINCT session keys, one per action, so eight
+// simultaneous requests on one session can be checked key by key.
+type fanoutPage struct{ shown string }
+
+func (p *fanoutPage) K1(ctx *via.Ctx) { ctx.Session().Put(conc1{1}) }
+func (p *fanoutPage) K2(ctx *via.Ctx) { ctx.Session().Put(conc2{2}) }
+func (p *fanoutPage) K3(ctx *via.Ctx) { ctx.Session().Put(conc3{3}) }
+func (p *fanoutPage) K4(ctx *via.Ctx) { ctx.Session().Put(conc4{4}) }
+func (p *fanoutPage) K5(ctx *via.Ctx) { ctx.Session().Put(conc5{5}) }
+func (p *fanoutPage) K6(ctx *via.Ctx) { ctx.Session().Put(conc6{6}) }
+func (p *fanoutPage) K7(ctx *via.Ctx) { ctx.Session().Put(conc7{7}) }
+func (p *fanoutPage) K8(ctx *via.Ctx) { ctx.Session().Put(conc8{8}) }
+func (p *fanoutPage) Seed(ctx *via.Ctx) {
+	ctx.Session().Put(auditA{1})
+}
+
+func (p *fanoutPage) Show(ctx *via.Ctx) {
+	out := ""
+	if _, ok := ctx.Session().Get[conc1](); ok {
+		out += "1"
+	}
+	if _, ok := ctx.Session().Get[conc2](); ok {
+		out += "2"
+	}
+	if _, ok := ctx.Session().Get[conc3](); ok {
+		out += "3"
+	}
+	if _, ok := ctx.Session().Get[conc4](); ok {
+		out += "4"
+	}
+	if _, ok := ctx.Session().Get[conc5](); ok {
+		out += "5"
+	}
+	if _, ok := ctx.Session().Get[conc6](); ok {
+		out += "6"
+	}
+	if _, ok := ctx.Session().Get[conc7](); ok {
+		out += "7"
+	}
+	if _, ok := ctx.Session().Get[conc8](); ok {
+		out += "8"
+	}
+	if a, ok := ctx.Session().Get[auditA](); ok && a.N == 1 {
+		out += "s"
+	}
+	p.shown = "keys=" + out
+}
+
+func (p *fanoutPage) View() h.H {
+	return h.Div(
+		h.P(h.Str(p.shown)),
+		h.Button(via.On("click", p.K1), h.Str("1")),
+		h.Button(via.On("click", p.K2), h.Str("2")),
+		h.Button(via.On("click", p.K3), h.Str("3")),
+		h.Button(via.On("click", p.K4), h.Str("4")),
+		h.Button(via.On("click", p.K5), h.Str("5")),
+		h.Button(via.On("click", p.K6), h.Str("6")),
+		h.Button(via.On("click", p.K7), h.Str("7")),
+		h.Button(via.On("click", p.K8), h.Str("8")),
+		h.Button(via.On("click", p.Seed), h.Str("seed")),
+		h.Button(via.On("click", p.Show), h.Str("show")),
+	)
+}
+
+// Eight simultaneous requests, each writing its own distinct key to one
+// session: every key must be readable afterwards, and so must the value that
+// was already there.
+func TestSession_concurrentDistinctKeysAllSurvive(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(fanoutPage{},
+		via.WithSessionKey([]byte(auditKey)),
+		via.WithSessionStore(via.NewMemorySessionStore())))
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/")
+	require.NoError(t, err)
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.NoError(t, err)
+	var acts []string
+	for n := range 10 {
+		acts = append(acts, actionURL(t, string(b), "r", n))
+	}
+
+	c := jarClient(t)
+	auditPost(t, c, srv.URL, acts[8]) // Seed mints the session
+	sid := cookieValue(t, c, srv.URL, "via_session")
+	require.NotEmpty(t, sid)
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			auditPostAs(t, srv.URL, acts[i], sid)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	_, body := auditPost(t, c, srv.URL, acts[9])
+	assert.Contains(t, body, "keys=12345678s", "a simultaneous write lost another request's key")
+}
+
+// A Tick/Listen handle keeps its connect-time snapshot for the connection's
+// life. Writing through it must not re-encode that snapshot over everything
+// written since — and the merge must refresh what the handle reads back, or a
+// long-lived handle keeps serving values another request has replaced.
+func TestSession_pinnedHandleWriteDoesNotRevertLaterWrites(t *testing.T) {
+	t.Parallel()
+	store := newPlainGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	sid := cookieValue(t, c, base, "via_session")
+
+	// The other request lands after this one has resolved its snapshot.
+	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
+	_, body := auditPost(t, c, base, acts[audPutA2ReadB])
+	assert.Contains(t, body, "readback=9",
+		"the handle is still serving its pre-merge snapshot after its own write")
+
+	_, final := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, final, "A=2 B=9",
+		"the pinned handle's write re-encoded its stale snapshot over the later write")
+}
+
+// Rotate exists to invalidate a pre-auth id. A store that cannot Delete must not
+// leave that id resolving — Rotate overwrites it with an already-expired
+// tombstone instead.
+func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	old := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, old)
+
+	fs.set(&fs.delErr, errors.New("redis down"))
+	resp, _ := auditPost(t, c, base, acts[audRot])
+	newID := sessionCookieOf(t, resp)
+	require.NotEmpty(t, newID)
+	require.NotEqual(t, old, newID, "Rotate did not re-id the session")
+	fs.set(&fs.delErr, nil)
+
+	_, stale := auditPostAs(t, base, acts[audShow], old)
+	assert.Contains(t, stale, "A=- B=-", "the pre-rotation id still resolves after Rotate")
+
+	_, live := auditPostAs(t, base, acts[audShow], newID)
+	assert.Contains(t, live, "A=1 B=-", "the rotated-to id does not resolve")
+}
+
+// If the tombstone cannot be written either, failing loudly beats returning a
+// rotation that did not happen: the request must be a 500 and say why.
+func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
+	// Not t.Parallel(): it reads the package log writer.
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+	c := jarClient(t)
+	auditPost(t, c, base, acts[audPutA1])
+
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	fs.set(&fs.delErr, errors.New("redis down"))
+	fs.set(&fs.saveErr, errors.New("redis down"))
+	resp, _ := auditPost(t, c, base, acts[audRot])
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"Rotate reported success with the old id still valid")
+	assert.Contains(t, logs.String(), "pre-rotation id is still valid",
+		"the log must say the rotation could not invalidate the old id")
+}
+
+// A store outage must not be read as "no session": minting one would Set-Cookie
+// over the user's real id and orphan their session once the store recovered.
+func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	id := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, id)
+
+	fs.set(&fs.loadErr, errors.New("redis down"))
+	resp, _ := auditPostAs(t, base, acts[audPutB9], id) // a flash written during the outage
+	assert.Empty(t, sessionCookieOf(t, resp), "a replacement session was minted during the outage")
+	resp, _ = auditPostAs(t, base, acts[audRot], id)
+	assert.Empty(t, sessionCookieOf(t, resp), "Rotate minted a session during the outage")
+	fs.set(&fs.loadErr, nil)
+
+	_, body := auditPostAs(t, base, acts[audShow], id)
+	assert.Contains(t, body, "A=1", "the real session did not survive the outage")
+}
+
+// A write that another request overtook mid-merge must be re-merged onto the
+// blob that landed, not written over it. The hook fires inside the conditional
+// read, so the CAS retry is exercised every run rather than by luck.
+func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
+	t.Parallel()
+	store := newCASGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	sid := cookieValue(t, c, base, "via_session")
+
+	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
+	auditPost(t, c, base, acts[audPutA2])
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "A=2 B=9", "the overtaking write was clobbered, or the retried write never landed")
+}
+
+// Rotate's whole point is that the pre-rotation id stops resolving. A handle
+// still pinned to that id must NOT re-create a session under it on its next
+// write.
+func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
+	t.Parallel()
+	store := newCASGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	old := cookieValue(t, c, base, "via_session")
+
+	var newID string
+	store.armLoadVersion(1, func() {
+		resp, _ := auditPostAs(t, base, acts[audRot], old)
+		newID = sessionCookieOf(t, resp)
+	})
+	auditPostAs(t, base, acts[audPutA2], old) // resolved before the rotation, writes after it
+	require.NotEmpty(t, newID)
+	require.NotEqual(t, old, newID)
+
+	_, stale := auditPostAs(t, base, acts[audShow], old)
+	assert.Contains(t, stale, "A=- B=-",
+		"a write through the pinned handle re-created a session under the pre-rotation id")
+	_, live := auditPostAs(t, base, acts[audShow], newID)
+	assert.Contains(t, live, "A=1 B=-", "the rotated-to session was disturbed by the dropped write")
+}
+
+// When Delete fails, Rotate leaves an expired tombstone under the old id. A
+// pinned handle writing there must not overwrite the tombstone with live values
+// — that would refresh its expiry and defeat the tombstone.
+func TestSession_writeThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	store := newCASGap(fs)
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	old := cookieValue(t, c, base, "via_session")
+
+	var newID string
+	store.armLoadVersion(1, func() {
+		fs.set(&fs.delErr, errors.New("redis down"))
+		resp, _ := auditPostAs(t, base, acts[audRot], old)
+		newID = sessionCookieOf(t, resp)
+		fs.set(&fs.delErr, nil)
+	})
+	auditPostAs(t, base, acts[audPutA2], old)
+	require.NotEmpty(t, newID)
+	require.NotEqual(t, old, newID)
+
+	_, stale := auditPostAs(t, base, acts[audShow], old)
+	assert.Contains(t, stale, "A=- B=-",
+		"a write through the pinned handle overwrote the rotation tombstone, reviving the old id")
+	_, live := auditPostAs(t, base, acts[audShow], newID)
+	assert.Contains(t, live, "A=1 B=-", "the rotated-to session was disturbed by the dropped write")
+}
+
+// casStuckStore never lets a conditional write apply once armed: the CAS loop
+// can retry to exhaustion and never settle.
+type casStuckStore struct {
+	*via.MemorySessionStore
+	armed atomic.Bool
+}
+
+func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, ver uint64) (bool, error) {
+	if s.armed.Load() {
+		return false, nil
+	}
+	return s.MemorySessionStore.SaveIf(ctx, id, data, ttl, ver)
+}
+
+// Contention the CAS loop cannot settle means every merge this request made was
+// against a revision that moved on. Falling back to an unconditional write
+// there applies a stale merge over whichever writers did get through — exactly
+// the lost update the loop exists to prevent. The write must be dropped.
+func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
+	t.Parallel()
+	cs := &casStuckStore{MemorySessionStore: via.NewMemorySessionStore()}
+	base, acts := auditServer(t, via.WithSessionStore(cs))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	cs.armed.Store(true)
+	auditPost(t, c, base, acts[audPutA2])
+	cs.armed.Store(false)
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "A=1", "an unsettled CAS loop wrote unconditionally instead of dropping")
+}
+
+// A handle whose id another request already rotated away must not rotate again:
+// it has nothing to carry to a new id, so re-issuing the cookie would overwrite
+// the good post-rotation cookie the browser holds and log the user out.
+func TestSession_rotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.T) {
+	t.Parallel()
+	store := newCASGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	old := cookieValue(t, c, base, "via_session")
+
+	var newID string
+	store.armLoadVersion(1, func() {
+		resp, _ := auditPostAs(t, base, acts[audRot], old)
+		newID = sessionCookieOf(t, resp)
+	})
+	// The pinned request's Put is dropped (its id was retired under it); the
+	// Rotate that follows must not answer with a cookie of its own.
+	pinned, _ := auditPostAs(t, base, acts[audPutA2Rotate], old)
+	require.NotEmpty(t, newID)
+	assert.Empty(t, sessionCookieOf(t, pinned),
+		"Rotate through a retired handle issued Set-Cookie, clobbering the browser's good cookie")
+
+	_, live := auditPostAs(t, base, acts[audShow], newID)
+	assert.Contains(t, live, "A=1 B=-", "the live session was disturbed")
+}
+
+// nullValsStore is a third-party store whose backend normalises an empty value
+// object to null — legal JSON for the same session. It implements only
+// SessionStore, like a store written against the documented interface alone.
+type nullValsStore struct {
+	inner      via.SessionStore
+	normalised atomic.Int64
+}
+
+func (s *nullValsStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	return s.inner.Load(ctx, id)
+}
+
+func (s *nullValsStore) Delete(ctx context.Context, id string) error { return s.inner.Delete(ctx, id) }
+
+func (s *nullValsStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	var blob map[string]json.RawMessage
+	if json.Unmarshal(data, &blob) == nil && string(blob["v"]) == "{}" {
+		blob["v"] = json.RawMessage("null")
+		if out, err := json.Marshal(blob); err == nil {
+			s.normalised.Add(1)
+			data = out
+		}
+	}
+	return s.inner.Save(ctx, id, data, ttl)
+}
+
+// Read and write must agree on what a session is: a session read back with a
+// nil value map is an empty session, so the next write must merge into it
+// rather than retire the id over the same bytes.
+func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
+	t.Parallel()
+	store := &nullValsStore{inner: via.NewMemorySessionStore()}
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audDelA]) // leaves the session stored with no values
+	require.Positive(t, store.normalised.Load(),
+		"precondition: the store never saw an empty value map to normalise")
+
+	auditPost(t, c, base, acts[audPutB9])
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "A=- B=9", "a session that reads fine was retired on its first write")
+}
+
+// Session.Put returns nothing, so a dropped write is only ever visible in the
+// log — and the short-circuit for a handle already known retired was the one
+// drop that said nothing at all. An operator reading "the value did not stick"
+// needs this line to tell the outage from a bug in their own handler.
+func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
+	// Not t.Parallel(): it reads the package log writer.
+	store := newCASGap(via.NewMemorySessionStore())
+	base, acts := auditServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPutA1])
+	old := cookieValue(t, c, base, "via_session")
+
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(prev)
+
+	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audRot], old) })
+	auditPostAs(t, base, acts[audPutTwice], old) // both writes land on a retired id
+
+	assert.Contains(t, logs.String(), "session write dropped — this handle's session id was already retired",
+		"the second write through a retired handle was dropped in silence")
 }

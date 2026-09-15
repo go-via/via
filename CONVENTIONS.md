@@ -406,6 +406,13 @@ change the surface, not the test boundary. Test-only modules (`vt/` the
 harness, `vtbrowser/` the chromedp tier) are exempt from pairing: they support
 the system rather than a single source file.
 
+One further exemption: `sourcelint_test.go`. It holds the source-TEXT lints
+(the reflect allowlist, the no-`&`/no-closure guard over the examples) — they
+parse the tree and assert on what is written in it, so they pair with every
+source file and therefore with none. They are named and isolated so a failure
+there reads as "the source drifted from a design rule", never as a behavioral
+regression.
+
 ### Internal Packages
 
 Rule: Use `internal/` for code that must not be imported by consumers

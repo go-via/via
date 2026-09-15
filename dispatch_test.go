@@ -2088,9 +2088,6 @@ func (p *pinnedLive) View() h.H {
 // are both fine. It must be a 503 (the condition is transient and server-side)
 // and it must say so in the log, once, with the tab id and the unit type.
 func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
-	restore := via.SetPinnedDeadlineForTest(150 * time.Millisecond)
-	defer restore()
-
 	var logs bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&logs)
@@ -2098,7 +2095,7 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 
 	p := pinnedLive{block: make(chan struct{}), pinned: make(chan struct{}, 1)}
 	defer close(p.block)
-	app := vt.Serve(t, via.Handler(p))
+	app := vt.Serve(t, via.Handler(p, via.WithPinnedDeadline(150*time.Millisecond)))
 	conn := app.Connect()
 	defer conn.Close()
 	select {
@@ -2217,9 +2214,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(prev)
 
-	restore := via.SetMaxSSEConnForTest(1)
-	app := vt.Serve(t, via.Handler(bumpLive{}))
-	restore()
+	app := vt.Serve(t, via.Handler(bumpLive{}, via.WithMaxSSEConn(1)))
 
 	conn := app.Connect()
 	defer conn.Close()
@@ -2232,7 +2227,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 
 	out := logs.String()
 	assert.Contains(t, out, "1 of 1 live streams", "the log must name the current count and the cap")
-	assert.Contains(t, out, "maxSSEConn", "the log must name the knob that moves the wall")
+	assert.Contains(t, out, "WithMaxSSEConn", "the log must name the knob that moves the wall")
 	assert.Equal(t, 1, strings.Count(out, "refusing an SSE connect"),
 		"a refusal storm must not become the loudest thing in the log")
 }

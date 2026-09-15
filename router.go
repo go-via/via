@@ -295,7 +295,7 @@ func (r *Router) init(opts []Option) {
 		r.mux = http.NewServeMux()
 		r.reg = newRegistry()
 		r.liveCount = &atomic.Int64{}
-		r.maxLive = maxSSEConn
+		r.maxLive = r.cfg.maxSSEConn
 		r.ctx, r.cancel = context.WithCancel(context.Background())
 		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{})
 		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {

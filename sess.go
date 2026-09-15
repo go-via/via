@@ -230,6 +230,10 @@ type sessionData struct {
 	// later dropped write is reported as the store outage it is rather than as
 	// a rotation that never happened.
 	mintFailed bool
+	// dropLogged keeps the dropped-write warning to one line per handle: every
+	// later Put/Delete through a retired handle is dropped too, and a handler
+	// that writes in a loop would otherwise flood the log with the same fact.
+	dropLogged bool
 }
 
 // sessionBlob is the wire form of a session. Field names are short because
@@ -420,7 +424,17 @@ const sessionSaveRetries = 8
 func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
 	d.mu.Lock()
 	if d.retired {
+		first := !d.dropLogged
+		d.dropLogged = true
 		d.mu.Unlock()
+		if first {
+			// Every other drop in save() logs its own cause; this branch is the
+			// short-circuit for a handle already known to be retired, and was
+			// the one path that lost a user's Put in silence. Session.Put
+			// returns nothing, so the log is the only place the drop surfaces.
+			log.Print("via: session write dropped — this handle's session id was already retired " +
+				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
+		}
 		return false
 	}
 	mintFailed := d.mintFailed

@@ -21,6 +21,8 @@ type config struct {
 	sessionTimeout time.Duration
 	head           Head
 	errorPage      func(*Ctx, PageError) h.H
+	maxSSEConn     int
+	pinnedDeadline time.Duration
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
@@ -33,9 +35,13 @@ const sseHeartbeat = 25 * time.Second
 // per click, since an action POST waits behind this same deadline.
 const sseWriteTimeout = 10 * time.Second
 
-// maxSSEConn caps concurrent live SSE streams per Handler; past it a connect
-// is refused 503. var rather than const only so a test can shrink it.
-var maxSSEConn = 10_000
+// defaultMaxSSEConn caps concurrent live SSE streams per Router; past it a
+// connect is refused 503. See WithMaxSSEConn.
+const defaultMaxSSEConn = 10_000
+
+// defaultPinnedDeadline is how long a dispatch waits for the child goroutine
+// before declaring it pinned. See WithPinnedDeadline.
+const defaultPinnedDeadline = 5 * time.Second
 
 // Option configures a Handler or a NewRouter. On a Router the options apply to
 // the whole app, not to an individual Mount: there is one session cookie and
@@ -43,9 +49,19 @@ var maxSSEConn = 10_000
 type Option func(*config)
 
 func newConfig(opts []Option) *config {
-	c := &config{trustedOrigins: map[string]bool{}}
+	c := &config{
+		trustedOrigins: map[string]bool{},
+		maxSSEConn:     defaultMaxSSEConn,
+		pinnedDeadline: defaultPinnedDeadline,
+	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if c.maxSSEConn <= 0 {
+		c.maxSSEConn = defaultMaxSSEConn
+	}
+	if c.pinnedDeadline <= 0 {
+		c.pinnedDeadline = defaultPinnedDeadline
 	}
 	c.head.validate()
 	if len(c.trustedOrigins) == 0 {
@@ -159,4 +175,25 @@ func WithSessionKey(key []byte) Option {
 	return func(c *config) {
 		c.sessionKey = key
 	}
+}
+
+// WithMaxSSEConn caps how many live SSE streams this Router serves at once
+// (default 10000); past the cap a connect is refused 503. Each stream is a
+// goroutine plus a composition tree held for the tab's life, so the right value
+// is the one the box has memory for — raise it with the memory to back it, and
+// lower it when a single pod should shed load to its siblings rather than swap.
+// A value of 0 or less restores the default.
+func WithMaxSSEConn(n int) Option {
+	return func(c *config) { c.maxSSEConn = n }
+}
+
+// WithPinnedDeadline sets how long an action POST waits for the tab's stream
+// goroutine to pick it up before answering 503 and logging the tab as pinned
+// (default 5s). The goroutine is serialized across every Tick, Listen and
+// action on that tab, so one handler that blocks stalls the rest; this deadline
+// is what turns that into a diagnosable 503 instead of a hang. Set it below the
+// load balancer's own timeout so via answers first. A value of 0 or less
+// restores the default.
+func WithPinnedDeadline(d time.Duration) Option {
+	return func(c *config) { c.pinnedDeadline = d }
 }
