@@ -2,10 +2,11 @@
 
 ## v0.8.0 — the v2 core goes mainline
 
-v0.8 is a rebuild. The v1 tree is replaced by a smaller core with no plugins,
+v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
 no subpackages beyond `h` and `topic`, and no configuration knob that a
 constant could serve instead. Module path is now
-`github.com/go-via/via` (no `/v2` suffix); v1 history is merged, the tree is
+`github.com/go-via/via` — unchanged, and still v0.x, so nothing in the module
+path or the version marks the break; v0.7 history is merged, the tree is
 the v2 core. **Requires Go 1.27.**
 
 ### Documented (behaviour unchanged)
@@ -246,12 +247,12 @@ the v2 core. **Requires Go 1.27.**
   is written. `Param[T]` still sees the decoded value.
 
 Read this even if you read nothing else. Two defaults moved in the permissive
-direction relative to v1, deliberately, and neither announces itself at
+direction relative to v0.7, deliberately, and neither announces itself at
 runtime unless you look:
 
 - **Origin enforcement (the "origin floor": the check on every state-changing
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
-  default.** v1 enforced; v0.8 accepts an action
+  default.** v0.7 enforced; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, at which point
   enforcement switches on for the whole endpoint. The reasoning: on a LIVE page
   the per-tab id is a synchronizer token and does the load-bearing work, and
@@ -277,7 +278,7 @@ opt out of.
 
 ### Breaking
 
-v0.8 is a rebuild rather than an incremental release: the v1 surface (plugins,
+v0.8 is a rebuild rather than an incremental release: the v0.7 surface (plugins,
 `h.Group`/`h.If` helpers, theme options, `WithoutSSEReconnect`, the old
 composition types) is replaced wholesale by the core below. Treat migration
 as a re-read of the README rather than a diff.
@@ -878,7 +879,7 @@ as a re-read of the README rather than a diff.
   it did not make it stable across a shape change, so such a `When` must still
   depend only on data fixed by `OnInit` or the field literal.
 - There is no per-IP or per-tab cap on concurrent SSE connections beyond the
-  router-wide `WithMaxLiveConnections`; a single client can still open many.
+  router-wide `WithMaxSSEConn`; a single client can still open many.
 - Action-body JSON decoding is not strict: unknown signal keys and trailing
   bytes after the JSON value are ignored rather than rejected.
 - Session idle-TTL eviction is lazy, enforced on the next access rather than swept
@@ -946,4 +947,5 @@ as a re-read of the README rather than a diff.
   every transport path, the compile-time `View` constraint, and the
   attribute-name allowlist.
 
-Earlier releases (v0.7.0 and back) predate this changelog; see the git tags.
+Releases up to and including v0.7.0 predate this changelog; see the git tags
+and the `v1` branch.
