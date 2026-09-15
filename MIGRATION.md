@@ -587,3 +587,54 @@ If you need a specific fix on v1, open an issue and ask. That is a request, not
 a support guarantee.
 
 v0.8 builds only with Go 1.27+.
+
+## Upgrading from a v0.8 pre-release
+
+Everything above is v1 → v0.8. If you are already on v0.8 — pinned to a commit
+on this branch before it was tagged — the API kept moving under you during the
+last stretch of the rebuild. This section is the diff for THAT jump: what
+renamed, whether the compiler will find it for you, and what a silent one
+looks like at runtime.
+
+| Old (pre-release) | New | Catches it |
+| --- | --- | --- |
+| `via.Embed(child)` | `via.Child(child)` | **compiler** — `Embed` is gone |
+| `vt.EmbedAction` | `vt.ChildAction` | **compiler** — `EmbedAction` is gone |
+| the `{embed}` action-URL segment | `{child}` | wire-only; nothing in your code names it — see "Wire break: action URLs" above |
+| `via.Handler(...)` → `http.Handler` | `via.Handler(...)` → `*via.Router` | **compiler** for a typed variable (`var h http.Handler = via.Handler(...)`); **source-compatible** for `http.Handle("/", via.Handler(...))`, since `*Router` implements `ServeHTTP` — this is what makes `Router.Close()` reachable |
+| `Title() string` hook (briefly `via.Titler`) | `PageMeta() via.Meta` | **warned, not silent** — a leftover `Title() string` is named at boot on stderr, once per type, and never called; the build still succeeds |
+| `Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}` | `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}` | **compiler** — the old fields don't exist; also new: `Head.Raw` now panics at boot if it contains `<script` or `<style` (declare it in `Assets` instead) |
+| `OnClick`/`OnSubmit`/`OnChange`/`OnClickArg` | `via.On(event, fn)` / `via.OnArg(event, fn, arg)` | **compiler** — the old names are gone |
+| `via.Live` interface, `OnConnect(*via.Ctx) error` | one `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open acquire | **silent** — `via.Live` no longer exists to assert against, so a leftover `OnConnect(ctx *via.Ctx) error` method just compiles as dead code nothing calls. Symptom: the unit never becomes live from that hook (no `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never happens), and nothing logs it |
+| `Reloader.Reload(*via.Ctx) error` | `Reloader.OnReload(*via.Ctx) error` | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
+| `List.Update` | `List.Append` / `List.Remove` | **compiler** — `Update` is gone |
+| `SignalClientOnly[T]` | removed — `Signal[T]` is the one client-value type | **compiler** — the type is gone |
+| `Session.Clear[T]()` | `Session.Delete[T]()` | **compiler** — `Clear` is gone |
+| `MemorySessionStore() SessionStore` | `NewMemorySessionStore() *MemorySessionStore` | **compiler** for the rename; the return-type narrowing also matters if you assigned the old call to a `SessionStore`-typed var expecting `VersionedSessionStore` behavior underneath — that was **silent** (a wrapper built around the interface silently took the lossy merge instead of CAS) and the concrete return type now makes it impossible |
+| `topic.Sub.C()` | `Sub.Ready()` + `Sub.Drain()` | **compiler** — `C` is gone |
+| `topic.Sub.Notify(ch)` | `Sub.WakeOn(ch)` | **compiler** — `Notify` is gone |
+| `topic.Topic.Subs()` | `Topic.NumSubs()` | **compiler** — `Subs` is gone |
+| action ids: flat page-wide counter + `?v=` shape digest | content-addressed id (hash of the handler's Go name), keyed by child path (`0-1`, not a flat `n`) | wire-only; nothing in your code builds these URLs. A tab left open across the upgrade holds the old shape and gets `410` on its first click, then comes back correct on reload — see "Wire break: action URLs" above |
+| signal slot names: render order (`s0`), then byte offset (`f0`, `i0_f0`) | Go field name (`count`, `chat__draft`) | wire-only; nothing in your code writes these. Same as above: old names are ignored, not matched, so a stale tab's post is silently dropped and heals on reload — see "Wire break: signal slot names" above |
+| a `Signal` behind a pointer/slice/array/map field, or held by a composition whose `View` has a value receiver | must be a plain field of a pointer-receiver composition | **compiler catches nothing here — it's a new boot-time panic**, not a rename: `Mount`/`Child` now walk the type and panic naming the field. The one shape the walk cannot see is a `Signal` behind an INTERFACE field, which still only panics on the first render that binds it |
+| `via.WithDocumentHead(...)` | `via.WithHead(...)` | **compiler** — old name is gone |
+| `h.Colspan` / `h.Rowspan` | `h.ColSpan` / `h.RowSpan` | **compiler** — old names are gone |
+
+Two more from the same stretch, easy to miss because neither renames anything:
+
+- **`Ctx.OnConnect`/`Ctx.OnDispose` called after `OnInit` returns.** Both used
+  to append silently to a snapshot nobody reads again — the fn simply never
+  ran, with no log line, while the sibling `ctx.Tick`/`ctx.Listen` already
+  warned in the same situation. All four now warn. If you were relying on the
+  old silence, you'll see a new stderr line naming the call site; nothing about
+  your code needs to change unless the call really was too late, in which case
+  move it earlier in `OnInit`.
+- **A GET of an action URL now answers `405`,** not `400`. If you were
+  switching on the raw status code instead of `PageError.Reason` /
+  `ReasonMethodNotAllowed`, update the check; anything reading `Reason` is
+  unaffected.
+
+If a build breaks and nothing above explains it, the fastest path is `git log
+--oneline -- <file>` on the identifier the compiler names — this branch's
+history is one rename per commit, so the commit message usually says the new
+spelling outright.
