@@ -29,7 +29,7 @@ import (
 //
 //	var _ via.Initer = (*Front)(nil)
 //
-// Mount and Embed also catch the two commonest slips — an OnInit with the
+// Mount and Child also catch the two commonest slips — an OnInit with the
 // wrong signature panics at boot, and a hook-shaped method with a near-miss
 // name (Reload, OnInitialize, …) on a type that implements neither interface
 // is logged — but the assertion above is the only airtight form.
@@ -77,10 +77,10 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	ctx.req = req
 	ctx.sessions = sessions
 	ctx.sessW = w
-	ctx.doInit = true // every embedded child's OnInit runs too, inside Embed
-	// Resolve once, eagerly, even with no OnInit: Embed copies the parent's
+	ctx.doInit = true // every embedded child's OnInit runs too, inside Child
+	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint
-	// its own id — two sibling embeds writing the session sent two Set-Cookie
+	// its own id — two sibling children writing the session sent two Set-Cookie
 	// headers and orphaned the first. Resolving alone reads the cookie and
 	// never writes one (only Session.ensure mints), so this cannot create a
 	// session for a request that would not otherwise touch one.
@@ -168,7 +168,7 @@ func answerReloadFailure(w http.ResponseWriter, err error) {
 // while it holds Signals. View is then called on a copy, so every Signal it
 // binds offsets from a stack address the render throws away — which used to
 // surface as a per-request 500 forever, once per request, with the process
-// serving happily. This makes it a Mount/Embed-time panic instead: fail at
+// serving happily. This makes it a Mount/Child-time panic instead: fail at
 // boot, not per request.
 func checkViewReceiver(t reflect.Type) {
 	if _, done := valueReceiverChecked.Load(t); done {
@@ -342,7 +342,7 @@ func (r *Router) Close() {
 }
 
 // Mount registers a page composition at path, in http.ServeMux pattern syntax.
-// Its actions post to {path}/_via/a/{embed}/{act}. root is taken by value; the
+// Its actions post to {path}/_via/a/{child}/{act}. root is taken by value; the
 // PT constraint makes a missing or mistyped View() a compile error, like
 // Handler.
 func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
@@ -376,6 +376,17 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 	assets := pageMetaOf(PT(&lit)).Assets
 	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
 	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets), assets.fingerprint()
+	// …and proved constant HERE, not on the first GET. A second reading off a
+	// probe copy — the same literal with its zero fields filled in, which is
+	// what OnInit does — must produce the same assets. A page that fails this
+	// would otherwise boot fine and 500 every request.
+	probe := root
+	perturbZeroFields(reflect.ValueOf(&probe).Elem(), 0)
+	if fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets }); read && fp != m.assetsFP {
+		panic("via: PageMeta().Assets of " + reflect.PointerTo(rootType).String() +
+			" depends on the page's data; the CSP is built once at Mount, so assets " +
+			"must be a constant of the type")
+	}
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
@@ -385,10 +396,10 @@ func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
 		}()
 		// concreteBase, not patternBase: a page at /job/{id} must advertise
 		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
-		// leaving every live embed under a parametrised mount dead.
+		// leaving every live child under a parametrised mount dead.
 		m.writePage(w, req, newInst(), concreteBase(patternBase, req, names), nil)
 	})
-	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{embed}/{act}", m.dispatch)
+	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
 }
 
@@ -512,15 +523,15 @@ func implementsAs[T any](pt reflect.Type) bool {
 
 var hookSigChecked sync.Map // reflect.Type -> true (only on a CLEAN pass)
 
-// embedHookWarned dedupes Embed's near-miss warning, which would otherwise
+// childHookWarned dedupes Child's near-miss warning, which would otherwise
 // repeat on every render of the child. Mount passes the Router's own map
 // instead, so a second app in the same binary — or a second test — is still
 // told (see warnNoChange).
-var embedHookWarned sync.Map
+var childHookWarned sync.Map
 
 // checkHooks catches the ways a composition can miss a hook it meant to
 // implement. A method literally named OnInit/OnReload/Title/Description with
-// the wrong signature is unambiguous, so it panics here at Mount/Embed rather
+// the wrong signature is unambiguous, so it panics here at Mount/Child rather
 // than serving forever with the hook dead. A near-miss NAME is a heuristic, so
 // it only warns — but only when the method carries the exact hook signature and
 // the real interface is unsatisfied, which is a shape nothing but the mistake
@@ -624,4 +635,62 @@ func withoutReceiver(mt reflect.Type) string {
 		s += " (" + strings.Join(out, ", ") + ")"
 	}
 	return s
+}
+
+// probeAssets reads the probe copy's assets, reporting read=false if PageMeta
+// refuses the synthetic data. The probe fills fields with values no author
+// promised to accept, so a panic there is the probe's fault, not the page's.
+func probeAssets(read func() Assets) (fp string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			fp, ok = "", false
+		}
+	}()
+	return read().fingerprint(), true
+}
+
+// perturbZeroFields fills v's zero scalar fields with non-zero values in place,
+// standing in for the data OnInit would load. A field the mounted literal
+// already set is left alone: that value is fixed for the life of the mount, so
+// assets derived from it ARE constant (a CDN base handed to the literal is the
+// motivating case). Reference kinds are left nil — a PageMeta deriving assets
+// from a slice OnInit fills escapes this probe, which is why the render-time
+// comparison stays.
+func perturbZeroFields(v reflect.Value, depth int) {
+	if depth > 4 || v.Kind() != reflect.Struct {
+		return
+	}
+	for i := range v.NumField() {
+		f := v.Field(i)
+		if !f.CanAddr() {
+			continue
+		}
+		// NewAt: an unexported field is not settable through reflect, and the
+		// fields a page derives its assets from are usually unexported.
+		f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
+		switch f.Kind() {
+		case reflect.Struct:
+			perturbZeroFields(f, depth+1)
+		case reflect.String:
+			if f.IsZero() {
+				f.SetString("via-probe")
+			}
+		case reflect.Bool:
+			if f.IsZero() {
+				f.SetBool(true)
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			if f.IsZero() {
+				f.SetInt(1)
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			if f.IsZero() {
+				f.SetUint(1)
+			}
+		case reflect.Float32, reflect.Float64:
+			if f.IsZero() {
+				f.SetFloat(1)
+			}
+		}
+	}
 }

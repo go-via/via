@@ -539,7 +539,7 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 // action endpoint.
 func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithTrustedOrigin("https://embedder.example"))
+	r := via.NewRouter(via.WithTrustedOrigin("https://childder.example"))
 	r.Mount("/login", loginForm{})
 	srv := serve(t, r)
 
@@ -721,14 +721,14 @@ func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
 
-// The unified pipeline carries the live machinery too: a live embed mounted on
+// The unified pipeline carries the live machinery too: a live child mounted on
 // a Router (not just Handler) bootstraps the SSE stream from its page — the
 // body carries @post('<base>/_via/sse') and the reconnect manager. Fails if
 // Mount loses the live bootstrap detection.
 func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/live", quietEmbed{})
+	r.Mount("/live", quietChild{})
 	_, body := do(t, serve(t, r), http.MethodGet, "/live", "")
 	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted streaming page must bootstrap its own SSE endpoint")
 	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted streaming page")
@@ -752,11 +752,11 @@ func (g *jobBar) View() h.H     { return h.Div(h.Str("pct "), g.pct.Display()) }
 
 type jobPage struct{ Bar jobBar }
 
-func (p *jobPage) View() h.H { return h.Main(via.Embed(p.Bar)) }
+func (p *jobPage) View() h.H { return h.Main(via.Child(p.Bar)) }
 
 // A page under a parametrised mount must advertise the CONCRETE SSE path. The
 // pattern base would be POSTed literally by the browser (/job/%7Bid%7D/_via/sse),
-// miss the route, and leave every live embed under such a mount dead — while
+// miss the route, and leave every live child under such a mount dead — while
 // the same page's action URLs already carried the concrete segment, so the two
 // halves of the library disagreed.
 func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) {
@@ -985,7 +985,7 @@ func (e *connReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("host: "), e.host.Display()))
 }
 
-// OnInit must see the SSE connect request, so an embed can authorize or
+// OnInit must see the SSE connect request, so a child can authorize or
 // inspect the connection at open time. "example.com" is httptest's fixed
 // in-memory network host, not a real loopback address.
 func TestOnInit_seesTheConnectRequest(t *testing.T) {
@@ -1021,7 +1021,7 @@ func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 }
 
 // onInitLive loads a field in OnInit, before the connect render ever runs —
-// a live embed's ticks fire on the connection's own goroutine, so its first
+// a live child's ticks fire on the connection's own goroutine, so its first
 // pushed frame is the proof OnInit's field reached the persistent instance.
 type onInitLive struct{ label string }
 
@@ -1046,22 +1046,22 @@ func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
 	})
 }
 
-// livePushEmbed is a live embed under a parametrised mount; Bump
+// livePushChild is a live child under a parametrised mount; Bump
 // changes its visible count so its action's push is a real patch.
-type livePushEmbed struct {
+type livePushChild struct {
 	n    int
 	seen via.State[int]
 }
 
-func (k *livePushEmbed) Bump(ctx *via.Ctx) { k.n++ }
+func (k *livePushChild) Bump(ctx *via.Ctx) { k.n++ }
 
-func (k *livePushEmbed) View() h.H {
+func (k *livePushChild) View() h.H {
 	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(via.On("click", k.Bump)))
 }
 
-type livePushParent struct{ I livePushEmbed }
+type livePushParent struct{ I livePushChild }
 
-func (p *livePushParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *livePushParent) View() h.H { return h.Div(via.Child(p.I)) }
 
 // A live push under a parametrised mount must carry the concrete path
 // segment in its action URLs, not the literal "{id}" pattern wildcard —
@@ -1087,17 +1087,17 @@ func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	})
 }
 
-// paramEmbed is embedded under a parametrised mount; Bump changes its
+// paramChild is embedded under a parametrised mount; Bump changes its
 // visible count so the action's response is a real patch, not a 204.
-type paramEmbed struct{ n int }
+type paramChild struct{ n int }
 
-func (k *paramEmbed) Bump(ctx *via.Ctx) { k.n++ }
+func (k *paramChild) Bump(ctx *via.Ctx) { k.n++ }
 
-func (k *paramEmbed) View() h.H { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
+func (k *paramChild) View() h.H { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
 
-type paramParent struct{ I paramEmbed }
+type paramParent struct{ I paramChild }
 
-func (p *paramParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *paramParent) View() h.H { return h.Div(via.Child(p.I)) }
 
 func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	t.Parallel()
@@ -1288,30 +1288,30 @@ func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
 		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
 }
 
-// reloadedEmbed proves the reload targets the ACTED unit: an embed's action
-// must re-read the embed, not the root.
-type reloadedEmbed struct {
+// reloadedChild proves the reload targets the ACTED unit: a child's action
+// must re-read the child, not the root.
+type reloadedChild struct {
 	s     *store
 	shown int
 }
 
-func (p *reloadedEmbed) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
+func (p *reloadedChild) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); return nil }
 
-func (p *reloadedEmbed) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
+func (p *reloadedChild) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
 
-func (p *reloadedEmbed) Bump(ctx *via.Ctx) { p.s.Add(1) }
+func (p *reloadedChild) Bump(ctx *via.Ctx) { p.s.Add(1) }
 
-func (p *reloadedEmbed) View() h.H {
+func (p *reloadedChild) View() h.H {
 	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
 }
 
-type reloadedEmbedParent struct{ C reloadedEmbed }
+type reloadedChildParent struct{ C reloadedChild }
 
-func (p *reloadedEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
+func (p *reloadedChildParent) View() h.H { return h.Div(via.Child(p.C)) }
 
-func TestReload_runsOnTheActedEmbedNotTheRoot(t *testing.T) {
+func TestReload_runsOnTheActedChildNotTheRoot(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(reloadedEmbedParent{C: reloadedEmbed{s: &store{}}}))
+	app := vt.Serve(t, via.Handler(reloadedChildParent{C: reloadedChild{s: &store{}}}))
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="n">0</p>`)
 
@@ -1366,6 +1366,27 @@ func TestRouterClose_endsAnOpenStreamWithoutTruncatingIt(t *testing.T) {
 	r.Close()
 
 	assert.NoError(t, conn.AwaitClose(), "a closed router must end the response cleanly, not truncate it")
+}
+
+// via.Handler is how every single-page app starts, and a via app owns
+// goroutines — so the entry point must hand back the thing that drains them.
+// Typed as *via.Router, not http.Handler: no type assertion at the call site.
+func TestHandler_returnsTheRouterSoCloseIsReachable(t *testing.T) {
+	t.Parallel()
+	p := &closablePage{gone: make(chan struct{}), beats: make(chan struct{}, 1)}
+	var r *via.Router = via.Handler(*p)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	conn.Await("datastar-patch-elements")
+
+	r.Close()
+
+	assert.NoError(t, conn.AwaitClose(), "Close from the Handler entry point must end the stream cleanly")
+	select {
+	case <-p.gone:
+	default:
+		assert.Fail(t, "Close returned before the unit's OnDispose ran")
+	}
 }
 
 func TestRouterClose_waitsForDisposersToRun(t *testing.T) {

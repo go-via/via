@@ -140,50 +140,50 @@ type mount struct {
 	assetsFP string
 }
 
-// unit returns the bind pass's unit Ctx for dispatch address embed: "r" is the
-// root, anything else a '-'-joined ordinal path down the embed tree ("0-1" is
-// the root's first Embed's second Embed).
-func (bind *Ctx) unit(embed string) *Ctx {
-	if embed == rootAddr {
+// unit returns the bind pass's unit Ctx for dispatch address child: "r" is the
+// root, anything else a '-'-joined ordinal path down the child tree ("0-1" is
+// the root's first Child's second Child).
+func (bind *Ctx) unit(child string) *Ctx {
+	if child == rootAddr {
 		return bind
 	}
 	cur := bind
-	for _, seg := range strings.Split(embed, "-") {
+	for _, seg := range strings.Split(child, "-") {
 		k, err := strconv.Atoi(seg)
-		if err != nil || k < 0 || k >= len(cur.embeds) {
+		if err != nil || k < 0 || k >= len(cur.children) {
 			return nil
 		}
-		cur = cur.embeds[k]
+		cur = cur.children[k]
 	}
 	return cur
 }
 
-// unit returns the connected live unit for dispatch address embed. Called on
-// the embed goroutine (see dispatchOverStream) so the lookup is atomic with the
+// unit returns the connected live unit for dispatch address child. Called on
+// the child goroutine (see dispatchOverStream) so the lookup is atomic with the
 // dispatch it guards; it still takes replace's lock, so a future caller reading
 // it from elsewhere need not remember to add one.
-func (c *tabStream) unit(embed string) *Ctx {
+func (c *tabStream) unit(child string) *Ctx {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.units[embed]
+	return c.units[child]
 }
 
-// rootAddr is a letter precisely so it cannot collide with an embed key, which
+// rootAddr is a letter precisely so it cannot collide with a child key, which
 // is always a '-'-joined path of ordinals.
 const rootAddr = "r"
 
-// unitAddr is c's own dispatch address in /_via/a/{embed}/{act}.
+// unitAddr is c's own dispatch address in /_via/a/{child}/{act}.
 func unitAddr(c *Ctx) string {
-	if c != nil && c.isEmbed {
-		return c.embedKey
+	if c != nil && c.isChild {
+		return c.childKey
 	}
 	return rootAddr
 }
 
 // dispatch is the single entry point for every action POST on a mount, at
-// {base}/_via/a/{embed}/{act}. One origin floor, one OnInit, one body decode:
+// {base}/_via/a/{child}/{act}. One origin floor, one OnInit, one body decode:
 // the six transports this replaced each re-implemented them and drifted (OnInit
-// never ran on an embed action; a live/embed action dropped ctx.Redirect).
+// never ran on a child action; a live/child action dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -205,7 +205,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	if mode == modeNative {
 		defer req.MultipartForm.RemoveAll() // drop any spilled temp files
 	}
-	embed := req.PathValue("embed")
+	child := req.PathValue("child")
 	act := req.PathValue("act")
 	base := concreteBase(m.patternBase, req, m.names)
 
@@ -222,20 +222,20 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			// The registry is router-wide, and a tab id from another mount is
 			// otherwise structurally valid here (same field, same action-id
 			// space), so nothing else would fail first.
-			http.Error(w, "no such embed", http.StatusGone)
+			http.Error(w, "no such child", http.StatusGone)
 			return
 		}
 		// A streaming page's PLAIN child echoes the tab id too, and its address
 		// was never registered on the connection. Membership is stable (a unit
 		// is published before the tab id is, and never removed), so this check
-		// is safe off the embed goroutine, unlike the staleness lookup
+		// is safe off the child goroutine, unlike the staleness lookup
 		// dispatchOverStream still does there.
-		if lc.unit(embed) != nil {
-			m.dispatchOverStream(w, req, mode, lc, embed, act, in, base)
+		if lc.unit(child) != nil {
+			m.dispatchOverStream(w, req, mode, lc, child, act, in, base)
 			return
 		}
 	}
-	m.dispatchPlain(w, req, mode, embed, act, in, base, tab)
+	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
 
 // decodeSignals decodes an action POST's body per mode. A native submit is
@@ -269,11 +269,11 @@ func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (m
 
 // dispatchOverStream runs act against a connected live unit on its
 // connection's serialized goroutine and WAITS for the result — synchronous,
-// unlike the old fire-and-forget embed dispatch, so a Redirect, the session
+// unlike the old fire-and-forget child dispatch, so a Redirect, the session
 // cookie, and a panic all resolve on THIS response like a plain action. The
 // wait is bounded by req.Context() as well as the connection closing, so a
 // stalled peer elsewhere can't park this POST's goroutine forever.
-func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, embed string, act string, in map[string]json.RawMessage, base string) {
+func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, child string, act string, in map[string]json.RawMessage, base string) {
 	res, outcome := lc.run(req.Context(), func() actionResult {
 		// A queued closure runs regardless of what its caller did meanwhile: if
 		// req.Context() is already done, run has given up and answered 410, so
@@ -309,9 +309,9 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// is more than an address mismatch — Signal.bind stamps the dirty sink
 		// at render time, so acting against an older unit attributes the write
 		// to a Ctx nothing downstream reads, silently dropping the patch.
-		u := lc.unit(embed)
+		u := lc.unit(child)
 		if u == nil {
-			return actionResult{gone: "no such embed"}
+			return actionResult{gone: "no such child"}
 		}
 		a, ok := u.actions[act]
 		if !ok {
@@ -406,7 +406,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				return
 			}
 			log.Printf("via: live action panic [tab=%s unit=%T act=%s]: %v\n%s",
-				lc.id, unit.embedV.v, act.name, rec, debug.Stack())
+				lc.id, unit.unitV.v, act.name, rec, debug.Stack())
 			res = actionResult{panicked: true}
 		}
 	}()
@@ -456,7 +456,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// the tab is navigating away from this render. See Reloader.
 	if rc.redirect == "" {
 		rl := &Ctx{req: req, sessions: sessions, sessW: w, session: rc.Session(), base: unit.base}
-		if err := reloadUnit(unit.embedV.v, rl); err != nil {
+		if err := reloadUnit(unit.unitV.v, rl); err != nil {
 			return actionResult{initErr: err}
 		}
 		rc.redirect = rl.redirect
@@ -519,8 +519,8 @@ func noStream(mode actionMode, tab string) string {
 
 // writePage writes a full HTML document for inst — the GET, and the full-page
 // re-render a native <form> submit answers with. Liveness is read off THIS
-// render rather than assumed: a plain root may carry a live EMBED, and
-// hard-coding "not live" shipped that page with no data-init, leaving the embed
+// render rather than assumed: a plain root may carry a live CHILD, and
+// hard-coding "not live" shipped that page with no data-init, leaving the child
 // dead after the first form submit.
 //
 // from non-nil already ran OnInit for this request; it carries that wiring down
@@ -538,7 +538,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 		return renderRootBase(inst, true, base, nil, nil, from, nil)
 	}
 	ctx := newRootCtx(true, base, nil)
-	ctx.embedV = inst // the root is a unit like any embed, when it is live
+	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
 		return nil, nil
 	}
@@ -547,7 +547,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 
 // dispatchPlain binds a fresh instance, runs OnInit, runs the acted-on unit's
 // action, then answers per mode.
-func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, embed string, act string, in map[string]json.RawMessage, base string, tab string) {
+func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
 	// Discovery is two-phase. auth is the render the client did not influence:
 	// it alone decides what is dispatchable (see OnArg). Then the body is
@@ -557,7 +557,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// dropped. The action must be present in BOTH, so the executed render is an
 	// intersection with auth, never a superset.
 	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
-	auth.embedV = inst                               // so auth.unit(rootAddr)'s liveness reads the same way an embed's does
+	auth.unitV = inst                                // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	if runOnInit(inst.v, auth, w, req, m.sessions) != nil {
 		return
 	}
@@ -575,9 +575,9 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// silently half-hydrated render.
 		log.Printf("via: plain discovery hit the %d-pass cap for action %s; some posted signals may be unapplied", maxHydratePasses, act)
 	}
-	ua := auth.unit(embed)
+	ua := auth.unit(child)
 	if ua == nil {
-		http.Error(w, "no such embed", http.StatusGone)
+		http.Error(w, "no such child", http.StatusGone)
 		return
 	}
 	authAct, ok := ua.actions[act]
@@ -585,18 +585,18 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
 		return
 	}
-	u := bind.unit(embed)
+	u := bind.unit(child)
 	if u == nil {
-		http.Error(w, "no such embed", http.StatusGone)
+		http.Error(w, "no such child", http.StatusGone)
 		return
 	}
 	// Same guard, same reason, as the acted-instance substitution in
-	// embedViewer: a When around an Embed that depends on a hydrated signal can
+	// childViewer: a When around a Child that depends on a hydrated signal can
 	// shift ordinals, so one key may denote different types in the auth and
-	// bind renders. Embed's docs forbid such a When; fail closed rather than
+	// bind renders. Child's docs forbid such a When; fail closed rather than
 	// run the handler against a unit the authorization never looked at.
-	if ua.embedV.typ != u.embedV.typ {
-		http.Error(w, "no such embed", http.StatusGone)
+	if ua.unitV.typ != u.unitV.typ {
+		http.Error(w, "no such child", http.StatusGone)
 		return
 	}
 	a, ok := u.actions[act]
@@ -647,7 +647,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		return
 	}
 	respond(w, req, mode, u.redirect, nil, func() []byte {
-		b := m.rerenderPlain(embed, rootBefore, inst, bind, u, base)
+		b := m.rerenderPlain(child, rootBefore, inst, bind, u, base)
 		if b == nil {
 			m.warnNoChange(act, a.name, actedViewer(inst, u))
 		}
@@ -656,11 +656,11 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 }
 
 // actedViewer is the composition the action just mutated: the root, or the
-// embed instance the discovery render bound. Re-loading the ROOT after an embed
+// child instance the discovery render bound. Re-loading the ROOT after a child
 // action would reload the wrong unit and leave the acted one stale.
 func actedViewer(inst instance, u *Ctx) any {
-	if u.isEmbed {
-		return u.embedV.v
+	if u.isChild {
+		return u.unitV.v
 	}
 	return inst.v
 }
@@ -674,7 +674,7 @@ func actedViewer(inst instance, u *Ctx) any {
 //
 // Reset are exactly the things a render PRODUCES and the next render must
 // produce again (slot order/initials, the action and hydrator tables, the
-// embed tree, the rendered bytes and push closure, this dispatch's dirty set
+// child tree, the rendered bytes and push closure, this dispatch's dirty set
 // and redirect), plus the root's OnInit registrations — OnInit does not re-run
 // here and nothing on the plain path consumes them. `live` is NOT reset: it is
 // auth's verdict, and a later pass may only widen it (I5).
@@ -695,7 +695,7 @@ func rebindFrom(auth *Ctx) *Ctx {
 	c.actions = map[string]action{}
 	c.hydrators = map[string]func(json.RawMessage){}
 	c.dirty = map[string]any{}
-	c.embeds = nil
+	c.children = nil
 	c.rendered, c.push = nil, nil
 	c.redirect = ""
 	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
@@ -726,7 +726,7 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 			fresh = true
 		}
 	}
-	for _, child := range c.embeds {
+	for _, child := range c.children {
 		if hydrateTree(child, in, done) {
 			fresh = true
 		}
@@ -746,13 +746,13 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 const maxHydratePasses = 8
 
 // rerenderPlain re-renders the acted-on unit for a Datastar action's response,
-// restricted to the signals the action wrote. A plain embed gets its own
-// container plus a data-signals attribute — the piece the old embed-action
-// handler omitted, silently dropping a Signal.Set inside a plain embed's
+// restricted to the signals the action wrote. A plain child gets its own
+// container plus a data-signals attribute — the piece the old child-action
+// handler omitted, silently dropping a Signal.Set inside a plain child's
 // action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
+func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
-	if embed == rootAddr {
+	if child == rootAddr {
 		// data-signals is a plain action's only channel for a server-side Set,
 		// restricted to what it wrote since re-declaring every slot would
 		// clobber a value the user is mid-edit. dirtyAll never returns nil,
@@ -767,13 +767,13 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderEmbedBind(u.embedKey, u.embedV, base, u, nil)
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
 	}
 	var buf bytes.Buffer
-	buf.WriteString(`<div id="via-i` + u.embedKey + `"`)
+	buf.WriteString(`<div id="via-i` + u.childKey + `"`)
 	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)
@@ -786,14 +786,14 @@ func (m *mount) rerenderPlain(embed string, rootBefore []byte, inst instance, bi
 // dispatchPlain does inline, for the same reason: a posted signal may widen
 // what the client sees and must never widen what it may call.
 //
-// Walked by embed ordinal, since that is the dispatch address. A type mismatch
-// at a key (a When around an Embed that a hydrated signal shifted) fails the
+// Walked by child ordinal, since that is the dispatch address. A type mismatch
+// at a key (a When around a Child that a hydrated signal shifted) fails the
 // whole subtree closed rather than authorizing against a unit the authority
 // render never looked at.
 func pruneToAuthority(bind, auth *Ctx) {
-	if auth == nil || bind.embedV.typ != auth.embedV.typ {
+	if auth == nil || bind.unitV.typ != auth.unitV.typ {
 		clear(bind.actions)
-		for _, child := range bind.embeds {
+		for _, child := range bind.children {
 			pruneToAuthority(child, nil)
 		}
 		return
@@ -810,10 +810,10 @@ func pruneToAuthority(bind, auth *Ctx) {
 			}
 		}
 	}
-	for i, child := range bind.embeds {
+	for i, child := range bind.children {
 		var ac *Ctx
-		if i < len(auth.embeds) {
-			ac = auth.embeds[i]
+		if i < len(auth.children) {
+			ac = auth.children[i]
 		}
 		pruneToAuthority(child, ac)
 	}
@@ -867,7 +867,7 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 }
 
 // respond is dispatch's one response policy for every action POST — root,
-// embed, live, or native form. A queued Redirect wins: a native submit gets a
+// child, live, or native form. A queued Redirect wins: a native submit gets a
 // 303, a Datastar @post gets the navigation script above. Either way the target
 // must clear hcore.SafeURL first — the same URL policy runOnInit and rendered
 // href/src URLs use — and an unsafe one is dropped, not followed. Otherwise

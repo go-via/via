@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// feed is a live embed driven by a shared Topic: every connection subscribes,
+// feed is a live child driven by a shared Topic: every connection subscribes,
 // and a published message fans out to all of them and is shown live.
 type feed struct {
 	room *topic.Topic[string]
@@ -57,7 +57,7 @@ func (d *disposeProbe) markDisposed() { close(d.disposed) }
 
 func (d *disposeProbe) View() h.H { return h.Div(h.Str("probe"), d.n.Display()) }
 
-// One publish must reach EVERY connected embed — that's the multi-user
+// One publish must reach EVERY connected child — that's the multi-user
 // headline. Two streams subscribe; a single Publish to the shared Topic shows up
 // on both.
 func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
@@ -77,42 +77,42 @@ func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	})
 }
 
-// mixedEmbed registers BOTH a tick and a subscription, plus a dispose probe.
-type mixedEmbed struct {
+// mixedChild registers BOTH a tick and a subscription, plus a dispose probe.
+type mixedChild struct {
 	room     *topic.Topic[string]
 	beats    via.State[int]
 	last     via.State[string]
 	disposed chan struct{}
 }
 
-func (m *mixedEmbed) OnInit(ctx *via.Ctx) error {
+func (m *mixedChild) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(15*time.Millisecond, m.beat)
 	ctx.OnDispose(m.markDispose)
 	ctx.Listen(m.room, m.recv)
 	return nil
 }
 
-func (m *mixedEmbed) beat(ctx *via.Ctx) { m.beats.Set(m.beats.Get() + 1) }
+func (m *mixedChild) beat(ctx *via.Ctx) { m.beats.Set(m.beats.Get() + 1) }
 
-func (m *mixedEmbed) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
+func (m *mixedChild) recv(ctx *via.Ctx, msg string) { m.last.Set(msg) }
 
-func (m *mixedEmbed) markDispose() { close(m.disposed) }
+func (m *mixedChild) markDispose() { close(m.disposed) }
 
-func (m *mixedEmbed) View() h.H {
+func (m *mixedChild) View() h.H {
 	return h.Div(
 		h.P(h.Str("beats: "), m.beats.Display()),
 		h.P(h.Str("last: "), m.last.Display()),
 	)
 }
 
-// Ticks and subscriptions share one embed loop: a ticking embed must also
-// deliver published messages, and disconnecting a ticking+subscribed embed
+// Ticks and subscriptions share one child loop: a ticking child must also
+// deliver published messages, and disconnecting a ticking+subscribed child
 // must still tear down cleanly (the ticker goroutine exits, disposers run).
-func TestLive_tickAndSubscribeShareOneEmbedLoopAndTearDownCleanly(t *testing.T) {
+func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})
-		srv := liveServer(t, via.Handler(mixedEmbed{room: room, disposed: done}))
+		srv := liveServer(t, via.Handler(mixedChild{room: room, disposed: done}))
 
 		lines, cancel := openStream(t, srv)
 		awaitLine(t, lines, "beats: ") // a tick frame flows
@@ -124,7 +124,7 @@ func TestLive_tickAndSubscribeShareOneEmbedLoopAndTearDownCleanly(t *testing.T) 
 		select {
 		case <-done:
 		default:
-			require.Fail(t, "OnDispose did not run when a ticking, subscribed embed disconnected")
+			require.Fail(t, "OnDispose did not run when a ticking, subscribed child disconnected")
 		}
 	})
 }
@@ -178,7 +178,7 @@ func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	}
 }
 
-// On disconnect the embed's OnDispose must run, so subscriptions and producers
+// On disconnect the child's OnDispose must run, so subscriptions and producers
 // are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
@@ -239,43 +239,43 @@ func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 	})
 }
 
-// chatEmbed mirrors example/chat (string messages) for an httptest fan-out
+// chatChild mirrors example/chat (string messages) for an httptest fan-out
 // check: a Send on one connection must reach every connection via the Topic.
 type chatRoom struct{ bus *topic.Topic[string] }
 
-type chatEmbed struct {
+type chatChild struct {
 	room  *chatRoom
 	Draft via.Signal[string]
 	Log   via.List[string]
 }
 
-func (c *chatEmbed) OnInit(ctx *via.Ctx) error {
+func (c *chatChild) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.recv)
 	return nil
 }
 
-func (c *chatEmbed) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
+func (c *chatChild) recv(ctx *via.Ctx, m string) { c.Log.Append(m) }
 
-func (c *chatEmbed) Send(ctx *via.Ctx) {
+func (c *chatChild) Send(ctx *via.Ctx) {
 	c.room.bus.Publish(c.Draft.Get())
 	c.Draft.Set("")
 }
 
-func (c *chatEmbed) row(m string) h.H { return h.Li(h.Str(m)) }
+func (c *chatChild) row(m string) h.H { return h.Li(h.Str(m)) }
 
-func (c *chatEmbed) View() h.H {
+func (c *chatChild) View() h.H {
 	return h.Div(
 		h.Ul(via.Each(c.Log.Get(), c.row)),
 		h.Form(via.On("submit", c.Send), h.Input(c.Draft.Bind())),
 	)
 }
 
-// The headline: a message sent on one connection's live embed fans out — via
+// The headline: a message sent on one connection's live child fans out — via
 // the Room's Topic — to EVERY connection, including a second tab.
 func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := &chatRoom{bus: topic.New[string]()}
-		srv := liveServer(t, via.Handler(chatEmbed{room: room}))
+		srv := liveServer(t, via.Handler(chatChild{room: room}))
 
 		la, ca := openStream(t, srv)
 		defer ca()
@@ -285,7 +285,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 		_ = awaitTabID(t, lb)
 
 		// Learn A's Send action id + the Draft signal slot from a page render
-		// (positional/handle identity is deterministic, so it matches A's embed).
+		// (positional/handle identity is deterministic, so it matches A's child).
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		draftSlot := attrValue(t, page, "data-bind")
 		sendID := actionID(t, page)
@@ -314,7 +314,7 @@ func (e *tickReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
 }
 
-// Ticks run under the embed ctx, so a tick body reading ctx.Request() must
+// Ticks run under the child ctx, so a tick body reading ctx.Request() must
 // see the connection's connect request — there is no triggering request for
 // a timer, and the connection's is the honest answer.
 func TestTick_seesTheConnectRequest(t *testing.T) {
@@ -558,7 +558,7 @@ func (r *racyNativeForm) View() h.H {
 
 // A native <form> submit on a streaming page re-renders lc.pageRoot in full
 // (dispatchOverStream's modeNative branch), so that render must run on the
-// embed's own serialized goroutine like every other live-state read/write —
+// child's own serialized goroutine like every other live-state read/write —
 // otherwise it races a concurrent tick. Runs in real time/concurrency so
 // -race catches a regression; asserts nothing about outcomes.
 func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
@@ -608,7 +608,7 @@ func (p *paramInTick) OnInit(ctx *via.Ctx) error {
 func (p *paramInTick) check(ctx *via.Ctx) {
 	defer func() {
 		// Non-blocking: the test only ever reads the first result, and Tick
-		// keeps firing every 1ms — a blocking send here wedges the embed
+		// keeps firing every 1ms — a blocking send here wedges the child
 		// goroutine forever once the buffer is full, hanging server Close.
 		select {
 		case p.panics <- recover():
@@ -715,7 +715,7 @@ func (r *leakRoom) View() h.H { return h.Div(h.Str("room")) }
 
 type leakPage struct{ A, B leakRoom }
 
-func (p *leakPage) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+func (p *leakPage) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
 // The second unit's OnConnect panics after the first has already acquired. The
 // connect answers 500 — and the first unit's OnDispose must still run, or the

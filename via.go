@@ -1,5 +1,5 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
-// Datastar client: plain request/response pages, SSE-backed live embeds,
+// Datastar client: plain request/response pages, SSE-backed live children,
 // server-authoritative State/List/Signal, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
@@ -76,14 +76,14 @@ type viewer interface{ View() h.H }
 
 // instance is one root/child composition plus the base address and size a
 // Signal names itself by. Both come from the generic entry point (Mount's T,
-// Embed's C); everything downstream is non-generic and would otherwise reflect.
+// Child's C); everything downstream is non-generic and would otherwise reflect.
 type instance struct {
 	v    viewer
 	base unsafe.Pointer
 	size uintptr
 	typ  reflect.Type // the composition's struct type, for the field-name signal table
 	sig  *typeSignals // that table, resolved once per type (never per render)
-	// Carried on the instance, not derived from the embed key: a live embed's
+	// Carried on the instance, not derived from the child key: a live child's
 	// push re-renders the child with no parent in scope and must still mint
 	// the exact same names the full-page walk did.
 	slotPrefix string
@@ -106,7 +106,7 @@ var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 type typeSignals struct {
 	fields []signalField
 	byOff  map[uintptr]string
-	names  map[string]bool // every minted slot name, for the embed-prefix collision check
+	names  map[string]bool // every minted slot name, for the child-prefix collision check
 }
 
 type signalField struct {
@@ -171,7 +171,7 @@ func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 // through a pointer, slice, array or map has no name at all: its writes land on
 // memory the render discards. That used to surface only when the View first
 // rendered it — a per-request 500 for the life of the process — so it is caught
-// here instead, on the type walk Mount and Embed do once.
+// here instead, on the type walk Mount and Child do once.
 //
 // An interface-held Signal cannot be seen from the type, so that one case stays
 // a render-time panic.
@@ -219,8 +219,8 @@ func lowerFirst(s string) string {
 }
 
 // prebindSignals stamps every field-held Signal with its wire name BEFORE the
-// View runs, so Ref reads a real name wherever it is called and an Embed's
-// by-value copy carries the embed's prefix, not the parent's last binding.
+// View runs, so Ref reads a real name wherever it is called and a Child's
+// by-value copy carries the child's prefix, not the parent's last binding.
 func prebindSignals(c *Ctx, inst instance) {
 	if inst.sig == nil || inst.base == nil {
 		return
@@ -231,22 +231,22 @@ func prebindSignals(c *Ctx, inst instance) {
 	}
 }
 
-// embedPrefixKey memoizes the parent-type -> child-type field-name lookup.
-type embedPrefixKey struct{ parent, child reflect.Type }
+// childPrefixKey memoizes the parent-type -> child-type field-name lookup.
+type childPrefixKey struct{ parent, child reflect.Type }
 
-var embedPrefixes sync.Map // embedPrefixKey -> string ("" = ambiguous)
+var childPrefixes sync.Map // childPrefixKey -> string ("" = ambiguous)
 
-// embedFieldName is the parent field an Embed's child came from. Embed takes
+// childFieldName is the parent field a Child's child came from. Child takes
 // the child BY VALUE, so the copy's address says nothing about which field it
 // came from; the type does, as long as the parent holds exactly ONE field of
-// it. Two fields of that type answer "" (Embed's argument order need not match
-// declaration order), and the caller falls back to the positional embed key.
-func embedFieldName(parent, child reflect.Type) string {
+// it. Two fields of that type answer "" (Child's argument order need not match
+// declaration order), and the caller falls back to the positional child key.
+func childFieldName(parent, child reflect.Type) string {
 	if parent == nil || child == nil || parent.Kind() != reflect.Struct {
 		return ""
 	}
-	k := embedPrefixKey{parent, child}
-	if v, ok := embedPrefixes.Load(k); ok {
+	k := childPrefixKey{parent, child}
+	if v, ok := childPrefixes.Load(k); ok {
 		return v.(string)
 	}
 	name := ""
@@ -261,17 +261,17 @@ func embedFieldName(parent, child reflect.Type) string {
 		name = lowerFirst(parent.Field(i).Name)
 	}
 	if name != "" {
-		// An embed scopes its child's slots under name+"__", while a plain
+		// A child scopes its child's slots under name+"__", while a plain
 		// field literally named A__b mints "a__b" in the PARENT — same slot,
 		// two different fields.
 		for own := range signalsOf(parent).names {
 			if strings.HasPrefix(own, name+"__") {
 				panic("via: signal slot " + own + " on " + parent.String() +
-					" collides with the embed prefix of field " + name + " — rename the field")
+					" collides with the child prefix of field " + name + " — rename the field")
 			}
 		}
 	}
-	embedPrefixes.Store(k, name)
+	childPrefixes.Store(k, name)
 	return name
 }
 
@@ -308,17 +308,17 @@ type Ctx struct {
 	sessions    *sessionManager
 	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I2)
 	session     *Session
-	embeds      []*Ctx // embedded children, in positional order (parent binder only)
-	isEmbed     bool
-	embedKey    string // ordinal among the parent's Embeds, composed with the parent's key ("0", "0-0")
-	embedV      instance
+	children    []*Ctx // embedded children, in positional order (parent binder only)
+	isChild     bool
+	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
+	unitV       instance
 	rendered    []byte // inner HTML from the discovery render (for the 204 compare)
-	push        func() // re-render THIS embed and frame it on the stream
+	push        func() // re-render THIS child and frame it on the stream
 	declare     bool   // this render declares page-level data-signals
 	base        string // mount path prefix for action POSTs
 	redirect    string
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
-	actedKey    string // embed key of the unit an action just mutated; Embed re-uses that instance instead of re-copying the parent's pristine field
+	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
 	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
@@ -383,15 +383,15 @@ func newCtx() *Ctx {
 }
 
 // dirtyAll gathers every signal this pass wrote, page-wide: a Set inside an
-// embed lands on that embed's binder, so the root map alone would silently
+// child lands on that child's binder, so the root map alone would silently
 // drop it.
 func (c *Ctx) dirtyAll() map[string]any {
-	if len(c.embeds) == 0 {
+	if len(c.children) == 0 {
 		return c.dirty
 	}
 	all := make(map[string]any, len(c.dirty))
 	maps.Copy(all, c.dirty)
-	for _, isl := range c.embeds {
+	for _, isl := range c.children {
 		maps.Copy(all, isl.dirtyAll())
 	}
 	return all
@@ -423,9 +423,9 @@ func ctxOf(b hcore.Binder) *Ctx {
 // writes the wrong field. The subtraction is unsigned, so a field BELOW the
 // base wraps past size and fails the bound check along with one above it.
 func (c *Ctx) signalSlot(field unsafe.Pointer) string {
-	if base := c.embedV.base; base != nil && field != nil && c.embedV.sig != nil {
-		if off := uintptr(field) - uintptr(base); off < c.embedV.size {
-			if name, ok := c.embedV.sig.byOff[off]; ok {
+	if base := c.unitV.base; base != nil && field != nil && c.unitV.sig != nil {
+		if off := uintptr(field) - uintptr(base); off < c.unitV.size {
+			if name, ok := c.unitV.sig.byOff[off]; ok {
 				return c.scopePrefix() + name
 			}
 		}
@@ -435,18 +435,18 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 		"not behind a pointer, slice, array, map or interface")
 }
 
-// childKey composes onto the parent's key, so a subtree re-rendered on its own
-// (renderEmbedBind) numbers its descendants exactly as the full-page walk did.
-func (c *Ctx) childKey(ordinal int) string {
-	if c.isEmbed {
-		return c.embedKey + "-" + strconv.Itoa(ordinal)
+// keyOf composes onto the parent's key, so a subtree re-rendered on its own
+// (renderChildBind) numbers its descendants exactly as the full-page walk did.
+func (c *Ctx) keyOf(ordinal int) string {
+	if c.isChild {
+		return c.childKey + "-" + strconv.Itoa(ordinal)
 	}
 	return strconv.Itoa(ordinal)
 }
 
-// scopePrefix lives on the instance so a live embed's parentless push
+// scopePrefix lives on the instance so a live child's parentless push
 // re-render reproduces it exactly — see instance.slotPrefix.
-func (c *Ctx) scopePrefix() string { return c.embedV.slotPrefix }
+func (c *Ctx) scopePrefix() string { return c.unitV.slotPrefix }
 
 // slotSet collects every slot this render declared, page-wide.
 func (c *Ctx) slotSet() map[string]bool {
@@ -459,7 +459,7 @@ func (c *Ctx) collectSlots(dst map[string]bool) {
 	for _, slot := range c.order {
 		dst[slot] = true
 	}
-	for _, isl := range c.embeds {
+	for _, isl := range c.children {
 		isl.collectSlots(dst)
 	}
 }
@@ -536,7 +536,7 @@ func (c *Ctx) claimSlot(ident any) (string, string, action) {
 		panic("via: two different actions share the action id " + id + ": " + prev.name +
 			" and " + name + " — their receivers are not addressable inside this unit " +
 			"(a closure, or a child held through a pointer/slice field), so via cannot tell " +
-			"them apart; give each child its own via.Embed embed")
+			"them apart; give each child its own via.Child")
 	}
 	return id, name, action{name: name, handle: ah, args: prev.args}
 }
@@ -587,10 +587,10 @@ func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	if isMethod {
 		recv := methodRecv(self)
 		ah.self = recv // two takes of the same method value are two funcvals; the receiver is the identity
-		if base := c.embedV.base; base != nil && recv != nil {
+		if base := c.unitV.base; base != nil && recv != nil {
 			// Unsigned, so a receiver below the base wraps past size and fails
 			// the bound check along with one above it.
-			if o := uintptr(recv) - uintptr(base); o < c.embedV.size {
+			if o := uintptr(recv) - uintptr(base); o < c.unitV.size {
 				off, scoped = o, true
 			}
 		}
@@ -882,7 +882,7 @@ func (u unrenderedArg) body() string {
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 	base := ""
 	if ctx != nil {
-		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{embed}/{id}
+		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
 	}
 	path := base + "/_via/a/" + unitAddr(ctx) + "/" + idx
 	r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path+query) + `')"`)
@@ -901,7 +901,7 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet) (*Ctx, []byte) {
 	ctx := newRootCtx(declareSignals, base, only)
 	ctx.declareSeen = seen
-	ctx.embedV = inst
+	ctx.unitV = inst
 	ctx.rev = rev
 	inheritRequestScope(ctx, from)
 	return ctx, renderRootWith(ctx, inst.v)
@@ -925,14 +925,14 @@ func inheritRequestScope(ctx, from *Ctx) {
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).
 	ctx.session = from.session
-	// An EMBED's mutation landed on the copy via.Embed made at the previous
-	// render. A root walk from here would call via.Embed(parent.Field) again
+	// An CHILD's mutation landed on the copy via.Child made at the previous
+	// render. A root walk from here would call via.Child(parent.Field) again
 	// and re-copy the parent's untouched field, throwing it away (validation
 	// errors gone, submitted values back to empty) — so carry the instance down
 	// for the walk to substitute at its own key. A root action mutates the very
 	// instance the walk starts from, so it needs nothing.
-	if from.isEmbed {
-		ctx.actedKey, ctx.actedInst = from.embedKey, from.embedV
+	if from.isChild {
+		ctx.actedKey, ctx.actedInst = from.childKey, from.unitV
 	}
 }
 
@@ -941,7 +941,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 // Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
 func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 	ctx := newCtx()
-	ctx.declare = declareSignals // embeds declare their own signals only on a declaring render
+	ctx.declare = declareSignals // children declare their own signals only on a declaring render
 	ctx.declareOnly = only
 	ctx.base = base
 	return ctx
@@ -952,7 +952,7 @@ func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 // whole walk is done — see checkLiveNesting.
 func renderRootWith(ctx *Ctx, v viewer) []byte {
 	declareSignals, only := ctx.declare, ctx.declareOnly
-	prebindSignals(ctx, ctx.embedV)
+	prebindSignals(ctx, ctx.unitV)
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
@@ -969,67 +969,75 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 }
 
 // checkLiveNesting enforces the two deferred-feature rules on the finished
-// render tree: a live unit may not hold another live unit, and a live EMBED's
-// View may not call Embed at all (a live ROOT may — its plain children are
+// render tree: a live unit may not hold another live unit, and a live CHILD's
+// View may not call Child at all (a live ROOT may — its plain children are
 // re-inited on every push, see rootPush). It runs after the walk because
 // liveness is only knowable then — loud and early, rather than serving a page
 // that silently misroutes an action.
 func checkLiveNesting(c *Ctx, underLive bool) {
 	if c.live {
 		if underLive {
-			panic("via: via.Embed: a live unit cannot sit inside another live unit — " +
+			panic("via: via.Child: a live unit cannot sit inside another live unit — " +
 				"embed it directly from a plain ancestor instead")
 		}
-		if c.isEmbed && len(c.embeds) > 0 {
-			panic("via: via.Embed: a live embed's View must not call Embed — keep a live embed's View flat")
+		if c.isChild && len(c.children) > 0 {
+			panic("via: via.Child: a live child's View must not call Child — keep a live child's View flat")
 		}
 	}
-	for _, ch := range c.embeds {
+	for _, ch := range c.children {
 		checkLiveNesting(ch, underLive || c.live)
 	}
 }
 
-// Handler builds an http.Handler serving the root composition. root is taken
-// by value; per request via copies it into an addressable local and operates on
-// the pointer, so pointer-receiver methods work without '&' at the call site.
-// The PT constraint makes a missing or mistyped View() a compile error rather
-// than a first-request 500; Handler(Counter{}) still infers both parameters.
-func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) http.Handler {
+// Handler builds a single-page app: a [Router] with root mounted at "/". root
+// is taken by value; per request via copies it into an addressable local and
+// operates on the pointer, so pointer-receiver methods work without '&' at the
+// call site. The PT constraint makes a missing or mistyped View() a compile
+// error rather than a first-request 500; Handler(Counter{}) still infers both
+// parameters.
+//
+// It returns the *Router rather than an http.Handler so the live half is
+// reachable: a via app owns goroutines, and [Router.Close] is what drains them.
+//
+//	r := via.Handler(Counter{})
+//	defer r.Close()
+//	http.ListenAndServe(":8080", r)
+func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) *Router {
 	r := NewRouter(opts...)
 	r.Mount[T, PT]("/", root)
 	return r
 }
 
 // liveUnits collects every live unit in bind's render, at any depth — the root
-// first when live, then its live embeds in render order.
+// first when live, then its live children in render order.
 func liveUnits(bind *Ctx) []*Ctx {
 	var units []*Ctx
 	if bind.live {
 		units = append(units, bind)
 	}
-	appendLiveEmbeds(bind, &units)
+	appendLiveChildren(bind, &units)
 	return units
 }
 
-// appendLiveEmbeds recurses: a live grandchild gets no stream wiring unless
+// appendLiveChildren recurses: a live grandchild gets no stream wiring unless
 // discovery descends past its (live or plain) parent too.
-func appendLiveEmbeds(ctx *Ctx, out *[]*Ctx) {
-	for _, isl := range ctx.embeds {
+func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
+	for _, isl := range ctx.children {
 		if isl.live {
 			*out = append(*out, isl)
 		}
-		appendLiveEmbeds(isl, out)
+		appendLiveChildren(isl, out)
 	}
 }
 
 // connectUnit wires unit's push closure to stream (whole-page at #root for the
-// root, its own #via-i{key} container for an embed) and registers it on lc.
+// root, its own #via-i{key} container for a child) and registers it on lc.
 func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 	lc.replace(unit)
-	if unit.isEmbed {
-		unit.push = embedPush(unit.embedKey, unit.embedV, base, stream, lc, unit)
+	if unit.isChild {
+		unit.push = childPush(unit.childKey, unit.unitV, base, stream, lc, unit)
 	} else {
-		unit.push = rootPush(unit.embedV, base, stream, lc, unit)
+		unit.push = rootPush(unit.unitV, base, stream, lc, unit)
 	}
 }
 
@@ -1037,12 +1045,12 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // fresh bind Ctx replaces lc's entry, so a live action needs no render of its
 // own — the previous push already built its actions/hydrators table.
 //
-// from is what makes a live root's plain EMBEDS survive a push: Embed re-copies
+// from is what makes a live root's plain CHILDREN survive a push: Child re-copies
 // each child from the root's field every render, so a child whose fields OnInit
 // filled comes back zero-valued unless that OnInit runs again. COST: a plain
 // child of a LIVE root runs its OnInit once per pushed frame — keep it cheap,
-// or hold the data on the live root. A live EMBED may not Embed at all
-// (checkLiveNesting), so embedPush needs none of this.
+// or hold the data on the live root. A live CHILD may not Child at all
+// (checkLiveNesting), so childPush needs none of this.
 // livePush renders one live unit under the same two-phase rule dispatchPlain
 // has always used (I1/I2) and the live path had no version of at all: the
 // AUTHORITY render is the one the client's posted signals did not touch, and it
@@ -1158,16 +1166,16 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 	return push
 }
 
-// embedPush is rootPush for a live embed: it re-renders at key in Datastar
+// childPush is rootPush for a live child: it re-renders at key in Datastar
 // inner mode, so the container's own data-ignore-morph never blocks the push.
-func embedPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
+func childPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
 	var push func()
 	var lastBody []byte // see skipUnchanged
 	last := from        // the connect render's bind, until the first push replaces it
 	push = func() {
 		lc.flushDirty(last)
 		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
-			return renderEmbedBind(key, inst, base, nil, rev)
+			return renderChildBind(key, inst, base, nil, rev)
 		})
 		bind.push = push
 		last = bind
@@ -1285,7 +1293,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	rev := newRevertSet()
 	bind := newRootCtx(false, base, nil)
 	bind.rev = rev
-	bind.embedV = pv
+	bind.unitV = pv
 	if runOnInit(pv.v, bind, w, req, m.sessions) != nil {
 		return
 	}

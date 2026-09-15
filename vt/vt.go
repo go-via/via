@@ -40,19 +40,19 @@ type App struct {
 	fetched  bool
 }
 
-// actionURLRe matches every action URL bound to embed in one chunk of
+// actionURLRe matches every action URL bound to a child in one chunk of
 // rendered markup. The action id is content-addressed from the handler's own
 // func name, so a test cannot construct the URL — it reads the one the page
 // actually shipped, which is also what makes the ?a= row datum travel with it.
-func actionURLRe(embed string) *regexp.Regexp {
-	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + embed + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+func actionURLRe(child string) *regexp.Regexp {
+	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
 }
 
-// nthActionURL returns the n-th action URL for embed in document order
+// nthActionURL returns the n-th action URL for child in document order
 // within markup — vt addresses actions by render position, which is how a
 // test reads its own View, while the wire addresses them by handler.
-func nthActionURL(markup []byte, embed string, n int) (string, bool) {
-	m := actionURLRe(embed).FindAllSubmatch(markup, -1)
+func nthActionURL(markup []byte, child string, n int) (string, bool) {
+	m := actionURLRe(child).FindAllSubmatch(markup, -1)
 	if n < 0 || n >= len(m) {
 		return "", false
 	}
@@ -66,7 +66,7 @@ func Serve(t testing.TB, handler http.Handler) *App {
 	t.Helper()
 	srv := httptest.NewTestServer(t, handler)
 	// ErrorLog must be set before the first Client()/Start() call: a test that
-	// deliberately drives a render panic (e.g. the off-embed State guard)
+	// deliberately drives a render panic (e.g. the off-child State guard)
 	// would otherwise spam a recovered-panic stack trace to stderr.
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.Client() // forces srv.URL to populate; harmless before any real request
@@ -118,24 +118,24 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (the root is embed "r"). The URL is read off the rendered root page at
+// order (the root is child "r"). The URL is read off the rendered root page at
 // Fire time, not constructed: the wire id is a hash of the handler's func
 // name and any ?a= row datum rides along with it, so a hand-built path would
 // be wrong. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
-func (a *App) Action(n int) *Action { return a.EmbedAction("r", n) }
+func (a *App) Action(n int) *Action { return a.ChildAction("r", n) }
 
-// EmbedAction builds a POST to the n-th action an embed renders,
-// in document order. embed is the key an embed's own container carries:
-// "0" for the root's first Embed, "1" for its second, "0-1" for the second
-// Embed inside the first, and so on (the root is "r"; use Action for that).
-func (a *App) EmbedAction(embed string, n int) *Action {
-	return &Action{app: a, embed: embed, n: n, headers: map[string]string{}, body: "{}"}
+// ChildAction builds a POST to the n-th action a child renders,
+// in document order. child is the key a child's own container carries:
+// "0" for the root's first Child, "1" for its second, "0-1" for the second
+// Child inside the first, and so on (the root is "r"; use Action for that).
+func (a *App) ChildAction(child string, n int) *Action {
+	return &Action{app: a, child: child, n: n, headers: map[string]string{}, body: "{}"}
 }
 
 // page fetches and caches the root page's HTML, so repeated Action/
-// EmbedAction calls don't re-render it.
+// ChildAction calls don't re-render it.
 func (a *App) page() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -150,7 +150,7 @@ func (a *App) page() string {
 // Action is a builder for an action POST.
 type Action struct {
 	app         *App
-	embed       string
+	child       string
 	n           int
 	raw         string
 	host        string
@@ -189,7 +189,7 @@ func (a *Action) SecFetch(s string) *Action {
 }
 
 // Tab sets the viatab signal in the POST body, routing a live action to a
-// connection's embed — the same channel the real client uses, since Datastar
+// connection's child — the same channel the real client uses, since Datastar
 // ships the whole (underscore-filtered) signal store with every @post.
 func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 
@@ -238,12 +238,12 @@ func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
 	path := a.raw
 	if path == "" && a.conn != nil {
-		path = a.conn.ActionURL(a.embed, a.n)
+		path = a.conn.ActionURL(a.child, a.n)
 	}
 	if path == "" {
-		u, ok := nthActionURL([]byte(a.app.page()), a.embed, a.n)
+		u, ok := nthActionURL([]byte(a.app.page()), a.child, a.n)
 		if !ok {
-			a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.embed, a.n)
+			a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.child, a.n)
 		}
 		path = u
 	}
@@ -274,7 +274,7 @@ func (a *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Conn is an open SSE stream to a live embed, carrying its per-connection tab id.
+// Conn is an open SSE stream to a live child, carrying its per-connection tab id.
 type Conn struct {
 	t        testing.TB
 	app      *App
@@ -378,27 +378,27 @@ func (a *App) ConnectAt(path, body string) *Conn {
 // connection; Action.Over splices it in for you.
 func (c *Conn) TabID() string { return c.tabID }
 
-// ActionURL returns the currently-rendered URL of embed's n-th action, in
+// ActionURL returns the currently-rendered URL of child's n-th action, in
 // document order — read off the LATEST datastar-patch-elements frame that
 // carries one, the same markup a browser's DOM would hold at this point, not a
-// separate plain GET's render. Before any push has touched this embed
+// separate plain GET's render. Before any push has touched this child
 // (e.g. the very first action after Connect), nothing has been pushed yet
 // either, so this falls back to the page's own initial GET — exactly what a
 // real browser would still be showing.
-func (c *Conn) ActionURL(embed string, n int) string {
+func (c *Conn) ActionURL(child string, n int) string {
 	c.t.Helper()
 	c.mu.Lock()
 	frames := append([][]byte(nil), c.elements...)
 	c.mu.Unlock()
 	for i := len(frames) - 1; i >= 0; i-- {
-		if u, ok := nthActionURL(frames[i], embed, n); ok {
+		if u, ok := nthActionURL(frames[i], child, n); ok {
 			return u
 		}
 	}
-	if u, ok := nthActionURL([]byte(c.app.page()), embed, n); ok {
+	if u, ok := nthActionURL([]byte(c.app.page()), child, n); ok {
 		return u
 	}
-	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", embed, n)
+	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", child, n)
 	return ""
 }
 

@@ -29,7 +29,7 @@ type config struct {
 const sseHeartbeat = 25 * time.Second
 
 // sseWriteTimeout caps a single frame write, so a stalled peer can't pin the
-// embed's goroutine. Fixed: disabling it would let one pin a net/http goroutine
+// child's goroutine. Fixed: disabling it would let one pin a net/http goroutine
 // per click, since an action POST waits behind this same deadline.
 const sseWriteTimeout = 10 * time.Second
 

@@ -47,7 +47,7 @@ func TestLive_sseEndpointRejectsGet(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "GET /_via/sse must be 405; the stream is POST")
 }
 
-// A plain app (no live root, no live embeds) has no stream: a POST to the
+// A plain app (no live root, no live children) has no stream: a POST to the
 // SSE endpoint must 404 rather than open an empty stream.
 func TestSSE_plainAppHasNoStream(t *testing.T) {
 	t.Parallel()
@@ -61,13 +61,13 @@ func TestSSE_plainAppHasNoStream(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a plain app must not serve the SSE stream")
 }
 
-// A stream must emit a periodic keepalive even on an embed with no ticks: a
+// A stream must emit a periodic keepalive even on a child with no ticks: a
 // failed write is the only in-band way to notice a half-open peer. It must be
 // an SSE comment frame, not a signal/element patch, so it never mutates
 // client state. Runs at the real 25s cadence — synctest makes the wait free.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Handler(quietEmbed{}))
+		app := vt.Serve(t, via.Handler(quietChild{}))
 		conn := app.Connect()
 
 		time.Sleep(24 * time.Second)
@@ -151,7 +151,7 @@ func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 		synctest.Wait()
 		select {
 		case <-done:
-			require.Fail(t, "the embed was disposed before the write deadline elapsed")
+			require.Fail(t, "the child was disposed before the write deadline elapsed")
 		default:
 		}
 
@@ -280,9 +280,9 @@ func (f *halfOpenFlusher) Flush() {}
 
 // A half-open peer (gone without a FIN) never cancels the request context, so a
 // failed frame write is the only in-band signal that it's gone. The stream must
-// react to it by tearing the embed down — running disposers, stopping ticks —
+// react to it by tearing the child down — running disposers, stopping ticks —
 // not by looping its single goroutine against a dead socket forever.
-func TestLive_failedStreamWriteTearsDownTheEmbedSoItDoesNotLeak(t *testing.T) {
+func TestLive_failedStreamWriteTearsDownTheChildSoItDoesNotLeak(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
 		handler := via.Handler(disposeProbe{disposed: done})
@@ -300,12 +300,12 @@ func TestLive_failedStreamWriteTearsDownTheEmbedSoItDoesNotLeak(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			require.Fail(t, "a failed keepalive write must tear the embed down (run disposers); it leaked instead")
+			require.Fail(t, "a failed keepalive write must tear the child down (run disposers); it leaked instead")
 		}
 	})
 }
 
-// pulse is a live embed: implementing OnInit opts it into a server-push SSE
+// pulse is a live child: implementing OnInit opts it into a server-push SSE
 // stream. A server-side ticker increments a beat count; via re-renders and
 // pushes the fragment, so the browser updates with no client code.
 type pulse struct{ beats via.State[int] }
@@ -336,7 +336,7 @@ func newPulse(t *testing.T) *httptest.Server {
 	return liveServer(t, via.Handler(pulse{}))
 }
 
-// multiline is a live embed whose rendered content contains a newline. The SSE
+// multiline is a live child whose rendered content contains a newline. The SSE
 // framing must survive it.
 type multiline struct{ s string }
 
@@ -349,11 +349,11 @@ func (m *multiline) set(*via.Ctx) { m.s = "top\nbottom" }
 
 func (m *multiline) View() h.H { return h.Div(h.P(h.Str(m.s))) }
 
-// quietEmbed is a live composition that registers no ticks — the stream must
+// quietChild is a live composition that registers no ticks — the stream must
 // still open and hold cleanly, not panic or wedge.
-type quietEmbed struct{ n via.State[int] }
+type quietChild struct{ n via.State[int] }
 
-func (q *quietEmbed) View() h.H { return h.Div(h.Str("quiet"), q.n.Display()) }
+func (q *quietChild) View() h.H { return h.Div(h.Str("quiet"), q.n.Display()) }
 
 // readFirstFrame returns the lines of the first SSE event from the stream
 // (everything up to the first blank-line terminator), cancelling the request.
@@ -503,10 +503,10 @@ func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	})
 }
 
-// A live embed that registers no ticks must still open the stream cleanly.
+// A live child that registers no ticks must still open the stream cleanly.
 func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(quietEmbed{}))
+		srv := liveServer(t, via.Handler(quietChild{}))
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -524,7 +524,7 @@ func TestLive_streamOpensWithNoTicks(t *testing.T) {
 }
 
 // A streaming page must server-render its initial View (no empty flash) and carry a
-// single bootstrap that opens the per-tab SSE stream, or the embed never goes
+// single bootstrap that opens the per-tab SSE stream, or the child never goes
 // live in the browser.
 func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	t.Parallel()
@@ -577,7 +577,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 				}
 				if sawEvent && strings.HasPrefix(line, "data: elements ") {
 					assert.Contains(t, line, `<div id="root"`, "frame must carry the #root morph target")
-					assert.Contains(t, line, "beats: ", "frame must re-render the embed")
+					assert.Contains(t, line, "beats: ", "frame must re-render the child")
 					cancel()
 					return
 				}
@@ -670,10 +670,10 @@ func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	}
 }
 
-// clicker is a live embed whose action mutates its OWN server State. The proof
+// clicker is a live child whose action mutates its OWN server State. The proof
 // of correct routing: after the POST, the patch must arrive over THIS
 // connection's SSE (not as the POST body), which only happens if the action ran
-// against this connection's embed instance — not a throwaway per-request copy.
+// against this connection's child instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
@@ -755,7 +755,7 @@ func (r *racyDirtySignal) View() h.H {
 
 // Every Inc dispatch that acks must also ship its value over the SSE
 // signals-patch, even under concurrent Incs. Before the fix (dispatchOverStream
-// looked up its unit before handing off to the embed goroutine, not inside
+// looked up its unit before handing off to the child goroutine, not inside
 // it), a concurrent push could replace the unit in between, dropping values.
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	t.Parallel()

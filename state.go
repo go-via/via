@@ -60,7 +60,7 @@ func (s *State[T]) Display() h.H {
 }
 
 // List is server-authoritative slice state — a chat log, a feed, a todo list.
-// It embeds State[[]E], so Get and Set remain the general door
+// It children State[[]E], so Get and Set remain the general door
 // (l.Set(slices.Insert(...))) and Append/Remove/Each spell the common cases.
 // Rows morph BY POSITION unless each carries a stable id, so give the row an
 // h.ID(…) when the order can change. Like State, rendering one makes its unit

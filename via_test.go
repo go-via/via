@@ -168,15 +168,15 @@ func readAll(t *testing.T, resp *http.Response) string {
 
 func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site": "same-origin"} }
 
-// actionURL extracts the n-th action URL embed rendered, in document order,
+// actionURL extracts the n-th action URL child rendered, in document order,
 // out of html. The wire id is a hash of the handler's func name (and any ?a=
 // row datum rides with it), so a test posts the URL the page actually
 // shipped rather than a hand-built path.
-func actionURL(t *testing.T, html string, embed string, n int) string {
+func actionURL(t *testing.T, html string, child string, n int) string {
 	t.Helper()
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + embed + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
+	pat := `(?:@post\('|action=")([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
 	m := regexp.MustCompile(pat).FindAllStringSubmatch(html, -1)
-	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", embed, n, html)
+	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", child, n, html)
 	return m[n][1]
 }
 
@@ -403,12 +403,12 @@ func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 // ctx.Param) cannot appear here: isViaCall only matches a package-qualified
 // call (via.X), and neither is ever spelled that way.
 var viaCallNames = map[string]bool{
-	"Handler": true, "Embed": true, "When": true, "Each": true,
+	"Handler": true, "Child": true, "When": true, "Each": true,
 	"On": true, "OnArg": true, "PostForm": true,
 }
 
 // The framework's headline promise is that user code never writes '&' and never
-// passes a closure at a via call site (Handler/Embed/On*). A violation that
+// passes a closure at a via call site (Handler/Child/On*). A violation that
 // compiles silently erodes the design, so this asserts it structurally over the
 // example sources — the canonical user-facing call sites. It is an interim
 // guard; the type-level closure ban is tracked as follow-up.
@@ -440,10 +440,10 @@ func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 								"%s: via takes compositions by value — drop the '&'", fset.Position(a.Pos()))
 						}
 					case *ast.CompositeLit:
-						// via.Embed(p.Chat) embeds the parent's field; a literal
+						// via.Child(p.Chat) embeds the parent's field; a literal
 						// would re-seed a fresh child on every render.
-						if isViaCallNamed(call, "Embed") {
-							assert.Failf(t, "composite literal at via.Embed call site",
+						if isViaCallNamed(call, "Child") {
+							assert.Failf(t, "composite literal at via.Child call site",
 								"%s: pass the parent's field (p.Chat), not a literal", fset.Position(a.Pos()))
 						}
 					}
@@ -483,16 +483,22 @@ func isViaCallNamed(call *ast.CallExpr, name string) bool {
 func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
 	// reflect is admitted in exactly three files and only on TYPE-setup paths
-	// that run once per composition type (Mount/Embed) and are memoized: the
-	// action-id func name, the field-name signal table, the embed's parent
+	// that run once per composition type (Mount/Child) and are memoized: the
+	// action-id func name, the field-name signal table, the child's parent
 	// field lookup, and the hook-shape check. Nothing here may run per render — that is the invariant
 	// this whitelist exists to keep honest.
 	allowed := map[string][]string{
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
 			"reflect.TypeOf", "reflect.ValueOf"},
-		"embed.go":  {"reflect.TypeOf"},
-		"router.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
+		"child.go": {"reflect.TypeOf"},
+		// router.go's kind switch is the Assets constancy probe, which runs once
+		// per Mount and never again.
+		"router.go": {"reflect.Bool", "reflect.Float32", "reflect.Float64", "reflect.Int",
+			"reflect.Int16", "reflect.Int32", "reflect.Int64", "reflect.Int8", "reflect.NewAt",
+			"reflect.PointerTo", "reflect.String", "reflect.Struct", "reflect.Type",
+			"reflect.TypeOf", "reflect.Uint", "reflect.Uint16", "reflect.Uint32",
+			"reflect.Uint64", "reflect.Uint8", "reflect.Value", "reflect.ValueOf"},
 	}
 	files := coreGoFiles(t)
 	require.NotEmpty(t, files, "expected core sources to scan")
@@ -655,23 +661,23 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 	}
 }
 
-// todoBoard embeds the todo list as a PLAIN embed — per-row value-actions
+// todoBoard embeds the todo list as a PLAIN child — per-row value-actions
 // must work there too, not only at the root.
 type todoBoard struct{ List todoList }
 
-func (b *todoBoard) View() h.H { return h.Div(via.Embed(b.List)) }
+func (b *todoBoard) View() h.H { return h.Div(via.Child(b.List)) }
 
-// A value-carrying action inside a plain embed must still deliver
-// its value: the embed action path has to expose the request to the slot.
-func TestActionArg_worksInsideAPlainEmbed(t *testing.T) {
+// A value-carrying action inside a plain child must still deliver
+// its value: the child action path has to expose the request to the slot.
+func TestActionArg_worksInsideAPlainChild(t *testing.T) {
 	t.Parallel()
 	board := todoBoard{List: todoList{box: newTodoList()}}
 	srv := serve(t, via.Handler(board))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // embed 1, bravo's slot, arg=2
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // child 1, bravo's slot, arg=2
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.NotContains(t, body, "bravo", "the embed row's value-action did not fire")
+	assert.NotContains(t, body, "bravo", "the child row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
 }
 
@@ -843,9 +849,9 @@ func (c *idCounter) View() h.H {
 
 type idPair struct{ A, B idCounter }
 
-func (p *idPair) View() h.H { return h.Div(via.Embed(p.A), via.Embed(p.B)) }
+func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-// idTwins holds two instances of one type as PLAIN fields (no Embed), so both
+// idTwins holds two instances of one type as PLAIN fields (no Child), so both
 // bind into the same action table. runtime.FuncForPC drops the receiver, so
 // without the offset in the id both buttons would render the SAME action URL
 // and A's click would run B's handler.
@@ -991,18 +997,18 @@ type collidePage struct {
 
 func (p *collidePage) View() h.H { return h.Div(p.A.B.Bind(), p.A_b.Bind()) }
 
-// embedCollidePage's field A__b mints "a__b" in the PARENT, which is exactly
-// the slot the EMBED of field A gives its own signal B ("a__" + "b").
-type embedKidB struct{ B via.Signal[int] }
+// childCollidePage's field A__b mints "a__b" in the PARENT, which is exactly
+// the slot the CHILD of field A gives its own signal B ("a__" + "b").
+type childKidB struct{ B via.Signal[int] }
 
-func (k *embedKidB) View() h.H { return k.B.Bind() }
+func (k *childKidB) View() h.H { return k.B.Bind() }
 
-type embedCollidePage struct {
-	A    embedKidB
+type childCollidePage struct {
+	A    childKidB
 	A__b via.Signal[int]
 }
 
-func (p *embedCollidePage) View() h.H { return h.Div(via.Embed(p.A), p.A__b.Bind()) }
+func (p *childCollidePage) View() h.H { return h.Div(via.Child(p.A), p.A__b.Bind()) }
 
 func assertSlotPanic(t *testing.T, app http.Handler, want string) {
 	t.Helper()
@@ -1052,9 +1058,9 @@ type mappedSignal struct{ S map[string]via.Signal[string] }
 
 func (b *mappedSignal) View() h.H { return h.Div() }
 
-type valueReceiverEmbedParent struct{ C valueReceiverView }
+type valueReceiverChildParent struct{ C valueReceiverView }
 
-func (p *valueReceiverEmbedParent) View() h.H { return h.Div(via.Embed(p.C)) }
+func (p *valueReceiverChildParent) View() h.H { return h.Div(via.Child(p.C)) }
 
 func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
 
@@ -1080,21 +1086,21 @@ func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 	assertMountPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverView{}) })
 }
 
-// valueReceiverEmbed is only reachable through via.Embed, so its View receiver
-// is checked where Embed resolves the child type rather than at Mount.
+// valueReceiverChild is only reachable through via.Child, so its View receiver
+// is checked where Child resolves the child type rather than at Mount.
 // Not Parallel: it captures the process-global log, which every other test writes to.
-func TestSignal_valueReceiverEmbedPanicsAtRender(t *testing.T) {
+func TestSignal_valueReceiverChildPanicsAtRender(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
 	rec := httptest.NewRecorder()
-	via.Handler(valueReceiverEmbedParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	via.Handler(valueReceiverChildParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, logs.String(), "View has a VALUE receiver")
 }
 
-func TestSignal_slotCollidingWithAnEmbedPrefixPanics(t *testing.T) {
-	assertSlotPanic(t, via.Handler(embedCollidePage{}), "collides with the embed prefix of field a")
+func TestSignal_slotCollidingWithAnChildPrefixPanics(t *testing.T) {
+	assertSlotPanic(t, via.Handler(childCollidePage{}), "collides with the child prefix of field a")
 }
 
 // ownedRows is the arg-authorization fixture: a list filtered by owner, plus
@@ -1294,11 +1300,11 @@ func (l *liveOwned) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-// ownedEmbedPage is the same model one level down: the dispatch address gains
-// an embed key, which is the part the root-only tests never exercise.
-type ownedEmbedPage struct{ Rows liveOwned }
+// ownedChildPage is the same model one level down: the dispatch address gains
+// a child key, which is the part the root-only tests never exercise.
+type ownedChildPage struct{ Rows liveOwned }
 
-func (p *ownedEmbedPage) View() h.H { return h.Div(h.Str("page"), via.Embed(p.Rows)) }
+func (p *ownedChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(p.Rows)) }
 
 func bobsRows(live bool) liveOwned {
 	return liveOwned{ownedRows: newOwnedRows("bob", false), live: live}
@@ -1309,12 +1315,12 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 	shapes := []struct {
 		name    string
 		handler http.Handler
-		embed   string
+		child   string
 		live    bool
 	}{
 		{"live root", via.Handler(bobsRows(true)), "r", true},
-		{"plain embed", via.Handler(ownedEmbedPage{Rows: bobsRows(false)}), "0", false},
-		{"live embed", via.Handler(ownedEmbedPage{Rows: bobsRows(true)}), "0", true},
+		{"plain child", via.Handler(ownedChildPage{Rows: bobsRows(false)}), "0", false},
+		{"live child", via.Handler(ownedChildPage{Rows: bobsRows(true)}), "0", true},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
@@ -1324,7 +1330,7 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 			require.Contains(t, page, "a=2", "bob's own row must be bound")
 			require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
 
-			own := actionURL(t, page, shape.embed, 0)
+			own := actionURL(t, page, shape.child, 0)
 			stolen := strings.Replace(own, "a=2", "a=1", 1)
 			require.NotEqual(t, own, stolen, "the swap must actually change the URL")
 

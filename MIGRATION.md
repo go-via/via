@@ -46,8 +46,8 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.hits.Set(c.hits.Get() + c.step.Get()) }
 use it for sessions, path params and subscriptions. It is no longer how state
 finds itself.
 
-The knock-on effect is the one to plan for: `via.State[T]` is **embed-only**.
-Reading or writing it outside a live embed panics with a message naming the
+The knock-on effect is the one to plan for: `via.State[T]` is **child-only**.
+Reading or writing it outside a live child panics with a message naming the
 fix. v1's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
 lives. For a value that is genuinely just server state, the v2 counter example
 does not use `State` at all. It injects a plain `*Store` dependency and lets
@@ -60,7 +60,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 
 | v1 | v2 |
 | --- | --- |
-| `StateTab[T]` | `State[T]` (live embeds only) |
+| `StateTab[T]` | `State[T]` (live children only) |
 | `StateSess[T]` | `ctx.Session().Get` / `.Put` |
 | `StateApp[T]` | your own dependency, injected; via does not own it |
 | `Signal[T]` | `Signal[T]`, client-side reactivity with zero round-trips |
@@ -96,10 +96,10 @@ The v1 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `Initer` (`OnInit(*Ctx) error`) is the one lifecycle hook,
 on a page and on every embedded child. There is no `Connector` and no `Live`
-interface: a composition is a live embed when it *acts* like one, meaning its
+interface: a composition is a live child when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
 `State[T]`/`List[E]`. There is no `Dispose`; `ctx.Listen` auto-disposes with
-the embed.
+the child.
 
 Both hooks are duck-typed. That is the one place in this migration where
 getting a port wrong does NOT fail to compile: a method with the wrong name or
@@ -111,7 +111,7 @@ var _ via.Initer = (*Page)(nil)
 var _ via.Reloader = (*Page)(nil)
 ```
 
-`Mount`/`Embed` walk the composition type at startup and catch two of the three
+`Mount`/`Child` walk the composition type at startup and catch two of the three
 ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
@@ -140,7 +140,7 @@ action, and on the SSE connect. Pair a connection-scoped acquire with
 `ctx.OnConnect(fn)` and its release with `ctx.OnDispose(fn)`; both run only
 when a stream actually opens.
 
-### 3. Composition is `via.Embed`, and roots are taken by value
+### 3. Composition is `via.Child`, and roots are taken by value
 
 v1's `Slot`, `Child[C]`, `NewChild`, `Fill` and the `.Embed` method are all
 gone. A child composition is a plain struct field, rendered explicitly:
@@ -148,7 +148,7 @@ gone. A child composition is a plain struct field, rendered explicitly:
 ```go
 // v2
 type Page struct{ Sidebar Sidebar }
-func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
+func (p *Page) View() h.H { return h.Div(via.Child(p.Sidebar), ...) }
 ```
 
 `via.Handler` and `Router.Mount` take the root **by value** (`Counter{...}`, not
@@ -156,11 +156,11 @@ func (p *Page) View() h.H { return h.Div(via.Embed(p.Sidebar), ...) }
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
 
-A live embed may be embedded directly by a plain root, or by a
-further plain `via.Embed` under one. Each streams and patches independently
-over the page's one connection. **Known limitation:** a live embed cannot be
-embedded inside another live composition, and a live embed's own `View`
-cannot itself call `via.Embed`; either panics at render. Nested live
+A live child may be embedded directly by a plain root, or by a
+further plain `via.Child` under one. Each streams and patches independently
+over the page's one connection. **Known limitation:** a live child cannot be
+embedded inside another live composition, and a live child's own `View`
+cannot itself call `via.Child`; either panics at render. Nested live
 composition (a dynamic set of live children keyed by identity) is a deferred
 feature; plain composition still nests to any depth.
 
@@ -168,7 +168,7 @@ feature; plain composition still nests to any depth.
 
 v1 had process-wide broadcast: `app.Broadcast(script)`,
 `BroadcastSignal(app, sig, val)`, `BroadcastSignals(map)`, `BroadcastNotify`.
-All removed. v2 fans out through a typed topic that embeds subscribe to:
+All removed. v2 fans out through a typed topic that children subscribe to:
 
 ```go
 var Posts = topic.New[Post]()          // package topic
@@ -181,7 +181,7 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 ```
 
 `ctx.Listen` is subscribe + pump + auto-dispose in one line, scoped to the
-embed's lifetime. Publishing is a topic send from anywhere in your app. The
+child's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
 `ctx.Redirect` navigates from anywhere: `OnInit`, `OnReload`, a native form
@@ -201,7 +201,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook, on the page and on every embedded child |
-| Live embed | `Connector.OnConnect` + `Disposer.Dispose` | no interface: a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
+| Live child | `Connector.OnConnect` + `Disposer.Dispose` | no interface: a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")`, generic over `Stringish` |
 | Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49 (`h.ColSpan`/`h.RowSpan` carry the Go-style casing); `h.RawAttr` covers the rest |
@@ -358,11 +358,11 @@ form:
 
 ## Wire break: action URLs
 
-The action endpoint is `/_via/a/{embed}/{id}` with an optional `?a=` row
-datum. `{embed}` is `r` for the page root, or the acting embed's key: its
-ordinal among its parent's `Embed` calls, composed onto the parent's, so the
-second `Embed` inside the first is `0-1`. Earlier v0.8 builds used a flat
-page-wide counter with the root at `0` and embeds at `n+1`. There is no `?v=`
+The action endpoint is `/_via/a/{child}/{id}` with an optional `?a=` row
+datum. `{child}` is `r` for the page root, or the acting child's key: its
+ordinal among its parent's `Child` calls, composed onto the parent's, so the
+second `Child` inside the first is `0-1`. Earlier v0.8 builds used a flat
+page-wide counter with the root at `0` and children at `n+1`. There is no `?v=`
 shape digest and no positional `{n}`: `id` is a hash
 of the handler method's own Go name (`main.(*Poll).Vote-fm`), stable across
 renders, instances and rebuilds.
@@ -412,14 +412,14 @@ A `Signal[T]`'s wire name is now its Go FIELD name, first rune lowercased —
 `outer__mid__kid__step` for a deeper path — where v0.8's earlier builds named
 it by byte offset (`f0`, `f48`, `i0_f0`) and v1 by render order (`s0`, `s1`).
 The offset is still the internal key, so hydration is unchanged; the name is
-resolved once per composition TYPE at `Mount`/`Embed`, never per render.
+resolved once per composition TYPE at `Mount`/`Child`, never per render.
 
-A plain nested struct joins its path with ONE underscore, an embed boundary
+A plain nested struct joins its path with ONE underscore, a child boundary
 with TWO — so a parent that binds `p.C.S` in its own View (`c_s`) and also
-embeds `p.C` (`c__s`) keeps the two copies apart, as it must: they are
+children `p.C` (`c__s`) keeps the two copies apart, as it must: they are
 different structs. A parent holding two fields of the child's type is
-genuinely ambiguous (`Embed`'s argument order need not match declaration
-order), so those embeds fall back to the positional key: `i0__s`, `i1__s`,
+genuinely ambiguous (`Child`'s argument order need not match declaration
+order), so those children fall back to the positional key: `i0__s`, `i1__s`,
 and `i0_0__s` for a nested one. The key's own depth separator is `-`
 (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS identifier character and
 `Ref()` hands slot names straight to Datastar expressions, so the SLOT spells
@@ -446,7 +446,7 @@ so a conditional `Bind()` is now safe.
 
 One carve-out:
 
-- `via.Embed`'s signature is unchanged: the child copy `Embed` already takes by
+- `via.Child`'s signature is unchanged: the child copy `Child` already takes by
   value is the offset base, so call sites need no edit.
 
 A plain action's patch also now declares any slot the pre-action render did
@@ -460,7 +460,7 @@ Both fail loudly rather than writing the wrong field at runtime, and both can
 surface on an upgrade in code that compiled fine before.
 
 - A `Signal` that is **not a plain field of its composition** panics at
-  `Mount`/`Embed` — at startup, not once per request. A signal reached through
+  `Mount`/`Child` — at startup, not once per request. A signal reached through
   a pointer, slice, array or map field, or held by a composition whose `View`
   has a VALUE receiver, has no field offset: its writes land on memory the
   render discards, and the render-order fallback that used to name it aliased
@@ -500,7 +500,7 @@ Four rules worth knowing before porting:
   composition that already has a `PageMeta` *field* must rename the field — Go
   forbids a method and a field sharing a name.
 - Only the **mounted root's** counts. An embedded child's `PageMeta` is ignored;
-  `Embed` logs one line when it sees one.
+  `Child` logs one line when it sees one.
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
 - `Assets` is the one field that is **not** inert: it decides the mount's CSP,
@@ -560,9 +560,9 @@ Stated plainly so you can decide whether to wait:
   request's cookie, which predates the `Set-Cookie` the same action just
   wrote. `Redirect` after a session-establishing submit instead of returning
   a page directly.
-- **An `Embed`'s embed key — its ordinal among its own parent's `Embed`
+- **A `Child`'s child key — its ordinal among its own parent's `Child`
   calls, composed onto the parent's key — is its identity** (container id,
-  signal prefix, dispatch address). A `When` around an `Embed` renumbers that
+  signal prefix, dispatch address). A `When` around a `Child` renumbers that
   parent's later siblings when it flips, so it must depend only on data fixed
   by `OnInit` or the field literal, never on time, a client signal, or shared
   state that changes while the page is open.

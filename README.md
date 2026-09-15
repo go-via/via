@@ -199,7 +199,7 @@ func main() {
   about *layout*, never about your identifiers: it takes a handler func
   value's code pointer for its action id, and it walks a composition's field
   offsets once per type to name signal slots and find embedded children
-  (`signalsOf`, `embedFieldName`). Signal *values* decode via `encoding/json`,
+  (`signalsOf`, `childFieldName`). Signal *values* decode via `encoding/json`,
   which reflects internally; that is data decoding, and the wiring stays reflection-free.
 - **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
 - **No closures at a via call site.** Named method values only.
@@ -230,7 +230,7 @@ spectrum from a fully plain page to a fully live app.
 
 The whole rule is one line:
 
-> A page streams iff it contains a live unit; a live embed may sit under any
+> A page streams iff it contains a live unit; a live child may sit under any
 > plain ancestor; a live unit may not contain another live unit.
 
 That verdict is taken from the render that serves the page, and only a
@@ -282,14 +282,14 @@ var _ via.Initer = (*Front)(nil)
 var _ via.Reloader = (*Front)(nil)
 ```
 
-Mount and Embed catch the two commonest slips on their own — an `OnInit` or
+Mount and Child catch the two commonest slips on their own — an `OnInit` or
 `OnReload` with the wrong signature panics at boot, and a method that has the
 hook's exact signature under a near-miss name (`Reload`, `OnInitialize`, …) on
 a type implementing neither interface is logged — but only the assertions above
 are airtight.
 
 **Page state goes in the path or the session — never the query string.** An
-action POSTs to `{mount}/_via/a/{n}/…`, built from the mount pattern with its
+action POSTs to `{mount}/_via/a/{child}/{id}`, built from the mount pattern with its
 `{name}` segments filled in and *nothing else*. The page's `?q=urgent&page=2`
 is not on that URL, so the render that decides what is dispatchable runs
 unfiltered: a row that only exists under the filter binds no action there, and
@@ -315,7 +315,7 @@ var _ via.PageMetaer = (*Ticket)(nil) // duck-typed like OnInit — pin it
 ```
 
 Only the **mounted root's** `PageMeta` counts: a nested unit may not rename the
-page it happens to sit in, and `Embed` logs one line when it sees a child
+page it happens to sit in, and `Child` logs one line when it sees a child
 declaring one. It shapes the *document*, so it lands on a render that writes one
 — the GET and a native form submit — not on an SSE push, which only patches
 elements inside `<body>`.
@@ -441,6 +441,11 @@ way a closed tab ends — a clean end of response, not a truncated one — an
 action POST against a closing tab answers `410`, and a connect arriving after
 `Close` is refused `503`. It is safe to call more than once.
 
+`via.Handler` returns that `*Router`, so `Close` is reachable from the one-line
+entry point too — `r := via.Handler(Page{})` then `defer r.Close()`; `*Router`
+serves HTTP, so it goes straight into `http.Handle`. `example/chat` runs the
+whole path end to end: SIGINT, `r.Close()`, `srv.Shutdown`.
+
 ## The feature map
 
 Each capability, the example that demonstrates it, and the traps that come with
@@ -460,28 +465,28 @@ it.
   p.Open.Ref())`. A `Signal` must be a plain field of the composition — one
   reached through a pointer, slice, array or map field, or held by a
   composition whose `View` has a value receiver, has no field offset to name
-  itself by. via walks the composition type at `Mount`/`Embed`, so those
+  itself by. via walks the composition type at `Mount`/`Child`, so those
   **panic at startup**, not once per request. The one case the type walk
   cannot see is a Signal behind an `interface` field; that still panics on
   the first render that binds it.
-- **Live embeds + `State[T]`** (`example/pulse`): render a `State[T]` or
-  register a `Tick` and a composition becomes a live embed with a per-tab SSE
+- **Live children + `State[T]`** (`example/pulse`): render a `State[T]` or
+  register a `Tick` and a composition becomes a live child with a per-tab SSE
   stream; `State[T]` is
   server-authoritative, read from the pure View and element-patched on change,
   `Tick` drives the push. `Tick`/`Listen`/action handlers all run on the
   connection's one goroutine, so a handler that blocks (I/O, an unbounded
   loop) stalls every other tick, action, and push on that same connection,
   and delays that connection's shutdown until it returns.
-- **Interactive live actions** (`example/chat`): a live-embed action routes —
+- **Interactive live actions** (`example/chat`): a live-child action routes —
   via the `via_tab` handshake (an unguessable per-connection id echoed in the
   `viatab` signal every `@post` already carries) — to *this* connection's
-  embed, mutates its state, and the
+  child, mutates its state, and the
   result is pushed over its SSE. The element push omits `data-signals`, and
   deliberate signal changes ride a signal-patch, so a fan-out never clobbers what
   a user is typing.
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
   `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose`: one publish
-  fans out to every connected embed.
+  fans out to every connected child.
 - **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Delete[T]`,
   a typed per-browser store keyed by Go type (no tags, no reflection — a
   typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
@@ -505,41 +510,41 @@ it.
   `WithSecureCookies` forces it on behind a TLS-terminating proxy.
 - **Resilience floor + reconnect** — what a live stream guarantees on a flaky
   network, with no knobs to set: a server-side keepalive comment frame
-  (fixed 25s) and a per-frame write deadline (fixed 10s) ride the embed's
+  (fixed 25s) and a per-frame write deadline (fixed 10s) ride the child's
   single goroutine; a failed frame write tears the
-  embed down (runs disposers, stops ticks) so a half-open peer — gone without a
+  child down (runs disposers, stops ticks) so a half-open peer — gone without a
   FIN — can't leak its goroutine and timers. A client reconnect manager surfaces
   a "Reconnecting…" banner on a dropped stream and reloads to re-bootstrap when
   Datastar gives up.
-- **Live-embed multiplexing** (`example/dashboard`): embed sub-compositions as
-  plain struct fields: `via.Embed(p.Clock)` in the parent's `View`. Each child
+- **Live-child multiplexing** (`example/dashboard`): child sub-compositions as
+  plain struct fields: `via.Child(p.Clock)` in the parent's `View`. Each child
   gets its own `OnInit`; a child that neither ticks nor holds `State` is a plain
-  in-place component, one that does is a live embed, and all the live children
+  in-place component, one that does is a live child, and all the live children
   on a page share the tab's *one* SSE stream on one goroutine — each re-renders and patches only its own region
   (`#via-i{n}`, pushed in place — its container is never morphed by a
-  parent's patch), its actions route by embed id + the tab handshake, and its
+  parent's patch), its actions route by child id + the tab handshake, and its
   signals are slot-scoped so siblings never collide. The parent's literal seeds a
   child's dependencies (a shared `*Topic`, a store) at registration; generic
   layouts (`Shell[C]{Body C}`) compose one shell with any page. Ownership is
   by value: the field literal seeds the child, each connection gets its own
   copy (value state stays per-tab), and pointer deps are the deliberate
-  sharing channel. **Known limitation:** a live embed cannot itself embed a
-  further live embed. Nesting is one level deep (the root, or a live child
-  directly under a plain root, or through further plain `via.Embed`s); it
+  sharing channel. **Known limitation:** a live child cannot itself embed a
+  further live child. Nesting is one level deep (the root, or a live child
+  directly under a plain root, or through further plain `via.Child`s); it
   panics at render, loud and early, rather than misroute an action. Plain
    composition still nests to any depth. Nested live composition
   (a dynamic set of live children addressed by identity) is a deferred
   feature. `State` is per connection: a native `PostForm` submit is a
   navigation, opens a new connection, and reseeds it — persist through the
   session or a shared pointer dep, or `Redirect` instead of returning a page.
-  An `Embed`'s identity is its **embed key**: its ordinal among its own
-  parent's `Embed` calls, composed onto the parent's key. The root's children
+  A `Child`'s identity is its **child key**: its ordinal among its own
+  parent's `Child` calls, composed onto the parent's key. The root's children
   are `0`, `1`, …; a child of `0` is `0-0`. One key drives the container id
   (`via-i0-0`), the signal prefix (`i0-0_`) and the dispatch address
   (`/_via/a/0-0/…`), so re-rendering any subtree on its own numbers its
   descendants exactly as the whole-page render did. A child's key must be the
   same on every render for the life of a connection; a `When` around an
-  `Embed` shifts its later **siblings**' ordinals, so such a `When` must
+  `Child` shifts its later **siblings**' ordinals, so such a `When` must
   depend only on data fixed by `OnInit` or the field literal, never on time, a
   client signal, or shared state that changes while the page is open.
 - **Per-row list actions** (`example/poll`): a row's button carries the row's own
@@ -604,7 +609,7 @@ Go type `Session.Put` stored them under, so a type a pod cannot decode reads
 back as absent rather than as someone else's value.
 
 The CSP is a pure function of the
-Head, so pods with different keys still serve identical policies. Live-embed
+Head, so pods with different keys still serve identical policies. Live-child
 state is in-memory and per-connection: a deploy drops
 the stream, the client reconnect manager shows "Reconnecting…" and reloads to
 re-bootstrap: the page comes back from server truth rather than replayed frames.
@@ -621,25 +626,25 @@ before any mount resolves, so it never carries a mount's per-page assets and
 cannot widen one's policy — and a handler that panics or returns nil falls
 back to the plain text via would have sent, logged once. See
 `example/forum`.
-An action URL addresses its handler, not its render position: `embed` is
-`r` for the page root and the acting embed's key otherwise, and `id` in
-`/_via/a/{embed}/{id}` is a hash of the handler method's own Go name, so it
+An action URL addresses its handler, not its render position: `child` is
+`r` for the page root and the acting child's key otherwise, and `id` in
+`/_via/a/{child}/{id}` is a hash of the handler method's own Go name, so it
 is the same across renders, instances and builds, and a row's datum rides
 along in `?a=`. A list that grew or shrank since a tab painted therefore keeps
 every URL that tab is holding valid. Dispatch answers `410 Gone` — on both the
 plain and live paths — for an id the current render does not bind (a
 closed branch, or an `OnInit` that failed to restore the state the `View`
-branches on; the 410 names the handlers that ARE bound), an unknown embed, or
+branches on; the 410 names the handlers that ARE bound), an unknown child, or
 a live action with no connection for its tab.
 Datastar resolves a non-2xx response silently and moves on; a native `<form>`
 submit shows the browser's own error page.
 
 Deferred (correctly out of 1.0 scope): a keyed cursor for the narrow remaining
 dynamic-shape cases — per-row *signals/inputs* in a **reordering** list, and
-lists *of* live embeds (per-row actions are done via `OnArg`; fixed
-embeds via `via.Embed` are done); nested live composition (a live embed
-embedding a further live embed, or an embedded live embed's own `View`
-calling `Embed` at all — v0.8 refuses both at render instead); and
+lists *of* live children (per-row actions are done via `OnArg`; fixed
+children via `via.Child` are done); nested live composition (a live child
+embedding a further live child, or an embedded live child's own `View`
+calling `Child` at all — v0.8 refuses both at render instead); and
 at-least-once redelivery (a push onto
 a dropping socket fails the write and tears down rather than being buffered
 for replay). The SSE GET stream applies the same origin check as the action
@@ -651,7 +656,7 @@ cap is deferred past v0.8.
 **Reconnect.** A dropped stream and its reconnect build an entirely new
 `liveConn`: any action POST still in flight against the old tab id answers 410
 once the old connection is gone, and the client's own reconnect manager is
-what re-bootstraps the page from server truth (also see "Live-embed
+what re-bootstraps the page from server truth (also see "Live-child
 multiplexing" above for the one-level-deep nesting limit).
 
 ## Develop

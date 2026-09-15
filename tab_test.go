@@ -79,13 +79,13 @@ func (s *sessionLive) View() h.H {
 		h.Button(via.On("click", s.Peek))) // action 1
 }
 
-// liveActionRequest builds a raw dispatch POST against embed/n using the
+// liveActionRequest builds a raw dispatch POST against child/n using the
 // page's currently-rendered action URL, with tab as its viatab signal —
 // bypassing any cookie jar, so the caller controls exactly what (if any)
 // session cookie rides along.
-func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, embed string, n int) *http.Request {
+func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, child string, n int) *http.Request {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, embed, n), strings.NewReader(withTab(tab, "{}")))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, child, n), strings.NewReader(withTab(tab, "{}")))
 	require.NoError(t, err)
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -453,7 +453,7 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 		"the pre-rotate id must not drive the connection anymore")
 }
 
-// raceLoginer is liveLoginer's Login, but pausable: it blocks on the embed
+// raceLoginer is liveLoginer's Login, but pausable: it blocks on the child
 // goroutine until proceed is signaled, closing started the instant it takes
 // hold of that goroutine — the two channels let a test park a concurrent
 // cookieless dispatch's own goroutine right at the moment the connection is
@@ -533,19 +533,19 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 		"a cookieless dispatch racing a concurrent login must be rejected against the connection it actually runs on, not the one that existed when it was queued")
 }
 
-// sessionLiveEmbed puts the same live unit one level down, under a plain root.
-// The session binding is a property of the CONNECTION, so an embed-scoped
+// sessionLiveChild puts the same live unit one level down, under a plain root.
+// The session binding is a property of the CONNECTION, so a child-scoped
 // dispatch must be held to it identically — but the dispatch address gains an
-// embed key, and the session check and the embed lookup are separate sites.
-type sessionLiveEmbed struct{ Child sessionLive }
+// child key, and the session check and the child lookup are separate sites.
+type sessionLiveChild struct{ Child sessionLive }
 
-func (p *sessionLiveEmbed) View() h.H { return h.Div(h.Str("shell"), via.Embed(p.Child)) }
+func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p.Child)) }
 
-func TestDispatch_liveEmbedActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
+func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/login", loginComp{})
-	r.Mount("/live", sessionLiveEmbed{})
+	r.Mount("/live", sessionLiveChild{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
@@ -580,23 +580,23 @@ func TestDispatch_liveEmbedActionUnderASessionRejectsAMismatchedSession(t *testi
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"an embed-scoped dispatch against a session-bound connection with no session must be rejected")
+		"a child-scoped dispatch against a session-bound connection with no session must be rejected")
 
 	ownReq := liveActionRequest(t, srv, string(page), tab, "0", 0)
 	ownResp, err := owner.Do(ownReq)
 	require.NoError(t, err)
 	defer ownResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, ownResp.StatusCode,
-		"the connecting session's own embed-scoped dispatch must still succeed")
+		"the connecting session's own child-scoped dispatch must still succeed")
 }
 
-type liveLoginerEmbed struct{ Child liveLoginer }
+type liveLoginerChild struct{ Child liveLoginer }
 
-func (p *liveLoginerEmbed) View() h.H { return h.Div(h.Str("shell"), via.Embed(p.Child)) }
+func (p *liveLoginerChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p.Child)) }
 
-func TestDispatch_rotateAfterALiveEmbedLoginKeepsTheBindingOnTheNewID(t *testing.T) {
+func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginerEmbed{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginerChild{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 
@@ -629,5 +629,5 @@ func TestDispatch_rotateAfterALiveEmbedLoginKeepsTheBindingOnTheNewID(t *testing
 	require.NoError(t, err)
 	defer okResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
-		"the rotated session must still own its embed-scoped connection")
+		"the rotated session must still own its child-scoped connection")
 }

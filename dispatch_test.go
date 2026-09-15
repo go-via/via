@@ -75,21 +75,21 @@ func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 	})
 }
 
-// embedRedirector is a PLAIN embed (dispatchPlain, not
+// childRedirector is a PLAIN child (dispatchPlain, not
 // liveRunAction) whose action queues a Redirect.
-type embedRedirector struct{}
+type childRedirector struct{}
 
-func (r *embedRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
+func (r *childRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
 
-func (r *embedRedirector) View() h.H { return h.Div(h.Button(via.On("click", r.Go))) }
+func (r *childRedirector) View() h.H { return h.Div(h.Button(via.On("click", r.Go))) }
 
-type embedRedirectorParent struct{ I embedRedirector }
+type childRedirectorParent struct{ I childRedirector }
 
-func (p *embedRedirectorParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *childRedirectorParent) View() h.H { return h.Div(via.Child(p.I)) }
 
-func TestDispatch_redirectFromPlainEmbedActionNavigatesTheTab(t *testing.T) {
+func TestDispatch_redirectFromPlainChildActionNavigatesTheTab(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(embedRedirectorParent{}))
+	srv := serve(t, via.Handler(childRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "0", 0), strings.NewReader("{}"))
@@ -107,25 +107,25 @@ func TestDispatch_redirectFromPlainEmbedActionNavigatesTheTab(t *testing.T) {
 	assert.Contains(t, string(body), "location.assign")
 }
 
-// sigEmbed's signals are only Bound (never Displayed), so Setting one never
+// sigChild's signals are only Bound (never Displayed), so Setting one never
 // changes the rendered HTML — the only way a client sees the new value is the
 // container's data-signals attribute. Other exists solely so Reset's Set of
 // Name has a sibling to leave alone: the response must declare Name and NOT
 // Other, proving the patch is restricted to what the action actually wrote
 // rather than the whole slot table.
-type sigEmbed struct{ Name, Other via.Signal[string] }
+type sigChild struct{ Name, Other via.Signal[string] }
 
-func (s *sigEmbed) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
+func (s *sigChild) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
 
-func (s *sigEmbed) View() h.H {
+func (s *sigChild) View() h.H {
 	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.On("click", s.Reset)))
 }
 
-type sigPage struct{ I sigEmbed }
+type sigPage struct{ I sigChild }
 
-func (p *sigPage) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *sigPage) View() h.H { return h.Div(via.Child(p.I)) }
 
-func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
+func TestDispatch_signalSetInChildActionReachesClient(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(sigPage{}))
 
@@ -138,15 +138,15 @@ func TestDispatch_signalSetInEmbedActionReachesClient(t *testing.T) {
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
 }
 
-// guardedEmbed is embedded under a parent whose own OnInit session-gates
+// guardedChild is embedded under a parent whose own OnInit session-gates
 // the whole mount, replacing the removed guard mechanism.
-type guardedEmbed struct{}
+type guardedChild struct{}
 
-func (g *guardedEmbed) Ping(ctx *via.Ctx) {}
+func (g *guardedChild) Ping(ctx *via.Ctx) {}
 
-func (g *guardedEmbed) View() h.H { return h.Div(h.Button(via.On("click", g.Ping))) }
+func (g *guardedChild) View() h.H { return h.Div(h.Button(via.On("click", g.Ping))) }
 
-type guardedParent struct{ I guardedEmbed }
+type guardedParent struct{ I guardedChild }
 
 func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 	if _, ok := ctx.Session().Get[acct](); !ok {
@@ -155,9 +155,9 @@ func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *guardedParent) View() h.H { return h.Div(via.Embed(p.I)) }
+func (p *guardedParent) View() h.H { return h.Div(via.Child(p.I)) }
 
-func TestDispatch_embedActionRunsOnInitRedirect(t *testing.T) {
+func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	r.Mount("/g", guardedParent{})
@@ -171,7 +171,7 @@ func TestDispatch_embedActionRunsOnInitRedirect(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the parent's OnInit Redirect must gate the embed action route")
+	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the parent's OnInit Redirect must gate the child action route")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
@@ -298,9 +298,9 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 	})
 }
 
-// splitActionURL cuts url into its /_via/a/ prefix, {embed}, {act} and any
+// splitActionURL cuts url into its /_via/a/ prefix, {child}, {act} and any
 // query, so a test can forge one segment and keep the rest genuine.
-func splitActionURL(t *testing.T, url string) (prefix, embed, act, query string) {
+func splitActionURL(t *testing.T, url string) (prefix, child, act, query string) {
 	t.Helper()
 	if i := strings.Index(url, "?"); i >= 0 {
 		url, query = url[:i], url[i:]
@@ -313,19 +313,19 @@ func splitActionURL(t *testing.T, url string) (prefix, embed, act, query string)
 }
 
 // swapActionID rewrites url's {act} segment to an id the render does not
-// bind, keeping embed, mount prefix and ?a= genuine.
+// bind, keeping child, mount prefix and ?a= genuine.
 func swapActionID(t *testing.T, url, act string) string {
 	t.Helper()
-	prefix, embed, _, q := splitActionURL(t, url)
-	return prefix + embed + "/" + act + q
+	prefix, child, _, q := splitActionURL(t, url)
+	return prefix + child + "/" + act + q
 }
 
-// swapEmbedIndex rewrites url's {embed} segment, keeping a genuine action id
-// on it — an id that resolves on ITS embed must not resolve on another.
-func swapEmbedIndex(t *testing.T, url, embed string) string {
+// swapChildIndex rewrites url's {child} segment, keeping a genuine action id
+// on it — an id that resolves on ITS child must not resolve on another.
+func swapChildIndex(t *testing.T, url, child string) string {
 	t.Helper()
 	prefix, _, act, q := splitActionURL(t, url)
-	return prefix + embed + "/" + act + q
+	return prefix + child + "/" + act + q
 }
 
 func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
@@ -339,7 +339,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
-	t.Run("plain embed", func(t *testing.T) {
+	t.Run("plain child", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
@@ -433,7 +433,7 @@ func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 			"_viatab": conn.TabID(),
 		})
 
-		// The returned page is a fresh connection's page (see Embed's godoc on
+		// The returned page is a fresh connection's page (see Child's godoc on
 		// the native-submit contract), not a snapshot of the dying
 		// connection's mutated liveForm — so it no longer carries "got:zed".
 		assert.Equal(t, http.StatusOK, status)
@@ -541,18 +541,18 @@ func (f *validatedForm) View() h.H {
 }
 
 // formShell wraps any composition, so the form below is submitted from inside
-// a via.Embed rather than at the root.
+// a via.Child rather than at the root.
 type formShell[C any] struct{ Body C }
 
-func (s *formShell[C]) View() h.H { return h.Main(via.Embed(s.Body)) }
+func (s *formShell[C]) View() h.H { return h.Main(via.Child(s.Body)) }
 
-// A native form submit inside an Embed must answer with the instance the
-// handler MUTATED. The re-render walks from the root, and via.Embed re-copies
+// A native form submit inside a Child must answer with the instance the
+// handler MUTATED. The re-render walks from the root, and via.Child re-copies
 // the parent's field on every render — so without carrying the acted instance
 // down, the response is a pristine form: the validation error gone and the
 // submitted value back to empty, as if the POST had never happened. The root
 // case (below) always worked, which is what made this so easy to miss.
-func TestNativeForm_insideAnEmbedKeepsTheHandlersMutations(t *testing.T) {
+func TestNativeForm_insideAnChildKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(formShell[validatedForm]{}))
 	_, page := app.Get("/")
@@ -565,7 +565,7 @@ func TestNativeForm_insideAnEmbedKeepsTheHandlersMutations(t *testing.T) {
 }
 
 // The same form at the root, as the control: it must keep working exactly as
-// before, so a fix that broke the root to fix the embed cannot pass.
+// before, so a fix that broke the root to fix the child cannot pass.
 func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(validatedForm{}))
@@ -578,7 +578,7 @@ func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 
 // initCounter counts its own OnInit runs. Substituting the acted instance into
 // the response re-render must NOT re-init it — re-initing is exactly what
-// would reload the data the handler just changed — while a fresh sibling embed
+// would reload the data the handler just changed — while a fresh sibling child
 // still gets its own OnInit.
 type initCounter struct {
 	inits int
@@ -596,7 +596,7 @@ func (c *initCounter) View() h.H {
 		h.Button(h.Str("go")))
 }
 
-func TestNativeForm_actedEmbedIsNotReInited(t *testing.T) {
+func TestNativeForm_actedChildIsNotReInited(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(formShell[initCounter]{}))
 	_, page := app.Get("/")
@@ -605,7 +605,7 @@ func TestNativeForm_actedEmbedIsNotReInited(t *testing.T) {
 	status, body := nativeFormPost(t, app, actionURL(t, page, "0", 0), nil)
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `<p id="saved">true</p>`, "the mutation must survive the re-render")
-	assert.Contains(t, body, `<p id="inits">1</p>`, "the acted embed's OnInit must not run a second time")
+	assert.Contains(t, body, `<p id="inits">1</p>`, "the acted child's OnInit must not run a second time")
 }
 
 // A live page's native form submit that arrives WITHOUT the tab field is a
@@ -639,7 +639,7 @@ func (f *liveNamedForm) View() h.H {
 // the row's (handler, arg) pair, and be authorized by the render it just forged.
 //
 // The gate sits inside a lazily-rendered builder (via.When's build here; an
-// via.Each row or an Embed's View is the same shape) — that is the only place a
+// via.Each row or a Child's View is the same shape) — that is the only place a
 // condition is evaluated DURING the render rather than while View() is being
 // constructed, and therefore the only place a hydration that runs mid-render
 // can reach it.
@@ -743,10 +743,10 @@ func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
 }
 
 // plainRootLiveKid is a PLAIN root (its own View renders no State) carrying a
-// LIVE embed, plus a native PostForm at the root. The submit falls to
+// LIVE child, plus a native PostForm at the root. The submit falls to
 // dispatchPlain — the root is not a registered live unit — and the full page it
 // answers with is what the browser replaces the document with, so it must still
-// bootstrap the stream the live embed needs.
+// bootstrap the stream the live child needs.
 type plainRootLiveKid struct {
 	Clock embeddedClock
 	name  string
@@ -758,7 +758,7 @@ func (p *plainRootLiveKid) View() h.H {
 	return h.Div(
 		h.P(h.ID("name"), h.Str(p.name)),
 		via.PostForm(p.Save, h.Input(h.Name("name")), h.Button(h.Str("go"))),
-		via.Embed(p.Clock),
+		via.Child(p.Clock),
 	)
 }
 
@@ -773,7 +773,7 @@ func (c *embeddedClock) beat(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 
 func (c *embeddedClock) View() h.H { return h.Div(c.n.Display()) }
 
-func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
+func TestNativeForm_plainRootKeepsALiveChildsBootstrap(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(plainRootLiveKid{}))
 	_, page := app.Get("/")
@@ -782,7 +782,7 @@ func TestNativeForm_plainRootKeepsALiveEmbedsBootstrap(t *testing.T) {
 	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "zed"})
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `<p id="name">zed</p>`)
-	assert.Contains(t, body, "data-init", "the live embed is dead after the submit without a bootstrap")
+	assert.Contains(t, body, "data-init", "the live child is dead after the submit without a bootstrap")
 	assert.Contains(t, body, "/_via/sse", "the bootstrap must name the stream URL")
 }
 
@@ -891,7 +891,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 
 // --- bounded-fixpoint discovery regressions (one root cause, three symptoms).
 //
-// The disclosure fixture above has no embed, no session and no OnArg, which is
+// The disclosure fixture above has no child, no session and no OnArg, which is
 // exactly why all three slipped through: every one of them needs a SECOND
 // discovery pass, which any page with a Bind()ed slot in the posted body takes.
 
@@ -915,16 +915,16 @@ type fixParent struct {
 	K fixKid
 }
 
-func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Embed(p.K)) }
+func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Child(p.K)) }
 
-func TestDispatchPlain_embedActionRunsOnAnInitedCopyAfterASecondPass(t *testing.T) {
+func TestDispatchPlain_childActionRunsOnAnInitedCopyAfterASecondPass(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(fixParent{}))
 
-	code, body := app.EmbedAction("0", 0).Body(`{"q":"x"}`).Fire()
+	code, body := app.ChildAction("0", 0).Body(`{"q":"x"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "<p>seen:init</p>",
-		"a posted Bind()ed signal forces a second discovery pass; the embed's action must still run on a copy whose OnInit ran")
+		"a posted Bind()ed signal forces a second discovery pass; the child's action must still run on a copy whose OnInit ran")
 }
 
 // argRows widens its row set from a Bind()ed signal, so a posted body can
@@ -969,7 +969,7 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 // shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
 // both mint the SAME content-addressed action id (the id hashes the Go func
 // name plus the receiver's offset, and here both are identical). That is the
-// only arrangement in which an embed key denoting different types in the auth
+// only arrangement in which a child key denoting different types in the auth
 // and the bind render gets past the action lookup at all.
 type shiftBase struct{ hit bool }
 
@@ -983,8 +983,8 @@ type shiftB struct{ shiftBase }
 
 func (b *shiftB) View() h.H { return h.Div(h.Str("B"), h.Button(via.On("click", b.Hit))) }
 
-// Flip is Bind()ed, so the POST body can flip it — and the When around Embed(A)
-// then shifts B from key "1" up to key "0". via.Embed's docs forbid exactly
+// Flip is Bind()ed, so the POST body can flip it — and the When around Child(A)
+// then shifts B from key "1" up to key "0". via.Child's docs forbid exactly
 // this When; the dispatcher must still fail closed rather than run A's
 // authorized action against B.
 type shiftPage struct {
@@ -996,24 +996,24 @@ type shiftPage struct {
 func (p *shiftPage) View() h.H {
 	return h.Div(
 		h.Input(p.Flip.Bind()),
-		via.When(!p.Flip.Get(), func() h.H { return via.Embed(p.A) }),
-		via.Embed(p.B),
+		via.When(!p.Flip.Get(), func() h.H { return via.Child(p.A) }),
+		via.Child(p.B),
 	)
 }
 
-func TestDispatchPlain_embedKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) {
+func TestDispatchPlain_childKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(shiftPage{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
 	aURL, bURL := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
 	require.Equal(t, aURL[strings.LastIndexByte(aURL, '/'):], bURL[strings.LastIndexByte(bURL, '/'):],
-		"the fixture only bites if both embeds mint the same action id")
+		"the fixture only bites if both children mint the same action id")
 
 	resp, body := do(t, srv, http.MethodPost, aURL, `{"flip":true}`)
 	assert.Equal(t, http.StatusGone, resp.StatusCode,
 		"a key whose type changed between the auth and bind renders must not dispatch")
-	assert.Contains(t, body, "no such embed")
+	assert.Contains(t, body, "no such child")
 }
 
 // scopeKid's OnInit reads the REQUEST, and its View Bind()s a slot the POST
@@ -1036,7 +1036,7 @@ func (k *scopeKid) View() h.H {
 
 type scopePage struct{ K scopeKid }
 
-func (p *scopePage) View() h.H { return h.Div(via.Embed(p.K)) }
+func (p *scopePage) View() h.H { return h.Div(via.Child(p.K)) }
 
 func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing.T) {
 	t.Parallel()
@@ -1058,7 +1058,7 @@ func actionID(t *testing.T, body string) string {
 	return m[1]
 }
 
-// liveReqEchoer is a live embed whose action copies a header off the request
+// liveReqEchoer is a live child whose action copies a header off the request
 // that triggered it into State.
 type liveReqEchoer struct{ echo via.State[string] }
 
@@ -1154,7 +1154,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 	})
 }
 
-// liveArg is a live embed with one value-carrying action, so a malformed
+// liveArg is a live child with one value-carrying action, so a malformed
 // ?a= can be exercised on the live dispatch path too (dispatchPlain has
 // its own via_test coverage).
 type liveArg struct{ last via.State[int] }
@@ -1507,7 +1507,7 @@ type twoLivePage struct {
 	Clock livePrivClock
 }
 
-func (p *twoLivePage) View() h.H { return h.Div(via.Embed(p.Priv), via.Embed(p.Clock)) }
+func (p *twoLivePage) View() h.H { return h.Div(via.Child(p.Priv), via.Child(p.Clock)) }
 
 var beatRE = regexp.MustCompile(`beat: (\d+)`)
 
@@ -1541,7 +1541,7 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		awaitBeat(t, conn, beat)
 
 		// The forgery rides on an action Priv IS allowed to call.
-		code, _ := app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
+		code, _ := app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
 
@@ -1553,7 +1553,7 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		}
 	}
 	require.Equal(t, http.StatusNoContent,
-		mustFire(t, app.EmbedAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
+		mustFire(t, app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
 	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0", "no gated handler may have run")
 }
 
@@ -1711,13 +1711,13 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 // --- F1 matrix: the shapes the root-level When above does not cover.
 //
 // The gate is the same one livePriv uses — a client-writable Signal whose only
-// authority is OnInit — but the thing it gates moves: an Each row, an Embed
-// inside the branch, and that Embed one level deeper. The check funnels through
+// authority is OnInit — but the thing it gates moves: an Each row, a Child
+// inside the branch, and that embeds one level deeper. The check funnels through
 // u.actions[act] today, so one of these may look redundant; they are not, since
-// the per-embed intersection (pruneToAuthority) and the unit lookup are
+// the per-child intersection (pruneToAuthority) and the unit lookup are
 // separate sites and a refactor splits them.
 
-// gatedHits is shared by pointer so a child taken BY VALUE into an Embed can
+// gatedHits is shared by pointer so a child taken BY VALUE into a Child can
 // still report, from the root's always-rendered markup, that it ran.
 type gatedHits = atomic.Int64
 
@@ -1771,13 +1771,13 @@ func (c *gatedChild) View() h.H         { return h.Div(h.Button(via.On("click", 
 
 type gatedMid struct{ Leaf gatedChild }
 
-func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Embed(m.Leaf)) }
+func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Child(m.Leaf)) }
 
-// gatedEmbedPage puts the gated action inside an Embed the root's When wraps.
+// gatedChildPage puts the gated action inside a Child the root's When wraps.
 // The Clock rides in its OWN When so the live and plain variants each keep a
 // stable ordinal for the life of a connection — p.live is fixed by the field
-// literal, which is the only kind of condition Embed's TRAP allows.
-type gatedEmbedPage struct {
+// literal, which is the only kind of condition Child's TRAP allows.
+type gatedChildPage struct {
 	live    bool
 	deep    bool
 	hits    *gatedHits
@@ -1787,21 +1787,21 @@ type gatedEmbedPage struct {
 	Mid     gatedMid
 }
 
-func (p *gatedEmbedPage) OnInit(ctx *via.Ctx) error {
+func (p *gatedChildPage) OnInit(ctx *via.Ctx) error {
 	p.IsAdmin.Set(gateIsOpen(ctx))
 	return nil
 }
 
-func (p *gatedEmbedPage) Safe(ctx *via.Ctx) {}
-func (p *gatedEmbedPage) clock() h.H        { return via.Embed(p.Clock) }
-func (p *gatedEmbedPage) gated() h.H {
+func (p *gatedChildPage) Safe(ctx *via.Ctx) {}
+func (p *gatedChildPage) clock() h.H        { return via.Child(p.Clock) }
+func (p *gatedChildPage) gated() h.H {
 	if p.deep {
-		return via.Embed(p.Mid)
+		return via.Child(p.Mid)
 	}
-	return via.Embed(p.Child)
+	return via.Child(p.Child)
 }
 
-func (p *gatedEmbedPage) View() h.H {
+func (p *gatedChildPage) View() h.H {
 	return h.Div(
 		h.Input(p.IsAdmin.Bind()),
 		h.Button(via.On("click", p.Safe), h.Str("safe")),
@@ -1820,8 +1820,8 @@ type gatedShape struct {
 	// privileged control can reach it at a path OnInit reads as admin. It is a
 	// closure because Router.Mount is generic over the unit type.
 	mountLive  func(r *via.Router, path string, hits *gatedHits)
-	plainEmbed string
-	liveEmbed  string
+	plainChild string
+	liveChild  string
 	gatedN     int
 }
 
@@ -1832,31 +1832,31 @@ var gatedShapes = []gatedShape{{
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
 		r.Mount(path, gatedEach{hits: hits, live: true})
 	},
-	plainEmbed: "r", liveEmbed: "r", gatedN: 1,
+	plainChild: "r", liveChild: "r", gatedN: 1,
 }, {
-	name: "Embed inside a When",
+	name: "Child inside a When",
 	plain: func(hits *gatedHits) http.Handler {
-		return via.Handler(gatedEmbedPage{hits: hits, Child: gatedChild{hits: hits}})
+		return via.Handler(gatedChildPage{hits: hits, Child: gatedChild{hits: hits}})
 	},
 	live: func(hits *gatedHits) http.Handler {
-		return via.Handler(gatedEmbedPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
+		return via.Handler(gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
-		r.Mount(path, gatedEmbedPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
+		r.Mount(path, gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
-	plainEmbed: "0", liveEmbed: "1", gatedN: 0,
+	plainChild: "0", liveChild: "1", gatedN: 0,
 }, {
-	name: "depth-2 embed",
+	name: "depth-2 child",
 	plain: func(hits *gatedHits) http.Handler {
-		return via.Handler(gatedEmbedPage{hits: hits, deep: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+		return via.Handler(gatedChildPage{hits: hits, deep: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
 	live: func(hits *gatedHits) http.Handler {
-		return via.Handler(gatedEmbedPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+		return via.Handler(gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
-		r.Mount(path, gatedEmbedPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+		r.Mount(path, gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
-	plainEmbed: "0-0", liveEmbed: "1-0", gatedN: 0,
+	plainChild: "0-0", liveChild: "1-0", gatedN: 0,
 }}
 
 const forgedAdmin = `{"isAdmin":true}`
@@ -1869,12 +1869,12 @@ func assertGateHeld(t *testing.T, hits *gatedHits, code int, body string) {
 	assert.Equal(t, http.StatusGone, code, "a gated action must not be dispatchable: %s", body)
 	assert.Zero(t, hits.Load(), "a gated handler ran")
 	// The refusal has to be the authorization answer — this render binds no
-	// such action, or no such embed — and not a routing or parse miss, which
+	// such action, or no such child — and not a routing or parse miss, which
 	// would pass this test while proving nothing about the gate.
 	assert.True(t,
 		strings.Contains(body, "does not bind it") ||
 			strings.Contains(body, "no such action") ||
-			strings.Contains(body, "no such embed"),
+			strings.Contains(body, "no such child"),
 		"the 410 must name the closed branch, not a routing miss: %s", body)
 }
 
@@ -1893,7 +1893,7 @@ func TestDispatchLive_aGatedActionStillDispatchesWhenTheBranchIsGenuinelyOpen(t 
 
 			_, page := app.Get("/admin")
 			require.Contains(t, page, ">nuke<", "the privileged mount must bind the gated action")
-			url := actionURL(t, page, shape.liveEmbed, shape.gatedN)
+			url := actionURL(t, page, shape.liveChild, shape.gatedN)
 			conn := app.ConnectAt("/admin", "{}")
 
 			code, body := app.Action(0).Over(conn).Raw(url).Fire()
@@ -1912,7 +1912,7 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.
 			app := vt.Serve(t, shape.plain(hits))
 
 			_, privileged := app.Get("/?admin=1")
-			url := actionURL(t, privileged, shape.plainEmbed, shape.gatedN)
+			url := actionURL(t, privileged, shape.plainChild, shape.gatedN)
 
 			code, body := app.Action(0).Raw(url).Body(forgedAdmin).Fire()
 			assertGateHeld(t, hits, code, body)
@@ -1927,14 +1927,14 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.
 // gatedURL is the URL a privileged render ships for the gated action — the
 // same id an unprivileged connection would have to call, since an action id is
 // content-addressed on its handler. Scraped rather than pushed because a When
-// that a posted signal opens around an Embed never reaches the client frame at
-// all (see TestDispatchLive_anEmbedOpenedByAPostedSignalIsNeverPushed), so the
+// that a posted signal opens around a Child never reaches the client frame at
+// all (see TestDispatchLive_anChildOpenedByAPostedSignalIsNeverPushed), so the
 // realistic attacker here is one replaying a URL he saw while privileged.
-func gatedURL(t *testing.T, app *vt.App, embed string, n int) string {
+func gatedURL(t *testing.T, app *vt.App, child string, n int) string {
 	t.Helper()
 	_, privileged := app.Get("/?admin=1")
 	require.Contains(t, privileged, ">nuke<", "the privileged render must bind the gated action")
-	return actionURL(t, privileged, embed, n)
+	return actionURL(t, privileged, child, n)
 }
 
 func TestConnect_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
@@ -1944,7 +1944,7 @@ func TestConnect_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
 			t.Parallel()
 			hits := &gatedHits{}
 			app := vt.Serve(t, shape.live(hits))
-			url := gatedURL(t, app, shape.liveEmbed, shape.gatedN)
+			url := gatedURL(t, app, shape.liveChild, shape.gatedN)
 			conn := app.ConnectWith(forgedAdmin)
 
 			// Connect frames no elements, so one ungated action with a CLEAN
@@ -1968,7 +1968,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T
 			t.Parallel()
 			hits := &gatedHits{}
 			app := vt.Serve(t, shape.live(hits))
-			url := gatedURL(t, app, shape.liveEmbed, shape.gatedN)
+			url := gatedURL(t, app, shape.liveChild, shape.gatedN)
 			conn := app.Connect()
 
 			// A clean connect: the forgery rides on an action the client IS
@@ -1989,7 +1989,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T
 // between pushes that Tick does (dispatch.go names both), so the restore that
 // undoes a display render's hydration has to cover it identically. There is no
 // plain cell to fill here by construction — ctx.Listen is valid only on a live
-// unit — so the axis is root vs. embed.
+// unit — so the axis is root vs. child.
 
 type listenReadsSignal struct {
 	bus  *topic.Topic[string]
@@ -2006,9 +2006,9 @@ func (p *listenReadsSignal) View() h.H {
 	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.P(h.Str("seen: ["+p.seen+"]")))
 }
 
-type listenEmbedPage struct{ Child listenReadsSignal }
+type listenChildPage struct{ Child listenReadsSignal }
 
-func (p *listenEmbedPage) View() h.H { return h.Div(h.Str("page"), via.Embed(p.Child)) }
+func (p *listenChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(p.Child)) }
 
 func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 	t.Parallel()
@@ -2021,9 +2021,9 @@ func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 		handler:     func(bus *topic.Topic[string]) http.Handler { return via.Handler(listenReadsSignal{bus: bus}) },
 		connectBody: `{"name":"ATTACKER"}`,
 	}, {
-		name: "embed",
+		name: "child",
 		handler: func(bus *topic.Topic[string]) http.Handler {
-			return via.Handler(listenEmbedPage{Child: listenReadsSignal{bus: bus}})
+			return via.Handler(listenChildPage{Child: listenReadsSignal{bus: bus}})
 		},
 		connectBody: `{"child__name":"ATTACKER"}`,
 	}}

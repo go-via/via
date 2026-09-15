@@ -1,4 +1,4 @@
-// Command pulse is a live embed: OnInit registers a tick, so via opens a per-tab
+// Command pulse is a live child: OnInit registers a tick, so via opens a per-tab
 // SSE stream and pushes a re-rendered fragment on every beat.
 package main
 

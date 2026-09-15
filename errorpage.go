@@ -40,7 +40,7 @@ const (
 // There is deliberately no sentinel for the 503s the SSE connect raises (at
 // capacity, shutting down): that route is client-consumed and never renders an
 // error page, so a sentinel for it would be unreachable API. Nor for an unknown
-// action or a cross-mount embed id — both are programming mistakes with the
+// action or a cross-mount child id — both are programming mistakes with the
 // same answer, "something went wrong", not a distinct page.
 var (
 	// ErrStoreDown means the session store could not be read for this request.
