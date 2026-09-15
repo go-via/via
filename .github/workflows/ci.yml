@@ -62,7 +62,9 @@ jobs:
 
       - name: Run CI checks
         if: steps.changes.outputs.code == 'true'
-        run: bash ./ci.sh
+        # --no-browser because the tier has its own job below; hosted runners
+        # ship Chrome, so ci.sh would otherwise run it a second time uncached.
+        run: bash ./ci.sh --no-browser
 
       - name: govulncheck
         if: steps.changes.outputs.code == 'true'
