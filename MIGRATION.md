@@ -1,12 +1,13 @@
-# Migrating from v1 to v0.8
+# Migrating from v0.7 to v0.8
 
-v0.8 is a rebuild. The module path is unchanged
-(`github.com/go-via/via`, no `/v2` suffix), so `go get -u` will hand you a tree
-that shares almost no identifiers with the one you were using. There is no
-compatibility shim and no deprecation window: v1 is preserved on the `v1`
-branch, and you can pin it indefinitely.
+v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
+changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.0 as
+an ordinary bump and hands you a tree that shares almost no identifiers with
+the one you were using. No tooling will warn you. There is no compatibility
+shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you
+can pin it indefinitely.
 
-So this document is not a rename table you can apply mechanically. Most v1 code
+So this document is not a rename table you can apply mechanically. Most v0.7 code
 does not port line by line, because the things that changed are the ideas, not
 the spellings. Read the four shifts below first; the mapping table after them
 will make sense only in their light. Budget a re-read of the README rather
@@ -28,14 +29,14 @@ design.
 
 ### 1. State is bare; `ctx` is for the request
 
-v1 threaded a `ctx` through every state operation: `p.Hits.Op(ctx).Inc()`,
+v0.7 threaded a `ctx` through every state operation: `p.Hits.Op(ctx).Inc()`,
 `c.Step.Read(ctx)`, `c.Hits.Write(ctx, 0)`. The argument was load-bearing
 plumbing: it carried the tab identity the value was scoped to.
 
 v2 makes state carry its own scope, so mutators are bare:
 
 ```go
-// v1
+// v0.7
 func (c *Counter) Inc(ctx *via.Ctx) { c.Hits.Op(ctx).Add(c.Step.Read(ctx)) }
 
 // v2
@@ -48,7 +49,7 @@ finds itself.
 
 The knock-on effect is the one to plan for: `via.State[T]` is **child-only**.
 Reading or writing it outside a live child panics with a message naming the
-fix. v1's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
+fix. v0.7's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
 lives. For a value that is genuinely just server state, the v2 counter example
 does not use `State` at all. It injects a plain `*Store` dependency and lets
 the re-render read it. That is the idiomatic answer and it is a design change,
@@ -58,7 +59,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 `StateTabNum`, `StateSessNum`, `StateAppNum`, no `.Op(ctx)` and no
 `Add`/`Sub`/`Inc`/`Dec`/`Clamp`. Write the arithmetic in Go.
 
-| v1 | v2 |
+| v0.7 | v0.8 |
 | --- | --- |
 | `StateTab[T]` | `State[T]` (live children only) |
 | `StateSess[T]` | `ctx.Session().Get` / `.Put` |
@@ -69,7 +70,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 
 ### 2. `View` is pure and takes no context
 
-v1: `View(ctx *via.CtxR) h.H`. v2: `View() h.H`. `CtxR` is gone entirely.
+v0.7: `View(ctx *via.CtxR) h.H`. v0.8: `View() h.H`. `CtxR` is gone entirely.
 
 This is the load-bearing constraint of the rewrite, so it is worth stating
 plainly: **anything your view needs must be a field on the composition before
@@ -79,7 +80,7 @@ for a 404, anything else for a 500. A view can no longer render a lie about
 data it failed to load.
 
 ```go
-// v1: the view reaches for what it needs
+// v0.7: the view reaches for what it needs
 func (p *Page) View(ctx *via.CtxR) h.H { return h.H1(h.Text(p.name(ctx))) }
 
 // v2: OnInit loads it, View renders it
@@ -92,7 +93,7 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 ```
 
-The v1 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
+The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `Initer` (`OnInit(*Ctx) error`) is the one lifecycle hook,
 on a page and on every embedded child. There is no `Connector` and no `Live`
@@ -116,18 +117,18 @@ ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
   not `func(*via.Ctx) error`, or one named `PageMeta` that is not
-  `func() via.Meta`. A leftover v1-era `Title() string` is warned about: it is
+  `func() via.Meta`. A leftover v0.7-era `Title() string` is warned about: it is
   no longer a hook and nothing calls it.
 - **Warns**: a near-miss NAME that carries the exact hook signature while the
   real interface is unsatisfied. The names it knows are `Init`, `Initialize`,
   `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for `OnInit`, and
   `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for
   `OnReload`, and `Meta`, `Metadata`, `PageMetadata`, `GetPageMeta`,
-  `DocumentMeta`, `PageInfo` for `PageMeta`. A v1 `Reloader.Reload` left unrenamed
+  `DocumentMeta`, `PageInfo` for `PageMeta`. A v0.7 `Reloader.Reload` left unrenamed
   is in this set, so it is warned about — and only warned about, on stderr,
   once per type.
 - **Silent**: everything else. A leftover `Connector.OnConnect` or
-  `Disposer.Dispose` from v1 is now an ordinary method nothing calls; the type
+  `Disposer.Dispose` from v0.7 is now an ordinary method nothing calls; the type
   walk has no name to match it against, so it says nothing at all. A `Signal`
   behind an INTERFACE field is likewise invisible to the walk and only panics
   on the first render that binds it.
@@ -142,7 +143,7 @@ when a stream actually opens.
 
 ### 3. Composition is `via.Child`, and roots are taken by value
 
-v1's `Slot`, `Child[C]`, `NewChild`, `Fill` and the `.Embed` method are all
+v0.7's `Slot`, `Child[C]`, `NewChild`, `Fill` and the `.Embed` method are all
 gone. A child composition is a plain struct field, rendered explicitly:
 
 ```go
@@ -166,7 +167,7 @@ feature; plain composition still nests to any depth.
 
 ### 4. Fan-out is scoped to a topic
 
-v1 had process-wide broadcast: `app.Broadcast(script)`,
+v0.7 had process-wide broadcast: `app.Broadcast(script)`,
 `BroadcastSignal(app, sig, val)`, `BroadcastSignals(map)`, `BroadcastNotify`.
 All removed. v2 fans out through a typed topic that children subscribe to:
 
@@ -196,7 +197,7 @@ target is still dropped loudly and never reaches the client.
 
 Entries marked **gone** have no replacement; see "Removed outright" below.
 
-| Area | v1 | v0.8 |
+| Area | v0.7 | v0.8 |
 | --- | --- | --- |
 | Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
@@ -282,7 +283,7 @@ dropped if it came from anywhere but a `Guard`).
 
 ## Worked example: the counter, both ways
 
-v1, with reactive per-tab state, a bound signal, and the `on` package:
+v0.7, with reactive per-tab state, a bound signal, and the `on` package:
 
 ```go
 type Counter struct {
@@ -330,20 +331,20 @@ a client-owned input value — not as the default container for everything.
 
 ## Security defaults moved
 
-Two defaults are more permissive than v1's, and they are the entries most
+Two defaults are more permissive than v0.7's, and they are the entries most
 likely to matter in production. The CHANGELOG has the full reasoning; the short
 form:
 
 - **The origin floor is open by default.** The origin floor is via's check
   that a state-changing request comes from a host you trust, read off
-  `Origin`/`Sec-Fetch-Site`. v1 enforced it; v0.8 accepts an action
+  `Origin`/`Sec-Fetch-Site`. v0.7 enforced it; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, which switches
   enforcement on for the whole endpoint. `WithInsecureOrigin` is gone; there is
   no secure default left to opt out of. The per-tab id is the CSRF token on a
   LIVE page only: a plain page carries an empty `viatab`/`_viatab`, so with the
   floor open a cross-origin `PostForm` submit is accepted and what actually
   defends it is the session cookie's `SameSite=Lax` (the request arrives
-  unauthenticated). If you deployed v1 without thinking about origins,
+  unauthenticated). If you deployed v0.7 without thinking about origins,
   **v0.8 needs you to think about them.** via logs one line at startup when the
   floor is open.
 - **Sessions are always on** and mint a random per-process key if you configure
@@ -410,7 +411,7 @@ check.
 A `Signal[T]`'s wire name is now its Go FIELD name, first rune lowercased —
 `count`, `chat__draft` for a signal inside an embedded `Chat`,
 `outer__mid__kid__step` for a deeper path — where v0.8's earlier builds named
-it by byte offset (`f0`, `f48`, `i0_f0`) and v1 by render order (`s0`, `s1`).
+it by byte offset (`f0`, `f48`, `i0_f0`) and v0.7 by render order (`s0`, `s1`).
 The offset is still the internal key, so hydration is unchanged; the name is
 resolved once per composition TYPE at `Mount`/`Child`, never per render.
 
@@ -567,9 +568,9 @@ Stated plainly so you can decide whether to wait:
   by `OnInit` or the field literal, never on time, a client signal, or shared
   state that changes while the page is open.
 
-## Staying on v1
+## Staying on v0.7
 
-The `v1` branch is preserved and its tags still resolve. If you are running v1
+The `v1` branch is preserved and its tags still resolve. If you are running v0.7
 in production and none of the above buys you anything, pinning is a legitimate
 answer:
 
@@ -577,20 +578,20 @@ answer:
 go get github.com/go-via/via@v0.7.0
 ```
 
-v1 is frozen. It will not receive features, and there is no commitment to
+v0.7 is frozen. It will not receive features, and there is no commitment to
 backport security fixes — as of this release its `golang.org/x/crypto` is behind
-and is not being bumped. Pinning v1 means taking on its dependency maintenance
+and is not being bumped. Pinning v0.7 means taking on its dependency maintenance
 yourself; the affected code is the auth example rather than the library, but
 check that against your own build before relying on it.
 
-If you need a specific fix on v1, open an issue and ask. That is a request, not
+If you need a specific fix on v0.7, open an issue and ask. That is a request, not
 a support guarantee.
 
 v0.8 builds only with Go 1.27+.
 
 ## Upgrading from a v0.8 pre-release
 
-Everything above is v1 → v0.8. If you are already on v0.8 — pinned to a commit
+Everything above is v0.7 → v0.8. If you are already on v0.8 — pinned to a commit
 on this branch before it was tagged — the API kept moving under you during the
 last stretch of the rebuild. This section is the diff for THAT jump: what
 renamed, whether the compiler will find it for you, and what a silent one
