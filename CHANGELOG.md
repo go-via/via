@@ -414,8 +414,8 @@ as a re-read of the README rather than a diff.
 - **Typed attribute helpers in `h`**: `ID`, `Class`, `Style`, `Type`, `Name`,
   `Value`, `Placeholder`, `Title`, `Alt`, `Rel`, `For`, `Target`, `Lang`,
   `Role`, `Method`, `Enctype`, `Accept`, `AutoComplete`, `Width`, `Height`,
-  `Min`, `Max`, `Step`, `Rows`, `Cols`, `MaxLength`, `MinLength`, `Colspan`,
-  `Rowspan`, `TabIndex`, plus the boolean attributes `Disabled`, `Checked`,
+  `Min`, `Max`, `Step`, `Rows`, `Cols`, `MaxLength`, `MinLength`, `ColSpan`,
+  `RowSpan`, `TabIndex`, plus the boolean attributes `Disabled`, `Checked`,
   `Required`, `ReadOnly`, `Selected`, `Multiple`, `AutoFocus`, `Hidden`,
   `Open`, `NoValidate`, `Async`, `Defer`, `Inert`, `Loop`, `Muted`,
   `Controls`, `PlaysInline`, `Reversed`. `h.Placeholder("x")` cannot be
