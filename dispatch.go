@@ -139,6 +139,7 @@ type mount struct {
 	// data-dependent Assets cannot silently outrun the policy.
 	csp      string
 	assetsFP string
+	guards   []Guard
 }
 
 // unit returns the bind pass's unit Ctx for dispatch address child: "r" is the
@@ -199,6 +200,13 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	if req.Header.Get("Datastar-Request") == "true" {
 		mode = modeDatastar
 	}
+	// Installed before the guard, not inside decodeSignals: a guard that reads
+	// req.Body must not see an unbounded one just because it runs first.
+	capBody(w, req, mode)
+	base := concreteBase(m.patternBase, req, m.names)
+	if !m.runGuards(w, req, mode, false, base) {
+		return
+	}
 	in, ok := decodeSignals(w, req, mode)
 	if !ok {
 		return
@@ -208,7 +216,6 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	}
 	child := req.PathValue("child")
 	act := req.PathValue("act")
-	base := concreteBase(m.patternBase, req, m.names)
 
 	tab := ""
 	if mode == modeNative {
@@ -239,12 +246,21 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
 
-// decodeSignals decodes an action POST's body per mode. A native submit is
-// multipart, so the cap rises to maxUploadBytes; only maxActionBody stays in
-// RAM, the rest spills to a temp file the caller removes.
+func capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
+	max := int64(maxActionBody)
+	if mode == modeNative {
+		// A native submit is multipart, so the cap rises to maxUploadBytes;
+		// only maxActionBody of it stays in RAM, the rest spills to a temp
+		// file the caller removes.
+		max = maxUploadBytes
+	}
+	req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, max)
+}
+
+// decodeSignals decodes an action POST's body per mode. capBody must already
+// be installed on req.Body — every caller runs it first.
 func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
-		req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, maxUploadBytes)
 		if err := req.ParseMultipartForm(maxActionBody); err != nil {
 			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -256,7 +272,7 @@ func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (m
 		return nil, true
 	}
 	in := map[string]json.RawMessage{}
-	dec := json.NewDecoder(http.MaxBytesReader(unwrapWriter(w), req.Body, maxActionBody))
+	dec := json.NewDecoder(req.Body)
 	if err := dec.Decode(&in); err != nil && !errors.Is(err, io.EOF) {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)

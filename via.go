@@ -1200,12 +1200,19 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// A POST so the connect can carry the page's signals as a body.
+	capBody(w, req, modeDatastar)
 	connectSig, ok := decodeSignals(w, req, modeDatastar)
 	if !ok {
 		return
 	}
 	if !canFlush(w) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	base := concreteBase(m.patternBase, req, m.names)
+	// Before the liveCount.Add below: a denied connect must never burn a
+	// WithMaxSSEConn slot.
+	if !m.runGuards(w, req, modeDatastar, true, base) {
 		return
 	}
 	// Increment-then-check so the gauge can't be raced past the limit.
@@ -1250,7 +1257,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 	pv := m.newInst()
-	base := concreteBase(m.patternBase, req, m.names)
 	// A half-open peer never cancels req.Context(); a failed frame write is the
 	// only signal it's gone, so the stream needs a context it can cancel.
 	streamCtx, cancel := context.WithCancel(req.Context())
