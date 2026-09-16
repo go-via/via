@@ -550,8 +550,8 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var aFired, cFired int
 		r := via.NewRouter()
-		r.Mount("/a", xmChild{fired: &aFired})
-		r.Mount("/c", xmChild{fired: &cFired})
+		via.Mount(r, "/a", xmChild{fired: &aFired})
+		via.Mount(r, "/c", xmChild{fired: &cFired})
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")

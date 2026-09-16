@@ -160,7 +160,7 @@ func (p *guardedParent) View() h.H { return h.Div(via.Child(p.I)) }
 func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/g", guardedParent{})
+	via.Mount(r, "/g", guardedParent{})
 	srv := serve(t, r)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/0/0", strings.NewReader("{}"))
@@ -445,8 +445,8 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		aCalls, cCalls := 0, 0
 		r := via.NewRouter()
-		r.Mount("/a", liveForm{calls: &aCalls})
-		r.Mount("/c", liveForm{calls: &cCalls})
+		via.Mount(r, "/a", liveForm{calls: &aCalls})
+		via.Mount(r, "/c", liveForm{calls: &cCalls})
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
@@ -1467,8 +1467,8 @@ func (p *paramLive) View() h.H         { return h.Div(h.Button(via.On("click", p
 func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/p/{id}", paramLive{})
-	r.Mount("/l/{id}", paramLive{live: true})
+	via.Mount(r, "/p/{id}", paramLive{})
+	via.Mount(r, "/l/{id}", paramLive{live: true})
 	app := vt.Serve(t, r)
 
 	_, plain := app.Get("/p/notanint")
@@ -1818,7 +1818,7 @@ type gatedShape struct {
 	plain, live func(hits *gatedHits) http.Handler
 	// mountLive re-registers the same live unit on a router, so the genuinely
 	// privileged control can reach it at a path OnInit reads as admin. It is a
-	// closure because Router.Mount is generic over the unit type.
+	// closure because Mount is generic over the unit type.
 	mountLive  func(r *via.Router, path string, hits *gatedHits)
 	plainChild string
 	liveChild  string
@@ -1830,7 +1830,7 @@ var gatedShapes = []gatedShape{{
 	plain: func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits}) },
 	live:  func(hits *gatedHits) http.Handler { return via.Handler(gatedEach{hits: hits, live: true}) },
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
-		r.Mount(path, gatedEach{hits: hits, live: true})
+		via.Mount(r, path, gatedEach{hits: hits, live: true})
 	},
 	plainChild: "r", liveChild: "r", gatedN: 1,
 }, {
@@ -1842,7 +1842,7 @@ var gatedShapes = []gatedShape{{
 		return via.Handler(gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
-		r.Mount(path, gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
+		via.Mount(r, path, gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
 	plainChild: "0", liveChild: "1", gatedN: 0,
 }, {
@@ -1854,7 +1854,7 @@ var gatedShapes = []gatedShape{{
 		return via.Handler(gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
-		r.Mount(path, gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
+		via.Mount(r, path, gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
 	plainChild: "0-0", liveChild: "1-0", gatedN: 0,
 }}

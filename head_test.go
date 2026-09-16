@@ -354,8 +354,8 @@ func (plainPage) View() h.H          { return h.Div(h.Str("plain")) }
 func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/charts", assetPage{})
-	r.Mount("/plain", plainPage{})
+	via.Mount(r, "/charts", assetPage{})
+	via.Mount(r, "/plain", plainPage{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
@@ -409,7 +409,7 @@ func TestPageMeta_panicsAtMountWhenAssetsDependOnData(t *testing.T) {
 			"OnInit would load — and got two different answers. Move the asset into the "+
 			"mounted literal, declare it router-wide with WithHead, or hold it in a "+
 			"package-level var.",
-		func() { via.NewRouter().Mount("/", varyingAssetPage{}) })
+		func() { via.Mount(via.NewRouter(), "/", varyingAssetPage{}) })
 }
 
 // A field the mounted literal already filled is NOT data: it is fixed for the
@@ -424,7 +424,7 @@ func (p *litAssetPage) View() h.H { return h.Div(h.Str("x")) }
 func TestPageMeta_assetsFromTheMountedLiteralAreConstant(t *testing.T) {
 	t.Parallel()
 	assert.NotPanics(t, func() {
-		via.NewRouter().Mount("/", litAssetPage{cdn: "https://cdn.example"})
+		via.Mount(via.NewRouter(), "/", litAssetPage{cdn: "https://cdn.example"})
 	})
 	_, body := metaBody(t, litAssetPage{cdn: "https://cdn.example"})
 	assert.Contains(t, body, `src="https://cdn.example/app.js"`)
@@ -460,7 +460,7 @@ func TestPageMeta_validatesItsAssetsAtMount(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
 		`via: via_test.badAssetPage.PageMeta().Assets: Script.Src "javascript:alert(1)" is not a relative URL or an absolute http(s) one`,
-		func() { via.NewRouter().Mount("/", badAssetPage{}) })
+		func() { via.Mount(via.NewRouter(), "/", badAssetPage{}) })
 }
 
 type badAssetPage struct{}
@@ -505,7 +505,7 @@ func TestMount_probeLeavesForeignStructsAlone(t *testing.T) {
 	t.Parallel()
 	require.NotPanics(t, func() {
 		r := via.NewRouter()
-		r.Mount("/", mutexAssetPage{cdn: "https://cdn.example", store: &mutexStore{}})
+		via.Mount(r, "/", mutexAssetPage{cdn: "https://cdn.example", store: &mutexStore{}})
 		t.Cleanup(r.Close)
 		srv := httptest.NewServer(r)
 		t.Cleanup(srv.Close)
@@ -543,7 +543,7 @@ func TestMount_probeStillCatchesDataDependentAssetsPastAMutex(t *testing.T) {
 			"OnInit would load — and got two different answers. Move the asset into the "+
 			"mounted literal, declare it router-wide with WithHead, or hold it in a "+
 			"package-level var.",
-		func() { via.NewRouter().Mount("/", mutexVaryingAssetPage{}) })
+		func() { via.Mount(via.NewRouter(), "/", mutexVaryingAssetPage{}) })
 }
 
 // A PageMeta that refuses the probe's synthetic data skips the boot check. That
@@ -562,7 +562,7 @@ func (p *probeRefusingPage) View() h.H { return h.Div(h.Str("x")) }
 // Not parallel: captureLog swaps the process-wide log writer.
 func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
 	logged := captureLog(t, func() {
-		require.NotPanics(t, func() { via.NewRouter().Mount("/", probeRefusingPage{}) })
+		require.NotPanics(t, func() { via.Mount(via.NewRouter(), "/", probeRefusingPage{}) })
 	})
 	assert.Contains(t, logged, "*via_test.probeRefusingPage")
 	assert.Contains(t, logged, "SKIPPED")

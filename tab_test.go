@@ -105,8 +105,8 @@ func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, child stri
 func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})  // plain — establishes the session cookie
-	r.Mount("/live", sessionLive{}) // Live root, shares the router-wide session manager
+	via.Mount(r, "/login", loginComp{})  // plain — establishes the session cookie
+	via.Mount(r, "/live", sessionLive{}) // Live root, shares the router-wide session manager
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
@@ -193,8 +193,8 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConnection(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})
-	r.Mount("/live", sessionLive{})
+	via.Mount(r, "/login", loginComp{})
+	via.Mount(r, "/live", sessionLive{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
@@ -550,8 +550,8 @@ func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p
 func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginComp{})
-	r.Mount("/live", sessionLiveChild{})
+	via.Mount(r, "/login", loginComp{})
+	via.Mount(r, "/live", sessionLiveChild{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)

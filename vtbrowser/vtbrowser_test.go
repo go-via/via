@@ -511,7 +511,7 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 // must say offline and show the banner.
 func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
 	r := via.NewRouter()
-	r.Mount("/", liveTicker{})
+	via.Mount(r, "/", liveTicker{})
 	s := vtbrowser.Open(t, r)
 	s.WaitLiveConnected()
 	s.WaitTextContains("p", "n: 1")
@@ -570,7 +570,7 @@ func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
 // server answers, then streaming again.
 func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
 	r := via.NewRouter()
-	r.Mount("/", liveTicker{})
+	via.Mount(r, "/", liveTicker{})
 	s := vtbrowser.Open(t, r)
 	s.WaitLiveConnected()
 	s.WaitTextContains("p", "n: 1")
@@ -578,7 +578,7 @@ func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
 	r.Close() // the graceful shutdown: every stream ends with a clean close
 
 	next := via.NewRouter()
-	next.Mount("/", liveTicker{})
+	via.Mount(next, "/", liveTicker{})
 	s.Restart(3*time.Second, next)
 
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online'`,
@@ -627,7 +627,7 @@ func (p *scriptPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str(
 func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
 	origin := jsCDN(t, `window.__external = true`)
 	r := via.NewRouter()
-	r.Mount("/", scriptPage{Src: origin})
+	via.Mount(r, "/", scriptPage{Src: origin})
 	s := vtbrowser.Open(t, r)
 
 	s.WaitEvalTrue(`window.__external === true`, "the declared off-origin script executed")

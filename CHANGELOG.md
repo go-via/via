@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- `Mount` is now a free function,
+  `via.Mount(r, path, root, opts ...MountOption)`, not a `*Router` method.
+  `Handler` is unchanged.
+
 ## v0.8.0 — the v2 core goes mainline
 
 v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,

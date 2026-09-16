@@ -64,7 +64,7 @@ func errGet(t *testing.T, r *via.Router, path string) (*http.Response, string) {
 func TestErrorPage_rendersOnMuxMiss(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/nowhere")
@@ -79,7 +79,7 @@ func TestErrorPage_rendersOnMuxMiss(t *testing.T) {
 func TestErrorPage_rendersOnErrNotFoundFromOnInit(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/gone", errMissing{})
+	via.Mount(r, "/gone", errMissing{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/gone")
@@ -91,7 +91,7 @@ func TestErrorPage_rendersOnErrNotFoundFromOnInit(t *testing.T) {
 func TestErrorPage_rendersOnRenderPanic(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/boom", errBoom{})
+	via.Mount(r, "/boom", errBoom{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/boom")
@@ -108,7 +108,7 @@ func TestErrorPage_carriesUnderlyingError(t *testing.T) {
 		got = e
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/gone", errMissing{})
+	via.Mount(r, "/gone", errMissing{})
 	t.Cleanup(r.Close)
 
 	errGet(t, r, "/gone")
@@ -125,7 +125,7 @@ func TestErrorPage_seesTheRequest(t *testing.T) {
 		path = ctx.Request().URL.Path
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
 	errGet(t, r, "/nowhere")
@@ -135,7 +135,7 @@ func TestErrorPage_seesTheRequest(t *testing.T) {
 func TestErrorPage_skipsDatastarActionResponse(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -157,7 +157,7 @@ func TestErrorPage_skipsDatastarActionResponse(t *testing.T) {
 func TestErrorPage_rendersOnNativeFormFailure(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -177,7 +177,7 @@ func TestErrorPage_rendersOnNativeFormFailure(t *testing.T) {
 
 func TestErrorPage_fallsBackWhenHandlerPanics(t *testing.T) {
 	r := via.NewRouter(via.WithErrorPage(func(*via.Ctx, via.PageError) h.H { panic("handler boom") }))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
 	var resp *http.Response
@@ -194,7 +194,7 @@ func TestErrorPage_fallsBackWhenHandlerPanics(t *testing.T) {
 
 func TestErrorPage_fallsBackWhenHandlerReturnsNil(t *testing.T) {
 	r := via.NewRouter(via.WithErrorPage(func(*via.Ctx, via.PageError) h.H { return nil }))
-	r.Mount("/gone", errMissing{})
+	via.Mount(r, "/gone", errMissing{})
 	t.Cleanup(r.Close)
 
 	var resp *http.Response
@@ -215,7 +215,7 @@ func TestErrorPage_cannotWidenAMountCSP(t *testing.T) {
 		via.WithErrorPage(errPage),
 		via.WithHead(via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "https://global.example/g.css"}}}}),
 	)
-	r.Mount("/asset", errAsset{})
+	via.Mount(r, "/asset", errAsset{})
 	t.Cleanup(r.Close)
 
 	ok, _ := errGet(t, r, "/asset")
@@ -231,7 +231,7 @@ func TestErrorPage_cannotWidenAMountCSP(t *testing.T) {
 func TestErrorPage_absentKeepsPlainText(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/gone", errMissing{})
+	via.Mount(r, "/gone", errMissing{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/gone")
@@ -296,7 +296,7 @@ func TestErrorPage_paramReturnsZeroInsteadOfPanicking(t *testing.T) {
 		n = ctx.Param[int]("id")
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/thread/{id}", errParams{})
+	via.Mount(r, "/thread/{id}", errParams{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/nowhere")
@@ -314,7 +314,7 @@ func TestErrorPage_paramReturnsZeroOnAnUndecodableSegment(t *testing.T) {
 		n = ctx.Param[int]("id")
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/thread/{id}", errParams{})
+	via.Mount(r, "/thread/{id}", errParams{})
 	t.Cleanup(r.Close)
 
 	resp, body := errGet(t, r, "/thread/abc")
@@ -332,7 +332,7 @@ func TestErrorPage_sessionWriteNamesTheErrorPageAsTheCause(t *testing.T) {
 		ctx.Session().Put("nope")
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
 	errGet(t, r, "/nowhere")
@@ -348,7 +348,7 @@ func TestErrorPage_reportsMethodNotAllowed(t *testing.T) {
 		got = e
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
 	resp, _ := errGet(t, r, "/_via/a/r/0")
@@ -364,7 +364,7 @@ func TestErrorPage_carriesErrStaleTabOnAnActionWithNoStream(t *testing.T) {
 		got = e
 		return h.Div(h.Str("x"))
 	}))
-	r.Mount("/", errLive{})
+	via.Mount(r, "/", errLive{})
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -385,7 +385,7 @@ func TestErrorPage_rendersOnAnOversizeNativeSubmit(t *testing.T) {
 		got = e
 		return h.Div(h.Str("too big"))
 	}))
-	r.Mount("/", errOK{})
+	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -448,7 +448,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 		via.WithSessionStore(store),
 		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
 	)
-	r.Mount("/", errLiveSess{})
+	via.Mount(r, "/", errLiveSess{})
 	t.Cleanup(r.Close)
 
 	app := vt.Serve(t, r)
@@ -486,7 +486,7 @@ func (p *gatePage) View() h.H                 { return h.Div(h.Str("secret")) }
 func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithErrorPage(errPage))
-	r.Mount("/secret", gatePage{})
+	via.Mount(r, "/secret", gatePage{})
 	t.Cleanup(r.Close)
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)

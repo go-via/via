@@ -30,12 +30,12 @@ import (
 )
 
 // viaCallNames are the via entry points whose arguments must be named method
-// values or by-value compositions — never an address-of or a closure. Mount
-// (a *Router method, called as r.Mount) and Param (a *Ctx method, called as
-// ctx.Param) cannot appear here: isViaCall only matches a package-qualified
-// call (via.X), and neither is ever spelled that way.
+// values or by-value compositions — never an address-of or a closure. Param
+// (a *Ctx method, called as ctx.Param) cannot appear here: isViaCall only
+// matches a package-qualified call (via.X), and Param is never spelled that
+// way.
 var viaCallNames = map[string]bool{
-	"Handler": true, "Child": true, "When": true, "Each": true,
+	"Handler": true, "Mount": true, "Child": true, "When": true, "Each": true,
 	"On": true, "OnArg": true, "PostForm": true,
 }
 
