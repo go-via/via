@@ -39,7 +39,7 @@ func flagGuard(allow *atomic.Bool) via.Guard {
 		if allow.Load() {
 			return nil
 		}
-		return errors.New("denied")
+		return via.ErrForbidden
 	}
 }
 
@@ -177,6 +177,17 @@ func TestGuard_deniesAConnectWithoutConsumingAStreamSlot(t *testing.T) {
 	defer conn.Close()
 }
 
+func TestGuard_nonSentinelErrorAnswers500(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(func(*via.Ctx) error { return errors.New("db unreachable") }))
+	app := vt.Serve(t, r)
+
+	status, _ := app.Get("/")
+	assert.Equal(t, http.StatusInternalServerError, status,
+		"only ErrNotFound and ErrForbidden get a dedicated status; anything else is a guard failure")
+}
+
 func TestGuard_doesNotGateTheDatastarAsset(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithGuard(func(*via.Ctx) error { return errors.New("denied") }))
@@ -214,7 +225,7 @@ func TestGuard_composesRouterThenMountInOrder(t *testing.T) {
 			return nil
 		}
 	}
-	deny := func(*via.Ctx) error { return errors.New("denied") }
+	deny := func(*via.Ctx) error { return via.ErrForbidden }
 
 	r := via.NewRouter(via.WithGuard(record("router")))
 	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(record("mount1"), deny, record("mount2")))
@@ -255,7 +266,7 @@ func TestGuard_sharesOneCtxAcrossTheChain(t *testing.T) {
 func TestGuard_mountedAtRootDoesNotGateASiblingMount(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(func(*via.Ctx) error { return errors.New("denied") }))
+	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(func(*via.Ctx) error { return via.ErrForbidden }))
 	via.Mount(r, "/admin", plainGuardedRoot{})
 	app := vt.Serve(t, r)
 

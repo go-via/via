@@ -20,9 +20,9 @@ import (
 // wrapping the *Router. A Guard must also not consume req.Body — decodeSignals
 // reads it after every guard has run.
 //
-// A non-nil error denies the request: ErrNotFound answers 404, anything else
-// answers 403. A queued Ctx.Redirect denies by navigating instead. Either one
-// stops the chain.
+// A non-nil error denies the request: ErrNotFound answers 404, ErrForbidden
+// answers 403, anything else answers 500. A queued Ctx.Redirect denies by
+// navigating instead. Either one stops the chain.
 type Guard func(*Ctx) error
 
 // Protect adds guards to one Mount, run after any router-wide WithGuard chain.
@@ -66,8 +66,11 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 			switch {
 			case errors.Is(err, ErrNotFound):
 				http.Error(w, "not found", http.StatusNotFound)
-			default:
+			case errors.Is(err, ErrForbidden):
 				http.Error(w, "forbidden", http.StatusForbidden)
+			default:
+				log.Printf("via: guard failed: %q", err)
+				http.Error(w, "guard failed", http.StatusInternalServerError)
 			}
 			return false
 		}

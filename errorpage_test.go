@@ -501,3 +501,20 @@ func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the wrapper caught a redirect it must pass through")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
+
+func TestErrorPage_rendersOnAGuardDenial(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(ctx *via.Ctx, e via.PageError) h.H {
+		got = e
+		return errPage(ctx, e)
+	}))
+	via.Mount(r, "/", errOK{}, via.Protect(func(*via.Ctx) error { return via.ErrForbidden }))
+	t.Cleanup(r.Close)
+
+	resp, body := errGet(t, r, "/")
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, body, "<h1>sorry</h1>")
+	assert.Equal(t, via.ReasonForbidden, got.Reason)
+	assert.ErrorIs(t, got.Err, via.ErrForbidden)
+}

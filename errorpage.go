@@ -23,7 +23,7 @@ type Reason string
 // is always exhaustive.
 const (
 	ReasonBadRequest       Reason = "bad_request"        // 400 — unusable action arg, malformed form or body
-	ReasonForbidden        Reason = "forbidden"          // 403 — untrusted origin, session mismatch
+	ReasonForbidden        Reason = "forbidden"          // 403 — untrusted origin, session mismatch, Guard denial
 	ReasonNotFound         Reason = "not_found"          // 404 — no such route, ErrNotFound, undecodable Param
 	ReasonMethodNotAllowed Reason = "method_not_allowed" // 405 — the route exists, this method does not (a GET of an action URL)
 	ReasonGone             Reason = "gone"               // 410 — the render that would bind this action is gone
@@ -32,8 +32,8 @@ const (
 	ReasonUnavailable      Reason = "unavailable"        // 503 — the session store could not answer
 )
 
-// The errors via reports through [PageError].Err for the two failures an app
-// can reasonably answer differently from the rest of their status class. Match
+// The errors via reports through [PageError].Err for the failures an app can
+// reasonably answer differently from the rest of their status class. Match
 // with errors.Is; Err is nil for every other failure, so a switch must have a
 // default.
 //
@@ -52,6 +52,10 @@ var (
 	// stream closed, or the id belongs to a render that no longer exists. The
 	// one failure a reload actually fixes.
 	ErrStaleTab = errors.New("via: stale tab")
+
+	// ErrForbidden denies with a 403. Return it from a Guard for "you may not
+	// do this"; queue a Ctx.Redirect instead for "please sign in".
+	ErrForbidden = errors.New("via: forbidden")
 )
 
 // PageError is everything via knows about a failure it is about to answer.
