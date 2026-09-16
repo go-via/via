@@ -385,6 +385,9 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
+	// Router-then-mount: a mount's own Protect narrows the router's WithGuard
+	// chain, never replaces or precedes it.
+	m.guards = append(append([]Guard(nil), r.cfg.guards...), mc.guards...)
 	// The CSP is derived from the root's declaration ONCE, here, off the
 	// zero-data literal: one string per mount, none per request. renderPage
 	// re-reads it and panics if the request-time value disagrees.
@@ -424,7 +427,11 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		// concreteBase, not patternBase: a page at /job/{id} must advertise
 		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 		// leaving every live child under a parametrised mount dead.
-		m.writePage(w, req, newInst(), concreteBase(patternBase, req, names), nil)
+		base := concreteBase(patternBase, req, names)
+		if !m.runGuards(w, req, modeNative, false, base) {
+			return
+		}
+		m.writePage(w, req, newInst(), base, nil)
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
