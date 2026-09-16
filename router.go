@@ -357,8 +357,12 @@ func (r *Router) Close() {
 // Its actions post to {path}/_via/a/{child}/{act}. root is taken by value; the
 // PT constraint makes a missing or mistyped View() a compile error, like
 // Handler.
-func (r *Router) Mount[T any, PT ptrViewer[T]](path string, root T) {
+func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
+	mc := &mountConfig{}
+	for _, opt := range opts {
+		opt(mc)
+	}
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
 	if getPattern == "" {

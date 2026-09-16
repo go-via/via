@@ -324,12 +324,12 @@ func main() {
 		via.WithErrorPage(errorPage),
 	)
 
-	app.Mount("/signup", SignUp{store: store})
-	app.Mount("/login", Login{store: store})
+	via.Mount(app, "/signup", SignUp{store: store})
+	via.Mount(app, "/login", Login{store: store})
 
-	app.Mount("/profile", Profile{store: store})
-	app.Mount("/forum", Forum{store: store})
-	app.Mount("/thread/{id}", ThreadPage{store: store})
+	via.Mount(app, "/profile", Profile{store: store})
+	via.Mount(app, "/forum", Forum{store: store})
+	via.Mount(app, "/thread/{id}", ThreadPage{store: store})
 
 	// "/" lands on the forum (its OnInit bounces an anonymous visitor to /login).
 	http.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {

@@ -685,7 +685,7 @@ func (s *sharedStore) lastTTL() time.Duration {
 func storeApp(t *testing.T, opts ...via.Option) *httptest.Server {
 	t.Helper()
 	r := via.NewRouter(append([]via.Option{via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))}, opts...)...)
-	r.Mount("/p", profilePage{})
+	via.Mount(r, "/p", profilePage{})
 	return serve(t, r)
 }
 
@@ -932,7 +932,7 @@ func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
 		via.WithSessionStore(store),
 		via.WithSessionStoreTimeout(50*time.Millisecond),
 	)
-	r.Mount("/", sessWritePage{})
+	via.Mount(r, "/", sessWritePage{})
 	app := vt.Serve(t, r)
 
 	done := make(chan int, 1)

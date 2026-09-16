@@ -95,7 +95,7 @@ func cspOf(t *testing.T, c *http.Client, url string) string {
 func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/x", redirectPage{})
+	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
 	// No cookies, no session — the policy is still stable across requests.
@@ -106,7 +106,7 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 
 	// A second app booted from a DIFFERENT key serves the same policy.
 	r2 := via.NewRouter(via.WithSessionKey([]byte("a-different-key-also-32-bytes-ok")))
-	r2.Mount("/x", redirectPage{})
+	via.Mount(r2, "/x", redirectPage{})
 	srv2 := serve(t, r2)
 	assert.Equal(t, csp1, cspOf(t, c, srv2.URL+"/x"),
 		"a hash-based policy needs no shared key: pods with different keys agree")
@@ -119,7 +119,7 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/x", redirectPage{})
+	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
 	c := &http.Client{}
@@ -155,7 +155,7 @@ func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/p", profilePage{})
+	via.Mount(r, "/p", profilePage{})
 	srv := serve(t, r)
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
@@ -237,7 +237,7 @@ func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 	t.Parallel()
 	cap := &capture{}
 	r := via.NewRouter()
-	r.Mount("/p", avatarPage{cap: cap})
+	via.Mount(r, "/p", avatarPage{cap: cap})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/p", "")
@@ -272,7 +272,7 @@ func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 	// sharing the real one with whatever else is mid-upload.
 	t.Setenv("TMPDIR", t.TempDir())
 	r := via.NewRouter()
-	r.Mount("/p", avatarPage{cap: &capture{}})
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
 	srv := serve(t, r)
 	_, page := do(t, srv, http.MethodGet, "/p", "")
 
@@ -296,7 +296,7 @@ func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 func TestPostForm_rejectsOversizeUpload413(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/p", avatarPage{cap: &capture{}})
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
 	srv := serve(t, r)
 
 	big := strings.Repeat("x", 9<<20) // > maxUploadBytes (8 MiB)
@@ -324,7 +324,7 @@ var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLa
 func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/thread/{id}", threadPage{})
+	via.Mount(r, "/thread/{id}", threadPage{})
 	srv := serve(t, r)
 
 	_, body := do(t, srv, http.MethodGet, "/thread/42", "")
@@ -336,7 +336,7 @@ func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 func TestRouter_pathParamReadableInAction(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/e/{id}", echoPage{})
+	via.Mount(r, "/e/{id}", echoPage{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/e/7", "")
@@ -352,7 +352,7 @@ func TestRouter_pathParamReadableInAction(t *testing.T) {
 func TestRouter_pathParamBadSegmentIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/thread/{id}", threadPage{})
+	via.Mount(r, "/thread/{id}", threadPage{})
 	srv := serve(t, r)
 
 	resp, body := do(t, srv, http.MethodGet, "/thread/abc", "")
@@ -365,7 +365,7 @@ func TestRouter_pathParamBadSegmentIs404(t *testing.T) {
 func TestRouter_pathParamBadSegmentInActionIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/e/{id}", echoPage{})
+	via.Mount(r, "/e/{id}", echoPage{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/e/abc", "")
@@ -386,7 +386,7 @@ func (p *wrongNamePage) View() h.H                 { return h.Div() }
 func TestRouter_paramUnknownNamePanics(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/thread/{id}", wrongNamePage{})
+	via.Mount(r, "/thread/{id}", wrongNamePage{})
 	srv := serve(t, r)
 
 	resp, _ := do(t, srv, http.MethodGet, "/thread/42", "")
@@ -399,7 +399,7 @@ func TestRouter_paramUnknownNamePanics(t *testing.T) {
 func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{})
+	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/a/r/0", strings.NewReader("{}"))
@@ -429,7 +429,7 @@ func (p *unsafeRedirectPage) View() h.H { return h.Div() }
 func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/secret", unsafeRedirectPage{})
+	via.Mount(r, "/secret", unsafeRedirectPage{})
 	srv := serve(t, r)
 
 	c := &http.Client{CheckRedirect: noFollow}
@@ -447,7 +447,7 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{})
+	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
 	c := &http.Client{CheckRedirect: noFollow}
@@ -465,8 +465,8 @@ func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginForm{})
-	r.Mount("/secret", secret{})
+	via.Mount(r, "/login", loginForm{})
+	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
 	jar, _ := cookiejar.New(nil)
@@ -521,7 +521,7 @@ func postForm(c *http.Client, t *testing.T, url, field, value string) *http.Resp
 func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
@@ -541,7 +541,7 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithTrustedOrigin("https://childder.example"))
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
 	var buf bytes.Buffer
@@ -561,7 +561,7 @@ func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 	_, page := do(t, srv, http.MethodGet, "/login", "")
 	url := swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz")
@@ -575,7 +575,7 @@ func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 func TestRouter_postFormCapsBody(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
 	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/login/_via/a/r/0", "name", strings.Repeat("x", 9<<20))
@@ -587,7 +587,7 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
@@ -602,7 +602,7 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/login", loginForm{})
+	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
@@ -618,8 +618,8 @@ func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/a", counter{count: &store{}})
-	r.Mount("/b", counter{count: &store{}})
+	via.Mount(r, "/a", counter{count: &store{}})
+	via.Mount(r, "/b", counter{count: &store{}})
 	srv := serve(t, r)
 
 	_, a := do(t, srv, http.MethodGet, "/a", "")
@@ -640,7 +640,7 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/", counter{count: &store{}})
+	via.Mount(r, "/", counter{count: &store{}})
 	srv := serve(t, r)
 
 	_, body := do(t, srv, http.MethodGet, "/", "")
@@ -655,7 +655,7 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 func TestRouter_mountedActionElementPatches(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/a", counter{count: &store{}})
+	via.Mount(r, "/a", counter{count: &store{}})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/a", "")
@@ -682,7 +682,7 @@ func (p *failInitPage) View() h.H { return h.P(h.Str("never")) }
 func TestRouter_onInitErrNotFoundIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/x", failInitPage{kind: "missing"})
+	via.Mount(r, "/x", failInitPage{kind: "missing"})
 	resp, body := do(t, serve(t, r), http.MethodGet, "/x", "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.NotContains(t, body, "never", "a failed OnInit must not render the View")
@@ -692,7 +692,7 @@ func TestRouter_onInitErrNotFoundIs404(t *testing.T) {
 func TestRouter_onInitErrorIs500(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/x", failInitPage{kind: "boom"})
+	via.Mount(r, "/x", failInitPage{kind: "boom"})
 	resp, body := do(t, serve(t, r), http.MethodGet, "/x", "")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.NotContains(t, body, "never")
@@ -703,7 +703,7 @@ func TestRouter_onInitErrorIs500(t *testing.T) {
 func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/x", failInitPage{kind: "missing"})
+	via.Mount(r, "/x", failInitPage{kind: "missing"})
 	resp, _ := do(t, serve(t, r), http.MethodPost, "/x/_via/a/r/0", "{}")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
@@ -729,7 +729,7 @@ func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/live", quietChild{})
+	via.Mount(r, "/live", quietChild{})
 	_, body := do(t, serve(t, r), http.MethodGet, "/live", "")
 	assert.Contains(t, body, `@post('/live/_via/sse')`, "a mounted streaming page must bootstrap its own SSE endpoint")
 	assert.Contains(t, body, "window.__viaRC", "the reconnect manager rides the mounted streaming page")
@@ -763,7 +763,7 @@ func (p *jobPage) View() h.H { return h.Main(via.Child(p.Bar)) }
 func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/job/{id}", jobPage{})
+	via.Mount(r, "/job/{id}", jobPage{})
 	srv := liveServer(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/job/7", "")
@@ -802,7 +802,7 @@ func (p *slugPage) View() h.H {
 func slugServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	r := via.NewRouter()
-	r.Mount("/t/{slug}", slugPage{})
+	via.Mount(r, "/t/{slug}", slugPage{})
 	return serve(t, r)
 }
 
@@ -915,24 +915,24 @@ func TestMount_panicsOnAPageMetaCarryingTheWrongSignature(t *testing.T) {
 	assert.PanicsWithValue(t,
 		"via: via_test.badMetaSig.PageMeta has signature func(string) via.Meta, not func() via.Meta — "+
 			"so via_test.badMetaSig does NOT implement via.PageMetaer and the hook will never run",
-		func() { via.NewRouter().Mount("/", badMetaSig{}) })
+		func() { via.Mount(via.NewRouter(), "/", badMetaSig{}) })
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedPageMeta(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedMeta{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedMeta{}) })
 	assert.Contains(t, logged, "misnamedMeta.Metadata looks like a mis-named PageMeta")
 	assert.Contains(t, logged, "var _ via.PageMetaer = (*misnamedMeta)(nil)")
 }
 
 func TestMount_staysQuietWhenThePageMetaLookalikeIsAHelperItCalls(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", metaHelper{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", metaHelper{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
 // Title was the hook PageMeta replaced. A leftover one still compiles and still
 // looks like it names the page, so the drop must be loud.
 func TestMount_warnsOnALeftoverTitleMethod(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", legacyTitle{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", legacyTitle{}) })
 	assert.Contains(t, logged, "legacyTitle.Title is no longer a via hook")
 }
 
@@ -941,22 +941,22 @@ func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
 	assert.PanicsWithValue(t,
 		"via: via_test.badInitSig.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — "+
 			"so via_test.badInitSig does NOT implement via.Initer and the hook will never run",
-		func() { via.NewRouter().Mount("/", badInitSig{}) })
+		func() { via.Mount(via.NewRouter(), "/", badInitSig{}) })
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedHook(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", misnamedReload{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedReload{}) })
 	assert.Contains(t, logged, "misnamedReload.Reload looks like a mis-named OnReload")
 	assert.Contains(t, logged, "var _ via.Reloader = (*misnamedReload)(nil)")
 }
 
 func TestMount_staysQuietWhenTheLookalikeIsJustAHelperTheRealHookCalls(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", reloadHelper{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", reloadHelper{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
 func TestMount_staysQuietForAnOrdinaryActionThatSharesAHookLookalikeName(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", refreshAction{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", refreshAction{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
@@ -1006,7 +1006,7 @@ func TestOnInit_seesTheConnectRequest(t *testing.T) {
 func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
-	r.Mount("/secret", secret{})
+	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/sse", strings.NewReader("{}"))
@@ -1071,7 +1071,7 @@ func (p *livePushParent) View() h.H { return h.Div(via.Child(p.I)) }
 func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := via.NewRouter()
-		r.Mount("/thread/{id}", livePushParent{})
+		via.Mount(r, "/thread/{id}", livePushParent{})
 		srv := liveServer(t, r)
 
 		lines, cancel := openStreamAt(t, srv, "/thread/7/_via/sse")
@@ -1103,7 +1103,7 @@ func (p *paramParent) View() h.H { return h.Div(via.Child(p.I)) }
 func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/thread/{id}", paramParent{})
+	via.Mount(r, "/thread/{id}", paramParent{})
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/thread/7", "")
@@ -1353,7 +1353,7 @@ func closableRouter(t *testing.T) (*via.Router, *closablePage) {
 	r := via.NewRouter()
 	// By value, like every Mount: the channels are what the test observes and a
 	// copy shares them.
-	r.Mount("/", *p)
+	via.Mount(r, "/", *p)
 	return r, p
 }
 
@@ -1468,7 +1468,7 @@ func TestRouterClose_stopsTheTickGoroutine(t *testing.T) {
 func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {
 	t.Parallel()
 	r := new(via.Router)
-	r.Mount("/", greetPage{})
+	via.Mount(r, "/", greetPage{})
 	app := vt.Serve(t, r)
 
 	code, body := app.Get("/")
@@ -1489,12 +1489,12 @@ func (d *droppedLetterConnect) OnConect(*via.Ctx) error { return nil }
 func (d *droppedLetterConnect) View() h.H               { return h.Div(d.N.Display()) }
 
 func TestMount_warnsOnAMiscasedHookName(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", miscasedInit{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", miscasedInit{}) })
 	assert.Contains(t, logged, "miscasedInit.Oninit looks like a mis-named OnInit")
 }
 
 func TestMount_warnsOnAHookNameOneLetterOff(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", droppedLetterConnect{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", droppedLetterConnect{}) })
 	assert.Contains(t, logged, "droppedLetterConnect.OnConect looks like a mis-named OnInit")
 }
 
@@ -1507,7 +1507,7 @@ func (u *unrelatedHookShapedMethod) Save(*via.Ctx) error     { return nil }
 func (u *unrelatedHookShapedMethod) View() h.H               { return h.Div(u.N.Display()) }
 
 func TestMount_staysQuietForUnrelatedMethodsWithAHookSignature(t *testing.T) {
-	logged := captureLog(t, func() { via.NewRouter().Mount("/", unrelatedHookShapedMethod{}) })
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", unrelatedHookShapedMethod{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
@@ -1536,7 +1536,7 @@ func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 	for range 50 {
 		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
 		r := via.NewRouter()
-		r.Mount("/", closePage{opened: opened, disposed: disposed})
+		via.Mount(r, "/", closePage{opened: opened, disposed: disposed})
 		srv := httptest.NewServer(r)
 		done := make(chan struct{})
 		go func() {

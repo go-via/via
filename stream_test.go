@@ -961,7 +961,7 @@ func (p plainWriter) Unwrap() http.ResponseWriter { return p.ResponseWriter }
 func TestLive_streamOpensThroughAResponseWriterWrapper(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
-	r.Mount("/", pulse{})
+	via.Mount(r, "/", pulse{})
 	t.Cleanup(r.Close)
 	mw := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		r.ServeHTTP(plainWriter{w}, req)

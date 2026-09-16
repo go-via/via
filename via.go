@@ -17,7 +17,7 @@
 // against one instance runs on ONE goroutine:
 //
 //   - A plain request (a GET page, an action POST on a page with no live unit)
-//     gets its OWN instance, copied from the value passed to [Router.Mount].
+//     gets its OWN instance, copied from the value passed to [Mount].
 //     OnInit, the action handler, OnReload and View all run on that request's
 //     net/http goroutine, and the instance is discarded with the response.
 //   - A live connection (one opened by [Ctx.Tick], [Ctx.Listen], or by
@@ -690,7 +690,7 @@ type paramMiss struct {
 }
 
 // Param reads the mount pattern's named {name} segment, in http.ServeMux
-// syntax (r.Mount("/thread/{id}", …) → ctx.Param[int]("id")). Callable from
+// syntax (via.Mount(r, "/thread/{id}", …) → ctx.Param[int]("id")). Callable from
 // OnInit, actions, and a live unit's Tick/Listen handlers; View is ctx-free,
 // so load params in OnInit into a field instead.
 //
@@ -714,7 +714,7 @@ type paramMiss struct {
 // So a page's list state — filter, page number, sort, tab — belongs in path
 // params or in the session, never in the query string:
 //
-//	r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
+//	via.Mount(r, "/tickets/{status}/{page}", TicketList{}) // survives an action
 //	// /tickets?status=open&page=2                    // does NOT
 func (c *Ctx) Param[T any](name string) T {
 	if c.errPage {
@@ -1004,7 +1004,7 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 //	http.ListenAndServe(":8080", r)
 func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) *Router {
 	r := NewRouter(opts...)
-	r.Mount[T, PT]("/", root)
+	Mount[T, PT](r, "/", root)
 	return r
 }
 
