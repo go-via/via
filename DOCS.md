@@ -141,8 +141,8 @@ func main() {
 		via.WithTrustedOrigin("https://example.com"),
 		via.WithErrorPage(errorPage),
 	)
-	app.Mount("/", Home{})
-	app.Mount("/thread/{id}", Thread{})
+	via.Mount(app, "/", Home{})
+	via.Mount(app, "/thread/{id}", Thread{})
 	defer app.Close()
 	log.Fatal(http.ListenAndServe(":8080", app)) // never drop this error: a port
 	// already in use otherwise looks like a page that simply does not respond
@@ -234,7 +234,7 @@ clicking it answers `410`. `ctx.Request().URL.Query()` reads on the GET and is
 empty on every action.
 
 ```go
-r.Mount("/tickets/{status}/{page}", TicketList{}) // survives an action
+via.Mount(r, "/tickets/{status}/{page}", TicketList{}) // survives an action
 // /tickets?status=open&page=2                    // does NOT
 ```
 
@@ -360,6 +360,36 @@ The action endpoint and rendered pages are hardened by default:
   definition — whatever the client last set it to. It is a fine switch for a
   disclosure the user controls; an authorization gate belongs on session or
   database state, read in `OnInit`.
+- **`Guard` is the protected-page mechanism**, not an `OnInit` check:
+
+  ```go
+  type Guard func(*Ctx) error
+
+  func Protect(g ...Guard) MountOption // per Mount, on top of any router-wide
+  func WithGuard(g ...Guard) Option    // every Mount on this Router
+  ```
+
+  A `Guard` runs before `OnInit`, on all four transports a mount answers — the
+  page GET, a plain action, a live action over an open stream, and the SSE
+  connect. `OnInit` only runs on the first two, so a `Guard` is what
+  re-authorizes a live action: a session revoked after connect still passes
+  `OnInit` (it never runs again on that stream) but is caught by the `Guard`
+  on the next click. Router-wide guards run first, then the mount's own, in
+  order, stopping at the first denial.
+
+  A `Guard` denies by returning `via.ErrForbidden` for "you may not do this"
+  (403, `via.ReasonForbidden` through `WithErrorPage`) or by queuing
+  `ctx.Redirect` for "please sign in" (303 on a page GET, a navigation script
+  on a Datastar action) — the same two shapes `OnInit` uses. On the SSE
+  connect a denial is always a plain 403, because `fetch` follows a 303 and
+  would deliver the target page's HTML as the stream body.
+
+  A guard denial does not tear down an already-open stream: `Tick` and
+  `Listen` keep pushing until the tab next acts and is denied, closes, or the
+  router shuts down. The session a `Guard` sees is writable, but there is no
+  header setter — a live action's answer may be an SSE frame on a connection
+  the guard did not open, so a response header belongs in a
+  `func(http.Handler) http.Handler` wrapping the `*Router`.
 
 ## Shutdown
 
@@ -502,14 +532,15 @@ it.
   positional slot) picks the row. Still a named method value — no `&`, no closure.
 
 - **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
-  `r.Mount("/path", Page{})` serves a whole app behind one handler, each page's
-  actions namespaced under its mount.
+  `via.Mount(r, "/path", Page{})` serves a whole app behind one handler, each
+  page's actions namespaced under its mount.
   - `OnInit(*Ctx) error` is the per-request hook that loads session/path data
     into a plain page before its ctx-free `View`. Return `via.ErrNotFound` for
     a vanished record (404); any other error answers 500, and the View never
     renders a lie.
-  - A session check + `ctx.Redirect("/login")` inside `OnInit` is the whole
-    protected-page story, with no separate guard mechanism.
+  - `Profile`, `Forum` and `ThreadPage` each redirect an anonymous visitor
+    from their own `OnInit`; a shared `via.Protect(…)` `Guard` would express
+    the same check once, mount- or router-wide.
   - `via.PostForm(handler, …)` renders a **native**, always-multipart form
     whose submit runs server-side, and `ctx.Redirect("/…")` issues a 303 — the
     server-rendered auth flow the bundled Datastar can't do. The same form

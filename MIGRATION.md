@@ -20,8 +20,9 @@ with `via.On*`, replace `h.Text` with `h.Str`, keep your typed attributes
 and reach for `h.RawAttr` only when no typed helper covers the attribute you
 need; every `via.X(ctx, …)` is now `ctx.X(…)`: `Param`,
 `Redirect`, `Listen`, `Session.Put`/`Get`/`Delete`/`Rotate` are
-all `Ctx`/`Session` methods now (and `via.Mount(r, …)`
-is `r.Mount(…)`, a `Router` method). Expect the compiler to find the rest.
+all `Ctx`/`Session` methods now (and `r.Mount(…)`
+is `via.Mount(r, …)`, a free function taking the `*Router`). Expect the
+compiler to find the rest.
 Then read shift 1, because that is the one that will actually change your
 design.
 
@@ -152,7 +153,7 @@ type Page struct{ Sidebar Sidebar }
 func (p *Page) View() h.H { return h.Div(via.Child(p.Sidebar), ...) }
 ```
 
-`via.Handler` and `Router.Mount` take the root **by value** (`Counter{...}`, not
+`via.Handler` and `via.Mount` take the root **by value** (`Counter{...}`, not
 `&Counter{...}`); via passes a pointer to the per-request instance, which is why
 action method values like `c.Inc` need no `&` at the call site. Generic layouts
 are ordinary generic structs: `Shell[C]{Body C}`.
@@ -199,7 +200,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 
 | Area | v0.7 | v0.8 |
 | --- | --- | --- |
-| Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `r.Mount("/p", Page{})` |
+| Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `via.Mount(r, "/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
 | Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook, on the page and on every embedded child |
 | Live child | `Connector.OnConnect` + `Disposer.Dispose` | no interface: a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
@@ -250,36 +251,37 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
   deadline (10s), and the concurrent-connection cap (10,000) are fixed;
   `WithSessionCookieName` is the only SSE/session option that remains. Open an
   issue if a deployment needs one of these tunable.
-- **`Guard`, `RequireSession`, and `Mount`'s `guards ...Guard` parameter**.
-  Put the check in `OnInit` and call `ctx.Redirect`; see the worked example
-  below. This also fixes a latent bug: a Redirect set inside `OnInit` used to
-  be silently dropped; it now issues the 303.
+- **`RequireSession` and `Mount`'s bare `guards ...Guard` parameter**. `Guard`
+  itself is back, with a different contract: it runs on every transport a
+  mount answers (page GET, plain action, live action, SSE connect), not just
+  the page GET, and answers through the same path `OnInit` uses — a Redirect
+  navigates, an error denies. See the worked example below.
 
-## Worked example: protecting a page (Guard is gone)
+## Worked example: protecting a page
 
 ```go
 // Before
 guard := via.RequireSession[User]("/login")
 app.Mount("/profile", Profile{}, guard)
 
-// After: the check moves into the page's own OnInit
-func (p *Profile) OnInit(ctx *via.Ctx) error {
-	user, ok := ctx.Session().Get[User]()
-	if !ok {
+// After
+func requireUser(ctx *via.Ctx) error {
+	if _, ok := ctx.Session().Get[User](); !ok {
 		ctx.Redirect("/login")
-		return nil
 	}
-	p.user = user
 	return nil
 }
 
-app.Mount("/profile", Profile{})
+via.Mount(app, "/profile", Profile{}, via.Protect(requireUser))
 ```
 
-The check and the data load now live in one function instead of a shared
-value passed to every protected `Mount` call — more to type per page, but
-one less concept, and a `Redirect` set here is honoured (before, it was
-dropped if it came from anywhere but a `Guard`).
+A named `Guard` composes across mounts the way `RequireSession` did — pass it
+to `via.Protect` per mount, or to `via.WithGuard` on the `Router` for one
+that needs it everywhere — but it also re-runs on a live action over an
+already-open stream, where `OnInit` runs once, at connect, and never again. A
+session revoked mid-stream used to keep authorizing every click on that
+stream; a `Guard` catches it on the next one. A Redirect set inside `OnInit`,
+which v0.7 silently dropped, now issues the 303 too.
 
 ## Worked example: the counter, both ways
 

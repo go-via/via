@@ -8,6 +8,18 @@
   `via.Mount(r, path, root, opts ...MountOption)`, not a `*Router` method.
   `Handler` is unchanged.
 
+### New
+
+- **`Guard` is back**, with a different contract than v0.7's: `type Guard
+  func(*Ctx) error`, `via.Protect(g ...Guard) MountOption` per mount, and
+  `via.WithGuard(g ...Guard) Option` router-wide. It runs before `OnInit` on
+  all four transports a mount answers — the page GET, a plain action, a live
+  action over an open stream, and the SSE connect — where `OnInit` runs only
+  on the first two, so it is what re-authorizes a live action after the
+  session it was opened under changes. It denies by
+  returning `via.ErrForbidden` (403, `via.ReasonForbidden`) or by queuing
+  `ctx.Redirect`, the same vocabulary `OnInit` uses.
+
 ## v0.8.0 — the v2 core goes mainline
 
 v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
