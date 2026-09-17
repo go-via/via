@@ -365,8 +365,7 @@ The action endpoint and rendered pages are hardened by default:
   ```go
   type Guard func(*Ctx) error
 
-  func Protect(g ...Guard) MountOption // per Mount, on top of any router-wide
-  func WithGuard(g ...Guard) Option    // every Mount on this Router
+  func Protect(g ...Guard) MountOption // per Mount
   ```
 
   A `Guard` runs before `OnInit`, on all four transports a mount answers — the
@@ -374,8 +373,8 @@ The action endpoint and rendered pages are hardened by default:
   connect. `OnInit` only runs on the first two, so a `Guard` is what
   re-authorizes a live action: a session revoked after connect still passes
   `OnInit` (it never runs again on that stream) but is caught by the `Guard`
-  on the next click. Router-wide guards run first, then the mount's own, in
-  order, stopping at the first denial.
+  on the next click. A mount's guards run in the order passed to `Protect`,
+  stopping at the first denial.
 
   A `Guard` denies by returning `via.ErrForbidden` for "you may not do this"
   (403, `via.ReasonForbidden` through `WithErrorPage`) or by queuing

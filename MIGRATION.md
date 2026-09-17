@@ -276,12 +276,11 @@ via.Mount(app, "/profile", Profile{}, via.Protect(requireUser))
 ```
 
 A named `Guard` composes across mounts the way `RequireSession` did — pass it
-to `via.Protect` per mount, or to `via.WithGuard` on the `Router` for one
-that needs it everywhere — but it also re-runs on a live action over an
-already-open stream, where `OnInit` runs once, at connect, and never again. A
-session revoked mid-stream used to keep authorizing every click on that
-stream; a `Guard` catches it on the next one. A Redirect set inside `OnInit`,
-which v0.7 silently dropped, now issues the 303 too.
+to `via.Protect` on every mount that needs it — but it also re-runs on a live
+action over an already-open stream, where `OnInit` runs once, at connect, and
+never again. A session revoked mid-stream used to keep authorizing every
+click on that stream; a `Guard` catches it on the next one. A Redirect set
+inside `OnInit`, which v0.7 silently dropped, now issues the 303 too.
 
 ## Worked example: the counter, both ways
 

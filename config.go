@@ -23,7 +23,6 @@ type config struct {
 	errorPage      func(*Ctx, PageError) h.H
 	maxSSEConn     int
 	pinnedDeadline time.Duration
-	guards         []Guard
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed

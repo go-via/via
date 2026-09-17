@@ -191,8 +191,8 @@ func TestGuard_nonSentinelErrorAnswers500(t *testing.T) {
 
 func TestGuard_doesNotGateTheDatastarAsset(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithGuard(func(*via.Ctx) error { return errors.New("denied") }))
-	via.Mount(r, "/", plainGuardedRoot{})
+	r := via.NewRouter()
+	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(func(*via.Ctx) error { return errors.New("denied") }))
 	app := vt.Serve(t, r)
 
 	status, _ := app.Get("/_via/datastar.js")
@@ -201,8 +201,8 @@ func TestGuard_doesNotGateTheDatastarAsset(t *testing.T) {
 
 func TestGuard_doesNotGateASiblingHandler(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithGuard(func(*via.Ctx) error { return errors.New("denied") }))
-	via.Mount(r, "/", plainGuardedRoot{})
+	r := via.NewRouter()
+	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(func(*via.Ctx) error { return errors.New("denied") }))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/sibling", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("sibling ok")) })
@@ -214,7 +214,7 @@ func TestGuard_doesNotGateASiblingHandler(t *testing.T) {
 	assert.Contains(t, body, "sibling ok")
 }
 
-func TestGuard_composesRouterThenMountInOrder(t *testing.T) {
+func TestGuard_composesInOrder(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
 	var seen []string
@@ -228,8 +228,8 @@ func TestGuard_composesRouterThenMountInOrder(t *testing.T) {
 	}
 	deny := func(*via.Ctx) error { return via.ErrForbidden }
 
-	r := via.NewRouter(via.WithGuard(record("router")))
-	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(record("mount1"), deny, record("mount2")))
+	r := via.NewRouter()
+	via.Mount(r, "/", plainGuardedRoot{}, via.Protect(record("first"), deny, record("second")))
 	app := vt.Serve(t, r)
 
 	status, _ := app.Get("/")
@@ -237,8 +237,7 @@ func TestGuard_composesRouterThenMountInOrder(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, []string{"router", "mount1"}, seen,
-		"router-then-mount order, short-circuited at the first denial")
+	assert.Equal(t, []string{"first"}, seen, "guards run in order, short-circuited at the first denial")
 }
 
 // OK must be exported: Session.Put marshals to JSON, and an unexported field
