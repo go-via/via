@@ -24,6 +24,8 @@ type config struct {
 	errorPage      func(*Ctx, PageError) h.H
 	maxSSEConn     int
 	pinnedDeadline time.Duration
+	maxBody        int64
+	maxUpload      int64
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
@@ -62,6 +64,8 @@ func newConfig(opts []Option) *config {
 		trustedOrigins: map[string]bool{},
 		maxSSEConn:     defaultMaxSSEConn,
 		pinnedDeadline: defaultPinnedDeadline,
+		maxBody:        maxActionBody,
+		maxUpload:      maxUploadBytes,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -222,4 +226,28 @@ func WithMaxSSEConn(n int) Option {
 // restores the default.
 func WithPinnedDeadline(d time.Duration) Option {
 	return func(c *config) { c.pinnedDeadline = d }
+}
+
+// WithMaxBody caps an action POST body in bytes, and how much of a native form
+// submit stays in RAM before the rest spills to a temp file (default 1 MiB).
+// Over the cap the request answers 413. It panics on a value of 0 or less.
+func WithMaxBody(bytes int64) Option {
+	return func(c *config) {
+		if bytes <= 0 {
+			panic("via: WithMaxBody must be positive")
+		}
+		c.maxBody = bytes
+	}
+}
+
+// WithMaxUpload caps a native PostForm submit's whole multipart body in bytes
+// (default 8 MiB). Over the cap the request answers 413. It panics on a value
+// of 0 or less.
+func WithMaxUpload(bytes int64) Option {
+	return func(c *config) {
+		if bytes <= 0 {
+			panic("via: WithMaxUpload must be positive")
+		}
+		c.maxUpload = bytes
+	}
 }

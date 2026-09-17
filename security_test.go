@@ -722,3 +722,40 @@ func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T
 		})
 	}
 }
+
+func TestWithMaxBody_refusesAnActionBodyOverTheCap(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithMaxBody(1024))
+	via.Mount(r, "/p", counter{count: &store{}})
+	srv := serve(t, r)
+
+	// Valid JSON, one byte over: an unparseable body would answer 400 before
+	// the reader ever passed the cap.
+	body := `{"a":"` + strings.Repeat("y", 1025-8) + `"}`
+	require.Len(t, body, 1025)
+	resp, _ := do(t, srv, http.MethodPost, "/p/_via/a/r/0", body)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestWithMaxUpload_refusesAMultipartBodyOverTheCap(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithMaxUpload(4096))
+	via.Mount(r, "/p", avatarPage{cap: &capture{}})
+	srv := serve(t, r)
+
+	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t,
+		srv.URL+"/p/_via/a/r/0", "big.bin", strings.Repeat("x", 4096))
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestWithMaxBody_panicsOnANonPositiveCap(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { via.NewRouter(via.WithMaxBody(0)) })
+}
+
+func TestWithMaxUpload_panicsOnANonPositiveCap(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { via.NewRouter(via.WithMaxUpload(-1)) })
+}

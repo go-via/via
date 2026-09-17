@@ -202,13 +202,13 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	}
 	// Installed before the guard, not inside decodeSignals: a guard that reads
 	// req.Body must not see an unbounded one just because it runs first.
-	capBody(w, req, mode)
+	m.capBody(w, req, mode)
 	base := concreteBase(m.patternBase, req, m.names)
 	guard, ok := m.runGuards(w, req, mode, false, base)
 	if !ok {
 		return
 	}
-	in, ok := decodeSignals(w, req, mode)
+	in, ok := m.decodeSignals(w, req, mode)
 	if !ok {
 		return
 	}
@@ -247,22 +247,22 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab, guard)
 }
 
-func capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
-	max := int64(maxActionBody)
+func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
+	max := m.cfg.maxBody
 	if mode == modeNative {
-		// A native submit is multipart, so the cap rises to maxUploadBytes;
-		// only maxActionBody of it stays in RAM, the rest spills to a temp
-		// file the caller removes.
-		max = maxUploadBytes
+		// A native submit is multipart, so the cap rises to the upload cap;
+		// only maxBody of it stays in RAM, the rest spills to a temp file the
+		// caller removes.
+		max = m.cfg.maxUpload
 	}
 	req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, max)
 }
 
 // decodeSignals decodes an action POST's body per mode. capBody must already
 // be installed on req.Body — every caller runs it first.
-func decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
+func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
-		if err := req.ParseMultipartForm(maxActionBody); err != nil {
+		if err := req.ParseMultipartForm(m.cfg.maxBody); err != nil {
 			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return nil, false
