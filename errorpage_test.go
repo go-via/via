@@ -30,6 +30,11 @@ type errMissing struct{}
 func (errMissing) OnInit(*via.Ctx) error { return via.ErrNotFound }
 func (errMissing) View() h.H             { return h.Div(h.Str("never")) }
 
+type errDenied struct{}
+
+func (errDenied) OnInit(*via.Ctx) error { return via.ErrForbidden }
+func (errDenied) View() h.H             { return h.Div(h.Str("never")) }
+
 type errBoom struct{}
 
 func (errBoom) View() h.H { panic("boom in View") }
@@ -86,6 +91,23 @@ func TestErrorPage_rendersOnErrNotFoundFromOnInit(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Contains(t, body, "<h1>sorry</h1>")
 	assert.Contains(t, body, "not found")
+}
+
+func TestErrorPage_rendersOnErrForbiddenFromOnInit(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(ctx *via.Ctx, e via.PageError) h.H {
+		got = e
+		return errPage(ctx, e)
+	}))
+	via.Mount(r, "/denied", errDenied{})
+	t.Cleanup(r.Close)
+
+	resp, body := errGet(t, r, "/denied")
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, body, "<h1>sorry</h1>")
+	assert.Equal(t, via.ReasonForbidden, got.Reason)
+	assert.ErrorIs(t, got.Err, via.ErrForbidden)
 }
 
 func TestErrorPage_rendersOnRenderPanic(t *testing.T) {

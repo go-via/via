@@ -53,8 +53,8 @@ var (
 	// one failure a reload actually fixes.
 	ErrStaleTab = errors.New("via: stale tab")
 
-	// ErrForbidden denies with a 403. Return it from a Guard for "you may not
-	// do this"; queue a Ctx.Redirect instead for "please sign in".
+	// ErrForbidden denies with a 403. Return it from a Guard or an OnInit for
+	// "you may not do this"; queue a Ctx.Redirect instead for "please sign in".
 	ErrForbidden = errors.New("via: forbidden")
 )
 

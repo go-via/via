@@ -123,9 +123,12 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	ctx.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
 	if oerr != nil {
 		noteErr(w, oerr)
-		if errors.Is(oerr, ErrNotFound) {
+		switch {
+		case errors.Is(oerr, ErrNotFound):
 			http.Error(w, "not found", http.StatusNotFound)
-		} else {
+		case errors.Is(oerr, ErrForbidden):
+			http.Error(w, "forbidden", http.StatusForbidden)
+		default:
 			log.Printf("via: OnInit failed: %q", oerr)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 		}
@@ -164,12 +167,15 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 // routes it through respond, which knows the transport.
 func answerReloadFailure(w http.ResponseWriter, err error) {
 	noteErr(w, err)
-	if errors.Is(err, ErrNotFound) {
+	switch {
+	case errors.Is(err, ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
-		return
+	case errors.Is(err, ErrForbidden):
+		http.Error(w, "forbidden", http.StatusForbidden)
+	default:
+		log.Printf("via: OnReload after an action failed: %q", err)
+		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
-	log.Printf("via: OnReload after an action failed: %q", err)
-	http.Error(w, "init failed", http.StatusInternalServerError)
 }
 
 // checkViewReceiver panics on a composition whose View has a VALUE receiver

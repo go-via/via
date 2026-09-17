@@ -9,9 +9,11 @@ import (
 )
 
 // Guard runs before OnInit on EVERY transport a mount answers — the page GET,
-// a plain action, a live action over an open stream, and the SSE connect —
-// unlike OnInit, which only runs on the first two and so cannot re-authorize
-// a live action after the session it was opened under changes.
+// a plain action, a live action over an open stream, and the SSE connect.
+// OnInit runs on all of those except the live action, so a Guard is the only
+// thing that re-authorizes one: a session revoked after connect still passes
+// OnInit (it never runs again on that stream) but is caught here on the next
+// click.
 //
 // The session it sees is writable (Session.Rotate, Session.Put), same as
 // OnInit's. There is no header setter: a live action's "response" may be an
