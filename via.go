@@ -51,6 +51,7 @@ import (
 	"maps"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,10 +90,11 @@ type instance struct {
 	slotPrefix string
 }
 
-// slotID is embedded first in Signal[T] so prebindSignals can stamp every
-// field-held signal's name through one pointer add, not a reflect per render.
+// slotID is embedded first in Signal[T] so prebindSignals can stamp it through
+// one pointer add without knowing T: no reflect on the render path.
 type slotID struct {
-	slot string // stable wire name
+	slot  string // stable wire name
+	bound *Ctx   // the pass whose dirty map ships the patch
 }
 
 func (*slotID) isViaSignal() {}
@@ -218,16 +220,19 @@ func lowerFirst(s string) string {
 	return string(s[0]+('a'-'A')) + s[1:]
 }
 
-// prebindSignals stamps every field-held Signal with its wire name before the
-// View runs, so Ref reads a real name wherever it is called and a Child's
-// by-value copy carries the child's prefix, not the parent's last binding.
+// prebindSignals stamps every field-held Signal with its wire name and this
+// render's Ctx before OnInit and the View run, so Ref reads a real name
+// wherever it is called, a Child's by-value copy carries the child's prefix
+// rather than the parent's last binding, and a Set on a signal the View never
+// renders still has a pass to ship its patch.
 func prebindSignals(c *Ctx, inst instance) {
 	if inst.sig == nil || inst.base == nil {
 		return
 	}
 	prefix := c.scopePrefix()
 	for _, f := range inst.sig.fields {
-		(*slotID)(unsafe.Add(inst.base, f.off)).slot = prefix + f.name
+		sid := (*slotID)(unsafe.Add(inst.base, f.off))
+		sid.slot, sid.bound = prefix+f.name, c
 	}
 }
 
@@ -323,6 +328,7 @@ type Ctx struct {
 	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
 	errPage     bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
+	viewRan     bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 }
@@ -963,12 +969,14 @@ func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 func renderRootWith(ctx *Ctx, v viewer) []byte {
 	declareSignals, only := ctx.declare, ctx.declareOnly
 	prebindSignals(ctx, ctx.unitV)
+	ctx.viewRan = true
 	rr := hcore.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
 	if declareSignals {
-		writeSignalsAttr(ctx.logger(), &b, ctx.order, ctx.initial, only, ctx.declareSeen)
+		order, initial := withWritten(ctx, only)
+		writeSignalsAttr(ctx.logger(), &b, order, initial, only, ctx.declareSeen)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())
@@ -976,6 +984,32 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	out := b.Bytes()
 	checkLiveNesting(ctx, false)
 	return out
+}
+
+// withWritten adds the slots an action wrote that no View in the tree declared.
+// A restricted declaration is filtered against what the render declared, so an
+// island signal nobody renders has no entry for the filter to find and its Set
+// would ship nothing. written is nil for a first paint, which declares all.
+func withWritten(c *Ctx, written map[string]any) ([]string, map[string]any) {
+	if len(written) == 0 {
+		return c.order, c.initial
+	}
+	declared := c.slotSet()
+	var extra []string
+	for slot := range written {
+		if !declared[slot] {
+			extra = append(extra, slot)
+		}
+	}
+	if extra == nil {
+		return c.order, c.initial
+	}
+	slices.Sort(extra) // map order would make the attribute differ between identical renders
+	initial := maps.Clone(c.initial)
+	for _, slot := range extra {
+		initial[slot] = written[slot]
+	}
+	return append(slices.Clone(c.order), extra...), initial
 }
 
 // checkLiveNesting enforces the two deferred-feature rules on the finished
@@ -1323,6 +1357,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 	bind.rev = rev
 	bind.unitV = pv
+	prebindSignals(bind, pv)
 	if runOnInit(pv.v, bind, w, req, m.sessions, true) != nil {
 		return
 	}

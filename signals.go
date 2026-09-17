@@ -138,10 +138,8 @@ func (r *revertSet) restore() {
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
 // doc for the goroutine model.
 type Signal[T any] struct {
-	slotID // MUST stay the first field: prebindSignals stamps the wire name through a pointer add at the field's offset
+	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
 	val    T
-	bound  *Ctx // stamped at bind; the pass whose dirty map ships the patch
-	warned bool // the never-rendered Set warning fired (once per signal)
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
@@ -170,33 +168,29 @@ func (s *Signal[T]) Ref() string {
 // client posted back for a Bind()ed signal on this request.
 func (s *Signal[T]) Get() T { return s.val }
 
-// Set assigns the value and records it dirty, which is what carries the change
-// to the client. Only the signals an action actually wrote are ever declared,
-// so a signal the user is mid-edit is never overwritten behind them: a live
-// action pushes a patch-signals frame whose element patch declares nothing, a
-// plain action's element patch carries a data-signals restricted to the dirty
-// slots.
+// Set assigns the value and declares the slot, which is what carries the change
+// to the client: a live action pushes a patch-signals frame, a plain action's
+// element patch carries a data-signals restricted to the slots it wrote. Only
+// the signals an action actually wrote are declared, so a signal the user is
+// mid-edit is never overwritten behind them.
 //
-// Contract: the change reaches the client only for a signal the View actually
-// renders (Bind or Display) — the wire name and the request binding are
-// assigned at render, so a Set on an unrendered signal updates server memory
-// and emits no patch. Bind or Display the signals an action mutates.
+// The View need not render the signal — Set is itself the declaration — so a
+// Set in OnInit seeds a client-side island that reads the slot and nothing
+// else, with no Bind or Display anywhere. Declaring is not hydrating: only Bind
+// makes a slot client-writable.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
-	if s.bound != nil && s.slot != "" {
-		s.bound.dirty[s.slot] = v
-		// A server write supersedes whatever the client posted for this slot, so
-		// it must survive the revert livePush does before the next render.
-		s.bound.rev.drop(s.slot)
+	if s.bound == nil || s.slot == "" {
 		return
 	}
-	// Silent, an unbound Set reads as "Set does nothing" — warn once per signal.
-	if !s.warned {
-		s.warned = true
-		// slog.Default(): no Router in scope.
-		slog.Default().Warn("via: Signal.Set on a signal the View never rendered — the value updates server " +
-			"memory but no patch reaches the client; Bind or Display the signal in the View")
+	s.bound.declareSignal(s.slot, v)
+	if !s.bound.viewRan {
+		return // a seed: the render about to run declares it, and dirtying it would evict the client's own value
 	}
+	s.bound.dirty[s.slot] = v
+	// A server write supersedes whatever the client posted for this slot, so it
+	// must survive the revert livePush does before the next render.
+	s.bound.rev.drop(s.slot)
 }
 
 // bind assigns the signal's wire name, hydrates it from the request when

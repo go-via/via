@@ -122,6 +122,7 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	if parent.doInit {
 		child.doInit = true
 		if !acted {
+			prebindSignals(child, inst)
 			initChild(child, inst.v)
 		}
 	}
@@ -177,6 +178,7 @@ func initChild(child *Ctx, v any) {
 // actions and signals bind into its own tables. Returns the inner HTML only.
 func renderChildInner(child *Ctx, v viewer) []byte {
 	prebindSignals(child, child.unitV)
+	child.viewRan = true
 	rr := hcore.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
 	return rr.Bytes()

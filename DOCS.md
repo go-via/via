@@ -291,6 +291,22 @@ an SSE frame on a connection the POST does not own. Anything that streams bytes
 — a file download, a CSV export — is a sibling `net/http` handler next to the
 via one.
 
+## Client-side islands
+
+via never generates or evaluates JavaScript. To hand a subtree to a chart or a
+map library: declare the script in `PageMeta`'s `Assets.Scripts`, put the
+container under `h.IgnoreMorph()` so a live patch leaves the subtree alone, and
+have the script react to a signal through `data-effect`.
+
+```go
+h.Div(h.ID("chart"), h.IgnoreMorph(), h.Data("effect", "drawChart($series)"))
+```
+
+Update it from Go with `sig.Set(…)`. A `Signal` reaches the client whether or
+not the `View` renders it, because `Set` is itself a declaration — so an
+island's signal needs no `Bind()` or `Display()` anywhere. Seed its first-paint
+value with a `Set` in `OnInit`.
+
 ## Security floor (built in)
 
 The action endpoint and rendered pages are hardened by default:
