@@ -937,16 +937,15 @@ as a re-read of the README rather than a diff.
   same connection (a double-click during login): before the connection
   binds it would have applied, but now it answers 403 "session mismatch"
   once, because it is indistinguishable from an attacker's request at
-  that point. This is deliberate, but it is a behaviour change.
+  that point. This is deliberate, but it is a behaviour change. Datastar
+  does not retry a 403, so the user sees one failed click.
 - A session minted from a `Tick`/`Listen` handler (as opposed to an action
   or `OnInit`) has no open response to carry a cookie, so it is created
-  and then orphaned until its TTL. In some configurations this is silent:
-  if the connection's `OnInit` ever calls `Session()` at all — including
-  a read-only `Get`, the pattern this doc recommends — the resulting
-  handle is cached with the connect response already attached, so a later
-  `Tick`/`Listen` `Put` writes its `Set-Cookie` onto that dead response
-  with no warning logged. Establish sessions in `OnInit` or an action
-  instead.
+  and then orphaned until its TTL. Via warns when this happens
+  ("no cookie can be set"), including when `OnInit` already called
+  `Session()` — a read-only `Get`, the pattern this doc recommends —
+  before the `Tick`/`Listen` `Put`. Establish sessions in `OnInit` or an
+  action instead.
 - A `Tick`/`Listen` handle keeps the session id it connected with, so once
   another request rotates that id away (a login in a plain action), every
   session write from that handle is dropped with a log for the rest of the
