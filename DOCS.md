@@ -454,6 +454,11 @@ it.
     once per request.
   - The one case the type walk cannot see is a Signal behind an `interface`
     field; that still panics on the first render that binds it.
+  - `SignalCS[T]` is the client-only sibling: its wire name is `_`-prefixed,
+    which Datastar's fetch filter drops, so it never reaches the server. It
+    starts at `T`'s zero value and has no `Set` or `Get`. Use it for UI-only
+    state — a panel open or closed, the active tab — and as the target of
+    hand-written client-side expressions.
 
 - **Live children + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live child with a per-tab SSE

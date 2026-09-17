@@ -575,3 +575,97 @@ func TestSignalRef_panicsOnASignalWithNoWireName(t *testing.T) {
 		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
 		func() { r.Sig.Ref() })
 }
+
+type csNested struct{ Open via.SignalCS[bool] }
+
+type csChild struct{ Open via.SignalCS[bool] }
+
+func (c *csChild) View() h.H { return h.Div(h.Input(c.Open.Bind())) }
+
+type csPage struct {
+	Open via.SignalCS[bool]
+	Chat csNested
+	Room csChild
+}
+
+func (p *csPage) View() h.H {
+	return h.Div(
+		h.Div(h.Data("show", p.Open.Ref())),
+		h.Input(p.Open.Bind()),
+		p.Open.Display(),
+		h.Div(h.Data("show", p.Chat.Open.Ref())),
+		via.Child(p.Room),
+	)
+}
+
+func TestSignalCS_wireNameLeadsWithTheUnderscoreAtEveryScope(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csPage{})).Get("/")
+
+	assert.Contains(t, body, `data-show="$_open"`)
+	assert.Contains(t, body, `data-show="$_chat_open"`, "a nested struct keeps the underscore in front")
+	assert.Contains(t, body, `data-bind="_room__open"`, "and so does a child scope")
+	assert.NotContains(t, body, `"chat_open"`)
+}
+
+func TestSignalCS_declaresItsZeroValueOnFirstPaint(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csPage{})).Get("/")
+
+	assert.Contains(t, body, `"_open":false`)
+	assert.Contains(t, body, `"_chat_open":false`, "a signal no View renders is still declared")
+}
+
+func TestSignalCS_bindAndDisplayShareTheWireName(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csPage{})).Get("/")
+
+	assert.Contains(t, body, `data-bind="_open"`)
+	assert.Contains(t, body, `<span data-text="$_open">false</span>`)
+}
+
+// csGated is the forgery shape: a client-only signal gates a branch, so an
+// inbound "_open" must reach nothing on the server.
+type csGated struct {
+	Open via.SignalCS[bool]
+	note string
+}
+
+func (g *csGated) Bump(ctx *via.Ctx) { g.note = "bumped" }
+func (g *csGated) View() h.H {
+	return h.Div(
+		h.P(h.ID("note"), h.Str(g.note)),
+		h.Div(h.Data("show", g.Open.Ref()), h.Str("panel")),
+		h.Button(via.On("click", g.Bump), h.Str("bump")),
+	)
+}
+
+func TestSignalCS_postedValueIsIgnoredWithoutError(t *testing.T) {
+	t.Parallel()
+	status, frag := vt.Serve(t, via.Handler(csGated{})).Action(0).Body(`{"_open":true}`).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, `<p id="note">bumped</p>`)
+	assert.NotContains(t, frag, `"_open":true`, "nothing on the server ever holds the posted value")
+}
+
+type boxedCS struct{ S *via.SignalCS[int] }
+
+func (b *boxedCS) View() h.H { return h.Div(b.S.Display()) }
+
+func TestSignalCS_behindAPointerFieldPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "holds a via.Signal behind a ptr", func() {
+		via.Handler(boxedCS{S: &via.SignalCS[int]{}})
+	})
+}
+
+func TestSignalCSRef_panicsOnASignalWithNoWireName(t *testing.T) {
+	t.Parallel()
+	b := &boxedCS{S: &via.SignalCS[int]{}}
+
+	assert.PanicsWithValue(t, "via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain "+
+		"field of the composition (through plain nested structs if you like), not one reached through a "+
+		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
+		func() { b.S.Ref() })
+}

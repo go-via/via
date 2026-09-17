@@ -101,19 +101,41 @@ func (*slotID) isViaSignal() {}
 
 var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
 
+// clientSignal is what SignalCS[T] satisfies and Signal[T] does not. csZero
+// carries T out of the generic type: SignalCS has no T-typed field, so reflect
+// alone cannot recover the zero value the slot is declared with.
+type clientSignal interface {
+	isViaSignalCS()
+	csZero() any
+}
+
+var signalCSMarker = reflect.TypeOf((*clientSignal)(nil)).Elem()
+
 var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 
 // typeSignals is one composition type's signal table: every Signal-typed
 // field's byte offset paired with the wire name its Go field path gives it.
 type typeSignals struct {
 	fields []signalField
-	byOff  map[uintptr]string
+	byOff  map[uintptr]signalField
 	names  map[string]bool // every minted slot name, for the child-prefix collision check
 }
 
 type signalField struct {
 	off  uintptr
 	name string
+	cs   bool
+	zero any // cs only; resolved on the type walk so the render never reflects
+}
+
+// wire is the slot name: the "_" goes ahead of the scope prefix, because
+// Datastar's fetch filter excludes /(^|\.)_/ and only a leading underscore
+// keeps a nested or child-scoped signal off the POST too.
+func (f signalField) wire(prefix string) string {
+	if f.cs {
+		return "_" + prefix + f.name
+	}
+	return prefix + f.name
 }
 
 var typeSignalCache sync.Map // reflect.Type -> *typeSignals
@@ -128,7 +150,7 @@ func signalsOf(t reflect.Type) *typeSignals {
 	if v, ok := typeSignalCache.Load(t); ok {
 		return v.(*typeSignals)
 	}
-	ts := &typeSignals{byOff: map[uintptr]string{}}
+	ts := &typeSignals{byOff: map[uintptr]signalField{}}
 	minted := map[string]bool{}
 	var walk func(t reflect.Type, base uintptr, prefix string, depth int)
 	walk = func(t reflect.Type, base uintptr, prefix string, depth int) {
@@ -139,10 +161,16 @@ func signalsOf(t reflect.Type) *typeSignals {
 			f := t.Field(i)
 			name, off := prefix+lowerFirst(f.Name), base+f.Offset
 			if reflect.PointerTo(f.Type).Implements(signalMarker) {
-				checkSlotName(t, f.Name, name, minted)
-				minted[name] = true
-				ts.fields = append(ts.fields, signalField{off: off, name: name})
-				ts.byOff[off] = name
+				sf := signalField{off: off, name: name}
+				if reflect.PointerTo(f.Type).Implements(signalCSMarker) {
+					sf.cs = true
+					sf.zero = reflect.New(f.Type).Interface().(clientSignal).csZero()
+				}
+				slot := sf.wire("")
+				checkSlotName(t, f.Name, slot, minted)
+				minted[slot] = true
+				ts.fields = append(ts.fields, sf)
+				ts.byOff[off] = sf
 				continue
 			}
 			if f.Type.Kind() == reflect.Struct {
@@ -232,7 +260,11 @@ func prebindSignals(c *Ctx, inst instance) {
 	prefix := c.scopePrefix()
 	for _, f := range inst.sig.fields {
 		sid := (*slotID)(unsafe.Add(inst.base, f.off))
-		sid.slot, sid.bound = prefix+f.name, c
+		sid.slot, sid.bound = f.wire(prefix), c
+		if f.cs {
+			// No Set will ever declare it, and a data-show may be its only reader.
+			c.declareSignal(sid.slot, f.zero)
+		}
 	}
 }
 
@@ -441,8 +473,8 @@ func ctxOf(b hcore.Binder) *Ctx {
 func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 	if base := c.unitV.base; base != nil && field != nil && c.unitV.sig != nil {
 		if off := uintptr(field) - uintptr(base); off < c.unitV.size {
-			if name, ok := c.unitV.sig.byOff[off]; ok {
-				return c.scopePrefix() + name
+			if f, ok := c.unitV.sig.byOff[off]; ok {
+				return f.wire(c.scopePrefix())
 			}
 		}
 	}

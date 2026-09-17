@@ -25,6 +25,10 @@
   `OnInit` — and the "Set on a signal the View never rendered" warning is gone.
   A signal nothing writes or renders still ships nothing, and nothing becomes
   client-writable: hydration is still `Bind()`-only.
+- **`SignalCS[T]` is a signal the server never sees.** `_`-prefixed on the
+  wire so Datastar never posts it, declared at `T`'s zero value at first paint,
+  with `Ref`, `Bind` and `Display` and no `Set` or `Get`. An inbound value for
+  its slot is ignored on every path.
 - `h.IgnoreMorph()` renders a bare `data-ignore-morph`, for a container whose
   subtree JS owns.
 
