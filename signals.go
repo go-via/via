@@ -262,3 +262,62 @@ func (s *Signal[T]) Bind() h.Attr {
 func textHandle(v any) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }
+
+// SignalCS is a client-only signal: the server never reads or writes it. It
+// starts at T's zero value and its wire name is "_"-prefixed, which Datastar's
+// fetch filter drops from every POST. There is no Set and no Get; a value the
+// server needs to know is a [Signal].
+type SignalCS[T any] struct {
+	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
+}
+
+func (*SignalCS[T]) isViaSignalCS() {}
+
+func (*SignalCS[T]) csZero() any { var z T; return z }
+
+// Ref returns the signal's Datastar expression — "$_open" for a field Open.
+// Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
+// array or map field, which has no field name to be named by.
+func (s *SignalCS[T]) Ref() string {
+	if s.slot == "" {
+		panic("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
+			"composition (through plain nested structs if you like), not one reached through a pointer, " +
+			"slice, array or map field; \"$\" alone is not a Datastar expression")
+	}
+	return "$" + s.slot
+}
+
+func (s *SignalCS[T]) bind(r *hcore.Renderer) {
+	b := r.Binder()
+	c := ctxOf(b)
+	if c == nil {
+		panic("via: a SignalCS was rendered outside a via render")
+	}
+	// Re-resolved per bind for the same reason Signal.bind does it: via.Child
+	// copies the child by value, so a slot stamped under the parent's prefix
+	// must be re-minted under the child's.
+	s.slot = c.signalSlot(unsafe.Pointer(s))
+	// No hydrator: an inbound value for an "_" name is never an echo of one via
+	// sent, so accepting it would only admit a forgery.
+	var zero T
+	b.DeclareSignal(s.slot, zero)
+}
+
+// Display renders the signal as a Datastar text-bound span, showing T's zero
+// value until the client changes it.
+func (s *SignalCS[T]) Display() h.H {
+	return hcore.Dyn(func(r *hcore.Renderer) {
+		s.bind(r)
+		var zero T
+		r.Render(h.Span(h.Data("text", "$"+s.slot), textHandle(zero)))
+	})
+}
+
+// Bind returns a two-way data-bind="<slot>" attribute for an input. The value
+// stays in the browser: unlike [Signal.Bind] it makes nothing server-readable.
+func (s *SignalCS[T]) Bind() h.Attr {
+	return hcore.DynAttr(func(r *hcore.Renderer) {
+		s.bind(r)
+		r.Render(h.Data("bind", s.slot))
+	})
+}

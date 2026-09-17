@@ -103,11 +103,12 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
 	// reflect is admitted in exactly three files and only on type-setup paths
 	// that run once per composition type (Mount/Child) and are memoized: the
-	// action-id func name, the field-name signal table, the child's parent
-	// field lookup, and the hook-shape check. Nothing here may run per render — that is the invariant
-	// this whitelist exists to keep honest.
+	// action-id func name, the field-name signal table (including a SignalCS
+	// field's zero value), the child's parent field lookup, and the hook-shape
+	// check. Nothing here may run per render — that is the invariant this
+	// whitelist exists to keep honest.
 	allowed := map[string][]string{
-		"via.go": {"reflect.Array", "reflect.Map", "reflect.Pointer", "reflect.PointerTo",
+		"via.go": {"reflect.Array", "reflect.Map", "reflect.New", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
 			"reflect.TypeOf", "reflect.ValueOf"},
 		"child.go": {"reflect.TypeOf"},
