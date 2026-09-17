@@ -1213,8 +1213,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	// A POST so the connect can carry the page's signals as a body.
-	capBody(w, req, modeDatastar)
-	connectSig, ok := decodeSignals(w, req, modeDatastar)
+	m.capBody(w, req, modeDatastar)
+	connectSig, ok := m.decodeSignals(w, req, modeDatastar)
 	if !ok {
 		return
 	}

@@ -631,6 +631,11 @@ cap returns 503). The cap is router-wide rather than per IP, so an anonymous
 client can open enough connections on its own to fill the cap and 503 everyone
 else. A per-IP cap is deferred past v0.8.
 
+**Body caps.** `WithMaxBody(bytes)` caps an action POST body and how much of a
+native form submit stays in RAM (default 1 MiB); `WithMaxUpload(bytes)` caps
+that submit's whole multipart body (default 8 MiB). Over either, the request
+answers 413. Both panic on a value of 0 or less.
+
 **Deferred** (correctly out of 1.0 scope):
 
 - A keyed cursor for the narrow remaining dynamic-shape cases — per-row

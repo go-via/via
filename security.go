@@ -7,12 +7,12 @@ import (
 )
 
 // maxActionBody bounds an action body against memory exhaustion; 1 MiB is far
-// above any legitimate signal payload.
+// above any legitimate signal payload. The default for WithMaxBody.
 const maxActionBody = 1 << 20
 
 // maxUploadBytes caps a PostForm's multipart body — every native form, not just
 // ones with a file input, since the parser can't tell in advance. Only
-// maxActionBody of it is kept in RAM regardless.
+// maxActionBody of it is kept in RAM regardless. The default for WithMaxUpload.
 const maxUploadBytes = 8 << 20
 
 // originAllowed is the "origin floor": the check that a state-changing request
