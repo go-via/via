@@ -204,7 +204,8 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// req.Body must not see an unbounded one just because it runs first.
 	capBody(w, req, mode)
 	base := concreteBase(m.patternBase, req, m.names)
-	if !m.runGuards(w, req, mode, false, base) {
+	guard, ok := m.runGuards(w, req, mode, false, base)
+	if !ok {
 		return
 	}
 	in, ok := decodeSignals(w, req, mode)
@@ -243,7 +244,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
+	m.dispatchPlain(w, req, mode, child, act, in, base, tab, guard)
 }
 
 func capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
@@ -385,8 +386,11 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 			// A native submit replaces the whole document, so this must be the
 			// page a brand-new connection will hold — a fresh instance with
 			// OnInit run, not a snapshot of the dying connection's live tree
-			// (which the reconnect is about to reseed anyway).
-			m.writePage(w, req, m.newInst(), base, nil)
+			// (which the reconnect is about to reseed anyway). No guard Ctx to
+			// reuse: the action just ran and may have mutated the session, so
+			// this OnInit must resolve it fresh, not off the pre-action guard
+			// read.
+			m.writePage(w, req, m.newInst(), base, nil, nil)
 		}, nil)
 		return
 	}
@@ -542,19 +546,28 @@ func noStream(mode actionMode, tab string) string {
 //
 // from non-nil already ran OnInit for this request; it carries that wiring down
 // (inheritRequestScope) instead of running OnInit twice.
-func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx) {
-	ctx, body := inst.renderPage(w, req, m, base, from)
+//
+// guard is the Ctx runGuards resolved for this same request, or nil — see
+// runGuards. Ignored when from is non-nil, since that path skips OnInit
+// entirely and never needs a session to share with it.
+func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from, guard *Ctx) {
+	ctx, body := inst.renderPage(w, req, m, base, from, guard)
 	if ctx == nil {
 		return
 	}
 	writeHTMLPage(w, m, body, base, len(liveUnits(ctx)) > 0, inst.v)
 }
 
-func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
+func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from, guard *Ctx) (*Ctx, []byte) {
 	if from != nil {
 		return renderRootBase(inst, true, base, nil, nil, from, nil)
 	}
-	ctx := newRootCtx(true, base, nil)
+	ctx := guard
+	if ctx == nil {
+		ctx = newRootCtx(true, base, nil)
+	} else {
+		ctx.declare, ctx.declareOnly = true, nil
+	}
 	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
 		return nil, nil
@@ -564,7 +577,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 
 // dispatchPlain binds a fresh instance, runs OnInit, runs the acted-on unit's
 // action, then answers per mode.
-func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
+func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string, guard *Ctx) {
 	inst := m.newInst()
 	// Discovery is two-phase. auth is the render the client did not influence:
 	// it alone decides what is dispatchable (see OnArg). Then the body is
@@ -573,8 +586,13 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// inside it hydrated too — without this their posted values were silently
 	// dropped. The action must be present in BOTH, so the executed render is an
 	// intersection with auth, never a superset.
-	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
-	auth.unitV = inst                                // so auth.unit(rootAddr)'s liveness reads the same way a child's does
+	auth := guard
+	if auth == nil {
+		auth = newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
+	} else {
+		auth.declare, auth.declareOnly = true, map[string]any{}
+	}
+	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	if runOnInit(inst.v, auth, w, req, m.sessions) != nil {
 		return
 	}
@@ -659,7 +677,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 
 	if mode == modeNative {
 		respond(w, req, mode, u.redirect, func() {
-			m.writePage(w, req, inst, base, u)
+			m.writePage(w, req, inst, base, u, nil)
 		}, nil)
 		return
 	}

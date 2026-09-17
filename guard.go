@@ -41,16 +41,20 @@ func WithGuard(g ...Guard) Option {
 }
 
 // runGuards reports whether the caller may proceed; it has already answered w
-// when it returns false.
+// when it returns false. When at least one guard ran, the returned *Ctx
+// carries the session it resolved, and the caller must feed it to runOnInit
+// instead of resolving a second one — otherwise a guard's Session.Put is
+// invisible to OnInit, and a guard-Put plus an OnInit-Put mint two cookies for
+// one request. nil means no guard ran; the caller resolves its own as before.
 //
 // sse distinguishes the SSE connect from every other transport: a Redirect
 // queued there would otherwise 303 the connect itself, and fetch follows a
 // redirect by delivering the target page's HTML as the SSE body (see
 // reconnect.go) — so a connect denial answers a plain 403 instead, which the
 // client's existing reconnect error arm already turns into a banner.
-func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionMode, sse bool, base string) bool {
+func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionMode, sse bool, base string) (*Ctx, bool) {
 	if len(m.guards) == 0 {
-		return true
+		return nil, true
 	}
 	ctx := newRootCtx(false, base, nil)
 	ctx.req = req
@@ -72,7 +76,7 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 				log.Printf("via: guard failed: %q", err)
 				http.Error(w, "guard failed", http.StatusInternalServerError)
 			}
-			return false
+			return nil, false
 		}
 		if ctx.redirect == "" {
 			continue
@@ -80,14 +84,14 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 		if !hcore.SafeURL(ctx.redirect) {
 			log.Printf("via: unsafe guard redirect %q dropped", ctx.redirect)
 			http.Error(w, "guard failed", http.StatusInternalServerError)
-			return false
+			return nil, false
 		}
 		if sse {
 			http.Error(w, "forbidden", http.StatusForbidden)
-			return false
+			return nil, false
 		}
 		respond(w, req, mode, ctx.redirect, nil, nil)
-		return false
+		return nil, false
 	}
-	return true
+	return ctx, true
 }

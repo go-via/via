@@ -1212,7 +1212,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	base := concreteBase(m.patternBase, req, m.names)
 	// Before the liveCount.Add below: a denied connect must never burn a
 	// WithMaxSSEConn slot.
-	if !m.runGuards(w, req, modeDatastar, true, base) {
+	guard, ok := m.runGuards(w, req, modeDatastar, true, base)
+	if !ok {
 		return
 	}
 	// Increment-then-check so the gauge can't be raced past the limit.
@@ -1303,7 +1304,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// the DISPLAY render of every push instead (livePush) — which is the only
 	// place it was ever visible, since connect frames no elements of its own.
 	rev := newRevertSet()
-	bind := newRootCtx(false, base, nil)
+	bind := guard
+	if bind == nil {
+		bind = newRootCtx(false, base, nil)
+	}
 	bind.rev = rev
 	bind.unitV = pv
 	if runOnInit(pv.v, bind, w, req, m.sessions) != nil {
