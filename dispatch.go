@@ -568,6 +568,9 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 		ctx.declare = true
 	}
 	ctx.unitV = inst // the root is a unit like any child, when it is live
+	// Before OnInit, not just before the View: seeding an island with Set is
+	// what OnInit is for, and a Set with no slot and no pass goes nowhere.
+	prebindSignals(ctx, inst)
 	if runOnInit(inst.v, ctx, w, req, m.sessions, false) != nil {
 		return nil, nil
 	}
@@ -592,6 +595,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		auth.declare, auth.declareOnly = true, map[string]any{}
 	}
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
+	prebindSignals(auth, inst)
 	if runOnInit(inst.v, auth, w, req, m.sessions, false) != nil {
 		return
 	}
@@ -809,7 +813,8 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 	}
 	var buf bytes.Buffer
 	buf.WriteString(`<div id="via-i` + u.childKey + `"`)
-	writeSignalsAttr(m.cfg.log, &buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
+	order, initial := withWritten(afterCtx, u.dirty)
+	writeSignalsAttr(m.cfg.log, &buf, order, initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)
 	buf.WriteString(`</div>`)

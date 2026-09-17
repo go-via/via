@@ -193,3 +193,9 @@ func PlaysInline(on bool) Attr { return hcore.BoolAttr("playsinline", on) }
 
 // Reversed numbers an ordered list descending when on.
 func Reversed(on bool) Attr { return hcore.BoolAttr("reversed", on) }
+
+// IgnoreMorph renders a bare data-ignore-morph. Datastar skips morphing a node
+// only when the old and the new one both carry it, so put it on a container
+// whose subtree some JS owns (a chart canvas, a map) and a live patch will
+// leave that subtree alone.
+func IgnoreMorph() Attr { return hcore.BoolAttr("data-ignore-morph", true) }

@@ -19,6 +19,15 @@
   denies by returning `via.ErrForbidden` (403, `via.ReasonForbidden`) or by
   queuing `ctx.Redirect`, the same vocabulary `OnInit` uses.
 
+- **A `Signal` reaches the client whether the `View` renders it or not.** `Set`
+  declares the slot, so a JS island (a chart, a map) can be fed from Go with no
+  `Bind()` or `Display()` anywhere — seed its first-paint value with a `Set` in
+  `OnInit` — and the "Set on a signal the View never rendered" warning is gone.
+  A signal nothing writes or renders still ships nothing, and nothing becomes
+  client-writable: hydration is still `Bind()`-only.
+- `h.IgnoreMorph()` renders a bare `data-ignore-morph`, for a container whose
+  subtree JS owns.
+
 ## v0.8.0 — the v2 core goes mainline
 
 v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
@@ -814,8 +823,6 @@ as a re-read of the README rather than a diff.
   single goroutine, and every net/http goroutine dispatched behind it, sat
   parked. The action now answers as soon as it has run; the push ships as a
   later, independent unit on the same connection.
-- Signal warnings: `Set` on a signal the View never rendered warns once
-  instead of silently doing nothing.
 - Session-cookie signature mismatch (two apps clobbering one cookie name)
   logs one loud diagnostic instead of silently resetting sessions.
 - Redirect godoc claimed a CSP nonce; the script is hash-admitted and works

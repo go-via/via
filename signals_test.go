@@ -1,9 +1,7 @@
 package via_test
 
 import (
-	"bytes"
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -144,19 +142,87 @@ func TestSignal_bareSetBeforeRenderIsSafe(t *testing.T) {
 	assert.Equal(t, "hello", s.Get())
 }
 
-func TestSignal_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
-	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+// island is the JS-island shape: Series is never rendered by the View, which
+// only puts down a container some script owns. beat makes the unit live.
+type island struct {
+	Series via.Signal[[]int]
+	beat   via.State[int]
+}
 
-	var s via.Signal[int]
-	s.Set(1)
-	s.Set(2)
-	assert.Equal(t, 1, strings.Count(buf.String(), "never rendered"),
-		"exactly one warning per unrendered signal")
-	assert.Equal(t, 2, s.Get(), "the value still updates server memory")
+func (i *island) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}) }
+func (i *island) View() h.H {
+	return h.Div(
+		i.beat.Display(),
+		h.Div(h.ID("chart"), h.IgnoreMorph()),
+		h.Button(via.On("click", i.Load), h.Str("load")),
+	)
+}
+
+// seededIsland seeds its island from OnInit. Spare is touched by nothing.
+type seededIsland struct {
+	Series via.Signal[[]int]
+	Spare  via.Signal[int]
+}
+
+func (i *seededIsland) OnInit(ctx *via.Ctx) error { i.Series.Set([]int{1, 2, 3}); return nil }
+func (i *seededIsland) View() h.H                 { return h.Div(h.ID("chart"), h.IgnoreMorph()) }
+
+// plainIsland is island without the liveness. n is rendered so the response
+// differs from the pre-action render and a patch is returned, not a 204.
+type plainIsland struct {
+	Series via.Signal[[]int]
+	n      int
+}
+
+func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}); i.n++ }
+func (i *plainIsland) View() h.H {
+	return h.Div(
+		h.Str(strings.Repeat("x", i.n)),
+		h.Div(h.ID("chart"), h.IgnoreMorph()),
+		h.Button(via.On("click", i.Load), h.Str("load")),
+	)
+}
+
+type islandHost struct{ Panel seededIsland }
+
+func (p *islandHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+
+func TestSignal_setInOnInitReachesTheDocumentUnrendered(t *testing.T) {
+	t.Parallel()
+	_, page := vt.Serve(t, via.Handler(seededIsland{})).Get("/")
+	assert.Contains(t, page, `"series":[1,2,3]`, "a Set in OnInit declares the slot, rendered or not")
+	assert.NotContains(t, page, `"spare"`, "a signal nobody Set or rendered stays off the wire")
+	assert.Contains(t, page, `<div id="chart" data-ignore-morph>`, "the island container keeps its subtree off the morph")
+}
+
+func TestChildSignal_setInOnInitReachesTheDocumentUnderTheChildPrefix(t *testing.T) {
+	t.Parallel()
+	_, page := vt.Serve(t, via.Handler(islandHost{})).Get("/")
+	assert.Contains(t, page, `"panel__series":[1,2,3]`, "the child's seed carries the child's prefix")
+	assert.NotContains(t, page, `"panel__spare"`, "a signal nobody Set or rendered stays off the wire")
+}
+
+func TestPlainSignal_setOnANeverRenderedSignalRidesTheActionPatch(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(plainIsland{}))
+	_, page := app.Get("/")
+	assert.NotContains(t, page, `"series"`, "nothing has written it yet")
+
+	_, frag := app.Action(0).Fire()
+	assert.Contains(t, frag, `"series":[1,2,3]`, "the action's Set must ride the patch with no Bind or Display anywhere")
+}
+
+func TestLiveSignal_setOnANeverRenderedSignalPatchesTheClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(island{}))
+		conn := app.Connect()
+
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		assert.Contains(t, conn.Await(`"series"`), "[1,2,3]",
+			"Set must reach the client with no Bind or Display anywhere")
+	})
 }
 
 // twoSignals writes one signal and leaves the other alone — the second stands
