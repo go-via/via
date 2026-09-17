@@ -88,7 +88,9 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	// headers and orphaned the first. Resolving alone reads the cookie and
 	// never writes one (only Session.ensure mints), so this cannot create a
 	// session for a request that would not otherwise touch one.
-	ctx.Session()
+	if storeDown(w, ctx) {
+		return ErrStoreDown
+	}
 	ic, ok := v.(Initer)
 	if !ok {
 		return nil

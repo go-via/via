@@ -483,9 +483,12 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 	// this test is about.
 	app.Get("/")
 	conn := app.Connect()
+	// The action URL is read off a rendered page, so it has to be taken while
+	// the store still answers — a GET during the outage is refused as well.
+	action := app.URL() + conn.ActionURL("r", 0)
 	store.down.Store(true)
 
-	resp, body := nativePost(t, app.Client(), app.URL()+conn.ActionURL("r", 0),
+	resp, body := nativePost(t, app.Client(), action,
 		map[string]string{"_viatab": conn.TabID()})
 
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
