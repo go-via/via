@@ -46,13 +46,12 @@ const (
 //     TTL is left, so a store never has to touch expiry on Load.
 //
 // Every method may be called concurrently, and from a request goroutine — honour
-// ctx. An error is logged and, with one exception, never fails the request: a
-// failed Load is treated as "the store could not answer", which is NOT "no
-// session" — via refuses to mint a replacement over a cookie the browser
-// already holds, and drops the write instead. The exception is
-// [Session.Rotate]: if the old id can be neither deleted nor overwritten with
-// an expired blob, the pre-rotation id would stay valid, so via panics and the
-// request answers 500 rather than reporting a rotation that did not happen.
+// ctx. A failed Load answers every transport with 503 and [ErrStoreDown]
+// rather than serving the request as anonymous. A failed Save or Delete is
+// logged and the write dropped. [Session.Rotate] is the exception: if the old
+// id can be neither deleted nor overwritten with an expired blob, via panics
+// and the request answers 500 rather than reporting a rotation that did not
+// happen.
 //
 // Implement [VersionedSessionStore] as well if the backend can do a conditional
 // write; without it, two requests writing the same session at the same instant
@@ -808,6 +807,17 @@ func (c *Ctx) Session() *Session {
 // Renaming or moving T retires the values already stored under it, and two
 // same-named types in same-named packages would share a key.
 func sessionKey[T any]() string { return fmt.Sprintf("%T", (*T)(nil)) }
+
+// storeDown answers 503 when the store could not be read; "could not answer" is
+// not "anonymous".
+func storeDown(w http.ResponseWriter, ctx *Ctx) bool {
+	if !ctx.Session().down {
+		return false
+	}
+	noteErr(w, ErrStoreDown)
+	http.Error(w, "session store unavailable", http.StatusServiceUnavailable)
+	return true
+}
 
 // Put stores a typed value in the session, keyed by its type — the
 // one-per-session value like the logged-in user. The first Put issues the

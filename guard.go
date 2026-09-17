@@ -59,7 +59,9 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 	// Eager, like runOnInit: a nil session handle here would let each guard
 	// (and OnInit right after it) resolve its own, minting and Set-Cookie-ing
 	// independently instead of sharing the one this request settles on.
-	ctx.Session()
+	if storeDown(w, ctx) {
+		return nil, false
+	}
 	for _, g := range m.guards {
 		if err := g(ctx); err != nil {
 			noteErr(w, err)

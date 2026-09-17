@@ -1690,3 +1690,57 @@ func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 	assert.Contains(t, logs.String(), "session write dropped — this handle's session id was already retired",
 		"the second write through a retired handle was dropped in silence")
 }
+
+// A store that could not answer is not "no session": the browser may well hold
+// a valid cookie. Serving the page as anonymous shows a signed-in user the
+// signed-out page, and a plain action then runs an unauthorized handler — so
+// every transport refuses with 503, as the SSE connect and a live action
+// already do.
+func TestSession_refusesAPageGetWhileTheStoreIsDown(t *testing.T) {
+	t.Parallel()
+	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
+	base := sessionServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	code, _ := fireAction(t, c, base, 0)
+	require.Equal(t, http.StatusNoContent, code, "precondition: a healthy sign-in establishes the cookie")
+
+	store.mu.Lock()
+	store.down = true
+	store.mu.Unlock()
+
+	assert.Equal(t, http.StatusServiceUnavailable, getPage(t, c, base).StatusCode,
+		"a page GET during a store outage must not render the signed-out page to a signed-in browser")
+}
+
+func TestSession_refusesAPlainActionWhileTheStoreIsDown(t *testing.T) {
+	t.Parallel()
+	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
+	base := sessionServer(t, via.WithSessionStore(store))
+	c := jarClient(t)
+
+	code, _ := fireAction(t, c, base, 0)
+	require.Equal(t, http.StatusNoContent, code, "precondition: a healthy sign-in establishes the cookie")
+
+	// The action URL is read off a rendered page, so it has to be taken while
+	// the store still answers — the GET would otherwise 503 first.
+	path := actionPath(t, c, base, "r", 1)
+
+	store.mu.Lock()
+	store.down = true
+	store.mu.Unlock()
+
+	req, err := http.NewRequest(http.MethodPost, base+path, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"a plain action during a store outage must not run against a session read as empty")
+	assert.Contains(t, string(body), "session store unavailable")
+}
