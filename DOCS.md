@@ -384,12 +384,12 @@ The action endpoint and rendered pages are hardened by default:
   `Guard` or from `OnInit`, because `fetch` follows a 303 and would deliver
   the target page's HTML as the stream body.
 
-  A guard denial does not tear down an already-open stream: `Tick` and
-  `Listen` keep pushing until the tab next acts and is denied, closes, or the
-  router shuts down. The session a `Guard` sees is writable, but there is no
-  header setter — a live action's answer may be an SSE frame on a connection
-  the guard did not open, so a response header belongs in a
-  `func(http.Handler) http.Handler` wrapping the `*Router`.
+  A guard gates requests, not open streams. A guard denial does not tear down
+  an already-open stream: `Tick` and `Listen` keep pushing until the tab next
+  acts and is denied, closes, or the router shuts down. The session a `Guard`
+  sees is writable, but there is no header setter — a live action's answer may
+  be an SSE frame on a connection the guard did not open, so a response header
+  belongs in a `func(http.Handler) http.Handler` wrapping the `*Router`.
 
 ## Shutdown
 

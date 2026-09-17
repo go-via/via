@@ -15,6 +15,10 @@ import (
 // passes OnInit (it never runs again on that stream) but is caught here on the
 // next click.
 //
+// A guard gates requests, not open streams: a session denied after connect
+// keeps receiving Tick and Listen pushes on the stream it already holds until
+// the next request from that tab is denied or the stream closes.
+//
 // The session it sees is writable (Session.Rotate, Session.Put), same as
 // OnInit's. There is no header setter: a live action's "response" may be an
 // SSE frame on a connection this call did not open (see Ctx.Request), so a
