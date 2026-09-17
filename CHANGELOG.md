@@ -11,12 +11,11 @@
 ### New
 
 - **`Guard` is back**, with a different contract than v0.7's: `type Guard
-  func(*Ctx) error`, `via.Protect(g ...Guard) MountOption` per mount, and
-  `via.WithGuard(g ...Guard) Option` router-wide. It runs before `OnInit` on
-  all four transports a mount answers — the page GET, a plain action, a live
-  action over an open stream, and the SSE connect — where `OnInit` runs only
-  on the first two, so it is what re-authorizes a live action after the
-  session it was opened under changes. It denies by
+  func(*Ctx) error`, `via.Protect(g ...Guard) MountOption` per mount. It runs
+  before `OnInit` on all four transports a mount answers — the page GET, a
+  plain action, a live action over an open stream, and the SSE connect —
+  where `OnInit` runs only on the first two, so it is what re-authorizes a
+  live action after the session it was opened under changes. It denies by
   returning `via.ErrForbidden` (403, `via.ReasonForbidden`) or by queuing
   `ctx.Redirect`, the same vocabulary `OnInit` uses.
 

@@ -25,19 +25,9 @@ import (
 // navigating instead. Either one stops the chain.
 type Guard func(*Ctx) error
 
-// Protect adds guards to one Mount, run after any router-wide WithGuard chain.
-// A mount may only narrow a router's policy, never widen it, so there is no
-// way to exempt a mount from a router-wide guard.
+// Protect adds guards to one Mount, run in order before OnInit.
 func Protect(g ...Guard) MountOption {
 	return func(mc *mountConfig) { mc.guards = append(mc.guards, g...) }
-}
-
-// WithGuard adds guards that run on every mount of this Router, before any
-// Protect the mount adds of its own. Applied once per Mount, never inside
-// Router.ServeHTTP — a router-wide check there would also gate the datastar
-// asset route and any sibling handler registered next to the Router.
-func WithGuard(g ...Guard) Option {
-	return func(c *config) { c.guards = append(c.guards, g...) }
 }
 
 // runGuards reports whether the caller may proceed; it has already answered w
