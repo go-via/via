@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"html"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -300,7 +299,7 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.errPageWarn.Do(func() {
-				log.Printf("via: the WithErrorPage handler panicked (%v) — falling back to via's plain-text errors", rec)
+				r.cfg.log.Error("via: the WithErrorPage handler panicked — falling back to via's plain-text errors", "err", rec)
 			})
 			body, ok = nil, false
 		}
@@ -312,7 +311,8 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 	node := r.cfg.errorPage(ctx, pe)
 	if node == nil {
 		r.errPageWarn.Do(func() {
-			log.Printf("via: the WithErrorPage handler returned nil for %d %s — falling back to via's plain-text errors", pe.Status, pe.Reason)
+			r.cfg.log.Warn("via: the WithErrorPage handler returned nil — falling back to via's plain-text errors",
+				"status", pe.Status, "reason", pe.Reason)
 		})
 		return nil, false
 	}

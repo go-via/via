@@ -608,6 +608,11 @@ so it never carries a mount's per-page assets and cannot widen one's policy —
 and a handler that panics or returns nil falls back to the plain text via would
 have sent, logged once. See `example/forum`.
 
+**Logging.** `WithLogger(l)` routes via's own diagnostics — failed hooks,
+session-store errors, dropped writes, recovered panics — to an `*slog.Logger`;
+default is `slog.Default()`. The `h` package and `via/topic` have no Router to
+reach and always log to `slog.Default()`.
+
 **Action URLs address a handler, not a render position.** `child` is `r` for the
 page root and the acting child's key otherwise, and `id` in
 `/_via/a/{child}/{id}` is a hash of the handler method's own Go name, so it is

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -117,13 +117,13 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(reqCtx context.Context, label string, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
+func runStream(log *slog.Logger, reqCtx context.Context, label string, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
 		for _, child := range children {
 			for _, d := range child.disposers {
 				// runPushItem, not a bare call: a disposer is user code, and one
 				// panicking must not skip the rest and leak what they release.
-				runPushItem(label, d)
+				runPushItem(log, label, d)
 			}
 		}
 	}()
@@ -138,7 +138,7 @@ func runStream(reqCtx context.Context, label string, children []*Ctx, listeners 
 	sweep := func() {
 		for _, l := range listeners {
 			if work := l.poll(); work != nil {
-				runPushItem(label, work)
+				runPushItem(log, label, work)
 			}
 		}
 	}
@@ -149,11 +149,11 @@ func runStream(reqCtx context.Context, label string, children []*Ctx, listeners 
 		case <-reqCtx.Done():
 			return
 		case fn := <-pushq:
-			runPushItem(label, fn)
+			runPushItem(log, label, fn)
 		case <-wake:
 			sweep()
 		case <-beat.C:
-			runPushItem(label, keepalive)
+			runPushItem(log, label, keepalive)
 		}
 	}
 }
@@ -164,10 +164,10 @@ func runStream(reqCtx context.Context, label string, children []*Ctx, listeners 
 // silently after a 204 the client already saw as success. label carries the
 // connection's identity, so a busy deploy's stacks group by tab and unit
 // instead of being read one by one.
-func runPushItem(label string, fn func()) {
+func runPushItem(log *slog.Logger, label string, fn func()) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("via: live push panic%s: %v\n%s", label, rec, debug.Stack())
+			log.Error("via: live push panic", "label", label, "err", rec, "stack", string(debug.Stack()))
 		}
 	}()
 	fn()

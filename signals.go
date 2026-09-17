@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sort"
 	"unsafe"
 
@@ -25,7 +25,7 @@ import (
 // only nil declares every slot (the GET first paint). Non-nil declares just the
 // slots named, so a plain action patch ships what it wrote without clobbering a
 // value the user is mid-edit; if that leaves nothing, no attribute is written.
-func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
+func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
 	want := make([]string, 0, len(order))
 	for _, slot := range order {
 		if only != nil {
@@ -54,8 +54,9 @@ func writeSignalsAttr(buf *bytes.Buffer, order []string, initial, only map[strin
 	for _, slot := range want {
 		val, err := json.Marshal(initial[slot])
 		if err != nil {
-			log.Printf("via: signal %q holds a value encoding/json cannot marshal (%v); it is left out of "+
-				"data-signals and the client store has no value for it — make the type JSON-round-trippable", slot, err)
+			log.Warn("via: a signal holds a value encoding/json cannot marshal; it is left out of "+
+				"data-signals and the client store has no value for it — make the type JSON-round-trippable",
+				"slot", slot, "err", err)
 			continue
 		}
 		if n > 0 {
@@ -192,8 +193,9 @@ func (s *Signal[T]) Set(v T) {
 	// Silent, an unbound Set reads as "Set does nothing" — warn once per signal.
 	if !s.warned {
 		s.warned = true
-		log.Print("via: Signal.Set on a signal the View never rendered — the value updates server memory " +
-			"but no patch reaches the client; Bind or Display the signal in the View")
+		// slog.Default(): no Router in scope.
+		slog.Default().Warn("via: Signal.Set on a signal the View never rendered — the value updates server " +
+			"memory but no patch reaches the client; Bind or Display the signal in the View")
 	}
 }
 

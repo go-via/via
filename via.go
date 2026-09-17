@@ -47,7 +47,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"maps"
 	"reflect"
 	"runtime"
@@ -370,6 +370,16 @@ func (c *Ctx) Context() context.Context {
 		return c.req.Context()
 	}
 	return context.Background()
+}
+
+// logger is the Router's logger, reached through sessions — the router-scoped
+// struct every request-scoped Ctx already carries. A bare render has neither,
+// so it falls back to the package default.
+func (c *Ctx) logger() *slog.Logger {
+	if c == nil {
+		return slog.Default()
+	}
+	return c.sessions.logger()
 }
 
 // newCtx builds a Ctx with the given hydration map (may be nil for a GET page).
@@ -814,7 +824,7 @@ func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 		// render a button whose every click 410s.
 		data, err := json.Marshal(arg)
 		if err != nil {
-			log.Printf("via: OnArg(%q): arg does not encode (%v); the binding is dropped", event, err)
+			ctx.logger().Warn("via: OnArg arg does not encode; the binding is dropped", "event", event, "err", err)
 			return
 		}
 		idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
@@ -860,9 +870,9 @@ type unrenderedArg struct {
 // body is the 410 response text. The diagnosis goes to the log, never the
 // response: the bound set is other rows' identities, and handing it back
 // answers the very question an arg-swapping client is asking.
-func (u unrenderedArg) body() string {
-	log.Printf("via: %s is bound, but not for arg %s; this render binds %d arg(s) for it",
-		u.name, u.raw, u.have)
+func (u unrenderedArg) body(log *slog.Logger) string {
+	log.Warn("via: the action is bound, but not for this arg",
+		"act", u.name, "arg", u.raw, "bound", u.have)
 	return "this render does not bind that action for that argument"
 }
 
@@ -958,7 +968,7 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
 	if declareSignals {
-		writeSignalsAttr(&b, ctx.order, ctx.initial, only, ctx.declareSeen)
+		writeSignalsAttr(ctx.logger(), &b, ctx.order, ctx.initial, only, ctx.declareSeen)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())
@@ -1099,7 +1109,8 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 		bind, body = render(rev)
 	}
 	if n == maxHydratePasses {
-		log.Printf("via: live push hit the %d-pass hydration cap; some posted signals may be unapplied", maxHydratePasses)
+		lc.mount.cfg.log.Warn("via: live push hit its hydration-pass cap; some posted signals may be unapplied",
+			"passes", maxHydratePasses)
 	}
 	if bind != auth {
 		pruneToAuthority(bind, auth)
@@ -1147,7 +1158,9 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 			}
 			if !initFailed {
 				initFailed = true
-				log.Printf("via: live push aborted — an embedded child's OnInit failed (err=%v redirect=%q); tearing the stream down so the client reconnects and gets the real answer", ci.err, ci.redirect)
+				lc.mount.cfg.log.Error("via: live push aborted — an embedded child's OnInit failed; tearing the "+
+					"stream down so the client reconnects and gets the real answer",
+					"err", ci.err, "redirect", ci.redirect)
 			}
 			stream.abort()
 		}()
@@ -1253,7 +1266,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 			// connect succeeded. Once headers ARE sent this can't help, so a
 			// mid-stream panic is caught per push item (runPushItem) instead.
 			if !headersSent {
-				recoverToHTTP(w, req, rec, "stream")
+				recoverToHTTP(m.cfg.log, w, req, rec, "stream")
 			}
 		}
 	}()
@@ -1355,7 +1368,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 		for _, u := range units {
 			for _, d := range u.disposers {
-				runPushItem(streamLabel, d)
+				runPushItem(m.cfg.log, streamLabel, d)
 			}
 		}
 	}()
@@ -1414,5 +1427,5 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	streaming = true
-	runStream(streamCtx, streamLabel, units, listeners, wake, pushq, keepalive, sseHeartbeat)
+	runStream(m.cfg.log, streamCtx, streamLabel, units, listeners, wake, pushq, keepalive, sseHeartbeat)
 }

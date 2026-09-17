@@ -1,7 +1,7 @@
 package h
 
 import (
-	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/go-via/via/internal/hcore"
@@ -38,7 +38,8 @@ func safeURL(u, where string) string {
 	if hcore.SafeURL(u) {
 		return u
 	}
-	log.Printf("h: unsafe %s URL %q neutralized to \"#\"", where, u)
+	// slog.Default(): no Router in scope.
+	slog.Default().Warn("h: unsafe URL neutralized to \"#\"", "attr", where, "url", u)
 	return "#"
 }
 

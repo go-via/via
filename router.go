@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -112,7 +112,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 			case sse:
 				http.Error(w, "forbidden", http.StatusForbidden)
 			case !hcore.SafeURL(ctx.redirect):
-				log.Printf("via: unsafe OnInit redirect %q dropped", ctx.redirect)
+				ctx.logger().Warn("via: unsafe OnInit redirect dropped", "redirect", ctx.redirect)
 				http.Error(w, "init failed", http.StatusInternalServerError)
 			default:
 				http.Redirect(w, req, ctx.redirect, http.StatusSeeOther)
@@ -130,7 +130,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 		case errors.Is(oerr, ErrForbidden):
 			http.Error(w, "forbidden", http.StatusForbidden)
 		default:
-			log.Printf("via: OnInit failed: %q", oerr)
+			ctx.logger().Error("via: OnInit failed", "err", oerr)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 		}
 		return oerr
@@ -166,7 +166,7 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 // answerReloadFailure answers a failed OnReload the way runOnInit answers a
 // failed OnInit. A queued Redirect is NOT handled here: the caller
 // routes it through respond, which knows the transport.
-func answerReloadFailure(w http.ResponseWriter, err error) {
+func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	noteErr(w, err)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -174,7 +174,7 @@ func answerReloadFailure(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
-		log.Printf("via: OnReload after an action failed: %q", err)
+		log.Error("via: OnReload after an action failed", "err", err)
 		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
 }
@@ -202,13 +202,13 @@ var valueReceiverChecked sync.Map // reflect.Type -> true
 // recoverToHTTP answers a recovered panic on a request transport: each via
 // sentinel gets the status it means, anything else is a server fault — logged
 // with its stack, answered 500.
-func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what string) {
+func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, rec any, what string) {
 	if _, ok := rec.(paramMiss); ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if ci, ok := rec.(initOutcome); ok {
-		answerInitFailure(w, req, ci)
+		answerInitFailure(log, w, req, ci)
 		return
 	}
 	if bad, ok := rec.(badActionArg); ok {
@@ -216,25 +216,25 @@ func recoverToHTTP(w http.ResponseWriter, req *http.Request, rec any, what strin
 		return
 	}
 	if un, ok := rec.(unrenderedArg); ok {
-		http.Error(w, un.body(), http.StatusGone)
+		http.Error(w, un.body(log), http.StatusGone)
 		return
 	}
 	route := ""
 	if req != nil {
 		route = " [" + req.Method + " " + req.URL.Path + "]"
 	}
-	log.Printf("via: %s panic%s: %v\n%s", what, route, rec, debug.Stack())
+	log.Error("via: "+what+" panic"+route, "err", rec, "stack", string(debug.Stack()))
 	noteErr(w, fmt.Errorf("via: %s panic: %v", what, rec))
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
 // answerInitFailure gives an embedded child's failed OnInit the same answers
 // the root's gets in runOnInit.
-func answerInitFailure(w http.ResponseWriter, req *http.Request, ci initOutcome) {
+func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome) {
 	switch {
 	case ci.redirect != "":
 		if !hcore.SafeURL(ci.redirect) {
-			log.Printf("via: unsafe OnInit redirect %q dropped", ci.redirect)
+			log.Warn("via: unsafe OnInit redirect dropped", "redirect", ci.redirect)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 			return
 		}
@@ -244,7 +244,7 @@ func answerInitFailure(w http.ResponseWriter, req *http.Request, ci initOutcome)
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		noteErr(w, ci.err)
-		log.Printf("via: OnInit failed: %q", ci.err)
+		log.Error("via: OnInit failed", "err", ci.err)
 		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
 }
@@ -385,7 +385,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
-	checkHooks(rootType, &r.hookWarned, true)
+	checkHooks(r.cfg.log, rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	// newInst gives every non-generic internal a fresh, correctly-typed root
 	// without carrying T/PT past this function.
@@ -417,10 +417,10 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets })
 	switch {
 	case !read:
-		log.Printf("via: %s.PageMeta() panicked on synthetic data, so the boot check that "+
+		r.cfg.log.Warn(fmt.Sprintf("via: %s.PageMeta() panicked on synthetic data, so the boot check that "+
 			"PageMeta().Assets is constant was SKIPPED for this mount. An asset derived from "+
 			"data OnInit loads will not be caught here; it will fail on the first request.",
-			reflect.PointerTo(rootType).String())
+			reflect.PointerTo(rootType).String()))
 	case fp != m.assetsFP:
 		panic("via: PageMeta().Assets of " + reflect.PointerTo(rootType).String() +
 			" depends on the page's data; the CSP is built once at Mount, so assets " +
@@ -434,7 +434,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				recoverToHTTP(w, req, rec, "render")
+				recoverToHTTP(r.cfg.log, w, req, rec, "render")
 			}
 		}()
 		// concreteBase, not patternBase: a page at /job/{id} must advertise
@@ -651,7 +651,7 @@ var childHookWarned sync.Map
 // correctly-shaped one on an embedded child is reported: it is a warning and
 // not a panic because the very same type may legitimately be a mounted page
 // elsewhere in the app, and panicking would outlaw that.
-func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
+func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	if t == nil {
 		return
 	}
@@ -672,18 +672,18 @@ func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
 	if !root {
 		for _, hook := range hookSpecs {
 			if hook.rootOnly && hook.implements(pt) {
-				log.Printf("via: %s.%s is ignored — only the MOUNTED page's %s names the document, "+
+				log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the MOUNTED page's %s names the document, "+
 					"and %s is embedded. Move it to the root composition, or fold the value into the "+
-					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name)
+					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
 			}
 		}
 	}
 	// Title was the hook PageMeta replaced. A leftover one is dead code that
 	// still compiles and still looks like it names the page, so say so.
 	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[PageMetaer](pt) {
-		log.Printf("via: %s.Title is no longer a via hook — the document is named by "+
+		log.Warn(fmt.Sprintf("via: %s.Title is no longer a via hook — the document is named by "+
 			"PageMeta() via.Meta now, so nothing will ever call it. Return via.Meta{Title: …} instead.",
-			t.String())
+			t.String()))
 	}
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
@@ -695,10 +695,10 @@ func checkHooks(t reflect.Type, warned *sync.Map, root bool) {
 		if !hook.shaped(m.Type) || hook.implements(pt) {
 			continue
 		}
-		log.Printf("via: %s.%s looks like a mis-named %s — it has the hook's exact signature "+
+		log.Warn(fmt.Sprintf("via: %s.%s looks like a mis-named %s — it has the hook's exact signature "+
 			"but %s implements no via.%s, so nothing will ever call it. Rename it, or add "+
 			"`var _ via.%s = (*%s)(nil)` so a rename can never silently unhook it again.",
-			t.String(), m.Name, hook.name, t.String(), hook.iface, hook.iface, t.Name())
+			t.String(), m.Name, hook.name, t.String(), hook.iface, hook.iface, t.Name()))
 	}
 }
 

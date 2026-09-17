@@ -7,7 +7,7 @@
 package topic
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 )
 
@@ -120,7 +120,9 @@ func (s *Sub[T]) enqueue(v T) (wake chan<- struct{}, ok bool) {
 		s.warned = true
 		s.mu.Unlock()
 		if warn {
-			log.Printf("via/topic: subscriber backlog hit its %d-value limit; dropping newest values for this subscriber only", s.limit)
+			// slog.Default(): no Router in scope.
+			slog.Default().Warn("via/topic: subscriber backlog hit its limit; dropping newest values for "+
+				"this subscriber only", "limit", s.limit)
 		}
 		return nil, false
 	}

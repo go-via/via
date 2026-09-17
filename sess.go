@@ -8,7 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -255,15 +255,25 @@ type sessionManager struct {
 	randomKey    bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
 	memoryStore  bool // no WithSessionStore: sessions die with the process
 	storeTimeout time.Duration
-	keyWarnOnce  sync.Once // warn about the random key at the FIRST session mint, not at boot
-	storeWarn    sync.Once // warn about the process-local store at the FIRST session mint
-	mismatchOnce sync.Once // warn once about signature-mismatch cookies (the two-apps clobber)
+	log          *slog.Logger // the Router's logger
+	keyWarnOnce  sync.Once    // warn about the random key at the FIRST session mint, not at boot
+	storeWarn    sync.Once    // warn about the process-local store at the FIRST session mint
+	mismatchOnce sync.Once    // warn once about signature-mismatch cookies (the two-apps clobber)
 }
 
 // newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
 // → a random per-process key. The random fallback warns on first use; a stable
 // key is what makes the COOKIE survive restarts and span pods, and a shared
 // SessionStore is what makes the DATA behind it do the same.
+// logger tolerates a nil manager so a Session handle built without one (a bare
+// render) still logs somewhere.
+func (m *sessionManager) logger() *slog.Logger {
+	if m == nil || m.log == nil {
+		return slog.Default()
+	}
+	return m.log
+}
+
 func newSessionManager(cfg *config) *sessionManager {
 	key := cfg.sessionKey
 	if len(key) == 0 {
@@ -301,7 +311,7 @@ func newSessionManager(cfg *config) *sessionManager {
 	}
 	return &sessionManager{store: store, key: key, cookie: name, ttl: ttl,
 		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory,
-		storeTimeout: timeout}
+		storeTimeout: timeout, log: cfg.log}
 }
 
 // sign returns the signature appended to the id in the cookie, so a tampered
@@ -330,7 +340,7 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error
 		// name with a different key (two dev servers on localhost ports).
 		// Silence here reads as "my session randomly resets".
 		m.mismatchOnce.Do(func() {
-			log.Print("via: session cookie failed its signature check — likely another app on this host " +
+			m.logger().Warn("via: session cookie failed its signature check — likely another app on this host " +
 				"uses the same cookie name with a different key; issuing a fresh session " +
 				"(set WithSessionCookieName or share VIA_SESSION_KEY to stop the clobber)")
 		})
@@ -373,7 +383,7 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 	defer cancel()
 	raw, ok, err := m.store.Load(ctx, id)
 	if err != nil {
-		log.Printf("via: session store Load failed: %v", err)
+		m.logger().Error("via: session store Load failed", "err", err)
 		return nil, err
 	}
 	if !ok {
@@ -432,7 +442,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			// short-circuit for a handle already known to be retired, and was
 			// the one path that lost a user's Put in silence. Session.Put
 			// returns nothing, so the log is the only place the drop surfaces.
-			log.Print("via: session write dropped — this handle's session id was already retired " +
+			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
 				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
 		}
 		return false
@@ -453,9 +463,9 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 	cas, _ := m.store.(VersionedSessionStore)
 	for attempt := 0; ; attempt++ {
 		if cas != nil && attempt >= sessionSaveRetries {
-			log.Printf("via: session write gave up after %d CAS attempts — the store is under "+
-				"pathological contention on one session; the write is dropped rather than "+
-				"clobbering the writers that got through", sessionSaveRetries)
+			m.logger().Error("via: session write gave up after CAS attempts — the store is under pathological "+
+				"contention on one session; the write is dropped rather than clobbering the writers "+
+				"that got through", "attempts", sessionSaveRetries)
 			return false
 		}
 		var (
@@ -472,7 +482,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		if err != nil {
 			// Writing d's copy over a store that could not be read is exactly
 			// the clobber this merge exists to avoid.
-			log.Printf("via: session store Load failed before save: %v", err)
+			m.logger().Error("via: session store Load failed before save", "err", err)
 			return false
 		}
 		var b sessionBlob
@@ -483,10 +493,10 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
 		if !live && !mint {
 			if mintFailed {
-				log.Print("via: session write dropped — the store rejected this session's first write, " +
+				m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
 					"so there is nothing under its id to merge into")
 			} else {
-				log.Print("via: session id retired (rotated away or expired); write dropped — " +
+				m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
 					"writing under it would revive an id that no longer names this session")
 			}
 			d.mu.Lock()
@@ -512,20 +522,20 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		exp := time.Now().Add(m.ttl)
 		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
 		if err != nil {
-			log.Printf("via: session encode failed: %v", err)
+			m.logger().Error("via: session encode failed", "err", err)
 			return false
 		}
 		if cas != nil {
 			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
 			if err != nil {
-				log.Printf("via: session store SaveIf failed: %v", err)
+				m.logger().Error("via: session store SaveIf failed", "err", err)
 				return false
 			}
 			if !applied {
 				continue // another request wrote first; re-merge onto its blob
 			}
 		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
-			log.Printf("via: session store Save failed: %v", err)
+			m.logger().Error("via: session store Save failed", "err", err)
 			return false
 		}
 		d.mu.Lock()
@@ -563,7 +573,7 @@ func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData)
 			// the fixation defence Rotate exists to provide, and void it
 			// exactly when the store is flaky. Overwrite the old id with a
 			// blob that is already expired instead: get deletes it on sight.
-			log.Printf("via: session store Delete failed on rotate, writing an expired tombstone: %v", err)
+			m.logger().Error("via: session store Delete failed on rotate, writing an expired tombstone", "err", err)
 			dead, _ := json.Marshal(sessionBlob{SID: d.sid, Exp: time.Now().Add(-time.Minute).UnixNano()})
 			if err := m.store.Save(ctx, oldID, dead, time.Second); err != nil {
 				panic("via: Session.Rotate could neither delete nor invalidate the old session id, " +
@@ -676,19 +686,19 @@ func (s *Session) ensure() *sessionData {
 		// out permanently once the backend recovered — a far worse outcome than
 		// a dropped write, and the store contract already says a backend error
 		// never fails the request.
-		log.Print("via: session write dropped — the session store could not be read for this request, " +
+		s.mgr.logger().Error("via: session write dropped — the session store could not be read for this request, " +
 			"so via will not mint a replacement session over the one the browser already holds")
 		return nil
 	}
 	if s.mgr.randomKey {
 		s.mgr.keyWarnOnce.Do(func() {
-			log.Print("via: session minted under a random per-process key — sessions will not survive a " +
+			s.mgr.logger().Warn("via: session minted under a random per-process key — sessions will not survive a " +
 				"restart or span pods; set WithSessionKey or the VIA_SESSION_KEY env for a stable key")
 		})
 	}
 	if s.mgr.memoryStore {
 		s.mgr.storeWarn.Do(func() {
-			log.Print("via: sessions are held in this process's memory — every restart or deploy logs " +
+			s.mgr.logger().Warn("via: sessions are held in this process's memory — every restart or deploy logs " +
 				"every user out, and a second pod sees none of them; pass WithSessionStore for a " +
 				"shared store")
 		})
@@ -698,10 +708,10 @@ func (s *Session) ensure() *sessionData {
 	if s.w != nil {
 		s.mgr.setCookie(s.w, id, s.secure)
 	} else if s.errPage {
-		log.Print("via: session written from a WithErrorPage handler, where no cookie can be set — the " +
+		s.mgr.logger().Warn("via: session written from a WithErrorPage handler, where no cookie can be set — the " +
 			"failing response is already committed; treat the session as read-only in an error page")
 	} else {
-		log.Print("via: session created where no cookie can be set (a Tick or Listen handler, which has no " +
+		s.mgr.logger().Warn("via: session created where no cookie can be set (a Tick or Listen handler, which has no " +
 			"request in flight); establish the session in OnInit or an action instead")
 	}
 	return d
@@ -739,7 +749,7 @@ func (s *Session) Rotate() string {
 		return ""
 	}
 	if s.down {
-		log.Print("via: Session.Rotate skipped — the session store could not be read for this request")
+		s.mgr.logger().Warn("via: Session.Rotate skipped — the session store could not be read for this request")
 		return ""
 	}
 	if s.data == nil {
@@ -755,7 +765,7 @@ func (s *Session) Rotate() string {
 		// names THAT request's new id. reID would short-circuit on the retired
 		// flag and write nothing, then Set-Cookie an id with no blob behind it —
 		// overwriting a good cookie and logging the user out. Leave it alone.
-		log.Print("via: Session.Rotate skipped — this handle's session id was already rotated away by " +
+		s.mgr.logger().Warn("via: Session.Rotate skipped — this handle's session id was already rotated away by " +
 			"another request; the cookie the browser now holds is left untouched")
 		return ""
 	}
