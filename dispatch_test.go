@@ -2190,9 +2190,9 @@ func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
 	}
 
 	out := logs.String()
-	assert.Equal(t, 1, strings.Count(out, "no such action deadbeef"),
+	assert.Equal(t, 1, strings.Count(out, "act=deadbeef"),
 		"a repeated garbage id must not re-dump the action table")
-	assert.Equal(t, 1, strings.Count(out, "no such action cafebabe"),
+	assert.Equal(t, 1, strings.Count(out, "act=cafebabe"),
 		"the dedupe is per id, so a genuinely new mistake is still reported")
 }
 
@@ -2226,7 +2226,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 	}
 
 	out := logs.String()
-	assert.Contains(t, out, "1 of 1 live streams", "the log must name the current count and the cap")
+	assert.Contains(t, out, "open=1 cap=1", "the log must name the current count and the cap")
 	assert.Contains(t, out, "WithMaxSSEConn", "the log must name the knob that moves the wall")
 	assert.Equal(t, 1, strings.Count(out, "refusing an SSE connect"),
 		"a refusal storm must not become the loudest thing in the log")

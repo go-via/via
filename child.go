@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"log/slog"
 	"reflect"
 	"strings"
 	"unsafe"
@@ -53,7 +54,8 @@ func Child[C any](child C) h.H {
 	// of the connection), so its address is the base its signals offset from.
 	typ := reflect.TypeOf(child)
 	checkViewReceiver(typ)
-	checkHooks(typ, &childHookWarned, false)
+	// slog.Default(): no Router in scope.
+	checkHooks(slog.Default(), typ, &childHookWarned, false)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	return hcore.Dyn(func(r *hcore.Renderer) { childViewer(r, inst) })
 }
@@ -138,7 +140,7 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(&buf, child.order, child.initial, parent.declareOnly, parent.declareSeen)
+		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial, parent.declareOnly, parent.declareSeen)
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)

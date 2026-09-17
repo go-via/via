@@ -2,7 +2,7 @@ package via
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -32,7 +32,7 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 		return // the post-action re-run; this unit's ticks were snapshotted at GET/connect (I5)
 	}
 	if c.initDone {
-		log.Print("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
+		c.logger().Warn("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
 		return
 	}
 	c.live = true
@@ -50,7 +50,7 @@ func (c *Ctx) OnConnect(fn func()) {
 		return // see Tick
 	}
 	if c.initDone {
-		log.Print("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
+		c.logger().Warn("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
 		return
 	}
 	c.onConnect = append(c.onConnect, fn)
@@ -67,7 +67,7 @@ func (c *Ctx) OnDispose(fn func()) {
 		return // see Tick
 	}
 	if c.initDone {
-		log.Print("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")
+		c.logger().Warn("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")
 		return
 	}
 	c.disposers = append(c.disposers, fn)
@@ -94,7 +94,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		return // see Tick
 	}
 	if c.initDone {
-		log.Print("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
+		c.logger().Warn("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
 		return
 	}
 	c.live = true
@@ -134,7 +134,8 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("via: panic in a Listen handler [unit=%T]: %v\n%s", c.unitV.v, r, debug.Stack())
+			c.logger().Error("via: panic in a Listen handler",
+				"unit", fmt.Sprintf("%T", c.unitV.v), "err", r, "stack", string(debug.Stack()))
 		}
 	}()
 	handler(c, v)

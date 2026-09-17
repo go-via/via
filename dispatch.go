@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"runtime/debug"
 	"sort"
@@ -71,10 +71,10 @@ func (m *mount) warnNoChange(act, name string, v any) {
 	if _, dup := m.noChange.LoadOrStore(act+"\x00"+name, struct{}{}); dup {
 		return
 	}
-	log.Printf("via: action %s (%s) changed nothing the render shows, so it answers 204 and the UI "+
+	m.cfg.log.Warn("via: this action changed nothing the render shows, so it answers 204 and the UI "+
 		"does not move. If it mutated data this unit loads in OnInit, that data is stale by now: "+
 		"re-read it in an OnReload(*via.Ctx) error method, which via runs after every action on this unit",
-		act, name)
+		"act", act, "name", name)
 }
 
 // warnAtCapacity breaks the silence of a router-wide refusal. The cap is
@@ -91,10 +91,10 @@ func (m *mount) warnAtCapacity(open int64) {
 	if now-last < int64(time.Minute) || !m.capWarn.CompareAndSwap(last, now) {
 		return
 	}
-	log.Printf("via: refusing an SSE connect with 503: %d of %d live streams already open for this router. "+
+	m.cfg.log.Warn("via: refusing an SSE connect with 503: the router is at its live-stream cap. "+
 		"There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused "+
 		"until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it.",
-		open, m.maxLive)
+		"open", open, "cap", m.maxLive)
 }
 
 // actionResult is what running an action produced. On the live path it all
@@ -189,7 +189,7 @@ func unitAddr(c *Ctx) string {
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			recoverToHTTP(w, req, rec, "action")
+			recoverToHTTP(m.cfg.log, w, req, rec, "action")
 		}
 	}()
 	if !originAllowed(req, m.cfg) {
@@ -366,7 +366,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		return
 	}
 	if res.initErr != nil {
-		answerReloadFailure(w, res.initErr)
+		answerReloadFailure(m.cfg.log, w, res.initErr)
 		return
 	}
 	if res.badArg != nil {
@@ -382,7 +382,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		return
 	}
 	if mode == modeNative {
-		respond(w, req, mode, res.redirect, func() {
+		m.respond(w, req, mode, res.redirect, func() {
 			// A native submit replaces the whole document, so this must be the
 			// page a brand-new connection will hold — a fresh instance with
 			// OnInit run, not a snapshot of the dying connection's live tree
@@ -393,7 +393,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		}, nil)
 		return
 	}
-	respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
+	m.respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
 }
 
 // liveRunAction hydrates unit's signals from in and runs act. unit is the bind
@@ -415,7 +415,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				return
 			}
 			if un, ok := rec.(unrenderedArg); ok {
-				res = actionResult{gone: un.body()}
+				res = actionResult{gone: un.body(lc.mount.cfg.log)}
 				return
 			}
 			// Same sentinel, same answer as recoverToHTTP gives the plain path:
@@ -425,8 +425,8 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 				res = actionResult{paramMiss: true}
 				return
 			}
-			log.Printf("via: live action panic [tab=%s unit=%T act=%s]: %v\n%s",
-				lc.id, unit.unitV.v, act.name, rec, debug.Stack())
+			lc.mount.cfg.log.Error("via: live action panic", "tab", lc.id,
+				"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
 			res = actionResult{panicked: true}
 		}
 	}()
@@ -515,7 +515,7 @@ func (m *mount) unknownAction(u *Ctx, act string) string {
 			have = append(have, id+" ("+a.name+")")
 		}
 		sort.Strings(have)
-		log.Printf("via: no such action %s; this render binds: %s", act, strings.Join(have, ", "))
+		m.cfg.log.Warn("via: no such action; this render binds others", "act", act, "binds", strings.Join(have, ", "))
 	}
 	return "no such action " + act + "; this render does not bind it"
 }
@@ -607,7 +607,8 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// Never expected: done grows monotonically, so a View would have to
 		// bind a fresh slot on every pass. Loud, because the alternative is a
 		// silently half-hydrated render.
-		log.Printf("via: plain discovery hit the %d-pass cap for action %s; some posted signals may be unapplied", maxHydratePasses, act)
+		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
+			"passes", maxHydratePasses, "act", act)
 	}
 	ua := auth.unit(child)
 	if ua == nil {
@@ -668,19 +669,19 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	if u.redirect == "" {
 		rl := &Ctx{req: req, sessions: m.sessions, sessW: w, session: auth.session, base: base}
 		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
-			answerReloadFailure(w, err)
+			answerReloadFailure(m.cfg.log, w, err)
 			return
 		}
 		u.redirect = rl.redirect
 	}
 
 	if mode == modeNative {
-		respond(w, req, mode, u.redirect, func() {
+		m.respond(w, req, mode, u.redirect, func() {
 			m.writePage(w, req, inst, base, u, nil)
 		}, nil)
 		return
 	}
-	respond(w, req, mode, u.redirect, nil, func() []byte {
+	m.respond(w, req, mode, u.redirect, nil, func() []byte {
 		b := m.rerenderPlain(child, rootBefore, inst, bind, u, base)
 		if b == nil {
 			m.warnNoChange(act, a.name, actedViewer(inst, u))
@@ -808,7 +809,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 	}
 	var buf bytes.Buffer
 	buf.WriteString(`<div id="via-i` + u.childKey + `"`)
-	writeSignalsAttr(&buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
+	writeSignalsAttr(m.cfg.log, &buf, afterCtx.order, afterCtx.initial, u.dirty, seen)
 	buf.WriteString(`>`)
 	buf.Write(afterInner)
 	buf.WriteString(`</div>`)
@@ -907,11 +908,11 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 // href/src URLs use — and an unsafe one is dropped, not followed. Otherwise
 // renderNative or renderPatch (nil for "unchanged" / "the live push already
 // carried it") decides the body.
-func respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect string, renderNative func(), renderPatch func() []byte) {
+func (m *mount) respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect string, renderNative func(), renderPatch func() []byte) {
 	if redirect != "" {
 		switch {
 		case !hcore.SafeURL(redirect):
-			log.Printf("via: unsafe Redirect target %q dropped", redirect)
+			m.cfg.log.Warn("via: unsafe Redirect target dropped", "redirect", redirect)
 		case mode == modeNative:
 			http.Redirect(w, req, redirect, http.StatusSeeOther)
 			return

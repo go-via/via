@@ -1,7 +1,7 @@
 package via
 
 import (
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 // default: the action endpoint accepts requests from any origin, and production
 // opts into enforcement with WithTrustedOrigin.
 type config struct {
+	log            *slog.Logger
 	trustedOrigins map[string]bool
 	sessionKey     []byte
 	sessionTTL     time.Duration
@@ -71,10 +72,13 @@ func newConfig(opts []Option) *config {
 	if c.pinnedDeadline <= 0 {
 		c.pinnedDeadline = defaultPinnedDeadline
 	}
+	if c.log == nil {
+		c.log = slog.Default()
+	}
 	c.head.validate()
 	if len(c.trustedOrigins) == 0 {
 		originWarnOnce.Do(func() {
-			log.Print("via: action endpoint accepts requests from any origin — the per-tab id is still " +
+			c.log.Warn("via: action endpoint accepts requests from any origin — the per-tab id is still " +
 				"the CSRF token, but cross-origin enforcement is OFF until WithTrustedOrigin names one")
 		})
 	}
@@ -90,6 +94,20 @@ func newConfig(opts []Option) *config {
 // so whichever open-floor test runs first wins the line and every other sees
 // nothing. An assertion would pass or fail on test order, not on the warning.
 var originWarnOnce sync.Once
+
+// WithLogger routes via's own diagnostics to l. Default is slog.Default(). It
+// panics on nil.
+//
+// The h package and via/topic have no Router to reach and keep writing to
+// slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(c *config) {
+		if l == nil {
+			panic("via: WithLogger(nil)")
+		}
+		c.log = l
+	}
+}
 
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
 // allowlists an exact origin (scheme://host[:port], as the browser sends it).

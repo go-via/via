@@ -2,7 +2,6 @@ package via
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
 	"github.com/go-via/via/internal/hcore"
@@ -71,7 +70,7 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 			case errors.Is(err, ErrForbidden):
 				http.Error(w, "forbidden", http.StatusForbidden)
 			default:
-				log.Printf("via: guard failed: %q", err)
+				m.cfg.log.Error("via: guard failed", "err", err)
 				http.Error(w, "guard failed", http.StatusInternalServerError)
 			}
 			return nil, false
@@ -80,7 +79,7 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 			continue
 		}
 		if !hcore.SafeURL(ctx.redirect) {
-			log.Printf("via: unsafe guard redirect %q dropped", ctx.redirect)
+			m.cfg.log.Warn("via: unsafe guard redirect dropped", "redirect", ctx.redirect)
 			http.Error(w, "guard failed", http.StatusInternalServerError)
 			return nil, false
 		}
@@ -88,7 +87,7 @@ func (m *mount) runGuards(w http.ResponseWriter, req *http.Request, mode actionM
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return nil, false
 		}
-		respond(w, req, mode, ctx.redirect, nil, nil)
+		m.respond(w, req, mode, ctx.redirect, nil, nil)
 		return nil, false
 	}
 	return ctx, true

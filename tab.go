@@ -3,7 +3,6 @@ package via
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -147,7 +146,8 @@ func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionR
 		var res actionResult
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("via: live action panic [tab=%s unit=%s]: %v\n%s", c.id, c.unitType(), rec, debug.Stack())
+				c.mount.cfg.log.Error("via: live action panic",
+					"tab", c.id, "unit", c.unitType(), "err", rec, "stack", string(debug.Stack()))
 				res = actionResult{panicked: true}
 			}
 			result <- res
@@ -198,10 +198,10 @@ func (c *tabStream) warnPinned() {
 	if c.pinnedLogged.Swap(true) {
 		return
 	}
-	log.Printf("via: live action queue not drained within %s [tab=%s unit=%s] — the connection's goroutine is "+
-		"blocked inside a Tick, Listen or action handler, so its keepalives have stopped too and every action on "+
-		"this tab answers 503 until it returns. Move blocking work off the handler.",
-		c.pinnedDeadline(), c.id, c.unitType())
+	c.mount.cfg.log.Warn("via: live action queue not drained — the connection's goroutine is blocked inside a "+
+		"Tick, Listen or action handler, so its keepalives have stopped too and every action on this tab "+
+		"answers 503 until it returns. Move blocking work off the handler.",
+		"deadline", c.pinnedDeadline(), "tab", c.id, "unit", c.unitType())
 }
 
 // registry maps a per-connection tab id to its live child. A local of each
