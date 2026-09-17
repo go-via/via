@@ -76,8 +76,7 @@ var errRedirected = errors.New("via: redirected")
 //
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
 // fetch follows a 303 and would deliver the target page's HTML as the stream
-// body (the same reason runGuards' own sse param exists), so a redirect here
-// answers a plain 403 instead — the same answer a Guard denial gives.
+// body, so a redirect there answers a plain 403 instead, as runGuards does.
 func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, sse bool) (err error) {
 	ctx.req = req
 	ctx.sessions = sessions

@@ -10,10 +10,10 @@ import (
 
 // Guard runs before OnInit on EVERY transport a mount answers — the page GET,
 // a plain action, a live action over an open stream, and the SSE connect.
-// OnInit runs on all of those except the live action, so a Guard is the only
-// thing that re-authorizes one: a session revoked after connect still passes
-// OnInit (it never runs again on that stream) but is caught here on the next
-// click.
+// OnInit runs on every one of those but the live action, so a Guard is the
+// only thing that re-authorizes that: a session revoked after connect still
+// passes OnInit (it never runs again on that stream) but is caught here on the
+// next click.
 //
 // The session it sees is writable (Session.Rotate, Session.Put), same as
 // OnInit's. There is no header setter: a live action's "response" may be an
@@ -33,11 +33,11 @@ func Protect(g ...Guard) MountOption {
 }
 
 // runGuards reports whether the caller may proceed; it has already answered w
-// when it returns false. When at least one guard ran, the returned *Ctx
-// carries the session it resolved, and the caller must feed it to runOnInit
-// instead of resolving a second one — otherwise a guard's Session.Put is
-// invisible to OnInit, and a guard-Put plus an OnInit-Put mint two cookies for
-// one request. nil means no guard ran; the caller resolves its own as before.
+// when it returns false. The returned *Ctx carries the session the guards
+// resolved, and the caller must feed it to runOnInit rather than resolve a
+// second one: otherwise a guard's Session.Put is invisible to OnInit, and a
+// guard-Put plus an OnInit-Put mint two cookies for one request. It is nil
+// when no guard ran, and the caller resolves its own.
 //
 // sse distinguishes the SSE connect from every other transport: a Redirect
 // queued there would otherwise 303 the connect itself, and fetch follows a
