@@ -3,6 +3,7 @@ package via_test
 import (
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -275,4 +276,96 @@ func TestGuard_mountedAtRootDoesNotGateASiblingMount(t *testing.T) {
 
 	status, _ = app.Get("/admin")
 	assert.Equal(t, http.StatusOK, status)
+}
+
+func guardPutsMarker(ctx *via.Ctx) error {
+	ctx.Session().Put(sharedMarker{OK: true})
+	return nil
+}
+
+// onInitReadsMarker renders "marker-seen" iff OnInit finds the value a Guard
+// on the same request just Put — the session must be one handle, not two.
+type onInitReadsMarker struct{ seen bool }
+
+func (o *onInitReadsMarker) OnInit(ctx *via.Ctx) error {
+	m, ok := ctx.Session().Get[sharedMarker]()
+	o.seen = ok && m.OK
+	return nil
+}
+
+func (o *onInitReadsMarker) View() h.H {
+	if o.seen {
+		return h.Div(h.Str("marker-seen"))
+	}
+	return h.Div(h.Str("marker-missing"))
+}
+
+func TestGuard_putIsVisibleToOnInit(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", onInitReadsMarker{}, via.Protect(guardPutsMarker))
+	app := vt.Serve(t, r)
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "marker-seen",
+		"OnInit must see the session value the Guard just Put on the same request")
+}
+
+// onInitAlsoPutsMarker also Puts on the session, so a request whose Guard and
+// OnInit both write must still settle on one cookie.
+type onInitAlsoPutsMarker struct{}
+
+func (onInitAlsoPutsMarker) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(sharedMarker{OK: true})
+	return nil
+}
+func (onInitAlsoPutsMarker) Bump(*via.Ctx) {}
+func (o *onInitAlsoPutsMarker) View() h.H {
+	return h.Div(h.Button(via.On("click", o.Bump), h.Str("+")))
+}
+
+var firstActionURLRe = regexp.MustCompile(`@post\('([^']*_via/a/r/[A-Za-z0-9_-]+)'\)`)
+
+func firstActionURL(t *testing.T, body string) string {
+	t.Helper()
+	m := firstActionURLRe.FindStringSubmatch(body)
+	require.NotEmpty(t, m, "no root action found on the rendered page")
+	return m[1]
+}
+
+func TestGuard_oneSetCookieOnAGet(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", onInitAlsoPutsMarker{}, via.Protect(guardPutsMarker))
+	app := vt.Serve(t, r)
+
+	req, err := http.NewRequest(http.MethodGet, app.URL()+"/", nil)
+	require.NoError(t, err)
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"a Guard-Put and an OnInit-Put on the same request must share one session, not mint two cookies")
+}
+
+func TestGuard_oneSetCookieOnAPlainAction(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", onInitAlsoPutsMarker{}, via.Protect(guardPutsMarker))
+	app := vt.Serve(t, r)
+
+	_, body := app.Get("/")
+	url := firstActionURL(t, body)
+	req, err := http.NewRequest(http.MethodPost, app.URL()+url, strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := app.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Len(t, resp.Header.Values("Set-Cookie"), 1,
+		"a Guard-Put and an OnInit-Put on the same action request must share one session, not mint two cookies")
 }

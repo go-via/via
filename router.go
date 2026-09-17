@@ -428,10 +428,11 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 		// leaving every live child under a parametrised mount dead.
 		base := concreteBase(patternBase, req, names)
-		if !m.runGuards(w, req, modeNative, false, base) {
+		guard, ok := m.runGuards(w, req, modeNative, false, base)
+		if !ok {
 			return
 		}
-		m.writePage(w, req, newInst(), base, nil)
+		m.writePage(w, req, newInst(), base, nil, guard)
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
