@@ -63,7 +63,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 | v0.7 | v0.8 |
 | --- | --- |
 | `StateTab[T]` | `State[T]` (live children only) |
-| `StateSess[T]` | `ctx.Session().Get` / `.Put` |
+| `StateSess[T]` | `ctx.Session().Get[T]()` / `.Put(v)` |
 | `StateApp[T]` | your own dependency, injected; via does not own it |
 | `Signal[T]` | `Signal[T]`, client-side reactivity with zero round-trips |
 | `*Num` shapes, `.Op(ctx)` | plain Go arithmetic on `Get()` |
@@ -211,7 +211,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Conditionals | `h.If` | `via.When` |
 | Groups | `h.Group` | pass the children directly; every element is variadic |
 | Growing lists | `StateTab[[]E]` + `Update` | `via.List[E]` with `Append` |
-| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put/Get[T]/Delete[T]/Rotate` |
+| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put(v)/Get[T]()/Delete()/Rotate` |
 | Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen`; a hand-rolled reader uses `Sub.WakeOn(ch)` and `Topic.NumSubs()` |
 | Post-action reload | — | `OnReload(*via.Ctx) error` (interface `Reloader`), run after every action on the unit |
 | Session storage | — | `via.SessionStore`, default `via.NewMemorySessionStore()`; implement `via.VersionedSessionStore` for a compare-and-set backend |
@@ -611,7 +611,7 @@ looks like at runtime.
 | `Reloader.Reload(*via.Ctx) error` | `Reloader.OnReload(*via.Ctx) error` | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
 | `List.Update` | `List.Append` / `List.Remove` | **compiler** — `Update` is gone |
 | `SignalClientOnly[T]` | removed — `Signal[T]` is the one client-value type | **compiler** — the type is gone |
-| `Session.Clear[T]()` | `Session.Delete[T]()` | **compiler** — `Clear` is gone |
+| `Session.Clear[T]()` | `Session.Delete()` | **compiler** — `Clear` is gone, and a session now holds one untyped value instead of one per `T` |
 | `MemorySessionStore() SessionStore` | `NewMemorySessionStore() *MemorySessionStore` | **compiler** for the rename; the return-type narrowing also matters if you assigned the old call to a `SessionStore`-typed var expecting `VersionedSessionStore` behavior underneath — that was **silent** (a wrapper built around the interface silently took the lossy merge instead of CAS) and the concrete return type now makes it impossible |
 | `topic.Sub.C()` | `Sub.Ready()` + `Sub.Drain()` | **compiler** — `C` is gone |
 | `topic.Sub.Notify(ch)` | `Sub.WakeOn(ch)` | **compiler** — `Notify` is gone |
