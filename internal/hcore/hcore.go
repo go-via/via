@@ -230,7 +230,7 @@ func (a rawAttr) render(r *Renderer) {
 
 func (a rawAttr) isAttr() {}
 
-// validAttrName allowlists attribute names: only VALUES are escaped at render,
+// validAttrName allowlists attribute names: only values are escaped at render,
 // so an unvalidated name composed from caller data could graft a second
 // attribute or close the tag. data-* names additionally admit ':', '_' and '.'
 // — Datastar's plugin syntax, without which its whole client-side vocabulary
@@ -307,7 +307,7 @@ func Data(name, val string) Attr {
 }
 
 // noAttr is an Attr that renders nothing. It exists so a boolean attribute can
-// express ABSENCE: `disabled="false"` is a *disabled* control in every browser,
+// express absence: `disabled="false"` is a *disabled* control in every browser,
 // so the off state must emit no attribute at all, and rawAttr always writes
 // name="val".
 type noAttr struct{}

@@ -25,8 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The SSE stream is bootstrapped with @post (not @get) so the connect can carry
-// the page's signals as a body — the channel multiplexing needs.
 func TestLive_pageBootstrapsTheStreamViaPost(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newPulse(t), http.MethodGet, "/", "")
@@ -34,8 +32,6 @@ func TestLive_pageBootstrapsTheStreamViaPost(t *testing.T) {
 	assert.NotContains(t, body, `@get('/_via/sse')`, "the old @get bootstrap must be gone")
 }
 
-// The SSE endpoint is POST-only now; a GET must be rejected (405) rather than
-// silently opening a stream the bootstrap no longer uses.
 func TestLive_sseEndpointRejectsGet(t *testing.T) {
 	t.Parallel()
 	srv := newPulse(t)
@@ -48,8 +44,6 @@ func TestLive_sseEndpointRejectsGet(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode, "GET /_via/sse must be 405; the stream is POST")
 }
 
-// A plain app (no live root, no live children) has no stream: a POST to the
-// SSE endpoint must 404 rather than open an empty stream.
 func TestSSE_plainAppHasNoStream(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
@@ -62,10 +56,6 @@ func TestSSE_plainAppHasNoStream(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a plain app must not serve the SSE stream")
 }
 
-// A stream must emit a periodic keepalive even on a child with no ticks: a
-// failed write is the only in-band way to notice a half-open peer. It must be
-// an SSE comment frame, not a signal/element patch, so it never mutates
-// client state. Runs at the real 25s cadence — synctest makes the wait free.
 func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(quietChild{}))
@@ -76,7 +66,7 @@ func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 		// Connect() only reads up to the tab-id line of the connect-time
 		// signals frame; its trailing blank line is already buffered. Drain
 		// whatever the connect handshake left behind before asserting nothing
-		// NEW (a keepalive) has arrived.
+		// new (a keepalive) has arrived.
 		for {
 			line, ok := conn.Peek()
 			if !ok {
@@ -91,7 +81,7 @@ func TestLive_keepaliveFiresAtDefaultCadence(t *testing.T) {
 			"keepalive must be an SSE comment frame (starts with ':'), not a data/event line")
 
 		// A single beat proves the keepalive fires at all, but not that it
-		// RECURS — a time.Timer (fires once) would pass the assertion above just
+		// recurs — a time.Timer (fires once) would pass the assertion above just
 		// as well as a time.Ticker. Drive another full cadence and require a
 		// second beat to catch that regression.
 		time.Sleep(25 * time.Second)
@@ -133,10 +123,6 @@ func (s *stalledPeer) Write(p []byte) (int, error) {
 	return 0, os.ErrDeadlineExceeded
 }
 
-// A stalled (not vanished) peer must still be torn down once a write blocks
-// past the write deadline — the deadline is what catches a peer whose write
-// never fails outright, only never completes. This runs at the real
-// production write timeout (10s), not a shortened override.
 func TestLive_halfOpenPeerTearsDownAfterWriteDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
@@ -208,10 +194,6 @@ func (s *stalledAfterConnect) Write(p []byte) (int, error) {
 	return 0, os.ErrDeadlineExceeded
 }
 
-// A stalled reader must not delay an action POST behind the deferred push it
-// triggers. dispatchOverStream used to run the re-render/push inline, so the
-// POST's goroutine sat parked in tabStream.run for as long as the write took,
-// even though the action had already succeeded.
 func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler := via.Handler(liveClicker{})
@@ -279,15 +261,11 @@ func (f *halfOpenFlusher) Write(p []byte) (int, error) {
 
 func (f *halfOpenFlusher) Flush() {}
 
-// A half-open peer (gone without a FIN) never cancels the request context, so a
-// failed frame write is the only in-band signal that it's gone. The stream must
-// react to it by tearing the child down — running disposers, stopping ticks —
-// not by looping its single goroutine against a dead socket forever.
 func TestLive_failedStreamWriteTearsDownTheChildSoItDoesNotLeak(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
 		handler := via.Handler(disposeProbe{disposed: done})
-		// httptest.NewRequest's context is never cancelled, so the ONLY thing that
+		// httptest.NewRequest's context is never cancelled, so the only thing that
 		// can end the stream here is the failed keepalive write — isolating that path.
 		req := httptest.NewRequest(http.MethodPost, "/_via/sse", nil)
 		req.Header.Set("Sec-Fetch-Site", "same-origin") // past the origin floor, as a real browser would
@@ -381,7 +359,7 @@ func readFirstFrame(t *testing.T, srv *httptest.Server) []string {
 		close(lines)
 	}()
 
-	// Return the first datastar-patch-ELEMENTS frame, skipping the connect-time
+	// Return the first datastar-patch-elements frame, skipping the connect-time
 	// viatab patch-signals frame that now precedes every stream.
 	var frame []string
 	inElements := false
@@ -448,8 +426,8 @@ func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan strin
 		}
 		// A caller can end the stream from the server side (e.g. forcing a
 		// disconnect) without cancelling ctx, so a scan error here isn't
-		// necessarily a bug — just log it so a spurious "frame never
-		// arrived" failure elsewhere in the test carries the real reason.
+		// necessarily a bug — log it so a spurious "frame never arrived"
+		// failure elsewhere in the test carries the real reason.
 		if err := sc.Err(); err != nil && ctx.Err() == nil {
 			t.Logf("sse scan ended: %v", err)
 		}
@@ -493,10 +471,6 @@ func awaitTabID(t *testing.T, lines <-chan string) string {
 	}
 }
 
-// A rendered fragment with an embedded newline must remain ONE SSE event:
-// every content line after the event line must be a `data:` field. A bare,
-// unprefixed line is read by the client as a junk field, silently truncating
-// the patch, then applying broken HTML.
 func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(multiline{}))
@@ -514,7 +488,6 @@ func TestLive_multilineFragmentStaysOneSSEEvent(t *testing.T) {
 	})
 }
 
-// A live child that registers no ticks must still open the stream cleanly.
 func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(quietChild{}))
@@ -534,9 +507,6 @@ func TestLive_streamOpensWithNoTicks(t *testing.T) {
 	})
 }
 
-// A streaming page must server-render its initial View (no empty flash) and carry a
-// single bootstrap that opens the per-tab SSE stream, or the child never goes
-// live in the browser.
 func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newPulse(t), http.MethodGet, "/", "")
@@ -546,9 +516,6 @@ func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`, "page must bootstrap the SSE stream")
 }
 
-// The SSE endpoint must stream Datastar element-patch frames: text/event-stream,
-// an `event: datastar-patch-elements` line, and a `data: elements <#root …>`
-// line carrying the re-rendered fragment with an advanced beat — the live push.
 func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := newPulse(t)
@@ -607,9 +574,6 @@ type boomOnDiscovery struct{}
 
 func (boomOnDiscovery) View() h.H { panic("via_test: discovery render exploded") }
 
-// A panic before the stream's headers are sent must answer 500, not fall
-// through to Go's default of 200 with an empty body — the client would read
-// that as a successful (if empty) connect.
 func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, serve(t, via.Handler(boomOnDiscovery{})), http.MethodPost, "/_via/sse", "")
@@ -632,10 +596,6 @@ func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-// openStreamAt's reader goroutine has two return paths — ctx.Done (client
-// cancels) and the scanner running dry (server closes the body). Both must
-// close lines, or a caller that ranges over it (or does `cancel(); <-done`
-// on a goroutine that ranges over it) hangs forever.
 func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
@@ -660,9 +620,6 @@ func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
 	})
 }
 
-// Neighbour path: the scanner running dry (the server ends the stream, not
-// the caller canceling ctx) must also close lines — the reader goroutine
-// falls out of `for sc.Scan()` without ever taking the ctx.Done arm.
 func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Handler(disposeProbe{disposed: make(chan struct{})}))
@@ -684,8 +641,8 @@ func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	}
 }
 
-// clicker is a live child whose action mutates its OWN server State. The proof
-// of correct routing: after the POST, the patch must arrive over THIS
+// clicker is a live child whose action mutates its own server State. The proof
+// of correct routing: after the POST, the patch must arrive over this
 // connection's SSE (not as the POST body), which only happens if the action ran
 // against this connection's child instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
@@ -705,7 +662,7 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
 
-		conn.Await("count: 1") // the mutation reaches THIS connection
+		conn.Await("count: 1") // the mutation reaches this connection
 	})
 }
 
@@ -732,11 +689,6 @@ func (f *flakyRender) View() h.H {
 	)
 }
 
-// A panic in the re-render a dispatched action's pushWork triggers must not
-// take the whole stream goroutine down — a dead goroutine here would strand
-// every later action behind a stream that looks alive but never dispatches
-// again. Trigger's mutation succeeds and its render then panics; a second
-// action (Fix) must still dispatch and push normally.
 func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(flakyRender{}))
@@ -767,10 +719,6 @@ func (r *racyDirtySignal) View() h.H {
 	return h.Div(r.n.Display(), r.beat.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
 }
 
-// Every Inc dispatch that acks must also ship its value over the SSE
-// signals-patch, even under concurrent Incs. Before the fix (dispatchOverStream
-// looked up its unit before handing off to the child goroutine, not inside
-// it), a concurrent push could replace the unit in between, dropping values.
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Handler(racyDirtySignal{}))
@@ -839,10 +787,6 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	<-done
 }
 
-// C9 regression: liveRunAction's push rides back as actionResult.pushWork
-// and runs on the connection's serialized goroutine right after acking, in
-// commit order — not on a detached goroutine racing other actions. The old
-// fire-and-forget enqueue could reorder pushes under concurrent dispatch.
 func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T) {
 	t.Parallel()
 	srv := liveServer(t, via.Handler(racyDirtySignal{}))
@@ -989,10 +933,6 @@ type wrapRW struct{ http.ResponseWriter }
 
 func (w wrapRW) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// via must find the flusher THROUGH a user's middleware. A raw http.Flusher
-// assertion answers no for the wrapper above, and the connect would 500
-// "streaming unsupported" — so every live page behind an ordinary logging or
-// compression middleware would simply never go live.
 func TestLive_connectsThroughAMiddlewareThatWrapsTheWriter(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(disposeProbe{disposed: make(chan struct{})})
@@ -1018,9 +958,6 @@ func (d *deadRW) Header() http.Header         { return d.hdr }
 func (d *deadRW) Write(p []byte) (int, error) { return d.body.Write(p) }
 func (d *deadRW) WriteHeader(code int)        { d.code = code }
 
-// The other end of the probe: a writer that genuinely cannot stream must be
-// refused BEFORE the stream goroutine and its timers are allocated, and with a
-// status that says why. Flushing to find out would commit a 200 first.
 func TestLive_connectIsRefusedWhenTheWriterCannotStream(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(disposeProbe{disposed: make(chan struct{})})

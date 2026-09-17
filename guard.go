@@ -7,7 +7,7 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// Guard runs before OnInit on EVERY transport a mount answers — the page GET,
+// Guard runs before OnInit on every transport a mount answers — the page GET,
 // a plain action, a live action over an open stream, and the SSE connect.
 // OnInit runs on every one of those but the live action, so a Guard is the
 // only thing that re-authorizes that: a session revoked after connect still

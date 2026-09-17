@@ -8,8 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// A published value reaches every current subscriber — that is the fan-out the
-// multi-user case is built on.
 func TestTopic_publishReachesEverySubscriber(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[string]()
@@ -25,9 +23,6 @@ func TestTopic_publishReachesEverySubscriber(t *testing.T) {
 	assert.True(t, bok)
 }
 
-// One stuck consumer must not stall the publisher (or every other subscriber):
-// Publish only ever appends to a queue. A framework that lets one slow tab
-// freeze the broadcast is unusable.
 func TestTopic_slowSubscriberDoesNotBlockThePublisher(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[int]()
@@ -46,8 +41,6 @@ func TestTopic_slowSubscriberDoesNotBlockThePublisher(t *testing.T) {
 	}
 }
 
-// Stop deregisters a subscriber and closes its channel, so later publishes never
-// reach it and its reader loop ends.
 func TestTopic_stopDeregistersAndClosesChannel(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[string]()
@@ -77,9 +70,6 @@ func TestTopic_subsCountsOnlyLiveSubscriptions(t *testing.T) {
 	assert.Zero(t, tp.NumSubs())
 }
 
-// A burst far larger than any per-subscriber buffer must still deliver every
-// value to every subscriber. A drop-on-full fan-out loses ~87% of a burst this
-// size, which is why delivery does not drop.
 func TestTopic_burstIsLosslessForEverySubscriber(t *testing.T) {
 	t.Parallel()
 	const subs, msgs = 100, 1000
@@ -104,8 +94,6 @@ func TestTopic_burstIsLosslessForEverySubscriber(t *testing.T) {
 	}
 }
 
-// Loss past the queue limit is the one documented failure mode, and it must be
-// counted rather than silent.
 func TestTopic_overLimitDropsAreCounted(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[int]()
@@ -119,8 +107,6 @@ func TestTopic_overLimitDropsAreCounted(t *testing.T) {
 	assert.Zero(t, tp.Subscribe().Dropped(), "a healthy subscriber drops nothing")
 }
 
-// Values queued before Stop stay drainable: a reader woken by the close must
-// still see everything published before it.
 func TestTopic_stopKeepsAlreadyQueuedValues(t *testing.T) {
 	t.Parallel()
 	tp := topic.New[string]()
@@ -134,8 +120,6 @@ func TestTopic_stopKeepsAlreadyQueuedValues(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// BenchmarkTopic_burstFanOut quantifies the fix: delivered/published under the
-// exact burst that made the old drop-on-full broker lose ~87%.
 func BenchmarkTopic_burstFanOut(b *testing.B) {
 	const subs, msgs = 100, 1000
 	var delivered, published int64

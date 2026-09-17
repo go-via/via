@@ -19,8 +19,6 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// --- small HTML helpers (plain app glue, not framework API) ---
-
 func page(title string, body ...h.H) h.H {
 	return h.Div(append([]h.H{h.H1(h.Str(title))}, body...)...)
 }
@@ -56,8 +54,6 @@ func errorPage(ctx *via.Ctx, e via.PageError) h.H {
 	}
 }
 
-// --- /signup ---
-
 type SignUp struct {
 	store *Store
 	err   string
@@ -89,8 +85,6 @@ func (s *SignUp) View() h.H {
 	)
 }
 
-// --- /login ---
-
 type Login struct {
 	store *Store
 	err   string
@@ -119,8 +113,6 @@ func (l *Login) View() h.H {
 		link("/signup", "Need an account? Sign up"),
 	)
 }
-
-// --- /profile (session-gated in OnInit) ---
 
 type Profile struct {
 	store *Store
@@ -188,8 +180,6 @@ func (p *Profile) View() h.H {
 	)
 }
 
-// --- /forum (session-gated in OnInit) ---
-
 type Forum struct {
 	store   *Store
 	threads []Thread
@@ -233,8 +223,6 @@ func (f *Forum) View() h.H {
 		link("/profile", "Profile"),
 	)
 }
-
-// --- /thread/{id} (session-gated in OnInit; reads the {id} segment via Param) ---
 
 type ThreadPage struct {
 	store   *Store

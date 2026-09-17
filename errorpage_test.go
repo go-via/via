@@ -478,7 +478,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 	require.NoError(t, err)
 	app.Client().Jar = jar
 
-	// The session must exist BEFORE the connect: a stream binds the identity the
+	// The session must exist before the connect: a stream binds the identity the
 	// browser held when it opened, and an unbound stream skips the store read
 	// this test is about.
 	app.Get("/")

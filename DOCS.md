@@ -28,7 +28,7 @@ func main() { http.Handle("/", via.Handler(Counter{n: new(atomic.Int64)})) }
 ```
 
 **2. `Signal` — client state.** `Bind()` on an input and `Display()` elsewhere
-share one wire name (the Go FIELD name), so the text tracks the input entirely
+share one wire name (the Go field name), so the text tracks the input entirely
 in the browser, with no request at all.
 
 ```go
@@ -145,7 +145,7 @@ func main() {
 	via.Mount(app, "/thread/{id}", Thread{})
 	defer app.Close()
 	log.Fatal(http.ListenAndServe(":8080", app)) // never drop this error: a port
-	// already in use otherwise looks like a page that simply does not respond
+	// already in use otherwise looks like a page that does not respond
 }
 ```
 
@@ -185,7 +185,7 @@ the SSE connect. Register connection-scoped side effects rather than performing
 them: `ctx.OnConnect(fn)` runs once when the stream opens, `ctx.OnDispose(fn)`
 when it closes.
 
-**`OnReload` is the other half.** `OnInit` runs BEFORE the handler, so anything
+**`OnReload` is the other half.** `OnInit` runs before the handler, so anything
 it loaded is stale the moment the handler mutates the store:
 
 ```go
@@ -211,7 +211,7 @@ to repeat once a handler has committed a mutation.
 
 **Pin your hooks.** `OnInit` and `OnReload` are duck-typed: a composition opts
 in by having the method, so a rename or a signature change opts it silently
-*out* — it still compiles, and the hook just stops running. One line per hook
+*out* — it still compiles, and the hook stops running. One line per hook
 next to the type turns that into a compile error:
 
 ```go
@@ -342,7 +342,7 @@ The action endpoint and rendered pages are hardened by default:
   gate on every `Redirect` target. `javascript:`/`data:`/`//` targets are
   dropped loudly: a Datastar action falls back to its normal element-patch
   response, a native `PostForm` submit falls back to a full-page re-render, and
-  an unsafe target from `OnInit` answers 500. A SAFE target navigates from
+  an unsafe target from `OnInit` answers 500. A safe target navigates from
   anywhere, including a Datastar `@post`. The response is a one-line
   `location.assign` script the CSP admits by hash, with the target carried in
   a `datastar-script-attributes` header rather than in the script bytes.
@@ -353,7 +353,7 @@ The action endpoint and rendered pages are hardened by default:
   anything else answers 410 before the handler runs. The render that decides
   this is server state alone: a `Signal` is hydrated from a request only for a
   slot the render put under client control (`Bind()`, which emits
-  `data-bind`), and the plain action path applies the body AFTER its discovery
+  `data-bind`), and the plain action path applies the body after its discovery
   render. So a `Display()`-only or unrendered signal cannot be set by a client,
   and a POST cannot open the branch that authorizes it.
 - **Never gate on a signal.** A `Bind()`ed `Signal` is client state by
@@ -425,7 +425,7 @@ it.
   handle-identity wire names. `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side. `When`/`Each` render
   conditionals and lists.
-  - A signal's wire name is its Go FIELD name — `count`, and `chat__draft` for
+  - A signal's wire name is its Go field name — `count`, and `chat__draft` for
     one inside a `Chat` child. Not its render order, so a `Bind()` behind a
     `When` (a wizard step, a branch that only sometimes renders its input)
     keeps its own slot instead of inheriting one from whatever rendered first.
@@ -474,8 +474,8 @@ it.
     itself does nothing to keep it warm) turns every later dispatch on that tab
     into a 403 "session mismatch" until the page is reloaded.
   - The signing key resolves `WithSessionKey` → `VIA_SESSION_KEY` env → a
-    random per-process key (warned on first use). The key signs the COOKIE. The
-    DATA lives in a `SessionStore`, and the default store is this process's
+    random per-process key (warned on first use). The key signs the cookie. The
+    data lives in a `SessionStore`, and the default store is this process's
     memory, so a restart or a second pod needs `WithSessionStore` as well — see
     **Restarts and deploys** at the end of this section.
   - `WithSessionTTL`/`WithSessionCookieName` tune it. The cookie is `Secure`
@@ -554,8 +554,8 @@ presence count, in ~60 lines.
 
 **Restarts and deploys.** Two separate things have to survive: the cookie and
 the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps
-the COOKIE valid across restarts and pods; it is signed rather than stored. The
-DATA lives in a `SessionStore`, and the default one is a map in this process's
+the cookie valid across restarts and pods; it is signed rather than stored. The
+data lives in a `SessionStore`, and the default one is a map in this process's
 memory, so with the key alone a restart still logs everyone out and a second
 pod sees nothing. Pass `WithSessionStore` for a shared, durable store:
 
@@ -621,7 +621,7 @@ the same across renders, instances and builds. A row's datum rides along in
 that tab is holding valid. Dispatch answers `410 Gone` — on both the plain and
 live paths — for an id the current render does not bind (a closed branch, or an
 `OnInit` that failed to restore the state the `View` branches on; the 410 names
-the handlers that ARE bound), an unknown child, or a live action with no
+the handlers that are bound), an unknown child, or a live action with no
 connection for its tab. Datastar resolves a non-2xx response silently and moves
 on; a native `<form>` submit shows the browser's own error page.
 

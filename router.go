@@ -18,14 +18,14 @@ import (
 )
 
 // Initer is via's one lifecycle hook, on a page or any embedded child: OnInit
-// runs with a Ctx BEFORE the (ctx-free) View, so a unit can load request or
+// runs with a Ctx before the (ctx-free) View, so a unit can load request or
 // session data into its fields and register the timers and subscriptions that
-// make it LIVE — ctx.Tick and ctx.Listen are valid only here. Detected by
+// make it live — ctx.Tick and ctx.Listen are valid only here. Detected by
 // interface assertion, never reflection.
 //
 // Opting in is having the method, so a rename or a signature change opts you
-// silently OUT: the composition still compiles and the hook simply stops
-// running. Pin it next to the type, and a future rename is a compile error:
+// silently out: the composition still compiles and the hook stops running.
+// Pin it next to the type, and a future rename is a compile error:
 //
 //	var _ via.Initer = (*Front)(nil)
 //
@@ -35,7 +35,7 @@ import (
 // is logged — but the assertion above is the only airtight form.
 type Initer interface{ OnInit(*Ctx) error }
 
-// Reloader re-reads a unit's data AFTER one of its actions ran and BEFORE the
+// Reloader re-reads a unit's data after one of its actions ran and before the
 // response render. It is the fix for via's commonest week-one defect: OnInit
 // loads, the handler mutates the store, and the render that answers the action
 // still shows what OnInit loaded — a 204 and a UI that never moves.
@@ -43,7 +43,7 @@ type Initer interface{ OnInit(*Ctx) error }
 //	func (p *Front) OnReload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
 //	func (p *Front) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
 //
-// Why a second hook and not a second OnInit run: OnInit is an INITIALIZER, not
+// Why a second hook and not a second OnInit run: OnInit is an initializer, not
 // a loader. It mints and defaults the session, registers Tick/Listen, and may
 // Redirect or return ErrNotFound — all of which are wrong to repeat once a
 // handler has already committed a mutation. Re-running it would overwrite the
@@ -68,10 +68,10 @@ var ErrNotFound = errors.New("via: not found")
 // Redirect; the caller must stop, like any other non-nil return.
 var errRedirected = errors.New("via: redirected")
 
-// runOnInit calls v.OnInit on ctx — the SAME Ctx the render then binds, so a
+// runOnInit calls v.OnInit on ctx — the same Ctx the render then binds, so a
 // Tick or Listen it registers marks the unit live. The response is still open,
 // so OnInit may set the session cookie or queue a Redirect (303'd here, before
-// the View renders — via's one per-request gate). A non-nil error has ALREADY
+// the View renders — via's one per-request gate). A non-nil error has already
 // been answered on w, so the caller must stop and never render.
 //
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
@@ -164,7 +164,7 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 }
 
 // answerReloadFailure answers a failed OnReload the way runOnInit answers a
-// failed OnInit. A queued Redirect is NOT handled here: the caller
+// failed OnInit. A queued Redirect is not handled here: the caller
 // routes it through respond, which knows the transport.
 func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	noteErr(w, err)
@@ -179,7 +179,7 @@ func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	}
 }
 
-// checkViewReceiver panics on a composition whose View has a VALUE receiver
+// checkViewReceiver panics on a composition whose View has a value receiver
 // while it holds Signals. View is then called on a copy, so every Signal it
 // binds offsets from a stack address the render throws away — which used to
 // surface as a per-request 500 forever, once per request, with the process
@@ -333,7 +333,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 // Close shuts the router's live half down and returns once it is quiet. Call it
-// BEFORE http.Server.Shutdown: a stream's goroutine, its Tick timers and its
+// before http.Server.Shutdown: a stream's goroutine, its Tick timers and its
 // Listen subscriptions hang off a context of the router's own, which Shutdown
 // does not cancel — so without this Shutdown blocks on every open tab until its
 // own deadline expires and then kills them mid-frame.
@@ -351,7 +351,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // gets against a tab that has just disconnected — never silently dropped. A
 // connect arriving after Close is refused 503.
 //
-// Close does NOT stop serving plain pages; that is http.Server.Shutdown's job.
+// Close does not stop serving plain pages; that is http.Server.Shutdown's job.
 // It is safe to call more than once and from any goroutine, and every call
 // waits for the same drain.
 func (r *Router) Close() {
@@ -401,14 +401,14 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
 	m.guards = mc.guards
-	// The CSP is derived from the root's declaration ONCE, here, off the
+	// The CSP is derived from the root's declaration once, here, off the
 	// zero-data literal: one string per mount, none per request. renderPage
 	// re-reads it and panics if the request-time value disagrees.
 	lit := root
 	assets := pageMetaOf(PT(&lit)).Assets
 	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
 	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets), assets.fingerprint()
-	// …and proved constant HERE, not on the first GET. A second reading off a
+	// …and proved constant here, not on the first GET. A second reading off a
 	// probe copy — the same literal with its zero fields filled in, which is
 	// what OnInit does — must produce the same assets. A page that fails this
 	// would otherwise boot fine and 500 every request.
@@ -469,10 +469,10 @@ func mountBase(path string) (base string, names []string) {
 // values, so a mounted page's action/form URLs point at /thread/5/_via/a/0 and
 // not the pattern.
 //
-// TWO-LAYER ESCAPING (the canonical statement; writeHTMLPage refers here). A
+// Two-layer escaping (the canonical statement; writeHTMLPage refers here). A
 // mount base ends up inside a Datastar expression inside an HTML attribute —
 // @post('<base>/…') — and Datastar evaluates that expression as JavaScript, so
-// it needs BOTH layers and neither substitutes for the other: PathEscape here
+// it needs both layers and neither substitutes for the other: PathEscape here
 // keeps a segment out of the JS string literal (a quote would otherwise close
 // it and run whatever follows), and the attribute escaping at the write site keeps
 // it out of the attribute. PathEscape also keeps the URL a valid path, and the
@@ -527,8 +527,8 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ha
 
 // hookSpecs are via's optional, duck-typed hooks. Opting in is having the
 // method; the cost of that is that a typo or a signature drift opts you
-// silently OUT — the composition still compiles and the hook simply never runs.
-// rootOnly marks the ones only a MOUNTED page's own methods are read from.
+// silently out — the composition still compiles and the hook never runs.
+// rootOnly marks the ones only a mounted page's own methods are read from.
 type hookSpec struct {
 	name       string
 	iface      string
@@ -545,7 +545,7 @@ var hookSpecs = []hookSpec{
 }
 
 // hookAliases maps a plausible mis-spelling to the hook it was surely meant to
-// be. Only consulted for methods that ALSO have the hook signature, which is
+// be. Only consulted for methods that also have the hook signature, which is
 // what keeps an ordinary action handler (func(*Ctx), no return) out of it.
 var hookAliases = map[string]string{
 	"Init": "OnInit", "Initialize": "OnInit", "Initialise": "OnInit",
@@ -561,7 +561,7 @@ var hookAliases = map[string]string{
 // match is case-insensitive and tolerates one edit, because the typos that
 // actually happen in the wild ("Oninit", "OnConect") are exactly the ones an
 // exact table misses. Only names of 5 characters or more are fuzzy-matched, and
-// only methods that ALREADY have a hook's signature ever reach here, so an
+// only methods that already have a hook's signature ever reach here, so an
 // unrelated method has to be a single keystroke off a hook name to trip it.
 func aliasFor(method string) (string, bool) {
 	if hook, ok := hookAliases[method]; ok {
@@ -631,7 +631,7 @@ func implementsAs[T any](pt reflect.Type) bool {
 	return pt.Implements(reflect.TypeOf((*T)(nil)).Elem())
 }
 
-var hookSigChecked sync.Map // reflect.Type -> true (only on a CLEAN pass)
+var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
 
 // childHookWarned dedupes Child's near-miss warning, which would otherwise
 // repeat on every render of the child. Mount passes the Router's own map
@@ -642,12 +642,12 @@ var childHookWarned sync.Map
 // checkHooks catches the ways a composition can miss a hook it meant to
 // implement. A method literally named OnInit/OnReload/Title/Description with
 // the wrong signature is unambiguous, so it panics here at Mount/Child rather
-// than serving forever with the hook dead. A near-miss NAME is a heuristic, so
+// than serving forever with the hook dead. A near-miss name is a heuristic, so
 // it only warns — but only when the method carries the exact hook signature and
 // the real interface is unsatisfied, which is a shape nothing but the mistake
 // produces.
 //
-// root says whether t is being MOUNTED. Only the root's Title is read, so a
+// root says whether t is being mounted. Only the root's Title is read, so a
 // correctly-shaped one on an embedded child is reported: it is a warning and
 // not a panic because the very same type may legitimately be a mounted page
 // elsewhere in the app, and panicking would outlaw that.
@@ -702,7 +702,7 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	}
 }
 
-// ctxErrShaped reports whether a METHOD type (receiver still in In(0)) is
+// ctxErrShaped reports whether a method type (receiver still in In(0)) is
 // func(*Ctx) error.
 func ctxErrShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) &&
@@ -710,14 +710,14 @@ func ctxErrShaped(mt reflect.Type) bool {
 		!mt.IsVariadic()
 }
 
-// stringShaped reports whether a METHOD type is func() string — the retired
+// stringShaped reports whether a method type is func() string — the retired
 // Title hook's shape, kept only to recognise a leftover one.
 func stringShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf("") &&
 		!mt.IsVariadic()
 }
 
-// metaShaped reports whether a METHOD type is func() via.Meta.
+// metaShaped reports whether a method type is func() via.Meta.
 func metaShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf(Meta{}) &&
 		!mt.IsVariadic()
@@ -762,14 +762,14 @@ func probeAssets(read func() Assets) (fp string, ok bool) {
 // perturbZeroFields fills v's zero scalar fields with non-zero values in place,
 // standing in for the data OnInit would load. A field the mounted literal
 // already set is left alone: that value is fixed for the life of the mount, so
-// assets derived from it ARE constant (a CDN base handed to the literal is the
+// assets derived from it are constant (a CDN base handed to the literal is the
 // motivating case). Reference kinds are left nil — a PageMeta deriving assets
 // from a slice OnInit fills escapes this probe, which is why the render-time
 // comparison stays.
 //
 // Struct fields whose type comes from outside the page's own package are left
 // completely alone, because their zero value is load-bearing: writing 1 into a
-// sync.Mutex's state word makes the next Lock() a RUNTIME THROW that no recover
+// sync.Mutex's state word makes the next Lock() a runtime throw that no recover
 // can catch, and time.Time's wall/ext are just as private. The page's own
 // package is the only one whose invariants the author controls.
 func perturbZeroFields(v reflect.Value, pkg string, depth int) {

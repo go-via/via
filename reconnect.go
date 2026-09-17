@@ -6,7 +6,7 @@ package via
 // something the user can see.
 //
 // The load-bearing fact, read off the bundled datastar.js: the fetch driver
-// defaults to retry:"auto", and under "auto" the ONLY path that reaches its
+// defaults to retry:"auto", and under "auto" the only path that reaches its
 // retry helper is the network-error catch. A response that ends — a clean
 // close on a graceful deploy, or Router.Close returning from the stream — takes
 // the `u?.(),h==="always"&&!mt` test, fails it, and falls through to `q(),n()`:
@@ -15,7 +15,7 @@ package via
 // network drops only, and a clean close would otherwise leave a page that looks
 // alive while every click 410s.
 //
-// Hence: `finished` whose detail.el is <body> IS the stream ending — the SSE
+// Hence: `finished` whose detail.el is <body> is the stream ending — the SSE
 // @post is the only fetch mounted on <body> (router.go's data-init) — and it is
 // treated as a drop. Emitting retry:"always" on that @post was the alternative
 // and is worse: it would also retry the deliberate 404 "no stream for this tab"
@@ -23,12 +23,12 @@ package via
 // through the same handler, so it buys nothing this does not already do.
 //
 // `error` is dispatched from the driver's onopen for any status >= 400, with
-// the code as a STRING in detail.argsRaw.status. A 410 means the tab is stale
+// the code as a string in detail.argsRaw.status. A 410 means the tab is stale
 // (its stream is gone, or the render no longer binds the action) — reload. A
 // 403/5xx is a server-side condition a reload will not fix — banner only.
 //
 // It also publishes status as a data-via-connection attribute on <html> —
-// "online"/"connecting"/"offline" — so an app can style its OWN connection UI in
+// "online"/"connecting"/"offline" — so an app can style its own connection UI in
 // CSS. A DOM attribute, not a signal, because Datastar exposes no supported way
 // to merge a signal from outside its own fetch lifecycle.
 //
@@ -53,7 +53,7 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`function hide(){if(b)b.style.display='none'}` +
 	`function ok(){gen++;fails=0;conn('online');hide()}` +
 	`function stop(m){gen++;conn('offline');show(m)}` +
-	// The re-bootstrap PROBES before it reloads. A reload fired blind lands on
+	// The re-bootstrap probes before it reloads. A reload fired blind lands on
 	// chrome-error://chromewebdata the moment the server is still down — which
 	// every real deploy is, for seconds — and the browser gives up there with
 	// no script left alive to try again. So: ask for this page until it answers,
@@ -70,7 +70,7 @@ const reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`if(n>=2){show('Connection lost. Please refresh the page.');return}` +
 	`show(m);fails=0;probe(500,++gen)}` +
 	// An incoming patch is the only reliable "stream is alive again" signal: a
-	// long-lived SSE @post fires 'retrying' on a drop but NO 'started'/'finished'
+	// long-lived SSE @post fires 'retrying' on a drop but no 'started'/'finished'
 	// on a successful resume. The bundled Datastar surfaces incoming patches
 	// solely as 'datastar-fetch' events whose detail.type is the patch kind — it
 	// never dispatches document-level 'datastar-patch-*' events — so those kinds

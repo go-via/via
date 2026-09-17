@@ -41,11 +41,6 @@ var urlCorpus = []struct {
 	{"mailto:a@b.c", false},
 }
 
-// The neutralizer behind the typed attributes and the predicate behind via's
-// Redirect gate are the same policy, and the point of moving the predicate into
-// internal/hcore is that they can no longer be two policies that merely agree.
-// This pins the agreement: an attribute is neutralized to "#" exactly when the
-// predicate refuses the URL. Change either side alone and this fails.
 func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {
 	t.Parallel()
 	for _, c := range urlCorpus {
@@ -58,8 +53,6 @@ func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {
 	}
 }
 
-// Every typed URL attribute goes through the one gate, not just href — a
-// policy that covers links but not form actions is not a policy.
 func TestURLPolicy_coversEveryTypedAttribute(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, render(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
@@ -70,13 +63,6 @@ func TestURLPolicy_coversEveryTypedAttribute(t *testing.T) {
 	assert.Contains(t, render(t, h.Form(h.Action("/ok"))), `action="/ok"`)
 }
 
-// RawAttr is the escape hatch for any attribute name, and a caller can spell
-// the same URL-bearing attributes the typed constructors cover — formaction
-// being the sharpest, since it hijacks a submit button inside an otherwise
-// safe form. Every one of them must go through the same SafeURL gate as
-// Href/Src/Action, or RawAttr is a bypass of the typed policy rather than an
-// equally-policed alternative to it. Case is attacked too, since HTML
-// attribute names are case-insensitive.
 func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 	t.Parallel()
 	// xlink:href is deliberately excluded: RawAttr's name allowlist already
@@ -99,11 +85,6 @@ func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`)
 }
 
-// srcdoc is single-escaped like any other attribute value, but a browser
-// entity-decodes the attribute and then parses the decoded string as a
-// document: an escaped "<script>" round-trips back to a live <script> tag,
-// same-origin. There is no safe escaping strategy for it through RawAttr, so
-// it must be refused outright rather than rendered.
 func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"srcdoc", "SRCDOC", "SrcDoc"} {
@@ -112,18 +93,12 @@ func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {
 	}
 }
 
-// Href/Src/Action neutralize through ONE gate. They used to call h.RawAttr,
-// which re-ran the same URL-bearing check on the value they had already
-// neutralized; they now go straight to the core attribute writer. This pins
-// what the second pass was silently propping up: the surviving gate alone
-// still refuses every hostile family, once, with nothing of the URL left in
-// the markup.
 func TestURLPolicy_typedAttributesNeutralizeThroughASingleGate(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
-	// The gate runs when the Attr is CONSTRUCTED, not at render, so each node
+	// The gate runs when the Attr is constructed, not at render, so each node
 	// has to be built after the log buffer is reset.
 	gates := []struct {
 		attr string

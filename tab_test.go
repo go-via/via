@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A live action POST with no/unknown tab id (no stream to route to)
-// must 410 so a stale client re-bootstraps, never silently mutate a throwaway.
 func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(clicker{}))
@@ -58,8 +56,8 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 			}
 		}
 		// A caller can end the stream from the server side without cancelling
-		// ctx, so a scan error here isn't necessarily a bug — just log it so
-		// a spurious "frame never arrived" failure carries the real reason.
+		// ctx, so a scan error here isn't necessarily a bug — log it so a
+		// spurious "frame never arrived" failure carries the real reason.
 		if err := sc.Err(); err != nil && ctx.Err() == nil {
 			t.Logf("sse scan ended: %v", err)
 		}
@@ -98,10 +96,6 @@ func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, child stri
 	return req
 }
 
-// A stream opened under a real session must reject a dispatch that
-// doesn't carry that same session — the tab id alone (a leaked/stolen one,
-// with no cookie at all, exactly as a cross-origin request would arrive with
-// the origin floor open) is no longer a sufficient credential.
 func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -146,7 +140,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 		"a dispatch against a session-bound connection with no session must be rejected")
 
 	// The rightful owner, same tab, same session cookie, must still work —
-	// the check rejects a MISMATCH, not the connection itself.
+	// the check rejects a mismatch, not the connection itself.
 	ownReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	ownResp, err := owner.Do(ownReq)
 	require.NoError(t, err)
@@ -155,10 +149,6 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 		"the connecting session's own dispatch must still succeed")
 }
 
-// Neighbour of the mismatch rejection: an ANONYMOUS stream (no
-// session at any point) must keep dispatching exactly as before — the check
-// only applies once a connection is actually bound to a session, so an app
-// that never touches Session() sees no behavior change.
 func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -183,13 +173,6 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 		"an anonymous connection must not be blocked — there is no session to mismatch")
 }
 
-// I1: an attacker holding a victim's leaked tab id, but carrying their OWN
-// valid session cookie, must not capture the connection by merely running a
-// read-only action against it — Ctx.Session() resolves the REQUEST's cookie
-// even for a read, so binding on "Session() was touched" (rather than "the
-// action minted a session that wasn't there before") would let the attacker's
-// pre-existing cookie look identical, after the fact, to a session the
-// action just created.
 func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConnection(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -235,7 +218,7 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 	peekResp.Body.Close()
 
 	// The victim's own later cookieless dispatch must still succeed — the
-	// connection must NOT have been captured by the attacker's cookie.
+	// connection must not have been captured by the attacker's cookie.
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpResp, err := http.DefaultClient.Do(bumpReq)
 	require.NoError(t, err)
@@ -244,10 +227,6 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 		"a read-only action carrying a foreign cookie must not bind the connection to it")
 }
 
-// Neighbour of the capture probe: the connection's own (anonymous) owner
-// running that same read-only action must not bind it either — the fix must
-// distinguish "an action minted a session" from "Session() was merely
-// touched", not just "no foreign cookie was involved".
 func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -296,9 +275,6 @@ func (p *liveLoginer) View() h.H {
 		h.Button(via.On("click", p.Rotate)))
 }
 
-// A tab connects anonymously, then a live action logs it in (Session().Put).
-// From that point on the connection must stop accepting a cookieless dispatch:
-// otherwise a leaked tab id is a bearer token for the logged-in stream.
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -343,9 +319,6 @@ func (o *onConnectLoginer) View() h.H {
 	return h.Div(o.n.Display(), h.Button(via.On("click", o.Bump)))
 }
 
-// The README-recommended "establish the session in OnInit" pattern must
-// bind the connection too — not just a session that already existed at
-// connect time.
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -369,9 +342,6 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 		"an OnInit-minted session must bind the connection exactly like a live-action login")
 }
 
-// Neighbour: two tabs open anonymously against the same app — logging one of
-// them in through a live action must bind ONLY that connection. A sibling
-// tab that never logs in keeps dispatching cookielessly, exactly as before.
 func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -409,10 +379,6 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 		"the sibling tab, never logged in, dispatches exactly as before")
 }
 
-// Neighbour: a session that rotates AFTER a live login bound the connection
-// must keep the binding across the new id — Rotate moves the same
-// *sessionData pointer (see sessionStore.reID), which is what dispatch
-// compares against.
 func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -484,11 +450,6 @@ func (p *raceLoginer) View() h.H {
 		h.Button(via.On("click", p.Login)))
 }
 
-// I3: the session-bound check must run on the same serialized goroutine as
-// the action it guards, not on the dispatching request's own goroutine
-// before the closure is even queued — otherwise a cookieless dispatch that
-// passes the check while the connection is still unbound, then actually
-// runs after a concurrent login has bound it, is applied anyway.
 func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
 	t.Parallel()
 	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
@@ -522,7 +483,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 		bumpDone <- resp
 	}()
 	// Give the cookieless dispatch time to reach its own check/enqueue point
-	// while the connection is STILL unbound — the exact window I3 closes.
+	// while the connection is still unbound — the exact window I3 closes.
 	// No deterministic handshake for this checkpoint is exposed through via's
 	// public surface, and adding one would mean touching non-test files, which
 	// is out of scope here; synctest doesn't help either since the race is
@@ -540,7 +501,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 }
 
 // sessionLiveChild puts the same live unit one level down, under a plain root.
-// The session binding is a property of the CONNECTION, so a child-scoped
+// The session binding is a property of the connection, so a child-scoped
 // dispatch must be held to it identically — but the dispatch address gains an
 // child key, and the session check and the child lookup are separate sites.
 type sessionLiveChild struct{ Child sessionLive }

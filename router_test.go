@@ -87,24 +87,17 @@ func cspOf(t *testing.T, c *http.Client, url string) string {
 	return csp
 }
 
-// A @post Redirect's script must be admitted by a document that may have been
-// served by another pod. Hashing gets there without any shared secret: the
-// policy depends on no cookie, no session, and no signing key, so pods with
-// DIFFERENT keys serve byte-identical policies. The old boot nonce only worked
-// when every pod shared VIA_SESSION_KEY — mismatched keys broke the redirect.
 func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
-	// No cookies, no session — the policy is still stable across requests.
 	c := &http.Client{}
 	csp1 := cspOf(t, c, srv.URL+"/x")
 	assert.Equal(t, csp1, cspOf(t, c, srv.URL+"/x"),
 		"the policy must be stable across requests without any session")
 
-	// A second app booted from a DIFFERENT key serves the same policy.
 	r2 := via.NewRouter(via.WithSessionKey([]byte("a-different-key-also-32-bytes-ok")))
 	via.Mount(r2, "/x", redirectPage{})
 	srv2 := serve(t, r2)
@@ -112,10 +105,6 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 		"a hash-based policy needs no shared key: pods with different keys agree")
 }
 
-// A via.Redirect from a Datastar @post action navigates the tab through the
-// hash-admitted script Datastar's text/javascript branch runs — but ONLY for a
-// target hcore.SafeURL clears. An unsafe one is dropped exactly as before: no
-// script, no header, no trace of the target anywhere in the response.
 func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -149,9 +138,6 @@ func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	}
 }
 
-// OnInit runs per request before the (ctx-free) View, so a page can load
-// session data into its fields and render it. Without it, a plain page could
-// never show "the logged-in user" — View has no ctx to read the session from.
 func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -173,7 +159,7 @@ type threadPage struct{ id int }
 func (p *threadPage) OnInit(ctx *via.Ctx) error { p.id = ctx.Param[int]("id"); return nil }
 func (p *threadPage) View() h.H                 { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
 
-// echoPage proves a path param is readable inside an ACTION (not just OnInit) on
+// echoPage proves a path param is readable inside an action (not just OnInit) on
 // a param'd mount — the action POST URL carries the {id} segment (/e/7/_via/a/r/0).
 type echoPage struct{ echoed int }
 
@@ -231,8 +217,6 @@ func uploadPOST(c *http.Client, t *testing.T, url, filename, content string) *ht
 	return resp
 }
 
-// PostForm is always multipart, so a file <input> reaches the handler through
-// stdlib's ctx.Request().FormFile — no separate upload verb or type.
 func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 	t.Parallel()
 	cap := &capture{}
@@ -261,10 +245,6 @@ func multipartTempFiles(t *testing.T) []string {
 	return matches
 }
 
-// deferred req.MultipartForm.RemoveAll() is what deletes a part's spilled
-// temp file — deleting that defer entirely fails no other test, since none of
-// them upload a file big enough to spill past maxActionBody in the first
-// place. This one deliberately does.
 func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 	// Not t.Parallel(): os.TempDir() is process-wide, and mime/multipart's
 	// spill files all share the "multipart-*" prefix regardless of which
@@ -291,8 +271,6 @@ func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 		"no multipart temp file spilled during this upload may survive the handler returning")
 }
 
-// The body cap for PostForm rises to maxUploadBytes (files are the payload);
-// an oversize multipart body is rejected, not buffered/spilled whole.
 func TestPostForm_rejectsOversizeUpload413(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -318,9 +296,6 @@ func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
 
 var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
-// A named path param binds the {name} segment so the page can read it (in
-// OnInit / actions) by that name, exactly like http.ServeMux —
-// /thread/42 → Param[int]("id")=42.
 func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -331,8 +306,6 @@ func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 	assert.Contains(t, body, "thread 42", `ctx.Param[int]("id") must read the {id} segment`)
 }
 
-// The path param is captured on the action sub-route too, so an action (whose
-// POST URL carries the {id} segment) reads it — not just OnInit.
 func TestRouter_pathParamReadableInAction(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -345,10 +318,6 @@ func TestRouter_pathParamReadableInAction(t *testing.T) {
 	assert.Contains(t, body, "echoed 7", `the action must read ctx.Param[int]("id") from its own POST path`)
 }
 
-// A segment that cannot decode into Param's type is a bad request against a
-// real route shape — /thread/abc for Param[int] answers 404, never a silent
-// zero-value render ("thread 0" would be a lie). Fails if Param goes back to
-// swallowing the decode error.
 func TestRouter_pathParamBadSegmentIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -360,8 +329,6 @@ func TestRouter_pathParamBadSegmentIs404(t *testing.T) {
 	assert.NotContains(t, body, "thread 0", "a bad segment must never render the zero value")
 }
 
-// The same 404 contract holds when the bad segment reaches Param inside an
-// ACTION (the POST URL carries the segment).
 func TestRouter_pathParamBadSegmentInActionIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -380,9 +347,6 @@ type wrongNamePage struct{}
 func (p *wrongNamePage) OnInit(ctx *via.Ctx) error { ctx.Param[int]("bogus"); return nil }
 func (p *wrongNamePage) View() h.H                 { return h.Div() }
 
-// Asking Param for a name the mount pattern doesn't declare panics (recovered
-// to a 500) rather than returning a silent zero value that would masquerade
-// as real data.
 func TestRouter_paramUnknownNamePanics(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -394,8 +358,6 @@ func TestRouter_paramUnknownNamePanics(t *testing.T) {
 		"Param for an undeclared name is a wiring mistake, not a 404")
 }
 
-// An OnInit Redirect protects the action sub-route too (not just the page
-// GET): an unauthenticated action POST is redirected before any handler runs.
 func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -424,8 +386,6 @@ func (p *unsafeRedirectPage) OnInit(ctx *via.Ctx) error {
 }
 func (p *unsafeRedirectPage) View() h.H { return h.Div() }
 
-// An OnInit redirect goes through the same hcore.SafeURL check as any other
-// Redirect: an unsafe target must never reach http.Redirect.
 func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -442,8 +402,6 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	assert.Empty(t, resp.Header.Get("Location"), "an unsafe OnInit redirect target must never reach http.Redirect")
 }
 
-// A session-gated page redirects (303) to the login path when the required
-// session value is absent.
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -460,8 +418,6 @@ func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
-// With the required session present, OnInit does not redirect and the page
-// renders.
 func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -515,9 +471,6 @@ func postForm(c *http.Client, t *testing.T, url, field, value string) *http.Resp
 	return resp
 }
 
-// A native form posts to a positional form endpoint; its handler runs (reading
-// the form fields off the request), and a via.Redirect turns into a 303 — so a
-// sign-in navigates the browser, which Datastar (no execute-script) cannot do.
 func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -535,9 +488,6 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 		"the sign-in session cookie must ride the 303 so the redirect lands authenticated")
 }
 
-// A form POST is state-changing, so under origin enforcement (WithTrustedOrigin
-// set) it must fail closed to a cross-site origin (CSRF), exactly like the
-// action endpoint.
 func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithTrustedOrigin("https://childder.example"))
@@ -557,7 +507,6 @@ func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
-// An unbound form action id fails closed (410), so a stale client re-bootstraps.
 func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -570,8 +519,6 @@ func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
 
-// The form body is capped (memory-exhaustion parity with the JSON action path):
-// an oversize body is rejected, not buffered whole.
 func TestRouter_postFormCapsBody(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -582,8 +529,6 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
-// A form handler that does not redirect re-renders the page (so it can show
-// validation errors etc.).
 func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -597,8 +542,6 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	assert.Contains(t, string(b), `<form method="post"`, "no-redirect form post must re-render the page")
 }
 
-// A form handler's ctx.Redirect target reaches http.Redirect verbatim: an
-// hostile scheme must be rejected here too, not just on the @post script path.
 func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -612,9 +555,6 @@ func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	assert.Empty(t, resp.Header.Get("Location"), "no Location header for a rejected redirect")
 }
 
-// A router serves several pages at their own paths; each page's actions are
-// namespaced under its mount path, so two pages can both declare action 1
-// without colliding, and an action on one page never touches the other.
 func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -635,8 +575,6 @@ func TestRouter_mountsPagesWithPathNamespacedIndependentActions(t *testing.T) {
 	assert.Contains(t, b2, `<h1>0</h1>`, "/b must be unaffected by an action on /a")
 }
 
-// Mounting at "/" must namespace to the root (no prefix): the page posts to
-// /_via/a/r/{act}, exactly like a single-page Handler.
 func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -650,8 +588,6 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	assert.Contains(t, after, `<h1>1</h1>`)
 }
 
-// A mounted action still ships the page-hardening response headers and behaves
-// like the single-page action (element-patch on change).
 func TestRouter_mountedActionElementPatches(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -676,9 +612,6 @@ func (p *failInitPage) OnInit(ctx *via.Ctx) error {
 }
 func (p *failInitPage) View() h.H { return h.P(h.Str("never")) }
 
-// OnInit returning via.ErrNotFound must answer 404 and never render the View —
-// the page's data is gone, and pretending otherwise would paint a lie. Fails if
-// the sentinel stops mapping to 404 or the render proceeds past a failed init.
 func TestRouter_onInitErrNotFoundIs404(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -688,7 +621,6 @@ func TestRouter_onInitErrNotFoundIs404(t *testing.T) {
 	assert.NotContains(t, body, "never", "a failed OnInit must not render the View")
 }
 
-// Any other OnInit error is the app's fault → 500, View never renders.
 func TestRouter_onInitErrorIs500(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -698,8 +630,6 @@ func TestRouter_onInitErrorIs500(t *testing.T) {
 	assert.NotContains(t, body, "never")
 }
 
-// The same contract holds on the action path: a failed OnInit blocks the
-// action from running at all.
 func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -708,10 +638,6 @@ func TestRouter_onInitErrorBlocksAction(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-// Handler is Mount at "/" internally — ONE dispatch pipeline. The observable
-// consequence: a single-page Handler(root) serves the router-only transports
-// too (a native PostForm posts to /_via/a/r/0 and 303s). Fails if Handler grows
-// its own separate mux again.
 func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(loginForm{}))
@@ -722,10 +648,6 @@ func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
 
-// The unified pipeline carries the live machinery too: a live child mounted on
-// a Router (not just Handler) bootstraps the SSE stream from its page — the
-// body carries @post('<base>/_via/sse') and the reconnect manager. Fails if
-// Mount loses the live bootstrap detection.
 func TestMount_livePageBootstrapsStreamUnderTheRouter(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -755,11 +677,6 @@ type jobPage struct{ Bar jobBar }
 
 func (p *jobPage) View() h.H { return h.Main(via.Child(p.Bar)) }
 
-// A page under a parametrised mount must advertise the CONCRETE SSE path. The
-// pattern base would be POSTed literally by the browser (/job/%7Bid%7D/_via/sse),
-// miss the route, and leave every live child under such a mount dead — while
-// the same page's action URLs already carried the concrete segment, so the two
-// halves of the library disagreed.
 func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -777,7 +694,7 @@ func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) 
 	awaitLine(t, lines, "pct ")
 }
 
-// slugPage is a LIVE page under a param'd mount: it holds a Tick (so the page
+// slugPage is a live page under a param'd mount: it holds a Tick (so the page
 // gets the data-init="@post('…/_via/sse')" bootstrap), an action binding (so
 // every data-on:@post URL carries the segment too), and a PostForm (so the
 // form action attribute does), and it echoes the raw segment through
@@ -806,12 +723,6 @@ func slugServer(t *testing.T) *httptest.Server {
 	return serve(t, r)
 }
 
-// A mount param is concatenated into a Datastar expression (@post('…')) inside
-// an HTML attribute, and Datastar EVALUATES that expression as JavaScript under
-// a CSP carrying 'unsafe-eval'. A quote in the segment would close the string
-// literal and run whatever follows. The assertion is on the attribute CONTENT,
-// not the absence of a payload string: the escaped form must be exactly the
-// percent-encoded segment inside one unbroken quoted literal.
 func TestRouter_paramCannotBreakOutOfADatastarExpression(t *testing.T) {
 	t.Parallel()
 	srv := slugServer(t)
@@ -827,9 +738,6 @@ func TestRouter_paramCannotBreakOutOfADatastarExpression(t *testing.T) {
 	assert.NotContains(t, page, "@post('/t/x'", "the segment must never terminate the JS string literal")
 }
 
-// The double quote closes the ATTRIBUTE rather than the JS literal, so
-// path-escaping alone is not enough: the value must be HTML-escaped where it is
-// written. (PathEscape leaves '"' alone.)
 func TestRouter_paramCannotBreakOutOfTheAttribute(t *testing.T) {
 	t.Parallel()
 	srv := slugServer(t)
@@ -840,8 +748,6 @@ func TestRouter_paramCannotBreakOutOfTheAttribute(t *testing.T) {
 	assert.NotContains(t, page, `" onload=`, "an unescaped quote would graft a live attribute into <body>")
 }
 
-// '&' must not start an entity inside the attribute, and '</script>' must not
-// be able to close an element — both are written escaped.
 func TestRouter_paramAmpersandAndTagAreEscaped(t *testing.T) {
 	t.Parallel()
 	srv := slugServer(t)
@@ -855,8 +761,6 @@ func TestRouter_paramAmpersandAndTagAreEscaped(t *testing.T) {
 	assert.NotContains(t, page2, "@post('/t/</script>", "no raw tag may reach an attribute from a segment")
 }
 
-// Escaping must not corrupt the VALUE: a non-ASCII segment still round-trips
-// to Param[string] intact, and the URL it mints is a valid path the mux routes.
 func TestRouter_nonASCIIParamRoundTrips(t *testing.T) {
 	t.Parallel()
 	srv := slugServer(t)
@@ -929,8 +833,6 @@ func TestMount_staysQuietWhenThePageMetaLookalikeIsAHelperItCalls(t *testing.T) 
 	assert.NotContains(t, logged, "mis-named")
 }
 
-// Title was the hook PageMeta replaced. A leftover one still compiles and still
-// looks like it names the page, so the drop must be loud.
 func TestMount_warnsOnALeftoverTitleMethod(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", legacyTitle{}) })
 	assert.Contains(t, logged, "legacyTitle.Title is no longer a via hook")
@@ -986,9 +888,6 @@ func (e *connReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("host: "), e.host.Display()))
 }
 
-// OnInit must see the SSE connect request, so a child can authorize or
-// inspect the connection at open time. "example.com" is httptest's fixed
-// in-memory network host, not a real loopback address.
 func TestOnInit_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(connReqEchoer{}))
@@ -999,10 +898,6 @@ func TestOnInit_seesTheConnectRequest(t *testing.T) {
 	})
 }
 
-// An OnInit Redirect must gate the SSE connect itself, beyond the page GET
-// and the action route — before A3 the stream handler ran OnInit at all, so
-// a session check left a streaming page's push channel open to anyone who knew
-// the URL even though the page and its actions were protected.
 func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -1036,9 +931,6 @@ func (p *onInitLive) OnInit(ctx *via.Ctx) error {
 
 func (p *onInitLive) View() h.H { return h.Div(h.Str(p.label)) }
 
-// OnInit must run before the connect render binds the live unit, so a field
-// it loads is already set by the time the first push renders — before A3 the
-// stream handler never ran OnInit at all.
 func TestLive_onInitRunsBeforeConnectRender(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(onInitLive{}))
@@ -1066,10 +958,6 @@ type livePushParent struct{ I livePushChild }
 
 func (p *livePushParent) View() h.H { return h.Div(via.Child(p.I)) }
 
-// A live push under a parametrised mount must carry the concrete path
-// segment in its action URLs, not the literal "{id}" pattern wildcard —
-// before A3 mount.connect closed over the pattern base instead of computing
-// the concrete base per connection, so every push rendered a dead "{id}" URL.
 func TestLive_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := via.NewRouter()
@@ -1119,7 +1007,7 @@ func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
 
 // staleLoader is the week-one shape: OnInit reads the store into a field, the
 // action mutates the store, and nothing re-reads it — so the response render
-// frames the PRE-action number.
+// frames the pre-action number.
 type staleLoader struct {
 	s     *store
 	shown int
@@ -1161,8 +1049,6 @@ func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
 		"the action's response must show what the handler wrote, not what OnInit loaded before it")
 }
 
-// Without OnReload the defect is intact — that is the point of the hook being
-// opt-in — but it must no longer be SILENT.
 func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
@@ -1177,7 +1063,7 @@ func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 	assert.Contains(t, logs.String(), "OnReload(*via.Ctx) error",
 		"the 204 must name the hook that fixes it")
 
-	// A legitimately idempotent click is a dead click EVERY time. One line per
+	// A legitimately idempotent click is a dead click every time. One line per
 	// click buries the log instead of reading it.
 	logs.Reset()
 	for range 5 {
@@ -1259,7 +1145,7 @@ func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
 }
 
-// tickingReload registers a Tick from OnReload on a page served PLAIN. Honouring
+// tickingReload registers a Tick from OnReload on a page served plain. Honouring
 // it would turn the unit live on a page with no stream (I5) and trip the
 // render-invariant panic; OnReload must register nothing.
 type tickingReload struct{ n int }
@@ -1291,7 +1177,7 @@ func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
 		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
 }
 
-// reloadedChild proves the reload targets the ACTED unit: a child's action
+// reloadedChild proves the reload targets the acted unit: a child's action
 // must re-read the child, not the root.
 type reloadedChild struct {
 	s     *store
@@ -1371,9 +1257,6 @@ func TestRouterClose_endsAnOpenStreamWithoutTruncatingIt(t *testing.T) {
 	assert.NoError(t, conn.AwaitClose(), "a closed router must end the response cleanly, not truncate it")
 }
 
-// via.Handler is how every single-page app starts, and a via app owns
-// goroutines — so the entry point must hand back the thing that drains them.
-// Typed as *via.Router, not http.Handler: no type assertion at the call site.
 func TestHandler_returnsTheRouterSoCloseIsReachable(t *testing.T) {
 	t.Parallel()
 	p := &closablePage{gone: make(chan struct{}), beats: make(chan struct{}, 1)}
@@ -1501,7 +1384,7 @@ func TestMount_warnsOnAHookNameOneLetterOff(t *testing.T) {
 }
 
 // The near-miss check must not fire for an ordinary method that merely shares a
-// hook's signature — being one keystroke off a hook NAME is the whole trigger.
+// hook's signature — being one keystroke off a hook name is the whole trigger.
 type unrelatedHookShapedMethod struct{ N via.Signal[int] }
 
 func (u *unrelatedHookShapedMethod) Validate(*via.Ctx) error { return nil }
@@ -1513,13 +1396,10 @@ func TestMount_staysQuietForUnrelatedMethodsWithAHookSignature(t *testing.T) {
 	assert.NotContains(t, logged, "mis-named")
 }
 
-// Close waits on the live WaitGroup, and a connect that has passed the
-// cancelled-context check must never Add behind it: that is a WaitGroup misuse
-// throw, which no per-connection recover can catch.
-// Close's contract is that the drain is COMPLETE when it returns: every stream
-// it let in has run its OnDispose. A connect that passes the shutting-down
-// check must therefore join the WaitGroup before Close can park in Wait — or
-// Close returns while a stream is still starting up behind it.
+// Close's drain is complete when it returns: every stream it let in has run its
+// OnDispose. A connect that passes the shutting-down check must therefore join
+// the live WaitGroup before Close parks in Wait — Adding behind Wait is a
+// WaitGroup misuse throw no per-connection recover can catch.
 type closePage struct {
 	opened, disposed *atomic.Int64
 	n                via.State[int]

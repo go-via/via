@@ -14,7 +14,7 @@ import (
 
 // Reason is the stable code a [WithErrorPage] handler switches on, so an app
 // never has to parse via's plain-text bodies. One reason per status class:
-// the STATUS is the contract, the body text is not.
+// the status is the contract, the body text is not.
 type Reason string
 
 // The reasons via reports. A status via does not currently emit maps to
@@ -78,9 +78,9 @@ type PageError struct {
 
 // WithErrorPage renders via's failures as HTML documents instead of plain text.
 //
-// DOCUMENT RESPONSES ONLY. It applies to a response the browser will render as
+// It applies only to document responses. It applies to a response the browser will render as
 // a page: a GET of a mounted page, a route that matches no mount, and a native
-// <form> submit (which navigates). It deliberately does NOT apply to a Datastar
+// <form> submit (which navigates). It deliberately does not apply to a Datastar
 // @post or to the SSE connect — those bodies are consumed by the client, which
 // already surfaces a failure itself, so an HTML document there is dead weight
 // that would only be logged to a console. Those keep their plain-text bodies.
@@ -90,19 +90,19 @@ type PageError struct {
 // that happen before any page resolves, so there is nothing to embed and
 // ctx.Redirect, ctx.Tick and ctx.Listen are ignored.
 //
-// STYLING AN ACTION FAILURE is a client-side job, deliberately. A @post that
+// Styling an action failure is a client-side job, deliberately. A @post that
 // answers 400/403/410/503 surfaces its status through Datastar, which fires a
 // datastar-fetch error event on the element that made the request — listen for
 // that and render the banner you want (see reconnect.go for the shape via's own
 // reconnect notice uses). There is no server-rendered equivalent, because an
 // action's response patches elements rather than replacing the document.
 //
-// COST: a failed request that reaches the handler resolves the session a SECOND
+// Cost: a failed request that reaches the handler resolves the session a second
 // time — once on the way in, once for the Ctx the handler gets — so an error
 // page is one extra store read per failure. It is off the happy path, but a
 // 404-flooded endpoint pays it per request.
 //
-// [Head].Raw is emitted VERBATIM into the error document's <head>, the same as
+// [Head].Raw is emitted verbatim into the error document's <head>, the same as
 // on a normal page. Anything unsafe there is unsafe here too, on a response the
 // app did not choose to serve.
 //
@@ -110,7 +110,7 @@ type PageError struct {
 // exact plain-text response via would have sent and logs once.
 //
 // CSP: an error page may render before a mount resolves, or for a different
-// mount than the one in hand, so it gets the ROUTER-WIDE floor — the policy
+// mount than the one in hand, so it gets the router-wide floor — the policy
 // built from [Head].Assets alone. It cannot widen a mount's policy and it
 // carries no per-page assets; declare anything it needs in the router's Head.
 //
@@ -163,7 +163,7 @@ func reasonFor(status int) Reason {
 const errPageBodyCap = 4 << 10
 
 // errPageWriter defers a >=400 response until the handler has returned, so the
-// error page is rendered from ONE place with the router-wide CSP rather than at
+// error page is rendered from one place with the router-wide CSP rather than at
 // each of via's ~40 http.Error sites. Intercepting the write instead of
 // rewriting those sites is what guarantees the status and the plain-text
 // fallback body stay exactly what they were.
@@ -251,11 +251,11 @@ func noteErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// wrapForErrorPage decides whether this request's failures are DOCUMENT
+// wrapForErrorPage decides whether this request's failures are document
 // responses. A Datastar @post and the SSE connect are client-consumed, so they
 // stay plain text (see WithErrorPage).
 //
-// A new STREAMING route has to be excluded here too: the wrapper buffers a
+// A new streaming route has to be excluded here too: the wrapper buffers a
 // >=400 response until finish, and a flush that reaches the real writer past it
 // would commit a bare 200 ahead of the error page.
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {

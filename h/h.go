@@ -7,7 +7,7 @@
 //
 //		h.Div(h.Class("row"), h.Href("/x"), h.Span(h.Str("hi")))
 //
-//	  - ELEMENTS are one exported function per HTML5 tag, named after the tag
+//	  - Elements are one exported function per HTML5 tag, named after the tag
 //	    with the first letter capitalised: h.Div, h.Ul, h.Textarea, h.Blockquote.
 //	    They take children variadically and return H. The table lives in
 //	    elements.go. A handful of tags are deliberately absent — html, head,
@@ -15,16 +15,16 @@
 //	    because via owns the document shell and the CSP'd asset tags; declare
 //	    those through via.Head / via.Meta instead. Anything else exotic goes
 //	    through [El].
-//	  - ATTRIBUTES are one exported function per attribute, named the same way:
+//	  - Attributes are one exported function per attribute, named the same way:
 //	    h.Class, h.Name, h.Type, h.Value, h.Placeholder, h.Href, h.Disabled. The
 //	    table lives in attrs.go (URL-valued ones in url.go). They return [Attr],
 //	    which is itself an H, so attributes and children share one argument list
 //	    and may be interleaved in any order — the renderer sorts them into the
 //	    opening tag. Boolean attributes (h.Disabled, h.Required, h.Checked) take
-//	    a bool and render as a bare name when true and as NOTHING when false,
+//	    a bool and render as a bare name when true and as nothing when false,
 //	    because disabled="false" still disables a control. [RawAttr] spells an
 //	    attribute h has no helper for.
-//	  - TEXT is [Str], which accepts a string or any built-in numeric type, so
+//	  - Text is [Str], which accepts a string or any built-in numeric type, so
 //	    h.Str(count) needs no strconv call.
 //
 // A nil H renders as nothing, so a conditional child costs nothing; prefer
@@ -32,13 +32,13 @@
 //
 // # Escaping
 //
-// Text and attribute VALUES are HTML-escaped at render time, always, with no
+// Text and attribute values are HTML-escaped at render time, always, with no
 // opt-out: there is no raw-HTML constructor anywhere in this package, and H is
 // sealed so no other package can add one. URL-bearing attributes (h.Href,
 // h.Src, h.Action, and a via Redirect target) are additionally scheme-checked,
 // so a javascript: or data: URL arriving from user data is dropped rather than
-// rendered. Attribute NAMES are not escaped — they are validated against an
-// allowlist and an invalid one PANICS, on the reasoning that a name is written
+// rendered. Attribute names are not escaped — they are validated against an
+// allowlist and an invalid one panics, on the reasoning that a name is written
 // by the programmer and never taken from a request.
 //
 // # The Datastar escape hatch
@@ -50,7 +50,7 @@
 //	h.Div(h.Data("show", p.Open.Ref()), ...)   // renders data-show="$open"
 //
 // Data validates the key the same way RawAttr does and escapes the expression.
-// Note that Datastar splits a key on ":", so data-attr-value must be written as
+// Datastar splits a key on ":", so data-attr-value must be written as
 // h.Data("attr:value", …) — and no Go test can catch the difference.
 //
 // # Guarantees
@@ -92,7 +92,7 @@ type H = hcore.H
 //
 // Attr values are HTML-escaped at render time, and URL-bearing attributes are
 // additionally scheme-checked, so a javascript: URL from user data is
-// neutralised rather than rendered. Attribute NAMES are not escaped: they are
+// neutralised rather than rendered. Attribute names are not escaped: they are
 // validated and an invalid one panics, on the reasoning that a name is written
 // by the programmer, never taken from a request.
 type Attr = hcore.Attr
@@ -108,7 +108,7 @@ func El(tag string, kids ...H) H { return hcore.El(tag, kids...) }
 // It exists so rendering a number needs no strconv call and no any at the
 // call site.
 //
-// It deliberately does NOT include bool, time.Time, fmt.Stringer or error.
+// It deliberately does not include bool, time.Time, fmt.Stringer or error.
 // Rendering those means choosing a format, and h will not choose one for you:
 // format the value in Go and pass the string.
 type Stringish = hcore.Stringish
@@ -153,6 +153,6 @@ func RawAttr(name, val string) Attr {
 // h.Data("attr:disabled", "$busy") or h.Data("show", "$open").
 //
 // Spell the separator as a colon, never a hyphen: Datastar splits a key on the
-// FIRST colon, so data-attr-value names a plugin "attr-value" that does not
+// first colon, so data-attr-value names a plugin "attr-value" that does not
 // exist and is silently ignored — no console error, no attribute applied.
 func Data(name, val string) Attr { return hcore.Data(name, val) }

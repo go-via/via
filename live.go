@@ -23,7 +23,7 @@ type subStarter func(wake chan struct{}) listener
 type listener struct{ poll func() func() }
 
 // Tick schedules fn to run every d for the life of the unit's connection, and
-// is one of the two things that make a unit LIVE (rendering a State or List is
+// is one of the two things that make a unit live (rendering a State or List is
 // the other). After each run via re-renders the unit and pushes an
 // element-patch. Valid only inside OnInit: ticks and subs are snapshotted
 // there, so a later call registers nothing and logs loudly.
@@ -81,7 +81,7 @@ func (c *Ctx) OnDispose(fn func()) {
 // Every published value reaches handler exactly once, in publish order, up to
 // the subscription's queue limit (see topic.Publish for the one drop case,
 // which logs; Listen owns the Sub, so hold your own Subscribe to read
-// Sub.Dropped). Renders are NOT one per value — a whole backlog runs its
+// Sub.Dropped). Renders are not one per value — a whole backlog runs its
 // handler calls, then one re-render and one SSE frame — so a burst costs frames
 // proportional to how fast the client drains, not how fast the topic publishes.
 //
@@ -111,12 +111,12 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 			if len(batch) == 0 {
 				return nil
 			}
-			// One push item per BATCH: values published while this item runs
+			// One push item per batch: values published while this item runs
 			// pile up for the next Drain, so a burst costs a bounded number of
-			// frames. The item pushes only THIS child's container, so a fan-out
+			// frames. The item pushes only this child's container, so a fan-out
 			// never re-renders a sibling.
 			return func() {
-				// One recover per VALUE, and the push runs regardless: the
+				// One recover per value, and the push runs regardless: the
 				// batch is a frame-rate optimisation, not a failure domain, so
 				// a panic on value k must not swallow k+1..n or the re-render
 				// the surviving values earned.

@@ -215,9 +215,9 @@ type sessionData struct {
 	sid  string
 	vals map[string]json.RawMessage
 	exp  time.Time
-	// dirty is THIS request's write set: the keys it Put or Cleared, a nil
+	// dirty is this request's write set: the keys it Put or Cleared, a nil
 	// value marking a Clear. Saving overlays only these onto whatever the
-	// store holds now, so a concurrent request writing a DIFFERENT key is not
+	// store holds now, so a concurrent request writing a different key is not
 	// erased by this one re-encoding its own stale copy. It accumulates for
 	// the life of the handle and is never trimmed: a re-save must be able to
 	// re-apply every write the request made.
@@ -256,15 +256,15 @@ type sessionManager struct {
 	memoryStore  bool // no WithSessionStore: sessions die with the process
 	storeTimeout time.Duration
 	log          *slog.Logger // the Router's logger
-	keyWarnOnce  sync.Once    // warn about the random key at the FIRST session mint, not at boot
-	storeWarn    sync.Once    // warn about the process-local store at the FIRST session mint
+	keyWarnOnce  sync.Once    // warn about the random key at the first session mint, not at boot
+	storeWarn    sync.Once    // warn about the process-local store at the first session mint
 	mismatchOnce sync.Once    // warn once about signature-mismatch cookies (the two-apps clobber)
 }
 
 // newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
 // → a random per-process key. The random fallback warns on first use; a stable
-// key is what makes the COOKIE survive restarts and span pods, and a shared
-// SessionStore is what makes the DATA behind it do the same.
+// key is what makes the cookie survive restarts and span pods, and a shared
+// SessionStore is what makes the data behind it do the same.
 // logger tolerates a nil manager so a Session handle built without one (a bare
 // render) still logs somewhere.
 func (m *sessionManager) logger() *slog.Logger {
@@ -374,7 +374,7 @@ func sessionCtx(req *http.Request) context.Context {
 }
 
 // get returns the session stored under id. A nil sessionData with a nil error
-// means "no such session"; a non-nil error means the STORE is unreachable,
+// means "no such session"; a non-nil error means the store is unreachable,
 // which is a third state and not the same thing — minting a replacement on a
 // backend blip would overwrite the user's cookie and orphan their real session
 // the moment the backend came back.
@@ -411,20 +411,20 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 }
 
 // save writes d back under id, merging rather than replacing: the blob the
-// store holds RIGHT NOW is re-read and only this request's write set is
+// store holds right now is re-read and only this request's write set is
 // overlaid onto it. Two requests on one session therefore each keep their own
 // keys, where re-encoding a whole decoded copy silently dropped whichever
 // finished first. What is left is a read-modify-write window of one store
-// round-trip, and last-writer-wins on the SAME key — see [Session].
+// round-trip, and last-writer-wins on the same key — see [Session].
 //
 // mint says id is a brand-new home for d — a freshly created session, or the
-// new id of a Rotate — and is the ONLY case allowed to write where the store
+// new id of a Rotate — and is the only case allowed to write where the store
 // holds no live blob for it. Without that gate a handle still holding a
 // pre-rotation id would re-create a valid session under it on its next write:
 // the rotated-away session never sees the write, and the id Rotate exists to
 // invalidate resolves again.
 //
-// sessionSaveRetries caps the CAS loop. Contention on ONE session id is a
+// sessionSaveRetries caps the CAS loop. Contention on one session id is a
 // handful of tabs, not a thundering herd, so exhausting it means the store is
 // pathological; the write is dropped rather than applied unconditionally over
 // a blob up to that many revisions stale, which is the very lost update the
@@ -636,7 +636,7 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // [VersionedSessionStore] — the default one does — it re-merges and retries until
 // its write applies to the revision it merged against, so a concurrent write is
 // not clobbered; under contention that will not settle it gives up after a
-// bounded number of attempts and drops ITS OWN write, with a log. Against a
+// bounded number of attempts and drops its own write, with a log. Against a
 // store that does not, the window between the read and the write is real: a
 // write landing inside another's round-trip is dropped. Either way a session is
 // a value bag, not a counter and not a lock.
@@ -644,14 +644,14 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // A write through a handle whose id has been rotated away or has expired is
 // also dropped, with a log: reviving that id would undo [Session.Rotate].
 //
-// The handle itself is NOT safe for concurrent use — only the stored data is
+// The handle itself is not safe for concurrent use — only the stored data is
 // merged across requests. Call it from the via callback that handed it to you;
 // see the package doc for the goroutine model.
 type Session struct {
 	mgr    *sessionManager
 	id     string // "" until resolved or created
 	data   *sessionData
-	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, AND a live action
+	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, and a live action
 	ctx    context.Context
 	secure bool
 	// errPage marks the session of a WithErrorPage render, which has no response
@@ -681,7 +681,7 @@ func (s *Session) ensure() *sessionData {
 		return s.data
 	}
 	if s.down {
-		// The user almost certainly HAS a session; the store just could not say
+		// The user almost certainly has a session; the store just could not say
 		// so. Minting one here would Set-Cookie over their real id and log them
 		// out permanently once the backend recovered — a far worse outcome than
 		// a dropped write, and the store contract already says a backend error
@@ -762,7 +762,7 @@ func (s *Session) Rotate() string {
 	s.data.mu.Unlock()
 	if retired {
 		// Another request already rotated this id away, so the browser's cookie
-		// names THAT request's new id. reID would short-circuit on the retired
+		// names that request's new id. reID would short-circuit on the retired
 		// flag and write nothing, then Set-Cookie an id with no blob behind it —
 		// overwriting a good cookie and logging the user out. Leave it alone.
 		s.mgr.logger().Warn("via: Session.Rotate skipped — this handle's session id was already rotated away by " +

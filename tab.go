@@ -13,7 +13,7 @@ import (
 // action routes onto its single goroutine. units is replaced after every push
 // with that render's bind Ctx — always the render the client's DOM reflects.
 type tabStream struct {
-	mount       *mount            // a tab id is valid only on ITS mount, never another sharing the router-wide registry
+	mount       *mount            // a tab id is valid only on its mount, never another sharing the router-wide registry
 	pushq       chan func()       // serialization channel, shared by all this connection's units
 	done        <-chan struct{}   // closed on disconnect
 	pushSignals func(json string) // emit a patch-signals frame on this stream
@@ -24,8 +24,8 @@ type tabStream struct {
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
 	// action reaches them through pushq — so neither takes mu.
-	client map[string]json.RawMessage // the slots the client last posted, re-applied to every DISPLAY render (livePush)
-	rev    *revertSet                 // how to undo that application before the next AUTHORITY render
+	client map[string]json.RawMessage // the slots the client last posted, re-applied to every display render (livePush)
+	rev    *revertSet                 // how to undo that application before the next authority render
 
 	id           string      // the per-connection tab id, for correlating a log line with a tab
 	pinnedLogged atomic.Bool // warnPinned is once per connection, not once per click
@@ -68,7 +68,7 @@ func (s *Session) sid() string {
 // re-hydrates lc.client over the instance, so without the delete the client's
 // old value would be painted back over the Set on the very next frame.
 //
-// It runs BEFORE the push's renders so the patch-signals frame precedes the
+// It runs before the push's renders so the patch-signals frame precedes the
 // element patch, and so the display render no longer sees the superseded slots.
 func (c *tabStream) flushDirty(u *Ctx) {
 	if u == nil {
@@ -106,7 +106,7 @@ func (c *tabStream) replace(u *Ctx) {
 	c.units[unitAddr(u)] = u
 }
 
-// runOutcome says WHY a dispatch did not produce a result. One 410 for three
+// runOutcome says why a dispatch did not produce a result. One 410 for three
 // unrelated causes was the whole defect: a closed tab, a client that hung up,
 // and a child goroutine pinned by a blocking Tick/Listen/action handler are
 // three different operational problems and only the first is the client's to
@@ -127,14 +127,14 @@ const (
 // case was invisible and arrived as a 410 that blamed the client.
 func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDeadline }
 
-// run posts fn onto the child goroutine and WAITS for its actionResult, so a
+// run posts fn onto the child goroutine and waits for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
 // triggered it. The result channel is buffered so a late send never blocks a
 // goroutine that already gave up, and every wait is guarded on c.done, reqCtx
 // and pinnedDeadline so a POST racing a closed tab, one whose client hung up,
 // and one whose goroutine never arrives are told apart rather than collapsed.
 //
-// res.pushWork runs AFTER result is sent, still on this goroutine: the POST
+// res.pushWork runs after result is sent, still on this goroutine: the POST
 // proceeds at once while pushWork stays serialized in the order its mutation
 // ran. A detached goroutine would race other actions' and push out of order.
 func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionResult, runOutcome) {

@@ -82,13 +82,13 @@ func (t *Topic[T]) NumSubs() int {
 func (t *Topic[T]) Publish(v T) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// One fan-out releases ONE wake-up per distinct channel, and only once
+	// One fan-out releases one wake-up per distinct channel, and only once
 	// every subscriber holds v: a token released mid-fan-out guarantees its
 	// sweep straddles this publish, and a second token for the same fan-out
-	// buys a spurious extra sweep that overlaps the NEXT one. Hence: collect
+	// buys a spurious extra sweep that overlaps the next one. Hence: collect
 	// the distinct wake channels, then signal each exactly once.
 	//
-	// This does NOT make a fan-out atomic for a reader. A sweep already in
+	// This does not make a fan-out atomic for a reader. A sweep already in
 	// flight holds no lock here and polls its subscriptions in registration
 	// order, so it can still drain one before v landed and another after.
 	// Nothing is lost — this publish's token is still pending, so the
@@ -148,12 +148,12 @@ func signal(ch chan<- struct{}) {
 	}
 }
 
-// WakeOn routes this subscription's wake-ups to ch as well as to Ready, so ONE
+// WakeOn routes this subscription's wake-ups to ch as well as to Ready, so one
 // reader can multiplex many subscriptions on a single channel — a live
 // connection drives every ctx.Listen from its own select loop instead of
 // spending a goroutine per subscription. ch must be buffered (capacity 1 is
 // enough: wake-ups coalesce and carry no values), and the reader must Drain
-// EVERY subscription it multiplexes on each wake-up, since one token may stand
+// every subscription it multiplexes on each wake-up, since one token may stand
 // for any number of them.
 //
 // It signals ch immediately when the queue is already non-empty, so a value
@@ -175,7 +175,7 @@ func (s *Sub[T]) WakeOn(ch chan<- struct{}) {
 func (s *Sub[T]) Ready() <-chan struct{} { return s.ready }
 
 // Drain removes and returns every queued value in publish order. ok is false
-// once the subscription is stopped AND its backlog is exhausted, which is the
+// once the subscription is stopped and its backlog is exhausted, which is the
 // reader's signal to exit. A nil slice with ok true just means a spurious
 // wake-up.
 func (s *Sub[T]) Drain() (batch []T, ok bool) {

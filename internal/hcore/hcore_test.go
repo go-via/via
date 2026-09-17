@@ -42,13 +42,11 @@ func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	t.Parallel()
 	r := hcore.NewRenderer(&stubBinder{})
-	r.WriteString("<b>")  // raw, caller pre-escaped
-	r.WriteEscaped("<b>") // must be escaped
+	r.WriteString("<b>")
+	r.WriteEscaped("<b>")
 	assert.Equal(t, "<b>&lt;b&gt;", string(r.Bytes()))
 }
 
-// Dyn's node is a body node, never an attribute — El must route it into the
-// tag's children even when it renders content that looks attribute-shaped.
 func TestDyn_rendersInTheElementBody(t *testing.T) {
 	t.Parallel()
 	r := hcore.NewRenderer(&stubBinder{})
@@ -56,9 +54,6 @@ func TestDyn_rendersInTheElementBody(t *testing.T) {
 	assert.Equal(t, "<span>dyn</span>", string(r.Bytes()))
 }
 
-// DynAttr satisfies Attr (isAttr), so El must route it into the opening tag —
-// this is the seam On and friends use to claim an action id at render
-// time without El special-casing them by concrete type.
 func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	t.Parallel()
 	r := hcore.NewRenderer(&stubBinder{})
@@ -67,10 +62,6 @@ func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	assert.Equal(t, `<span data-x="1">body</span>`, string(r.Bytes()))
 }
 
-// El writes tag straight into "<" + tag + ">" with no escaping of its own — an
-// unvalidated tag string is as much a breakout vector as an unvalidated
-// attribute name is, and "div onclick=alert(1)" grafts a live inline handler
-// onto the opening tag. It must be held to the same allowlist RawAttr uses.
 func TestEl_rejectsTagNamesThatCanBreakOutOfTheOpeningTag(t *testing.T) {
 	t.Parallel()
 	for _, tag := range []string{
@@ -85,9 +76,6 @@ func TestEl_rejectsTagNamesThatCanBreakOutOfTheOpeningTag(t *testing.T) {
 	}
 }
 
-// The allowlist must still admit ordinary tags: lowercase, uppercase (custom
-// elements are conventionally lower, but the class is [A-Za-z] not [a-z]),
-// and a hyphenated custom-element name.
 func TestEl_acceptsOrdinaryTagNames(t *testing.T) {
 	t.Parallel()
 	for _, tag := range []string{"div", "DIV", "my-widget", "a"} {

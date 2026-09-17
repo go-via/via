@@ -51,7 +51,7 @@ finds itself.
 The knock-on effect is the one to plan for: `via.State[T]` is **child-only**.
 Reading or writing it outside a live child panics with a message naming the
 fix. v0.7's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
-lives. For a value that is genuinely just server state, the v2 counter example
+lives. For a value that is genuinely server state, the v2 counter example
 does not use `State` at all. It injects a plain `*Store` dependency and lets
 the re-render read it. That is the idiomatic answer and it is a design change,
 not a syntax change.
@@ -104,8 +104,8 @@ interface: a composition is a live child when it *acts* like one, meaning its
 the child.
 
 Both hooks are duck-typed. That is the one place in this migration where
-getting a port wrong does NOT fail to compile: a method with the wrong name or
-the wrong signature is simply not the interface, so the hook never runs and
+getting a port wrong does not fail to compile: a method with the wrong name or
+the wrong signature is not the interface, so the hook never runs and
 nothing says so. Pin each one you port:
 
 ```go
@@ -120,7 +120,7 @@ ways to get this wrong:
   not `func(*via.Ctx) error`, or one named `PageMeta` that is not
   `func() via.Meta`. A leftover v0.7-era `Title() string` is warned about: it is
   no longer a hook and nothing calls it.
-- **Warns**: a near-miss NAME that carries the exact hook signature while the
+- **Warns**: a near-miss name that carries the exact hook signature while the
   real interface is unsatisfied. The names it knows are `Init`, `Initialize`,
   `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for `OnInit`, and
   `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for
@@ -131,7 +131,7 @@ ways to get this wrong:
 - **Silent**: everything else. A leftover `Connector.OnConnect` or
   `Disposer.Dispose` from v0.7 is now an ordinary method nothing calls; the type
   walk has no name to match it against, so it says nothing at all. A `Signal`
-  behind an INTERFACE field is likewise invisible to the walk and only panics
+  behind an interface field is likewise invisible to the walk and only panics
   on the first render that binds it.
 
 The interface assertions above are the only airtight check. Every other
@@ -202,7 +202,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | --- | --- | --- |
 | Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `via.Mount(r, "/p", Page{})` |
 | Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
-| Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the ONLY hook, on the page and on every embedded child |
+| Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the only hook, on the page and on every embedded child |
 | Live child | `Connector.OnConnect` + `Disposer.Dispose` | no interface: a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
 | Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
 | Text node | `h.Text("x")` | `h.Str("x")`, generic over `Stringish` |
@@ -219,7 +219,7 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
-| Per-page metadata | — | a `PageMeta() via.Meta` method on the MOUNTED root (`via.PageMetaer`) — title, description, canonical, robots, OG/Twitter, and the page's own assets |
+| Per-page metadata | — | a `PageMeta() via.Meta` method on the mounted root (`via.PageMetaer`) — title, description, canonical, robots, OG/Twitter, and the page's own assets |
 | Per-page assets & CSP | — | `Meta.Assets` (`Script`/`Style`/`Preload`/`FontOrigins`); the CSP is built per mount from `Head.Assets` + the page's own |
 | `WithHead{Title}` | — | **gone** — `PageMeta().Title` |
 | `WithHead{InlineStyle}` | — | **gone** — `Head.Assets.Styles: []via.Style{{Inline: css}}` |
@@ -342,16 +342,16 @@ form:
   from any origin until `WithTrustedOrigin` names one, which switches
   enforcement on for the whole endpoint. `WithInsecureOrigin` is gone; there is
   no secure default left to opt out of. The per-tab id is the CSRF token on a
-  LIVE page only: a plain page carries an empty `viatab`/`_viatab`, so with the
+  live page only: a plain page carries an empty `viatab`/`_viatab`, so with the
   floor open a cross-origin `PostForm` submit is accepted and what actually
   defends it is the session cookie's `SameSite=Lax` (the request arrives
   unauthenticated). If you deployed v0.7 without thinking about origins,
   **v0.8 needs you to think about them.** via logs one line at startup when the
   floor is open.
 - **Sessions are always on** and mint a random per-process key if you configure
-  none, warning once. The key signs the COOKIE; the DATA lives in a
+  none, warning once. The key signs the cookie; the data lives in a
   `SessionStore` whose default is this process's memory, so surviving a restart
-  or spanning pods takes BOTH `WithSessionKey` (or `VIA_SESSION_KEY`) and
+  or spanning pods takes both `WithSessionKey` (or `VIA_SESSION_KEY`) and
   `WithSessionStore`. Session values are now stored as JSON keyed by the Go
   type, so a `Session.Put` value must round-trip through `encoding/json`. The idle TTL slides on **every** request that carries
   a valid session cookie — `OnInit` resolves the session eagerly whether or not
@@ -375,10 +375,10 @@ answers `410 Gone` (the old `{n}` segment binds no handler), and the page
 comes back correct on reload. Deploy-time impact is one dead click per stale
 tab, not a permanently broken page.
 
-The upside is the bug this replaces: the digest folded in the action COUNT, so
+The upside is the bug this replaces: the digest folded in the action count, so
 on a page backed by a shared store (a poll, a feed, any list with per-row
 actions) another user adding or removing a row changed every other open tab's
-digest and silently 410'd ALL of its buttons, including untouched ones, until
+digest and silently 410'd all of its buttons, including untouched ones, until
 a reload. Handler-addressed URLs cannot do that.
 
 ## Wire break: the tab id is a signal, not a header
@@ -386,8 +386,8 @@ a reload. Handler-addressed URLs cannot do that.
 The per-connection tab id — the CSRF token in via's threat model — used to
 ride as the `X-Via-Tab` request header, spelled out on every single action
 binding (`{headers:{'X-Via-Tab':$_viatab}}`, 33 bytes each). Datastar builds
-request headers per CALL and offers no ancestor inheritance or config hook, so
-there was no way to set it once per page. It DOES send the whole signal store
+request headers per call and offers no ancestor inheritance or config hook, so
+there was no way to set it once per page. It does send the whole signal store
 with every `@post`, filtering only names matching `/(^|\.)_/`, so the
 underscore in `_viatab` was the only reason the id wasn't already going along.
 
@@ -409,22 +409,22 @@ check.
 
 ## Wire break: signal slot names
 
-A `Signal[T]`'s wire name is now its Go FIELD name, first rune lowercased —
+A `Signal[T]`'s wire name is now its Go field name, first rune lowercased —
 `count`, `chat__draft` for a signal inside an embedded `Chat`,
 `outer__mid__kid__step` for a deeper path — where v0.8's earlier builds named
 it by byte offset (`f0`, `f48`, `i0_f0`) and v0.7 by render order (`s0`, `s1`).
 The offset is still the internal key, so hydration is unchanged; the name is
-resolved once per composition TYPE at `Mount`/`Child`, never per render.
+resolved once per composition type at `Mount`/`Child`, never per render.
 
-A plain nested struct joins its path with ONE underscore, a child boundary
-with TWO — so a parent that binds `p.C.S` in its own View (`c_s`) and also
+A plain nested struct joins its path with one underscore, a child boundary
+with two — so a parent that binds `p.C.S` in its own View (`c_s`) and also
 children `p.C` (`c__s`) keeps the two copies apart, as it must: they are
 different structs. A parent holding two fields of the child's type is
 genuinely ambiguous (`Child`'s argument order need not match declaration
 order), so those children fall back to the positional key: `i0__s`, `i1__s`,
 and `i0_0__s` for a nested one. The key's own depth separator is `-`
 (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS identifier character and
-`Ref()` hands slot names straight to Datastar expressions, so the SLOT spells
+`Ref()` hands slot names straight to Datastar expressions, so the slot spells
 it `_`. Earlier v0.8 builds spelled it `i0-0__s` and produced an expression
 Datastar could not parse.
 
@@ -464,16 +464,16 @@ surface on an upgrade in code that compiled fine before.
 - A `Signal` that is **not a plain field of its composition** panics at
   `Mount`/`Child` — at startup, not once per request. A signal reached through
   a pointer, slice, array or map field, or held by a composition whose `View`
-  has a VALUE receiver, has no field offset: its writes land on memory the
+  has a value receiver, has no field offset: its writes land on memory the
   render discards, and the render-order fallback that used to name it aliased
   one signal's slot onto another under a conditional `Bind()`. via walks the
   composition type where the app is wired and refuses it there. The one shape
-  the type walk cannot see is a Signal behind an INTERFACE field, which still
+  the type walk cannot see is a Signal behind an interface field, which still
   panics on the first render that binds it. The remedy is one line — make the
   `Signal` (and any child composition holding one) a direct struct field, and
   give `View` a pointer receiver. Keyed per-row signal slots remain future
   work.
-- Two fields minting the SAME slot name panic. A nested `A.B` joins with one
+- Two fields minting the same slot name panic. A nested `A.B` joins with one
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
   `A__b`. Rename one of them.
@@ -524,7 +524,7 @@ decision, move it to session or database state, where it belonged already.
 A value-carrying action authorizes its `?a=` against the latest render — the
 discovery render for a plain action, the last push for a live one. An arg that
 render did not bind answers 410 before the handler runs. Apps that bound a
-VOLATILE value as an arg (a pagination cursor, a count) are affected: the value
+volatile value as an arg (a pagination cursor, a count) are affected: the value
 goes stale the moment a render moves it, and the in-flight click 410s. Bind a
 stable identity (a row's primary key) and read changing state off the
 composition in an argless `On` handler.
@@ -548,7 +548,7 @@ Stated plainly so you can decide whether to wait:
   stopped rendering that handler at all. The common cause is an `OnInit` that
   does not restore the session/UI state the `View` branches on, so the
   dispatch-time render takes a different branch than the client's — the
-  SERVER LOG names the handlers the render DID bind, which is the fastest way
+  server log names the handlers the render did bind, which is the fastest way
   to see it (the response body names only the id that was asked for: the bound
   list is your Go type and method names, and the client is not entitled to
   them). Datastar resolves a non-2xx response silently; a streaming page heals on
@@ -594,7 +594,7 @@ v0.8 builds only with Go 1.27+.
 
 Everything above is v0.7 → v0.8. If you are already on v0.8 — pinned to a commit
 on this branch before it was tagged — the API kept moving under you during the
-last stretch of the rebuild. This section is the diff for THAT jump: what
+last stretch of the rebuild. This section is the diff for that jump: what
 renamed, whether the compiler will find it for you, and what a silent one
 looks like at runtime.
 
@@ -607,7 +607,7 @@ looks like at runtime.
 | `Title() string` hook (briefly `via.Titler`) | `PageMeta() via.Meta` | **warned, not silent** — a leftover `Title() string` is named at boot on stderr, once per type, and never called; the build still succeeds |
 | `Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}` | `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}` | **compiler** — the old fields don't exist; also new: `Head.Raw` now panics at boot if it contains `<script` or `<style` (declare it in `Assets` instead) |
 | `OnClick`/`OnSubmit`/`OnChange`/`OnClickArg` | `via.On(event, fn)` / `via.OnArg(event, fn, arg)` | **compiler** — the old names are gone |
-| `via.Live` interface, `OnConnect(*via.Ctx) error` | one `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open acquire | **silent** — `via.Live` no longer exists to assert against, so a leftover `OnConnect(ctx *via.Ctx) error` method just compiles as dead code nothing calls. Symptom: the unit never becomes live from that hook (no `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never happens), and nothing logs it |
+| `via.Live` interface, `OnConnect(*via.Ctx) error` | one `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open acquire | **silent** — `via.Live` no longer exists to assert against, so a leftover `OnConnect(ctx *via.Ctx) error` method compiles as dead code nothing calls. Symptom: the unit never becomes live from that hook (no `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never happens), and nothing logs it |
 | `Reloader.Reload(*via.Ctx) error` | `Reloader.OnReload(*via.Ctx) error` | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
 | `List.Update` | `List.Append` / `List.Remove` | **compiler** — `Update` is gone |
 | `SignalClientOnly[T]` | removed — `Signal[T]` is the one client-value type | **compiler** — the type is gone |
@@ -618,15 +618,15 @@ looks like at runtime.
 | `topic.Topic.Subs()` | `Topic.NumSubs()` | **compiler** — `Subs` is gone |
 | action ids: flat page-wide counter + `?v=` shape digest | content-addressed id (hash of the handler's Go name), keyed by child path (`0-1`, not a flat `n`) | wire-only; nothing in your code builds these URLs. A tab left open across the upgrade holds the old shape and gets `410` on its first click, then comes back correct on reload — see "Wire break: action URLs" above |
 | signal slot names: render order (`s0`), then byte offset (`f0`, `i0_f0`) | Go field name (`count`, `chat__draft`) | wire-only; nothing in your code writes these. Same as above: old names are ignored, not matched, so a stale tab's post is silently dropped and heals on reload — see "Wire break: signal slot names" above |
-| a `Signal` behind a pointer/slice/array/map field, or held by a composition whose `View` has a value receiver | must be a plain field of a pointer-receiver composition | **compiler catches nothing here — it's a new boot-time panic**, not a rename: `Mount`/`Child` now walk the type and panic naming the field. The one shape the walk cannot see is a `Signal` behind an INTERFACE field, which still only panics on the first render that binds it |
+| a `Signal` behind a pointer/slice/array/map field, or held by a composition whose `View` has a value receiver | must be a plain field of a pointer-receiver composition | **compiler catches nothing here — it's a new boot-time panic**, not a rename: `Mount`/`Child` now walk the type and panic naming the field. The one shape the walk cannot see is a `Signal` behind an interface field, which still only panics on the first render that binds it |
 | `via.WithDocumentHead(...)` | `via.WithHead(...)` | **compiler** — old name is gone |
 | `h.Colspan` / `h.Rowspan` | `h.ColSpan` / `h.RowSpan` | **compiler** — old names are gone |
 
 Two more from the same stretch, easy to miss because neither renames anything:
 
 - **`Ctx.OnConnect`/`Ctx.OnDispose` called after `OnInit` returns.** Both used
-  to append silently to a snapshot nobody reads again — the fn simply never
-  ran, with no log line, while the sibling `ctx.Tick`/`ctx.Listen` already
+  to append silently to a snapshot nobody reads again — the fn never ran,
+  with no log line, while the sibling `ctx.Tick`/`ctx.Listen` already
   warned in the same situation. All four now warn. If you were relying on the
   old silence, you'll see a new stderr line naming the call site; nothing about
   your code needs to change unless the call really was too late, in which case

@@ -129,7 +129,7 @@ func jarClient(t *testing.T) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	// Its OWN transport: a nil Transport means http.DefaultTransport, shared with
+	// Its own transport: a nil Transport means http.DefaultTransport, shared with
 	// every other parallel test, so one test's server teardown closed this
 	// client's idle connections mid-request.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
@@ -168,10 +168,6 @@ func sessionServer(t *testing.T, opts ...via.Option) string {
 	return srv.URL
 }
 
-// A session exists to outlive a single request: a value stored on one request
-// must be readable on the next from the same browser, or "stay logged in" is
-// impossible. The signed cookie carries only an id; the value lives server-side
-// and is resolved back by that id.
 func TestSession_storedValueIsReadableOnALaterRequest(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -184,8 +180,6 @@ func TestSession_storedValueIsReadableOnALaterRequest(t *testing.T) {
 		"a value stored in the session was not readable on a later request")
 }
 
-// Clear removes a stored value, so a logout drops the session-held identity:
-// after SignIn then SignOut, a Greet must no longer see the member.
 func TestSession_clearRemovesAStoredValue(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -198,10 +192,6 @@ func TestSession_clearRemovesAStoredValue(t *testing.T) {
 	assert.NotContains(t, body, "hi alice", "Clear did not remove the stored session value")
 }
 
-// Sessions must be ISOLATED per browser: two clients storing under the same
-// type key must keep independent values, or the store is a process-global bag
-// that leaks one user's data to another. Two clients bump their own counters a
-// different number of times and must each read back only their own.
 func TestSession_isolatesValuesPerSession(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -218,9 +208,6 @@ func TestSession_isolatesValuesPerSession(t *testing.T) {
 	assert.Contains(t, b2, "n=1", "client 2 saw another session's count")
 }
 
-// Rotate is fixation defense: after an auth change it must mint a NEW session id
-// (so any id an attacker fixed before login is useless) while preserving the
-// stored data, so the user stays logged in under the new id.
 func TestSession_rotateChangesTheIdButKeepsData(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -238,8 +225,6 @@ func TestSession_rotateChangesTheIdButKeepsData(t *testing.T) {
 	assert.Contains(t, body, "hi alice", "Rotate must preserve the session's data")
 }
 
-// Rotating before anything is stored still mints a fresh server session and
-// issues its cookie — fixation defense must not depend on prior data.
 func TestSession_rotateWithoutPriorDataIssuesAFreshCookie(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -250,8 +235,6 @@ func TestSession_rotateWithoutPriorDataIssuesAFreshCookie(t *testing.T) {
 		"Rotate on an empty session must still issue a fresh cookie")
 }
 
-// The pre-rotate id must stop resolving — a captured/fixed session id is dead
-// after rotation, which is the whole point of fixation defense.
 func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -265,12 +248,6 @@ func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	assert.NotContains(t, body, "hi alice", "the pre-rotate session id still resolved")
 }
 
-// Writing into a session never rotates its id on its own. Rotate-on-write is
-// tempting but wrong: "first write" can only be tracked per REQUEST, so every
-// writing request rotates again, and a request still carrying the previous id
-// (a double-click, a retried form) forks a fresh, empty session instead of
-// resolving to the one the user was just using. Fixation defense is
-// [Session.Rotate], called explicitly at an auth-state change.
 func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -285,14 +262,6 @@ func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 	assert.Equal(t, first, second, "a write with no explicit Rotate call must not change the session id")
 }
 
-// Neighbour of the no-auto-rotate fix: concurrent writers racing the SAME
-// cookie must not each mint their own session — that was the reID leak the
-// automatic rotation caused (N concurrent Puts -> N live ids aliasing one
-// *sessionData, none ever swept). With rotation gone from the write path,
-// concurrent Bumps on one cookie must all land on the one id the
-// SignIn-less jar started with. (What they do to the counter once there is
-// a lost-update race the Session API never promised to prevent — Get/Put
-// isn't compare-and-swap — so this test only pins the id, not the sum.)
 func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -318,8 +287,6 @@ func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 		"concurrent writes on one cookie must not rotate/fork the session id")
 }
 
-// Enabling sessions issues the browser an HttpOnly cookie so the session id
-// can't be read by page scripts.
 func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -346,13 +313,6 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 	assert.Greater(t, sessionCookie.MaxAge, 0, "session cookie must carry a MaxAge, not expire with the browser session")
 }
 
-// A session left idle past its TTL must stop resolving — a long-abandoned
-// session must not silently resurrect on a late request. This runs at the
-// real default TTL (24h), not a shortened override: synctest's fake clock
-// makes the wait free in wall time, and proves the documented default rather
-// than a stand-in for it. The server must live on httptest's in-memory
-// network — a real listener's Accept-loop goroutine would block the bubble
-// from ever going idle.
 func TestSession_expiresAfterIdleTTL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, via.Handler(loginComp{},
@@ -368,8 +328,6 @@ func TestSession_expiresAfterIdleTTL(t *testing.T) {
 	})
 }
 
-// WithSessionTTL alone (no WithSessionKey) must still enable sessions, signing
-// the cookie with an auto-generated per-process key — zero-config dev sessions.
 func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionTTL(time.Hour)) // no key supplied
@@ -381,9 +339,6 @@ func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
 		"WithSessionTTL alone must enable sessions with an auto-generated key")
 }
 
-// A short WithSessionKey is a guessable HMAC-SHA256 key — accepted silently,
-// it would forgeably sign every session cookie the app issues. It must fail
-// loudly at construction, not at request time.
 func TestSession_shortSessionKeyPanicsAtConstruction(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() {
@@ -410,9 +365,6 @@ func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {
 	return nil
 }
 
-// A TLS-terminating proxy forwards plain HTTP to the app, so req.TLS is nil and
-// the auto Secure flag would be off even though the user is on https.
-// WithSecureCookies forces Secure regardless, for that deployment.
 func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
@@ -425,8 +377,6 @@ func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 	assert.True(t, ck.Secure, "WithSecureCookies must set Secure even when the request is plain HTTP")
 }
 
-// Over real TLS the cookie must be Secure automatically (no opt-in needed) —
-// that auto-detection is exactly why Secure isn't forced by default.
 func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(via.Handler(loginComp{},
@@ -451,8 +401,6 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 	assert.True(t, ck.Secure, "over TLS the session cookie must be Secure automatically")
 }
 
-// Without the opt-in, a plain-HTTP request must NOT get a Secure cookie, or dev
-// on http://localhost can never receive it — the ergonomic default.
 func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
@@ -475,9 +423,6 @@ func (c *liveSess) OnInit(ctx *via.Ctx) error {
 }
 func (c *liveSess) View() h.H { return h.Div(h.Str("live")) }
 
-// A live app's OnInit must be able to establish the session: the cookie is
-// issued on the SSE connect response, so it's in place before any later live
-// action needs it.
 func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
@@ -514,8 +459,6 @@ func tamperID(v string) string {
 	return first + id[1:] + "." + sig
 }
 
-// A cookie whose id doesn't match its signature must be rejected outright — the
-// signature is what stops an attacker from forging or guessing a session id.
 func TestSession_rejectsATamperedCookie(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -537,12 +480,6 @@ func hmacSign(key []byte, id string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// A cookie whose id is genuinely valid (still resolvable in the store) but
-// whose signature has been corrupted must still be rejected — tamperID above
-// only ever breaks the id half, so sabotaging verify to always succeed passes
-// every existing test (the forged id fails the store lookup regardless of
-// what verify says). This corrupts only the signature half of a real,
-// currently-valid cookie, isolating the MAC check itself.
 func TestSession_rejectsACookieWithACorruptedSignature(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -566,10 +503,6 @@ func TestSession_rejectsACookieWithACorruptedSignature(t *testing.T) {
 		"a real session id with a corrupted signature must not resolve")
 }
 
-// A cookie whose id is genuine but whose signature was produced by a
-// DIFFERENT key (the two-apps-on-localhost-with-different-secrets case) must
-// be rejected exactly like a corrupted signature — this is the same MAC
-// check, exercised via a differently-keyed forgery rather than bit damage.
 func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -589,8 +522,6 @@ func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
 		"a real session id signed under a different key must not resolve")
 }
 
-// WithSessionCookieName lets an app pick its cookie name — the mitigation for
-// two via apps on one host clobbering a shared default cookie.
 func TestSession_usesACustomCookieName(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
@@ -614,11 +545,6 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 	assert.NotContains(t, names, "via_session", "the default cookie name must not also be set")
 }
 
-// Sessions are always available: a plain app (no session option) stays
-// cookieless until the first ctx.Session().Put, and from that write on the value
-// resolves — no opt-in ceremony, the cookie is the lazy consequence of the
-// first write. Fails if sessions go back behind an option gate, or if a page
-// view starts minting cookies eagerly.
 func TestSession_alwaysOnLazyCookie(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t) // no session option
@@ -702,14 +628,12 @@ func TestSessionStore_sharedStoreCarriesSessionsAcrossProcesses(t *testing.T) {
 	jarPost(t, c, a.URL+actionURL(t, page, "r", 0))
 	require.Contains(t, jarGet(t, c, a.URL+"/p"), "hi alice", "the session must work on the pod that minted it")
 
-	// A DIFFERENT Router over the SAME key and store: a restart, or a second pod.
+	// A different Router over the same key and store: a restart, or a second pod.
 	b := storeApp(t, via.WithSessionStore(store))
 	assert.Contains(t, jarGet(t, c, b.URL+"/p"), "hi alice",
 		"a shared SessionStore must carry the session's DATA to another process, not just its cookie")
 }
 
-// The repro the README used to deny: a stable key alone keeps the COOKIE valid
-// and loses the DATA, because the default store is this process's memory.
 func TestSessionStore_defaultStoreLosesSessionsOnRestart(t *testing.T) {
 	t.Parallel()
 	c := jarClient(t)
@@ -754,8 +678,6 @@ func TestSessionStore_handsTheConfiguredTTLToEverySave(t *testing.T) {
 		"a store must be handed the expiry deadline rather than reimplement TTL")
 }
 
-// A store that ignores the ttl it was handed must still not resurrect an idle
-// session: via stamps its own deadline into the blob.
 func TestSessionStore_expiredBlobIsRefusedEvenWhenTheStoreIgnoresTTL(t *testing.T) {
 	t.Parallel()
 	store := newSharedStore()
@@ -895,7 +817,7 @@ func TestSession_siblingChildsShareOneSessionAcrossHydratePasses(t *testing.T) {
 // hangingStore is the backend that has stopped answering: every call blocks
 // until its context is done, which without a store deadline is never — session
 // calls deliberately outlive the request's own context.
-// abort exists only so a REGRESSION fails loudly instead of hanging: without
+// abort exists only so a regression fails loudly instead of hanging: without
 // it a store that never returns also blocks httptest's Close forever.
 type hangingStore struct {
 	calls chan struct{}
@@ -961,8 +883,6 @@ func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
 	}
 }
 
-// --- Session merge, rotation and store-outage behaviour ------------------
-//
 // Two requests writing one session, a handle whose id was rotated away under
 // it, a store that will not settle a conditional write: all of it is reachable
 // over HTTP with a user-written SessionStore, so these drive the real server
@@ -1220,10 +1140,6 @@ func (f *failStore) Delete(ctx context.Context, id string) error {
 
 func newFailStore() *failStore { return &failStore{MemorySessionStore: via.NewMemorySessionStore()} }
 
-// A session has one slot, so two in-flight requests writing it resolve
-// last-writer-wins: the one whose save reaches the store last determines the
-// final value, even though the other's write landed first. The hook lands the
-// second request between this one's read and its write.
 func TestSession_concurrentRequestsLastWriterWins(t *testing.T) {
 	t.Parallel()
 	store := newPlainGap(via.NewMemorySessionStore())
@@ -1241,9 +1157,6 @@ func TestSession_concurrentRequestsLastWriterWins(t *testing.T) {
 	assert.Contains(t, body, "V=2", "the later save did not win over the interleaved write")
 }
 
-// A Clear has to survive the merge as a tombstone: it always wins over
-// whatever the fresh read turns up, not just over the clearing request's own
-// stale copy.
 func TestSession_clearSurvivesMerge(t *testing.T) {
 	t.Parallel()
 	store := newPlainGap(via.NewMemorySessionStore())
@@ -1260,9 +1173,6 @@ func TestSession_clearSurvivesMerge(t *testing.T) {
 	assert.Contains(t, body, "V=-", "the Delete was undone by the other request's interleaved write")
 }
 
-// Rotate exists to invalidate a pre-auth id. A store that cannot Delete must not
-// leave that id resolving — Rotate overwrites it with an already-expired
-// tombstone instead.
 func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()
@@ -1287,8 +1197,6 @@ func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	assert.Contains(t, live, "V=1", "the rotated-to id does not resolve")
 }
 
-// If the tombstone cannot be written either, failing loudly beats returning a
-// rotation that did not happen: the request must be a 500 and say why.
 func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 	// Not t.Parallel(): it reads the package log writer.
 	fs := newFailStore()
@@ -1311,8 +1219,6 @@ func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 		"the log must say the rotation could not invalidate the old id")
 }
 
-// A store outage must not be read as "no session": minting one would Set-Cookie
-// over the user's real id and orphan their session once the store recovered.
 func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()
@@ -1334,9 +1240,6 @@ func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
 	assert.Contains(t, body, "V=1", "the real session did not survive the outage")
 }
 
-// A write that another request overtook mid-merge must be re-merged onto the
-// blob that landed, not written over it. The hook fires inside the conditional
-// read, so the CAS retry is exercised every run rather than by luck.
 func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
 	t.Parallel()
 	store := newCASGap(via.NewMemorySessionStore())
@@ -1353,9 +1256,6 @@ func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
 	assert.Contains(t, body, "V=2", "the retried write never landed")
 }
 
-// Rotate's whole point is that the pre-rotation id stops resolving. A handle
-// still pinned to that id must NOT re-create a session under it on its next
-// write.
 func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 	t.Parallel()
 	store := newCASGap(via.NewMemorySessionStore())
@@ -1381,9 +1281,6 @@ func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 	assert.Contains(t, live, "V=1", "the rotated-to session was disturbed by the dropped write")
 }
 
-// When Delete fails, Rotate leaves an expired tombstone under the old id. A
-// pinned handle writing there must not overwrite the tombstone with live values
-// — that would refresh its expiry and defeat the tombstone.
 func TestSession_writeThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()
@@ -1426,10 +1323,6 @@ func (s *casStuckStore) SaveIf(ctx context.Context, id string, data []byte, ttl 
 	return s.MemorySessionStore.SaveIf(ctx, id, data, ttl, ver)
 }
 
-// Contention the CAS loop cannot settle means every merge this request made was
-// against a revision that moved on. Falling back to an unconditional write
-// there applies a stale merge over whichever writers did get through — exactly
-// the lost update the loop exists to prevent. The write must be dropped.
 func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 	t.Parallel()
 	cs := &casStuckStore{MemorySessionStore: via.NewMemorySessionStore()}
@@ -1445,9 +1338,6 @@ func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 	assert.Contains(t, body, "V=1", "an unsettled CAS loop wrote unconditionally instead of dropping")
 }
 
-// A handle whose id another request already rotated away must not rotate again:
-// it has nothing to carry to a new id, so re-issuing the cookie would overwrite
-// the good post-rotation cookie the browser holds and log the user out.
 func TestSession_rotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.T) {
 	t.Parallel()
 	store := newCASGap(via.NewMemorySessionStore())
@@ -1499,9 +1389,6 @@ func (s *nullValsStore) Save(ctx context.Context, id string, data []byte, ttl ti
 	return s.inner.Save(ctx, id, data, ttl)
 }
 
-// Read and write must agree on what a session is: a session read back with a
-// nil value map is an empty session, so the next write must merge into it
-// rather than retire the id over the same bytes.
 func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
 	t.Parallel()
 	store := &nullValsStore{inner: via.NewMemorySessionStore()}
@@ -1519,10 +1406,6 @@ func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
 	assert.Contains(t, body, "V=9", "a session that reads fine was retired on its first write")
 }
 
-// Session.Put returns nothing, so a dropped write is only ever visible in the
-// log — and the short-circuit for a handle already known retired was the one
-// drop that said nothing at all. An operator reading "the value did not stick"
-// needs this line to tell the outage from a bug in their own handler.
 func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 	// Not t.Parallel(): it reads the package log writer.
 	store := newCASGap(via.NewMemorySessionStore())
@@ -1544,11 +1427,6 @@ func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 		"the second write through a retired handle was dropped in silence")
 }
 
-// A store that could not answer is not "no session": the browser may well hold
-// a valid cookie. Serving the page as anonymous shows a signed-in user the
-// signed-out page, and a plain action then runs an unauthorized handler — so
-// every transport refuses with 503, as the SSE connect and a live action
-// already do.
 func TestSession_refusesAPageGetWhileTheStoreIsDown(t *testing.T) {
 	t.Parallel()
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}

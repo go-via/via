@@ -18,8 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// List[E] is server-authoritative slice state with an Append one-liner — the
-// chat log. Append/Get work without a live child for the unit.
 func TestList_appendAddsElementsInOrder(t *testing.T) {
 	t.Parallel()
 	var l via.List[string]
@@ -34,9 +32,6 @@ type hookless struct{ v via.State[int] }
 
 func (s *hookless) View() h.H { return h.Div(h.Str("n="), s.v.Display()) }
 
-// Rendering a State is what MAKES a unit live: a composition with no hook at
-// all must still bootstrap its SSE stream and hold an open connection, because
-// server-held state is meaningless without one.
 func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(hookless{}))
@@ -63,11 +58,6 @@ func (e *stateEcho) View() h.H {
 	)
 }
 
-// On a live child, State renders its current value into the pushed frame. And
-// because server state routinely carries user-influenced data (a name, a chat
-// message), the value is HTML-escaped on render — a raw value must not break
-// out into markup. Asserted against the real SSE frame: the escaped form is
-// present and the raw form is absent.
 func TestState_rendersEscapedValueOnALiveChild(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(stateEcho{}))
@@ -76,15 +66,11 @@ func TestState_rendersEscapedValueOnALiveChild(t *testing.T) {
 	status, _ := app.Action(0).Over(conn).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the render ships over the SSE")
 
-	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;") // the escaped value reaches the client
+	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;")
 	assert.Contains(t, frame, "msg: ", "the frame must re-render the child's State")
 	assert.NotContains(t, frame, "<b>Ada", "the raw value must not survive into markup")
 }
 
-// TestState_bareSetAndAppend pins the bare-mutator contract for State and List:
-// Set(v)/Append(v) take no ctx — the value is server-owned and reaches the
-// browser on the next push, so there is nothing per-request to hand them.
-// Fails if either mutator grows a required ctx again.
 func TestState_bareSetAndAppend(t *testing.T) {
 	t.Parallel()
 	var s via.State[int]
@@ -97,8 +83,6 @@ func TestState_bareSetAndAppend(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, l.Get())
 }
 
-// Remove is the mirror of Append: it must leave the list in exactly the state
-// the name promises, shifting the rest left.
 func TestList_remove(t *testing.T) {
 	t.Parallel()
 	var l via.List[string]
@@ -110,9 +94,6 @@ func TestList_remove(t *testing.T) {
 	assert.Equal(t, []string{"a", "c"}, l.Get(), "Remove shifts the rest left")
 }
 
-// A wrong index is a programming error. Remove panics rather than silently
-// doing nothing, because a no-op would hide the bug behind a list that just
-// never changes — the same reason State panics off-child.
 func TestList_outOfRangeIndexPanics(t *testing.T) {
 	t.Parallel()
 	newList := func() *via.List[string] {
@@ -123,9 +104,6 @@ func TestList_outOfRangeIndexPanics(t *testing.T) {
 	assert.Panics(t, func() { newList().Remove(1) }, "Remove past the end")
 }
 
-// Remove must not leave the removed element reachable through the backing
-// array: the freed slot is zeroed, so a pointer row does not keep its target
-// alive for as long as the child's connection lives.
 func TestList_removeZeroesTheFreedSlot(t *testing.T) {
 	t.Parallel()
 	var l via.List[*string]
@@ -155,9 +133,6 @@ func (t *listChild) View() h.H {
 	)
 }
 
-// Removal has to reach the browser, not just the server value: the patch the
-// action pushes must no longer contain the dropped row. This is the half a
-// unit test on Get() cannot see.
 func TestList_removeReachesTheBrowser(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(listChild{items: newListItems("drop", "keep")}))
@@ -184,8 +159,6 @@ type eachListChild struct{ items via.List[string] }
 func (e *eachListChild) View() h.H        { return h.Ul(e.items.Each(e.row)) }
 func (e *eachListChild) row(s string) h.H { return h.Li(h.Str(s)) }
 
-// List.Each must render every element in order through the List method, not
-// just through the free via.Each function it wraps.
 func TestList_eachRendersRowsInOrder(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(eachListChild{items: newListItems("one", "two", "three")}))
@@ -241,12 +214,8 @@ func (p *lateLive) View() h.H {
 	)
 }
 
-// The GET renders the closed branch, so the page is served plain and opens
-// no SSE stream. An action that opens the branch would leave the tab demanding
-// a connection it never made — every later action 410s. That must be loud at
-// the action that caused it, not a silent freeze.
-// Sequential: it captures the global log output.
 func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
+	// Sequential: it captures the global log output.
 	app := via.Handler(lateLive{})
 	rec := httptest.NewRecorder()
 	rec.Body = &bytes.Buffer{}

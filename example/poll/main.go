@@ -78,7 +78,7 @@ func (a *PollApp) Add(ctx *via.Ctx) {
 }
 
 // Vote and Remove take the option's id as a typed parameter — via decodes it
-// from the action the row carried, so they act on THAT option regardless of
+// from the action the row carried, so they act on that option regardless of
 // where it currently sits in the re-sorted list.
 func (a *PollApp) Vote(ctx *via.Ctx, id int)   { a.poll.vote(id) }
 func (a *PollApp) Remove(ctx *via.Ctx, id int) { a.poll.remove(id) }
@@ -86,8 +86,8 @@ func (a *PollApp) Remove(ctx *via.Ctx, id int) { a.poll.remove(id) }
 func (a *PollApp) row(o Option) h.H {
 	return h.Li(
 		h.Span(h.Str(o.Label+" — "), h.Str(o.Votes)),
-		h.Button(via.OnArg("click", a.Vote, o.ID), h.Str("vote")),     // carries o.ID
-		h.Button(via.OnArg("click", a.Remove, o.ID), h.Str("remove")), // carries o.ID
+		h.Button(via.OnArg("click", a.Vote, o.ID), h.Str("vote")),
+		h.Button(via.OnArg("click", a.Remove, o.ID), h.Str("remove")),
 	)
 }
 
