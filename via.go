@@ -1310,7 +1310,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 	bind.rev = rev
 	bind.unitV = pv
-	if runOnInit(pv.v, bind, w, req, m.sessions) != nil {
+	if runOnInit(pv.v, bind, w, req, m.sessions, true) != nil {
 		return
 	}
 	renderRootWith(bind, pv.v)

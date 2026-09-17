@@ -73,7 +73,12 @@ var errRedirected = errors.New("via: redirected")
 // so OnInit may set the session cookie or queue a Redirect (303'd here, before
 // the View renders — via's one per-request gate). A non-nil error has ALREADY
 // been answered on w, so the caller must stop and never render.
-func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager) (err error) {
+//
+// sse marks the SSE connect, the one transport a Redirect cannot navigate:
+// fetch follows a 303 and would deliver the target page's HTML as the stream
+// body (the same reason runGuards' own sse param exists), so a redirect here
+// answers a plain 403 instead — the same answer a Guard denial gives.
+func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, sse bool) (err error) {
 	ctx.req = req
 	ctx.sessions = sessions
 	ctx.sessW = w
@@ -102,10 +107,13 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	}()
 	defer func() {
 		if err == nil && ctx.redirect != "" {
-			if !hcore.SafeURL(ctx.redirect) {
+			switch {
+			case sse:
+				http.Error(w, "forbidden", http.StatusForbidden)
+			case !hcore.SafeURL(ctx.redirect):
 				log.Printf("via: unsafe OnInit redirect %q dropped", ctx.redirect)
 				http.Error(w, "init failed", http.StatusInternalServerError)
-			} else {
+			default:
 				http.Redirect(w, req, ctx.redirect, http.StatusSeeOther)
 			}
 			err = errRedirected

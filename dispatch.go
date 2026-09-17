@@ -569,7 +569,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 		ctx.declare, ctx.declareOnly = true, nil
 	}
 	ctx.unitV = inst // the root is a unit like any child, when it is live
-	if runOnInit(inst.v, ctx, w, req, m.sessions) != nil {
+	if runOnInit(inst.v, ctx, w, req, m.sessions, false) != nil {
 		return nil, nil
 	}
 	return ctx, renderRootWith(ctx, inst.v)
@@ -593,7 +593,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		auth.declare, auth.declareOnly = true, map[string]any{}
 	}
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
-	if runOnInit(inst.v, auth, w, req, m.sessions) != nil {
+	if runOnInit(inst.v, auth, w, req, m.sessions, false) != nil {
 		return
 	}
 	rootBefore := renderRootWith(auth, inst.v)
