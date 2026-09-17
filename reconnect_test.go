@@ -10,10 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A streaming page must ship the client reconnect manager so a dropped SSE stream is
-// visible (a banner) and a give-up triggers a re-bootstrap reload, instead of
-// freezing the tab silently. Assert the manager's load-bearing branches are
-// present in the page.
 func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
@@ -37,12 +33,6 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	}
 }
 
-// The reconnect manager is an inline script and a strict CSP blocks inline
-// scripts it does not explicitly admit. If it ships unadmitted it is silently
-// dropped and the tab freezes on a drop exactly when the manager was meant to
-// save it. It is admitted by the SHA-256 of its own bytes, so assert the served
-// tag is bare (no nonce) and that the policy carries its exact digest — that is
-// what catches a stray byte added around the script.
 func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
@@ -61,9 +51,6 @@ func TestReconnect_managerScriptIsAdmittedByCSP(t *testing.T) {
 	require.True(t, found, "no inline script contained __viaRC — the loop above asserted nothing")
 }
 
-// A plain page has no SSE stream to lose, so injecting a reconnect manager
-// would be dead weight (and a banner that can never clear). It must ship only on
-// streaming pages.
 func TestReconnect_plainPageOmitsTheManager(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newCounter(t), http.MethodGet, "/", "")
@@ -73,9 +60,6 @@ func TestReconnect_plainPageOmitsTheManager(t *testing.T) {
 		"plain page must not ship the reconnect manager")
 }
 
-// The reconnect blob is a single IIFE; a stray syntax error would silently dead
-// the whole manager in the browser while every server-side test still passes.
-// Balanced braces/parens is a cheap structural guard against that.
 func TestReconnect_blobIsBalanced(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")

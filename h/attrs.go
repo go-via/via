@@ -17,7 +17,7 @@ import (
 // Two shapes, and the distinction matters:
 //
 //   - value attributes render name="val", with val HTML-escaped at render time.
-//   - boolean attributes render as a bare name when on and as NOTHING when off,
+//   - boolean attributes render as a bare name when on and as nothing when off,
 //     because `disabled="false"` disables a control in every browser. That
 //     absence is the whole reason these are not RawAttr calls.
 
@@ -47,7 +47,7 @@ func Class(names ...string) Attr {
 }
 
 // Style is an inline style declaration. The value is HTML-escaped, so it cannot
-// break out of the attribute, but it is NOT parsed as CSS: this package does
+// break out of the attribute, but it is not parsed as CSS: this package does
 // not vet declarations. Prefer a class.
 func Style(css string) Attr { return RawAttr("style", css) }
 

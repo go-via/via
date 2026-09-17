@@ -19,7 +19,7 @@ func randomToken() string {
 }
 
 // sha256Source returns the CSP source expression admitting exactly src. CSP
-// hash sources are STANDARD base64 (padded), not the URL-safe alphabet used
+// hash sources are standard base64 (padded), not the URL-safe alphabet used
 // elsewhere in via — the browser rejects a mismatch silently.
 func sha256Source(src string) string {
 	sum := sha256.Sum256([]byte(src))
@@ -30,7 +30,7 @@ func sha256Source(src string) string {
 // carries. A patch is a fragment, not a document: it loads no assets of its
 // own, so it gets the floor policy and not any mount's widened one.
 //
-// via admits its own inline scripts BY HASH, not by nonce. A hash authorises
+// via admits its own inline scripts by hash, not by nonce. A hash authorises
 // exactly the bytes via ships, so publishing it costs nothing and leaves no
 // token for an injected <script nonce="…"> to borrow; it is also identical
 // across pods and restarts with no shared signing key, which is what an

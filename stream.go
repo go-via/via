@@ -18,7 +18,7 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 	_, _ = io.WriteString(w, "\n")
 }
 
-// writeInnerPatchFrame patches the CHILDREN of #id, never comparing id's own
+// writeInnerPatchFrame patches the children of #id, never comparing id's own
 // element: mode inner hands the client a DocumentFragment, and the both-sided
 // data-ignore-morph check only fires when the incoming node is an Element. That
 // is how a live child's push still lands on a container the root-walk render
@@ -67,7 +67,7 @@ func (e *errWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// stream serializes every write and tears the stream down on the FIRST write
+// stream serializes every write and tears the stream down on the first write
 // or flush failure. A half-open peer (vanished without a FIN) never cancels the
 // request context, so a failed frame write is the only in-band signal it's
 // gone; cancelling stops the child goroutine, its tickers and subscriptions and
@@ -133,7 +133,7 @@ func runStream(log *slog.Logger, reqCtx context.Context, label string, children 
 		}
 	}
 	// One token may stand for any number of subscriptions, so every wake sweeps
-	// them ALL, in registration order — which makes handler ordering across two
+	// them all, in registration order — which makes handler ordering across two
 	// Listens deterministic instead of a race between two reader goroutines.
 	sweep := func() {
 		for _, l := range listeners {
@@ -191,7 +191,7 @@ func writeSSEHeaders(w http.ResponseWriter) {
 	hdr.Set("X-Content-Type-Options", "nosniff")
 }
 
-// canFlush reports whether w can stream, looking THROUGH wrappers the way
+// canFlush reports whether w can stream, looking through wrappers the way
 // http.ResponseController does. A raw w.(http.Flusher) is wrong here — any
 // middleware wrapper answers no — and ResponseController.Flush cannot serve as
 // the probe either, because flushing commits a 200 ahead of the checks that

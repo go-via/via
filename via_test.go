@@ -29,10 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The binder plumbing (signal slots, action ids, the renderer itself) is
-// deliberately off the h package's public surface: h is elements + attrs +
-// Str only, the via core reaches the plumbing through internal/hcore. If this
-// fails, plumbing leaked back onto the package every user of h sees.
 func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
 	t.Parallel()
 	banned := map[string]bool{
@@ -178,8 +174,6 @@ func actionURL(t *testing.T, html string, child string, n int) string {
 	return m[n][1]
 }
 
-// The GET page must ship the server-rendered skeleton — the current value baked
-// into HTML, both wired buttons, the morph-target #root, and the client script.
 func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodGet, "/", "")
@@ -197,11 +191,6 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	}
 }
 
-// Event bindings must use Datastar v1's colon key syntax (data-on:click). The
-// old dash form (data-on-click) is parsed by v1.0.2 as a nonexistent plugin
-// "on-click" and silently dropped — the button renders, no listener attaches,
-// and the click is dead in the browser while every server-side test still
-// passes. Assert the dash form never ships so that regression can't reappear.
 func TestEventBinding_usesDatastarColonSyntaxNotDeadDashForm(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, newCounter(t), http.MethodGet, "/", "")
@@ -210,9 +199,6 @@ func TestEventBinding_usesDatastarColonSyntaxNotDeadDashForm(t *testing.T) {
 	assert.NotContains(t, body, "data-on-click", "page ships the dead v0.x dash form data-on-click (silently ignored by Datastar v1.0.2)")
 }
 
-// An action must mutate the server-side dependency and return the re-rendered
-// fragment as a text/html element-patch reflecting the NEW value — and the state
-// must persist across requests (it lives in the store, not the request).
 func TestAction_elementPatchesAndPersists(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
@@ -232,8 +218,6 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 	assert.Contains(t, body, `<h1>1</h1>`, "Dec did not bring state back to 1")
 }
 
-// An action id with no registered handler must be rejected with 410 Gone, so
-// a stale client learns the action is gone rather than silently no-op.
 func TestUnknownAction_isGone(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
@@ -244,9 +228,6 @@ func TestUnknownAction_isGone(t *testing.T) {
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
 }
 
-// Go 1.27's default jsonv2 backing must still decode a signal body the way v1
-// did (replace invalid UTF-8 with U+FFFD) rather than reject it, or the module
-// silently starts 400ing bodies real browsers happily sent under v1.
 func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(boundForm{}))
@@ -254,9 +235,6 @@ func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	assert.Equal(t, http.StatusOK, status)
 }
 
-// A duplicate key in a signal body must decode with v1's last-write-wins
-// semantics, not jsonv2's stricter default, or the same request a v1 client
-// sent starts failing under the new decoder.
 func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(boundForm{}))
@@ -266,8 +244,6 @@ func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	assert.NotContains(t, frag, "one")
 }
 
-// The vendored Datastar client must be served from the embedded asset with a JS
-// content-type, or the module script tag on the page 404s and nothing hydrates.
 func TestEmbeddedDatastarClient_isServedAsJS(t *testing.T) {
 	t.Parallel()
 	resp, body := do(t, newCounter(t), http.MethodGet, "/_via/datastar.js", "")
@@ -278,10 +254,6 @@ func TestEmbeddedDatastarClient_isServedAsJS(t *testing.T) {
 	assert.NotEmpty(t, body, "served datastar.js was empty")
 }
 
-// Slice 1's action response is a full element-patch (text/html morphed into
-// #root); it must never emit an application/json signal-patch. The dead
-// dirty/markDirty signal-patch leg was deleted, and this guard stops a second,
-// untested wire contract from silently returning.
 func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
@@ -305,10 +277,6 @@ func (n *noopComp) View() h.H {
 	return h.Div(h.Button(via.On("click", n.Ping), h.Str("ping")))
 }
 
-// An action that leaves the rendered View identical must return 204 No Content,
-// not re-send an identical #root the browser would morph onto itself. The
-// runtime infers this by comparing the pre- and post-action renders — no author
-// annotation (no NoContent call) required.
 func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(noopComp{}))
@@ -325,9 +293,6 @@ func (c *formComp) View() h.H {
 	return h.Form(via.On("submit", c.Go), h.Input(c.q.Bind()))
 }
 
-// On("submit", ...) wires a form submit to a POST action with Datastar's colon event
-// syntax. Datastar auto-prevents a form's default submit, so no modifier is
-// needed.
 func TestOn_submitWiresAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(formComp{})), http.MethodGet, "/", "")
@@ -344,10 +309,6 @@ func (r *reqEchoer) View() h.H {
 	return h.Div(h.Button(via.On("click", r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
 }
 
-// An action must be able to read the HTTP request that triggered it — auth
-// headers, cookies, client info — through ctx.Request(); without it there is no
-// way to do request-native wiring from a handler. The value the action pulls out
-// of the request must reach the re-rendered response.
 func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(reqEchoer{}))
@@ -372,12 +333,6 @@ func (c *digestEchoer) View() h.H {
 	return h.Div(h.Input(c.q.Bind()), h.Button(via.On("click", c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
 }
 
-// TestAction_digestPlaceholderCannotBeForgedByUserText posts hostile text
-// containing the literal NUL-delimited digest placeholder via.digestPlaceholder
-// mints internally (NUL, "vD0", NUL — token 0, this component's only
-// action). If writeEscaped ever stopped neutralising NUL, the final
-// bytes.ReplaceAll pass that splices the real shape digest into the response
-// would match this text too and corrupt it with digest bytes.
 func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(digestEchoer{}))
@@ -426,16 +381,12 @@ func newTodoList() *todoBox {
 	return &todoBox{items: []todoItem{{1, "alpha"}, {2, "bravo"}, {3, "gamma"}}}
 }
 
-// A row's action binding must carry the row's own value, so the click self-
-// describes which datum it acts on — no closure, no stable-slot scheme.
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(todoList{box: newTodoList()})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
 }
 
-// The handler must receive the carried value as a typed parameter and act on it:
-// deleting the row whose value rode with the click.
 func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
@@ -447,9 +398,6 @@ func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	assert.Contains(t, body, "gamma")
 }
 
-// The VALUE, not the action slot, identifies the row: posting to a different
-// row's slot but with bravo's value still deletes bravo — so a renumbered list
-// can't misroute, because identity rides with the click.
 func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
@@ -463,9 +411,6 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	assert.Contains(t, body, "alpha")
 }
 
-// A malformed ?a= (here, a string where the handler wants an int) must not
-// silently hand the handler a zero value it might act on (e.g. deleting row
-// 0) — the arg is client-controlled input, so an honest answer is 400.
 func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
@@ -476,9 +421,6 @@ func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
 }
 
-// A missing ?a= value (empty, or the literal "null") must answer 400, not
-// silently hand the handler the zero value — the "delete row 0" case this
-// guards against reads identically to a malformed arg to a client.
 func TestActionArg_missingArgAnswers400(t *testing.T) {
 	tests := []struct {
 		name string
@@ -500,14 +442,12 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 	}
 }
 
-// todoBoard embeds the todo list as a PLAIN child — per-row value-actions
+// todoBoard embeds the todo list as a plain child — per-row value-actions
 // must work there too, not only at the root.
 type todoBoard struct{ List todoList }
 
 func (b *todoBoard) View() h.H { return h.Div(via.Child(b.List)) }
 
-// A value-carrying action inside a plain child must still deliver
-// its value: the child action path has to expose the request to the slot.
 func TestActionArg_worksInsideAPlainChild(t *testing.T) {
 	t.Parallel()
 	board := todoBoard{List: todoList{box: newTodoList()}}
@@ -532,8 +472,6 @@ func (a *changePicker) View() h.H {
 	)
 }
 
-// On("change", ...) must render its event binding and route the commit back into the
-// handler. Fails if the change event stops firing or stops reaching Pick.
 func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(changePicker{}))
@@ -545,7 +483,7 @@ func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 }
 
 // tickSessionWriter starts a Tick in OnInit that writes to the session on
-// every beat — the pattern I2 covers: a Tick/Listen handler's Ctx is the SAME
+// every beat — the pattern I2 covers: a Tick/Listen handler's Ctx is the same
 // Ctx OnInit held, so its sessW was set (for OnInit's own use) and, if
 // never cleared, silently survives long past the point the response it
 // pointed at was flushed.
@@ -561,13 +499,8 @@ func (t *tickSessionWriter) beat(ctx *via.Ctx) {
 }
 func (t *tickSessionWriter) View() h.H { return h.Div(t.n.Display()) }
 
-// I2: a session minted from a Tick handler has no open response to carry a
-// cookie — this must produce the documented warning (loud, not silent), and
-// the connect response (long since flushed by the time any tick fires) must
-// never carry a stray Set-Cookie for it.
-//
-// Sequential: it captures the global log output.
 func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -586,12 +519,6 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 		"a Tick-minted session must warn instead of silently orphaning")
 }
 
-// TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs is the regression
-// guard for the bug content-addressed action ids replace: two tabs share one
-// store; tab A deletes a row, changing the action COUNT for everyone. Under
-// the old positional/shape-digest wire, every URL tab B was still holding
-// (its untouched rows included) 410'd as "stale page" — silently, permanently,
-// until a reload. Addressed by handler + ?a=, tab B's shipped URLs keep working.
 func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 	t.Parallel()
 	box := newTodoList()
@@ -618,9 +545,6 @@ func rowActionURL(t *testing.T, html string, id int) string {
 	return m[1]
 }
 
-// An action id is derived from the handler's own Go func name, so it is the
-// same across renders AND across instances — a deploy or a second server does
-// not invalidate the URLs open tabs are holding.
 func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
 	t.Parallel()
 	_, first := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
@@ -629,7 +553,7 @@ func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
 		"two independent instances must address the same handler identically")
 }
 
-// twinButtons binds the SAME handler twice. Both buttons mean the same thing,
+// twinButtons binds the same handler twice. Both buttons mean the same thing,
 // so they collapse onto one action entry and one URL — identity is the
 // handler, never the render position.
 type twinButtons struct{ count *store }
@@ -655,13 +579,8 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
 
-// The 410 for an id this render does not bind keeps the diagnosis (which
-// handlers ARE bound, and the Go method behind each) server-side: the body
-// names only the id the client asked for, so the render's Go type and method
-// names never reach it.
-//
-// Sequential: it captures the global log output.
 func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -690,9 +609,9 @@ type idPair struct{ A, B idCounter }
 
 func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-// idTwins holds two instances of one type as PLAIN fields (no Child), so both
+// idTwins holds two instances of one type as plain fields (no Child), so both
 // bind into the same action table. runtime.FuncForPC drops the receiver, so
-// without the offset in the id both buttons would render the SAME action URL
+// without the offset in the id both buttons would render the same action URL
 // and A's click would run B's handler.
 type idTwins struct{ A, B idCounter }
 
@@ -727,8 +646,6 @@ func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
 	require.NotEqual(t, urls[0], urls[1])
 }
 
-// The id must address the receiver, not the render position: clicking the
-// SECOND twin's button must increment the second counter, not the first.
 func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(idTwins{})
@@ -757,8 +674,6 @@ func (c *idSameMethodTwice) View() h.H {
 	)
 }
 
-// The flip side of the guard: the SAME method on the SAME receiver, bound
-// twice, is one action and must still collapse onto one id.
 func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
 	t.Parallel()
 	urls := actionURLs(t, via.Handler(idSameMethodTwice{}))
@@ -776,10 +691,8 @@ func (p *idClosurePair) View() h.H {
 	return h.Div(kids...)
 }
 
-// Two distinct closures share a Go name ("…View.func1"), so via cannot tell
-// them apart by identity. That must be loud, never a silent last-wins.
-// Sequential: it captures the global log output.
 func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
+	// Sequential: it captures the global log output.
 	app := via.Handler(idClosurePair{})
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
@@ -790,7 +703,7 @@ func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
 	require.Contains(t, logs.String(), "share the action id")
 }
 
-// gridBench binds ONE handler a thousand times, which is the shape actionID's
+// gridBench binds one handler a thousand times, which is the shape actionID's
 // cost shows up in: the id is a pure function of (code pointer, receiver
 // offset), so resolving the Go name and hashing it per binding per render was
 // pure waste.
@@ -810,12 +723,8 @@ func BenchmarkRender_thousandActionBindings(b *testing.B) {
 	}
 }
 
-// The memoized id must be stable across renders AND across separately mounted
-// instances of the same type — the cache is keyed on the code pointer plus the
-// receiver's offset, so a key that dropped either half would either churn URLs
-// between renders or collapse two receivers onto one id.
-// Not Parallel: it captures the process-global log, which every other test writes to.
 func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
+	// Not Parallel: it captures the process-global log, which every other test writes to.
 	handler := via.Handler(idTwins{})
 	first := actionURLs(t, handler)
 	second := actionURLs(t, handler)
@@ -828,7 +737,7 @@ func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
 // collidePage mints "a_b" twice: once for the nested A.B (nested struct names
 // join with "_") and once for the sibling field A_b. Two spans bind one slot,
 // one slot is declared, and the hydrator map keeps whichever came last — so a
-// POST writes the WRONG field, silently.
+// POST writes the wrong field, silently.
 type collidePage struct {
 	A   struct{ B via.Signal[int] }
 	A_b via.Signal[int]
@@ -836,8 +745,8 @@ type collidePage struct {
 
 func (p *collidePage) View() h.H { return h.Div(p.A.B.Bind(), p.A_b.Bind()) }
 
-// childCollidePage's field A__b mints "a__b" in the PARENT, which is exactly
-// the slot the CHILD of field A gives its own signal B ("a__" + "b").
+// childCollidePage's field A__b mints "a__b" in the parent, which is exactly
+// the slot the child of field A gives its own signal B ("a__" + "b").
 type childKidB struct{ B via.Signal[int] }
 
 func (k *childKidB) View() h.H { return k.B.Bind() }
@@ -885,7 +794,7 @@ type boxedSignal struct{ S *via.Signal[string] }
 
 func (b *boxedSignal) View() h.H { return h.Div(h.Input(b.S.Bind())) }
 
-// valueReceiverView binds a STACK COPY: every signal offsets from the wrong
+// valueReceiverView binds a stack copy: every signal offsets from the wrong
 // base, so its writes land on a struct the render throws away.
 type valueReceiverView struct{ S via.Signal[int] }
 
@@ -925,10 +834,8 @@ func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 	assertMountPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverView{}) })
 }
 
-// valueReceiverChild is only reachable through via.Child, so its View receiver
-// is checked where Child resolves the child type rather than at Mount.
-// Not Parallel: it captures the process-global log, which every other test writes to.
 func TestSignal_valueReceiverChildPanicsAtRender(t *testing.T) {
+	// Not Parallel: it captures the process-global log, which every other test writes to.
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
@@ -944,7 +851,7 @@ func TestSignal_slotCollidingWithAChildPrefixPanics(t *testing.T) {
 
 // ownedRows is the arg-authorization fixture: a list filtered by owner, plus
 // an admin-only row reachable only through a via.When. Two users see two
-// disjoint sets of ?a= values from ONE handler and one action id — which is
+// disjoint sets of ?a= values from one handler and one action id — which is
 // the whole point: the action id is content-addressed on the handler, so the
 // arg is the only thing separating alice's row from bob's.
 type ownedRows struct {
@@ -988,11 +895,6 @@ func (o *ownedRows) View() h.H {
 	)
 }
 
-// The blocker this file's arg checks exist for: bob's render binds Delete for
-// his own row (?a=2), so the handler id is dispatchable by him — but swapping
-// the arg to alice's row (?a=1) over his own valid session must 410, not
-// delete her row. Before the (handler, arg) pair became the dispatch identity
-// this answered 200 and ran Delete(1).
 func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
@@ -1006,9 +908,6 @@ func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	assert.NotContains(t, body, "deleted: [1]", "alice's row was deleted by an arg swap")
 }
 
-// The same swap over a LIVE connection — bob's own tab, his own session, the
-// handler bound by his own render. The live path resolves the action against
-// the last push's table rather than a fresh render, so it needs its own test.
 func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveOwnedRows{}))
@@ -1033,10 +932,6 @@ func (l *liveOwnedRows) View() h.H {
 	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Delete, 2)))
 }
 
-// An arg rendered only inside a via.When branch that is CLOSED for this
-// request must 410 even though the handler itself is bound elsewhere on the
-// page. This is the check doing its job: the branch, not the handler, is what
-// authorizes the row, and a closed branch is an authorization answer.
 func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
 	t.Parallel()
 	admin := serve(t, via.Handler(newOwnedRows("alice", true)))
@@ -1056,8 +951,6 @@ func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
 	assert.NotContains(t, body, "deleted: [9]")
 }
 
-// The other half of the check: an arg the render DID bind still dispatches
-// normally. A fix that 410s everything would pass the tests above.
 func TestActionArg_renderedArgStillDispatches(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
@@ -1067,7 +960,7 @@ func TestActionArg_renderedArgStillDispatches(t *testing.T) {
 	assert.Contains(t, body, "deleted: [2]", "bob's own row must still be deletable")
 }
 
-// bigList is via.Each over a large list: ONE handler, one action id, one
+// bigList is via.Each over a large list: one handler, one action id, one
 // thousand bound args. It pins that the arg set stays bounded by the render
 // (a set of the very strings the HTML already carries) and that every row in
 // it still dispatches.
@@ -1083,10 +976,6 @@ func (b *bigList) View() h.H {
 	return h.Div(h.P(h.Str(b.hit)), h.Ul(via.Each(ids, b.row)))
 }
 
-// Each over 1000 rows: the first, last, and a middle row all dispatch, and an
-// id past the end does not. The set is one entry per rendered binding — the
-// same string the binding already wrote into the HTML — so it cannot outgrow
-// the response it was built from.
 func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(bigList{}))
@@ -1106,7 +995,7 @@ func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 // value-carrying bindings must stay within a small constant per binding. The
 // ceiling is deliberately loose (it is a regression tripwire, not a budget) —
 // what it catches is the set turning into something super-linear, or the args
-// being retained per ROW rather than merged per SLOT.
+// being retained per row rather than merged per slot.
 func BenchmarkEachArgSet(b *testing.B) {
 	h := via.Handler(bigList{})
 	srv := httptest.NewServer(h)
@@ -1125,8 +1014,8 @@ func BenchmarkEachArgSet(b *testing.B) {
 // liveOwned promotes ownedRows' whole ownership model — two users, disjoint
 // ?a= sets, one handler id — onto a unit that can be live, so the arg check
 // can be held to the same claim off the root unit it is held to on it. The
-// live twin below it (liveOwnedRows) proves only that an UNRENDERED arg 410s;
-// what matters is that ANOTHER USER's arg does, with his row left intact.
+// live twin below it (liveOwnedRows) proves only that an unrendered arg 410s;
+// what matters is that another user's arg does, with his row left intact.
 type liveOwned struct {
 	ownedRows
 	live bool

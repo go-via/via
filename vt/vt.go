@@ -379,7 +379,7 @@ func (a *App) ConnectAt(path, body string) *Conn {
 func (c *Conn) TabID() string { return c.tabID }
 
 // ActionURL returns the currently-rendered URL of child's n-th action, in
-// document order — read off the LATEST datastar-patch-elements frame that
+// document order — read off the latest datastar-patch-elements frame that
 // carries one, the same markup a browser's DOM would hold at this point, not a
 // separate plain GET's render. Before any push has touched this child
 // (e.g. the very first action after Connect), nothing has been pushed yet
@@ -403,9 +403,9 @@ func (c *Conn) ActionURL(child string, n int) string {
 }
 
 // Peek returns the next buffered frame without blocking, so a test can assert
-// something has NOT happened yet without letting time advance further to find
-// out — under synctest, a blocking Await would just wait for whatever
-// eventually arrives, which defeats a "not yet" claim at a specific instant.
+// something has not happened yet without letting time advance further to find
+// out — under synctest, a blocking Await would wait for whatever eventually
+// arrives, defeating a "not yet" claim at a specific instant.
 func (c *Conn) Peek() (string, bool) {
 	select {
 	case line, ok := <-c.frames:
@@ -437,7 +437,7 @@ func (c *Conn) Await(needle string) string {
 	}
 }
 
-// AwaitClose blocks until the SERVER ends the stream and returns the error that
+// AwaitClose blocks until the server ends the stream and returns the error that
 // ended it — nil when the response terminated cleanly, which is what a graceful
 // shutdown owes the client; a non-nil error means the client saw a truncated
 // stream. Fails the test if the stream is still open after 2s.

@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// attrValue extracts the value of a named HTML attribute from a rendered body.
 func attrValue(t *testing.T, body, name string) string {
 	t.Helper()
 	m := regexp.MustCompile(name + `="([^"]*)"`).FindStringSubmatch(body)
@@ -32,8 +31,6 @@ type numComp struct{ n via.Signal[int] }
 
 func (c *numComp) View() h.H { return h.Div(c.n.Display()) }
 
-// The page-level data-signals declaration must carry an ordinary numeric signal
-// verbatim — if the common case regressed, the client would hydrate nothing.
 func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(numComp{})).Get("/")
@@ -54,12 +51,6 @@ func (c *nameComp) View() h.H {
 	return h.Div(h.Input(c.name.Bind()), h.Button(via.On("click", c.Touch), h.Str("x")), c.name.Display())
 }
 
-// A string signal value is attacker-influenced — it round-trips through the
-// client. The data-signals declaration sits inside a single-quoted attribute,
-// so a raw apostrophe in the value would close the attribute early and let the
-// attacker graft a live data-on-load Datastar expression onto #root (XSS). A
-// hydrated apostrophe must come back entity-encoded, never raw — asserted here
-// against the real HTTP response, not the internal serializer.
 func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	t.Parallel()
 	// Echo the breakout payload back as the signal's own slot; the request shape
@@ -84,11 +75,6 @@ func (g *greeting) View() h.H {
 	)
 }
 
-// A signal that is both Bound to an input and Displayed must resolve to ONE
-// shared wire name, or the two-way binding and the live display reference
-// different signals and never update together. The data-bind value must equal
-// the data-text signal (minus the $ sigil), and the name must be declared once
-// for hydration.
 func TestSignal_bindAndDisplayShareOneWireName(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(greeting{})).Get("/")
@@ -122,7 +108,7 @@ func TestSignal_sharedNameIsOrderIndependent(t *testing.T) {
 
 // boundForm rounds a Bound+Displayed signal through an action POST. The response
 // fragment must reflect the value the client typed (not a zero reset) and keep
-// the SAME wire name the GET page served, or the live binding desyncs after the
+// the same wire name the GET page served, or the live binding desyncs after the
 // first action.
 type boundForm struct{ Name via.Signal[string] }
 
@@ -151,10 +137,6 @@ func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	assert.Contains(t, frag, "Ada", "response must reflect the value the client typed, not a zero reset")
 }
 
-// TestSignal_bareSetBeforeRenderIsSafe pins the bare-mutator contract: Set(v)
-// with no ctx works before the signal was ever rendered (no bound pass yet) —
-// it updates server memory and emits no patch, without panicking. Fails if Set
-// grows a required ctx again or dereferences an unstamped binding.
 func TestSignal_bareSetBeforeRenderIsSafe(t *testing.T) {
 	t.Parallel()
 	var s via.Signal[string]
@@ -162,11 +144,8 @@ func TestSignal_bareSetBeforeRenderIsSafe(t *testing.T) {
 	assert.Equal(t, "hello", s.Get())
 }
 
-// A Set on a signal the View never rendered updates server memory but can emit
-// no patch — that silence must be loud: exactly one warning per signal, not
-// zero (a mystery) and not one per call (noise). Sequential: it captures the
-// global log output.
 func TestSignal_setOnNeverRenderedSignalWarnsOnce(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -197,9 +176,6 @@ func (t *twoSignals) View() h.H {
 	)
 }
 
-// A plain action's element patch declares ONLY the signals the action wrote.
-// Re-declaring every slot would overwrite the whole client store on every
-// action, so a value the user was mid-edit vanished on the next click.
 func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(twoSignals{}))
@@ -216,7 +192,7 @@ func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 // wizard is the conditional-Bind shape: exactly one of Name/Email is rendered
 // per step, so their slots can only stay distinct if a slot is the field's
 // identity rather than the order it was first rendered in. The step indicator
-// renders AFTER the input, so a render-order scheme hands the step's own slot
+// renders after the input, so a render-order scheme hands the step's own slot
 // to the input.
 type wizard struct {
 	Step  via.Signal[int]
@@ -246,7 +222,6 @@ func (w *wizard) View() h.H {
 	)
 }
 
-// bindSlots lists every data-bind slot in document order.
 func bindSlots(markup string) []string {
 	var out []string
 	for _, m := range regexp.MustCompile(`data-bind="([^"]*)"`).FindAllStringSubmatch(markup, -1) {
@@ -255,9 +230,6 @@ func bindSlots(markup string) []string {
 	return out
 }
 
-// A signal whose Bind is conditional must never inherit a slot another signal
-// already owns. On a streaming page the hydrator table is keyed by slot, so an
-// aliased slot posts the user's input into the WRONG FIELD.
 func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(wizard{}))
@@ -269,7 +241,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	status, _ := app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status, "the live action acks; the push carries the render")
 
-	// "name=" and not "name=Ada": a live push renders the SERVER's value for a
+	// "name=" and not "name=Ada": a live push renders the server's value for a
 	// slot the current View no longer binds, exactly as the plain page below
 	// does. The client's posted value is re-applied only where the render still
 	// has a hydrator for it (livePush), so it cannot survive as server state.
@@ -287,9 +259,6 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	assert.Contains(t, line, "name= email=<", "the posted slot must write its own field, never the email's")
 }
 
-// The same aliasing on a plain page shows up client-side: the instance is
-// fresh per request, so the wrong-field write lands in the Datastar store — the
-// step-2 input would render bound to the slot still holding step 1's name.
 func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(plainWizard{}))
@@ -303,10 +272,6 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 	assert.NotContains(t, frag, "Ada", "and so must not render carrying the name the user typed")
 }
 
-// A plain action's patch declares the dirty slots — plus any slot the
-// pre-action render did not carry. Without that, an input that appears for the
-// first time in the response ships no declaration at all and the client either
-// has no value for it or, worse, a stale one left by whatever held the slot.
 func TestPlainAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(plainWizard{}))
@@ -334,7 +299,7 @@ func (w *plainWizard) View() h.H {
 	return h.Div(h.Input(w.Email.Bind()), w.Step.Display())
 }
 
-// refChild calls Ref BEFORE the signal is Bound anywhere, which is the whole
+// refChild calls Ref before the signal is Bound anywhere, which is the whole
 // point: a field-held signal is named before the View runs, so a raw Datastar
 // expression can reference it from anywhere in the tree.
 type refChild struct{ Draft via.Signal[string] }
@@ -352,9 +317,6 @@ func (p *refPage) View() h.H {
 	return h.Div(h.Data("show", p.Count.Ref()), p.Count.Display(), via.Child(p.Chat))
 }
 
-// A slot is the Go FIELD name, so a user writing a raw Datastar expression
-// reads it off the struct instead of reverse-engineering an opaque field offset
-// out of the rendered HTML. A child's slots carry its field path.
 func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(refPage{})).Get("/")
@@ -431,7 +393,7 @@ func TestSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 }
 
 // liveGatedFlag is gatedFlag on a live unit, where the hydration an action does
-// feeds the NEXT push's render — so an unwritable slot accepted there would
+// feeds the next push's render — so an unwritable slot accepted there would
 // open the branch one frame later and make its handlers dispatchable from then on.
 type liveGatedFlag struct {
 	Admin  via.Signal[bool]
@@ -469,7 +431,7 @@ type staleChild struct{ S via.Signal[string] }
 
 func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
 
-// The parent binds the child's signal in its OWN View and also embeds the
+// The parent binds the child's signal in its own View and also embeds the
 // child. Child copies the field by value at View-build time, so from the
 // second render on, the copy arrives carrying the root-scoped slot the
 // parent's field minted, colliding with the parent's own.
@@ -504,8 +466,6 @@ func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
 		"child slot must carry its child prefix: %s", binds[1][1])
 }
 
-// --- F5(3): one unmarshalable value must cost its own slot, not the page's.
-
 type unmarshalable struct{}
 
 func (unmarshalable) MarshalJSON() ([]byte, error) { return nil, errors.New("via_test: not encodable") }
@@ -519,9 +479,6 @@ func (m *mixedSignals) View() h.H {
 	return h.Div(h.Input(m.Good.Bind()), h.Input(m.Bad.Bind()))
 }
 
-// The declaration used to be marshalled as one object, so a single bad value
-// emptied data-signals for EVERY signal on the page — silently, with the page
-// still rendering and the client store left bare.
 func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(mixedSignals{}))
@@ -537,7 +494,7 @@ func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
 	assert.NotContains(t, page, `<div id="root" data-signals=''`, "and the declaration is not wiped")
 }
 
-// refHolder reaches its signal through a POINTER field, which has no field
+// refHolder reaches its signal through a pointer field, which has no field
 // name to mint a wire name from.
 type refHolder struct{ Sig *via.Signal[int] }
 

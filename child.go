@@ -14,7 +14,7 @@ import (
 // Child renders a child composition — a plain struct field of the parent,
 // seeded at the parent's literal — into its own positional container. The child
 // gets its own OnInit (before its View, on every request-scoped render) and may
-// be plain or live; liveness is what the child DOES, never a separate type. One
+// be plain or live; liveness is what the child does, never a separate type. One
 // live child anywhere makes the page stream.
 //
 //	type Page struct{ Chat ChatRoom; Ticker Clock }
@@ -35,7 +35,7 @@ import (
 // ancestor on the path is plain. Only the last clause limits: a live child's own
 // View may not call Child either. Violations panic at render.
 //
-// TRAP: a Child's key is its POSITION among its parent's Child calls, composed
+// trap: a Child's key is its position among its parent's Child calls, composed
 // with the parent's ("0", "0-0"), and the container id, signal prefix and
 // dispatch address all read it. A child's key must be identical on every render
 // for the life of a connection, and a When wrapped around a Child shifts its
@@ -77,9 +77,9 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	// OnInit would undo the very change the handler just made — re-reading
 	// mutated data is OnReload's job, and dispatch has already run it.
 	//
-	// The type guard is not paranoia: a root View whose Child ORDER shifts
+	// The type guard is not paranoia: a root View whose Child order shifts
 	// between the discovery render and the response re-render leaves the acted
-	// key pointing at a slot a DIFFERENT type now occupies, and splicing the
+	// key pointing at a slot a different type now occupies, and splicing the
 	// instance in there renders the wrong View under the wrong slot prefix.
 	// Fall back to the fresh copy rather than render a lie.
 	acted := parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ
@@ -92,7 +92,7 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
 	child.isChild = true
 	child.childKey = key
-	// The DOUBLE underscore marks the scope boundary: a plain nested struct
+	// The double underscore marks the scope boundary: a plain nested struct
 	// joins with a single one, so a parent that binds p.C.S in its own View
 	// (slot "c_s") and also embeds p.C (slot "c__s") keeps the two apart —
 	// different copies that must never share a slot. Stamped onto the instance
@@ -126,13 +126,13 @@ func childViewer(r *hcore.Renderer, inst instance) {
 		}
 	}
 
-	// Render first: it is what populates the child's signal slots AND settles
+	// Render first: it is what populates the child's signal slots and settles
 	// child.live, so neither the declaration nor the container attribute below
 	// can be decided before it.
 	child.rendered = renderChildInner(child, inst.v)
 	r.WriteString(`<div id="via-i` + key + `"`)
 	if child.live {
-		// Datastar only skips a morph when BOTH the existing element and the
+		// Datastar only skips a morph when both the existing element and the
 		// incoming fragment carry the attribute, so every root-walk render must
 		// mark it. The child's own push targets #via-i{key} in inner mode,
 		// which never compares the container, so that push still lands.
@@ -190,7 +190,7 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // root's key and aliasing onto it.
 //
 // from is the request-scoped Ctx this re-render belongs to (nil for a live
-// push); it inits the child's nested CHILDREN — see inheritRequestScope.
+// push); it inits the child's nested children — see inheritRequestScope.
 func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet) (*Ctx, []byte) {
 	c := newCtx()
 	c.rev = rev

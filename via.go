@@ -14,10 +14,10 @@
 //
 // A composition instance is never shared between goroutines by via, and none
 // of its handles take a lock. That is safe because every callback via runs
-// against one instance runs on ONE goroutine:
+// against one instance runs on one goroutine:
 //
 //   - A plain request (a GET page, an action POST on a page with no live unit)
-//     gets its OWN instance, copied from the value passed to [Mount].
+//     gets its own instance, copied from the value passed to [Mount].
 //     OnInit, the action handler, OnReload and View all run on that request's
 //     net/http goroutine, and the instance is discarded with the response.
 //   - A live connection (one opened by [Ctx.Tick], [Ctx.Listen], or by
@@ -31,13 +31,13 @@
 //     runs concurrently with a tick.
 //
 // The rule that follows: [Signal], [State], [List], [Ctx] and [Session] are
-// NOT safe for concurrent use. Call them only from a via callback. To reach a
+// Not safe for concurrent use. Call them only from a via callback. To reach a
 // unit from a goroutine of your own — a background worker, a message consumer,
 // an http.Handler outside via — publish to a [topic.Topic] and have the unit
 // [Ctx.Listen] to it; the value is then delivered on the unit's own goroutine.
 //
 //	go func() { prices.Publish(tick) }() // fine: Topic is concurrency-safe
-//	go func() { p.Price.Set(tick) }()    // RACE: Set is not
+//	go func() { p.Price.Set(tick) }()    // race: Set is not
 package via
 
 import (
@@ -89,7 +89,7 @@ type instance struct {
 	slotPrefix string
 }
 
-// slotID is embedded FIRST in Signal[T] so prebindSignals can stamp every
+// slotID is embedded first in Signal[T] so prebindSignals can stamp every
 // field-held signal's name through one pointer add, not a reflect per render.
 type slotID struct {
 	slot string // stable wire name
@@ -117,9 +117,9 @@ type signalField struct {
 var typeSignalCache sync.Map // reflect.Type -> *typeSignals
 
 // signalsOf builds (memoized per type) the offset -> wire-name table: the Go
-// FIELD name, first rune lowercased, "_"-joined through plain nested structs.
+// field name, first rune lowercased, "_"-joined through plain nested structs.
 //
-// "_" and not "." is deliberate: Datastar treats a dotted signal name as a PATH
+// "_" and not "." is deliberate: Datastar treats a dotted signal name as a path
 // and re-nests it, so "chat.draft" would arrive back as {"chat":{"draft":…}}
 // and never match the flat slot the server looks up.
 func signalsOf(t reflect.Type) *typeSignals {
@@ -218,7 +218,7 @@ func lowerFirst(s string) string {
 	return string(s[0]+('a'-'A')) + s[1:]
 }
 
-// prebindSignals stamps every field-held Signal with its wire name BEFORE the
+// prebindSignals stamps every field-held Signal with its wire name before the
 // View runs, so Ref reads a real name wherever it is called and a Child's
 // by-value copy carries the child's prefix, not the parent's last binding.
 func prebindSignals(c *Ctx, inst instance) {
@@ -237,8 +237,8 @@ type childPrefixKey struct{ parent, child reflect.Type }
 var childPrefixes sync.Map // childPrefixKey -> string ("" = ambiguous)
 
 // childFieldName is the parent field a Child's child came from. Child takes
-// the child BY VALUE, so the copy's address says nothing about which field it
-// came from; the type does, as long as the parent holds exactly ONE field of
+// the child by value, so the copy's address says nothing about which field it
+// came from; the type does, as long as the parent holds exactly one field of
 // it. Two fields of that type answer "" (Child's argument order need not match
 // declaration order), and the caller falls back to the positional child key.
 func childFieldName(parent, child reflect.Type) string {
@@ -262,7 +262,7 @@ func childFieldName(parent, child reflect.Type) string {
 	}
 	if name != "" {
 		// A child scopes its child's slots under name+"__", while a plain
-		// field literally named A__b mints "a__b" in the PARENT — same slot,
+		// field literally named A__b mints "a__b" in the parent — same slot,
 		// two different fields.
 		for own := range signalsOf(parent).names {
 			if strings.HasPrefix(own, name+"__") {
@@ -287,7 +287,7 @@ type ptrViewer[T any] = interface {
 // actions by handler identity during a render pass, hydrates signals from the
 // request, and records per-slot initial values.
 //
-// NOT safe for concurrent use. Call it only from the via callback it was
+// Not safe for concurrent use. Call it only from the via callback it was
 // handed to; to reach a live unit from a goroutine of your own, publish to a
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
@@ -313,7 +313,7 @@ type Ctx struct {
 	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
 	unitV       instance
 	rendered    []byte // inner HTML from the discovery render (for the 204 compare)
-	push        func() // re-render THIS child and frame it on the stream
+	push        func() // re-render this child and frame it on the stream
 	declare     bool   // this render declares page-level data-signals
 	base        string // mount path prefix for action POSTs
 	redirect    string
@@ -347,7 +347,7 @@ type Ctx struct {
 func (c *Ctx) Request() *http.Request { return c.req }
 
 // Context returns the context that bounds this unit's work. On a live unit it
-// is the STREAM context — cancelled when the tab disconnects or [Router.Close]
+// is the stream context — cancelled when the tab disconnects or [Router.Close]
 // runs — which is the one a Tick or Listen handler can watch to abandon a slow
 // call instead of finishing it against a dead socket:
 //
@@ -430,7 +430,7 @@ func ctxOf(b hcore.Binder) *Ctx {
 // or bound off a value receiver's stack copy, has no field offset: its writes
 // land on memory the render discards, and any invented name is positional, so
 // a conditional Bind hands one signal's slot to another and the next post
-// writes the wrong field. The subtraction is unsigned, so a field BELOW the
+// writes the wrong field. The subtraction is unsigned, so a field below the
 // base wraps past size and fails the bound check along with one above it.
 func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 	if base := c.unitV.base; base != nil && field != nil && c.unitV.sig != nil {
@@ -501,10 +501,10 @@ type action struct {
 }
 
 // actionSlot registers run under the content-addressed id of ident — for
-// OnArg that is the user's fn, NOT the decoding wrapper, which would name the
+// OnArg that is the user's fn, not the decoding wrapper, which would name the
 // same via-internal closure for every row.
 //
-// The id hashes the func's Go NAME plus its receiver's byte offset, not its
+// The id hashes the func's Go name plus its receiver's byte offset, not its
 // code pointer: the name survives a rebuild, so a deploy does not invalidate
 // every action URL an open tab is holding, while the offset keeps two
 // instances of one type (struct{ A, B Counter }) from minting one id for A.Inc
@@ -551,7 +551,7 @@ func (c *Ctx) claimSlot(ident any) (string, string, action) {
 	return id, name, action{name: name, handle: ah, args: prev.args}
 }
 
-// actionHandle is a handler's runtime identity within ONE render: its code
+// actionHandle is a handler's runtime identity within one render: its code
 // pointer plus the bound receiver (method value) or funcval. Never hashed into
 // the id — both halves move every request — only compared, to turn a would-be
 // silent last-wins overwrite into a panic.
@@ -568,7 +568,7 @@ type eface struct{ typ, data unsafe.Pointer }
 //
 // A funcval is a code pointer followed by the captured words, and the compiler
 // heap-allocates a method-value wrapper even for a zero-sized receiver — so
-// the second word is in bounds for a "-fm" func and ONLY for one. A plain func
+// the second word is in bounds for a "-fm" func and only for one. A plain func
 // or capture-free closure is a one-word static symbol; reading past it would
 // be out of bounds, so those are identified by the pointer itself, never
 // dereferenced.
@@ -707,17 +707,17 @@ type paramMiss struct {
 // A segment that cannot decode into T answers 404 — never a silent zero value.
 // Naming a segment the mount pattern doesn't have panics.
 //
-// IN A [WithErrorPage] HANDLER it returns the zero value instead, for every
+// In a [WithErrorPage] handler it returns the zero value instead, for every
 // name: that Ctx is answering a failure that may have happened before any route
 // matched, so there is no pattern to read a segment from — and an error page is
 // the one render that must not be able to fail. Read [Ctx.Request] if the raw
 // path matters there.
 //
-// PATH PARAMS SURVIVE AN ACTION; QUERY PARAMS DO NOT. An action POSTs to
+// Path params survive an action; query params do not. An action POSTs to
 // {mount}/_via/a/{n}/…, built from the mount pattern with its {name} segments
 // filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
 // URL, so the discovery render that decides what is dispatchable runs against
-// the UNFILTERED page: a row that only exists under the filter binds no action
+// the unfiltered page: a row that only exists under the filter binds no action
 // in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
 // therefore readable on the GET and empty on every action.
 //
@@ -725,7 +725,7 @@ type paramMiss struct {
 // params or in the session, never in the query string:
 //
 //	via.Mount(r, "/tickets/{status}/{page}", TicketList{}) // survives an action
-//	// /tickets?status=open&page=2                    // does NOT
+//	// /tickets?status=open&page=2                    // does not
 func (c *Ctx) Param[T any](name string) T {
 	if c.errPage {
 		var zero T
@@ -785,13 +785,13 @@ func On(event string, fn func(*Ctx)) h.Attr {
 }
 
 // OnArg wires a named DOM event to an action that carries a value: the row's
-// own datum rides with the event, so the handler acts on THAT item regardless
-// of its render POSITION. fn is a named method value (e.g. l.Delete); arg is
+// own datum rides with the event, so the handler acts on that item regardless
+// of its render position. fn is a named method value (e.g. l.Delete); arg is
 // plain data (e.g. todo.ID), not an identifier string.
 //
 // DISPATCHABLE-IFF-RENDERED (this is the canonical statement of the property;
 // via.When, Signal.bind and hydrateTree all defer to it). Dispatch identity is
-// the (handler, arg) PAIR. The render that precedes every dispatch — the
+// the (handler, arg) pair. The render that precedes every dispatch — the
 // discovery render on a plain page, the last push on a live one — rebuilds the
 // set of args it binds for fn, and a POST whose ?a= is not in that set is 410'd
 // before fn ever runs. So an arg the caller's own render does not produce
@@ -802,12 +802,12 @@ func On(event string, fn func(*Ctx)) h.Attr {
 //
 // That render is server state alone: an inbound value is accepted only for a
 // slot the render put under client control (Bind), and the body is applied
-// AFTER the discovery render, so a POST cannot open the branch that authorizes
+// after the discovery render, so a POST cannot open the branch that authorizes
 // it. A Bind()ed signal IS client-controlled, so gating on one is the client's
 // decision to make — an authorization gate belongs on session or database
 // state, never on a signal.
 //
-// TRAP: arg must be a stable IDENTITY (a row's primary key), never a value
+// trap: arg must be a stable identity (a row's primary key), never a value
 // that moves between renders. A pagination cursor or count bound as an arg
 // goes stale the moment any push re-renders the button, and the click already
 // in flight 410s. Read changing state from the composition in an argless On
@@ -818,7 +818,7 @@ func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 		if ctx == nil {
 			return
 		}
-		// Marshalled BEFORE the slot is claimed: the encoded arg is both what
+		// Marshalled before the slot is claimed: the encoded arg is both what
 		// the binding ships and what dispatch matches against, so one that
 		// cannot encode has no authorizable identity — binding it anyway would
 		// render a button whose every click 410s.
@@ -886,7 +886,7 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // id addresses the handler itself, so a list that grew or shrank since the
 // client's copy was rendered still routes every already-shipped URL. The tab
 // id rides in the signal store Datastar already ships with every @post rather
-// than in a header, because Datastar builds headers per CALL (Object.assign
+// than in a header, because Datastar builds headers per call (Object.assign
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
@@ -903,7 +903,7 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 // reaches here follows an action, so the answer must reflect mutated server
 // state.
 //
-// declareSignals false is what a LIVE push passes: re-declaring data-signals on
+// declareSignals false is what a live push passes: re-declaring data-signals on
 // every push would re-merge and clobber a signal the user is mid-edit (their
 // half-typed message vanishing when someone else's arrives). Server-driven
 // signal changes ride an explicit signal-patch instead. only restricts the
@@ -917,7 +917,7 @@ func renderRootBase(inst instance, declareSignals bool, base string, only map[st
 	return ctx, renderRootWith(ctx, inst.v)
 }
 
-// inheritRequestScope carries a request-scoped render's wiring onto a LATER
+// inheritRequestScope carries a request-scoped render's wiring onto a later
 // render off the same request (an action's response, a live root's push).
 //
 // doInit is load-bearing: the acted-on unit's OnInit already ran, but every
@@ -931,11 +931,11 @@ func inheritRequestScope(ctx, from *Ctx) {
 	ctx.req = from.req
 	ctx.sessions = from.sessions
 	ctx.sessW = from.sessW
-	// The resolved handle, not just the manager: a session minted THIS request
+	// The resolved handle, not just the manager: a session minted this request
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).
 	ctx.session = from.session
-	// A CHILD's mutation landed on the copy via.Child made at the previous
+	// A child's mutation landed on the copy via.Child made at the previous
 	// render. A root walk from here would call via.Child(parent.Field) again
 	// and re-copy the parent's untouched field, throwing it away (validation
 	// errors gone, submitted values back to empty) — so carry the instance down
@@ -958,7 +958,7 @@ func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 }
 
 // renderRootWith renders v under an already-built root Ctx. Liveness is an
-// OUTPUT, not an input, so the nesting rules can only be checked once the
+// output, not an input, so the nesting rules can only be checked once the
 // whole walk is done — see checkLiveNesting.
 func renderRootWith(ctx *Ctx, v viewer) []byte {
 	declareSignals, only := ctx.declare, ctx.declareOnly
@@ -979,8 +979,8 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 }
 
 // checkLiveNesting enforces the two deferred-feature rules on the finished
-// render tree: a live unit may not hold another live unit, and a live CHILD's
-// View may not call Child at all (a live ROOT may — its plain children are
+// render tree: a live unit may not hold another live unit, and a live child's
+// View may not call Child at all (a live root may — its plain children are
 // re-inited on every push, see rootPush). It runs after the walk because
 // liveness is only knowable then — loud and early, rather than serving a page
 // that silently misroutes an action.
@@ -1055,15 +1055,15 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // fresh bind Ctx replaces lc's entry, so a live action needs no render of its
 // own — the previous push already built its actions/hydrators table.
 //
-// from is what makes a live root's plain CHILDREN survive a push: Child re-copies
+// from is what makes a live root's plain children survive a push: Child re-copies
 // each child from the root's field every render, so a child whose fields OnInit
-// filled comes back zero-valued unless that OnInit runs again. COST: a plain
-// child of a LIVE root runs its OnInit once per pushed frame — keep it cheap,
-// or hold the data on the live root. A live CHILD may not Child at all
+// filled comes back zero-valued unless that OnInit runs again. Cost: a plain
+// child of a live root runs its OnInit once per pushed frame — keep it cheap,
+// or hold the data on the live root. A live child may not Child at all
 // (checkLiveNesting), so childPush needs none of this.
 // livePush renders one live unit under the same two-phase rule dispatchPlain
 // has always used (I1/I2) and the live path had no version of at all: the
-// AUTHORITY render is the one the client's posted signals did not touch, and it
+// authority render is the one the client's posted signals did not touch, and it
 // alone decides what is dispatchable.
 //
 // Phase 1 puts the server-authored signal values back — undoing the previous
@@ -1071,29 +1071,29 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
 // state, because hydration writes straight into a field of an instance that
 // outlives the request — and renders. Phase 2 applies the client's signals to
 // the slots that render made writable and re-renders to fixpoint, exactly as
-// the plain path does, so a Bind()ed signal still steers what the client SEES
+// the plain path does, so a Bind()ed signal still steers what the client sees
 // and a branch it opens still gets the slots inside it hydrated. The frame
 // carries phase 2; the table the connection keeps is phase 2 pruned to phase 1,
-// per handler AND per arg.
+// per handler and per arg.
 //
-// The authority render runs FIRST and the display render LAST because
+// The authority render runs first and the display render last because
 // Signal.bind stamps the dirty sink at render time: the Ctx registered on the
 // connection must be the one a later Set writes through.
 //
-// Cost: TWO renders per push on any page carrying a Bind() — a real Datastar
+// Cost: two renders per push on any page carrying a Bind() — a real Datastar
 // connect body is the whole signal store, so lc.client holds every bindable
 // slot from the first connect on. Each extra render re-runs every plain child's
 // OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
 func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []byte) {
-	// ONE set for the life of the connection, never replaced: a hydrator closure
+	// One set for the life of the connection, never replaced: a hydrator closure
 	// notes its undo into the rev of the Ctx that bound the signal, so a second
 	// live unit's push swapping lc.rev would leave that unit pointing at a set
 	// nothing restores — and its next action's client value would survive into
-	// the AUTHORITY render. restore() clears the map, so reuse is not growth:
+	// the authority render. restore() clears the map, so reuse is not growth:
 	// it is keyed by slot and bounded by the page's signal count.
 	rev := lc.rev
 	rev.restore()
-	// Deferred, not called at the end: the DISPLAY render below runs with the
+	// Deferred, not called at the end: the display render below runs with the
 	// client's values hydrated onto the instance, and a panic in it (which
 	// runPushItem swallows, leaving the stream up) would otherwise leave
 	// attacker-posted values sitting on the instance for the next Tick/Listen
@@ -1118,7 +1118,7 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	return bind, body
 }
 
-// UNCHANGED FRAMES ARE DROPPED (the canonical statement; both push closures
+// Unchanged frames are dropped (the canonical statement; both push closures
 // and the tests refer here as "skipUnchanged").
 //
 // Why both push closures keep the last framed body: a Tick
@@ -1128,7 +1128,7 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 // five minutes). The plain action path has always answered 204 on an unchanged
 // render; this is the live path's version of that.
 //
-// It is element patches ONLY. flushDirty runs first and on its own comparison
+// It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its
 // patch-signals frame, and a DOM change with no signal change still ships its
 // element patch. The connect handshake's signals frame and the keepalive are
@@ -1140,7 +1140,7 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 	last := from        // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	push = func() {
 		lc.flushDirty(last)
-		// A plain child's failed OnInit panics initOutcome from INSIDE this
+		// A plain child's failed OnInit panics initOutcome from inside this
 		// render, on every frame, and a push has no response to turn that into
 		// a 500/303/404. Dropping the frame loops forever with no
 		// client-visible signal at all, and rendering the child empty serves a
@@ -1263,7 +1263,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		if rec := recover(); rec != nil {
 			// A panic before the headers went out would otherwise fall through
 			// to Go's default — 200 with an empty body, telling the client the
-			// connect succeeded. Once headers ARE sent this can't help, so a
+			// connect succeeded. Once headers are sent this can't help, so a
 			// mid-stream panic is caught per push item (runPushItem) instead.
 			if !headersSent {
 				recoverToHTTP(m.cfg.log, w, req, rec, "stream")
@@ -1294,9 +1294,9 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	// The credential dispatch requires a match against, so that a leaked tab id
 	// is not on its own a bearer token good from any origin with no session at
-	// all (see dispatch). Resolved BEFORE OnInit, which may mint or rotate one:
+	// all (see dispatch). Resolved before OnInit, which may mint or rotate one:
 	// the point is the identity the browser held when it opened this stream.
-	// An error here is NOT "anonymous": the browser may well hold a valid
+	// An error here is not "anonymous": the browser may well hold a valid
 	// cookie the store just could not answer for. Opening the stream anyway
 	// would leave it permanently unbound — nothing binds it later, since a
 	// live action sees a session that already existed at connect — and the tab
@@ -1311,10 +1311,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
 	//
-	// UN-HYDRATED, unlike every earlier version of this line: the connect body
+	// Un-hydrated, unlike every earlier version of this line: the connect body
 	// is the client's, and this render is what decides the connection's action
 	// table and its liveness (I1). The body is kept as lc.client and applied to
-	// the DISPLAY render of every push instead (livePush) — which is the only
+	// the display render of every push instead (livePush) — which is the only
 	// place it was ever visible, since connect frames no elements of its own.
 	rev := newRevertSet()
 	bind := guard
@@ -1359,7 +1359,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn
 	// that panics before it takes over would strand every acquire already made
 	// (a room joined with no matching part, for the life of the process). Armed
-	// here and handed over at the call, and deferred AFTER the recover above so
+	// here and handed over at the call, and deferred after the recover above so
 	// it runs first.
 	streaming := false
 	defer func() {
@@ -1373,10 +1373,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
-	// Subscriptions are started BEFORE any OnConnect runs, and their queued
+	// Subscriptions are started before any OnConnect runs, and their queued
 	// values are drained by runStream below. A unit whose OnConnect publishes
 	// (the "join a room" pattern the hook's doc names) would otherwise miss its
-	// OWN join: the starters used to run inside runStream, i.e. after every
+	// own join: the starters used to run inside runStream, i.e. after every
 	// OnConnect, so the join was published into a topic this unit had not
 	// subscribed to yet and the first frame showed the pre-join world. The
 	// starters stay off the plain-GET path — this is the SSE handler, and
@@ -1415,7 +1415,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"`+tabSignal+`":"`+id+`"}`) })
 
 	// The connect response is flushed now. A Tick/Listen handler runs against
-	// this SAME unit Ctx for the life of the connection, so leaving sessW set
+	// this same unit Ctx for the life of the connection, so leaving sessW set
 	// would let its Session().Put SetCookie on a dead response: no error, no
 	// cookie, a session minted and orphaned until TTL (I2). Clearing it makes
 	// Session.ensure's "no cookie can be set" warning fire, as documented.

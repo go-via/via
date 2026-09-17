@@ -30,9 +30,6 @@ func headSrv(t *testing.T, opts ...via.Option) *httptest.Server {
 	return srv
 }
 
-// The whole point of the struct: a declared shell reaches the document, the
-// <html lang> lands on the element via itself opens, and Raw is emitted
-// verbatim right after via's own <meta charset>.
 func TestDocumentHead_rendersTheDeclaredShell(t *testing.T) {
 	t.Parallel()
 	_, body := headResp(t, via.Head{
@@ -48,8 +45,6 @@ func TestDocumentHead_rendersTheDeclaredShell(t *testing.T) {
 	}
 }
 
-// A zero Head must serve exactly what via served before the option existed —
-// otherwise every existing app's document silently changes shape.
 func TestDocumentHead_zeroValueChangesNothing(t *testing.T) {
 	t.Parallel()
 	_, with := headResp(t, via.Head{})
@@ -59,9 +54,6 @@ func TestDocumentHead_zeroValueChangesNothing(t *testing.T) {
 	assert.NotContains(t, with, "<title>")
 }
 
-// The router-wide assets reach every page and widen every page's policy: one
-// stylesheet CDN, one script CDN, one font origin, each in its own directive
-// and nowhere else.
 func TestDocumentHead_derivesTheCSPFromDeclaredAssets(t *testing.T) {
 	t.Parallel()
 	resp, body := headResp(t, via.Head{Assets: via.Assets{
@@ -78,16 +70,12 @@ func TestDocumentHead_derivesTheCSPFromDeclaredAssets(t *testing.T) {
 	assert.Contains(t, body, `<script defer src="https://plausible.io/script.js"></script>`)
 }
 
-// An undeclared host stays blocked: only declared assets widen the policy, so
-// an empty Assets keeps the strict default.
 func TestDocumentHead_noAssetsDoesNotWidenTheCSP(t *testing.T) {
 	t.Parallel()
 	resp, _ := headResp(t, via.Head{Raw: `<link rel="icon" href="/favicon.png">`})
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "style-src 'self';")
 }
 
-// An inline style ships in the document and is admitted by the hash of its
-// exact bytes — the one inline case a strict policy can carry.
 func TestDocumentHead_inlineStyleIsAdmittedByItsHash(t *testing.T) {
 	t.Parallel()
 	const css = "body{margin:0}"
@@ -96,7 +84,6 @@ func TestDocumentHead_inlineStyleIsAdmittedByItsHash(t *testing.T) {
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), hashSource(css))
 }
 
-// A preload widens the directive its As names, and nothing else.
 func TestDocumentHead_preloadWidensTheDirectiveItsAsNames(t *testing.T) {
 	t.Parallel()
 	resp, body := headResp(t, via.Head{Assets: via.Assets{
@@ -108,8 +95,6 @@ func TestDocumentHead_preloadWidensTheDirectiveItsAsNames(t *testing.T) {
 	assert.Contains(t, body, `<link rel="preload" href="https://cdn.example.com/hero.avif" as="image">`)
 }
 
-// Malformed heads fail at startup, not in the browser. Each of these would
-// otherwise be a blocked request nobody sees until later.
 func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 	t.Parallel()
 	for name, head := range map[string]via.Head{
@@ -133,9 +118,6 @@ func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 	}
 }
 
-// The silent-drop hole Raw used to be: via never parses Raw, so buildCSP never
-// saw a <script> hidden in it and the browser blocked it with no via-side
-// signal at all. Now it cannot be declared there.
 func TestDocumentHead_rejectsScriptsAndStylesSmuggledThroughRaw(t *testing.T) {
 	t.Parallel()
 	for name, raw := range map[string]string{
@@ -161,8 +143,6 @@ func panicOf(t *testing.T, raw string) string {
 		`cannot admit it and the browser would block it silently; declare it in Head.Assets instead`
 }
 
-// Two apps configured identically must serve byte-identical policies — the same
-// plainness the hash-based CSP bought, preserved once assets can widen it.
 func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	t.Parallel()
 	head := via.Head{Assets: via.Assets{
@@ -174,12 +154,6 @@ func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	require.NotEmpty(t, r1.Header.Get("Content-Security-Policy"))
 	assert.Equal(t, r1.Header.Get("Content-Security-Policy"), r2.Header.Get("Content-Security-Policy"))
 }
-
-// --- Per-page metadata, declared by the ROOT composition.
-//
-// Head is router-wide, so every page in a multi-page app would otherwise share
-// one <title>. PageMeta is the per-page declaration: a method, because real
-// metadata is data-dependent, read after OnInit and only from the mounted root.
 
 type metaPage struct {
 	title string
@@ -196,8 +170,6 @@ type metaChild struct{ title string }
 func (c *metaChild) PageMeta() via.Meta { return via.Meta{Title: c.title} }
 func (c *metaChild) View() h.H          { return h.Span(h.Str("child")) }
 
-// Metadata derived from data OnInit loads — the case a struct field could not
-// serve, and the reason PageMeta is a method read after the hook has run.
 type loadedMetaPage struct {
 	store   map[string]string
 	subject string
@@ -222,7 +194,6 @@ func metaBody[T any, PT interface {
 	return do(t, srv, http.MethodGet, "/", "")
 }
 
-// Every inert slot reaches the document, in a shape a crawler recognises.
 func TestPageMeta_writesEveryInertSlot(t *testing.T) {
 	t.Parallel()
 	_, body := metaBody(t, inertPage{})
@@ -260,8 +231,6 @@ func TestPageMeta_readsDataLoadedByOnInit(t *testing.T) {
 	assert.Contains(t, body, `<meta name="description" content="Printer on fire">`)
 }
 
-// Meta is data, not markup: every inert slot is escaped, including the ones
-// that live inside an attribute.
 func TestPageMeta_escapesEveryInertSlot(t *testing.T) {
 	t.Parallel()
 	_, body := metaBody(t, escapingPage{})
@@ -283,8 +252,6 @@ func (escapingPage) PageMeta() via.Meta {
 }
 func (escapingPage) View() h.H { return h.Div(h.Str("hi")) }
 
-// The defect the *Ctx.Title shape had: one head shared down the request tree
-// let any nested child silently rename the page.
 func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 	t.Parallel()
 	_, body := metaBody(t, metaPage{title: "outer", Child: metaChild{title: "inner"}})
@@ -293,8 +260,6 @@ func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 	assert.NotContains(t, body, "inner", "only the MOUNTED root's PageMeta names the document")
 }
 
-// The warning is once per TYPE per process (childHookWarned), so a -count>1 run
-// would see an empty log on every pass but the first: capture it once.
 func TestPageMeta_warnsWhenAChildDeclaresOne(t *testing.T) {
 	logged := warnChildOnce(t)
 
@@ -322,8 +287,6 @@ type warnChild struct{ title string }
 func (c *warnChild) PageMeta() via.Meta { return via.Meta{Title: c.title} }
 func (c *warnChild) View() h.H          { return h.Span(h.Str("child")) }
 
-// The inert half may vary freely with request data; the policy must not move
-// when it does.
 func TestPageMeta_inertFieldsDoNotTouchTheCSP(t *testing.T) {
 	t.Parallel()
 	plain, _ := metaBody(t, metaPage{})
@@ -331,8 +294,6 @@ func TestPageMeta_inertFieldsDoNotTouchTheCSP(t *testing.T) {
 
 	assert.Equal(t, plain.Header.Get("Content-Security-Policy"), titled.Header.Get("Content-Security-Policy"))
 }
-
-// --- Per-mount assets.
 
 type assetPage struct{}
 
@@ -349,8 +310,6 @@ type plainPage struct{}
 func (plainPage) PageMeta() via.Meta { return via.Meta{Title: "plain"} }
 func (plainPage) View() h.H          { return h.Div(h.Str("plain")) }
 
-// The point of a per-mount CSP: one page's declaration must not widen another
-// page's policy.
 func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
@@ -369,8 +328,6 @@ func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 	assert.Contains(t, body, `<script type="module" src="https://cdn.charts.example/c.js"></script>`)
 }
 
-// A patch is a fragment, not a document: it loads nothing, so it keeps the
-// floor policy rather than any mount's widened one.
 func TestPageMeta_patchResponsesCarryTheGlobalCSP(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
@@ -382,9 +339,6 @@ func TestPageMeta_patchResponsesCarryTheGlobalCSP(t *testing.T) {
 	assert.Contains(t, csp, "frame-ancestors 'self'")
 }
 
-// Assets decide the policy, which is built ONCE at Mount. A PageMeta whose
-// Assets move with request data would serve a document the policy does not
-// cover — silently, in the browser only. So it panics on the first render.
 type varyingAssetPage struct{ n int }
 
 func (p *varyingAssetPage) OnInit(*via.Ctx) error { p.n = 1; return nil }
@@ -396,9 +350,6 @@ func (p *varyingAssetPage) PageMeta() via.Meta {
 }
 func (p *varyingAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
-// The CSP is built at Mount, so the disagreement is caught THERE: via reads
-// PageMeta a second time off a probe copy of the literal with its zero fields
-// filled in — what OnInit does — and refuses the mount if the assets moved.
 func TestPageMeta_panicsAtMountWhenAssetsDependOnData(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
@@ -412,8 +363,6 @@ func TestPageMeta_panicsAtMountWhenAssetsDependOnData(t *testing.T) {
 		func() { via.Mount(via.NewRouter(), "/", varyingAssetPage{}) })
 }
 
-// A field the mounted literal already filled is NOT data: it is fixed for the
-// life of the mount, so assets derived from it are constant and must mount.
 type litAssetPage struct{ cdn string }
 
 func (p *litAssetPage) PageMeta() via.Meta {
@@ -430,8 +379,6 @@ func TestPageMeta_assetsFromTheMountedLiteralAreConstant(t *testing.T) {
 	assert.Contains(t, body, `src="https://cdn.example/app.js"`)
 }
 
-// The boot probe fills scalars, not slices, so assets grown from a slice OnInit
-// loads get past it — which is exactly why the render-time comparison stays.
 type lateAssetPage struct{ extra []string }
 
 func (p *lateAssetPage) OnInit(*via.Ctx) error { p.extra = []string{"/late.js"}; return nil }
@@ -444,7 +391,6 @@ func (p *lateAssetPage) PageMeta() via.Meta {
 }
 func (p *lateAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
-// Not parallel: captureLog swaps the process-wide log writer.
 func TestPageMeta_panicsOnRenderWhenAssetsTheProbeCannotSeeMove(t *testing.T) {
 	logged := captureLog(t, func() {
 		resp, _ := metaBody(t, lateAssetPage{})
@@ -454,8 +400,6 @@ func TestPageMeta_panicsOnRenderWhenAssetsTheProbeCannotSeeMove(t *testing.T) {
 		"assets must be a constant of the type")
 }
 
-// The same validation the router-wide Assets get, applied to the page's own —
-// and at Mount, not on the first request.
 func TestPageMeta_validatesItsAssetsAtMount(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
@@ -470,7 +414,7 @@ func (badAssetPage) PageMeta() via.Meta {
 }
 func (badAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
-// The boot probe writes into a COPY of the mounted literal, and a sync.Mutex's
+// The boot probe writes into a copy of the mounted literal, and a sync.Mutex's
 // zero state is an invariant: perturbing it makes the next Lock a runtime throw
 // that no recover can catch, so the process dies at Mount with no via wording.
 // A page holding a mutex (directly, or through a store) is the ordinary shape.
@@ -515,8 +459,6 @@ func TestMount_probeLeavesForeignStructsAlone(t *testing.T) {
 	})
 }
 
-// The skip rule must not disarm the probe: a page that ALSO holds a mutex still
-// gets its scalar fields filled, so data-dependent assets are caught at boot.
 type mutexVaryingAssetPage struct {
 	mu sync.Mutex
 	n  int
@@ -546,9 +488,6 @@ func TestMount_probeStillCatchesDataDependentAssetsPastAMutex(t *testing.T) {
 		func() { via.Mount(via.NewRouter(), "/", mutexVaryingAssetPage{}) })
 }
 
-// A PageMeta that refuses the probe's synthetic data skips the boot check. That
-// is the right call — the values are the probe's invention — but it must be
-// said out loud, or the author believes a guard ran that did not.
 type probeRefusingPage struct{ n int }
 
 func (p *probeRefusingPage) PageMeta() via.Meta {
@@ -559,7 +498,6 @@ func (p *probeRefusingPage) PageMeta() via.Meta {
 }
 func (p *probeRefusingPage) View() h.H { return h.Div(h.Str("x")) }
 
-// Not parallel: captureLog swaps the process-wide log writer.
 func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
 	logged := captureLog(t, func() {
 		require.NotPanics(t, func() { via.Mount(via.NewRouter(), "/", probeRefusingPage{}) })

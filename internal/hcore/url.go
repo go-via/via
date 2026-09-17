@@ -5,7 +5,7 @@ import "strings"
 // SafeURL admits http, https and relative URLs and rejects everything else —
 // javascript:, data:, vbscript:, and the protocol-relative // and \\ forms.
 //
-// This is THE URL policy: it lives here, below both packages, so h's typed
+// This is the URL policy: it lives here, below both packages, so h's typed
 // attributes and via's Redirect share one implementation rather than two that
 // agree today. A second copy of a URL gate is how a javascript: bypass ends up
 // admitted by one caller and refused by the other.

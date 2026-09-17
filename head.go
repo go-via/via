@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Head describes the ROUTER-WIDE document shell: the <html lang>, raw head
+// Head describes the router-wide document shell: the <html lang>, raw head
 // markup, and the assets every page of the app carries. Per-page slots — the
 // title and the rest of [Meta] — belong to the mounted page, not here.
 //
@@ -33,11 +33,11 @@ type Head struct {
 }
 
 // Meta is what a mounted page declares about its own document, via the
-// [PageMetaer] hook. Everything but Assets is INERT: escaped text written into
+// [PageMetaer] hook. Everything but Assets is inert: escaped text written into
 // the head, free to depend on data OnInit loaded.
 //
 // Assets is not inert — it decides the page's Content-Security-Policy, which is
-// built once at Mount. It must therefore be a CONSTANT of the type: via reads
+// built once at Mount. It must therefore be a constant of the type: via reads
 // it at Mount from the mounted literal, again at Mount from a probe copy whose
 // zero fields are filled in, and again on every document render. It panics if
 // any two disagree — at Mount for a page the probe can see through, on the
@@ -63,7 +63,7 @@ type Meta struct {
 	// <meta name="twitter:card">. Rendered in sorted key order.
 	Twitter map[string]string
 
-	// Assets are this page's own scripts, styles and preloads. MUST be a
+	// Assets are this page's own scripts, styles and preloads. Must be a
 	// constant of the type: see the type doc.
 	Assets Assets
 }
@@ -107,13 +107,13 @@ type Preload struct {
 	As   string
 }
 
-// PageMetaer lets the ROOT page composition describe its own document: title,
+// PageMetaer lets the root page composition describe its own document: title,
 // description, social cards, and the assets the page needs.
 //
 //	func (p *Ticket) PageMeta() via.Meta { return via.Meta{Title: "#" + p.id} }
 //
 // It is a method rather than a struct field because real metadata is
-// data-dependent, and it runs AFTER OnInit (and OnReload), so the data is
+// data-dependent, and it runs after OnInit (and OnReload), so the data is
 // already loaded. The inert fields are HTML-escaped.
 //
 // Assets is the exception and is checked as one: it is read at Mount from the
@@ -122,11 +122,11 @@ type Preload struct {
 // page's data panics at Mount; one that varies on something the boot probe
 // cannot reach (a slice OnInit fills) panics on the first GET instead.
 //
-// It shapes the DOCUMENT, so it takes effect on a render that writes one: the
+// It shapes the document, so it takes effect on a render that writes one: the
 // GET, and the full-page response to a native <form> submit. An SSE push
 // patches elements inside <body> and never rewrites the head.
 //
-// ONLY THE ROOT'S counts. An embedded child's PageMeta is ignored — a nested
+// Only the root's counts. An embedded child's PageMeta is ignored — a nested
 // unit may not rename the page it happens to sit in — and Child logs one line
 // naming the type when it sees one, because the method looks like it works.
 //

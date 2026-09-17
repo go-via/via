@@ -122,9 +122,6 @@ func TestMultipleAttributes_keepSourceOrder(t *testing.T) {
 	assert.Equal(t, `<a href="/x" rel="next">go</a>`, got)
 }
 
-// The full-vocabulary sweep: one constructor per HTML5 tag h ships, each must
-// render its own tag; void elements must self-close (no closing tag). Fails if
-// a constructor maps to the wrong tag or a void grows a body.
 func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -145,9 +142,6 @@ func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
 	}
 }
 
-// Typed URL attributes go through safeURL: http/https/relative pass verbatim;
-// javascript:, data:, protocol-relative (//) are neutralized to "#" — never
-// shipped. Fails if the gate opens or a good URL is mangled.
 func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, render(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
@@ -158,11 +152,6 @@ func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
 	assert.Contains(t, render(t, h.Form(h.Action("/login"))), `action="/login"`)
 }
 
-// An attribute renderer that escapes only the value leaves the name as a raw
-// breakout vector: a name like `x" onmouseover="alert(1)` grafts a live event
-// handler onto the tag. The DSL's whole promise is safe HTML, so a name that
-// could break out of the opening tag must be rejected at construction, loudly,
-// rather than silently emitted.
 func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{
@@ -180,10 +169,6 @@ func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {
 	}
 }
 
-// A bare carriage return in rendered text would terminate an SSE data line and
-// split a datastar-patch-elements frame mid-payload (Datastar's stream tokenizer
-// treats CR as a line end), corrupting the morph — a bug no httptest sees. It
-// must be escaped like the other dangerous characters.
 func TestText_escapesCarriageReturnThatWouldSplitAnSSEFrame(t *testing.T) {
 	t.Parallel()
 	got := render(t, h.Span(h.Str("before\rafter")))
@@ -191,9 +176,6 @@ func TestText_escapesCarriageReturnThatWouldSplitAnSSEFrame(t *testing.T) {
 	assert.Contains(t, got, "&#13;")
 }
 
-// h.Data prepends "data-" but the caller-supplied suffix is the injection
-// surface; it is validated against the same allowlist as a raw attribute name
-// (the suffix must itself start with a letter — "data-" is a fixed safe prefix).
 func TestData_rejectsInjectableSuffix(t *testing.T) {
 	t.Parallel()
 	for _, suffix := range []string{`x" onclick="evil`, "a b", ">", "", "-x"} {
@@ -202,11 +184,6 @@ func TestData_rejectsInjectableSuffix(t *testing.T) {
 	}
 }
 
-// The allowlist must still admit every legitimate HTML/data/ARIA attribute
-// name, or it breaks real markup. The cases pin the boundary precisely: a
-// single letter (leading-letter rule, not merely "non-digit"), uppercase
-// (the class is [A-Za-z] not [a-z]), and hyphens/digits after the first letter
-// — including a trailing hyphen — must all render unchanged.
 func TestRawAttr_acceptsOrdinaryHTMLAttributeNames(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, want string }{
@@ -226,11 +203,6 @@ func TestRawAttr_acceptsOrdinaryHTMLAttributeNames(t *testing.T) {
 	}
 }
 
-// Datastar v1 parses a plugin attribute by splitting the key on the FIRST
-// colon: data-on:click is the `on` plugin with arg `click`, while data-on-click
-// names a plugin "on-click" that does not exist and is silently ignored. A name
-// allowlist that rejects ':' and '_' therefore puts the entire client-side
-// vocabulary — events, modifiers, class/attr toggles — out of reach.
 func TestData_rendersDatastarPluginNamesVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ suffix, val, want string }{
@@ -248,10 +220,6 @@ func TestData_rendersDatastarPluginNamesVerbatim(t *testing.T) {
 	}
 }
 
-// The colon is not the danger; an inline DOM event handler is. onclick="..."
-// executes its value as script, so a caller-supplied name that reaches it turns
-// any string-valued attribute into an XSS sink — regardless of case, since HTML
-// attribute names are case-insensitive.
 func TestRawAttr_rejectsInlineEventHandlers(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"onclick", "onerror", "ONCLICK", "onload", "OnMouseOver", "onfocus"} {
@@ -266,8 +234,6 @@ func TestRawAttr_rejectsInlineEventHandlers(t *testing.T) {
 	assert.NotPanics(t, func() { h.RawAttr("open", "") })
 }
 
-// The ':' '_' '.' relaxation is scoped to data-*: a plain attribute name has no
-// use for them and they would widen the breakout surface for nothing.
 func TestRawAttr_rejectsPluginPunctuationOutsideDataAttrs(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"xmlns:foo", "a_b", "a.b", "data-", "data-:x"} {
@@ -275,8 +241,6 @@ func TestRawAttr_rejectsPluginPunctuationOutsideDataAttrs(t *testing.T) {
 	}
 }
 
-// maybe is the helper shape that produces a nil child: nothing to render for
-// this case, so it returns the zero H.
 func maybe(show bool) h.H {
 	if !show {
 		return nil

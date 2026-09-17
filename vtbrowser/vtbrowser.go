@@ -134,7 +134,7 @@ func (s *Session) Reload() {
 }
 
 // Restart is a deploy: it takes the app's server off the air, leaves it down
-// for the given gap, then serves handler again on the SAME host:port the tab
+// for the given gap, then serves handler again on the same host:port the tab
 // is still pointed at. Nothing navigates the tab — recovering is the page's own
 // job, which is the whole point of the reconnect manager.
 //

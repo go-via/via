@@ -30,13 +30,13 @@ the v2 core. **Requires Go 1.27.**
 
 ### Documented (behaviour unchanged)
 
-- Query strings do NOT reach action handlers. An action POSTs to
+- Query strings do not reach action handlers. An action POSTs to
   `{mount}/_via/a/{n}/…`, built from the mount pattern's path params and
   nothing else, so the discovery render runs unfiltered and a row that only
   exists under `?q=` answers `410` when clicked. Page state — filter, page,
   sort, tab — belongs in path params or the session. On `Ctx.Param` and in the
   README.
-- `State.Get` does NOT make a unit live; only `State.Display` and `List.Each`
+- `State.Get` does not make a unit live; only `State.Display` and `List.Each`
   do. A unit that only `Get`s a State is silently plain. On `State.Get`.
 - `Ctx` has no response writer, so a file download is a sibling `net/http`
   handler. On `Ctx.Request`.
@@ -67,10 +67,10 @@ the v2 core. **Requires Go 1.27.**
   there is no mount pattern to read a segment from when no route matched.
 
 - **A unit sees its own `OnConnect` publish.** The `Listen` subscriptions were
-  started inside the stream loop, i.e. AFTER every `OnConnect` fn had already
+  started inside the stream loop, i.e. after every `OnConnect` fn had already
   run, so the "join a room" pattern `OnConnect`'s own doc names could not work:
   a presence unit that published its join on connect and rendered the count
-  from its `Listen` showed the PRE-join count in a fresh tab until some other
+  from its `Listen` showed the pre-join count in a fresh tab until some other
   tab joined or left. `example/chat`'s online count had exactly this defect.
   Subscriptions now start before the first `OnConnect`, still only on the SSE
   handler, so a plain GET still leaks no subscription.
@@ -89,7 +89,7 @@ the v2 core. **Requires Go 1.27.**
   duck-typed like `OnInit` and read after it (and after `OnReload`), so
   data-dependent metadata works. `Meta` carries `Title`, `Description`,
   `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to vary
-  with the request — plus `Assets`, which is not. Only the MOUNTED root's counts:
+  with the request — plus `Assets`, which is not. Only the mounted root's counts:
   an embedded child's is ignored and `Child` logs one line naming the type,
   because a shared per-request head would let any nested unit silently rename
   the page.
@@ -103,7 +103,7 @@ the v2 core. **Requires Go 1.27.**
   `Preload` widens the directive its `As` names. Element-patch responses keep
   the floor policy: a fragment loads nothing.
 
-  Because the policy is built before any request, `Assets` MUST be a constant of
+  Because the policy is built before any request, `Assets` must be a constant of
   the type, and via proves it AT `Mount`: it reads `PageMeta` a second time off
   a probe copy of the mounted literal with its zero fields filled in — what
   `OnInit` does — and refuses the mount, naming the type, if the assets moved.
@@ -136,7 +136,7 @@ the v2 core. **Requires Go 1.27.**
 
 - **`Ctx.OnConnect` and `Ctx.OnDispose` warn when called too late.** Both
   appended silently to a snapshot nobody reads again when called after `OnInit`
-  returned — the fn simply never ran — while the sibling `ctx.Tick` and
+  returned — the fn never ran — while the sibling `ctx.Tick` and
   `ctx.Listen` logged. All four now behave the same.
 
 - **The reconnect manager backs off instead of reloading into a dead server.**
@@ -168,7 +168,7 @@ the v2 core. **Requires Go 1.27.**
 
 - **A clean stream close now reaches the user.** The bundled Datastar client
   defaults each `@post` to `retry:"auto"`, and under `"auto"` a response body
-  that simply ENDS resolves rather than retrying: it fires `finished` and never
+  that ends resolves rather than retrying: it fires `finished` and never
   `retrying`/`retries-failed`. So a graceful deploy — or `Router.Close` — left
   every tab looking alive while every click answered `410`, with nothing on
   screen and nothing in the log. The reconnect manager now reads `finished` on
@@ -195,7 +195,7 @@ the v2 core. **Requires Go 1.27.**
   literal — which is exactly what `Child` asks you to do. `via.StateOf("lobby")`
   and `via.ListOf("a", "b")` are the constructors.
 
-- **`Ctx.Context`** returns the context bounding this unit's work — the STREAM
+- **`Ctx.Context`** returns the context bounding this unit's work — the stream
   context on a live unit, so a `Tick` or `Listen` handler can abandon a slow
   call when the tab disconnects or the router closes. `Ctx.Request`'s context
   cannot serve: a live action runs after its POST has acked.
@@ -242,7 +242,7 @@ the v2 core. **Requires Go 1.27.**
   or return `ErrNotFound`, none of which is safe to repeat once a handler has
   committed a mutation. `Tick`/`Listen` are no-ops inside `OnReload` (liveness
   stays the GET/connect verdict), and it is skipped when the handler queued a
-  `Redirect`. A unit that declares NEITHER hook and answers 204 now logs one
+  `Redirect`. A unit that declares neither hook and answers 204 now logs one
   line naming `OnReload`, so the failure is never silent again.
 
 - **Mount and Child check the lifecycle hooks.** `Initer`/`Reloader` are
@@ -273,10 +273,10 @@ runtime unless you look:
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
   default.** v0.7 enforced; v0.8 accepts an action
   from any origin until `WithTrustedOrigin` names one, at which point
-  enforcement switches on for the whole endpoint. The reasoning: on a LIVE page
+  enforcement switches on for the whole endpoint. The reasoning: on a live page
   the per-tab id is a synchronizer token and does the load-bearing work, and
   local development over plain http has to work with no configuration. The
-  limit of that reasoning: a PLAIN page has no connection and no tab id
+  limit of that reasoning: a plain page has no connection and no tab id
   (`viatab` and `_viatab` are empty), so a cross-origin `PostForm` submit is
   accepted with the floor open, and what defends it is the session cookie's
   `SameSite=Lax`, and the request arrives unauthenticated. The consequence:
@@ -286,7 +286,7 @@ runtime unless you look:
   the option in production.
 - **Sessions are always on**, lazily: the cookie is issued on first write. If
   no key is configured, via mints a random per-process one and warns once. The
-  key signs the COOKIE only; the DATA lives behind the new `SessionStore`
+  key signs the cookie only; the data lives behind the new `SessionStore`
   interface, whose default is a map in this process's memory. Surviving a
   restart or spanning pods takes both `WithSessionKey`/`VIA_SESSION_KEY` and
   `WithSessionStore`; via warns once at the first session mint when the store
@@ -317,13 +317,13 @@ as a re-read of the README rather than a diff.
 - **The zero `Router` is usable**, like `http.ServeMux`: `new(Router)` no
   longer nil-dereferences at the first `Mount`. Prefer `NewRouter` when you
   have options to pass.
-- **`via.Live` and `OnConnect` are gone: there is ONE hook, `Initer`/`OnInit`.**
+- **`via.Live` and `OnConnect` are gone: there is one hook, `Initer`/`OnInit`.**
   `OnConnect(*Ctx) error` and `OnInit(*Ctx) error` had the same signature, the
   same Ctx powers, and ran at the same point; keeping both meant a composition
   with nothing to load still had to write an empty method to flip a liveness
   boolean. Rename `OnConnect` to `OnInit` and delete it outright where its body
   was `return nil`. Liveness is no longer an interface assertion but what a
-  unit DOES: it is live if its `OnInit` registered a `Tick` or a `Listen`, or
+  unit does: it is live if its `OnInit` registered a `Tick` or a `Listen`, or
   its `View` rendered a `State`/`List`. A unit whose server state only drives a
   branch (`State.Get()` in an `if`, never `Display()`ed) is not detectable that
   way; give it a `Tick` or render it.
@@ -340,7 +340,7 @@ as a re-read of the README rather than a diff.
   on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
   page sends the empty id, which matches no connection and falls through to the
   stateless path, as does a plain child embedded on a live page.
-- **The tab id is a SIGNAL, not the `X-Via-Tab` header** (wire break). Datastar
+- **The tab id is a signal, not the `X-Via-Tab` header** (wire break). Datastar
   builds request headers per call (`Object.assign({}, {Accept,
   'Datastar-Request'}, opts.headers)`, with no ancestor inheritance and no
   config hook), so a header had to be spelled out on every binding (33 bytes
@@ -352,11 +352,11 @@ as a re-read of the README rather than a diff.
   the origin floor is untouched. `PostForm` is the one exception: a native
   form submit carries neither signals nor headers, so it keeps its hidden
   `_viatab` field, now bound to `$viatab`.
-- **A signal's wire name is its Go FIELD name** (wire break): `count`,
+- **A signal's wire name is its Go field name** (wire break): `count`,
   `chat__draft` for one inside an embedded `Chat`, `outer__mid__kid__step` for
   a deeper path, replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
   The offsets stay as the internal key, so hydration is unchanged and
-  reflection runs once per composition TYPE at `Mount`/`Child`, never per
+  reflection runs once per composition type at `Mount`/`Child`, never per
   render. A plain nested struct joins with one underscore, a child boundary
   with two, so a parent that binds `p.C.S` itself (`c_s`) and also embeds
   `p.C` (`c__s`) keeps the two copies apart. Two fields of the same type in
@@ -525,7 +525,7 @@ as a re-read of the README rather than a diff.
   a slow client still cannot head-of-line block another, and a unit may still
   publish to a topic it listens to.
 - **Action ids are memoized.** `actionID` resolved a handler's Go name through
-  `runtime.FuncForPC` and hashed it once per binding PER RENDER (~190ns each).
+  `runtime.FuncForPC` and hashed it once per binding per render (~190ns each).
   The id is a pure function of the code pointer and the receiver's offset, so
   it is now computed once per pair. A thousand bindings render in 281us,
   down from 436us. The receiver-offset folding — which is what keeps two
@@ -546,7 +546,7 @@ as a re-read of the README rather than a diff.
   `vt.Action.Over`. Several 410/500 bodies and the nesting panics were reworded
   to match. **No wire change to ids or routing**: container ids, signal
   prefixes, action and SSE paths, and the tab/session headers and cookies are
-  all untouched. Some error BODIES did change text (`no such island` → `no such
+  all untouched. Some error bodies did change text (`no such island` → `no such
   child`, `live connection closed` → `stream closed`), so a client matching on
   a 410 body string needs updating; the status codes did not move.
 
@@ -585,13 +585,13 @@ as a re-read of the README rather than a diff.
 
   It fixes conditional `Bind()`. Slots were claimed in first-render order, so
   a `Bind()` inside a `When` (a wizard step) could claim a slot another signal
-  already owned: on a live page the post then wrote the WRONG FIELD, and on a
+  already owned: on a live page the post then wrote the wrong field, and on a
   stateless page the new input came up holding the previous occupant's value.
   A `Signal` reached through a pointer, slice, array or map field — or held by
   a composition whose `View` has a value receiver — is outside the struct, has
   no offset, and now **panics at `Mount`/`Child`** rather than falling back to
   a render-order name that carried the old aliasing hazard. A Signal behind an
-  INTERFACE field is invisible to the type walk and still panics on render. Make it a direct struct field. Keyed per-row
+  interface field is invisible to the type walk and still panics on render. Make it a direct struct field. Keyed per-row
   signal slots remain future work.
 - **A plain action hydrates signals inside a branch another posted signal
   opens.** Discovery renders once on server state alone (that render, and only
@@ -599,11 +599,11 @@ as a re-read of the README rather than a diff.
   to a fixpoint so a `Bind()`ed `Signal` in a `When` build, an `Each` row, or
   a child `View` that another `Bind()`ed signal reveals is hydrated too — its
   posted value used to be dropped server-side and wiped client-side. The
-  dispatchable set is the INTERSECTION of the two renders, never a superset,
+  dispatchable set is the intersection of the two renders, never a superset,
   and the intersection is per `(handler, arg)` pair: a posted signal cannot
   open the branch that authorizes a handler, nor widen an `Each` so that an
   `OnArg` arg the server-state render never bound becomes dispatchable. A
-  handler that exists ONLY inside such a branch still answers 410 on a plain
+  handler that exists only inside such a branch still answers 410 on a plain
   page. Every discovery pass re-renders the whole tree, so an embedded child's
   `OnInit` runs once per pass (two passes for a page whose posted body carries
   any `Bind()`ed slot) — keep `OnInit` cheap and idempotent.
@@ -619,7 +619,7 @@ as a re-read of the README rather than a diff.
   open across the upgrade 410s its first click, then reloads correct.
 
   It replaces the `?v=` shape digest, which is deleted. The digest fixed the
-  signal order and the action COUNT, so on a page backed by a shared store
+  signal order and the action count, so on a page backed by a shared store
   every per-row `OnArg` was its own action slot and another user adding or
   removing a row silently 410'd every other open tab's buttons — untouched
   ones included, permanently, until reload (`example/poll` demonstrated it).
@@ -628,8 +628,8 @@ as a re-read of the README rather than a diff.
 
   A click now 410s only when the current render does not bind that handler at
   all — a closed branch, or the classic wiring mistake of an `OnInit` that
-  fails to restore the state the `View` branches on. The SERVER LOG then names
-  the handlers the render DID bind, so the mistake reads as a diagnosis instead
+  fails to restore the state the `View` branches on. The server log then names
+  the handlers the render did bind, so the mistake reads as a diagnosis instead
   of a dead button; the 410 body names only the id that was asked for, since
   the bound list is the render's Go type and method names. Two bindings of the same handler (same method, same `?a=`)
   collapse onto one entry, which is what they mean.
@@ -660,8 +660,8 @@ as a re-read of the README rather than a diff.
   entered the connection's dispatch table, and they stayed callable for the life
   of the stream — reachable both from the SSE connect body and from the body of
   any action the client was already allowed to call. Every push now renders the
-  AUTHORITY first (server-authored values only), applies the client's signals to
-  it for a DISPLAY render, and registers the intersection of the two, per
+  authority first (server-authored values only), applies the client's signals to
+  it for a display render, and registers the intersection of the two, per
   handler and per arg. The SSE connect body no longer hydrates the render that
   decides liveness and actions at all; it is kept and applied to display renders
   instead. **Breaking:** a `Bind()`ed signal's posted value no longer persists as
@@ -670,13 +670,13 @@ as a re-read of the README rather than a diff.
   what the plain path has always done. A push undoes the display render's
   application before it returns, so reading one in a `Tick`/`Listen` handler, or
   in a `View` that no longer `Bind()`s it, sees the server's value.
-  **Cost:** a page containing any `Bind()` pays TWO renders per push, not one —
+  **Cost:** a page containing any `Bind()` pays two renders per push, not one —
   a real Datastar connect body is the whole signal store, so the client's posted
   slots are never empty once the page has a bindable signal. Each extra render
   also re-runs every plain child's `OnInit` (`inheritRequestScope` sets
   `doInit`) and re-walks the live-nesting check, so keep a plain child's
   `OnInit` cheap or hold the data on the live root.
-  A page's live units share ONE revert set for the life of the connection: a
+  A page's live units share one revert set for the life of the connection: a
   per-push set left a second live unit's registered `Ctx` pointing at a set
   nothing restored, which re-opened the escalation above on any page with two
   live units.
@@ -692,12 +692,12 @@ as a re-read of the README rather than a diff.
   dropped on its own.
 
 - **A client-posted signal can no longer open a server-gated branch.** A
-  `Signal` is hydrated from a request only when THIS render put it under client
+  `Signal` is hydrated from a request only when this render put it under client
   control — i.e. only `Bind()` (which emits `data-bind`) makes a slot writable.
   A `Display()`-only signal, or one the `View` never rendered, is state the
   server publishes downward, and an inbound value for it is now ignored on
   every path. Separately, the plain action path no longer hydrates during its
-  discovery render at all: the body is applied AFTER that render, the way the
+  discovery render at all: the body is applied after that render, the way the
   live path has always done it. Together these restore
   dispatchable-iff-rendered — before, a `Signal` an `OnInit` filled from the
   session could be flipped by the POST body, opening a `via.When` branch and
@@ -712,7 +712,7 @@ as a re-read of the README rather than a diff.
   so a plain root carrying a live `Child` served a document with no `data-init`
   and the child was dead after the first submit. Liveness is now read off that
   re-render, exactly as the GET and the live path do.
-- **The acted-instance substitution now checks the TYPE as well as the key.**
+- **The acted-instance substitution now checks the type as well as the key.**
   When a root's `Child` order shifts between the discovery render and the
   response re-render (the acted child's own action opened a branch or appended
   to the list the root iterates), the acted key names a slot a different type
@@ -732,7 +732,7 @@ as a re-read of the README rather than a diff.
   handler, and a POST whose `?a=` is not in it answers 410 before the handler
   runs — so another user's row id, or one behind a `via.When` branch closed for
   the caller, is not dispatchable. **This is a behaviour change for any app that
-  binds a VOLATILE value as an arg** (a pagination cursor, a count): such an arg
+  binds a volatile value as an arg** (a pagination cursor, a count): such an arg
   goes stale the moment a render moves it and the click 410s. Bind a stable
   identity (a primary key) and read changing state off the composition instead.
 - **A plain child's action response keeps the instance the handler mutated.**
@@ -760,15 +760,15 @@ as a re-read of the README rather than a diff.
   field. (A `Tick`/`Listen` registered there is snapshotted at connect and does
   not accumulate.)
 
-- **Wire break: an island is addressed by its KEY, not a page-wide counter.**
+- **Wire break: an island is addressed by its key, not a page-wide counter.**
   A `Child`ed child's identity is now its ordinal among its own parent's
   `Child` calls, composed onto the parent's key — the root's children are
   `0`, `1`, …, a child of `0` is `0-0` — and the root's dispatch address is
   `r`. Container id (`via-i0-0`), signal prefix (`i0_0__`) and dispatch
   address (`/_via/a/0-0/…`) all read that one key. The flat counter it
-  replaces was allocated by a whole-page walk, so a PLAIN island's own action
+  replaces was allocated by a whole-page walk, so a plain island's own action
   re-render — which renders only its own subtree — restarted numbering at the
-  root: a nested live child came back carrying a DUPLICATE of its parent's
+  root: a nested live child came back carrying a duplicate of its parent's
   container id, a signal prefix that aliased the parent's own slot, and a
   dispatch address that answered `410 no such action` on click. A tab open
   across the upgrade holds the old addresses and gets one dead click before a
@@ -893,7 +893,7 @@ as a re-read of the README rather than a diff.
   afterward); an anonymous connection has no session to check against at
   all, so never render, log, or leak a tab id outside its own client.
 - An island's key is its ordinal among its parent's `Child` calls, so a `When`
-  wrapped around a `Child` renumbers every LATER sibling of that parent when
+  wrapped around a `Child` renumbers every later sibling of that parent when
   it flips. Composition made the numbering stable across partial re-renders;
   it did not make it stable across a shape change, so such a `When` must still
   depend only on data fixed by `OnInit` or the field literal.
@@ -910,20 +910,20 @@ as a re-read of the README rather than a diff.
 - A session that idles past its TTL while a live stream is open turns every
   later dispatch on that tab into a 403 "session mismatch" until the page is
   reloaded — the stream itself does not keep the session warm.
-- A `View` that panics PART-WAY through a live push's display render can lose
+- A `View` that panics part-way through a live push's display render can lose
   exactly one later `Signal.Set`. `Signal.bind` stamps the signal's dirty sink
   at bind time, so the signals rendered before the panic point are left
   pointing at a `Ctx` the push never installed; a `Tick`/`Listen` `Set` before
   the next push lands in that orphaned map, the push's `flushDirty` does not
   see it, and the display render repaints the client's value over it. It
   self-heals on the following push, and it is not client-driven — the `View`
-  has to panic. Keeping the dirty sink on the CONNECTION instead was
+  has to panic. Keeping the dirty sink on the connection instead was
   considered and rejected: the plain path has no connection, and it reads the
-  acted child's OWN dirty set (not the page-wide one) to scope that child's
+  acted child's own dirty set (not the page-wide one) to scope that child's
   `data-signals` patch, so one shared sink would make a child's patch
   re-declare a sibling's slots and clobber a value the user is mid-edit.
 
-- A live connection only binds to a session an action actually MINTS
+- A live connection only binds to a session an action actually mints
   (`Session().Put`/`.Rotate`) while none existed at the start of that
   request; a merely read-only `Session().Get` never binds it, even one
   carrying a foreign valid cookie, closing the capture window an earlier

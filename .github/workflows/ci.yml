@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-test:
-    # NOTE: this job always RUNS and reports, even for docs-only changes — only
+    # Note: this job always runs and reports, even for docs-only changes — only
     # its heavy steps are skipped (see the "Detect" step). Keeping the job (and
     # its "Build and Test" name) unconditional is deliberate: it is a required
     # status check, and a `paths`/`paths-ignore` trigger filter would make the
@@ -38,7 +38,7 @@ jobs:
           if [ -z "$base" ] || [ "$base" = "$zero" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
-            # Changed files that are NOT markdown / not under docs/. A non-empty
+            # Changed files that are not markdown / not under docs/. A non-empty
             # check (not `grep -q`'s exit code) stays correct across grep
             # implementations; `|| true` guards the no-match exit.
             nondoc="$(git diff --name-only "$base" "${{ github.sha }}" | grep -vE '(\.md$|^docs/)' || true)"
@@ -76,7 +76,7 @@ jobs:
   browser-test:
     # Same shape as build-test: the job always runs and reports, only its heavy
     # steps are gated. The detection is duplicated rather than hoisted into a
-    # shared job on purpose — a `needs:` dependency would SKIP this job when the
+    # shared job on purpose — a `needs:` dependency would skip this job when the
     # detector fails, leaving a required check pending forever, which is exactly
     # the trap documented above.
     name: Browser Tests

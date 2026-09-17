@@ -90,7 +90,7 @@ func newConfig(opts []Option) *config {
 }
 
 // originWarnOnce keeps the open-floor notice to one line per process. The floor
-// is open by DEFAULT, so the quiet state is the permissive one, and an app that
+// is open by default, so the quiet state is the permissive one, and an app that
 // never calls WithTrustedOrigin looks configured rather than open — this line
 // is what tells you which mode you are in.
 //
@@ -152,8 +152,8 @@ func WithSecureCookies() Option {
 // WithSessionStore points sessions at a shared, durable store instead of the
 // default process-local map — the difference between a deploy logging every
 // user out and a deploy nobody notices, and what makes a second pod see the
-// first pod's sessions. Pair it with WithSessionKey: the key keeps the COOKIE
-// valid, the store keeps the DATA behind it.
+// first pod's sessions. Pair it with WithSessionKey: the key keeps the cookie
+// valid, the store keeps the data behind it.
 //
 //	type redisSessions struct{ c *redis.Client }
 //
@@ -198,7 +198,7 @@ func WithSessionStoreTimeout(d time.Duration) Option {
 // WithSessionKey sets the HMAC key signing the session cookie id. The key
 // resolves WithSessionKey → VIA_SESSION_KEY → a random per-process key (warned
 // on first use) — fine for dev, but those cookies survive neither a restart nor
-// a second process, so set a stable key in production. It keeps the COOKIE
+// a second process, so set a stable key in production. It keeps the cookie
 // valid only; the data behind it lives in the SessionStore, so a stable key
 // without WithSessionStore still logs everyone out on restart.
 func WithSessionKey(key []byte) Option {

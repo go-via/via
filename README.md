@@ -50,10 +50,11 @@ func main() {
 }
 ```
 
-A composition is a struct. Its `View` is a pure, `ctx`-free function. Actions are
-methods, wired by **named method value** (`via.On("click", c.Inc)`): no strings,
-no closures. `via.Handler` takes the composition **by value**, so there is no `&`
-at any call site, and a missing or mistyped `View` is a compile error.
+A composition is a struct. Its `View` is a pure, `ctx`-free function. Actions
+are methods, wired by **named method value** (`via.On("click", c.Inc)`): no
+strings, no closures. `via.Handler` takes the composition **by value**, so
+there is no `&` at any call site, and a missing or mistyped `View` is a
+compile error.
 
 ## The hard guarantees
 

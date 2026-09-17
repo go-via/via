@@ -1,6 +1,6 @@
 package via_test
 
-// These are SOURCE-TEXT LINTS, not behaviour tests. They parse via's own and
+// These are source-text lints, not behaviour tests. They parse via's own and
 // the examples' .go files and assert on what is written there — the identifiers
 // used, the shape of an argument at a call site. Nothing here exercises the
 // running system, and a rename or a refactor can break one without anything
@@ -39,11 +39,6 @@ var viaCallNames = map[string]bool{
 	"On": true, "OnArg": true, "PostForm": true,
 }
 
-// The framework's headline promise is that user code never writes '&' and never
-// passes a closure at a via call site (Handler/Child/On*). A violation that
-// compiles silently erodes the design, so this asserts it structurally over the
-// example sources — the canonical user-facing call sites. It is an interim
-// guard; the type-level closure ban is tracked as follow-up.
 func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 	t.Parallel()
 	files := exampleGoFiles(t)
@@ -104,17 +99,9 @@ func isViaCallNamed(call *ast.CallExpr, name string) bool {
 	return ok && pkg.Name == "via" && sel.Sel.Name == name
 }
 
-// via's headline guarantee is reflection-free wiring: the composition is bound
-// by generics + interface assertions + handle identity, never by reflecting
-// over its fields, method names, or struct tags (which is what the old
-// reflect-based framework did). This locks that — only via.go may import
-// reflect, and only to read a handler func value's own code pointer for
-// actionID (a func's identity, not a struct's shape). (Signal values decode
-// through encoding/json, which reflects internally; that is data decoding, not
-// wiring, and is out of this guard.)
 func TestCore_importsNoReflectPackage(t *testing.T) {
 	t.Parallel()
-	// reflect is admitted in exactly three files and only on TYPE-setup paths
+	// reflect is admitted in exactly three files and only on type-setup paths
 	// that run once per composition type (Mount/Child) and are memoized: the
 	// action-id func name, the field-name signal table, the child's parent
 	// field lookup, and the hook-shape check. Nothing here may run per render — that is the invariant

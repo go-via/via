@@ -75,7 +75,7 @@ func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 	})
 }
 
-// childRedirector is a PLAIN child (dispatchPlain, not
+// childRedirector is a plain child (dispatchPlain, not
 // liveRunAction) whose action queues a Redirect.
 type childRedirector struct{}
 
@@ -110,7 +110,7 @@ func TestDispatch_redirectFromPlainChildActionNavigatesTheTab(t *testing.T) {
 // sigChild's signals are only Bound (never Displayed), so Setting one never
 // changes the rendered HTML — the only way a client sees the new value is the
 // container's data-signals attribute. Other exists solely so Reset's Set of
-// Name has a sibling to leave alone: the response must declare Name and NOT
+// Name has a sibling to leave alone: the response must declare Name and not
 // Other, proving the patch is restricted to what the action actually wrote
 // rather than the whole slot table.
 type sigChild struct{ Name, Other via.Signal[string] }
@@ -176,7 +176,7 @@ func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 }
 
 // mixedPage carries a @post action and a native PostForm on the same page, so
-// their ids must come from the ONE action table dispatch now shares.
+// their ids must come from the one action table dispatch now shares.
 type mixedPage struct{ n int }
 
 func (p *mixedPage) Bump(ctx *via.Ctx) { p.n++ }
@@ -261,14 +261,6 @@ func (b *branchy) View() h.H {
 	return h.Div(kids...)
 }
 
-// TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL is C2: a
-// connection's action table can change shape mid-connection (a push adds a
-// button), and the URL for the new action only ever appears in what THIS
-// connection pushed — never in the plain page vt cached before Connect.
-// Sourcing it from Conn's own pushed markup (vt.Action.Live) finds it and
-// dispatches successfully; sourcing it from the stale page (plain
-// vt.Action) can't find action 1 at all, because the page vt fetched never
-// had it.
 func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(branchy{}))
@@ -321,7 +313,7 @@ func swapActionID(t *testing.T, url, act string) string {
 }
 
 // swapChildIndex rewrites url's {child} segment, keeping a genuine action id
-// on it — an id that resolves on ITS child must not resolve on another.
+// on it — an id that resolves on its child must not resolve on another.
 func swapChildIndex(t *testing.T, url, child string) string {
 	t.Helper()
 	prefix, _, act, q := splitActionURL(t, url)
@@ -491,10 +483,6 @@ func (f *nativeFormPanic) View() h.H {
 	return h.Div(f.n.Display(), via.PostForm(f.Save, h.Input(h.Name("name")), h.Button(h.Str("save"))))
 }
 
-// A panic in a native form's post-mutation re-render must answer 500, not
-// hang the POST forever — the render runs on the dispatching POST's own
-// goroutine (see dispatch.go's dispatchOverStream), outside liveRunAction's own
-// recover, after the mutation already succeeded.
 func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		boom := new(bool)
@@ -514,7 +502,7 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 }
 
 // validatedForm is a native PostForm whose handler records validation errors
-// on ITSELF and re-seeds the submitted values — the ordinary server-rendered
+// on itself and re-seeds the submitted values — the ordinary server-rendered
 // form. What the response must show is the instance Save mutated.
 type validatedForm struct {
 	Name via.Signal[string]
@@ -546,12 +534,6 @@ type formShell[C any] struct{ Body C }
 
 func (s *formShell[C]) View() h.H { return h.Main(via.Child(s.Body)) }
 
-// A native form submit inside a Child must answer with the instance the
-// handler MUTATED. The re-render walks from the root, and via.Child re-copies
-// the parent's field on every render — so without carrying the acted instance
-// down, the response is a pristine form: the validation error gone and the
-// submitted value back to empty, as if the POST had never happened. The root
-// case (below) always worked, which is what made this so easy to miss.
 func TestNativeForm_insideAChildKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(formShell[validatedForm]{}))
@@ -564,8 +546,6 @@ func TestNativeForm_insideAChildKeepsTheHandlersMutations(t *testing.T) {
 	assert.Contains(t, body, `"body__name":"Widget"`, "the submitted value was not re-seeded")
 }
 
-// The same form at the root, as the control: it must keep working exactly as
-// before, so a fix that broke the root to fix the child cannot pass.
 func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(validatedForm{}))
@@ -577,7 +557,7 @@ func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 }
 
 // initCounter counts its own OnInit runs. Substituting the acted instance into
-// the response re-render must NOT re-init it — re-initing is exactly what
+// the response re-render must not re-init it — re-initing is exactly what
 // would reload the data the handler just changed — while a fresh sibling child
 // still gets its own OnInit.
 type initCounter struct {
@@ -608,10 +588,6 @@ func TestNativeForm_actedChildIsNotReInited(t *testing.T) {
 	assert.Contains(t, body, `<p id="inits">1</p>`, "the acted child's OnInit must not run a second time")
 }
 
-// A live page's native form submit that arrives WITHOUT the tab field is a
-// missing-field failure, not a served-plain one — the page was live, which is
-// precisely why the field had to be there. The old message asserted the
-// opposite and sent people looking at their OnInit.
 func TestNativeForm_missingTabFieldSaysWhatActuallyHappened(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveNamedForm{}))
@@ -640,7 +616,7 @@ func (f *liveNamedForm) View() h.H {
 //
 // The gate sits inside a lazily-rendered builder (via.When's build here; an
 // via.Each row or a Child's View is the same shape) — that is the only place a
-// condition is evaluated DURING the render rather than while View() is being
+// condition is evaluated during the render rather than while View() is being
 // constructed, and therefore the only place a hydration that runs mid-render
 // can reach it.
 type signalGatedAdmin struct {
@@ -720,7 +696,7 @@ func TestDispatchPlain_serverGatedBranchStillDispatchesForAnAuthorizedCaller(t *
 }
 
 // echoedSignal is the control for the hydration reorder: a plain action must
-// still SEE the value the client posted, it just must not let that value
+// still see the value the client posted, it just must not let that value
 // rewrite the render that authorized it.
 type echoedSignal struct {
 	Name via.Signal[string]
@@ -742,8 +718,8 @@ func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
 	assert.Contains(t, body, "saw: zed")
 }
 
-// plainRootLiveKid is a PLAIN root (its own View renders no State) carrying a
-// LIVE child, plus a native PostForm at the root. The submit falls to
+// plainRootLiveKid is a plain root (its own View renders no State) carrying a
+// live child, plus a native PostForm at the root. The submit falls to
 // dispatchPlain — the root is not a registered live unit — and the full page it
 // answers with is what the browser replaces the document with, so it must still
 // bootstrap the stream the live child needs.
@@ -872,10 +848,6 @@ func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.
 	assert.Contains(t, conn.Await("seen: saw:bob"), "seen: saw:bob")
 }
 
-// Renamed from ...UntilTheBranchIsPushed: a push no longer authorizes it
-// either. The branch is opened by a Bind()ed signal, so it is the client's
-// render, not the server's — see the posted-signal tests at the end of this
-// file.
 func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(disclosure{keepalive: true}))
@@ -889,13 +861,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	assert.Contains(t, body, "does not bind it")
 }
 
-// --- bounded-fixpoint discovery regressions (one root cause, three symptoms).
-//
-// The disclosure fixture above has no child, no session and no OnArg, which is
-// exactly why all three slipped through: every one of them needs a SECOND
-// discovery pass, which any page with a Bind()ed slot in the posted body takes.
-
-// fixKid is a PLAIN embedded child whose OnInit seeds the state its handler
+// fixKid is a plain embedded child whose OnInit seeds the state its handler
 // reads — the state a later discovery pass used to skip.
 type fixKid struct {
 	loaded string
@@ -967,7 +933,7 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 }
 
 // shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
-// both mint the SAME content-addressed action id (the id hashes the Go func
+// both mint the same content-addressed action id (the id hashes the Go func
 // name plus the receiver's offset, and here both are identical). That is the
 // only arrangement in which a child key denoting different types in the auth
 // and the bind render gets past the action lookup at all.
@@ -1016,7 +982,7 @@ func TestDispatchPlain_childKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) 
 	assert.Contains(t, body, "no such child")
 }
 
-// scopeKid's OnInit reads the REQUEST, and its View Bind()s a slot the POST
+// scopeKid's OnInit reads the request, and its View Bind()s a slot the POST
 // body carries — so the discovery loop takes a second pass and re-inits this
 // child off the cloned Ctx. A pass-2 Ctx with no request scope is the defect
 // class the clone exists to close.
@@ -1068,10 +1034,6 @@ func (e *liveReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
 }
 
-// A live action runs on the stream goroutine, yet it must still see the request
-// that TRIGGERED it — the action POST. That POST carried X-Echo; the connect
-// request never did, so the value surfacing over the SSE proves the triggering
-// action request is threaded through (not the connect request).
 func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveReqEchoer{}))
@@ -1108,9 +1070,6 @@ func (r *renderCounter) View() h.H {
 	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.On("click", r.Bump)))
 }
 
-// A live action must run against the last render's table, not a fresh one of
-// its own: connect renders once, and the action's own push renders once —
-// never a bind render in between just to locate the action.
 func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		views := &atomic.Int64{}
@@ -1125,7 +1084,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 
 		// A throwaway instance (its own views counter) discovers the current
 		// action URL without adding a render to the instance under test — the
-		// whole point of this test is counting THAT instance's View calls.
+		// whole point of this test is counting that instance's View calls.
 		digestSrv := liveServer(t, via.Handler(renderCounter{views: &atomic.Int64{}}))
 		_, page := do(t, digestSrv, http.MethodGet, "/", "")
 
@@ -1139,9 +1098,6 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 	})
 }
 
-// An action id this render does not bind (a click racing a push that closed
-// the branch) must 410, not silently do nothing — the client can then
-// re-bootstrap instead of a click quietly having no effect.
 func TestLive_unknownActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
@@ -1165,9 +1121,6 @@ func (l *liveArg) View() h.H {
 	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Set, 7)))
 }
 
-// A malformed ?a= on a LIVE action must answer 400, not run the handler with
-// a zero value nor 500 — and the stream goroutine must survive to answer a
-// later, well-formed action normally.
 func TestLive_malformedActionArgAnswers400(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveArg{}))
@@ -1183,8 +1136,6 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 	})
 }
 
-// Neighbour of the malformed-arg case: a missing ?a= (empty, or "null") on a
-// LIVE action must also answer 400, not run Set with the zero value.
 func TestLive_missingActionArgAnswers400(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1210,16 +1161,6 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 		})
 	}
 }
-
-// --- F-1: a live action that FAILS after hydration must not leave the posted
-// values on the instance.
-//
-// liveRunAction hydrates every posted slot into the instance BEFORE running the
-// handler, and the only other restore is livePush's — which never runs when the
-// action returns without a push. A malformed ?a= is the attacker-reachable way
-// in: the arg decode panics from INSIDE act.fn, after hydration. The sibling
-// property for the push path is
-// TestConnect_aTickHandlerNeverSeesThePostedSignalValue.
 
 type tickAfterBadArg struct {
 	Idx  via.Signal[int]
@@ -1253,7 +1194,7 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 	require.Equal(t, http.StatusBadRequest, status)
 
 	// Drained rather than counted: the 5ms tick keeps frames in the pipe that
-	// were rendered BEFORE the dispatch, and under load there are more than the
+	// were rendered before the dispatch, and under load there are more than the
 	// two this used to assume — so "the second frame" was sometimes a stale one
 	// that had never seen the posted value. The invariant under test holds on
 	// every frame regardless; only the display value needs the first
@@ -1285,10 +1226,6 @@ func (a *abandonedAction) View() h.H {
 	return h.Div(a.n.Display(), h.Button(via.On("click", a.Act)))
 }
 
-// A live action must never mutate state once its caller has given up on it.
-// Before the fix, a closure handed to the stream goroutine (tabStream.run)
-// ran to completion regardless of whether the request's context was already
-// done when the goroutine picked it up.
 func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
 	t.Parallel()
 	root := &abandonedAction{applied: new(atomic.Int32)}
@@ -1335,15 +1272,6 @@ func withTab(tab, body string) string {
 	return string(out)
 }
 
-// --- F1: the live path's action table is the render the client did not touch.
-//
-// A live unit outlives the request, so a Bind()ed signal's posted value used to
-// land in the instance and stay there: it opened a gated branch, the branch's
-// handlers entered the connection's table, and they dispatched. The plain path
-// has always refused this (auth ∩ bind); these prove the live path now does too
-// — while still SHOWING the client the branch its own signals opened, which is
-// what keeps two-way binding usable.
-
 type livePriv struct {
 	live     bool
 	IsAdmin  via.Signal[bool]
@@ -1363,7 +1291,7 @@ func (p *livePriv) OnInit(ctx *via.Ctx) error {
 
 // Safe counts its calls and the View renders the count: an action whose render
 // is byte-identical to the last frame now ships no frame at all (see
-// skipUnchanged), so a test that reads its assertions off the NEXT frame has to
+// skipUnchanged), so a test that reads its assertions off the next frame has to
 // give the render something that actually moves.
 func (p *livePriv) Safe(ctx *via.Ctx)            { p.safeN++ }
 func (p *livePriv) Nuke(ctx *via.Ctx)            { p.nuked = true }
@@ -1436,8 +1364,6 @@ func mustFire(t *testing.T, a *vt.Action) int {
 	return code
 }
 
-// The plain control: the identical attack, already answered 410 before this
-// change, and the behaviour the live path is now held to.
 func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(livePriv{}))
@@ -1450,8 +1376,6 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T)
 		assert.Contains(t, body, "does not bind it")
 	}
 }
-
-// --- F3: a Param that no longer decodes is a 404 on either path, never a 500.
 
 type paramLive struct{ live bool }
 
@@ -1482,16 +1406,6 @@ func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
 	assert.Contains(t, body, "not found")
 }
-
-// --- F1 regression: two live units on one connection.
-//
-// The revert set used to be reallocated per push and stored on the CONNECTION,
-// while a hydrator closure notes its undo into the rev of the Ctx that bound
-// the signal. So a SECOND live unit pushing in between left the first unit
-// pointing at a set nothing restores: its next action's posted value survived
-// into the AUTHORITY render and opened the gated branch for real. The
-// single-unit tests above all pass against that bug — this shape is the one
-// that catches it, and it is the README's canonical composition.
 
 type livePrivClock struct{ n int }
 
@@ -1534,7 +1448,7 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 
 	// Looped rather than fired once: the stranding bug is a race between the
 	// sibling's push swapping the connection's revert set out and Priv's own
-	// hydration noting its undo into it, so pinning ONE interleaving pins a
+	// hydration noting its undo into it, so pinning one interleaving pins a
 	// schedule, not the invariant. Three rounds, each with a fresh beat in
 	// between, is the same attack against three different orderings.
 	for beat := 1; beat <= 3; beat++ {
@@ -1557,13 +1471,6 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0", "no gated handler may have run")
 }
 
-// --- F2: a Tick/Listen handler sees the SERVER's value, not the client's.
-//
-// The handler runs between a display render and the next push, straight against
-// the live instance. The display render applies the client's posted signals to
-// that instance, so without a restore at the END of a push the handler read
-// attacker-controlled data as input.
-
 type tickReadsSignal struct {
 	Name via.Signal[string]
 	seen string
@@ -1585,27 +1492,19 @@ func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 	conn := app.ConnectWith(`{"name":"ATTACKER"}`)
 
 	// The first tick pushes; the second is the one that reads the instance
-	// AFTER a display render has applied the connect body to it.
+	// after a display render has applied the connect body to it.
 	require.Contains(t, conn.Await("seen: ["), "seen: []")
 	frame := conn.Await("seen: [")
 	assert.Contains(t, frame, "seen: []", "the handler read the client's value: %s", frame)
-	// The client must still SEE what it posted — the display render is unchanged.
+	// The client must still see what it posted — the display render is unchanged.
 	assert.Contains(t, frame, ">ATTACKER<")
 }
-
-// --- F-1: a panic in the DISPLAY render must not strand the client's values
-// on the live instance.
-//
-// runPushItem swallows the panic and the stream survives, so the restore that
-// undoes the display render's hydration has to be a defer, not a trailing call.
-// Otherwise the next Tick handler reads the posted value straight off the
-// instance — the F2 class, through a crashing View instead of a push.
 
 type tickAfterDisplayPanic struct {
 	Idx   via.Signal[int]
 	seen  int
 	beat  int  // rendered so consecutive tick frames differ; see skipUnchanged
-	blown bool // the display render panics ONCE, so a later push can frame what the handler saw
+	blown bool // the display render panics once, so a later push can frame what the handler saw
 }
 
 func (p *tickAfterDisplayPanic) OnInit(ctx *via.Ctx) error {
@@ -1635,12 +1534,6 @@ func TestConnect_aPanickingDisplayRenderLeavesNoPostedValueOnTheInstance(t *test
 	assert.Contains(t, frame, "seen: 0", "a Tick handler read the posted value off the instance: %s", frame)
 }
 
-// --- A Set inside a Tick handler on a Bind()ed slot must reach the client.
-//
-// The display render re-applies lc.client over the instance, so the push has to
-// drop the slot the server just wrote and emit its patch-signals frame — the
-// same thing a live action does.
-
 type tickSetsBoundSignal struct{ N via.Signal[int] }
 
 func (p *tickSetsBoundSignal) OnInit(ctx *via.Ctx) error {
@@ -1659,15 +1552,6 @@ func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
 	// ...and the display render no longer paints the client's 7 back over it.
 	assert.Contains(t, conn.Await(">3<"), ">3<")
 }
-
-// --- F1: a live action's Set must survive its own panic into the NEXT push.
-//
-// liveRunAction used to reset unit.dirty to a fresh map before running the
-// handler, unconditionally. A handler that Set a signal and then panicked (or
-// whose reloadUnit errored) never reached a push, so its dirty entry sat on
-// the instance unflushed — and the reset ahead of the NEXT action wiped it
-// before that action's own push could ship it. flushDirty's clearDirty is the
-// only thing meant to own clearing it, and only right after an actual flush.
 
 type dirtyAfterPanic struct{ X via.Signal[int] }
 
@@ -1708,16 +1592,7 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
 }
 
-// --- F1 matrix: the shapes the root-level When above does not cover.
-//
-// The gate is the same one livePriv uses — a client-writable Signal whose only
-// authority is OnInit — but the thing it gates moves: an Each row, a Child
-// inside the branch, and that embeds one level deeper. The check funnels through
-// u.actions[act] today, so one of these may look redundant; they are not, since
-// the per-child intersection (pruneToAuthority) and the unit lookup are
-// separate sites and a refactor splits them.
-
-// gatedHits is shared by pointer so a child taken BY VALUE into a Child can
+// gatedHits is shared by pointer so a child taken by value into a Child can
 // still report, from the root's always-rendered markup, that it ran.
 type gatedHits = atomic.Int64
 
@@ -1727,7 +1602,7 @@ type gatedEach struct {
 	IsAdmin via.Signal[bool]
 }
 
-// gateIsOpen reads the ONLY authority the gate has: this request. The path
+// gateIsOpen reads the only authority the gate has: this request. The path
 // form exists because a stream connect is a POST to <mount>/_via/sse and
 // carries no query, so the genuinely-privileged control below needs a mount.
 func gateIsOpen(ctx *via.Ctx) bool {
@@ -1774,9 +1649,9 @@ type gatedMid struct{ Leaf gatedChild }
 func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Child(m.Leaf)) }
 
 // gatedChildPage puts the gated action inside a Child the root's When wraps.
-// The Clock rides in its OWN When so the live and plain variants each keep a
+// The Clock rides in its own When so the live and plain variants each keep a
 // stable ordinal for the life of a connection — p.live is fixed by the field
-// literal, which is the only kind of condition Child's TRAP allows.
+// literal, which is the only kind of condition Child's trap allows.
 type gatedChildPage struct {
 	live    bool
 	deep    bool
@@ -1878,9 +1753,6 @@ func assertGateHeld(t *testing.T, hits *gatedHits, code int, body string) {
 		"the 410 must name the closed branch, not a routing miss: %s", body)
 }
 
-// The other half of every cell: with the branch genuinely open — the gate set
-// by OnInit from the request, never by a posted signal — the SAME url must
-// dispatch. A fix that 410s everything would satisfy the assertions above.
 func TestDispatchLive_aGatedActionStillDispatchesWhenTheBranchIsGenuinelyOpen(t *testing.T) {
 	t.Parallel()
 	for _, shape := range gatedShapes {
@@ -1947,7 +1819,7 @@ func TestConnect_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
 			url := gatedURL(t, app, shape.liveChild, shape.gatedN)
 			conn := app.ConnectWith(forgedAdmin)
 
-			// Connect frames no elements, so one ungated action with a CLEAN
+			// Connect frames no elements, so one ungated action with a clean
 			// body forces the display render the forged connect body rode in for.
 			require.Equal(t, http.StatusNoContent, mustFire(t, app.Action(0).Over(conn)))
 
@@ -1984,12 +1856,6 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T
 		})
 	}
 }
-
-// --- F2, the other handler kind: Listen runs on the same live instance
-// between pushes that Tick does (dispatch.go names both), so the restore that
-// undoes a display render's hydration has to cover it identically. There is no
-// plain cell to fill here by construction — ctx.Listen is valid only on a live
-// unit — so the axis is root vs. child.
 
 type listenReadsSignal struct {
 	bus  *topic.Topic[string]
@@ -2037,7 +1903,7 @@ func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 			require.Eventually(t, func() bool { return bus.NumSubs() == 1 }, time.Second, time.Millisecond,
 				"the Listen must be subscribed before anything is published to it")
 
-			// Connect frames no elements, so the FIRST publish is only there to
+			// Connect frames no elements, so the first publish is only there to
 			// drive a push: that push's display render is what applies the
 			// connect body to the live instance. The second is the one whose
 			// handler reads the instance afterwards.
@@ -2082,11 +1948,6 @@ func (p *pinnedLive) View() h.H {
 	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump), h.Str("+")))
 }
 
-// A blocked Tick/Listen/action handler owns the connection's goroutine, so the
-// dispatch never reaches it. Answering 410 "stream closed" blamed the client
-// for a server-side hang and told the operator nothing — the tab and its stream
-// are both fine. It must be a 503 (the condition is transient and server-side)
-// and it must say so in the log, once, with the tab id and the unit type.
 func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 	var logs bytes.Buffer
 	prev := log.Writer()
@@ -2120,12 +1981,6 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 		"a pinned goroutine stays pinned; one line per connection, not one per click")
 }
 
-// A dispatch on a session-bound connection compares the request's session with
-// the connection's. When the STORE cannot answer, the resolve yields no session
-// — which used to read as "wrong session" and answer 403, reporting a backend
-// blip as a security rejection while the only log line was sess.go's "Load
-// failed" with nothing tying it to the refusal. A store outage is a 503, the
-// same answer the connect already gives.
 func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 	t.Parallel()
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
@@ -2166,10 +2021,6 @@ func (s *sessBoundLive) View() h.H {
 	return h.Div(s.n.Display(), h.Button(via.On("click", s.Bump), h.Str("+")))
 }
 
-// The unknown-action log prints the render's whole action table — every bound
-// id and the Go method name behind it. Unthrottled, a client posting garbage
-// ids dumps that table at line rate: a log-flood amplifier and a disclosure
-// channel at once. One line per distinct unknown id, like warnNoChange.
 func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
 	var logs bytes.Buffer
 	prev := log.Writer()
@@ -2204,10 +2055,6 @@ func (b *bumpLive) View() h.H {
 	return h.Div(b.n.Display(), h.Button(via.On("click", b.Bump), h.Str("+")))
 }
 
-// A 503 at the connection cap told nobody anything: the operator saw tabs fail
-// to go live with no line in the log naming the wall they hit. Rate-limited
-// rather than deduped forever — being at capacity comes and goes, unlike a
-// wiring mistake.
 func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 	var logs bytes.Buffer
 	prev := log.Writer()
@@ -2232,9 +2079,6 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 		"a refusal storm must not become the loudest thing in the log")
 }
 
-// A panic's stack says where, never which tab or which unit. On a busy deploy
-// that is the difference between grouping the failures and reading them one by
-// one.
 func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
 	var logs bytes.Buffer
 	prev := log.Writer()

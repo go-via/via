@@ -30,19 +30,14 @@ func (c *listComp) View() h.H {
 	)
 }
 
-// Each must render every item in order, in place (no wrapper element), so a
-// row method that returns <li> lands directly inside the <ul>.
 func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(listComp{items: []string{"a", "b", "c"}})).Get("/")
 	assert.Contains(t, body, "<ul><li>a</li><li>b</li><li>c</li></ul>")
 }
 
-// When renders its content only when the condition holds, and never calls
-// build on the false path (laziness is the contract — a false-path call would
-// evaluate a branch that may only be valid when the condition is true).
-// Sequential, not Parallel: it reads the shared lazyBuildCalls counter.
 func TestWhen_rendersOnlyWhenTrueAndIsLazy(t *testing.T) {
+	// Sequential, not Parallel: it reads the shared lazyBuildCalls counter.
 	_, on := vt.Serve(t, via.Handler(listComp{show: true})).Get("/")
 	assert.Contains(t, on, "lazybuilt", "When(true) must render the built node")
 

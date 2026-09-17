@@ -103,7 +103,7 @@ func main() {
 	}()
 	<-ctx.Done()
 
-	// Close FIRST: it ends every stream the way a closed tab does, so Shutdown
+	// Close first: it ends every stream the way a closed tab does, so Shutdown
 	// has no open SSE response left to block on until its own deadline.
 	r.Close()
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)

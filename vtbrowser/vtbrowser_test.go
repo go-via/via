@@ -24,8 +24,6 @@ import (
 	"github.com/go-via/via/vtbrowser"
 )
 
-// --- fixtures ---
-
 // liveTicker pushes an incrementing count over SSE with no client interaction —
 // the vehicle for testing that WaitFor observes a server-push morph.
 type liveTicker struct{ n via.State[int] }
@@ -101,7 +99,7 @@ func (c *chat) View() h.H {
 	)
 }
 
-// bClock + bCounter are two LIVE children multiplexed on one stream: a ticking
+// bClock + bCounter are two live children multiplexed on one stream: a ticking
 // clock and a click-driven counter. bDash is the shell (not itself live).
 type bClock struct{ secs via.State[int] }
 
@@ -123,10 +121,6 @@ type bDash struct {
 
 func (d *bDash) View() h.H { return h.Div(via.Child(d.Clock), via.Child(d.Counter)) }
 
-// Two live children on one page must update INDEPENDENTLY in a real browser: the
-// clock's server-push morphs only #via-i0, and a click on the counter routes
-// (via the tab handshake) to #via-i1 and morphs only that — proving Datastar
-// patches each child's container separately over the one shared SSE stream.
 func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(bDash{}))
 
@@ -145,7 +139,7 @@ func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// pRoot is a PLAIN root (not itself live) with its own action, embedding a
+// pRoot is a plain root (not itself live) with its own action, embedding a
 // live bCounter — the region-ownership case: the root's own action patch
 // must not repaint the live child from its seed value.
 type pRoot struct {
@@ -162,10 +156,6 @@ func (p *pRoot) View() h.H {
 	)
 }
 
-// A plain root's own action re-renders #root (Datastar's default whole-root
-// morph); the embedded live child's container carries data-ignore-morph, so
-// that patch must leave the child's DOM untouched, and the child's own push
-// (Datastar inner mode) must still land afterward.
 func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
@@ -190,11 +180,6 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// --- harness tests ---
-
-// Open must serve the server-rendered skeleton (including the #root morph
-// target) and Datastar must run under the strict nonce'd CSP without a single
-// console error. Eval is the escape hatch for DOM facts the named helpers omit.
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
@@ -209,9 +194,6 @@ func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// WaitFor polls the DOM, so it observes a value the server pushes over SSE with
-// no client interaction — proving data-init opens the stream and each
-// datastar-patch-elements frame morphs #root in a real browser.
 func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
 
@@ -223,10 +205,6 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// Click drives a live-child action: the count changes only if the $viatab the
-// SSE set is sent in the action's signal body, reaching this connection's child
-// and pushing the result back over its stream. WaitTextContains absorbs the
-// round-trip latency.
 func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
@@ -237,8 +215,6 @@ func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// Type sends real key events (so Datastar's data-bind fires as for a human) and
-// Value reads the bound input's resulting value.
 func TestTypeAndValue_driveABoundInput(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(form{}))
 
@@ -249,10 +225,6 @@ func TestTypeAndValue_driveABoundInput(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// NewTab opens a second tab in the same browser. A message sent in one tab must
-// fan out (Topic → SSE → morph) to the other, presence must reflect both
-// connections, and the sender's composer must clear — a deliberate signal-patch
-// that WaitValue observes.
 func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	r := newRoom()
 	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
@@ -271,17 +243,6 @@ func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
-// The reconnect manager is a nonce'd inline IIFE — wire-shape tests prove it
-// ships, but only a real browser proves it PARSES and RUNS under the strict CSP,
-// attaches its datastar-fetch listener, and drives the banner + status DOM. A
-// dropped stream must surface the "Reconnecting…" banner and flip the status
-// attribute; the resume must clear both. The drop is faked with a synthetic
-// 'retrying' datastar-fetch event (it carries no patch payload, so Datastar's
-// own document listener ignores it) and asserted synchronously. The resume is
-// NOT faked — a synthetic patch event would make Datastar try to apply a
-// payload-less patch and throw — so it rides a REAL server push: the ticker's
-// next element-patch, which is exactly the signal Datastar emits on a live
-// stream resume (no started/finished, only an incoming patch).
 func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
 
@@ -301,20 +262,19 @@ func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 		t.Fatalf("a dropped stream did not surface the reconnect banner: %q", got)
 	}
 
+	// The resume is not faked like the drop above: a synthetic patch event makes
+	// Datastar apply a payload-less patch and throw, so this rides the ticker's
+	// next real server push.
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
 		`(document.getElementById('via-reconnect-banner')||{style:{}}).style.display==='none'`,
 		"a real server-push patch cleared the banner and restored online")
 	s.RequireCleanConsole()
 }
 
-// When Datastar gives up (retries-failed), the manager goes offline and, past
-// its reload-loop cap, shows a terminal "please refresh" notice instead of
-// scheduling another reload — the guard that stops a permanently-down server
-// from pinning a tab in a reload loop. Pre-arming the counter at the cap keeps
-// the test deterministic (no real page reload) while exercising that branch.
 func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
+	// Pre-armed at the reload cap so the terminal branch runs without a real reload.
 	var armed bool
 	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
 
@@ -330,10 +290,6 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// A fan-out push must NOT clobber what another user is typing: while A composes
-// (not yet sent), B sends; A must receive B's line AND keep its own draft. The
-// element push omits data-signals precisely so a morph never overwrites a
-// client signal a user is editing.
 func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	r := newRoom()
 	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
@@ -341,7 +297,7 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 
 	a.WaitTextContains("h1", "online: 2")
 
-	a.Type("input", "half-typed") // A is composing; has NOT sent
+	a.Type("input", "half-typed") // A is composing; has not sent
 	a.WaitBoundSignal("input", "half-typed")
 
 	b.Type("input", "from-b")
@@ -366,10 +322,6 @@ func (p *redirectViaScript) View() h.H {
 	return h.Div(h.Button(h.RawAttr("id", "go"), via.On("click", p.Go), h.Str("go")))
 }
 
-// A via.Redirect from a Datastar @post action navigates the browser, and only a
-// real browser proves it: the response is a text/javascript body Datastar
-// appends to <head>, so it lands only if the strict CSP admits it by SHA-256 and
-// Datastar's script branch honours Datastar-Script-Attributes.
 func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
 	app := via.Handler(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
@@ -408,11 +360,6 @@ func (f *liveFormBrowser) View() h.H {
 	)
 }
 
-// A native PostForm submit from inside a live unit must reach the handler and
-// come back as a fresh 200 page, not fall through to the plain path's
-// fail-closed 410 "this tab has no stream" document. Only a real
-// browser can see this: an unfilled `data-attr-value` is not an error, it is
-// silently ignored, so no Go-level assertion catches it (see L1).
 func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	calls := 0
 	s := vtbrowser.Open(t, via.Handler(liveFormBrowser{calls: &calls}))
@@ -436,8 +383,6 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// --- Declared assets under the derived CSP ---
-
 // styledPage is the vehicle for the head tests: one element whose colour comes
 // only from a stylesheet, so "did the sheet load" is directly observable.
 type styledPage struct{}
@@ -459,9 +404,6 @@ func cdn(t testing.TB, css string) string {
 
 const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color === "rgb(255, 0, 0)"`
 
-// The payoff of declaring a Style: an off-origin stylesheet must actually load
-// and apply. No httptest can see this — the server ships the same bytes whether
-// or not the browser fetches them.
 func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
@@ -472,12 +414,6 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	s.RequireCleanConsole() // a CSP-blocked sheet surfaces as a console error
 }
 
-// The other half of the same claim: the policy is exactly as wide as what was
-// declared. An @import inside an inline Style points at an origin nothing ever
-// declared, so style-src does not cover it and the browser blocks it. This is
-// the documented limitation, pinned so it cannot silently become a hole: if a
-// declaration ever widened to a wildcard, this test would go green for the
-// wrong reason and the assertion below would start failing.
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
@@ -493,22 +429,12 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 	if red {
 		t.Fatal("an origin the Head never declared must not be admitted by style-src")
 	}
-	// No console assertion: a refused @import is reported as a browser ISSUE,
+	// No console assertion: a refused @import is reported as a browser issue,
 	// not through the console API, so it never reaches ConsoleErrors. The style
-	// simply not applying is the whole of the evidence — and RequireCleanConsole
-	// would be wrong here either way, since a block is the expected outcome.
+	// not applying is the whole of the evidence — and RequireCleanConsole would
+	// be wrong here either way, since a block is the expected outcome.
 }
 
-// The 3am case a headless assertion cannot see: a graceful shutdown ends every
-// stream by RETURNING, i.e. a clean 200 close. The bundled datastar.js defaults
-// each @post to retry:"auto", and under "auto" a body that ends falls through
-// to its resolve path — it fires `finished` and never `retrying` or
-// `retries-failed`. The manager used to read `finished` as "all good" and hide
-// the banner, so the tab looked alive while every click 410'd, with nothing on
-// screen and nothing in the log.
-//
-// Router.Close is that exact close, from inside the library. After it the tab
-// must say offline and show the banner.
 func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
 	r := via.NewRouter()
 	via.Mount(r, "/", liveTicker{})
@@ -525,20 +451,12 @@ func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
 		"a clean stream close must put a visible banner on screen")
 }
 
-// Datastar's fetch driver reports a >= 400 response through a `datastar-fetch`
-// event of type "error" carrying the code as a string in detail.argsRaw.status
-// (its onopen hook, in the bundled datastar.js). A 410 means this tab is stale
-// — its stream is gone, or the current render no longer binds the action — and
-// only a reload fixes it. A 403/5xx is the server's condition, and reloading
-// into it would be a loop, so that one is a banner and nothing more.
-//
-// Driven by dispatching the event directly: what is under test is the
-// manager's branch table, and provoking a real 410 and a real 403 on the same
-// page would confound them with the stream close.
 func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 	s.WaitLiveConnected()
 
+	// Dispatched directly: a real 410 and a real 403 on one page would confound
+	// the manager's branch table with the stream close.
 	const fire = `(function(s){document.dispatchEvent(new CustomEvent('datastar-fetch',` +
 		`{detail:{type:'error',el:document.body,argsRaw:{status:s}}}));return true})`
 
@@ -558,16 +476,6 @@ func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
 	s.WaitEvalTrue(`window.__probe===undefined`, "a 410 means the page is stale and must reload")
 }
 
-// The deploy case, and the one no httptest can see: SIGTERM ends every stream
-// cleanly and the server is then GONE for several seconds while the new
-// process starts. The manager used to answer that clean close with a single
-// blind location.reload() on a 500-2000ms timer, so the reload landed on
-// chrome-error://chromewebdata with no script left alive to try again — a
-// permanently dead tab on every rolling restart.
-//
-// The gap here is deliberately longer than that old give-up window. The page
-// must still be alive at the end of it: probing, then reloading once the new
-// server answers, then streaming again.
 func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
 	r := via.NewRouter()
 	via.Mount(r, "/", liveTicker{})
@@ -579,14 +487,12 @@ func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
 
 	next := via.NewRouter()
 	via.Mount(next, "/", liveTicker{})
-	s.Restart(3*time.Second, next)
+	s.Restart(3*time.Second, next) // longer than the manager's old blind-reload window
 
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online'`,
 		"the tab must re-bootstrap onto the new server instead of reloading once into a dead one")
 	s.WaitTextContains("p", "n: 1")
 }
-
-// --- Per-mount assets, in a real browser ---
 
 // jsCDN serves one off-origin script that stamps a global, so "did it execute"
 // is directly observable.
@@ -620,10 +526,6 @@ func (p *scriptPage) PageMeta() via.Meta {
 
 func (p *scriptPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
 
-// The only real proof of the feature: a script a page declared in PageMeta
-// must EXECUTE under that mount's own CSP — an off-origin one by origin, an
-// inline one by hash — and its inline style must apply. Every server-side test
-// passes identically whether the browser ran the script or refused it.
 func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
 	origin := jsCDN(t, `window.__external = true`)
 	r := via.NewRouter()

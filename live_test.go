@@ -57,9 +57,6 @@ func (d *disposeProbe) markDisposed() { close(d.disposed) }
 
 func (d *disposeProbe) View() h.H { return h.Div(h.Str("probe"), d.n.Display()) }
 
-// One publish must reach EVERY connected child — that's the multi-user
-// headline. Two streams subscribe; a single Publish to the shared Topic shows up
-// on both.
 func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
@@ -77,7 +74,7 @@ func TestFeed_publishFansOutToEveryConnection(t *testing.T) {
 	})
 }
 
-// mixedChild registers BOTH a tick and a subscription, plus a dispose probe.
+// mixedChild registers both a tick and a subscription, plus a dispose probe.
 type mixedChild struct {
 	room     *topic.Topic[string]
 	beats    via.State[int]
@@ -105,9 +102,6 @@ func (m *mixedChild) View() h.H {
 	)
 }
 
-// Ticks and subscriptions share one child loop: a ticking child must also
-// deliver published messages, and disconnecting a ticking+subscribed child
-// must still tear down cleanly (the ticker goroutine exits, disposers run).
 func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
@@ -156,9 +150,6 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
-// A failed OnInit opens no connection, so neither half of an OnConnect/OnDispose
-// pair may run: registering is not acquiring, and a Listen registered before
-// the failure never subscribed either — nothing is left orphaned in a Topic.
 func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	t.Parallel()
 	acquired, disposed := make(chan struct{}), make(chan struct{})
@@ -178,8 +169,6 @@ func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 	}
 }
 
-// On disconnect the child's OnDispose must run, so subscriptions and producers
-// are torn down rather than leaked for the life of the process.
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
 	done := make(chan struct{})
@@ -219,9 +208,6 @@ func (p *panicThenDisposeProbe) markDisposed() { close(p.disposed) }
 
 func (p *panicThenDisposeProbe) View() h.H { return h.Div(h.Str("probe"), p.n.Display()) }
 
-// A panicking disposer must not skip every disposer registered after it — a
-// skipped one (e.g. sub.Stop) would otherwise leak for the life of the
-// process.
 func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		done := make(chan struct{})
@@ -270,8 +256,6 @@ func (c *chatChild) View() h.H {
 	)
 }
 
-// The headline: a message sent on one connection's live child fans out — via
-// the Room's Topic — to EVERY connection, including a second tab.
 func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := &chatRoom{bus: topic.New[string]()}
@@ -295,12 +279,12 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 
-		awaitLine(t, lb, "hello-room") // the OTHER tab receives it — fan-out
+		awaitLine(t, lb, "hello-room") // the other tab receives it — fan-out
 		awaitLine(t, la, "hello-room") // and the sender does too
 	})
 }
 
-// tickReqEchoer reads the connect request from inside a TICK body, not OnInit.
+// tickReqEchoer reads the connect request from inside a tick body, not OnInit.
 type tickReqEchoer struct{ host via.State[string] }
 
 func (e *tickReqEchoer) OnInit(ctx *via.Ctx) error {
@@ -314,9 +298,6 @@ func (e *tickReqEchoer) View() h.H {
 	return h.Div(h.P(h.Str("tick-host: "), e.host.Display()))
 }
 
-// Ticks run under the child ctx, so a tick body reading ctx.Request() must
-// see the connection's connect request — there is no triggering request for
-// a timer, and the connection's is the honest answer.
 func TestTick_seesTheConnectRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(tickReqEchoer{}))
@@ -331,7 +312,7 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 // must never be visible from there. Before S8, dispatch wrote req/sessW/
 // redirect directly onto the render-time Ctx a Tick holds for the life of
 // the connection, so firing an action left every later tick reading the
-// ACTION's request instead of the connect one.
+// action's request instead of the connect one.
 type pathTicker struct {
 	path via.State[string]
 	n    via.State[int]
@@ -359,7 +340,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 		app := vt.Serve(t, via.Handler(pathTicker{}))
 		conn := app.Connect()
 
-		// Fire BEFORE the first tick pushes, while the connection's unit is
+		// Fire before the first tick pushes, while the connection's unit is
 		// still the exact Ctx OnInit handed to Tick. Waiting for a push first
 		// (the old version of this test) replaces the unit with a fresh
 		// render Ctx, hiding the corruption this test exists to catch.
@@ -388,8 +369,8 @@ func (r *reTicker) beat(ctx *via.Ctx) {
 
 func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
 
-// Sequential: it captures the global log output.
 func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -425,8 +406,8 @@ func (r *reListener) recv(ctx *via.Ctx, msg string) {
 
 func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
 
-// Sequential: it captures the global log output.
 func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -448,7 +429,7 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 
 // lateRegistrar's beat calls OnConnect and OnDispose on the already-connected
 // Ctx. Both used to append silently to a snapshot nobody reads again — the fn
-// simply never ran — while the sibling Tick/Listen calls warned.
+// never ran — while the sibling Tick/Listen calls warned.
 type lateRegistrar struct{ n via.State[int] }
 
 func (r *lateRegistrar) OnInit(ctx *via.Ctx) error {
@@ -464,8 +445,8 @@ func (r *lateRegistrar) beat(ctx *via.Ctx) {
 
 func (r *lateRegistrar) View() h.H { return h.Div(r.n.Display()) }
 
-// Sequential: it captures the global log output.
 func TestLive_onConnectAndOnDisposeAfterConnectAreLoudNoOps(t *testing.T) {
+	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()
 	log.SetOutput(&buf)
@@ -499,13 +480,10 @@ func (r *racyTicker) View() h.H {
 	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
 }
 
-// tabStream.mu guards units: a background tick's push runs replace on the
-// stream goroutine while a concurrent action POST reads it via unit() on its
-// own goroutine. Runs in real (not synctest) time so -race, or Go's own
-// concurrent-map-access panic, catches a missing lock; it asserts nothing
-// about outcomes since the property under test is the absence of a race.
 func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	t.Parallel()
+	// Real time, not synctest: -race (or a concurrent-map panic) is the only
+	// assertion — the test claims nothing about outcomes.
 	srv := liveServer(t, via.Handler(racyTicker{}))
 
 	lines, cancel := openStream(t, srv)
@@ -556,13 +534,10 @@ func (r *racyNativeForm) View() h.H {
 	return h.Div(r.n.Display(), via.PostForm(r.Save, h.Button(h.Str("save"))))
 }
 
-// A native <form> submit on a streaming page re-renders lc.pageRoot in full
-// (dispatchOverStream's modeNative branch), so that render must run on the
-// child's own serialized goroutine like every other live-state read/write —
-// otherwise it races a concurrent tick. Runs in real time/concurrency so
-// -race catches a regression; asserts nothing about outcomes.
 func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	t.Parallel()
+	// Real time, not synctest: -race is the only assertion — the test claims
+	// nothing about outcomes.
 	srv := liveServer(t, via.Handler(racyNativeForm{}))
 
 	lines, cancel := openStream(t, srv)
@@ -620,10 +595,6 @@ func (p *paramInTick) check(ctx *via.Ctx) {
 
 func (p *paramInTick) View() h.H { return h.Div() }
 
-// Param must not nil-dereference the request from a Tick handler: the
-// connection's Ctx keeps the request it was connected with for its whole
-// life, so Param answers the same "no such segment" panic a request-bound
-// call would, not a raw nil-pointer crash.
 func TestLive_paramInTickReadsConnectRequestNotNil(t *testing.T) {
 	t.Parallel()
 	panics := make(chan any, 1)
@@ -652,10 +623,6 @@ func (l *listenOnly) onMsg(ctx *via.Ctx, s string) { l.last.Set(s) }
 
 func (l *listenOnly) View() h.H { return h.Div(h.Str("last="), l.last.Display()) }
 
-// OnInit runs on every request that renders the unit, plain GETs included, so
-// Listen must register a starter rather than subscribe on the spot: a page
-// fetched but never connected would otherwise orphan one Sub per GET in the
-// Topic forever.
 func TestListen_plainGetLeaksNoSubscription(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[string]()
@@ -673,8 +640,6 @@ func TestListen_plainGetLeaksNoSubscription(t *testing.T) {
 		"the connect itself must subscribe exactly once")
 }
 
-// A disconnect must give the subscription back — the lazy Subscribe is still
-// paired with the disposer that stops it.
 func TestListen_disconnectReturnsTheSubscription(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[string]()
@@ -717,9 +682,6 @@ type leakPage struct{ A, B leakRoom }
 
 func (p *leakPage) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-// The second unit's OnConnect panics after the first has already acquired. The
-// connect answers 500 — and the first unit's OnDispose must still run, or the
-// acquire is stranded for the life of the process.
 func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
 	t.Parallel()
 	var held atomic.Int32
@@ -735,7 +697,7 @@ func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
 }
 
 // burstUnit counts handler calls and renders separately, which is the whole
-// point of the contract: the two numbers must NOT be equal under a burst.
+// point of the contract: the two numbers must not be equal under a burst.
 type burstUnit struct {
 	bus     *topic.Topic[int]
 	got     *atomic.Int64
@@ -752,10 +714,6 @@ func (b *burstUnit) View() h.H {
 	return h.Div(h.Str("sum="), b.sum.Display())
 }
 
-// The defect: a burst wider than the old 64-slot buffer silently skipped
-// handler calls, giving an accumulating handler a WRONG answer. The same
-// burst must also cost far fewer renders than messages — drained into one
-// batch, handled in order, pushed once.
 func TestListen_burstLosesNoHandlerCallAndCoalescesRenders(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const msgs = 1000
@@ -832,8 +790,6 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 		"a unit publishing to the topic it listens to wedged its own stream (%d/%d handler calls)", got.Load(), 2*seeds)
 }
 
-// One client that never reads its socket must not hold up anyone else's
-// delivery: each connection owns its goroutine and its own queue.
 func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
@@ -904,7 +860,7 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 	b.ReportMetric(float64(got.Load())/float64(total)*100, "%delivered")
 }
 
-// orderUnit registers TWO Listens on one topic. Each used to own a reader
+// orderUnit registers two Listens on one topic. Each used to own a reader
 // goroutine, so which handler saw a value first was a scheduler race; both now
 // run from the connection's single select loop, in registration order.
 type orderUnit struct {
@@ -1046,9 +1002,6 @@ func (b *panicListener) recv(ctx *via.Ctx, v int) {
 
 func (b *panicListener) View() h.H { return h.Div(h.Str("seen="), h.Str(int(b.seen.Load()))) }
 
-// The defect: the whole drained batch ran as ONE push item, so a panic on value
-// 2 skipped 3,4,5 AND the re-render — a bad value cost the rest of the backlog
-// and the frame the survivors earned.
 func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
@@ -1068,13 +1021,13 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 	assert.EqualValues(t, 5, got.Load(), "every value must still reach the handler")
 }
 
-// --- A unit must observe its OWN OnConnect publish.
+// A unit must observe its own OnConnect publish.
 //
 // OnConnect's doc names "join a room" as the pattern, and a room's own join is
 // the first thing its viewer count has to reflect. The Listen starters used to
 // run inside runStream — i.e. after every OnConnect — so the join was published
 // into a topic this unit had not subscribed to yet: a fresh tab showed the
-// pre-join count until some OTHER tab joined or left. example/chat's presence
+// pre-join count until some other tab joined or left. example/chat's presence
 // count had exactly this defect.
 
 type connectPublisher struct {
@@ -1104,7 +1057,7 @@ func TestConnect_aUnitSeesItsOwnOnConnectPublish(t *testing.T) {
 		"the first frame after connect must reflect the unit's own OnConnect publish")
 }
 
-// --- A push whose render is byte-identical to the last one ships no frame.
+// A push whose render is byte-identical to the last one ships no frame.
 //
 // The plain action path has always answered 204 on an unchanged render; the
 // live path used to push a byte-identical element patch on every single tick.

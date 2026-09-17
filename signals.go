@@ -15,7 +15,7 @@ import (
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
 // attribute: data-signals='{...}'.
 //
-// json.Marshal already unicode-escapes <, > and & inside string VALUES, so the
+// json.Marshal already unicode-escapes <, > and & inside string values, so the
 // single quote is the only HTML-significant character left raw — and left
 // verbatim a signal carrying an apostrophe would close this attribute early and
 // let an attacker graft a data-on-* expression onto <div id="root">. Double
@@ -45,7 +45,7 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 
 	// Marshalled one slot at a time, not as one map: a single unmarshalable
 	// value used to fail the whole object and emit data-signals='', wiping the
-	// client store for EVERY signal on the page with nothing in the log. Drop
+	// client store for every signal on the page with nothing in the log. Drop
 	// the offender, keep the rest — the same treatment an unmarshalable OnArg
 	// value gets.
 	var obj bytes.Buffer
@@ -85,14 +85,14 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 	buf.WriteByte('\'')
 }
 
-// revertSet records how to put a signal's SERVER-authored value back after a
+// revertSet records how to put a signal's server-authored value back after a
 // render that applied the client's posted values on top of it.
 //
 // It exists because a live unit outlives the request: hydration writes straight
 // into the instance's field, so without an undo the client's value became the
 // server's own state and every later push re-rendered from it — which is how a
 // posted signal used to open a gated branch and leave its action dispatchable
-// for the life of the connection. livePush reverts, renders the AUTHORITY, then
+// for the life of the connection. livePush reverts, renders the authority, then
 // re-applies for display, so the client can still steer what it sees and never
 // what it may call.
 //
@@ -133,7 +133,7 @@ func (r *revertSet) restore() {
 // Signal is a client-resident value that round-trips per request and renders as
 // a Datastar text-bound span. T must be JSON-round-trippable.
 //
-// NOT safe for concurrent use. Call it only from via callbacks (OnInit, an
+// Not safe for concurrent use. Call it only from via callbacks (OnInit, an
 // action handler, a Tick or Listen handler); to reach a unit from a goroutine
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
 // doc for the goroutine model.
@@ -145,7 +145,7 @@ type Signal[T any] struct {
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
-// "$chat__draft" for a Draft inside an embedded Chat (the DOUBLE underscore
+// "$chat__draft" for a Draft inside an embedded Chat (the double underscore
 // marks the child boundary; a plain nested struct joins with a single one) —
 // for hand-written Datastar attributes the typed API does not cover:
 //
@@ -215,13 +215,13 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 	if s.bound == nil {
 		panic("via: a Signal was rendered outside a via render")
 	}
-	// Resolved on EVERY bind, not cached: via.Child copies the child by value,
+	// Resolved on every bind, not cached: via.Child copies the child by value,
 	// so a signal the parent's View already bound arrives still carrying the
 	// parent's prefix and would collide in the page's one signal store. It is
 	// also the one place a Signal that is not a plain field is caught.
 	s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 	if writable {
-		// The ONE hydration door, deliberately: it is the only one that records
+		// The one hydration door, deliberately: it is the only one that records
 		// an undo (revertSet), which is what keeps a live unit's instance
 		// server-authored between renders. A second path that wrote s.val
 		// straight from the request would silently re-open the escalation
@@ -243,7 +243,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 
 // Display renders the signal as a Datastar text-bound span. Displaying the same
 // signal in several places reuses its name, so they all update together. Unlike
-// Bind it does NOT make the slot client-writable — an inbound value for a
+// Bind it does not make the slot client-writable — an inbound value for a
 // Display-only signal is ignored (see Signal.bind).
 func (s *Signal[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
@@ -254,7 +254,7 @@ func (s *Signal[T]) Display() h.H {
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input, sharing the
 // signal's name with Display regardless of source order. Bind is what puts the
-// slot under CLIENT control: its value is thereafter whatever the client last
+// slot under client control: its value is thereafter whatever the client last
 // set, so never gate an authorization decision on a Bind()ed signal (see OnArg).
 func (s *Signal[T]) Bind() h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
