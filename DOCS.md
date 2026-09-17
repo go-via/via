@@ -370,18 +370,21 @@ The action endpoint and rendered pages are hardened by default:
 
   A `Guard` runs before `OnInit`, on all four transports a mount answers — the
   page GET, a plain action, a live action over an open stream, and the SSE
-  connect. `OnInit` only runs on the first two, so a `Guard` is what
-  re-authorizes a live action: a session revoked after connect still passes
-  `OnInit` (it never runs again on that stream) but is caught by the `Guard`
-  on the next click. A mount's guards run in the order passed to `Protect`,
-  stopping at the first denial.
+  connect. `OnInit` already runs on three of those (everything but the live
+  action), so a `Guard` adds exactly one: it is what re-authorizes a live
+  action, since a session revoked after connect still passes `OnInit` (it
+  never runs again on that stream) but is caught by the `Guard` on the next
+  click. A mount's guards run in the order passed to `Protect`, stopping at
+  the first denial.
 
   A `Guard` denies by returning `via.ErrForbidden` for "you may not do this"
   (403, `via.ReasonForbidden` through `WithErrorPage`) or by queuing
   `ctx.Redirect` for "please sign in" (303 on a page GET, a navigation script
-  on a Datastar action) — the same two shapes `OnInit` uses. On the SSE
-  connect a denial is always a plain 403, because `fetch` follows a 303 and
-  would deliver the target page's HTML as the stream body.
+  on a Datastar action) — the same two shapes `OnInit` uses, and `OnInit`
+  answers `ErrForbidden` the same way. On the SSE connect a denial is always a
+  plain 403, whether it came from a `Guard` or from `OnInit`'s own Redirect,
+  because `fetch` follows a 303 and would deliver the target page's HTML as
+  the stream body.
 
   A guard denial does not tear down an already-open stream: `Tick` and
   `Listen` keep pushing until the tab next acts and is denied, closes, or the
