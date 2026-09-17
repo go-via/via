@@ -93,8 +93,8 @@ func (l *Login) Submit(ctx *via.Ctx) {
 		l.err = "name is required" // no Redirect: the page re-renders with the error
 		return
 	}
-	ctx.Session().Put(User{Name: name}) // Get[User]() / Delete[User]() read it back
-	ctx.Session().Rotate()              // fixation defense on an auth-state change
+	ctx.Session().Put(User{Name: name}) // Get[User]() reads it back
+	ctx.Session().Rotate()              // fixation defense on auth change
 	ctx.Redirect("/")
 }
 
@@ -459,10 +459,11 @@ it.
   `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose`: one publish
   fans out to every connected child.
 
-- **Sessions** (always available): `ctx.Session().Put[T]`/`Get[T]`/`Delete[T]`,
-  a typed per-browser store keyed by Go type (no tags, no reflection — a
-  typed-nil sentinel), behind a signed-HMAC cookie issued lazily on the first
-  write. Apps that never store anything stay cookieless.
+- **Sessions** (always available):
+  `ctx.Session().Put(v)`/`Get[T]()`/`Delete()`, a per-browser JSON value behind
+  a signed-HMAC cookie issued lazily on the first write. A session holds one
+  value; nest what you need in a struct. Apps that never store anything stay
+  cookieless.
   - Sessions do not rotate their id on their own: call `Session.Rotate` at an
     auth-state change (login, logout, privilege elevation) to invalidate a
     session id an attacker may have planted beforehand (fixation defense).
@@ -584,9 +585,9 @@ That is the whole interface. via hands a session over already serialized and
 never asks a store to understand it: rotation is a Save under the new id then a
 Delete of the old, and expiry is the `ttl` handed to Save. via stamps the same
 deadline into the blob and refuses an expired Load anyway, so a backend with no
-TTL support is still correct. Values go through `encoding/json`, keyed by the
-Go type `Session.Put` stored them under, so a type a pod cannot decode reads
-back as absent rather than as someone else's value.
+TTL support is still correct. The value goes through `encoding/json`, so bytes
+that no longer decode into the `T` a `Get[T]` asks for read back as absent
+rather than as a stale value.
 
 The CSP is a pure function of the Head, so pods with different keys still serve
 identical policies. Live-child state is in-memory and per-connection: a deploy

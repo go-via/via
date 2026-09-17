@@ -24,6 +24,7 @@ const (
 	defaultSessionStoreTimeout = 5 * time.Second
 	defaultSessionCookie       = "via_session"
 	minSessionKeyLen           = 16 // bytes; below this an HMAC-SHA256 key is guessable
+	sessionSlot                = "v"
 )
 
 // SessionStore is where session state lives between requests. The default is a
@@ -600,9 +601,9 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 
 // Session is a browser session's value bag, resolved from the signed cookie,
 // created lazily on the first write — an app that never stores anything stays
-// cookieless. A value is keyed by the Go type used to store it, and stored as
-// JSON: T must round-trip through encoding/json, because the bytes may be read
-// back by a different process.
+// cookieless. The value is stored as JSON: T must round-trip through
+// encoding/json, because the bytes may be read back by a different process. A
+// session holds one value; nest what you need in a struct.
 //
 // SECURITY: sessions do NOT rotate their id on their own. Call [Session.Rotate]
 // at every auth-state change (login, logout, privilege elevation) to invalidate
@@ -618,10 +619,8 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // the snapshot taken when its stream connected — and refreshed by its own next
 // write.
 //
-// Writes from two in-flight requests on one session are merged per key: each
-// write re-reads the stored blob and overlays only the keys that request
-// touched, so a Put in one tab does not erase a Put of a DIFFERENT type in
-// another. Two requests writing the SAME type resolve last-writer-wins.
+// Writes from two in-flight requests on one session resolve last-writer-wins:
+// each write re-reads the stored blob and overlays its own value onto it.
 //
 // The merge is a read-modify-write. Against a store that implements
 // [VersionedSessionStore] — the default one does — it re-merges and retries until
@@ -708,24 +707,24 @@ func (s *Session) ensure() *sessionData {
 	return d
 }
 
-func (s *Session) load(key string) (json.RawMessage, bool) {
+func (s *Session) load() (json.RawMessage, bool) {
 	if s.data == nil {
 		return nil, false
 	}
 	s.data.mu.Lock()
 	defer s.data.mu.Unlock()
-	v, ok := s.data.vals[key]
+	v, ok := s.data.vals[sessionSlot]
 	return v, ok
 }
 
-func (s *Session) set(key string, value json.RawMessage) {
+func (s *Session) set(value json.RawMessage) {
 	d := s.ensure()
 	if d == nil {
 		return
 	}
 	d.mu.Lock()
-	d.vals[key] = value
-	d.dirty[key] = value
+	d.vals[sessionSlot] = value
+	d.dirty[sessionSlot] = value
 	d.mu.Unlock()
 	s.mgr.save(s.storeCtx(), s.id, d, false)
 }
@@ -765,13 +764,13 @@ func (s *Session) Rotate() string {
 	return s.id
 }
 
-func (s *Session) clear(key string) {
+func (s *Session) clear() {
 	if s.data == nil {
 		return
 	}
 	s.data.mu.Lock()
-	delete(s.data.vals, key)
-	s.data.dirty[key] = nil // tombstone: a Clear must survive the merge, not just be absent from it
+	delete(s.data.vals, sessionSlot)
+	s.data.dirty[sessionSlot] = nil // tombstone: a Clear must survive the merge, not just be absent from it
 	s.data.mu.Unlock()
 	s.mgr.save(s.storeCtx(), s.id, s.data, false)
 }
@@ -800,14 +799,6 @@ func (c *Ctx) Session() *Session {
 	return s
 }
 
-// sessionKey names T on the wire. A printed type name, so the key a session was
-// written under still decodes on another pod — which the per-process sentinel
-// pointer this replaced could never do. %T of a typed nil pointer, not reflect:
-// via's core stays import-free of reflect outside the three type-setup files.
-// Renaming or moving T retires the values already stored under it, and two
-// same-named types in same-named packages would share a key.
-func sessionKey[T any]() string { return fmt.Sprintf("%T", (*T)(nil)) }
-
 // storeDown answers 503 when the store could not be read; "could not answer" is
 // not "anonymous".
 func storeDown(w http.ResponseWriter, ctx *Ctx) bool {
@@ -819,29 +810,26 @@ func storeDown(w http.ResponseWriter, ctx *Ctx) bool {
 	return true
 }
 
-// Put stores a typed value in the session, keyed by its type — the
-// one-per-session value like the logged-in user. The first Put issues the
-// cookie, and only where a response is open: a plain action, OnInit, or a live
-// action. It panics if T does not marshal to JSON: a session may be read back
-// by another process, so an unencodable value has nowhere to go.
+// Put stores v as the session's value. The first Put issues the cookie, and
+// only where a response is open: a plain action, OnInit, or a live action. It
+// panics if v does not marshal to JSON.
 //
 // SECURITY: Put does NOT rotate the session id. Call [Session.Rotate] right
 // after a Put that changes auth state, so a pre-auth id an attacker planted
 // doesn't survive the login.
-func (s *Session) Put[T any](v T) {
+func (s *Session) Put(v any) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		panic("via: Session.Put: " + sessionKey[T]() + " does not marshal to JSON: " + err.Error())
+		panic("via: Session.Put: does not marshal to JSON: " + err.Error())
 	}
-	s.set(sessionKey[T](), raw)
+	s.set(raw)
 }
 
-// Get reads the value stored with [Session.Put] for type T, returning the zero
-// value and false when nothing is stored or the stored bytes no longer decode
-// into T.
+// Get reads the session's value as T, returning the zero value and false when
+// nothing is stored or the stored bytes no longer decode into T.
 func (s *Session) Get[T any]() (T, bool) {
 	var zero T
-	raw, ok := s.load(sessionKey[T]())
+	raw, ok := s.load()
 	if !ok {
 		return zero, false
 	}
@@ -852,8 +840,7 @@ func (s *Session) Get[T any]() (T, bool) {
 	return v, true
 }
 
-// Delete removes the value stored under T's key — a logout dropping the
-// session-held user.
-func (s *Session) Delete[T any]() {
-	s.clear(sessionKey[T]())
+// Delete removes the session's value.
+func (s *Session) Delete() {
+	s.clear()
 }

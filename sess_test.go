@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// member is a one-per-session typed value: the "logged-in user" the session
+// member is a one-per-session value: the "logged-in user" the session
 // remembers across requests.
 type member struct{ Name string }
 
@@ -48,7 +48,7 @@ func (c *loginComp) Greet(ctx *via.Ctx) {
 		c.greeting = "hi " + m.Name
 	}
 }
-func (c *loginComp) SignOut(ctx *via.Ctx) { ctx.Session().Delete[member]() }
+func (c *loginComp) SignOut(ctx *via.Ctx) { ctx.Session().Delete() }
 func (c *loginComp) Refresh(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (c *loginComp) View() h.H {
 	return h.Div(
@@ -469,8 +469,11 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 // action's.
 type liveSess struct{}
 
-func (c *liveSess) OnInit(ctx *via.Ctx) error { ctx.Session().Put(member{Name: "bob"}); return nil }
-func (c *liveSess) View() h.H                 { return h.Div(h.Str("live")) }
+func (c *liveSess) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(member{Name: "bob"})
+	return nil
+}
+func (c *liveSess) View() h.H { return h.Div(h.Str("live")) }
 
 // A live app's OnInit must be able to establish the session: the cookie is
 // issued on the SSE connect response, so it's in place before any later live
@@ -828,7 +831,10 @@ func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) 
 // never calls Session() is the sibling case.
 type sessKid struct{ Tag string }
 
-func (k *sessKid) OnInit(ctx *via.Ctx) error { ctx.Session().Put(sessUser{Name: "ann"}); return nil }
+func (k *sessKid) OnInit(ctx *via.Ctx) error {
+	ctx.Session().Put(sessUser{Name: "ann"})
+	return nil
+}
 
 func (k *sessKid) View() h.H { return h.P(h.Str(k.Tag)) }
 
@@ -964,49 +970,36 @@ func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
 // part — they fire a whole second request from inside one store call, so the
 // interleave a race would only sometimes produce happens every run.
 
-type auditA struct{ N int }
-type auditB struct{ N int }
-
-// auditPage exposes one action per write the tests below need; Show copies both
-// session values into the render, which is the only way a ctx-free View can
+// auditPage exposes one action per write the tests below need; Show copies the
+// session value into the render, which is the only way a ctx-free View can
 // surface what the store actually holds.
 type auditPage struct{ shown string }
 
-func (p *auditPage) PutA1(ctx *via.Ctx) { ctx.Session().Put(auditA{1}) }
-func (p *auditPage) PutA2(ctx *via.Ctx) { ctx.Session().Put(auditA{2}) }
-func (p *auditPage) PutB9(ctx *via.Ctx) { ctx.Session().Put(auditB{9}) }
-func (p *auditPage) PutB3(ctx *via.Ctx) { ctx.Session().Put(auditB{3}) }
-func (p *auditPage) DelA(ctx *via.Ctx)  { ctx.Session().Delete[auditA]() }
-func (p *auditPage) Rot(ctx *via.Ctx)   { ctx.Session().Rotate() }
+func (p *auditPage) Put1(ctx *via.Ctx) { ctx.Session().Put(1) }
+func (p *auditPage) Put2(ctx *via.Ctx) { ctx.Session().Put(2) }
+func (p *auditPage) Put9(ctx *via.Ctx) { ctx.Session().Put(9) }
+func (p *auditPage) Put3(ctx *via.Ctx) { ctx.Session().Put(3) }
+func (p *auditPage) Del(ctx *via.Ctx)  { ctx.Session().Delete() }
+func (p *auditPage) Rot(ctx *via.Ctx)  { ctx.Session().Rotate() }
 
-// PutA2ReadB writes and then reads the OTHER key back through the same handle:
-// a merge that refreshed the store but not this request's own view would show
-// the pre-merge snapshot here.
-func (p *auditPage) PutA2ReadB(ctx *via.Ctx) {
-	ctx.Session().Put(auditA{2})
-	b, ok := ctx.Session().Get[auditB]()
-	p.shown = "readback=" + auditVal(b.N, ok)
-}
-
-func (p *auditPage) PutA2Rotate(ctx *via.Ctx) {
-	ctx.Session().Put(auditA{2})
+func (p *auditPage) Put2Rotate(ctx *via.Ctx) {
+	ctx.Session().Put(2)
 	ctx.Session().Rotate()
 }
 
 // PutTwice writes twice through one handle: if the id was retired under it, the
 // first write learns that from the store and the second short-circuits on it.
 func (p *auditPage) PutTwice(ctx *via.Ctx) {
-	ctx.Session().Put(auditA{2})
-	ctx.Session().Put(auditB{9})
+	ctx.Session().Put(2)
+	ctx.Session().Put(9)
 }
 
 func (p *auditPage) Show(ctx *via.Ctx) {
-	a, aok := ctx.Session().Get[auditA]()
-	b, bok := ctx.Session().Get[auditB]()
-	p.shown = "A=" + auditVal(a.N, aok) + " B=" + auditVal(b.N, bok)
+	v, ok := ctx.Session().Get[int]()
+	p.shown = "V=" + auditValStr(v, ok)
 }
 
-func auditVal(n int, ok bool) string {
+func auditValStr(n int, ok bool) string {
 	if !ok {
 		return "-"
 	}
@@ -1016,28 +1009,26 @@ func auditVal(n int, ok bool) string {
 func (p *auditPage) View() h.H {
 	return h.Div(
 		h.P(h.Str(p.shown)),
-		h.Button(via.On("click", p.PutA1), h.Str("a1")),       // 0
-		h.Button(via.On("click", p.PutA2), h.Str("a2")),       // 1
-		h.Button(via.On("click", p.PutB9), h.Str("b9")),       // 2
-		h.Button(via.On("click", p.PutB3), h.Str("b3")),       // 3
-		h.Button(via.On("click", p.DelA), h.Str("dela")),      // 4
-		h.Button(via.On("click", p.Rot), h.Str("rot")),        // 5
-		h.Button(via.On("click", p.PutA2ReadB), h.Str("arb")), // 6
-		h.Button(via.On("click", p.PutA2Rotate), h.Str("ar")), // 7
-		h.Button(via.On("click", p.PutTwice), h.Str("two")),   // 8
-		h.Button(via.On("click", p.Show), h.Str("show")),      // 9
+		h.Button(via.On("click", p.Put1), h.Str("a1")),       // 0
+		h.Button(via.On("click", p.Put2), h.Str("a2")),       // 1
+		h.Button(via.On("click", p.Put9), h.Str("b9")),       // 2
+		h.Button(via.On("click", p.Put3), h.Str("b3")),       // 3
+		h.Button(via.On("click", p.Del), h.Str("dela")),      // 4
+		h.Button(via.On("click", p.Rot), h.Str("rot")),       // 5
+		h.Button(via.On("click", p.Put2Rotate), h.Str("ar")), // 6
+		h.Button(via.On("click", p.PutTwice), h.Str("two")),  // 7
+		h.Button(via.On("click", p.Show), h.Str("show")),     // 8
 	)
 }
 
 const (
-	audPutA1 = iota
-	audPutA2
-	audPutB9
-	audPutB3
-	audDelA
+	audPut1 = iota
+	audPut2
+	audPut9
+	audPut3
+	audDel
 	audRot
-	audPutA2ReadB
-	audPutA2Rotate
+	audPut2Rotate
 	audPutTwice
 	audShow
 )
@@ -1229,182 +1220,44 @@ func (f *failStore) Delete(ctx context.Context, id string) error {
 
 func newFailStore() *failStore { return &failStore{MemorySessionStore: via.NewMemorySessionStore()} }
 
-// A write from one in-flight request must not erase a write of a different type
-// made by another request on the same session. The hook lands the second
-// request between this one's read and its write, which is the window a save
-// that re-encoded its own decoded copy would lose.
-func TestSession_concurrentRequestsDoNotLoseWrites(t *testing.T) {
+// A session has one slot, so two in-flight requests writing it resolve
+// last-writer-wins: the one whose save reaches the store last determines the
+// final value, even though the other's write landed first. The hook lands the
+// second request between this one's read and its write.
+func TestSession_concurrentRequestsLastWriterWins(t *testing.T) {
 	t.Parallel()
 	store := newPlainGap(via.NewMemorySessionStore())
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	sid := cookieValue(t, c, base, "via_session")
 	require.NotEmpty(t, sid)
 
-	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
-	auditPost(t, c, base, acts[audPutA2])
+	store.armLoad(1, func() { auditPostAs(t, base, acts[audPut9], sid) })
+	auditPost(t, c, base, acts[audPut2])
 
 	_, body := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, body, "A=2 B=9", "a concurrent write of a different type was lost")
+	assert.Contains(t, body, "V=2", "the later save did not win over the interleaved write")
 }
 
-// A Clear has to survive the merge as a tombstone, not merely be absent from
-// the clearing request's own copy.
+// A Clear has to survive the merge as a tombstone: it always wins over
+// whatever the fresh read turns up, not just over the clearing request's own
+// stale copy.
 func TestSession_clearSurvivesMerge(t *testing.T) {
 	t.Parallel()
 	store := newPlainGap(via.NewMemorySessionStore())
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
-	auditPost(t, c, base, acts[audPutB9])
+	auditPost(t, c, base, acts[audPut1])
 	sid := cookieValue(t, c, base, "via_session")
 
-	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB3], sid) })
-	auditPost(t, c, base, acts[audDelA])
+	store.armLoad(1, func() { auditPostAs(t, base, acts[audPut3], sid) })
+	auditPost(t, c, base, acts[audDel])
 
 	_, body := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, body, "A=- B=3", "the Delete was undone by the other request's save, or its write was lost")
-}
-
-type conc1 struct{ N int }
-type conc2 struct{ N int }
-type conc3 struct{ N int }
-type conc4 struct{ N int }
-type conc5 struct{ N int }
-type conc6 struct{ N int }
-type conc7 struct{ N int }
-type conc8 struct{ N int }
-
-// fanoutPage writes eight DISTINCT session keys, one per action, so eight
-// simultaneous requests on one session can be checked key by key.
-type fanoutPage struct{ shown string }
-
-func (p *fanoutPage) K1(ctx *via.Ctx) { ctx.Session().Put(conc1{1}) }
-func (p *fanoutPage) K2(ctx *via.Ctx) { ctx.Session().Put(conc2{2}) }
-func (p *fanoutPage) K3(ctx *via.Ctx) { ctx.Session().Put(conc3{3}) }
-func (p *fanoutPage) K4(ctx *via.Ctx) { ctx.Session().Put(conc4{4}) }
-func (p *fanoutPage) K5(ctx *via.Ctx) { ctx.Session().Put(conc5{5}) }
-func (p *fanoutPage) K6(ctx *via.Ctx) { ctx.Session().Put(conc6{6}) }
-func (p *fanoutPage) K7(ctx *via.Ctx) { ctx.Session().Put(conc7{7}) }
-func (p *fanoutPage) K8(ctx *via.Ctx) { ctx.Session().Put(conc8{8}) }
-func (p *fanoutPage) Seed(ctx *via.Ctx) {
-	ctx.Session().Put(auditA{1})
-}
-
-func (p *fanoutPage) Show(ctx *via.Ctx) {
-	out := ""
-	if _, ok := ctx.Session().Get[conc1](); ok {
-		out += "1"
-	}
-	if _, ok := ctx.Session().Get[conc2](); ok {
-		out += "2"
-	}
-	if _, ok := ctx.Session().Get[conc3](); ok {
-		out += "3"
-	}
-	if _, ok := ctx.Session().Get[conc4](); ok {
-		out += "4"
-	}
-	if _, ok := ctx.Session().Get[conc5](); ok {
-		out += "5"
-	}
-	if _, ok := ctx.Session().Get[conc6](); ok {
-		out += "6"
-	}
-	if _, ok := ctx.Session().Get[conc7](); ok {
-		out += "7"
-	}
-	if _, ok := ctx.Session().Get[conc8](); ok {
-		out += "8"
-	}
-	if a, ok := ctx.Session().Get[auditA](); ok && a.N == 1 {
-		out += "s"
-	}
-	p.shown = "keys=" + out
-}
-
-func (p *fanoutPage) View() h.H {
-	return h.Div(
-		h.P(h.Str(p.shown)),
-		h.Button(via.On("click", p.K1), h.Str("1")),
-		h.Button(via.On("click", p.K2), h.Str("2")),
-		h.Button(via.On("click", p.K3), h.Str("3")),
-		h.Button(via.On("click", p.K4), h.Str("4")),
-		h.Button(via.On("click", p.K5), h.Str("5")),
-		h.Button(via.On("click", p.K6), h.Str("6")),
-		h.Button(via.On("click", p.K7), h.Str("7")),
-		h.Button(via.On("click", p.K8), h.Str("8")),
-		h.Button(via.On("click", p.Seed), h.Str("seed")),
-		h.Button(via.On("click", p.Show), h.Str("show")),
-	)
-}
-
-// Eight simultaneous requests, each writing its own distinct key to one
-// session: every key must be readable afterwards, and so must the value that
-// was already there.
-func TestSession_concurrentDistinctKeysAllSurvive(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(via.Handler(fanoutPage{},
-		via.WithSessionKey([]byte(auditKey)),
-		via.WithSessionStore(via.NewMemorySessionStore())))
-	t.Cleanup(srv.Close)
-	resp, err := http.Get(srv.URL + "/")
-	require.NoError(t, err)
-	b, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	require.NoError(t, err)
-	var acts []string
-	for n := range 10 {
-		acts = append(acts, actionURL(t, string(b), "r", n))
-	}
-
-	c := jarClient(t)
-	auditPost(t, c, srv.URL, acts[8]) // Seed mints the session
-	sid := cookieValue(t, c, srv.URL, "via_session")
-	require.NotEmpty(t, sid)
-
-	var wg sync.WaitGroup
-	start := make(chan struct{})
-	for i := range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			auditPostAs(t, srv.URL, acts[i], sid)
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	_, body := auditPost(t, c, srv.URL, acts[9])
-	assert.Contains(t, body, "keys=12345678s", "a simultaneous write lost another request's key")
-}
-
-// A Tick/Listen handle keeps its connect-time snapshot for the connection's
-// life. Writing through it must not re-encode that snapshot over everything
-// written since — and the merge must refresh what the handle reads back, or a
-// long-lived handle keeps serving values another request has replaced.
-func TestSession_pinnedHandleWriteDoesNotRevertLaterWrites(t *testing.T) {
-	t.Parallel()
-	store := newPlainGap(via.NewMemorySessionStore())
-	base, acts := auditServer(t, via.WithSessionStore(store))
-	c := jarClient(t)
-
-	auditPost(t, c, base, acts[audPutA1])
-	sid := cookieValue(t, c, base, "via_session")
-
-	// The other request lands after this one has resolved its snapshot.
-	store.armLoad(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
-	_, body := auditPost(t, c, base, acts[audPutA2ReadB])
-	assert.Contains(t, body, "readback=9",
-		"the handle is still serving its pre-merge snapshot after its own write")
-
-	_, final := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, final, "A=2 B=9",
-		"the pinned handle's write re-encoded its stale snapshot over the later write")
+	assert.Contains(t, body, "V=-", "the Delete was undone by the other request's interleaved write")
 }
 
 // Rotate exists to invalidate a pre-auth id. A store that cannot Delete must not
@@ -1416,7 +1269,7 @@ func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(fs))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 	require.NotEmpty(t, old)
 
@@ -1428,10 +1281,10 @@ func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	fs.set(&fs.delErr, nil)
 
 	_, stale := auditPostAs(t, base, acts[audShow], old)
-	assert.Contains(t, stale, "A=- B=-", "the pre-rotation id still resolves after Rotate")
+	assert.Contains(t, stale, "V=-", "the pre-rotation id still resolves after Rotate")
 
 	_, live := auditPostAs(t, base, acts[audShow], newID)
-	assert.Contains(t, live, "A=1 B=-", "the rotated-to id does not resolve")
+	assert.Contains(t, live, "V=1", "the rotated-to id does not resolve")
 }
 
 // If the tombstone cannot be written either, failing loudly beats returning a
@@ -1441,7 +1294,7 @@ func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 	fs := newFailStore()
 	base, acts := auditServer(t, via.WithSessionStore(fs))
 	c := jarClient(t)
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 
 	var logs bytes.Buffer
 	prev := log.Writer()
@@ -1466,19 +1319,19 @@ func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(fs))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	id := cookieValue(t, c, base, "via_session")
 	require.NotEmpty(t, id)
 
 	fs.set(&fs.loadErr, errors.New("redis down"))
-	resp, _ := auditPostAs(t, base, acts[audPutB9], id) // a flash written during the outage
+	resp, _ := auditPostAs(t, base, acts[audPut9], id) // a flash written during the outage
 	assert.Empty(t, sessionCookieOf(t, resp), "a replacement session was minted during the outage")
 	resp, _ = auditPostAs(t, base, acts[audRot], id)
 	assert.Empty(t, sessionCookieOf(t, resp), "Rotate minted a session during the outage")
 	fs.set(&fs.loadErr, nil)
 
 	_, body := auditPostAs(t, base, acts[audShow], id)
-	assert.Contains(t, body, "A=1", "the real session did not survive the outage")
+	assert.Contains(t, body, "V=1", "the real session did not survive the outage")
 }
 
 // A write that another request overtook mid-merge must be re-merged onto the
@@ -1490,14 +1343,14 @@ func TestSession_saveRetriesWhenOvertakenMidMerge(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	sid := cookieValue(t, c, base, "via_session")
 
-	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audPutB9], sid) })
-	auditPost(t, c, base, acts[audPutA2])
+	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audPut9], sid) })
+	auditPost(t, c, base, acts[audPut2])
 
 	_, body := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, body, "A=2 B=9", "the overtaking write was clobbered, or the retried write never landed")
+	assert.Contains(t, body, "V=2", "the retried write never landed")
 }
 
 // Rotate's whole point is that the pre-rotation id stops resolving. A handle
@@ -1509,7 +1362,7 @@ func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
 	var newID string
@@ -1517,15 +1370,15 @@ func TestSession_writeThroughARotatedAwayIDDoesNotReviveIt(t *testing.T) {
 		resp, _ := auditPostAs(t, base, acts[audRot], old)
 		newID = sessionCookieOf(t, resp)
 	})
-	auditPostAs(t, base, acts[audPutA2], old) // resolved before the rotation, writes after it
+	auditPostAs(t, base, acts[audPut2], old) // resolved before the rotation, writes after it
 	require.NotEmpty(t, newID)
 	require.NotEqual(t, old, newID)
 
 	_, stale := auditPostAs(t, base, acts[audShow], old)
-	assert.Contains(t, stale, "A=- B=-",
+	assert.Contains(t, stale, "V=-",
 		"a write through the pinned handle re-created a session under the pre-rotation id")
 	_, live := auditPostAs(t, base, acts[audShow], newID)
-	assert.Contains(t, live, "A=1 B=-", "the rotated-to session was disturbed by the dropped write")
+	assert.Contains(t, live, "V=1", "the rotated-to session was disturbed by the dropped write")
 }
 
 // When Delete fails, Rotate leaves an expired tombstone under the old id. A
@@ -1538,7 +1391,7 @@ func TestSession_writeThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
 	var newID string
@@ -1548,15 +1401,15 @@ func TestSession_writeThroughATombstonedIDDoesNotReviveIt(t *testing.T) {
 		newID = sessionCookieOf(t, resp)
 		fs.set(&fs.delErr, nil)
 	})
-	auditPostAs(t, base, acts[audPutA2], old)
+	auditPostAs(t, base, acts[audPut2], old)
 	require.NotEmpty(t, newID)
 	require.NotEqual(t, old, newID)
 
 	_, stale := auditPostAs(t, base, acts[audShow], old)
-	assert.Contains(t, stale, "A=- B=-",
+	assert.Contains(t, stale, "V=-",
 		"a write through the pinned handle overwrote the rotation tombstone, reviving the old id")
 	_, live := auditPostAs(t, base, acts[audShow], newID)
-	assert.Contains(t, live, "A=1 B=-", "the rotated-to session was disturbed by the dropped write")
+	assert.Contains(t, live, "V=1", "the rotated-to session was disturbed by the dropped write")
 }
 
 // casStuckStore never lets a conditional write apply once armed: the CAS loop
@@ -1583,13 +1436,13 @@ func TestSession_saveDropsItsWriteWhenCASNeverSettles(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(cs))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	cs.armed.Store(true)
-	auditPost(t, c, base, acts[audPutA2])
+	auditPost(t, c, base, acts[audPut2])
 	cs.armed.Store(false)
 
 	_, body := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, body, "A=1", "an unsettled CAS loop wrote unconditionally instead of dropping")
+	assert.Contains(t, body, "V=1", "an unsettled CAS loop wrote unconditionally instead of dropping")
 }
 
 // A handle whose id another request already rotated away must not rotate again:
@@ -1601,7 +1454,7 @@ func TestSession_rotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
 	var newID string
@@ -1611,13 +1464,13 @@ func TestSession_rotateThroughARetiredHandleLeavesTheGoodCookieAlone(t *testing.
 	})
 	// The pinned request's Put is dropped (its id was retired under it); the
 	// Rotate that follows must not answer with a cookie of its own.
-	pinned, _ := auditPostAs(t, base, acts[audPutA2Rotate], old)
+	pinned, _ := auditPostAs(t, base, acts[audPut2Rotate], old)
 	require.NotEmpty(t, newID)
 	assert.Empty(t, sessionCookieOf(t, pinned),
 		"Rotate through a retired handle issued Set-Cookie, clobbering the browser's good cookie")
 
 	_, live := auditPostAs(t, base, acts[audShow], newID)
-	assert.Contains(t, live, "A=1 B=-", "the live session was disturbed")
+	assert.Contains(t, live, "V=1", "the live session was disturbed")
 }
 
 // nullValsStore is a third-party store whose backend normalises an empty value
@@ -1655,15 +1508,15 @@ func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
-	auditPost(t, c, base, acts[audDelA]) // leaves the session stored with no values
+	auditPost(t, c, base, acts[audPut1])
+	auditPost(t, c, base, acts[audDel]) // leaves the session stored with no values
 	require.Positive(t, store.normalised.Load(),
 		"precondition: the store never saw an empty value map to normalise")
 
-	auditPost(t, c, base, acts[audPutB9])
+	auditPost(t, c, base, acts[audPut9])
 
 	_, body := auditPost(t, c, base, acts[audShow])
-	assert.Contains(t, body, "A=- B=9", "a session that reads fine was retired on its first write")
+	assert.Contains(t, body, "V=9", "a session that reads fine was retired on its first write")
 }
 
 // Session.Put returns nothing, so a dropped write is only ever visible in the
@@ -1676,7 +1529,7 @@ func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
 
-	auditPost(t, c, base, acts[audPutA1])
+	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
 	var logs bytes.Buffer
