@@ -13,12 +13,11 @@
 - **`Guard` is back**, with a different contract than v0.7's: `type Guard
   func(*Ctx) error`, `via.Protect(g ...Guard) MountOption` per mount. It runs
   before `OnInit` on all four transports a mount answers — the page GET, a
-  plain action, a live action over an open stream, and the SSE connect —
-  where `OnInit` already runs on the first three, so it is what re-authorizes
-  the one it doesn't: a live action, after the session it was opened under
-  changes. It denies by returning `via.ErrForbidden` (403,
-  `via.ReasonForbidden`) or by queuing `ctx.Redirect`, the same vocabulary
-  `OnInit` uses.
+  plain action, a live action over an open stream, and the SSE connect.
+  `OnInit` runs on every one but the live action, so a `Guard` is what
+  re-authorizes that one after the session it was opened under changes. It
+  denies by returning `via.ErrForbidden` (403, `via.ReasonForbidden`) or by
+  queuing `ctx.Redirect`, the same vocabulary `OnInit` uses.
 
 ## v0.8.0 — the v2 core goes mainline
 

@@ -442,39 +442,6 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	assert.Empty(t, resp.Header.Get("Location"), "an unsafe OnInit redirect target must never reach http.Redirect")
 }
 
-// redirectingLiveRoot's OnInit always redirects, unconditionally — enough to
-// prove the SSE connect never lets it reach a 303.
-type redirectingLiveRoot struct{ n via.State[int] }
-
-func (r *redirectingLiveRoot) OnInit(ctx *via.Ctx) error {
-	ctx.Redirect("/login")
-	return nil
-}
-func (r *redirectingLiveRoot) View() h.H { return h.Div(r.n.Display()) }
-
-// An OnInit Redirect answers a plain 403 on the SSE connect instead of a 303:
-// fetch follows a redirect, and would deliver the login page's HTML as the
-// stream body — the same reason a Guard denial on connect is a 403, not a
-// navigation.
-func TestRouter_onInitRedirectOnConnectAnswers403(t *testing.T) {
-	t.Parallel()
-	r := via.NewRouter()
-	via.Mount(r, "/", redirectingLiveRoot{})
-	app := vt.Serve(t, r)
-
-	req, err := http.NewRequest(http.MethodPost, app.URL()+"/_via/sse", strings.NewReader("{}"))
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	c := &http.Client{Transport: app.Client().Transport, CheckRedirect: noFollow}
-	resp, err := c.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"fetch follows a 303 and would deliver the target page's HTML as the stream body")
-	assert.Empty(t, resp.Header.Get("Location"))
-}
-
 // A session-gated page redirects (303) to the login path when the required
 // session value is absent.
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {

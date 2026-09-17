@@ -386,10 +386,9 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 			// A native submit replaces the whole document, so this must be the
 			// page a brand-new connection will hold — a fresh instance with
 			// OnInit run, not a snapshot of the dying connection's live tree
-			// (which the reconnect is about to reseed anyway). No guard Ctx to
-			// reuse: the action just ran and may have mutated the session, so
-			// this OnInit must resolve it fresh, not off the pre-action guard
-			// read.
+			// (which the reconnect is about to reseed anyway). The guard Ctx is
+			// not reused: the action just ran and may have mutated the session,
+			// so this OnInit resolves it fresh.
 			m.writePage(w, req, m.newInst(), base, nil, nil)
 		}, nil)
 		return
@@ -547,9 +546,9 @@ func noStream(mode actionMode, tab string) string {
 // from non-nil already ran OnInit for this request; it carries that wiring down
 // (inheritRequestScope) instead of running OnInit twice.
 //
-// guard is the Ctx runGuards resolved for this same request, or nil — see
-// runGuards. Ignored when from is non-nil, since that path skips OnInit
-// entirely and never needs a session to share with it.
+// guard is the Ctx runGuards resolved for this request, or nil (see
+// runGuards). Ignored when from is non-nil: that path runs no OnInit, so it
+// has no second session to share.
 func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from, guard *Ctx) {
 	ctx, body := inst.renderPage(w, req, m, base, from, guard)
 	if ctx == nil {
@@ -566,7 +565,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 	if ctx == nil {
 		ctx = newRootCtx(true, base, nil)
 	} else {
-		ctx.declare, ctx.declareOnly = true, nil
+		ctx.declare = true
 	}
 	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if runOnInit(inst.v, ctx, w, req, m.sessions, false) != nil {
