@@ -147,7 +147,7 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 func coreGoFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
-	for _, dir := range []string{".", "h", "topic"} {
+	for _, dir := range []string{".", "expr", "h", "topic"} {
 		entries, err := os.ReadDir(dir)
 		require.NoError(t, err)
 		for _, e := range entries {

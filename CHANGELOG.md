@@ -8,6 +8,9 @@
   `via.Mount(r, path, root, opts ...MountOption)`, not a `*Router` method.
   `Handler` is unchanged.
 
+- `Signal.Ref` and `SignalCS.Ref` return `expr.Expr`, not `string`. A call site
+  that concatenated the result now composes it (`sig.Ref().Ne("")`) or casts.
+
 ### New
 
 - **`Guard` is back**, with a different contract than v0.7's: `type Guard
@@ -20,17 +23,26 @@
   queuing `ctx.Redirect`, the same vocabulary `OnInit` uses.
 
 - **A `Signal` reaches the client whether the `View` renders it or not.** `Set`
-  declares the slot, so a JS island (a chart, a map) can be fed from Go with no
-  `Bind()` or `Display()` anywhere — seed its first-paint value with a `Set` in
-  `OnInit` — and the "Set on a signal the View never rendered" warning is gone.
-  A signal nothing writes or renders still ships nothing, and nothing becomes
-  client-writable: hydration is still `Bind()`-only.
+  declares the slot, so a JS island can be fed from Go with no `Bind()` or
+  `Display()`; seed it with a `Set` in `OnInit`. The never-rendered warning is
+  gone. A signal nothing writes or renders ships nothing, and hydration is
+  still `Bind()`-only.
 - **`SignalCS[T]` is a signal the server never sees.** `_`-prefixed on the
   wire so Datastar never posts it, declared at `T`'s zero value at first paint,
   with `Ref`, `Bind` and `Display` and no `Set` or `Get`. An inbound value for
   its slot is ignored on every path.
 - `h.IgnoreMorph()` renders a bare `data-ignore-morph`, for a container whose
   subtree JS owns.
+
+- **`expr` builds Datastar expressions in Go.** `Expr` is a string with
+  methods — `Not`, `Eq`/`Ne`, `Lt`/`Le`/`Gt`/`Ge`, and the `$name`-only
+  mutations `Assign`, `Toggle`, `Add` — plus `All`, `Any`, `Do`, `Lit`, `Call`,
+  `El` and the unchecked `Raw`. A literal operand is JSON-encoded, so no Go
+  value reaches the browser unquoted. It imports nothing from via or `h`.
+- **`h` has a typed attribute per Datastar plugin**: `DataShow`, `DataText`,
+  `DataClass`, `DataAttr`, `DataStyle`, `DataOn`, `DataEffect`, `DataComputed`,
+  `DataIndicator`, `DataRef`. They take any `~string`, so an `expr.Expr` goes
+  straight in. `h.Data` stays for what they miss.
 
 ## v0.8.0 — the v2 core goes mainline
 

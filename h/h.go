@@ -44,12 +44,13 @@
 // # The Datastar escape hatch
 //
 // via generates the data-* attributes that make a page live (via.On,
-// Signal.Bind, State.Display). [Data] is the door to the rest of Datastar's
-// vocabulary for the cases the typed API does not cover:
+// Signal.Bind, State.Display). The DataShow/DataClass/DataOn family spells the
+// rest of Datastar's vocabulary:
 //
-//	h.Div(h.Data("show", p.Open.Ref()), ...)   // renders data-show="$open"
+//	h.Div(h.DataShow(p.Open.Ref()), ...)   // renders data-show="$open"
 //
-// Data validates the key the same way RawAttr does and escapes the expression.
+// [Data] covers anything they miss. It validates the key the same
+// way RawAttr does and escapes the expression.
 // Datastar splits a key on ":", so data-attr-value must be written as
 // h.Data("attr:value", …) — and no Go test can catch the difference.
 //
