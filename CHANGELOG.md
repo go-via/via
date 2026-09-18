@@ -50,6 +50,12 @@
 
 ### Fixed
 
+- A `Set` inside an `OnConnect` fn now reaches the client: the connect pushes
+  once after the hook runs, where before the value waited for a tick or a
+  publish. The shared-state recipe re-reads its store in `OnConnect` for the
+  same reason — `ctx.Listen` subscribes at connect, so a publish between
+  `OnInit`'s read and that subscribe used to leave the tab stale.
+
 - A root no longer mints slots for its children's signals: the type walk stops
   at a field with its own `View`. The dead entry in every first paint is gone,
   and so is the rebind of the child's handles on each root render. A child

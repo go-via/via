@@ -1057,6 +1057,87 @@ func TestConnect_aUnitSeesItsOwnOnConnectPublish(t *testing.T) {
 		"the first frame after connect must reflect the unit's own OnConnect publish")
 }
 
+type connectSeeder struct {
+	bus *topic.Topic[int]
+	N   via.State[int]
+}
+
+var _ via.Initer = (*connectSeeder)(nil)
+
+func (p *connectSeeder) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.bus, p.onN) // nothing publishes on bus; the Listen only makes the unit live
+	ctx.OnConnect(p.seed)
+	return nil
+}
+func (p *connectSeeder) seed()                   { p.N.Set(7) }
+func (p *connectSeeder) onN(ctx *via.Ctx, n int) { p.N.Set(n) }
+func (p *connectSeeder) View() h.H               { return h.P(h.Str("n: "), p.N.Display()) }
+
+func TestConnect_aSetInOnConnectReachesTheClient(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(connectSeeder{bus: topic.New[int]()}))
+	conn := app.Connect()
+
+	assert.Contains(t, conn.Await("n: "), "n: 7",
+		"a Set inside OnConnect must reach the client without waiting for a tick or publish")
+}
+
+type racedShared struct {
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	Count via.State[int64]
+}
+
+var _ via.Initer = (*racedShared)(nil)
+
+func (s *racedShared) OnInit(ctx *via.Ctx) error {
+	s.Count.Set(s.n.Load())
+	s.room.Publish(s.n.Add(1)) // precedes ctx.Listen's Subscribe below, so no handler sees it
+	ctx.Listen(s.room, s.recv)
+	ctx.OnConnect(s.sync)
+	return nil
+}
+func (s *racedShared) recv(ctx *via.Ctx, v int64) { s.Count.Set(v) }
+func (s *racedShared) sync()                      { s.Count.Set(s.n.Load()) }
+func (s *racedShared) View() h.H                  { return h.P(h.Str("count: "), s.Count.Display()) }
+
+func TestListen_anOnConnectReReadSeesAPublishThatBeatTheSubscribe(t *testing.T) {
+	t.Parallel()
+	n := new(atomic.Int64)
+	app := vt.Serve(t, via.Handler(racedShared{n: n, room: topic.New[int64]()}))
+	conn := app.Connect()
+	frame := conn.Await("count: ")
+
+	assert.Contains(t, frame, "count: "+strconv.FormatInt(n.Load(), 10),
+		"the first frame after connect must show the store as it stands once every Listen has subscribed")
+}
+
+type connectNoop struct {
+	bus *topic.Topic[int]
+	N   via.State[int]
+}
+
+var _ via.Initer = (*connectNoop)(nil)
+
+func (p *connectNoop) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.bus, p.onN) // nothing publishes on bus; the Listen only makes the unit live
+	ctx.OnConnect(p.noop)
+	return nil
+}
+func (p *connectNoop) noop()                   {}
+func (p *connectNoop) onN(ctx *via.Ctx, n int) { p.N.Set(n) }
+func (p *connectNoop) View() h.H               { return h.P(h.Str("n: "), p.N.Display()) }
+
+func TestConnect_anOnConnectThatChangesNothingShipsNoFrame(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(connectNoop{bus: topic.New[int]()}))
+	conn := app.Connect()
+
+	time.Sleep(200 * time.Millisecond)
+	assert.Zero(t, countFrames(conn, "n: "),
+		"an OnConnect fn that changes nothing must not ship an element patch")
+}
+
 // A push whose render is byte-identical to the last one ships no frame.
 //
 // The plain action path has always answered 204 on an unchanged render; the

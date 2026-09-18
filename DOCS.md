@@ -46,7 +46,9 @@ func (g *Greeting) View() h.H {
 is per connection, so the shared number lives in your own store. A `Topic`
 publish fans the change out, and each tab's `Listen` copies it into that tab's
 `State`, which element-patches over SSE. Registering the `Listen` in `OnInit` is
-what makes the page live.
+what makes the page live. The subscribe itself happens when the tab connects,
+after `OnInit` read the store — so re-read it in `ctx.OnConnect`, or a publish
+landing in that window leaves the tab stale until the next one.
 
 ```go
 type Shared struct {
@@ -60,10 +62,12 @@ var _ via.Initer = (*Shared)(nil)
 func (s *Shared) OnInit(ctx *via.Ctx) error {
 	s.Count.Set(s.n.Load())
 	ctx.Listen(s.room, s.recv)
+	ctx.OnConnect(s.sync)
 	return nil
 }
 
 func (s *Shared) recv(ctx *via.Ctx, v int64) { s.Count.Set(v) }
+func (s *Shared) sync()                      { s.Count.Set(s.n.Load()) }
 func (s *Shared) Inc(ctx *via.Ctx)           { s.room.Publish(s.n.Add(1)) }
 
 func (s *Shared) View() h.H {
@@ -154,9 +158,10 @@ func main() {
 **`State` is per connection, not per app.** Each tab gets its own copy, so a
 counter two tabs are supposed to share does not live in a `State`. It lives in a
 store you own, changes are announced on a `topic.Topic`, and each tab's
-`ctx.Listen` handler copies the new value into that tab's `State`. That is the
-whole shared-live-state recipe (step 3 of the [Tour](#tour), and
-`example/feed`); reach for it before anything else here.
+`ctx.Listen` handler copies the new value into that tab's `State`, with a
+`ctx.OnConnect` re-read of the store to cover a publish that beat the
+subscribe. That is the whole shared-live-state recipe (step 3 of the
+[Tour](#tour), and `example/feed`); reach for it before anything else here.
 
 A page is served **plain**: request/response, with actions and a morph on
 POST. It **streams** — an SSE connection scoped to that one tab, its own server
