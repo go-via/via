@@ -3,6 +3,7 @@ package via
 import (
 	"fmt"
 	"slices"
+	"unsafe"
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
@@ -19,11 +20,41 @@ import (
 // child from a composite literal, where there is no OnInit of the child's to
 // run. The two are the same job from opposite ends; pick by who owns the value.
 //
+// A constant start value can also be a field tag, `via:"init=<json>"`, read
+// once when via walks the composition type at Mount. A [StateOf] literal wins
+// over the tag, and a [State.Set] in OnInit wins over both.
+//
 // Not safe for concurrent use. Call it only from via callbacks (OnInit, an
 // action handler, a Tick or Listen handler); to reach a unit from a goroutine
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
 // doc for the goroutine model.
-type State[T any] struct{ val T }
+//
+// State has no Ref and reaches no client expression. When markup must react
+// to it client-side, mirror it into a Signal with a Set in the same callback
+// and use that Signal's Ref instead.
+type State[T any] struct {
+	val T
+	// lit marks the start value as decided — by StateOf, by ListOf, or by the
+	// one apply of a via:"init=…" tag — so a literal wins over the tag and no
+	// later render re-seeds over what a Set has authored.
+	lit bool
+}
+
+func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+
+// seedApplier writes through the handle pointer the type walk found by offset.
+// List[E] embeds State[[]E] first, so that pointer is the embedded State's
+// address too and a List seeds through this same closure.
+func (*State[T]) seedApplier(v any) func(unsafe.Pointer) any {
+	seed := v.(T)
+	return func(handle unsafe.Pointer) any {
+		s := (*State[T])(handle)
+		if !s.lit {
+			s.lit, s.val = true, seed
+		}
+		return s.val
+	}
+}
 
 // StateOf seeds a State with v, so a parent can hand an embedded child its
 // starting value from a composite literal. A unit seeding its own state wants
@@ -35,7 +66,7 @@ type State[T any] struct{ val T }
 //
 // The stored value is unexported (see the Field-Embeddable Types convention),
 // so this constructor is the only way to write one outside a callback.
-func StateOf[T any](v T) State[T] { return State[T]{val: v} }
+func StateOf[T any](v T) State[T] { return State[T]{val: v, lit: true} }
 
 // Get returns this connection's value. It is server-authoritative: nothing the
 // client sends can change it.
@@ -72,14 +103,15 @@ func (s *State[T]) Display() h.H {
 // (l.Set(slices.Insert(...))) and Append/Remove/Each spell the common cases.
 // Rows morph by position unless each carries a stable id, so give the row an
 // h.ID(…) when the order can change. Like State, rendering one makes its unit
-// live.
+// live, and like State it reads a `via:"init=<json>"` field tag —
+// `via:"init=[\"a\",\"b\"]"` — that a [ListOf] literal wins over.
 //
 // Not safe for concurrent use — same rule as [State].
 type List[E any] struct{ State[[]E] }
 
 // ListOf seeds a List with the given elements — the [StateOf] of lists, and the
 // same choice against a zero List filled in OnInit.
-func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v}} }
+func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true}} }
 
 // Append adds v to the end of this connection's list and schedules the push,
 // like any Set. It re-slices in place when there is capacity, so appending in a

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -153,7 +154,7 @@ func (i *island) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}) }
 func (i *island) View() h.H {
 	return h.Div(
 		i.beat.Display(),
-		h.Div(h.ID("chart"), h.IgnoreMorph()),
+		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
 		h.Button(via.On("click", i.Load), h.Str("load")),
 	)
 }
@@ -165,7 +166,7 @@ type seededIsland struct {
 }
 
 func (i *seededIsland) OnInit(ctx *via.Ctx) error { i.Series.Set([]int{1, 2, 3}); return nil }
-func (i *seededIsland) View() h.H                 { return h.Div(h.ID("chart"), h.IgnoreMorph()) }
+func (i *seededIsland) View() h.H                 { return h.Div(h.ID("chart"), h.DataIgnoreMorph()) }
 
 // plainIsland is island without the liveness. n is rendered so the response
 // differs from the pre-action render and a patch is returned, not a 204.
@@ -178,7 +179,7 @@ func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}); i.n++ }
 func (i *plainIsland) View() h.H {
 	return h.Div(
 		h.Str(strings.Repeat("x", i.n)),
-		h.Div(h.ID("chart"), h.IgnoreMorph()),
+		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
 		h.Button(via.On("click", i.Load), h.Str("load")),
 	)
 }
@@ -497,10 +498,8 @@ type staleChild struct{ S via.Signal[string] }
 
 func (c *staleChild) View() h.H { return h.Div(h.Input(c.S.Bind())) }
 
-// The parent binds the child's signal in its own View and also embeds the
-// child. Child copies the field by value at View-build time, so from the
-// second render on, the copy arrives carrying the root-scoped slot the
-// parent's field minted, colliding with the parent's own.
+// The parent binds the child's signal in its own View. That signal belongs to
+// the child's unit, so the parent has no slot to name it by.
 type stalePage struct {
 	Beat via.State[int]
 	C    staleChild
@@ -517,19 +516,9 @@ func (p *stalePage) View() h.H {
 	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Child(p.C))
 }
 
-func TestSignal_embeddedCopyRemintsTheParentsSlot(t *testing.T) {
-	t.Parallel()
-	srv := serve(t, via.Handler(stalePage{}))
-	lines, cancel := openStream(t, srv)
-	defer cancel()
-
-	frame := firstElementsFrame(t, lines)
-	binds := regexp.MustCompile(`data-bind="([a-z0-9_]+)"`).FindAllStringSubmatch(frame, -1)
-	require.Len(t, binds, 2, "frame: %s", frame)
-	assert.NotEqual(t, binds[0][1], binds[1][1],
-		"the child copy must re-mint its slot, not inherit the parent's root-scoped one")
-	assert.True(t, strings.HasPrefix(binds[1][1], "c__"),
-		"child slot must carry its child prefix: %s", binds[1][1])
+func TestSignal_parentBindingAChildsSignalPanicsNamingViaChild(t *testing.T) {
+	assertSlotPanic(t, via.Handler(stalePage{}),
+		"a child composition must be rendered through via.Child, not by calling its View")
 }
 
 type unmarshalable struct{}
@@ -668,4 +657,164 @@ func TestSignalCSRef_panicsOnASignalWithNoWireName(t *testing.T) {
 		"field of the composition (through plain nested structs if you like), not one reached through a "+
 		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
 		func() { b.S.Ref() })
+}
+
+type csSeedPage struct {
+	Open     via.SignalCS[bool] `via:"init=true"`
+	Untagged via.SignalCS[bool]
+}
+
+func (p *csSeedPage) View() h.H { return h.Div() }
+
+func TestSignalCS_declaresTheTagSeedOnFirstPaint(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csSeedPage{})).Get("/")
+
+	assert.Contains(t, body, `"_open":true`)
+	assert.Contains(t, body, `"_untagged":false`)
+}
+
+type csSeedDisplayPage struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+}
+
+func (p *csSeedDisplayPage) View() h.H { return p.Open.Display() }
+
+func TestSignalCS_displaysTheTagSeedBeforeTheClientChangesIt(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csSeedDisplayPage{})).Get("/")
+
+	assert.Contains(t, body, `<span data-text="$_open">true</span>`)
+}
+
+type csSeedNested struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+}
+
+type csSeedChild struct {
+	Open  via.SignalCS[bool] `via:"init=true"`
+	Count via.Signal[int]    `via:"init=7"`
+	Room  via.State[string]  `via:"init=\"lobby\""`
+}
+
+func (c *csSeedChild) View() h.H { return h.Div(c.Room.Display()) }
+
+type csSeedNestingPage struct {
+	Nested csSeedNested
+	Room   csSeedChild
+}
+
+func (p *csSeedNestingPage) View() h.H { return h.Div(via.Child(p.Room)) }
+
+func TestSignalCS_seedsThroughNestedAndChildScopes(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csSeedNestingPage{})).Get("/")
+
+	assert.Contains(t, body, `"_nested_open":true`)
+	assert.Contains(t, body, `"_room__open":true`)
+	assert.Contains(t, body, `"room__count":7`)
+	assert.Contains(t, body, "lobby")
+	assert.NotContains(t, body, `"_room_open"`, "the root mints nothing for a child composition's signals")
+	assert.NotContains(t, body, `"room_count"`)
+}
+
+// csSeedGated is the forgery shape: a client-only signal, seeded or not,
+// gates a branch, so an inbound "_open" must reach nothing on the server.
+type csSeedGated struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+	note string
+}
+
+func (g *csSeedGated) Bump(ctx *via.Ctx) { g.note = "bumped" }
+func (g *csSeedGated) View() h.H {
+	return h.Div(
+		h.P(h.ID("note"), h.Str(g.note)),
+		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
+		h.Button(via.On("click", g.Bump), h.Str("bump")),
+	)
+}
+
+func TestSignalCS_seededSlotIsStillNeverPosted(t *testing.T) {
+	t.Parallel()
+	status, frag := vt.Serve(t, via.Handler(csSeedGated{})).Action(0).Body(`{"_open":false}`).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, `<p id="note">bumped</p>`)
+	assert.NotContains(t, frag, `"_open":false`, "nothing on the server ever holds the posted value")
+}
+
+type csSeedMalformed struct {
+	Open via.SignalCS[bool] `via:"init=tru"`
+}
+
+func (p *csSeedMalformed) View() h.H { return h.Div() }
+
+func TestSignalCS_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, `csSeedMalformed.Open has a via:"init=…" value that is not JSON for its `+
+		`via.SignalCS[bool] type`, func() { via.Handler(csSeedMalformed{}) })
+}
+
+type seedTagSignal struct {
+	Count via.Signal[int] `via:"init=7"`
+}
+
+func (p *seedTagSignal) View() h.H { return h.P(h.Str("count=" + strconv.Itoa(p.Count.Get()))) }
+
+func TestSignal_startsAtTheTagSeedOnAPlainGet(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(seedTagSignal{})).Get("/")
+
+	assert.Contains(t, body, "count=7")
+	assert.Contains(t, body, `"count":7`, "the tag alone declares the slot, with no Bind or Display")
+}
+
+type seedTagInited struct {
+	Count via.Signal[int] `via:"init=7"`
+}
+
+func (p *seedTagInited) OnInit(ctx *via.Ctx) error { p.Count.Set(3); return nil }
+func (p *seedTagInited) View() h.H                 { return h.P(h.Str("count=" + strconv.Itoa(p.Count.Get()))) }
+
+func TestSignal_setInOnInitOverridesTheTagSeed(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(seedTagInited{})).Get("/")
+
+	assert.Contains(t, body, "count=3")
+	assert.Contains(t, body, `"count":3`)
+	assert.NotContains(t, body, `"count":7`)
+}
+
+type seedTagPosted struct {
+	Count via.Signal[int] `via:"init=7"`
+	seen  string
+}
+
+func (p *seedTagPosted) Read(ctx *via.Ctx) { p.seen = strconv.Itoa(p.Count.Get()) }
+func (p *seedTagPosted) View() h.H {
+	return h.Div(
+		h.P(h.ID("seen"), h.Str(p.seen)),
+		h.Input(p.Count.Bind()),
+		h.Button(via.On("click", p.Read), h.Str("read")),
+	)
+}
+
+func TestSignal_postedValueWinsOverTheTagSeed(t *testing.T) {
+	t.Parallel()
+	status, frag := vt.Serve(t, via.Handler(seedTagPosted{})).Action(0).Body(`{"count":9}`).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, `<p id="seen">9</p>`)
+}
+
+type seedTagSignalMalformed struct {
+	Count via.Signal[int] `via:"init=seven"`
+}
+
+func (p *seedTagSignalMalformed) View() h.H { return h.Div(p.Count.Display()) }
+
+func TestSignal_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, `seedTagSignalMalformed.Count has a via:"init=…" value that is not JSON for its `+
+		`via.Signal[int] type`, func() { via.Handler(seedTagSignalMalformed{}) })
 }

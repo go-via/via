@@ -59,3 +59,8 @@ func TestData_panicsOnAnInvalidName(t *testing.T) {
 	assert.Panics(t, func() { h.DataClass("a b", ex("$on")) })
 	assert.Panics(t, func() { h.DataOn("click\" onload=x", ex("$a")) })
 }
+
+func TestDataIgnoreMorph_rendersTheBareDatastarAttribute(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, `<div id="chart" data-ignore-morph></div>`, render(t, h.Div(h.ID("chart"), h.DataIgnoreMorph())))
+}

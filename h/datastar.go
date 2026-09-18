@@ -1,6 +1,10 @@
 package h
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/go-via/via/internal/hcore"
+)
 
 // One typed attribute per Datastar plugin, key spelled once. [Data] covers
 // what is missing here: a modifier suffix, a newer plugin. The expression type
@@ -16,6 +20,10 @@ func DataText[V ~string](e V) Attr { return Data("text", string(e)) }
 func DataClass[V ~string](name string, e V) Attr { return Data("class:"+name, string(e)) }
 
 // DataAttr sets the named attribute from the expression.
+//
+//	h.Button(h.DataAttr("disabled", draft.Ref().Eq("")), …)
+//
+// A client-side disable is cosmetic — the handler still validates.
 func DataAttr[V ~string](name string, e V) Attr { return Data("attr:"+name, string(e)) }
 
 // DataStyle sets the named CSS property from the expression.
@@ -40,6 +48,12 @@ func DataIndicator[V ~string](sig V) Attr { return Data("indicator", signalName(
 
 // DataRef names the signal Datastar puts this element into.
 func DataRef[V ~string](sig V) Attr { return Data("ref", signalName(sig)) }
+
+// DataIgnoreMorph renders a bare data-ignore-morph. Datastar skips morphing a node
+// only when the old and the new one both carry it, so put it on a container
+// whose subtree some JS owns (a chart canvas, a map) and a live patch will
+// leave that subtree alone.
+func DataIgnoreMorph() Attr { return hcore.BoolAttr("data-ignore-morph", true) }
 
 // A Ref() spells "$name"; indicator and ref want the bare name, and "$name"
 // would declare a signal literally called "$name".

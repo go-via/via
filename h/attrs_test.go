@@ -21,11 +21,6 @@ func TestBoolAttr_onRendersTheBareName(t *testing.T) {
 	assert.Equal(t, "<button disabled>go</button>", got)
 }
 
-func TestIgnoreMorph_rendersTheBareDatastarAttribute(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, `<div id="chart" data-ignore-morph></div>`, render(t, h.Div(h.ID("chart"), h.IgnoreMorph())))
-}
-
 func TestBoolAttrs_everyHelperIsPresentOrAbsent(t *testing.T) {
 	t.Parallel()
 	for name, fn := range map[string]func(bool) h.Attr{

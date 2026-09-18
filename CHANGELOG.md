@@ -13,14 +13,8 @@
 
 ### New
 
-- **`Guard` is back**, with a different contract than v0.7's: `type Guard
-  func(*Ctx) error`, `via.Protect(g ...Guard) MountOption` per mount. It runs
-  before `OnInit` on all four transports a mount answers — the page GET, a
-  plain action, a live action over an open stream, and the SSE connect.
-  `OnInit` runs on every one but the live action, so a `Guard` is what
-  re-authorizes that one after the session it was opened under changes. It
-  denies by returning `via.ErrForbidden` (403, `via.ReasonForbidden`) or by
-  queuing `ctx.Redirect`, the same vocabulary `OnInit` uses.
+- `via.ErrForbidden` — returned from `OnInit`, answers 403 with
+  `ReasonForbidden`.
 
 - **A `Signal` reaches the client whether the `View` renders it or not.** `Set`
   declares the slot, so a JS island can be fed from Go with no `Bind()` or
@@ -28,21 +22,39 @@
   gone. A signal nothing writes or renders ships nothing, and hydration is
   still `Bind()`-only.
 - **`SignalCS[T]` is a signal the server never sees.** `_`-prefixed on the
-  wire so Datastar never posts it, declared at `T`'s zero value at first paint,
-  with `Ref`, `Bind` and `Display` and no `Set` or `Get`. An inbound value for
+  wire so Datastar never posts it, declared at `T`'s zero value at first
+  paint. `Ref`, `Bind` and `Display`, no `Set` or `Get`. An inbound value for
   its slot is ignored on every path.
-- `h.IgnoreMorph()` renders a bare `data-ignore-morph`, for a container whose
-  subtree JS owns.
+- **A handle field starts at its `via:"init=<json>"` tag.** `Signal[T]`,
+  `SignalCS[T]`, `State[T]` and `List[E]` all read it, decoded into the
+  handle's own type once when via walks the composition type at Mount and
+  applied per unit before `OnInit` — nested and embedded children included. A
+  tagged `Signal` reaches the client at first paint with no `Bind` or
+  `Display`. Precedence: a `StateOf`/`ListOf` literal wins over the tag, a
+  `Set` in `OnInit` wins over both, and a client-posted value on an action wins
+  for a `Bind()`ed signal. A tag with any other key, a value that is not JSON
+  for its type, or a tag on a field that is no via handle panics at Mount.
+- `h.DataIgnoreMorph()` renders a bare `data-ignore-morph`, for a container
+  whose subtree JS owns.
 
 - **`expr` builds Datastar expressions in Go.** `Expr` is a string with
   methods — `Not`, `Eq`/`Ne`, `Lt`/`Le`/`Gt`/`Ge`, and the `$name`-only
   mutations `Assign`, `Toggle`, `Add` — plus `All`, `Any`, `Do`, `Lit`, `Call`,
-  `El` and the unchecked `Raw`. A literal operand is JSON-encoded, so no Go
-  value reaches the browser unquoted. It imports nothing from via or `h`.
+  `El` and the unchecked `Raw`. `Rawf` splices checked exprs into unchecked
+  text through `%s`. A literal operand is JSON-encoded, so no Go value
+  reaches the browser unquoted. It imports nothing from via or `h`.
 - **`h` has a typed attribute per Datastar plugin**: `DataShow`, `DataText`,
   `DataClass`, `DataAttr`, `DataStyle`, `DataOn`, `DataEffect`, `DataComputed`,
   `DataIndicator`, `DataRef`. They take any `~string`, so an `expr.Expr` goes
   straight in. `h.Data` stays for what they miss.
+
+### Fixed
+
+- A root no longer mints slots for its children's signals: the type walk stops
+  at a field with its own `View`. The dead entry in every first paint is gone,
+  and so is the rebind of the child's handles on each root render. A child
+  rendered without `via.Child` — by calling its `View`, or by binding one of
+  its signals from the parent — now panics naming the cause.
 
 ## v0.8.0 — the v2 core goes mainline
 

@@ -86,3 +86,40 @@ func TestAllAny_panicOnNoArguments(t *testing.T) {
 	assert.Panics(t, func() { expr.All() })
 	assert.Panics(t, func() { expr.Any() })
 }
+
+func TestRawf_splicesCheckedExpressionsIntoUncheckedText(t *testing.T) {
+	t.Parallel()
+	got := expr.Rawf("const s=%s;s.forEach((v,i)=>%s.lineTo(i,v))",
+		expr.Expr("$load"), expr.El)
+	assert.Equal(t, "const s=$load;s.forEach((v,i)=>el.lineTo(i,v))", got.String())
+}
+
+func TestRawf_emitsALiteralPercentForDoublePercent(t *testing.T) {
+	t.Parallel()
+	got := expr.Rawf("%s %% 2", expr.Expr("$n"))
+	assert.Equal(t, "$n % 2", got.String())
+}
+
+func TestRawf_panicsOnAVerbOtherThanS(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		format string
+	}{
+		{"d verb", "%d"},
+		{"v verb", "%v"},
+		{"trailing lone percent", "%"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Panics(t, func() { expr.Rawf(tt.format, expr.Expr("$n")) })
+		})
+	}
+}
+
+func TestRawf_panicsOnAnArgumentCountMismatch(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { expr.Rawf("%s %s", expr.Expr("$a")) })
+	assert.Panics(t, func() { expr.Rawf("%s", expr.Expr("$a"), expr.Expr("$b")) })
+}

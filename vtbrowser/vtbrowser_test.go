@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vtbrowser"
@@ -536,4 +537,126 @@ func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
 	s.WaitEvalTrue(`window.__inline === true`, "the declared inline script was admitted by its hash")
 	s.WaitEvalTrue(styledIsRed, "the declared inline style was admitted by its hash")
 	s.RequireCleanConsole() // a CSP-blocked script surfaces as a console error
+}
+
+// bSeedChild's Signal is never Bind()ed or Display()ed: the seed declaration
+// is all that puts its slot on the client, and a data-effect is its only reader.
+type bSeedChild struct {
+	Load via.Signal[[]int] `via:"init=[]"`
+}
+
+func (c *bSeedChild) Fill(ctx *via.Ctx) { c.Load.Set([]int{1, 2, 3}) }
+func (c *bSeedChild) View() h.H {
+	return h.Div(
+		h.Span(h.ID("n"), h.Str("-")),
+		h.Div(h.DataEffect(expr.Rawf(`document.getElementById('n').textContent = String(%s.length)`,
+			c.Load.Ref()))),
+		h.Button(h.ID("fill"), via.On("click", c.Fill), h.Str("fill")),
+	)
+}
+
+type bSeedRoot struct{ Uptime bSeedChild }
+
+func (r *bSeedRoot) View() h.H { return h.Div(via.Child(r.Uptime)) }
+
+func TestChild_seededChildSignalReachesTheIslandWithoutRootPhantom(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bSeedRoot{}))
+
+	s.WaitTextContains("#n", "0")
+
+	var root, child string
+	s.Eval(`document.getElementById('root').getAttribute('data-signals')||""`, &root)
+	s.Eval(`document.getElementById('via-i0').getAttribute('data-signals')||""`, &child)
+	if strings.Contains(root, "uptime_load") {
+		t.Fatalf("the root minted a slot for its child's signal: %q", root)
+	}
+	if !strings.Contains(child, "uptime__load") {
+		t.Fatalf("the child unit did not declare its own signal: %q", child)
+	}
+
+	s.Click("#fill")
+	s.WaitTextContains("#n", "3")
+	s.RequireCleanConsole()
+}
+
+// bToggleRoot gates a block on a client-only signal while a live child ticks
+// below it: no server round-trip may reset the seeded toggle.
+type bToggleRoot struct {
+	Details via.SignalCS[bool] `via:"init=true"`
+	Clock   bClock
+}
+
+func (r *bToggleRoot) View() h.H {
+	return h.Div(
+		h.Button(h.ID("toggle"), h.DataOn("click", r.Details.Ref().Toggle()), h.Str("toggle")),
+		h.Div(h.ID("panel"), h.DataShow(r.Details.Ref()), h.Str("panel")),
+		via.Child(r.Clock),
+	)
+}
+
+const panelHidden = `(document.getElementById('panel')||{style:{}}).style.display==='none'`
+
+func TestChild_clientOnlyToggleSeededOpenSurvivesChildPushes(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bToggleRoot{}))
+
+	s.WaitEvalTrue(`!(`+panelHidden+`)`, "the seeded client-only toggle to show the panel at first paint")
+
+	s.Click("#toggle")
+	s.WaitEvalTrue(panelHidden, "the click to hide the panel")
+
+	s.WaitFor("#via-i0 p", func(text string) bool {
+		var n int
+		_, err := fmt.Sscanf(text, "uptime %d", &n)
+		return err == nil && n >= 3
+	}, "the live child to push several patches after the toggle")
+
+	var hidden bool
+	s.Eval(panelHidden, &hidden)
+	if !hidden {
+		t.Fatal("a child push re-declared the root's client-only signal from its seed")
+	}
+	s.RequireCleanConsole()
+}
+
+// bTickChild is a live child whose Signal is read only through Ref.
+type bTickChild struct {
+	N via.Signal[int] `via:"init=0"`
+}
+
+func (c *bTickChild) OnInit(ctx *via.Ctx) error { ctx.Tick(80*time.Millisecond, c.tick); return nil }
+func (c *bTickChild) tick(ctx *via.Ctx)         { c.N.Set(c.N.Get() + 1) }
+func (c *bTickChild) View() h.H {
+	return h.Div(h.Span(h.ID("n2"), h.DataText(c.N.Ref())))
+}
+
+type bTickRoot struct {
+	hits  int
+	Ticks bTickChild
+}
+
+func (r *bTickRoot) Hit(ctx *via.Ctx) { r.hits++ }
+func (r *bTickRoot) View() h.H {
+	return h.Div(
+		h.P(h.ID("hits"), h.Str("hits "), h.Str(r.hits)),
+		h.Button(h.ID("hit"), via.On("click", r.Hit), h.Str("hit")),
+		via.Child(r.Ticks),
+	)
+}
+
+func TestChild_childSetAfterRootRenderBindsToTheChildUnit(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bTickRoot{}))
+
+	s.WaitLiveConnected()
+	s.WaitFor("#n2", func(text string) bool { n, err := strconv.Atoi(text); return err == nil && n >= 1 }, "the child to tick once")
+
+	s.Click("#hit")
+	s.WaitTextContains("#hits", "hits 1")
+
+	after, err := strconv.Atoi(s.Text("#n2"))
+	if err != nil {
+		t.Fatalf("the child's signal is unreadable after the root render: %q", s.Text("#n2"))
+	}
+	s.WaitFor("#n2", func(text string) bool { n, err := strconv.Atoi(text); return err == nil && n > after },
+		"the child's Set to keep arriving on the child's own slot after a root render")
+	s.RequireCleanConsole()
 }

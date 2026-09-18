@@ -134,6 +134,10 @@ func (r *revertSet) restore() {
 // Signal is a client-resident value that round-trips per request and renders as
 // a Datastar text-bound span. T must be JSON-round-trippable.
 //
+// It starts at T's zero value, or at the JSON in a `via:"init=<json>"` field
+// tag, read once when via walks the composition type at Mount; a tagged signal
+// reaches the client at first paint whether the View renders it or not.
+//
 // Not safe for concurrent use. Call it only from via callbacks (OnInit, an
 // action handler, a Tick or Listen handler); to reach a unit from a goroutine
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
@@ -141,6 +145,33 @@ func (r *revertSet) restore() {
 type Signal[T any] struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
 	val    T
+	// settled marks the start value as decided, so the seed a via:"init=…" tag
+	// carries is applied once per instance and never over a later Set.
+	settled bool
+}
+
+func (*Signal[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+
+func (*Signal[T]) seedApplier(v any) func(unsafe.Pointer) any {
+	seed := v.(T)
+	return func(handle unsafe.Pointer) any {
+		s := (*Signal[T])(handle)
+		if !s.settled {
+			s.settled, s.val = true, seed
+		}
+		return s.val
+	}
+}
+
+// jsonSeed decodes a via:"init=…" value into T and hands it back as any, which
+// is how T leaves the generic type: the type walk that reads the tag has only
+// the field's reflect.Type and cannot name T.
+func jsonSeed[T any](raw string) (any, error) {
+	var v T
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
@@ -178,6 +209,10 @@ func (s *Signal[T]) Get() T { return s.val }
 // The View need not render the signal: Set declares it, so a Set in OnInit
 // seeds an island the View never binds or displays. Declaring is not
 // hydrating; only Bind makes a slot client-writable.
+//
+// A nil slice or map marshals as JSON null, which a client-side forEach or
+// index faults on. Start such a signal at an empty one with a field tag:
+// `via:"init=[]"`.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound == nil || s.slot == "" {
@@ -263,10 +298,16 @@ func textHandle(v any) h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }
 
-// SignalCS is a client-only signal: the server never reads or writes it. It
-// starts at T's zero value and its wire name is "_"-prefixed, which Datastar's
-// fetch filter drops from every POST. There is no Set and no Get; a value the
-// server needs to know is a [Signal].
+// SignalCS is a client-only signal: the server never reads or writes it. Its
+// wire name is "_"-prefixed, which Datastar's fetch filter drops from every
+// POST. It starts at T's zero value, or at the JSON in a `via:"init=<json>"`
+// field tag, read once when via walks the composition type at Mount — there is
+// still no Set and no Get; a value the server needs to know is a [Signal].
+//
+//	Details via.SignalCS[bool] `via:"init=true"`
+//
+// A string seed is written as JSON, not as a bare string:
+// `via:"init=\"north-1\""`.
 type SignalCS[T any] struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
 }
@@ -274,6 +315,13 @@ type SignalCS[T any] struct {
 func (*SignalCS[T]) isViaSignalCS() {}
 
 func (*SignalCS[T]) csZero() any { var z T; return z }
+
+func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+
+// seedApplier has nothing to write: a SignalCS holds no value, so its seed
+// lives in the type table and reaches the client through the declaration
+// prebindSignals makes. The nil keeps that fact in one place.
+func (*SignalCS[T]) seedApplier(any) func(unsafe.Pointer) any { return nil }
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
@@ -287,7 +335,9 @@ func (s *SignalCS[T]) Ref() expr.Expr {
 	return expr.Expr("$" + s.slot)
 }
 
-func (s *SignalCS[T]) bind(r *hcore.Renderer) {
+// bind declares the slot at its seed value and returns the seed, so Display
+// can render it without a second, stale zero value of its own.
+func (s *SignalCS[T]) bind(r *hcore.Renderer) any {
 	b := r.Binder()
 	c := ctxOf(b)
 	if c == nil {
@@ -297,19 +347,19 @@ func (s *SignalCS[T]) bind(r *hcore.Renderer) {
 	// copies the child by value, so a slot stamped under the parent's prefix
 	// must be re-minted under the child's.
 	s.slot = c.signalSlot(unsafe.Pointer(s))
+	seed := c.csSeed(unsafe.Pointer(s))
 	// No hydrator: an inbound value for an "_" name is never an echo of one via
 	// sent, so accepting it would only admit a forgery.
-	var zero T
-	b.DeclareSignal(s.slot, zero)
+	b.DeclareSignal(s.slot, seed)
+	return seed
 }
 
-// Display renders the signal as a Datastar text-bound span, showing T's zero
+// Display renders the signal as a Datastar text-bound span, showing the seed
 // value until the client changes it.
 func (s *SignalCS[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
-		s.bind(r)
-		var zero T
-		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(zero)))
+		seed := s.bind(r)
+		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(seed)))
 	})
 }
 
