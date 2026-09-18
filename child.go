@@ -160,7 +160,7 @@ type initOutcome struct {
 // initChild runs an embedded child's OnInit before its View. A paramMiss panic
 // propagates untouched — the transport already answers it 404.
 func initChild(child *Ctx, v any) {
-	ic, ok := v.(Initer)
+	ic, ok := v.(initer)
 	if !ok {
 		return
 	}

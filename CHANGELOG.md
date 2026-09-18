@@ -11,6 +11,11 @@
 - `Signal.Ref` and `SignalCS.Ref` return `expr.Expr`, not `string`. A call site
   that concatenated the result now composes it (`sig.Ref().Ne("")`) or casts.
 
+- `Initer`, `Reloader` and `PageMetaer` are no longer exported — delete any
+  `var _ via.Initer = (*Page)(nil)` pin. The hooks stay duck-typed, and
+  `Mount` still panics on a hook name with the wrong signature and logs a
+  near-miss name.
+
 ### New
 
 - `via.ErrForbidden` — returned from `OnInit`, answers 403 with
@@ -288,15 +293,13 @@ the v2 core. **Requires Go 1.27.**
   `Redirect`. A unit that declares neither hook and answers 204 now logs one
   line naming `OnReload`, so the failure is never silent again.
 
-- **Mount and Child check the lifecycle hooks.** `Initer`/`Reloader` are
+- **Mount and Child check the lifecycle hooks.** `OnInit`/`OnReload` are
   duck-typed, so a typo or a signature change unhooks a composition silently.
   A method literally named `OnInit`/`OnReload` whose signature is not
   `func(*via.Ctx) error` now panics at Mount/Child, and a method that *does*
   have that signature under a near-miss name (`Reload`, `OnInitialize`,
-  `Refresh`, …) on a type implementing neither interface logs one line naming
-  the assertion that would have caught it. The assertion itself —
-  `var _ via.Initer = (*Front)(nil)` — is the only airtight form and is now in
-  every example.
+  `Refresh`, …) while the real hook is absent logs one line naming the hook
+  it was surely meant to be.
 
 ### Security defaults changed
 

@@ -18,8 +18,6 @@ import (
 // re-render over SSE on every beat.
 type Pulse struct{ Beats via.State[int] }
 
-var _ via.Initer = (*Pulse)(nil)
-
 func (p *Pulse) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Second, p.beat)
 	return nil
@@ -46,8 +44,6 @@ func (Pulse) PageMeta() via.Meta {
 		},
 	}
 }
-
-var _ via.PageMetaer = (*Pulse)(nil)
 
 func main() {
 	// via publishes the live connection's state as data-via-connection on

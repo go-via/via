@@ -119,8 +119,6 @@ type Profile struct {
 	user  User // loaded per request in OnInit
 }
 
-var _ via.Initer = (*Profile)(nil)
-
 func (p *Profile) OnInit(ctx *via.Ctx) error {
 	user, ok := ctx.Session().Get[User]()
 	if !ok {
@@ -185,9 +183,6 @@ type Forum struct {
 	threads []Thread
 }
 
-var _ via.Initer = (*Forum)(nil)
-var _ via.Reloader = (*Forum)(nil)
-
 func (f *Forum) OnInit(ctx *via.Ctx) error {
 	if _, ok := ctx.Session().Get[User](); !ok {
 		ctx.Redirect("/login")
@@ -231,10 +226,6 @@ type ThreadPage struct {
 	posts   []Post
 	found   bool
 }
-
-var _ via.Initer = (*ThreadPage)(nil)
-var _ via.Reloader = (*ThreadPage)(nil)
-var _ via.PageMetaer = (*ThreadPage)(nil)
 
 // PageMeta runs after OnReload, so the tab strip names the thread that was
 // just loaded — the case a Head field could not serve. Assets is absent here
