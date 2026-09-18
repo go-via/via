@@ -45,6 +45,10 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 // requests that never become a connection. Valid only inside OnInit, and it
 // does not itself make a unit live: on a unit nothing else made live, fn never
 // runs. Like Tick, a call after OnInit returned registers nothing and logs.
+//
+// A Set inside fn reaches the client: one push follows the connect. fn runs
+// after every Listen subscribes, so it's where to re-read a store a Listen
+// mirrors — a publish before the subscribe else reaches no handler.
 func (c *Ctx) OnConnect(fn func()) {
 	if c.reinit {
 		return // see Tick

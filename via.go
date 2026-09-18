@@ -1212,14 +1212,17 @@ func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
 }
 
 // connectUnit wires unit's push closure to stream (whole-page at #root for the
-// root, its own #via-i{key} container for a child) and registers it on lc.
-func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) {
+// root, its own #via-i{key} container for a child) and registers it on lc. The
+// returned baseline renders the unit as the push would and records the bytes
+// without framing them, so a later push ships only what actually changed.
+func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) (baseline func()) {
 	lc.replace(unit)
 	if unit.isChild {
-		unit.push = childPush(unit.childKey, unit.unitV, base, stream, lc, unit)
+		unit.push, baseline = childPush(unit.childKey, unit.unitV, base, stream, lc, unit)
 	} else {
-		unit.push = rootPush(unit.unitV, base, stream, lc, unit)
+		unit.push, baseline = rootPush(unit.unitV, base, stream, lc, unit)
 	}
+	return baseline
 }
 
 // rootPush renders inst fresh and pushes the whole-page element-patch. The
@@ -1304,11 +1307,13 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 // patch-signals frame, and a DOM change with no signal change still ships its
 // element patch. The connect handshake's signals frame and the keepalive are
 // likewise untouched, so a half-open peer is still detected on the beat.
-func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
-	var push func()
+func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) (push, baseline func()) {
 	var initFailed bool
 	var lastBody []byte // nil until the first frame, so the first push always ships
 	last := from        // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
+	render := func(rev *revertSet) (*Ctx, []byte) {
+		return renderRootBase(inst, false, base, nil, nil, from, rev) // push omits data-signals
+	}
 	push = func() {
 		lc.flushDirty(last)
 		// A plain child's failed OnInit panics initOutcome from inside this
@@ -1335,9 +1340,7 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 			}
 			stream.abort()
 		}()
-		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
-			return renderRootBase(inst, false, base, nil, nil, from, rev) // push omits data-signals
-		})
+		bind, body := livePush(lc, render)
 		bind.push = push
 		last = bind
 		lc.replace(bind)
@@ -1347,20 +1350,23 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 		lastBody = append(lastBody[:0], body...)
 		stream.frame(func(w io.Writer) { writePatchFrame(w, body) })
 	}
-	return push
+	return push, func() {
+		_, body := livePush(lc, render)
+		lastBody = append(lastBody[:0], body...)
+	}
 }
 
 // childPush is rootPush for a live child: it re-renders at key in Datastar
 // inner mode, so the container's own data-ignore-morph never blocks the push.
-func childPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) func() {
-	var push func()
+func childPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) (push, baseline func()) {
 	var lastBody []byte // see skipUnchanged
 	last := from        // the connect render's bind, until the first push replaces it
+	render := func(rev *revertSet) (*Ctx, []byte) {
+		return renderChildBind(key, inst, base, nil, rev)
+	}
 	push = func() {
 		lc.flushDirty(last)
-		bind, body := livePush(lc, func(rev *revertSet) (*Ctx, []byte) {
-			return renderChildBind(key, inst, base, nil, rev)
-		})
+		bind, body := livePush(lc, render)
 		bind.push = push
 		last = bind
 		lc.replace(bind)
@@ -1371,7 +1377,10 @@ func childPush(key string, inst instance, base string, stream *stream, lc *tabSt
 		id := "via-i" + key
 		stream.frame(func(w io.Writer) { writeInnerPatchFrame(w, id, body) })
 	}
-	return push
+	return push, func() {
+		_, body := livePush(lc, render)
+		lastBody = append(lastBody[:0], body...)
+	}
 }
 
 // connect is the SSE stream's entry point at {base}/_via/sse. Every mount gets
@@ -1559,7 +1568,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	for _, u := range units {
-		connectUnit(u, stream, base, lc)
+		baseline := connectUnit(u, stream, base, lc)
+		// The post-connect push below compares against the unit's last framed
+		// body; without this it would be empty and that push would ship a full
+		// frame even for an OnConnect fn that changed nothing.
+		if len(u.onConnect) > 0 {
+			baseline()
+		}
 		for _, fn := range u.onConnect {
 			fn()
 		}
@@ -1586,6 +1601,20 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		u.sessW = nil
 		if u.session != nil {
 			u.session.w = nil // the handle cached w at resolve time; clearing the Ctx alone left it live
+		}
+	}
+
+	// Whatever an OnConnect published is drained first, so the connect's own
+	// frame carries it rather than a pre-handler render the next sweep would
+	// immediately correct.
+	sweepListeners(m.cfg.log, streamLabel, listeners)
+
+	// A Set inside an OnConnect fn has no push to ride — runStream does no
+	// initial push — so it must be pushed explicitly here. It ships a frame
+	// only if the render moved off the baseline taken before the fns ran.
+	for _, u := range units {
+		if len(u.onConnect) > 0 {
+			runPushItem(m.cfg.log, streamLabel, u.push)
 		}
 	}
 

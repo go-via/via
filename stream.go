@@ -132,16 +132,6 @@ func runStream(log *slog.Logger, reqCtx context.Context, label string, children 
 			startTicker(reqCtx, child, t, pushq)
 		}
 	}
-	// One token may stand for any number of subscriptions, so every wake sweeps
-	// them all, in registration order — which makes handler ordering across two
-	// Listens deterministic instead of a race between two reader goroutines.
-	sweep := func() {
-		for _, l := range listeners {
-			if work := l.poll(); work != nil {
-				runPushItem(log, label, work)
-			}
-		}
-	}
 	beat := time.NewTicker(interval)
 	defer beat.Stop()
 	for {
@@ -151,9 +141,20 @@ func runStream(log *slog.Logger, reqCtx context.Context, label string, children 
 		case fn := <-pushq:
 			runPushItem(log, label, fn)
 		case <-wake:
-			sweep()
+			sweepListeners(log, label, listeners)
 		case <-beat.C:
 			runPushItem(log, label, keepalive)
+		}
+	}
+}
+
+// sweepListeners drains every listener once, in registration order, so two
+// Listens fire deterministically instead of racing two reader goroutines;
+// one wake token may stand for any number of pending subscriptions.
+func sweepListeners(log *slog.Logger, label string, listeners []listener) {
+	for _, l := range listeners {
+		if work := l.poll(); work != nil {
+			runPushItem(log, label, work)
 		}
 	}
 }
