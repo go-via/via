@@ -97,7 +97,9 @@ func (a *PollApp) View() h.H {
 		h.Ul(via.Each(a.poll.ranked(), a.row)), // rows reorder by votes each render
 		h.Form(via.On("submit", a.Add),
 			h.Input(a.Draft.Bind(), h.Placeholder("new option")),
-			h.Button(h.Str("add")),
+			// Disabled client-side while the draft is empty; Add still checks, the
+			// client is not trusted to.
+			h.Button(h.DataAttr("disabled", a.Draft.Ref().Eq("")), h.Str("add")),
 		),
 	)
 }

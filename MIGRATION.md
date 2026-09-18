@@ -251,11 +251,9 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
   deadline (10s), and the concurrent-connection cap (10,000) are fixed;
   `WithSessionCookieName` is the only SSE/session option that remains. Open an
   issue if a deployment needs one of these tunable.
-- **`RequireSession` and `Mount`'s bare `guards ...Guard` parameter**. `Guard`
-  itself is back, with a different contract: it runs on every transport a
-  mount answers (page GET, plain action, live action, SSE connect), not just
-  the page GET, and answers through the same path `OnInit` uses — a Redirect
-  navigates, an error denies. See the worked example below.
+- **`RequireSession` and `Mount`'s bare `guards ...Guard` parameter**. There is
+  no separate guard mechanism: the check moves into `OnInit`, on the page
+  itself. See the worked example below.
 
 ## Worked example: protecting a page
 
@@ -265,22 +263,21 @@ guard := via.RequireSession[User]("/login")
 app.Mount("/profile", Profile{}, guard)
 
 // After
-func requireUser(ctx *via.Ctx) error {
+func (p *Profile) OnInit(ctx *via.Ctx) error {
 	if _, ok := ctx.Session().Get[User](); !ok {
 		ctx.Redirect("/login")
+		return nil
 	}
 	return nil
 }
-
-via.Mount(app, "/profile", Profile{}, via.Protect(requireUser))
 ```
 
-A named `Guard` composes across mounts the way `RequireSession` did — pass it
-to `via.Protect` on every mount that needs it — but it also re-runs on a live
-action over an already-open stream, where `OnInit` runs once, at connect, and
-never again. A session revoked mid-stream used to keep authorizing every
-click on that stream; a `Guard` catches it on the next one. A Redirect set
-inside `OnInit`, which v0.7 silently dropped, now issues the 303 too.
+`OnInit` runs on every transport a mount answers but a live action over an
+already-open stream: a session revoked after connect still passes `OnInit`
+(it never runs again on that stream), so `Tick` and `Listen` keep pushing on
+it until the tab next acts, closes, or the router shuts down — that gap is
+unmitigated. A Redirect set inside `OnInit`, which v0.7 silently dropped, now
+issues the 303 too.
 
 ## Worked example: the counter, both ways
 
@@ -303,6 +300,10 @@ func (c *Counter) View(ctx *via.CtxR) h.H {
     )
 }
 ```
+
+The field tag survives in one form: `via:"init=<json>"` seeds a `Signal`,
+`SignalCS`, `State` or `List` at its declared value. The `step` half is gone —
+wire names are minted from the field path, never spelled.
 
 v0.8, where the count is an injected dependency, the view is pure, and the
 re-render is the update mechanism:

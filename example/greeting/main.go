@@ -1,5 +1,7 @@
 // Command greeting is a client-side reactive form: a text input two-way bound to
-// a Signal, displayed live next to it. Datastar updates it as you type.
+// a Signal, displayed live next to it. Datastar updates it as you type, and an
+// expr built from the same Signal shows or hides the greeting — nothing here
+// makes a request.
 package main
 
 import (
@@ -22,7 +24,10 @@ func (g *Greeting) View() h.H {
 			h.Str("Your name "),
 			h.Input(g.Name.Bind(), h.Placeholder("type here")),
 		),
-		h.P(h.Str("Hello, "), g.Name.Display(), h.Str("!")),
+		// Ref() is the client-side reference; Eq/Ne build the expression the
+		// browser evaluates, with the operand JSON-encoded on the way out.
+		h.P(h.DataShow(g.Name.Ref().Ne("")), h.Str("Hello, "), g.Name.Display(), h.Str("!")),
+		h.P(h.DataShow(g.Name.Ref().Eq("")), h.Small(h.Str("The greeting appears once you type."))),
 	)
 }
 

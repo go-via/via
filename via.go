@@ -103,13 +103,29 @@ var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
 
 // clientSignal is what SignalCS[T] satisfies and Signal[T] does not. csZero
 // carries T out of the generic type: SignalCS has no T-typed field, so reflect
-// alone cannot recover the zero value the slot is declared with.
+// alone cannot recover the zero value an untagged slot is declared with.
 type clientSignal interface {
 	isViaSignalCS()
 	csZero() any
 }
 
-var signalCSMarker = reflect.TypeOf((*clientSignal)(nil)).Elem()
+// seeded is the one mechanism behind via:"init=<json>", implemented by
+// *Signal[T], *SignalCS[T] and *State[T] — and by *List[E] through the State it
+// embeds first, so the pointer the applier receives is the embedded State's
+// address too. decodeSeed carries T out of the generic type, and seedApplier
+// builds the typed write once, on the Mount walk, so a seed costs a closure
+// call per unit and no reflection.
+//
+// The applier writes only into a handle whose start value is not decided yet —
+// a StateOf literal wins over the tag, and a later pass over the same instance
+// must not undo a Set — and answers with the value the handle now holds, which
+// is what a Signal's slot is declared at.
+type seeded interface {
+	decodeSeed(raw string) (any, error)
+	seedApplier(v any) func(handle unsafe.Pointer) any
+}
+
+var seededMarker = reflect.TypeOf((*seeded)(nil)).Elem()
 
 var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 
@@ -117,15 +133,23 @@ var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 // field's byte offset paired with the wire name its Go field path gives it.
 type typeSignals struct {
 	fields []signalField
+	seeds  []seedField // State/List fields carrying a via:"init=…" tag: no wire name, only a value to write
 	byOff  map[uintptr]signalField
 	names  map[string]bool // every minted slot name, for the child-prefix collision check
 }
 
 type signalField struct {
-	off  uintptr
-	name string
-	cs   bool
-	zero any // cs only; resolved on the type walk so the render never reflects
+	off      uintptr
+	name     string
+	cs       bool
+	seed     any                      // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
+	declares bool                     // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
+	apply    func(unsafe.Pointer) any // tagged Signal only; a SignalCS holds no value to write
+}
+
+type seedField struct {
+	off   uintptr
+	apply func(unsafe.Pointer) any
 }
 
 // wire is the slot name: the "_" goes ahead of the scope prefix, because
@@ -142,6 +166,8 @@ var typeSignalCache sync.Map // reflect.Type -> *typeSignals
 
 // signalsOf builds (memoized per type) the offset -> wire-name table: the Go
 // field name, first rune lowercased, "_"-joined through plain nested structs.
+// The walk stops at a field with its own View: that unit names its signals in
+// its own table, under its child scope prefix.
 //
 // "_" and not "." is deliberate: Datastar treats a dotted signal name as a path
 // and re-nests it, so "chat.draft" would arrive back as {"chat":{"draft":…}}
@@ -160,11 +186,18 @@ func signalsOf(t reflect.Type) *typeSignals {
 		for i := range t.NumField() {
 			f := t.Field(i)
 			name, off := prefix+lowerFirst(f.Name), base+f.Offset
+			tag, tagged := f.Tag.Lookup("via")
 			if reflect.PointerTo(f.Type).Implements(signalMarker) {
 				sf := signalField{off: off, name: name}
-				if reflect.PointerTo(f.Type).Implements(signalCSMarker) {
-					sf.cs = true
-					sf.zero = reflect.New(f.Type).Interface().(clientSignal).csZero()
+				handle := reflect.New(f.Type).Interface()
+				if cs, ok := handle.(clientSignal); ok {
+					sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
+				}
+				if tagged {
+					sf.seed, sf.declares = decodeSeedTag(t, f, handle.(seeded), tag), true
+					if !sf.cs {
+						sf.apply = handle.(seeded).seedApplier(sf.seed)
+					}
 				}
 				slot := sf.wire("")
 				checkSlotName(t, f.Name, slot, minted)
@@ -173,10 +206,26 @@ func signalsOf(t reflect.Type) *typeSignals {
 				ts.byOff[off] = sf
 				continue
 			}
+			if reflect.PointerTo(f.Type).Implements(seededMarker) { // State, List
+				if tagged {
+					handle := reflect.New(f.Type).Interface().(seeded)
+					v := decodeSeedTag(t, f, handle, tag)
+					ts.seeds = append(ts.seeds, seedField{off: off, apply: handle.seedApplier(v)})
+				}
+				continue
+			}
+			// Not descended: an entry here is a dead slot that also rebinds the
+			// child's handles to the root's on every root render.
+			if reflect.PointerTo(f.Type).Implements(viewerType) {
+				checkNoSeedTag(t, f)
+				continue
+			}
 			if f.Type.Kind() == reflect.Struct {
+				checkNoSeedTag(t, f)
 				walk(f.Type, off, name+"_", depth+1)
 				continue
 			}
+			checkNoSeedTag(t, f)
 			checkSignalReachable(t, f)
 		}
 	}
@@ -184,6 +233,40 @@ func signalsOf(t reflect.Type) *typeSignals {
 	ts.names = minted
 	typeSignalCache.Store(t, ts)
 	return ts
+}
+
+// decodeSeedTag resolves a handle field's declared start value from its tag.
+// A tag that fails to decode is a typo caught here, at Mount, rather than
+// surfacing as a handle quietly holding a value nobody wrote.
+func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) any {
+	v, err := h.decodeSeed(parseSeedTag(owner, f, tag))
+	if err != nil {
+		panic("via: " + owner.String() + "." + f.Name + " has a via:\"init=…\" value that is not JSON " +
+			"for its " + f.Type.String() + " type: " + err.Error())
+	}
+	return v
+}
+
+// parseSeedTag splits the one key via knows off the tag. The value runs to the
+// end of the tag rather than to the next comma, so an object or array seed
+// needs no quoting of its own commas.
+func parseSeedTag(owner reflect.Type, f reflect.StructField, tag string) string {
+	key, raw, ok := strings.Cut(tag, "=")
+	if !ok || key != "init" {
+		panic("via: " + owner.String() + "." + f.Name + " has via:" + strconv.Quote(tag) +
+			": the only key is init=<json>")
+	}
+	return raw
+}
+
+// checkNoSeedTag panics when a via tag sits on a field that cannot use it —
+// a plain field, a nested struct field — where its value is silently never
+// applied.
+func checkNoSeedTag(owner reflect.Type, f reflect.StructField) {
+	if _, ok := f.Tag.Lookup("via"); ok {
+		panic("via: " + owner.String() + "." + f.Name + " has a via:\"…\" tag, but only " +
+			"a Signal, SignalCS, State or List field reads it")
+	}
 }
 
 // checkSlotName panics on a duplicate slot name: two fields minting the same
@@ -261,10 +344,22 @@ func prebindSignals(c *Ctx, inst instance) {
 	for _, f := range inst.sig.fields {
 		sid := (*slotID)(unsafe.Add(inst.base, f.off))
 		sid.slot, sid.bound = f.wire(prefix), c
-		if f.cs {
-			// No Set will ever declare it, and a data-show may be its only reader.
-			c.declareSignal(sid.slot, f.zero)
+		if !f.declares {
+			continue
 		}
+		// A tagged Signal is declared at what it holds, not at the seed: this
+		// runs on every render, and re-declaring the seed over a value OnInit
+		// or an action has since Set would undo it. A SignalCS holds nothing,
+		// no Set will ever declare it, and a data-show may be its only reader,
+		// so its seed is declared on every pass.
+		v := f.seed
+		if f.apply != nil {
+			v = f.apply(unsafe.Add(inst.base, f.off))
+		}
+		c.declareSignal(sid.slot, v)
+	}
+	for _, s := range inst.sig.seeds {
+		s.apply(unsafe.Add(inst.base, s.off))
 	}
 }
 
@@ -478,9 +573,19 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 			}
 		}
 	}
-	panic("via: a rendered Signal is not a plain field of its composition — give View a POINTER " +
-		"receiver, and hold every Signal (and every child composition) as a plain struct field, " +
-		"not behind a pointer, slice, array, map or interface")
+	panic("via: a rendered Signal has no slot in its unit — a child composition must be rendered " +
+		"through via.Child, not by calling its View; and View needs a POINTER receiver with every " +
+		"Signal (and every child) held as a plain struct field, not behind a pointer, slice, array, " +
+		"map or interface")
+}
+
+// csSeed returns field's declared start value — T's zero, or the JSON in a
+// via:"…" tag — resolved once on the type walk (see signalsOf) because reflect
+// cannot recover T from the field itself. Called only once signalSlot has
+// already validated field's offset, so it never needs to panic on its own.
+func (c *Ctx) csSeed(field unsafe.Pointer) any {
+	off := uintptr(field) - uintptr(c.unitV.base)
+	return c.unitV.sig.byOff[off].seed
 }
 
 // keyOf composes onto the parent's key, so a subtree re-rendered on its own
@@ -1289,12 +1394,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	base := concreteBase(m.patternBase, req, m.names)
-	// Before the liveCount.Add below: a denied connect must never burn a
-	// WithMaxSSEConn slot.
-	guard, ok := m.runGuards(w, req, modeDatastar, true, base)
-	if !ok {
-		return
-	}
 	// Increment-then-check so the gauge can't be raced past the limit.
 	if n := m.liveCount.Add(1); n > int64(m.maxLive) {
 		m.liveCount.Add(-1)
@@ -1383,10 +1482,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// the display render of every push instead (livePush) — which is the only
 	// place it was ever visible, since connect frames no elements of its own.
 	rev := newRevertSet()
-	bind := guard
-	if bind == nil {
-		bind = newRootCtx(false, base, nil)
-	}
+	bind := newRootCtx(false, base, nil)
 	bind.rev = rev
 	bind.unitV = pv
 	prebindSignals(bind, pv)

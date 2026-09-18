@@ -33,6 +33,11 @@ import (
 // wrong signature panics at boot, and a hook-shaped method with a near-miss
 // name (Reload, OnInitialize, …) on a type that implements neither interface
 // is logged — but the assertion above is the only airtight form.
+//
+// OnInit does not run again for a live action over a stream that is already
+// open — it ran once, at connect. A session whose authorization changes after
+// that keeps acting on the stream until it closes; there is no mechanism that
+// re-checks it sooner.
 type Initer interface{ OnInit(*Ctx) error }
 
 // Reloader re-reads a unit's data after one of its actions ran and before the
@@ -76,7 +81,7 @@ var errRedirected = errors.New("via: redirected")
 //
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
 // fetch follows a 303 and would deliver the target page's HTML as the stream
-// body, so a redirect there answers a plain 403 instead, as runGuards does.
+// body, so a redirect there answers a plain 403 instead.
 func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, sse bool) (err error) {
 	ctx.req = req
 	ctx.sessions = sessions
@@ -400,7 +405,6 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
-	m.guards = mc.guards
 	// The CSP is derived from the root's declaration once, here, off the
 	// zero-data literal: one string per mount, none per request. renderPage
 	// re-reads it and panics if the request-time value disagrees.
@@ -441,11 +445,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 		// leaving every live child under a parametrised mount dead.
 		base := concreteBase(patternBase, req, names)
-		guard, ok := m.runGuards(w, req, modeNative, false, base)
-		if !ok {
-			return
-		}
-		m.writePage(w, req, newInst(), base, nil, guard)
+		m.writePage(w, req, newInst(), base, nil)
 	})
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)

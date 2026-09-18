@@ -295,11 +295,11 @@ via one.
 
 via never generates or evaluates JavaScript. To hand a subtree to a chart or a
 map library: declare the script in `PageMeta`'s `Assets.Scripts`, put the
-container under `h.IgnoreMorph()` so a live patch leaves the subtree alone, and
+container under `h.DataIgnoreMorph()` so a live patch leaves the subtree alone, and
 have the script react to a signal.
 
 ```go
-h.Div(h.ID("chart"), h.IgnoreMorph(),
+h.Div(h.ID("chart"), h.DataIgnoreMorph(),
 	h.DataEffect(expr.Call("drawChart", expr.El, p.Series.Ref())))
 ```
 
@@ -378,36 +378,29 @@ The action endpoint and rendered pages are hardened by default:
   definition — whatever the client last set it to. It is a fine switch for a
   disclosure the user controls; an authorization gate belongs on session or
   database state, read in `OnInit`.
-- **`Guard` is the protected-page mechanism**, not an `OnInit` check:
+- **A protected page checks its session in `OnInit`:**
 
   ```go
-  type Guard func(*Ctx) error
-
-  func Protect(g ...Guard) MountOption // per Mount
+  func (p *Profile) OnInit(ctx *via.Ctx) error {
+  	if _, ok := ctx.Session().Get[User](); !ok {
+  		ctx.Redirect("/login")
+  		return nil
+  	}
+  	return nil
+  }
   ```
 
-  A `Guard` runs before `OnInit`, on all four transports a mount answers — the
-  page GET, a plain action, a live action over an open stream, and the SSE
-  connect. `OnInit` runs on every one but the live action, so a `Guard` is
-  what re-authorizes that one: a session revoked after connect still passes
-  `OnInit` (it never runs again on that stream) but is caught by the `Guard`
-  on the next click. A mount's guards run in the order passed to `Protect`,
-  stopping at the first denial.
-
-  A `Guard` denies by returning `via.ErrForbidden` for "you may not do this"
+  `OnInit` denies by returning `via.ErrForbidden` for "you may not do this"
   (403, `via.ReasonForbidden` through `WithErrorPage`) or by queuing
   `ctx.Redirect` for "please sign in" (303 on a page GET, a navigation script
-  on a Datastar action) — the same two shapes `OnInit` uses, and answers the
-  same way. On the SSE connect a denial is always a plain 403, whether from a
-  `Guard` or from `OnInit`, because `fetch` follows a 303 and would deliver
-  the target page's HTML as the stream body.
+  on a Datastar action). On the SSE connect a denial is always a plain 403,
+  because `fetch` follows a 303 and would deliver the target page's HTML as
+  the stream body.
 
-  A guard gates requests, not open streams. A guard denial does not tear down
-  an already-open stream: `Tick` and `Listen` keep pushing until the tab next
-  acts and is denied, closes, or the router shuts down. The session a `Guard`
-  sees is writable, but there is no header setter — a live action's answer may
-  be an SSE frame on a connection the guard did not open, so a response header
-  belongs in a `func(http.Handler) http.Handler` wrapping the `*Router`.
+  `OnInit` runs on every transport but a live action over an already-open
+  stream, so a session revoked after connect keeps `Tick` and `Listen`
+  pushing on that stream until the tab next acts and is denied, closes, or
+  the router shuts down — that gap is unmitigated.
 
 ## Shutdown
 
@@ -444,7 +437,9 @@ it.
   greeting updates live as you type, entirely client-side. `When`/`Each` render
   conditionals and lists.
   - A signal's wire name is its Go field name — `count`, and `chat__draft` for
-    one inside a `Chat` child. Not its render order, so a `Bind()` behind a
+    one inside a `Chat` child; names join with `_` through plain nested
+    structs, and the walk stops at a field with its own `View` — that unit
+    names its own signals. Not its render order, so a `Bind()` behind a
     `When` (a wizard step, a branch that only sometimes renders its input)
     keeps its own slot instead of inheriting one from whatever rendered first.
   - `sig.Ref()` returns that name as an `expr.Expr` (`"$count"`), which the
@@ -457,10 +452,25 @@ it.
   - The one case the type walk cannot see is a Signal behind an `interface`
     field; that still panics on the first render that binds it.
   - `SignalCS[T]` is the client-only sibling: its wire name is `_`-prefixed,
-    which Datastar's fetch filter drops, so it never reaches the server. It
-    starts at `T`'s zero value and has no `Set` or `Get`. Use it for UI-only
-    state — a panel open or closed, the active tab — and as an operand in
-    `expr`.
+    which Datastar's fetch filter drops, so it never reaches the server. It has
+    no `Set` or `Get`. Use it for UI-only state — a panel open or closed, the
+    active tab — and as an operand in `expr`.
+  - A `via:"init=<json>"` field tag gives any handle — `Signal`, `SignalCS`,
+    `State`, `List` — its start value, decoded once at Mount and applied per
+    unit before `OnInit`. A tagged `Signal` reaches the client at first paint
+    with no `Bind` or `Display`, which is how a JS island is fed a `[]` rather
+    than a `null`:
+
+    ```go
+    Load    via.Signal[[]int]  `via:"init=[]"`
+    Details via.SignalCS[bool] `via:"init=true"`
+    Room    via.State[string]  `via:"init=\"lobby\""`
+    ```
+
+    A `StateOf`/`ListOf` literal wins over the tag, a `Set` in `OnInit` wins
+    over both, and a posted value wins for a `Bind()`ed signal. Any other key,
+    a value that is not JSON for its type, or a tag on a field that is no via
+    handle **panics at Mount**.
 
 - **Live children + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live child with a per-tab SSE
@@ -563,8 +573,7 @@ it.
     a vanished record (404); any other error answers 500, and the View never
     renders a lie.
   - `Profile`, `Forum` and `ThreadPage` each redirect an anonymous visitor
-    from their own `OnInit`; a shared `via.Protect(…)` `Guard` would express
-    the same check once, mount- or router-wide.
+    from their own `OnInit`.
   - `via.PostForm(handler, …)` renders a **native**, always-multipart form
     whose submit runs server-side, and `ctx.Redirect("/…")` issues a 303 — the
     server-rendered auth flow the bundled Datastar can't do. The same form

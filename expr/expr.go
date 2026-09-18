@@ -3,7 +3,8 @@
 // call. It emits expressions and nothing else; h's Data* functions turn one
 // into an attribute. It imports nothing from via or h.
 //
-// Everything here is checked except [Raw], which is emitted verbatim.
+// Everything here is checked except [Raw] and the text of [Rawf], which are
+// emitted verbatim.
 package expr
 
 import (
@@ -124,6 +125,46 @@ const El Expr = "el"
 
 // Raw emits js verbatim and unchecked. Never build one from user input.
 func Raw(js string) Expr { return Expr(js) }
+
+// Rawf splices checked expressions into unchecked text: each %s takes the next
+// Expr verbatim, %% is a literal percent, and any other verb or a wrong
+// argument count panics. The text itself is emitted as written, like Raw —
+// never build one from user input; the args are the only part expr vouches for.
+func Rawf(format string, args ...Expr) Expr {
+	var b strings.Builder
+	i := 0
+	for j := 0; j < len(format); j++ {
+		c := format[j]
+		if c != '%' {
+			b.WriteByte(c)
+			continue
+		}
+		j++
+		if j == len(format) {
+			panic("expr: Rawf takes %s and %% only, got a trailing %")
+		}
+		switch format[j] {
+		case 's':
+			if i == len(args) {
+				panic(fmt.Sprintf("expr: Rawf has %d %%s verbs and %d arguments",
+					strings.Count(format, "%s"), len(args)))
+			}
+			b.WriteString(string(args[i]))
+			i++
+		case '%':
+			b.WriteByte('%')
+		default:
+			// fmt.Sprintf would answer a bad verb with "%!d(...)" instead of
+			// panicking, so the scan is hand-written to enforce %s-or-%%-only.
+			panic(fmt.Sprintf("expr: Rawf takes %%s and %%%% only, got %%%c", format[j]))
+		}
+	}
+	if i != len(args) {
+		panic(fmt.Sprintf("expr: Rawf has %d %%s verbs and %d arguments",
+			strings.Count(format, "%s"), len(args)))
+	}
+	return Expr(b.String())
+}
 
 func sources(es []Expr) []string {
 	out := make([]string, len(es))

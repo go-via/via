@@ -648,9 +648,22 @@ func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 // bind into the same action table. runtime.FuncForPC drops the receiver, so
 // without the offset in the id both buttons would render the same action URL
 // and A's click would run B's handler.
-type idTwins struct{ A, B idCounter }
+//
+// It renders through a plain method: a field with its own View is a child
+// composition, and only via.Child may render one.
+type idTwin struct {
+	N via.Signal[int]
+}
 
-func (p *idTwins) View() h.H { return h.Div(p.A.View(), p.B.View()) }
+func (c *idTwin) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
+
+func (c *idTwin) row() h.H {
+	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+}
+
+type idTwins struct{ A, B idTwin }
+
+func (p *idTwins) View() h.H { return h.Div(p.A.row(), p.B.row()) }
 
 var actionURLRe = regexp.MustCompile(`@post\('([^']+)'`)
 
@@ -821,6 +834,68 @@ func assertMountPanic(t *testing.T, want string, mount func()) {
 func TestSignal_duplicateSlotNamePanicsAtMount(t *testing.T) {
 	t.Parallel()
 	assertMountPanic(t, "signal slot a_b is minted twice", func() { via.Handler(collidePage{}) })
+}
+
+type tagBareKey struct {
+	Open via.SignalCS[bool] `via:"true"`
+}
+
+func (p *tagBareKey) View() h.H { return h.Div() }
+
+type tagUnknownKey struct {
+	Count via.Signal[int] `via:"seed=1"`
+}
+
+func (p *tagUnknownKey) View() h.H { return h.Div(p.Count.Display()) }
+
+type tagKeyNoValue struct {
+	Count via.Signal[int] `via:"init"`
+}
+
+func (p *tagKeyNoValue) View() h.H { return h.Div(p.Count.Display()) }
+
+func TestMount_panicsOnAnUnknownTagKey(t *testing.T) {
+	t.Parallel()
+	t.Run("no key at all", func(t *testing.T) {
+		t.Parallel()
+		assertMountPanic(t, `tagBareKey.Open has via:"true": the only key is init=<json>`,
+			func() { via.Handler(tagBareKey{}) })
+	})
+	t.Run("a key via does not know", func(t *testing.T) {
+		t.Parallel()
+		assertMountPanic(t, `tagUnknownKey.Count has via:"seed=1": the only key is init=<json>`,
+			func() { via.Handler(tagUnknownKey{}) })
+	})
+	t.Run("the key with no value", func(t *testing.T) {
+		t.Parallel()
+		assertMountPanic(t, `tagKeyNoValue.Count has via:"init": the only key is init=<json>`,
+			func() { via.Handler(tagKeyNoValue{}) })
+	})
+}
+
+type tagOnPlainField struct {
+	Name string `via:"init=\"x\""`
+}
+
+func (p *tagOnPlainField) View() h.H { return h.Div() }
+
+type tagOnNestedField struct {
+	Chat struct{ X int } `via:"init=1"`
+}
+
+func (p *tagOnNestedField) View() h.H { return h.Div() }
+
+func TestMount_panicsOnASeedTagOnAPlainField(t *testing.T) {
+	t.Parallel()
+	want := ` has a via:"…" tag, but only a Signal, SignalCS, State or List field reads it`
+	t.Run("plain field", func(t *testing.T) {
+		t.Parallel()
+		assertMountPanic(t, "tagOnPlainField.Name"+want, func() { via.Handler(tagOnPlainField{}) })
+	})
+	t.Run("nested struct field", func(t *testing.T) {
+		t.Parallel()
+		assertMountPanic(t, "tagOnNestedField.Chat"+want, func() { via.Handler(tagOnNestedField{}) })
+	})
 }
 
 // boxedSignal reaches its signal through a pointer field, so the handle lives
@@ -1117,4 +1192,54 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 			assert.Contains(t, body, "deleted: [2]", "only bob's own row may have been deleted")
 		})
 	}
+}
+
+type phantomChild struct {
+	Load via.Signal[[]int]  `via:"init=[]"`
+	Open via.SignalCS[bool] `via:"init=true"`
+}
+
+func (c *phantomChild) View() h.H { return h.Div() }
+
+type phantomRoot struct{ Sub phantomChild }
+
+func (p *phantomRoot) View() h.H { return h.Div(via.Child(p.Sub)) }
+
+func TestMount_mintsNoSlotForAChildCompositionsSignals(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(phantomRoot{})).Get("/")
+
+	assert.NotContains(t, body, `"sub_load"`)
+	assert.NotContains(t, body, `"_sub_open"`)
+	assert.Contains(t, body, `"sub__load":[]`)
+	assert.Contains(t, body, `"_sub__open":true`)
+}
+
+type tagChildSub struct{ N via.Signal[int] }
+
+func (s *tagChildSub) View() h.H { return h.Div() }
+
+type tagOnChildComposition struct {
+	Sub tagChildSub `via:"init=1"`
+}
+
+func (p *tagOnChildComposition) View() h.H { return h.Div(via.Child(p.Sub)) }
+
+func TestMount_panicsOnASeedTagOnAChildComposition(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, `tagOnChildComposition.Sub has a via:"…" tag, but only a Signal, SignalCS, State or List field reads it`,
+		func() { via.Handler(tagOnChildComposition{}) })
+}
+
+type bareChildSub struct{ Name via.Signal[string] }
+
+func (s *bareChildSub) View() h.H { return h.Div(h.Input(s.Name.Bind())) }
+
+type bareChildParent struct{ Sub bareChildSub }
+
+func (p *bareChildParent) View() h.H { return h.Div(p.Sub.View()) }
+
+func TestChild_renderedWithoutChildPanicsNamingViaChild(t *testing.T) {
+	assertSlotPanic(t, via.Handler(bareChildParent{}),
+		"a child composition must be rendered through via.Child, not by calling its View")
 }

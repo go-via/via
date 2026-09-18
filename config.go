@@ -51,9 +51,7 @@ const defaultPinnedDeadline = 5 * time.Second
 // one origin policy across every page mounted on it.
 type Option func(*config)
 
-type mountConfig struct {
-	guards []Guard
-}
+type mountConfig struct{}
 
 // MountOption configures a single Mount call, as opposed to Option which
 // configures the whole Router.

@@ -280,3 +280,79 @@ func TestListOf_withNoElementsRendersAnEmptyList(t *testing.T) {
 	_, body := app.Get("/")
 	assert.Contains(t, body, "<ul></ul>")
 }
+
+type tagSeedState struct {
+	Room via.State[string] `via:"init=\"lobby\""`
+}
+
+func (p *tagSeedState) View() h.H { return h.Div(h.P(p.Room.Display()), h.Str("get="+p.Room.Get())) }
+
+func TestState_startsAtTheTagSeed(t *testing.T) {
+	t.Parallel()
+	code, body := vt.Serve(t, via.Handler(tagSeedState{})).Get("/")
+
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "<p>lobby</p>")
+	assert.Contains(t, body, "get=lobby")
+}
+
+type tagSeedChild struct {
+	Room via.State[string] `via:"init=\"tag\""`
+}
+
+func (c *tagSeedChild) View() h.H { return h.P(c.Room.Display()) }
+
+type tagSeedParent struct{ Child tagSeedChild }
+
+func (p *tagSeedParent) View() h.H { return h.Div(via.Child(p.Child)) }
+
+func TestState_literalSeedWinsOverTheTagSeed(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tagSeedParent{
+		Child: tagSeedChild{Room: via.StateOf("lobby")},
+	}))
+
+	_, body := app.Get("/")
+	assert.Contains(t, body, "<p>lobby</p>")
+	assert.NotContains(t, body, "tag")
+}
+
+type tagSeedInited struct {
+	Room via.State[string] `via:"init=\"tag\""`
+}
+
+func (p *tagSeedInited) OnInit(ctx *via.Ctx) error { p.Room.Set("set"); return nil }
+func (p *tagSeedInited) View() h.H                 { return h.P(p.Room.Display()) }
+
+func TestState_setInOnInitOverridesTheTagSeed(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(tagSeedInited{})).Get("/")
+
+	assert.Contains(t, body, "<p>set</p>")
+}
+
+type tagSeedList struct {
+	Lines via.List[string] `via:"init=[\"a\",\"b\"]"`
+}
+
+func (p *tagSeedList) View() h.H        { return h.Ul(p.Lines.Each(p.row)) }
+func (p *tagSeedList) row(s string) h.H { return h.Li(h.Str(s)) }
+
+func TestList_startsAtTheTagSeed(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(tagSeedList{})).Get("/")
+
+	assert.Contains(t, body, "<li>a</li><li>b</li>")
+}
+
+type tagSeedStateMalformed struct {
+	Room via.State[string] `via:"init=lobby"`
+}
+
+func (p *tagSeedStateMalformed) View() h.H { return h.P(p.Room.Display()) }
+
+func TestState_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, `tagSeedStateMalformed.Room has a via:"init=…" value that is not JSON for its `+
+		`via.State[string] type`, func() { via.Handler(tagSeedStateMalformed{}) })
+}
