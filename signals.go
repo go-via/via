@@ -8,6 +8,7 @@ import (
 	"sort"
 	"unsafe"
 
+	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
 )
@@ -147,7 +148,7 @@ type Signal[T any] struct {
 // marks the child boundary; a plain nested struct joins with a single one) —
 // for hand-written Datastar attributes the typed API does not cover:
 //
-//	h.Div(h.Data("show", p.Open.Ref()), ...)
+//	h.Div(h.DataShow(p.Open.Ref()), ...)
 //
 // A Signal must be a plain field of the composition, through plain nested
 // structs if you like; that is what names it before the View runs, so Ref reads
@@ -155,13 +156,13 @@ type Signal[T any] struct {
 // array or map field has no field name, and Ref on it panics — the same
 // verdict rendering it gives, moved to the call that would otherwise have
 // produced a bare "$" and a silently dead Datastar expression.
-func (s *Signal[T]) Ref() string {
+func (s *Signal[T]) Ref() expr.Expr {
 	if s.slot == "" {
 		panic("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression")
 	}
-	return "$" + s.slot
+	return expr.Expr("$" + s.slot)
 }
 
 // Get returns the server-side value: what the last Set wrote, or what the
@@ -174,10 +175,9 @@ func (s *Signal[T]) Get() T { return s.val }
 // the signals an action actually wrote are declared, so a signal the user is
 // mid-edit is never overwritten behind them.
 //
-// The View need not render the signal — Set is itself the declaration — so a
-// Set in OnInit seeds a client-side island that reads the slot and nothing
-// else, with no Bind or Display anywhere. Declaring is not hydrating: only Bind
-// makes a slot client-writable.
+// The View need not render the signal: Set declares it, so a Set in OnInit
+// seeds an island the View never binds or displays. Declaring is not
+// hydrating; only Bind makes a slot client-writable.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound == nil || s.slot == "" {
@@ -242,7 +242,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 func (s *Signal[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		s.bind(r, false)
-		r.Render(h.Span(h.Data("text", "$"+s.slot), textHandle(s.val)))
+		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(s.val)))
 	})
 }
 
@@ -278,13 +278,13 @@ func (*SignalCS[T]) csZero() any { var z T; return z }
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
 // array or map field, which has no field name to be named by.
-func (s *SignalCS[T]) Ref() string {
+func (s *SignalCS[T]) Ref() expr.Expr {
 	if s.slot == "" {
 		panic("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression")
 	}
-	return "$" + s.slot
+	return expr.Expr("$" + s.slot)
 }
 
 func (s *SignalCS[T]) bind(r *hcore.Renderer) {
@@ -309,7 +309,7 @@ func (s *SignalCS[T]) Display() h.H {
 	return hcore.Dyn(func(r *hcore.Renderer) {
 		s.bind(r)
 		var zero T
-		r.Render(h.Span(h.Data("text", "$"+s.slot), textHandle(zero)))
+		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(zero)))
 	})
 }
 

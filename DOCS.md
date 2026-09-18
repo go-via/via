@@ -296,16 +296,18 @@ via one.
 via never generates or evaluates JavaScript. To hand a subtree to a chart or a
 map library: declare the script in `PageMeta`'s `Assets.Scripts`, put the
 container under `h.IgnoreMorph()` so a live patch leaves the subtree alone, and
-have the script react to a signal through `data-effect`.
+have the script react to a signal.
 
 ```go
-h.Div(h.ID("chart"), h.IgnoreMorph(), h.Data("effect", "drawChart($series)"))
+h.Div(h.ID("chart"), h.IgnoreMorph(),
+	h.DataEffect(expr.Call("drawChart", expr.El, p.Series.Ref())))
 ```
 
-Update it from Go with `sig.Set(…)`. A `Signal` reaches the client whether or
-not the `View` renders it, because `Set` is itself a declaration — so an
-island's signal needs no `Bind()` or `Display()` anywhere. Seed its first-paint
-value with a `Set` in `OnInit`.
+`expr.Raw` takes JavaScript `expr` cannot spell.
+
+Update it from Go with `sig.Set(…)`. `Set` declares the signal, so the island
+needs no `Bind()` or `Display()`. Seed the first-paint value with a `Set` in
+`OnInit`.
 
 ## Security floor (built in)
 
@@ -445,8 +447,8 @@ it.
     one inside a `Chat` child. Not its render order, so a `Bind()` behind a
     `When` (a wizard step, a branch that only sometimes renders its input)
     keeps its own slot instead of inheriting one from whatever rendered first.
-  - `sig.Ref()` returns that name as a Datastar expression (`"$count"`) for
-    hand-written attributes: `h.Data("show", p.Open.Ref())`.
+  - `sig.Ref()` returns that name as an `expr.Expr` (`"$count"`), which the
+    `h.Data*` attributes take: `h.DataShow(p.Open.Ref())`.
   - A `Signal` must be a plain field of the composition. One reached through a
     pointer, slice, array or map field, or held by a composition whose `View`
     has a value receiver, has no field offset to name itself by. via walks the
@@ -457,8 +459,8 @@ it.
   - `SignalCS[T]` is the client-only sibling: its wire name is `_`-prefixed,
     which Datastar's fetch filter drops, so it never reaches the server. It
     starts at `T`'s zero value and has no `Set` or `Get`. Use it for UI-only
-    state — a panel open or closed, the active tab — and as the target of
-    hand-written client-side expressions.
+    state — a panel open or closed, the active tab — and as an operand in
+    `expr`.
 
 - **Live children + `State[T]`** (`example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live child with a per-tab SSE

@@ -371,7 +371,7 @@ func (w *plainWizard) View() h.H {
 type refChild struct{ Draft via.Signal[string] }
 
 func (c *refChild) View() h.H {
-	return h.Div(h.Data("show", c.Draft.Ref()), h.Input(c.Draft.Bind()))
+	return h.Div(h.DataShow(c.Draft.Ref()), h.Input(c.Draft.Bind()))
 }
 
 type refPage struct {
@@ -380,7 +380,7 @@ type refPage struct {
 }
 
 func (p *refPage) View() h.H {
-	return h.Div(h.Data("show", p.Count.Ref()), p.Count.Display(), via.Child(p.Chat))
+	return h.Div(h.DataShow(p.Count.Ref()), p.Count.Display(), via.Child(p.Chat))
 }
 
 func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
@@ -564,7 +564,7 @@ func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
 // name to mint a wire name from.
 type refHolder struct{ Sig *via.Signal[int] }
 
-func (r *refHolder) View() h.H { return h.Div(h.Data("show", r.Sig.Ref())) }
+func (r *refHolder) View() h.H { return h.Div(h.DataShow(r.Sig.Ref())) }
 
 func TestSignalRef_panicsOnASignalWithNoWireName(t *testing.T) {
 	t.Parallel()
@@ -590,10 +590,10 @@ type csPage struct {
 
 func (p *csPage) View() h.H {
 	return h.Div(
-		h.Div(h.Data("show", p.Open.Ref())),
+		h.Div(h.DataShow(p.Open.Ref())),
 		h.Input(p.Open.Bind()),
 		p.Open.Display(),
-		h.Div(h.Data("show", p.Chat.Open.Ref())),
+		h.Div(h.DataShow(p.Chat.Open.Ref())),
 		via.Child(p.Room),
 	)
 }
@@ -635,7 +635,7 @@ func (g *csGated) Bump(ctx *via.Ctx) { g.note = "bumped" }
 func (g *csGated) View() h.H {
 	return h.Div(
 		h.P(h.ID("note"), h.Str(g.note)),
-		h.Div(h.Data("show", g.Open.Ref()), h.Str("panel")),
+		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
 		h.Button(via.On("click", g.Bump), h.Str("bump")),
 	)
 }

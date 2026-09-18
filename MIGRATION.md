@@ -428,10 +428,9 @@ and `i0_0__s` for a nested one. The key's own depth separator is `-`
 it `_`. Earlier v0.8 builds spelled it `i0-0__s` and produced an expression
 Datastar could not parse.
 
-`Signal[T].Ref()` is the companion: it returns `"$count"` for use in a
-hand-written Datastar expression (`h.Data("show", p.Open.Ref())`), so a name
-you need in raw markup comes off the struct instead of out of the rendered
-HTML.
+`Signal[T].Ref()` is the companion: it returns `"$count"` as an `expr.Expr`
+(`h.DataShow(p.Open.Ref())`), so a name you need in markup comes off the struct
+instead of out of the rendered HTML.
 
 Nothing in your code writes a slot name either, so again there is nothing to
 port; a tab left open across the upgrade holds the old names, posts them, and

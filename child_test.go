@@ -997,7 +997,7 @@ func TestChild_childActionPatchInitsNestedChildren(t *testing.T) {
 type twinStats struct{ Q via.Signal[string] }
 
 func (s *twinStats) View() h.H {
-	return h.Div(h.Input(s.Q.Bind()), h.Span(h.Data("show", s.Q.Ref()+" != ''")))
+	return h.Div(h.Input(s.Q.Bind()), h.Span(h.DataShow(s.Q.Ref().Ne(""))))
 }
 
 type twinShell struct{ Inner twinPage }
@@ -1018,7 +1018,7 @@ func TestChild_fallbackSlotNamesAreValidJSIdentifiers(t *testing.T) {
 		assert.NotContainsf(t, m[1], "-", "slot %q is not a valid JS identifier", m[1])
 		assert.Falsef(t, seen[m[1]], "the two twins share slot %q", m[1])
 		seen[m[1]] = true
-		assert.Containsf(t, page, `data-show="$`+m[1]+` != `, "Ref() must name the same slot Bind() declared")
+		assert.Containsf(t, page, `data-show="($`+m[1]+` !== `, "Ref() must name the same slot Bind() declared")
 	}
 	assert.Contains(t, page, `id="via-i0-0"`, "the child KEY keeps its '-' separator")
 	assert.Contains(t, seen, "inner__i0_0__q", "the fallback spells the key with underscores")
