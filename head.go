@@ -33,8 +33,8 @@ type Head struct {
 }
 
 // Meta is what a mounted page declares about its own document, via the
-// [PageMetaer] hook. Everything but Assets is inert: escaped text written into
-// the head, free to depend on data OnInit loaded.
+// PageMeta() Meta hook on the mounted root. Everything but Assets is inert:
+// escaped text written into the head, free to depend on data OnInit loaded.
 //
 // Assets is not inert — it decides the page's Content-Security-Policy, which is
 // built once at Mount. It must therefore be a constant of the type: via reads
@@ -107,38 +107,29 @@ type Preload struct {
 	As   string
 }
 
-// PageMetaer lets the root page composition describe its own document: title,
-// description, social cards, and the assets the page needs.
-//
-//	func (p *Ticket) PageMeta() via.Meta { return via.Meta{Title: "#" + p.id} }
-//
-// It is a method rather than a struct field because real metadata is
-// data-dependent, and it runs after OnInit (and OnReload), so the data is
-// already loaded. The inert fields are HTML-escaped.
+// pageMetaer lets the root page composition describe its own document: title,
+// description, social cards, and the assets the page needs. It is a method
+// rather than a struct field because real metadata is data-dependent, and it
+// runs after OnInit (and OnReload), so the data is already loaded.
 //
 // Assets is the exception and is checked as one: it is read at Mount from the
 // literal you mounted, before any request, because the CSP is built there — one
-// string per mount, none per request. A PageMeta whose Assets vary with the
-// page's data panics at Mount; one that varies on something the boot probe
-// cannot reach (a slice OnInit fills) panics on the first GET instead.
-//
-// It shapes the document, so it takes effect on a render that writes one: the
-// GET, and the full-page response to a native <form> submit. An SSE push
-// patches elements inside <body> and never rewrites the head.
+// string per mount, none per request. See [Meta].
 //
 // Only the root's counts. An embedded child's PageMeta is ignored — a nested
 // unit may not rename the page it happens to sit in — and Child logs one line
 // naming the type when it sees one, because the method looks like it works.
 //
-// Duck-typed like [Initer], so pin it: var _ via.PageMetaer = (*Ticket)(nil).
-type PageMetaer interface{ PageMeta() Meta }
+// Duck-typed and unexported like initer; the contract callers read is in the
+// package doc.
+type pageMetaer interface{ PageMeta() Meta }
 
 // pageMetaOf reads the root's declaration. At write time that is after OnInit
 // and OnReload have loaded the data metadata is usually derived from; at Mount
 // it is the literal you mounted, which is what makes the Assets constancy check
 // meaningful.
 func pageMetaOf(root any) Meta {
-	if m, ok := root.(PageMetaer); ok {
+	if m, ok := root.(pageMetaer); ok {
 		return m.PageMeta()
 	}
 	return Meta{}

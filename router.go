@@ -17,52 +17,27 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// Initer is via's one lifecycle hook, on a page or any embedded child: OnInit
+// initer is via's one lifecycle hook, on a page or any embedded child: OnInit
 // runs with a Ctx before the (ctx-free) View, so a unit can load request or
 // session data into its fields and register the timers and subscriptions that
 // make it live — ctx.Tick and ctx.Listen are valid only here. Detected by
 // interface assertion, never reflection.
 //
-// Opting in is having the method, so a rename or a signature change opts you
-// silently out: the composition still compiles and the hook stops running.
-// Pin it next to the type, and a future rename is a compile error:
-//
-//	var _ via.Initer = (*Front)(nil)
-//
-// Mount and Child also catch the two commonest slips — an OnInit with the
-// wrong signature panics at boot, and a hook-shaped method with a near-miss
-// name (Reload, OnInitialize, …) on a type that implements neither interface
-// is logged — but the assertion above is the only airtight form.
-//
-// OnInit does not run again for a live action over a stream that is already
-// open — it ran once, at connect. A session whose authorization changes after
-// that keeps acting on the stream until it closes; there is no mechanism that
-// re-checks it sooner.
-type Initer interface{ OnInit(*Ctx) error }
+// Duck-typed and unexported: opting in is having the method, and checkHooks is
+// the safety net for the two ways a unit misses one it meant to have. The
+// contract callers read is in the package doc.
+type initer interface{ OnInit(*Ctx) error }
 
-// Reloader re-reads a unit's data after one of its actions ran and before the
+// reloader re-reads a unit's data after one of its actions ran and before the
 // response render. It is the fix for via's commonest week-one defect: OnInit
 // loads, the handler mutates the store, and the render that answers the action
 // still shows what OnInit loaded — a 204 and a UI that never moves.
 //
-//	func (p *Front) OnReload(ctx *via.Ctx) error { p.links = p.store.Front(); return nil }
-//	func (p *Front) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
-//
-// Why a second hook and not a second OnInit run: OnInit is an initializer, not
-// a loader. It mints and defaults the session, registers Tick/Listen, and may
-// Redirect or return ErrNotFound — all of which are wrong to repeat once a
-// handler has already committed a mutation. Re-running it would overwrite the
-// very session value the handler just Put. OnReload says exactly one thing, so
-// it can run exactly when it should.
-//
-// It runs on the plain path and the live path alike, once per action, and is
-// skipped when the handler queued a Redirect (nothing from this render ships).
-// ctx.Tick and ctx.Listen are no-ops inside it: liveness is the GET/connect
-// verdict (I5). A non-nil error is answered like OnInit's — ErrNotFound is 404,
-// anything else 500 — and a Redirect it queues navigates the tab.
-//
-// Like Initer it is duck-typed, so pin it: var _ via.Reloader = (*Front)(nil).
-type Reloader interface{ OnReload(*Ctx) error }
+// A second hook and not a second OnInit run because OnInit is an initializer,
+// not a loader: it mints the session, registers Tick/Listen, and may Redirect
+// or return ErrNotFound, all of which are wrong to repeat once a handler has
+// committed a mutation. The contract callers read is in the package doc.
+type reloader interface{ OnReload(*Ctx) error }
 
 // ErrNotFound is the sentinel an OnInit returns when the data the page needs no
 // longer exists — the request is honest, so the answer is 404, not 500. Wrap it
@@ -96,7 +71,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	if storeDown(w, ctx) {
 		return ErrStoreDown
 	}
-	ic, ok := v.(Initer)
+	ic, ok := v.(initer)
 	if !ok {
 		return nil
 	}
@@ -150,7 +125,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 // caller's to answer, because the right answer differs per transport (a @post
 // navigates by script, a native submit by 303).
 func reloadUnit(v any, ctx *Ctx) (err error) {
-	ic, ok := v.(Reloader)
+	ic, ok := v.(reloader)
 	if !ok {
 		return nil
 	}
@@ -531,7 +506,6 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ha
 // rootOnly marks the ones only a mounted page's own methods are read from.
 type hookSpec struct {
 	name       string
-	iface      string
 	want       string
 	shaped     func(reflect.Type) bool
 	implements func(reflect.Type) bool
@@ -539,9 +513,9 @@ type hookSpec struct {
 }
 
 var hookSpecs = []hookSpec{
-	{name: "OnInit", iface: "Initer", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Initer]},
-	{name: "OnReload", iface: "Reloader", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[Reloader]},
-	{name: "PageMeta", iface: "PageMetaer", want: "func() via.Meta", shaped: metaShaped, implements: implementsAs[PageMetaer], rootOnly: true},
+	{name: "OnInit", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[initer]},
+	{name: "OnReload", want: "func(*via.Ctx) error", shaped: ctxErrShaped, implements: implementsAs[reloader]},
+	{name: "PageMeta", want: "func() via.Meta", shaped: metaShaped, implements: implementsAs[pageMetaer], rootOnly: true},
 }
 
 // hookAliases maps a plausible mis-spelling to the hook it was surely meant to
@@ -660,8 +634,8 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 		for _, hook := range hookSpecs {
 			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
 				panic("via: " + t.String() + "." + hook.name + " has signature " +
-					withoutReceiver(m.Type) + ", not " + hook.want + " — so " + t.String() +
-					" does NOT implement via." + hook.iface + " and the hook will never run")
+					withoutReceiver(m.Type) + ", not " + hook.want +
+					" — so the hook will never run")
 			}
 		}
 		hookSigChecked.Store(t, true)
@@ -680,7 +654,7 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	}
 	// Title was the hook PageMeta replaced. A leftover one is dead code that
 	// still compiles and still looks like it names the page, so say so.
-	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[PageMetaer](pt) {
+	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[pageMetaer](pt) {
 		log.Warn(fmt.Sprintf("via: %s.Title is no longer a via hook — the document is named by "+
 			"PageMeta() via.Meta now, so nothing will ever call it. Return via.Meta{Title: …} instead.",
 			t.String()))
@@ -696,9 +670,8 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 			continue
 		}
 		log.Warn(fmt.Sprintf("via: %s.%s looks like a mis-named %s — it has the hook's exact signature "+
-			"but %s implements no via.%s, so nothing will ever call it. Rename it, or add "+
-			"`var _ via.%s = (*%s)(nil)` so a rename can never silently unhook it again.",
-			t.String(), m.Name, hook.name, t.String(), hook.iface, hook.iface, t.Name()))
+			"but %s has no %s %s, so nothing will ever call it. Rename it to %s.",
+			t.String(), m.Name, hook.name, t.String(), hook.name, hook.want, hook.name))
 	}
 }
 

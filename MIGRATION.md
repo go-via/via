@@ -96,7 +96,7 @@ func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 
 The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
-`View() h.H`, and `Initer` (`OnInit(*Ctx) error`) is the one lifecycle hook,
+`View() h.H`, and `OnInit(*Ctx) error` is the one lifecycle hook,
 on a page and on every embedded child. There is no `Connector` and no `Live`
 interface: a composition is a live child when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
@@ -105,29 +105,23 @@ the child.
 
 Both hooks are duck-typed. That is the one place in this migration where
 getting a port wrong does not fail to compile: a method with the wrong name or
-the wrong signature is not the interface, so the hook never runs and
-nothing says so. Pin each one you port:
-
-```go
-var _ via.Initer = (*Page)(nil)
-var _ via.Reloader = (*Page)(nil)
-```
-
-`Mount`/`Child` walk the composition type at startup and catch two of the three
-ways to get this wrong:
+the wrong signature is not the hook, so it never runs. There is nothing to
+assert against — the hook interfaces are unexported — so the boot check is
+the safety net: `Mount`/`Child` walk the composition type at startup and
+catch two of the three ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
   not `func(*via.Ctx) error`, or one named `PageMeta` that is not
   `func() via.Meta`. A leftover v0.7-era `Title() string` is warned about: it is
   no longer a hook and nothing calls it.
-- **Warns**: a near-miss name that carries the exact hook signature while the
-  real interface is unsatisfied. The names it knows are `Init`, `Initialize`,
-  `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for `OnInit`, and
-  `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for
-  `OnReload`, and `Meta`, `Metadata`, `PageMetadata`, `GetPageMeta`,
-  `DocumentMeta`, `PageInfo` for `PageMeta`. A v0.7 `Reloader.Reload` left unrenamed
-  is in this set, so it is warned about — and only warned about, on stderr,
-  once per type.
+- **Warns**: a near-miss name that carries the exact hook signature while
+  the correctly-named method is absent. The names it knows are `Init`,
+  `Initialize`, `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart` for
+  `OnInit`, and `Reload`, `OnReloaded`, `Refresh`, `OnRefresh`, `Reinit`,
+  `OnReInit` for `OnReload`, and `Meta`, `Metadata`, `PageMetadata`,
+  `GetPageMeta`, `DocumentMeta`, `PageInfo` for `PageMeta`. A v0.7
+  `Reloader.Reload` left unrenamed is in this set, so it is warned about —
+  and only warned about, on stderr, once per type.
 - **Silent**: everything else. A leftover `Connector.OnConnect` or
   `Disposer.Dispose` from v0.7 is now an ordinary method nothing calls; the type
   walk has no name to match it against, so it says nothing at all. A `Signal`
@@ -213,13 +207,13 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 | Growing lists | `StateTab[[]E]` + `Update` | `via.List[E]` with `Append` |
 | Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put(v)/Get[T]()/Delete()/Rotate` |
 | Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen`; a hand-rolled reader uses `Sub.WakeOn(ch)` and `Topic.NumSubs()` |
-| Post-action reload | — | `OnReload(*via.Ctx) error` (interface `Reloader`), run after every action on the unit |
+| Post-action reload | — | `OnReload(*via.Ctx) error`, run after every action on the unit |
 | Session storage | — | `via.SessionStore`, default `via.NewMemorySessionStore()`; implement `via.VersionedSessionStore` for a compare-and-set backend |
 | Path params | — | `ctx.Param[T]("name")` |
 | Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
 | Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
 | Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
-| Per-page metadata | — | a `PageMeta() via.Meta` method on the mounted root (`via.PageMetaer`) — title, description, canonical, robots, OG/Twitter, and the page's own assets |
+| Per-page metadata | — | a `PageMeta() via.Meta` method on the mounted root — title, description, canonical, robots, OG/Twitter, and the page's own assets |
 | Per-page assets & CSP | — | `Meta.Assets` (`Script`/`Style`/`Preload`/`FontOrigins`); the CSP is built per mount from `Head.Assets` + the page's own |
 | `WithHead{Title}` | — | **gone** — `PageMeta().Title` |
 | `WithHead{InlineStyle}` | — | **gone** — `Head.Assets.Styles: []via.Style{{Inline: css}}` |
@@ -491,8 +485,6 @@ func (p *ThreadPage) PageMeta() via.Meta {
 		OG:          map[string]string{"title": p.subject, "type": "article"},
 	}
 }
-
-var _ via.PageMetaer = (*ThreadPage)(nil)
 ```
 
 Four rules worth knowing before porting:
@@ -608,7 +600,7 @@ looks like at runtime.
 | `Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}` | `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}` | **compiler** — the old fields don't exist; also new: `Head.Raw` now panics at boot if it contains `<script` or `<style` (declare it in `Assets` instead) |
 | `OnClick`/`OnSubmit`/`OnChange`/`OnClickArg` | `via.On(event, fn)` / `via.OnArg(event, fn, arg)` | **compiler** — the old names are gone |
 | `via.Live` interface, `OnConnect(*via.Ctx) error` | one `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open acquire | **silent** — `via.Live` no longer exists to assert against, so a leftover `OnConnect(ctx *via.Ctx) error` method compiles as dead code nothing calls. Symptom: the unit never becomes live from that hook (no `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never happens), and nothing logs it |
-| `Reloader.Reload(*via.Ctx) error` | `Reloader.OnReload(*via.Ctx) error` | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
+| `Reloader.Reload(*via.Ctx) error` | an `OnReload(*via.Ctx) error` method | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
 | `List.Update` | `List.Append` / `List.Remove` | **compiler** — `Update` is gone |
 | `SignalClientOnly[T]` | removed — `Signal[T]` is the one client-value type | **compiler** — the type is gone |
 | `Session.Clear[T]()` | `Session.Delete()` | **compiler** — `Clear` is gone, and a session now holds one untyped value instead of one per `T` |

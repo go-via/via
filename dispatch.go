@@ -62,10 +62,10 @@ const tabFormField = "_viatab"
 // process: a legitimately idempotent click is a dead click every time it is
 // made, and one line per click buries the log instead of reading it.
 func (m *mount) warnNoChange(act, name string, v any) {
-	if _, isReloader := v.(Reloader); isReloader {
+	if _, isReloader := v.(reloader); isReloader {
 		return
 	}
-	if _, isIniter := v.(Initer); !isIniter {
+	if _, isIniter := v.(initer); !isIniter {
 		return
 	}
 	if _, dup := m.noChange.LoadOrStore(act+"\x00"+name, struct{}{}); dup {
@@ -466,7 +466,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// Re-load the unit the same way the plain path does: the handler mutated
 	// state this unit's OnInit had already read, and the push render below
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
-	// the tab is navigating away from this render. See Reloader.
+	// the tab is navigating away from this render. See reloader.
 	if rc.redirect == "" {
 		rl := &Ctx{req: req, sessions: sessions, sessW: w, session: rc.Session(), base: unit.base}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
@@ -648,7 +648,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// The handler mutated state the acted unit's OnInit had already read, so
 	// the response render below would frame the pre-action data — a 204 and a
 	// silently unchanged UI. Skipped behind a Redirect: nothing from this
-	// instance gets rendered. See Reloader.
+	// instance gets rendered. See reloader.
 	if u.redirect == "" {
 		rl := &Ctx{req: req, sessions: m.sessions, sessW: w, session: auth.session, base: base}
 		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {

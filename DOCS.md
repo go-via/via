@@ -57,8 +57,6 @@ type Shared struct {
 	Count via.State[int64]   // this connection's view of it
 }
 
-var _ via.Initer = (*Shared)(nil)
-
 func (s *Shared) OnInit(ctx *via.Ctx) error {
 	s.Count.Set(s.n.Load())
 	ctx.Listen(s.room, s.recv)
@@ -123,8 +121,6 @@ type Home struct{}
 func (p *Home) View() h.H { return h.A(h.Href("/thread/1"), h.Str("thread 1")) }
 
 type Thread struct{ id int }
-
-var _ via.Initer = (*Thread)(nil)
 
 func (t *Thread) OnInit(ctx *via.Ctx) error {
 	t.id = ctx.Param[int]("id")
@@ -214,21 +210,13 @@ verdict. It is a second hook rather than a second `OnInit` run on purpose:
 `OnInit` also mints the session and registers timers, neither of which is safe
 to repeat once a handler has committed a mutation.
 
-**Pin your hooks.** `OnInit` and `OnReload` are duck-typed: a composition opts
-in by having the method, so a rename or a signature change opts it silently
-*out* — it still compiles, and the hook stops running. One line per hook
-next to the type turns that into a compile error:
-
-```go
-var _ via.Initer = (*Front)(nil)
-var _ via.Reloader = (*Front)(nil)
-```
-
-Mount and Child catch the two commonest slips on their own — an `OnInit` or
-`OnReload` with the wrong signature panics at boot, and a method that has the
-hook's exact signature under a near-miss name (`Reload`, `OnInitialize`, …) on
-a type implementing neither interface is logged — but only the assertions above
-are airtight.
+**The hooks are duck-typed.** A composition opts in by having the method, so
+a rename or a signature change opts it silently *out* — it still compiles,
+and the hook stops running. `Mount` and `Child` are the safety net: an
+`OnInit` or `OnReload` with the wrong signature panics at boot, and a method
+that has the hook's exact signature under a near-miss name (`Reload`,
+`OnInitialize`, …) is logged once, naming the method it was surely meant to
+be.
 
 **Page state goes in the path or the session — never the query string.** An
 action POSTs to `{mount}/_via/a/{child}/{id}`, built from the mount pattern with
@@ -252,8 +240,6 @@ method, not a field, because real metadata is data-dependent. It is read after
 func (p *Ticket) PageMeta() via.Meta {
 	return via.Meta{Title: "#" + strconv.Itoa(p.t.ID) + " " + p.t.Subject}
 }
-
-var _ via.PageMetaer = (*Ticket)(nil) // duck-typed like OnInit — pin it
 ```
 
 Only the **mounted root's** `PageMeta` counts: a nested unit may not rename the

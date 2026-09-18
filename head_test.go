@@ -160,8 +160,6 @@ type metaPage struct {
 	Child metaChild
 }
 
-var _ via.PageMetaer = (*metaPage)(nil)
-
 func (p *metaPage) PageMeta() via.Meta { return via.Meta{Title: p.title} }
 func (p *metaPage) View() h.H          { return h.Div(h.Str("hi"), via.Child(p.Child)) }
 
@@ -174,9 +172,6 @@ type loadedMetaPage struct {
 	store   map[string]string
 	subject string
 }
-
-var _ via.Initer = (*loadedMetaPage)(nil)
-var _ via.PageMetaer = (*loadedMetaPage)(nil)
 
 func (p *loadedMetaPage) OnInit(*via.Ctx) error { p.subject = p.store["7"]; return nil }
 func (p *loadedMetaPage) PageMeta() via.Meta {

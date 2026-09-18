@@ -37,8 +37,6 @@ type Uptime struct {
 	load []int
 }
 
-var _ via.Initer = (*Uptime)(nil)
-
 func (u *Uptime) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(time.Second, u.beat)
 	return nil

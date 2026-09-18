@@ -10,6 +10,44 @@
 // Mount("/thread/{id}") — but never as an internal wire-name a caller could
 // desync (see the Field-Embeddable Types convention).
 //
+// # Lifecycle hooks
+//
+// The hooks are duck-typed: opt in by having the method, so a rename or
+// signature change silently opts a unit back out. [Mount] and [Child] catch
+// two slips — a hook-named method with the wrong signature panics at boot,
+// and a near-miss name carrying a hook's exact signature is logged once.
+//
+//	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any
+//	                         // embedded child
+//	OnReload(*via.Ctx) error // after one of the unit's actions, before the
+//	                         // render that answers it
+//	PageMeta() via.Meta      // the mounted root's own document
+//
+// OnInit loads request or session data into a unit's fields and registers
+// the timers and subscriptions that make it live — [Ctx.Tick] and
+// [Ctx.Listen] are valid only there. It runs on every transport but a live
+// action over an already-open stream: it ran once, at connect, so a session
+// whose authorization changes after that keeps acting on the stream until
+// the tab next acts and is denied, the stream closes, or the router shuts
+// down.
+//
+// OnReload is the fix for the commonest week-one defect — OnInit loads, the
+// handler mutates the store, and the render answering the action still shows
+// what OnInit loaded. It is a second hook rather than a second OnInit run
+// because OnInit is an initializer, not a loader: it mints and defaults the
+// session, registers Tick/Listen, and may Redirect or return [ErrNotFound],
+// all wrong to repeat once a handler has committed a mutation. It runs on
+// the plain path and the live path alike, once per action, and is skipped
+// when the handler queued a Redirect. Tick and Listen are no-ops inside it:
+// liveness is the GET/connect verdict. A non-nil error is answered like
+// OnInit's — ErrNotFound is 404, anything else 500.
+//
+// PageMeta names the document — title, description, social cards, assets —
+// and is read after OnInit and OnReload, so the data is already loaded.
+// Only the mounted root's is read, and it takes effect on a render that
+// writes a document (the GET, and the full-page answer to a native form
+// submit), never on an SSE push. See [Meta].
+//
 // # Goroutine model
 //
 // A composition instance is never shared between goroutines by via, and none

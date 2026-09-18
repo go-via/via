@@ -818,14 +818,14 @@ func TestMount_panicsOnAPageMetaCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
 		"via: via_test.badMetaSig.PageMeta has signature func(string) via.Meta, not func() via.Meta — "+
-			"so via_test.badMetaSig does NOT implement via.PageMetaer and the hook will never run",
+			"so the hook will never run",
 		func() { via.Mount(via.NewRouter(), "/", badMetaSig{}) })
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedPageMeta(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedMeta{}) })
 	assert.Contains(t, logged, "misnamedMeta.Metadata looks like a mis-named PageMeta")
-	assert.Contains(t, logged, "var _ via.PageMetaer = (*misnamedMeta)(nil)")
+	assert.Contains(t, logged, "Rename it to PageMeta.")
 }
 
 func TestMount_staysQuietWhenThePageMetaLookalikeIsAHelperItCalls(t *testing.T) {
@@ -842,14 +842,14 @@ func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t,
 		"via: via_test.badInitSig.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — "+
-			"so via_test.badInitSig does NOT implement via.Initer and the hook will never run",
+			"so the hook will never run",
 		func() { via.Mount(via.NewRouter(), "/", badInitSig{}) })
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedHook(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedReload{}) })
 	assert.Contains(t, logged, "misnamedReload.Reload looks like a mis-named OnReload")
-	assert.Contains(t, logged, "var _ via.Reloader = (*misnamedReload)(nil)")
+	assert.Contains(t, logged, "Rename it to OnReload.")
 }
 
 func TestMount_staysQuietWhenTheLookalikeIsJustAHelperTheRealHookCalls(t *testing.T) {

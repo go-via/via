@@ -1035,8 +1035,6 @@ type connectPublisher struct {
 	N   via.State[int]
 }
 
-var _ via.Initer = (*connectPublisher)(nil)
-
 func (p *connectPublisher) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(p.bus, p.onCount)
 	ctx.OnConnect(p.join)
@@ -1062,8 +1060,6 @@ type connectSeeder struct {
 	N   via.State[int]
 }
 
-var _ via.Initer = (*connectSeeder)(nil)
-
 func (p *connectSeeder) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(p.bus, p.onN) // nothing publishes on bus; the Listen only makes the unit live
 	ctx.OnConnect(p.seed)
@@ -1087,8 +1083,6 @@ type racedShared struct {
 	room  *topic.Topic[int64]
 	Count via.State[int64]
 }
-
-var _ via.Initer = (*racedShared)(nil)
 
 func (s *racedShared) OnInit(ctx *via.Ctx) error {
 	s.Count.Set(s.n.Load())
@@ -1116,8 +1110,6 @@ type connectNoop struct {
 	bus *topic.Topic[int]
 	N   via.State[int]
 }
-
-var _ via.Initer = (*connectNoop)(nil)
 
 func (p *connectNoop) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(p.bus, p.onN) // nothing publishes on bus; the Listen only makes the unit live
@@ -1149,8 +1141,6 @@ type unchangedTick struct {
 	want *atomic.Int64
 	N    via.State[int]
 }
-
-var _ via.Initer = (*unchangedTick)(nil)
 
 func (p *unchangedTick) OnInit(ctx *via.Ctx) error {
 	ctx.Tick(5*time.Millisecond, p.tick)
