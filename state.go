@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/topic"
 )
 
 // State is server-authoritative, per-connection unit state. Unlike Signal it
@@ -81,6 +82,27 @@ func (s *State[T]) Get() T { return s.val }
 // Set assigns the value on this unit instance. The change reaches the browser
 // on the next push — a Tick re-render, an action response, or a stream flush.
 func (s *State[T]) Set(v T) { s.val = v }
+
+// Track keeps s equal to a store announced on t: it seeds s from load now,
+// seeds it again once the stream has subscribed, and then applies every
+// publish. Valid only inside OnInit; a later call is ignored and logged. load
+// may return one field of a larger store, in which case t carries that field's
+// type.
+func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
+	if !ctx.inInit {
+		// No partial seed: a one-shot copy that never follows is the trap this
+		// whole method exists to remove.
+		ctx.logger().Warn("via: Track called after OnInit returned — ignored; Track is valid only inside OnInit")
+		return
+	}
+	s.Set(load())
+	// The subscribe runs before any OnConnect fn, so this re-read covers every
+	// write between OnInit and it.
+	ctx.OnConnect(func() { s.Set(load()) })
+	ctx.Listen(t, s.recv)
+}
+
+func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
 
 // Display renders the current value as literal, escaped server text and marks
 // its unit live, so server-held state alone earns a connection.

@@ -180,6 +180,13 @@ func (p *Feed) onPost(ctx *via.Ctx, post Post) { p.items.Append(post) }
 child's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
+v0.7's `StateApp[T]` — one value shared by every connection — is your own
+store plus a `topic.Topic[T]` and `State.Track`: the store holds the value, the
+topic announces each change, and `Track` seeds this connection's `State` and
+follows.
+`StateSess[T]` has no equivalent; keep per-session data in the typed session
+and read it in `OnInit`.
+
 `ctx.Redirect` navigates from anywhere: `OnInit`, `OnReload`, a native form
 submit (303 before the View ever renders) and a Datastar `@post` action alike.
 A `@post` answers with a one-line `location.assign` script, which Datastar

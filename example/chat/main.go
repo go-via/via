@@ -32,8 +32,9 @@ type Room struct {
 func NewRoom() *Room {
 	return &Room{bus: topic.New[Message](), presence: topic.New[int]()}
 }
-func (r *Room) join() { r.presence.Publish(int(r.online.Add(1))) }
-func (r *Room) part() { r.presence.Publish(int(r.online.Add(-1))) }
+func (r *Room) join()      { r.presence.Publish(int(r.online.Add(1))) }
+func (r *Room) part()      { r.presence.Publish(int(r.online.Add(-1))) }
+func (r *Room) count() int { return int(r.online.Load()) }
 
 // Chat is one connected tab's live child.
 type Chat struct {
@@ -47,7 +48,7 @@ type Chat struct {
 
 func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
-	ctx.Listen(c.room.presence, c.onPresence)
+	c.Online.Track(ctx, c.room.presence, c.room.count)
 
 	// Registered, not performed: OnInit also runs on the plain GET and on every
 	// action, and only a real connection gets an OnConnect/OnDispose pair.
@@ -57,7 +58,6 @@ func (c *Chat) OnInit(ctx *via.Ctx) error {
 }
 
 func (c *Chat) onMessage(ctx *via.Ctx, m Message) { c.Log.Append(m) }
-func (c *Chat) onPresence(ctx *via.Ctx, n int)    { c.Online.Set(n) }
 
 // Send publishes the drafted line to everyone and clears the composer.
 func (c *Chat) Send(ctx *via.Ctx) {

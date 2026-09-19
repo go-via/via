@@ -9,10 +9,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -355,4 +358,178 @@ func TestState_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
 	t.Parallel()
 	assertMountPanic(t, `tagSeedStateMalformed.Room has a via:"init=…" value that is not JSON for its `+
 		`via.State[string] type`, func() { via.Handler(tagSeedStateMalformed{}) })
+}
+
+type trackFollow struct {
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	Count via.State[int64]
+}
+
+func (w *trackFollow) OnInit(ctx *via.Ctx) error { w.Count.Track(ctx, w.room, w.n.Load); return nil }
+func (w *trackFollow) View() h.H                 { return h.P(h.Str("count: "), w.Count.Display()) }
+
+func TestState_trackSeedsThePlainRender(t *testing.T) {
+	t.Parallel()
+	n := &atomic.Int64{}
+	n.Store(7)
+	app := vt.Serve(t, via.Handler(trackFollow{n: n, room: topic.New[int64]()}))
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "count: 7",
+		"Track must seed the first paint from load, with no connection open")
+}
+
+func TestState_trackFollowsAPublishFromAnotherGoroutine(t *testing.T) {
+	t.Parallel()
+	n, room := &atomic.Int64{}, topic.New[int64]()
+	app := vt.Serve(t, via.Handler(trackFollow{n: n, room: room}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	room.Publish(n.Add(3))
+	assert.Contains(t, conn.Await("count: 3"), "count: 3",
+		"a publish from outside the unit must reach the tracking connection")
+}
+
+type trackRaced struct {
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	Count via.State[int64]
+}
+
+func (w *trackRaced) OnInit(ctx *via.Ctx) error {
+	w.Count.Track(ctx, w.room, w.n.Load)
+	// Simulates a writer racing the connect: lands before the subscribe.
+	w.room.Publish(w.n.Add(1))
+	return nil
+}
+func (w *trackRaced) View() h.H { return h.P(h.Str("count: "), w.Count.Display()) }
+
+func TestState_trackSeesAWriteThatBeatTheSubscribe(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(trackRaced{n: &atomic.Int64{}, room: topic.New[int64]()}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	assert.Contains(t, conn.Await("count: "), "count: 1",
+		"the first frame after connect must show the write that landed before the subscribe")
+}
+
+// trackJoiner mirrors example/chat's presence: Track, then its OnConnect writes.
+type trackJoiner struct {
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	Count via.State[int64]
+}
+
+func (w *trackJoiner) OnInit(ctx *via.Ctx) error {
+	w.Count.Track(ctx, w.room, w.n.Load)
+	ctx.OnConnect(w.join)
+	return nil
+}
+func (w *trackJoiner) join()     { w.room.Publish(w.n.Add(1)) }
+func (w *trackJoiner) View() h.H { return h.P(h.Str("count: "), w.Count.Display()) }
+
+func TestState_trackSeesTheUnitsOwnOnConnectPublish(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(trackJoiner{n: &atomic.Int64{}, room: topic.New[int64]()}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	assert.Contains(t, conn.Await("count: 1"), "count: 1",
+		"Track's own connect re-read must not shadow the unit's OnConnect publish")
+}
+
+// trackLater calls Track from a tick handler, long after OnInit returned.
+type trackLater struct {
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	N     via.State[int64]
+	Beats via.State[int]
+}
+
+func (w *trackLater) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, w.beat)
+	return nil
+}
+
+func (w *trackLater) beat(ctx *via.Ctx) {
+	w.Beats.Set(w.Beats.Get() + 1)
+	w.N.Track(ctx, w.room, w.n.Load)
+}
+
+func (w *trackLater) View() h.H {
+	return h.Div(h.Str("n="), w.N.Display(), h.Str(" beats="), w.Beats.Display())
+}
+
+func TestState_trackAfterOnInitIsIgnored(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	n := &atomic.Int64{}
+	n.Store(5)
+	app := vt.Serve(t, via.Handler(trackLater{n: n, room: topic.New[int64]()}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	frame := conn.Await("beats=1")
+	assert.Contains(t, frame, "n=0", "a late Track must not seed the State")
+	assert.Contains(t, buf.String(), "Track called after OnInit returned",
+		"a Track call after OnInit must log loudly instead of half-working")
+}
+
+// trackFromAction calls Track from an action handler, not OnInit.
+type trackFromAction struct {
+	feed  *topic.Topic[string]
+	n     *atomic.Int64
+	room  *topic.Topic[int64]
+	N     via.State[int64]
+	Bumps via.State[int]
+}
+
+func (w *trackFromAction) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(w.feed, w.recv)
+	return nil
+}
+
+func (w *trackFromAction) recv(*via.Ctx, string) {}
+
+func (w *trackFromAction) Bump(ctx *via.Ctx) {
+	w.Bumps.Set(w.Bumps.Get() + 1)
+	w.N.Track(ctx, w.room, w.n.Load)
+}
+
+func (w *trackFromAction) View() h.H {
+	return h.Div(
+		h.Str("n="), w.N.Display(),
+		h.Str(" bumps="), w.Bumps.Display(),
+		h.Button(via.On("click", w.Bump)),
+	)
+}
+
+func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	n := &atomic.Int64{}
+	n.Store(7)
+	app := vt.Serve(t, via.Handler(trackFromAction{feed: topic.New[string](), n: n, room: topic.New[int64]()}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+
+	frame := conn.Await("bumps=1")
+	assert.Contains(t, frame, "n=0", "a Track from an action handler must not seed the State")
+	assert.Contains(t, buf.String(), "Track called after OnInit returned",
+		"a Track call from an action handler must log loudly instead of half-working")
 }

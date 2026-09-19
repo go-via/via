@@ -100,8 +100,11 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 			err = errRedirected
 		}
 	}()
+	// Deferred rather than cleared after the call so a paramMiss panic unwinds
+	// it too: ticks/subs are snapshotted when OnInit returns — see Tick/Listen.
+	defer func() { ctx.inInit = false }()
+	ctx.inInit = true
 	oerr := ic.OnInit(ctx)
-	ctx.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
 	if oerr != nil {
 		noteErr(w, oerr)
 		switch {
@@ -129,7 +132,7 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 	if !ok {
 		return nil
 	}
-	ctx.reinit, ctx.initDone = true, true
+	ctx.reinit = true
 	// A paramMiss means the URL segment no longer decodes — the same 404 the
 	// first OnInit would have answered.
 	defer func() {
