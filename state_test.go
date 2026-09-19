@@ -417,7 +417,7 @@ func TestState_trackSeesAWriteThatBeatTheSubscribe(t *testing.T) {
 		"the first frame after connect must show the write that landed before the subscribe")
 }
 
-// trackJoiner mirrors example/chat's presence: Track, then its OnConnect writes.
+// trackJoiner mirrors internal/example/chat's presence: Track, then its OnConnect writes.
 type trackJoiner struct {
 	n     *atomic.Int64
 	room  *topic.Topic[int64]
