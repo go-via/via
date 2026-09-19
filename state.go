@@ -38,7 +38,45 @@ type State[T any] struct {
 	// lit marks the start value as decided — by StateOf, by ListOf, or by the
 	// one apply of a via:"init=…" tag — so a literal wins over the tag and no
 	// later render re-seeds over what a Set has authored.
-	lit bool
+	lit   bool
+	track *stateTracking[T] // set by StateTrack; nil on every other State
+}
+
+type stateTracking[T any] struct {
+	topic *topic.Topic[T]
+	load  func() T
+}
+
+// tracker is how a StateTrack literal is started without naming T: the type
+// walk holds the handle as an any, so the closure it asks for here carries T
+// out of the generic type, exactly as seedApplier does for a seed tag.
+type tracker interface {
+	trackStarter() func(handle unsafe.Pointer, ctx *Ctx)
+}
+
+func (*State[T]) trackStarter() func(unsafe.Pointer, *Ctx) {
+	return func(handle unsafe.Pointer, ctx *Ctx) {
+		s := (*State[T])(handle)
+		if s.track == nil {
+			return
+		}
+		s.Track(ctx, s.track.topic, s.track.load)
+	}
+}
+
+// StateTrack is the literal form of [State.Track]: a State that seeds from
+// load at every init of its unit, re-seeds once the stream has subscribed, and
+// follows t.
+//
+//	via.Handler(Counter{Hits: via.StateTrack(room, n.Load)})
+//
+// load runs at each init, not here, so a request renders whatever the store
+// holds then; the unit needs no OnInit of its own, and a literal on one that
+// has an OnInit runs first so it reads the seeded value. Use it when the
+// source is fixed at mount time; use Track in OnInit when it depends on the
+// request.
+func StateTrack[T any](t *topic.Topic[T], load func() T) State[T] {
+	return State[T]{lit: true, track: &stateTracking[T]{topic: t, load: load}}
 }
 
 func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }

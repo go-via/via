@@ -739,6 +739,11 @@ func (s *Session) set(value json.RawMessage) {
 	s.mgr.save(s.storeCtx(), s.id, d, false)
 }
 
+// ID is the session's stable identity: minted once, unchanged by
+// [Session.Rotate], "" when there is no session yet. Key per-user state by it;
+// it is not the cookie and grants nothing.
+func (s *Session) ID() string { return s.sid() }
+
 // Rotate issues a fresh session id, carries the existing data to it, and
 // re-sets the cookie — call it after every auth-state change (login, privilege
 // elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""

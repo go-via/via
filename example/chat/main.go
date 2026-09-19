@@ -25,16 +25,15 @@ type Message struct{ Who, Text string }
 // messages to every tab; another broadcasts the live head-count.
 type Room struct {
 	bus      *topic.Topic[Message]
-	presence *topic.Topic[int]
+	presence *topic.Topic[int64]
 	online   atomic.Int64
 }
 
 func NewRoom() *Room {
-	return &Room{bus: topic.New[Message](), presence: topic.New[int]()}
+	return &Room{bus: topic.New[Message](), presence: topic.New[int64]()}
 }
-func (r *Room) join()      { r.presence.Publish(int(r.online.Add(1))) }
-func (r *Room) part()      { r.presence.Publish(int(r.online.Add(-1))) }
-func (r *Room) count() int { return int(r.online.Load()) }
+func (r *Room) join() { r.presence.Publish(r.online.Add(1)) }
+func (r *Room) part() { r.presence.Publish(r.online.Add(-1)) }
 
 // Chat is one connected tab's live child.
 type Chat struct {
@@ -43,12 +42,12 @@ type Chat struct {
 	Who    via.Signal[string] // round-trips so Send can author the message
 	Draft  via.Signal[string] // two-way bound composer, cleared on send
 	Log    via.List[Message]  // server-authoritative, pushed over SSE
-	Online via.State[int]     // presence count, pushed over SSE
+	Online via.State[int64]   // presence count, pushed over SSE
 }
 
 func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
-	c.Online.Track(ctx, c.room.presence, c.room.count)
+	c.Online.Track(ctx, c.room.presence, c.room.online.Load)
 
 	// Registered, not performed: OnInit also runs on the plain GET and on every
 	// action, and only a real connection gets an OnConnect/OnDispose pair.

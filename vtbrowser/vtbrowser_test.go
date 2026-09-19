@@ -660,3 +660,41 @@ func TestChild_childSetAfterRootRenderBindsToTheChildUnit(t *testing.T) {
 		"the child's Set to keep arriving on the child's own slot after a root render")
 	s.RequireCleanConsole()
 }
+
+// tracked mirrors example/shared: an atomic kept in State by a StateTrack literal.
+type tracked struct {
+	n    *atomic.Int64
+	room *topic.Topic[int64]
+	Hits via.State[int64]
+}
+
+func (c *tracked) Inc(ctx *via.Ctx) { c.room.Publish(c.n.Add(1)) }
+func (c *tracked) View() h.H {
+	return h.Div(h.P(h.Str("hits: "), c.Hits.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
+}
+
+func TestTrack_keepsEveryTabOnTheSharedValue(t *testing.T) {
+	n, room := new(atomic.Int64), topic.New[int64]()
+	a := vtbrowser.Open(t, via.Handler(tracked{n: n, room: room, Hits: via.StateTrack(room, n.Load)}))
+	b := a.NewTab()
+	a.WaitLiveConnected()
+	b.WaitLiveConnected()
+
+	a.Click("button")
+	b.WaitTextContains("p", "hits: 1")
+	a.WaitTextContains("p", "hits: 1")
+
+	b.Click("button")
+	a.WaitTextContains("p", "hits: 2")
+
+	c := a.NewTab() // a late tab is seeded from the store, not from a publish
+	c.WaitTextContains("p", "hits: 2")
+	c.WaitLiveConnected()
+	a.Click("button")
+	c.WaitTextContains("p", "hits: 3")
+	b.WaitTextContains("p", "hits: 3")
+
+	a.RequireCleanConsole()
+	b.RequireCleanConsole()
+	c.RequireCleanConsole()
+}

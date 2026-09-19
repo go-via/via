@@ -42,40 +42,41 @@ func (g *Greeting) View() h.H {
 }
 ```
 
-**3. `State.Track` — server state shared across tabs.** `State` is per
+**3. `via.StateTrack` — server state shared across tabs.** `State` is per
 connection, so the shared number stays in a store you own — here an
-`atomic.Int64` — and each bump is announced on a `topic.Topic`. `Track` seeds
-this connection's `State` from the store and then applies every publish, which
-element-patches over SSE; the `Track` in `OnInit` is what makes the page live.
-It exists because the subscribe only happens when the tab connects, after
-`OnInit` read the store: `Track` re-reads there too, so a publish landing in
-that window is not missed.
+`atomic.Int64` — and each bump is announced on a `topic.Topic`. A tracked
+`State` seeds this connection's copy from the store and then applies every
+publish, which element-patches over SSE; tracking is also what makes the page
+live. It exists because the subscribe only happens when the tab connects, after
+the first read: a tracked `State` re-reads at connect too, so a publish landing
+in that window is not missed.
 
 ```go
 type Counter struct {
-	n     *atomic.Int64       // the shared value, app-owned
-	room  *topic.Topic[int64] // announces each bump
-	Count via.State[int64]    // this connection's view of it
-}
-
-func (c *Counter) OnInit(ctx *via.Ctx) error {
-	c.Count.Track(ctx, c.room, c.n.Load)
-	return nil
+	n    *atomic.Int64       // the shared value, app-owned
+	room *topic.Topic[int64] // announces each bump
+	Hits via.State[int64]    // this connection's view of it
 }
 
 func (c *Counter) Inc(ctx *via.Ctx) { c.room.Publish(c.n.Add(1)) }
 
 func (c *Counter) View() h.H {
 	return h.Div(
-		h.H1(c.Count.Display()),
+		h.H1(c.Hits.Display()),
 		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 
 func main() {
-	http.Handle("/", via.Handler(Counter{n: new(atomic.Int64), room: topic.New[int64]()}))
+	n, room := new(atomic.Int64), topic.New[int64]()
+	http.Handle("/", via.Handler(
+		Counter{n: n, room: room, Hits: via.StateTrack(room, n.Load)}))
 }
 ```
+
+When the source depends on the request — a topic picked by the path param or
+the session — call `s.Hits.Track(ctx, t, load)` in `OnInit` instead; a literal
+is fixed at mount time and cannot read one.
 
 The store need not be the whole picture: `load` may return one field of a
 larger struct, and the topic then carries that field's type.
@@ -482,7 +483,8 @@ it.
     signal-patch, so a fan-out never clobbers what a user is typing.
 
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
-  `via/topic.Topic[T]` broker: `State.Track` when every tab mirrors one shared
+  `via/topic.Topic[T]` broker: `via.StateTrack` (or `State.Track` in `OnInit`,
+  when the topic depends on the request) when every tab mirrors one shared
   value, `ctx.Listen` / `ctx.OnDispose` when every message has to be seen. One
   publish fans out to every connected child.
 
@@ -491,6 +493,9 @@ it.
   a signed-HMAC cookie issued lazily on the first write. A session holds one
   value; nest what you need in a struct. Apps that never store anything stay
   cookieless.
+  - `Session.ID()` is the stable identity behind the cookie — unchanged by
+    `Rotate`, `""` before the first write. Key per-user state by it; it grants
+    nothing on its own.
   - Sessions do not rotate their id on their own: call `Session.Rotate` at an
     auth-state change (login, logout, privilege elevation) to invalidate a
     session id an attacker may have planted beforehand (fixation defense).
@@ -577,6 +582,25 @@ it.
 
 `example/chat` is the most complete live example: a multi-user chat room with a
 presence count, in ~60 lines.
+
+**Per-user fan-out.** `ctx.Session().ID()` is the session's stable identity —
+minted once, unchanged by `Rotate`, `""` before the first write. It is not the
+cookie and grants nothing; it is a key. Key a topic by it and every tab of one
+user follows that user's own stream:
+
+```go
+// store holds map[string]*topic.Topic[Inbox] behind a mutex; topicFor mints
+// one on first ask and load reads that user's inbox.
+func (p *Page) OnInit(ctx *via.Ctx) error {
+	id := ctx.Session().ID()
+	p.Inbox.Track(ctx, p.store.topicFor(id), p.store.load(id))
+	return nil
+}
+```
+
+`Track` and not `via.StateTrack` because the topic depends on the request. Like
+every `Topic` this is in-process: two pods are two fan-outs, so a cross-pod app
+publishes from its own broker instead.
 
 **Restarts and deploys.** Two separate things have to survive: the cookie and
 the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps

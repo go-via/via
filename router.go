@@ -71,6 +71,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	if storeDown(w, ctx) {
 		return ErrStoreDown
 	}
+	startTracks(ctx, ctx.unitV)
 	ic, ok := v.(initer)
 	if !ok {
 		return nil
