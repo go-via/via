@@ -16,6 +16,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1474,4 +1475,70 @@ func TestSession_refusesAPlainActionWhileTheStoreIsDown(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"a plain action during a store outage must not run against a session read as empty")
 	assert.Contains(t, string(body), "session store unavailable")
+}
+
+// idComp surfaces ctx.Session().ID() through the View, the only way to read it.
+type idComp struct{ shown, before, after string }
+
+// "@" marks the id in the body: an action with no rendered change answers 204.
+func (c *idComp) Show(ctx *via.Ctx) { c.shown = "@" + ctx.Session().ID() }
+func (c *idComp) Put(ctx *via.Ctx) {
+	ctx.Session().Put(member{Name: "alice"})
+	c.shown = "@" + ctx.Session().ID()
+}
+func (c *idComp) Cycle(ctx *via.Ctx) {
+	c.before = ctx.Session().ID()
+	ctx.Session().Rotate()
+	c.after = ctx.Session().ID()
+}
+func (c *idComp) View() h.H {
+	return h.Div(
+		h.P(h.Str("id=["), h.Str(c.shown), h.Str("]")),
+		h.P(h.Str("before=["), h.Str(c.before), h.Str("] after=["), h.Str(c.after), h.Str("]")),
+		h.Button(via.On("click", c.Show), h.Str("show")),   // 0
+		h.Button(via.On("click", c.Put), h.Str("put")),     // 1
+		h.Button(via.On("click", c.Cycle), h.Str("cycle")), // 2
+	)
+}
+
+func idServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(via.Handler(idComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+var rotatedIDs = regexp.MustCompile(`before=\[([^\]]*)\] after=\[([^\]]*)\]`)
+
+func TestSession_idIsEmptyBeforeTheFirstWrite(t *testing.T) {
+	t.Parallel()
+	c := jarClient(t)
+
+	_, body := fireAction(t, c, idServer(t), 0) // Show, on a request that never writes
+
+	assert.Contains(t, body, "id=[@]", "ID must be empty while there is no session yet")
+}
+
+func TestSession_idIsSetAfterPut(t *testing.T) {
+	t.Parallel()
+	c := jarClient(t)
+
+	_, body := fireAction(t, c, idServer(t), 1) // Put
+
+	assert.NotContains(t, body, "id=[@]", "the first write mints an id ID must report")
+	assert.Contains(t, body, "id=[@", "the View did not render the id at all")
+}
+
+func TestSession_idSurvivesRotate(t *testing.T) {
+	t.Parallel()
+	base := idServer(t)
+	c := jarClient(t)
+
+	fireAction(t, c, base, 1) // Put — mints the session
+	_, body := fireAction(t, c, base, 2)
+
+	m := rotatedIDs.FindStringSubmatch(body)
+	require.Len(t, m, 3, "the View did not render both sides of the Rotate: %s", body)
+	assert.NotEmpty(t, m[1], "ID must be set on a session that has been written to")
+	assert.Equal(t, m[1], m[2], "Rotate re-ids the cookie; ID is the stable identity and must not move")
 }

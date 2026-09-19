@@ -18,10 +18,17 @@
 
 ### New
 
-- `State.Track(ctx, t, load)` keeps a `State` equal to a store announced on a
-  `topic.Topic`: it seeds from `load`, seeds again once the stream has
-  subscribed, and applies every publish — so shared live state no longer needs
-  a hand-written `ctx.OnConnect` re-read.
+- **A `State` can track a store announced on a `topic.Topic`**: it seeds from
+  `load`, seeds again once the stream has subscribed, and applies every publish
+  — so shared live state no longer needs a hand-written `ctx.OnConnect`
+  re-read. `via.StateTrack(t, load)` declares it on the field, and a unit whose
+  only live thing is a tracked `State` needs no `OnInit` at all;
+  `State.Track(ctx, t, load)` is the same job from `OnInit`, for when the topic
+  depends on the request.
+
+- `Session.ID()` is the session's stable identity — minted once, unchanged by
+  `Rotate`, `""` when there is no session yet. It is not the cookie and grants
+  nothing; it is what keys per-user state, a topic per user included.
 
 - `via.ErrForbidden` — returned from `OnInit`, answers 403 with
   `ReasonForbidden`.

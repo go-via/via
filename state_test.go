@@ -533,3 +533,123 @@ func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
 	assert.Contains(t, buf.String(), "Track called after OnInit returned",
 		"a Track call from an action handler must log loudly instead of half-working")
 }
+
+type litTrack struct {
+	Hits via.State[int64]
+}
+
+func (p *litTrack) View() h.H { return h.P(h.Str("count: "), p.Hits.Display()) }
+
+func TestStateTrack_seedsThePlainRenderWithoutAnOnInit(t *testing.T) {
+	t.Parallel()
+	n := &atomic.Int64{}
+	n.Store(7)
+	app := vt.Serve(t, via.Handler(litTrack{Hits: via.StateTrack(topic.New[int64](), n.Load)}))
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "count: 7",
+		"the literal must seed the first paint on a unit that has no OnInit at all")
+}
+
+func TestStateTrack_followsAPublish(t *testing.T) {
+	t.Parallel()
+	n, room := &atomic.Int64{}, topic.New[int64]()
+	app := vt.Serve(t, via.Handler(litTrack{Hits: via.StateTrack(room, n.Load)}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	room.Publish(n.Add(3))
+	assert.Contains(t, conn.Await("count: 3"), "count: 3",
+		"a publish from outside the unit must reach a literal-tracked State")
+}
+
+// litTrackRacer publishes from OnInit, inside the window a connect re-read must cover.
+type litTrackRacer struct {
+	n    *atomic.Int64
+	room *topic.Topic[int64]
+	Hits via.State[int64]
+}
+
+func (p *litTrackRacer) OnInit(*via.Ctx) error { p.room.Publish(p.n.Add(1)); return nil }
+func (p *litTrackRacer) View() h.H             { return h.P(h.Str("count: "), p.Hits.Display()) }
+
+func TestStateTrack_seesAWriteThatBeatTheSubscribe(t *testing.T) {
+	t.Parallel()
+	n, room := &atomic.Int64{}, topic.New[int64]()
+	app := vt.Serve(t, via.Handler(litTrackRacer{n: n, room: room, Hits: via.StateTrack(room, n.Load)}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	assert.Contains(t, conn.Await("count: "), "count: 1",
+		"the first frame after connect must show the write that landed before the subscribe")
+}
+
+type litTrackReader struct {
+	seen string
+	Hits via.State[int64]
+}
+
+func (p *litTrackReader) OnInit(*via.Ctx) error {
+	p.seen = "seen:" + strconv.FormatInt(p.Hits.Get(), 10)
+	return nil
+}
+func (p *litTrackReader) View() h.H { return h.P(h.Str(p.seen)) }
+
+func TestStateTrack_runsBeforeTheUnitsOwnOnInit(t *testing.T) {
+	t.Parallel()
+	n := &atomic.Int64{}
+	n.Store(9)
+	app := vt.Serve(t, via.Handler(litTrackReader{Hits: via.StateTrack(topic.New[int64](), n.Load)}))
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "seen:9",
+		"the unit's own OnInit must read a State the literal already seeded")
+}
+
+type litTrackKid struct {
+	Hits via.State[int64]
+}
+
+func (c litTrackKid) View() h.H { return h.P(h.Str("kid: "), c.Hits.Display()) }
+
+type litTrackParent struct {
+	Kid litTrackKid
+}
+
+func (p *litTrackParent) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestStateTrack_worksOnAnEmbeddedChild(t *testing.T) {
+	t.Parallel()
+	n, room := &atomic.Int64{}, topic.New[int64]()
+	n.Store(4)
+	app := vt.Serve(t, via.Handler(litTrackParent{Kid: litTrackKid{Hits: via.StateTrack(room, n.Load)}}))
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "kid: 4", "an embedded child's literal must seed at its own init")
+
+	conn := app.Connect()
+	defer conn.Close()
+	room.Publish(n.Add(1))
+	assert.Contains(t, conn.Await("kid: 5"), "kid: 5",
+		"an embedded child's literal must follow its topic")
+}
+
+// litTrackSilent never renders State; only the literal's Listen can make the page live.
+type litTrackSilent struct {
+	Hits via.State[int64]
+}
+
+func (p *litTrackSilent) View() h.H { return h.P(h.Str("silent")) }
+
+func TestStateTrack_makesThePageLive(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(litTrackSilent{Hits: via.StateTrack(topic.New[int64](), new(atomic.Int64).Load)}))
+
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, `@post('/_via/sse')`,
+		"a literal-tracked State must earn the page a stream even when nothing renders it")
+}

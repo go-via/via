@@ -171,7 +171,8 @@ var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 // field's byte offset paired with the wire name its Go field path gives it.
 type typeSignals struct {
 	fields []signalField
-	seeds  []seedField // State/List fields carrying a via:"init=…" tag: no wire name, only a value to write
+	seeds  []seedField  // State/List fields carrying a via:"init=…" tag: no wire name, only a value to write
+	tracks []trackField // every State/List field, so a StateTrack literal on any of them registers at init
 	byOff  map[uintptr]signalField
 	names  map[string]bool // every minted slot name, for the child-prefix collision check
 }
@@ -188,6 +189,11 @@ type signalField struct {
 type seedField struct {
 	off   uintptr
 	apply func(unsafe.Pointer) any
+}
+
+type trackField struct {
+	off   uintptr
+	start func(unsafe.Pointer, *Ctx)
 }
 
 // wire is the slot name: the "_" goes ahead of the scope prefix, because
@@ -245,10 +251,17 @@ func signalsOf(t reflect.Type) *typeSignals {
 				continue
 			}
 			if reflect.PointerTo(f.Type).Implements(seededMarker) { // State, List
+				handle := reflect.New(f.Type).Interface()
 				if tagged {
-					handle := reflect.New(f.Type).Interface().(seeded)
-					v := decodeSeedTag(t, f, handle, tag)
-					ts.seeds = append(ts.seeds, seedField{off: off, apply: handle.seedApplier(v)})
+					h := handle.(seeded)
+					v := decodeSeedTag(t, f, h, tag)
+					ts.seeds = append(ts.seeds, seedField{off: off, apply: h.seedApplier(v)})
+				}
+				// Every State lands here, tracked or not: whether this instance
+				// carries a StateTrack literal is a per-instance fact the type
+				// cannot answer, so the starter nil-checks at init.
+				if tk, ok := handle.(tracker); ok {
+					ts.tracks = append(ts.tracks, trackField{off: off, start: tk.trackStarter()})
 				}
 				continue
 			}
@@ -398,6 +411,24 @@ func prebindSignals(c *Ctx, inst instance) {
 	}
 	for _, s := range inst.sig.seeds {
 		s.apply(unsafe.Add(inst.base, s.off))
+	}
+}
+
+// startTracks registers each StateTrack literal in inst, ahead of runOnInit's
+// or initChild's own OnInit call so a seeded State is what OnInit reads.
+//
+// inInit is raised around the loop because Track, Listen and OnConnect all
+// reject a call from outside init; it is restored rather than cleared so the
+// caller's own bracketing stays the one that decides.
+func startTracks(c *Ctx, inst instance) {
+	if inst.sig == nil || inst.base == nil || len(inst.sig.tracks) == 0 {
+		return
+	}
+	was := c.inInit
+	c.inInit = true
+	defer func() { c.inInit = was }()
+	for _, t := range inst.sig.tracks {
+		t.start(unsafe.Add(inst.base, t.off), c)
 	}
 }
 

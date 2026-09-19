@@ -63,7 +63,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 | v0.7 | v0.8 |
 | --- | --- |
 | `StateTab[T]` | `State[T]` (live children only) |
-| `StateSess[T]` | `ctx.Session().Get[T]()` / `.Put(v)` |
+| `StateSess[T]` | per-session topic keyed by `Session.ID()` + `State.Track` |
 | `StateApp[T]` | your own dependency, injected; via does not own it |
 | `Signal[T]` | `Signal[T]`, client-side reactivity with zero round-trips |
 | `*Num` shapes, `.Op(ctx)` | plain Go arithmetic on `Get()` |
@@ -181,11 +181,14 @@ child's lifetime. Publishing is a topic send from anywhere in your app. The
 difference that matters: nothing can now push to a page that did not ask.
 
 v0.7's `StateApp[T]` — one value shared by every connection — is your own
-store plus a `topic.Topic[T]` and `State.Track`: the store holds the value, the
-topic announces each change, and `Track` seeds this connection's `State` and
-follows.
-`StateSess[T]` has no equivalent; keep per-session data in the typed session
-and read it in `OnInit`.
+store plus a `topic.Topic[T]` and `via.StateTrack(room, load)` on the field:
+the store holds the value, the topic announces each change, and the tracked
+`State` seeds this connection's copy and follows.
+
+`StateSess[T]` is a topic per user, keyed by `ctx.Session().ID()` — the stable
+identity behind the cookie — and `State.Track` in `OnInit` (the method, not the
+literal: the topic depends on the request). Data that only has to be read, not
+pushed, still belongs in the typed session.
 
 `ctx.Redirect` navigates from anywhere: `OnInit`, `OnReload`, a native form
 submit (303 before the View ever renders) and a Datastar `@post` action alike.
