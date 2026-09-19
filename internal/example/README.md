@@ -1,6 +1,6 @@
 # Examples
 
-Run any of them with `go run ./example/<name>`.
+Run any of them with `go run ./internal/example/<name>`.
 
 ## Where to start
 

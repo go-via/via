@@ -74,7 +74,7 @@ func (s *store) Value() int { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
 func (s *store) Add(d int)  { s.mu.Lock(); s.n += d; s.mu.Unlock() }
 
 // counter is the slice-1 component under test, exercised through the public via
-// API. It mirrors example/counter: server-authoritative state in an injected
+// API. It mirrors internal/example/counter: server-authoritative state in an injected
 // dependency, element-patched on each action.
 type counter struct{ count *store }
 

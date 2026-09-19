@@ -1,5 +1,5 @@
 # Compiled example programs land at the repo root with no extension (e.g.
-# `chat` from `go build ./internal/examples/chat`). gitignore has no
+# `chat` from `go build ./internal/example/chat`). gitignore has no
 # "no-extension" glob, so: ignore every root-level entry, then re-include
 # directories, any file that HAS an extension, and LICENSE (the only
 # extensionless tracked file). Net effect — extensionless root files (build
@@ -50,7 +50,6 @@ go.work.sum
 
 # Nested example/showcase build outputs (root-level ones are caught by /* above).
 /viashowcase/showcase
-/internal/examples/chatcluster/chatcluster
 
 # Research clones (not part of the project)
 /.research/

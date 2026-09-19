@@ -157,10 +157,10 @@ counter two tabs are supposed to share does not live in a `State`. It lives in
 a store you own, changes are announced on a `topic.Topic`, and each tab's
 `State.Track` seeds from the store and follows the topic — including a re-read
 at connect, so a publish that beat the subscribe is not lost. That is the whole
-shared-live-state recipe (step 3 of the [Tour](#tour), and `example/shared`);
+shared-live-state recipe (step 3 of the [Tour](#tour), and `internal/example/shared`);
 reach for it before anything else here. A plain `ctx.Listen` is the right shape
 when the tab does not mirror a value but has to see every message —
-`example/feed`, and `example/chat`'s message bus appended to a `List`.
+`internal/example/feed`, and `internal/example/chat`'s message bus appended to a `List`.
 
 A page is served **plain**: request/response, with actions and a morph on
 POST. It **streams** — an SSE connection scoped to that one tab, its own server
@@ -415,7 +415,7 @@ action POST against a closing tab answers `410`, and a connect arriving after
 
 `via.Handler` returns that `*Router`, so `Close` is reachable from the one-line
 entry point too — `r := via.Handler(Page{})` then `defer r.Close()`. `*Router`
-serves HTTP, so it goes straight into `http.Handle`. `example/chat` runs the
+serves HTTP, so it goes straight into `http.Handle`. `internal/example/chat` runs the
 whole path end to end: SIGINT, `r.Close()`, `srv.Shutdown`.
 
 ## The feature map
@@ -423,10 +423,10 @@ whole path end to end: SIGINT, `r.Close()`, `srv.Shutdown`.
 Each capability, the example that demonstrates it, and the traps that come with
 it.
 
-- **Plain core** (`example/counter`): an action's response self-classifies —
+- **Plain core** (`internal/example/counter`): an action's response self-classifies —
   element-patch when the render changed, `204` when it didn't.
 
-- **Reactive handles** (`example/greeting`): client-resident `Signal[T]` with
+- **Reactive handles** (`internal/example/greeting`): client-resident `Signal[T]` with
   handle-identity wire names. `Bind()` and `Display()` share one name, so the
   greeting updates live as you type, entirely client-side. `When`/`Each` render
   conditionals and lists.
@@ -466,7 +466,7 @@ it.
     a value that is not JSON for its type, or a tag on a field that is no via
     handle **panics at Mount**.
 
-- **Live children + `State[T]`** (`example/pulse`): render a `State[T]` or
+- **Live children + `State[T]`** (`internal/example/pulse`): render a `State[T]` or
   register a `Tick` and a composition becomes a live child with a per-tab SSE
   stream. `State[T]` is server-authoritative, read from the pure View and
   element-patched on change; `Tick` drives the push.
@@ -475,14 +475,14 @@ it.
     action, and push on that same connection, and delays that connection's
     shutdown until it returns.
 
-- **Interactive live actions** (`example/chat`): a live-child action routes to
+- **Interactive live actions** (`internal/example/chat`): a live-child action routes to
   *this* connection's child — via the `via_tab` handshake, an unguessable
   per-connection id echoed in the `viatab` signal every `@post` already carries
   — mutates its state, and the result is pushed over its SSE.
   - The element push omits `data-signals`, and deliberate signal changes ride a
     signal-patch, so a fan-out never clobbers what a user is typing.
 
-- **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
+- **Multi-user fan-out** (`internal/example/feed`, `internal/example/chat`): an in-process
   `via/topic.Topic[T]` broker: `via.StateTrack` (or `State.Track` in `OnInit`,
   when the topic depends on the request) when every tab mirrors one shared
   value, `ctx.Listen` / `ctx.OnDispose` when every message has to be seen. One
@@ -523,7 +523,7 @@ it.
   - A client reconnect manager surfaces a "Reconnecting…" banner on a dropped
     stream and reloads to re-bootstrap when Datastar gives up.
 
-- **Live-child multiplexing** (`example/dashboard`): child sub-compositions as
+- **Live-child multiplexing** (`internal/example/dashboard`): child sub-compositions as
   plain struct fields: `via.Child(p.Clock)` in the parent's `View`. Each child
   gets its own `OnInit`. A child that neither ticks nor holds `State` is a plain
   in-place component; one that does is a live child.
@@ -558,13 +558,13 @@ it.
     the field literal — never on time, a client signal, or shared state that
     changes while the page is open.
 
-- **Per-row list actions** (`example/poll`): a row's button carries the row's own
+- **Per-row list actions** (`internal/example/poll`): a row's button carries the row's own
   datum — `via.OnArg("click", l.Delete, item.ID)` — and the handler receives it as a
   typed parameter, `func(*via.Ctx, int)`. Identity rides with the click, so a list
   that grows, shrinks, and **reorders** never misroutes: the value (not the
   positional slot) picks the row. Still a named method value — no `&`, no closure.
 
-- **Multi-page apps + auth + uploads** (`example/forum`): `via.NewRouter()` with
+- **Multi-page apps + auth + uploads** (`internal/example/forum`): `via.NewRouter()` with
   `via.Mount(r, "/path", Page{})` serves a whole app behind one handler, each
   page's actions namespaced under its mount.
   - `OnInit(*Ctx) error` is the per-request hook that loads session/path data
@@ -580,7 +580,7 @@ it.
     `ctx.Request().FormFile("avatar")`.
   - `ctx.Param[int]("id")` reads the named `{id}` segment of `"/thread/{id}"`.
 
-`example/chat` is the most complete live example: a multi-user chat room with a
+`internal/example/chat` is the most complete live example: a multi-user chat room with a
 presence count, in ~60 lines.
 
 **Per-user fan-out.** `ctx.Session().ID()` is the session's stable identity —
@@ -656,7 +656,7 @@ surfaces the failure itself. Switch on `PageError.Reason` (`ReasonNotFound`,
 renders under the ROUTER-WIDE CSP floor — it can run before any mount resolves,
 so it never carries a mount's per-page assets and cannot widen one's policy —
 and a handler that panics or returns nil falls back to the plain text via would
-have sent, logged once. See `example/forum`.
+have sent, logged once. See `internal/example/forum`.
 
 **Logging.** `WithLogger(l)` routes via's own diagnostics — failed hooks,
 session-store errors, dropped writes, recovered panics — to an `*slog.Logger`;

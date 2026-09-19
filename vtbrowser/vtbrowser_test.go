@@ -661,7 +661,7 @@ func TestChild_childSetAfterRootRenderBindsToTheChildUnit(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-// tracked mirrors example/shared: an atomic kept in State by a StateTrack literal.
+// tracked mirrors internal/example/shared: an atomic kept in State by a StateTrack literal.
 type tracked struct {
 	n    *atomic.Int64
 	room *topic.Topic[int64]

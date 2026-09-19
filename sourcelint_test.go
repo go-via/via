@@ -163,7 +163,7 @@ func coreGoFiles(t *testing.T) []string {
 func exampleGoFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
-	err := filepath.WalkDir("example", func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join("internal", "example"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
