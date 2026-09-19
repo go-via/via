@@ -164,8 +164,9 @@ func initChild(child *Ctx, v any) {
 	if !ok {
 		return
 	}
+	defer func() { child.inInit = false }() // see runOnInit
+	child.inInit = true
 	err := ic.OnInit(child)
-	child.initDone = true // ticks/subs are snapshotted from here on — see Tick/Listen
 	if err != nil {
 		panic(initOutcome{err: err})
 	}

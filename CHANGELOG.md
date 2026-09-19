@@ -18,6 +18,11 @@
 
 ### New
 
+- `State.Track(ctx, t, load)` keeps a `State` equal to a store announced on a
+  `topic.Topic`: it seeds from `load`, seeds again once the stream has
+  subscribed, and applies every publish — so shared live state no longer needs
+  a hand-written `ctx.OnConnect` re-read.
+
 - `via.ErrForbidden` — returned from `OnInit`, answers 403 with
   `ReasonForbidden`.
 
@@ -55,11 +60,17 @@
 
 ### Fixed
 
+- `ctx.Tick`, `ctx.Listen`, `ctx.OnConnect`, `ctx.OnDispose` and `State.Track`
+  now warn and no-op when called from an action handler, or from any unit with
+  no `OnInit` at all — before, the late-call guard read a flag only `OnInit`
+  itself set, so those calls registered nothing in silence. A `Track` from an
+  action was worse: it copied the store once and never followed it.
+
 - A `Set` inside an `OnConnect` fn now reaches the client: the connect pushes
   once after the hook runs, where before the value waited for a tick or a
-  publish. The shared-state recipe re-reads its store in `OnConnect` for the
-  same reason — `ctx.Listen` subscribes at connect, so a publish between
-  `OnInit`'s read and that subscribe used to leave the tab stale.
+  publish. `State.Track` re-reads its store in `OnConnect` for the same reason
+  — `ctx.Listen` subscribes at connect, so a publish between `OnInit`'s read
+  and that subscribe would otherwise leave the tab stale.
 
 - A root no longer mints slots for its children's signals: the type walk stops
   at a field with its own `View`. The dead entry in every first paint is gone,

@@ -1186,3 +1186,94 @@ func TestConnect_anUnchangedTickRenderShipsNoFrame(t *testing.T) {
 	assert.Zero(t, countFrames(conn, "n: 7"),
 		"the ticks after the change repeat the same bytes and must ship nothing")
 }
+
+// actionTicker is live via a Listen on a topic nothing publishes to, so its
+// Bump runs as a live action over the open stream — and calls Tick on the
+// action's own Ctx.
+type actionTicker struct {
+	room  *topic.Topic[string]
+	beats *atomic.Int64
+	N     via.State[int]
+}
+
+func (a *actionTicker) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(a.room, a.recv)
+	return nil
+}
+
+func (a *actionTicker) recv(*via.Ctx, string) {}
+
+func (a *actionTicker) Bump(ctx *via.Ctx) {
+	a.N.Set(a.N.Get() + 1)
+	ctx.Tick(time.Millisecond, a.tick) // called after OnInit returned
+}
+
+func (a *actionTicker) tick(*via.Ctx) { a.beats.Add(1) }
+
+func (a *actionTicker) View() h.H {
+	return h.Div(h.Str("n="), a.N.Display(), h.Button(via.On("click", a.Bump)))
+}
+
+func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	beats := &atomic.Int64{}
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(actionTicker{room: topic.New[string](), beats: beats}))
+		conn := app.Connect()
+		defer conn.Close()
+
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+		conn.Await("n=1")
+
+		synctest.Wait()
+		time.Sleep(50 * time.Millisecond)
+		synctest.Wait()
+	})
+
+	assert.Equal(t, int64(0), beats.Load(),
+		"a Tick registered from an action handler must never fire")
+	assert.Contains(t, buf.String(), "Tick called after OnInit returned",
+		"a Tick call from an action handler must log loudly instead of registering nothing in silence")
+}
+
+// plainTicker is a plain (non-live) unit whose action calls Tick — the same
+// late call as actionTicker, down the plain POST path.
+type plainTicker struct {
+	beats *atomic.Int64
+	N     via.Signal[int]
+}
+
+func (p *plainTicker) Bump(ctx *via.Ctx) {
+	p.N.Set(p.N.Get() + 1)
+	ctx.Tick(time.Millisecond, p.tick) // called after OnInit returned
+}
+
+func (p *plainTicker) tick(*via.Ctx) { p.beats.Add(1) }
+
+func (p *plainTicker) View() h.H {
+	return h.Div(h.Str("n="), p.N.Display(), h.Button(via.On("click", p.Bump)))
+}
+
+func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	beats := &atomic.Int64{}
+	app := vt.Serve(t, via.Handler(plainTicker{beats: beats}))
+	status, _ := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, status)
+
+	assert.Equal(t, int64(0), beats.Load(),
+		"a Tick registered from a plain action handler must never fire")
+	assert.Contains(t, buf.String(), "Tick called after OnInit returned",
+		"a Tick call from a plain action handler must log loudly")
+}

@@ -16,21 +16,24 @@ Read three, in this order — each adds exactly one idea to the last:
 3. **`pulse`** — adds `State` and the SSE stream: state that lives on the
    SERVER, pushed to the tab. This is where a page stops being plain.
 
-After that, pick by what you need: `feed` for `Topic` + `ctx.Listen` (state
-shared across tabs — `State` alone is per connection), `poll` for `via.OnArg`
-per-row actions, `dashboard` for several live children on one stream plus a JS island fed by
-`Set` and a client-only `SignalCS`, `chat` for all of it at once, `forum` for
-the multi-page/router/session/upload side.
+After that, pick by what you need: `shared` for a value the app owns and every
+tab tracks through `State.Track` (state shared across tabs — `State` alone is
+per connection), `feed` for `Topic` + `ctx.Listen`, which is what you want when
+each event matters rather than only the latest, `poll` for `via.OnArg` per-row
+actions, `dashboard` for several live children on one stream plus a JS island
+fed by `Set` and a client-only `SignalCS`, `chat` for both topic shapes at
+once, `forum` for the multi-page/router/session/upload side.
 
 | example | what it shows |
 | --- | --- |
 | `counter` | server-rendered state, one action, no client signal |
 | `greeting` | a client-resident `Signal`, two-way bound, displayed, and tested by `expr` |
 | `pulse` | a server tick pushed to one tab over SSE |
+| `shared` | an app-owned counter every tab follows with `State.Track` |
 | `feed` | a `Topic` broadcast fanning out to every connected tab |
 | `poll` | a reordering list where `via.OnArg` carries each row's id; `h.DataAttr` |
 | `dashboard` | live regions on one stream; a canvas island; tag-seeded signals |
-| `chat` | multi-user chat with a presence count |
+| `chat` | a `Topic` message bus plus a tracked presence count |
 | `forum` | a multi-page app: router, sessions, `PostForm` + `Redirect`, upload |
 
 ## Not shown here — read the godoc

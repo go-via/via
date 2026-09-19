@@ -42,43 +42,43 @@ func (g *Greeting) View() h.H {
 }
 ```
 
-**3. `State` + `Topic` + `Listen` — server state shared across tabs.** `State`
-is per connection, so the shared number lives in your own store. A `Topic`
-publish fans the change out, and each tab's `Listen` copies it into that tab's
-`State`, which element-patches over SSE. Registering the `Listen` in `OnInit` is
-what makes the page live. The subscribe itself happens when the tab connects,
-after `OnInit` read the store — so re-read it in `ctx.OnConnect`, or a publish
-landing in that window leaves the tab stale until the next one.
+**3. `State.Track` — server state shared across tabs.** `State` is per
+connection, so the shared number stays in a store you own — here an
+`atomic.Int64` — and each bump is announced on a `topic.Topic`. `Track` seeds
+this connection's `State` from the store and then applies every publish, which
+element-patches over SSE; the `Track` in `OnInit` is what makes the page live.
+It exists because the subscribe only happens when the tab connects, after
+`OnInit` read the store: `Track` re-reads there too, so a publish landing in
+that window is not missed.
 
 ```go
-type Shared struct {
-	n     *atomic.Int64      // the real shared value
-	room  *topic.Topic[int64]
-	Count via.State[int64]   // this connection's view of it
+type Counter struct {
+	n     *atomic.Int64       // the shared value, app-owned
+	room  *topic.Topic[int64] // announces each bump
+	Count via.State[int64]    // this connection's view of it
 }
 
-func (s *Shared) OnInit(ctx *via.Ctx) error {
-	s.Count.Set(s.n.Load())
-	ctx.Listen(s.room, s.recv)
-	ctx.OnConnect(s.sync)
+func (c *Counter) OnInit(ctx *via.Ctx) error {
+	c.Count.Track(ctx, c.room, c.n.Load)
 	return nil
 }
 
-func (s *Shared) recv(ctx *via.Ctx, v int64) { s.Count.Set(v) }
-func (s *Shared) sync()                      { s.Count.Set(s.n.Load()) }
-func (s *Shared) Inc(ctx *via.Ctx)           { s.room.Publish(s.n.Add(1)) }
+func (c *Counter) Inc(ctx *via.Ctx) { c.room.Publish(c.n.Add(1)) }
 
-func (s *Shared) View() h.H {
+func (c *Counter) View() h.H {
 	return h.Div(
-		h.H1(s.Count.Display()),
-		h.Button(via.On("click", s.Inc), h.Str("+")),
+		h.H1(c.Count.Display()),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
 	)
 }
 
 func main() {
-	http.Handle("/", via.Handler(Shared{n: new(atomic.Int64), room: topic.New[int64]()}))
+	http.Handle("/", via.Handler(Counter{n: new(atomic.Int64), room: topic.New[int64]()}))
 }
 ```
+
+The store need not be the whole picture: `load` may return one field of a
+larger struct, and the topic then carries that field's type.
 
 **4. `PostForm` + `Session` + `Redirect`.** A native, always-multipart form
 whose submit runs server-side. Read fields with stdlib, keep the result in the
@@ -152,12 +152,14 @@ func main() {
 ## A page is plain until a composition makes it live
 
 **`State` is per connection, not per app.** Each tab gets its own copy, so a
-counter two tabs are supposed to share does not live in a `State`. It lives in a
-store you own, changes are announced on a `topic.Topic`, and each tab's
-`ctx.Listen` handler copies the new value into that tab's `State`, with a
-`ctx.OnConnect` re-read of the store to cover a publish that beat the
-subscribe. That is the whole shared-live-state recipe (step 3 of the
-[Tour](#tour), and `example/feed`); reach for it before anything else here.
+counter two tabs are supposed to share does not live in a `State`. It lives in
+a store you own, changes are announced on a `topic.Topic`, and each tab's
+`State.Track` seeds from the store and follows the topic — including a re-read
+at connect, so a publish that beat the subscribe is not lost. That is the whole
+shared-live-state recipe (step 3 of the [Tour](#tour), and `example/shared`);
+reach for it before anything else here. A plain `ctx.Listen` is the right shape
+when the tab does not mirror a value but has to see every message —
+`example/feed`, and `example/chat`'s message bus appended to a `List`.
 
 A page is served **plain**: request/response, with actions and a morph on
 POST. It **streams** — an SSE connection scoped to that one tab, its own server
@@ -480,8 +482,9 @@ it.
     signal-patch, so a fan-out never clobbers what a user is typing.
 
 - **Multi-user fan-out** (`example/feed`, `example/chat`): an in-process
-  `via/topic.Topic[T]` broker + `ctx.Listen` / `ctx.OnDispose`: one publish
-  fans out to every connected child.
+  `via/topic.Topic[T]` broker: `State.Track` when every tab mirrors one shared
+  value, `ctx.Listen` / `ctx.OnDispose` when every message has to be seen. One
+  publish fans out to every connected child.
 
 - **Sessions** (always available):
   `ctx.Session().Put(v)`/`Get[T]()`/`Delete()`, a per-browser JSON value behind

@@ -31,7 +31,7 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 	if c.reinit {
 		return // the post-action re-run; this unit's ticks were snapshotted at GET/connect (I5)
 	}
-	if c.initDone {
+	if !c.inInit {
 		c.logger().Warn("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
 		return
 	}
@@ -53,7 +53,7 @@ func (c *Ctx) OnConnect(fn func()) {
 	if c.reinit {
 		return // see Tick
 	}
-	if c.initDone {
+	if !c.inInit {
 		c.logger().Warn("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
 		return
 	}
@@ -70,7 +70,7 @@ func (c *Ctx) OnDispose(fn func()) {
 	if c.reinit {
 		return // see Tick
 	}
-	if c.initDone {
+	if !c.inInit {
 		c.logger().Warn("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")
 		return
 	}
@@ -97,7 +97,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if c.reinit {
 		return // see Tick
 	}
-	if c.initDone {
+	if !c.inInit {
 		c.logger().Warn("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
 		return
 	}

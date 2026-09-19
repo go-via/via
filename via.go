@@ -490,7 +490,7 @@ type Ctx struct {
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
-	initDone    bool            // a Tick/Listen after this would register into a snapshot nobody reads
+	inInit      bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
 	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
 	errPage     bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
 	viewRan     bool            // the View has run: a Set from here on is a change to patch, not a seed to declare

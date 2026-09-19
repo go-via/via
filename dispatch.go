@@ -686,7 +686,7 @@ func actedViewer(inst instance, u *Ctx) any {
 // rebindFrom builds the Ctx for hydration pass >= 2: a clone of the auth
 // render with only the per-render tables reset. Three separate defect rounds
 // were one field set on auth and forgotten here (req/sessions/sessW/doInit,
-// then session, then live/initDone), each patched by hand-copying one more
+// then session, then live), each patched by hand-copying one more
 // field — so the default is inverted: a new Ctx field rides along unless it is
 // reset below, and forgetting one can no longer silently drop a request scope.
 //
