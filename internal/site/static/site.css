@@ -1,0 +1,319 @@
+:root {
+  --bg: #16181d;
+  --sidebar: #1b1e24;
+  --text: #c9ced8;
+  --border: #2a2e37;
+  --amber: #ffbf00;
+  --ink: #0b0b0f;
+  --sans: Inter, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@font-face {
+  font-family: Inter;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/static/fonts/inter.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-400.woff2") format("woff2");
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { color: #fff; line-height: 1.25; }
+h1 { font-size: 1.9rem; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; }
+h3 { font-size: 1.05rem; margin: 0; }
+
+code, pre { font-family: var(--mono); font-size: .875rem; }
+
+pre {
+  overflow-x: auto;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f1116;
+  line-height: 1.5;
+}
+
+.shell {
+  display: grid;
+  /* minmax(0, …) so wide code blocks scroll inside .col instead of widening the row */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "top" "side" "col" "bottom";
+  min-height: 100vh;
+}
+
+.top {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .85rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.wordmark { display: flex; }
+.top-link { font-size: .9rem; }
+
+.side {
+  grid-area: side;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 0;
+}
+.side ul { list-style: none; margin: 0; padding: 0; }
+.nav-link {
+  display: block;
+  padding: .35rem 1.5rem;
+  color: var(--text);
+  border-left: 2px solid transparent;
+}
+.nav-link:hover { color: #fff; text-decoration: none; }
+.nav-link.current {
+  color: var(--amber);
+  border-left-color: var(--amber);
+  background: rgba(255, 191, 0, .06);
+}
+
+.col {
+  grid-area: col;
+  min-width: 0;
+  max-width: 72ch;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.bottom {
+  grid-area: bottom;
+  padding: 1.25rem 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: .85rem;
+}
+
+@media (min-width: 900px) {
+  .shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-areas:
+      "top top"
+      "side col"
+      "side bottom";
+  }
+  .side {
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+  }
+}
+
+.hero { margin-bottom: 2rem; }
+.hero-art { max-width: 100%; border-radius: 8px; }
+.hero-mark { display: block; margin: 1.25rem 0 .5rem; }
+.pitch { font-size: 1.1rem; margin: 0; }
+
+.demo {
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar);
+}
+.demo > header { padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.demo-prose { padding: .75rem 1rem 0; }
+.demo .row { display: flex; align-items: center; gap: .5rem; }
+
+/* The panels are siblings of the radios, so :checked picks one by position
+   and the card needs no script. */
+.demo-tabs { display: flex; flex-wrap: wrap; padding: .75rem 1rem 1rem; }
+.demo-tabs > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.demo-tabs > label {
+  padding: .25rem .75rem;
+  font-size: .85rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-right: .35rem;
+  cursor: pointer;
+}
+.demo-tabs > div { display: none; flex: 1 1 100%; width: 100%; min-width: 0; max-width: 100%; margin-top: .9rem; }
+.demo-tabs > input:nth-of-type(1):checked ~ label:nth-of-type(1),
+.demo-tabs > input:nth-of-type(2):checked ~ label:nth-of-type(2),
+.demo-tabs > input:nth-of-type(3):checked ~ label:nth-of-type(3) {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.demo-tabs > input:nth-of-type(1):focus-visible ~ label:nth-of-type(1),
+.demo-tabs > input:nth-of-type(2):focus-visible ~ label:nth-of-type(2),
+.demo-tabs > input:nth-of-type(3):focus-visible ~ label:nth-of-type(3) {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+.demo-tabs > input:nth-of-type(1):checked ~ div:nth-of-type(1),
+.demo-tabs > input:nth-of-type(2):checked ~ div:nth-of-type(2),
+.demo-tabs > input:nth-of-type(3):checked ~ div:nth-of-type(3) {
+  display: block;
+}
+
+.inspector {
+  font-family: var(--mono);
+  font-size: .8rem;
+  max-height: 320px;
+  overflow: auto;
+  padding: .75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #0f1116;
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: #23272f;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--amber); color: #fff; }
+
+/* Demo controls: the actions and signals demos render plain form elements,
+   which the browser styles nothing like the rest of the page. */
+.demo label { display: block; margin: .5rem 0; }
+.demo label > input { display: block; margin-top: .2rem; }
+.demo input,
+.demo output {
+  font: inherit;
+  color: var(--text);
+  background: #0f1116;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .25rem .5rem;
+}
+.demo input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.demo input[type="number"] { width: 6rem; }
+.demo output { min-width: 2.5rem; text-align: right; font-family: var(--mono); }
+
+.demo .tally { list-style: none; padding: 0; margin: 0; }
+.demo .tally > li { margin: .35rem 0; }
+.demo .tally span { flex: 1; }
+
+.demo .panel { margin-top: .5rem; padding: .5rem .75rem; border-left: 2px solid var(--amber); }
+.demo .panel p { margin: 0; }
+
+/* Empty is the common case for both: a State renders "" until it has
+   something to say, and an empty box would still take its own line. */
+.demo .err,
+.demo .notice { display: block; margin-top: .25rem; color: var(--amber); }
+.demo .err:empty,
+.demo .notice:empty { display: none; }
+
+.demo .total { font-family: var(--mono); }
+.demo .total.over { color: var(--amber); }
+
+.map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .75rem;
+  margin-top: .9rem;
+}
+.chart {
+  display: block;
+  max-width: 100%;
+  margin-top: .9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.demo .metric {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 2rem;
+  color: #fff;
+}
+.demo .note { font-size: .85rem; color: #8b93a1; }
+.demo .pair { display: flex; flex-wrap: wrap; gap: 1rem; }
+.demo .loglist {
+  margin: .75rem 0 0;
+  padding: 0 0 0 1.25rem;
+  max-height: 200px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: .8rem;
+}
+.demo .loglist:empty { display: none; }
+.demo .csp { margin: .5rem 0; padding-left: 1.25rem; font-size: .9rem; }
+.demo .csp code { color: var(--amber); }
+
+.ref-table {
+  width: 100%;
+  margin: 1rem 0 1.5rem;
+  border-collapse: collapse;
+  font-size: .9rem;
+}
+.ref-table th, .ref-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: .45rem .6rem;
+  border-bottom: 1px solid var(--border);
+}
+.ref-table th { color: #fff; font-weight: 600; }
+.ref-table td code { color: var(--amber); }
+@media (min-width: 900px) { .ref-table td code { white-space: nowrap; } }
+
+.inspector h4 {
+  margin: 0 0 .35rem;
+  color: #8b93a1;
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.insp-signals pre {
+  margin: 0 0 .9rem;
+  padding: .5rem;
+  background: #16181d;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 120px;
+  overflow: auto;
+}
+.insp-empty { margin: 0; color: #8b93a1; }
+.insp-e {
+  border-left: 2px solid var(--border);
+  padding: .1rem 0 .1rem .5rem;
+  margin-bottom: .25rem;
+}
+.insp-e > summary { cursor: pointer; color: #8b93a1; }
+.insp-e > pre {
+  margin: .3rem 0 .2rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+.insp-req { border-left-color: var(--amber); }
+.insp-req > summary { color: var(--amber); }
+.insp-res { border-left-color: #4b8; }
+.insp-res > summary { color: #7cc; }
+.insp-frame { border-left-color: #58f; }
+.insp-frame > summary { color: #8ab4ff; }

@@ -1,0 +1,7 @@
+{{ ([domain] + extra_domains) | join(', ') }} {
+	encode zstd gzip
+	reverse_proxy {{ bind }} {
+		# SSE: never buffer the upstream stream
+		flush_interval -1
+	}
+}

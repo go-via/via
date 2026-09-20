@@ -1,0 +1,59 @@
+# Deploys the site as a static binary under systemd behind Caddy (TLS via ACME).
+# Usage: ansible-playbook -i <ip>, playbook.yml   (trailing comma = ad-hoc inventory)
+- hosts: all
+  become: true
+  vars:
+    domain: go-via.dev
+    extra_domains: [www.go-via.dev]
+    bind: 127.0.0.1:8080
+    arch: amd64
+    bin: /usr/local/bin/go-via-site
+    env_file: /etc/go-via.env
+    build_dir: "{{ playbook_dir }}/.."
+
+  tasks:
+    - name: build dir
+      delegate_to: localhost
+      become: false
+      file: { path: "{{ playbook_dir }}/.build", state: directory }
+
+    - name: build the binary locally
+      delegate_to: localhost
+      become: false
+      environment: { CGO_ENABLED: "0", GOOS: linux, GOARCH: "{{ arch }}" }
+      command: go build -trimpath -ldflags=-s -o "{{ playbook_dir }}/.build/site-{{ arch }}" .
+      args: { chdir: "{{ build_dir }}" }
+      changed_when: false
+
+    - name: install caddy
+      apt: { name: caddy, state: present, update_cache: true }
+
+    - name: install binary
+      copy:
+        src: "{{ playbook_dir }}/.build/site-{{ arch }}"
+        dest: "{{ bin }}"
+        mode: "0755"
+      notify: restart go-via
+
+    # Generated once and kept: rotating the key logs every session out.
+    - name: session key
+      shell: umask 077 && echo "VIA_SESSION_KEY=$(openssl rand -hex 32)" > {{ env_file }}
+      args: { creates: "{{ env_file }}" }
+
+    - name: systemd unit
+      template: { src: templates/go-via.service.j2, dest: /etc/systemd/system/go-via.service }
+      notify: restart go-via
+
+    - name: caddyfile
+      template: { src: templates/Caddyfile.j2, dest: /etc/caddy/Caddyfile }
+      notify: reload caddy
+
+    - name: enable services
+      systemd: { name: "{{ item }}", enabled: true, state: started, daemon_reload: true }
+      loop: [go-via, caddy]
+
+  handlers:
+    - name: restart go-via
+      systemd: { name: go-via, state: restarted, daemon_reload: true }
+    - name: reload caddy
+      systemd: { name: caddy, state: reloaded }

@@ -1,0 +1,24 @@
+/* Map container rules only. MapLibre's own stylesheet is deliberately not
+   vendored: it embeds data: image URIs, which this site's default-src 'self'
+   blocks, and nothing here needs its controls. */
+
+.map {
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #16181d;
+}
+
+.map canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.maplibregl-control-container,
+.maplibregl-ctrl-attrib {
+  display: none;
+}

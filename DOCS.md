@@ -303,6 +303,15 @@ Update it from Go with `sig.Set(…)`. `Set` declares the signal, so the island
 needs no `Bind()` or `Display()`. Seed the first-paint value with a `Set` in
 `OnInit`.
 
+Write the init so it can run twice: a `data-effect` re-runs on every change of
+every signal it reads, so build once (`el._map ??= new Map({container: el})`)
+and let later runs only move what already exists. Teardown is yours — via has
+no unmount hook, and a patch that drops the container frees nothing the library
+holds. Mark each container with a data attribute (`h.Data("island-map", "")`)
+and keep one `MutationObserver` on the document: for every removed node, find
+the marked elements inside it and call the library's own `remove()`, so its
+worker, WebGL context and timers go with the node.
+
 ## Security floor (built in)
 
 The action endpoint and rendered pages are hardened by default:
