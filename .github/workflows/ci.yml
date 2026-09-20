@@ -55,7 +55,7 @@ jobs:
         if: steps.changes.outputs.code == 'true'
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.4'
+          go-version: '1.26.8'
           cache: true
 
       - name: Setup Node
@@ -82,7 +82,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.4'
+          go-version: '1.26.8'
           cache: true
 
       - name: Install Chromium
