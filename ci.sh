@@ -52,6 +52,10 @@ $GO build ./...
 echo "== go test -race =="
 $GO test -race ./...
 
+# Separate module: it pulls chroma, which via's own go.mod must not see.
+echo "== site module (internal/site) =="
+( cd internal/site && $GO build ./... && $GO vet ./... && $GO tool staticcheck ./... && $GO test ./... )
+
 # Real-browser tier (separate module, chromedp). A missing binary skips loudly
 # rather than silently: vtbrowser's own t.Skip is invisible in CI output, so an
 # unrun tier reads as a pass.

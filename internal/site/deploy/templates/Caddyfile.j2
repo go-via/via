@@ -1,7 +1,23 @@
-{{ ([domain] + extra_domains) | join(', ') }} {
-	encode zstd gzip
+{{ domain }} {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	# text/* would also compress, and so buffer, text/event-stream.
+	encode zstd gzip {
+		match {
+			header Content-Type text/html* text/css* text/plain* application/javascript* application/json* image/svg+xml*
+		}
+	}
+
 	reverse_proxy {{ bind }} {
 		# SSE: never buffer the upstream stream
 		flush_interval -1
 	}
+
+	log {
+		output file /var/log/caddy/go-via.log
+	}
+}
+
+www.{{ domain }} {
+	redir https://{{ domain }}{uri} permanent
 }

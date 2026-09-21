@@ -13,7 +13,7 @@ import (
 // constant of the type.
 var islandAssets = via.Assets{
 	Scripts: []via.Script{
-		{Src: "/static/vendor/maplibre-gl-csp.js"},
+		{Src: "/static/vendor/maplibre-gl-csp.js", Defer: true},
 		{Src: "/static/islands.js", Defer: true},
 	},
 	Styles: []via.Style{{Href: "/static/islands.css"}},
@@ -27,13 +27,13 @@ type Islands struct {
 }
 
 func (p *Islands) PageMeta() via.Meta {
-	m := shell.Meta("Islands", "Handing a subtree to a JS library: DataIgnoreMorph, DataEffect and a teardown that leaves nothing behind.")
+	m := shell.Meta(shell.NavFor("/islands"), "Handing a subtree to a JS library: DataIgnoreMorph, DataEffect and a teardown that leaves nothing behind.")
 	m.Assets = islandAssets
 	return m
 }
 
 func (p *Islands) View() h.H {
-	return shell.Page("Islands", shell.Nav[4],
+	return shell.Page(shell.NavFor("/islands"),
 		h.P(
 			h.Str("via never generates JavaScript. An island is what it offers instead: a container via renders once and then leaves alone. "),
 			h.Code(h.Str("h.DataIgnoreMorph()")),
@@ -59,12 +59,14 @@ func (p *Islands) View() h.H {
 				h.Str("Add, remove and shuffle MapLibre instances; the script tag is declared once, in the page's "),
 				h.Code(h.Str("PageMeta().Assets")),
 				h.Str(", and serves however many maps the grid holds. "),
-				h.Str("Init is idempotent because a data-effect re-runs on every change of every signal it reads, so viaMap builds the map with "),
+				h.Str("A data-effect re-runs on every change of every signal it reads, so init has to be idempotent. "),
+				h.Str("viaMap builds the map with "),
 				h.Code(h.Str("??=")),
-				h.Str(" and otherwise only calls jumpTo — Shuffle flies the maps instead of rebuilding them. "),
-				h.Str("Teardown is yours: via has no unmount hook by design, so islands.js keeps one MutationObserver on the document and calls "),
+				h.Str(" and otherwise only calls jumpTo, which is why Shuffle flies the maps instead of rebuilding them. "),
+				h.Str("Client-side teardown is yours: via has no client-side unmount hook, so islands.js keeps one MutationObserver on the document and calls "),
 				h.Code(h.Str("_map.remove()")),
 				h.Str(" for every island a patch took out of the DOM. "),
+				h.Str("The server side has one: ctx.OnDispose runs when the unit's connection closes, which is where a producer feeding the island is stopped. "),
 				h.Str("Everything here is same-origin — MapLibre's CSP build with its worker served from /static/vendor/, one GeoJSON file, and a style with no tiles, glyphs or sprite — so the page's "),
 				h.Code(h.Str("default-src 'self'")),
 				h.Str(" needs no widening."),
@@ -77,5 +79,7 @@ func (p *Islands) View() h.H {
 				h.Str("the action's element patch carries the one signal the handler wrote, and the effect re-runs on arrival."),
 			),
 			via.Child(p.Chart), "chart.go"),
+
+		h.P(h.A(h.Href("/platform"), h.Str("Next: composition, auth and the security floor"))),
 	)
 }

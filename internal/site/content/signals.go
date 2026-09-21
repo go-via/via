@@ -17,21 +17,22 @@ type Signals struct {
 }
 
 func (p *Signals) PageMeta() via.Meta {
-	return shell.Meta("Signals", "Client-resident state with Go field names for wire names: Bind, Display, SignalCS and the expr package.")
+	return shell.Meta(shell.NavFor("/signals"), "Client-resident state whose wire name is the lower-cased field name: Bind, Display, SignalCS and the expr package.")
 }
 
 func (p *Signals) View() h.H {
-	return shell.Page("Signals", shell.Nav[2],
-		h.P(h.Str("A Signal lives in the browser, and its wire name is its Go field name. "+
-			"Bind it to an input, display it somewhere else, compare it in an expression — none of that is a request. "+
-			"The server still owns the signal when it wants to: a Set declares it and ships it.")),
+	return shell.Page(shell.NavFor("/signals"),
+		h.P(h.Str("A Signal lives in the browser, and its wire name is its field name lower-cased, prefixed by the "+
+			"path of children it sits under: a Count on the page is $count, and a Draft inside an embedded Chat is "+
+			"$chat__draft. Bind it to an input, display it somewhere else, compare it in an expression — none of "+
+			"that is a request. The server still owns the signal when it wants to: a Set declares it and ships it.")),
 
 		demo.Card("Greeting", h.P(h.Str("Bind() and Display() are two views of one field, so they resolve to the same wire name whatever order they render in. "+
 			"Typing here reaches no handler and opens no connection; the page is still the plain request-and-response it was served as.")),
 			via.Child(p.Greeting), "greeting.go"),
 
 		demo.Card("Client-only toggle", h.P(h.Str("SignalCS is the client-resident sibling. Its wire name is _-prefixed, which Datastar's fetch filter drops, so the server never sees this flag and has nowhere to store it. "+
-			"Use it for UI state — a panel, the active tab — and give it a start value with a via:\"init=…\" tag.")),
+			"It is for UI state — a panel, the active tab — and a via:\"init=…\" tag gives it a start value.")),
 			via.Child(p.Toggle), "toggle.go"),
 
 		demo.Card("Computed", h.P(h.Str("Ref() hands a signal to the expr package as $a, and the h.Data* attributes take the expression it builds. "+

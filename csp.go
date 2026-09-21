@@ -95,7 +95,7 @@ func buildCSP(global, page Assets) string {
 	if len(img.src) > base[3] {
 		csp += "img-src " + img.join() + "; "
 	}
-	return csp + "object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+	return csp + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 }
 
 // srcSet accumulates one directive's sources in declaration order, without

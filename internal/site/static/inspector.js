@@ -1,6 +1,4 @@
-// inspector.js fills every [data-inspector] pane with the signals and the SSE
-// frames its own demo produced: it wraps fetch, tees every Datastar response,
-// and routes each frame to the pane whose child container it targets.
+// Fills each [data-inspector] pane with the frames and signals of its own demo.
 
 (function () {
   "use strict";
@@ -19,7 +17,6 @@
   }
 
   function clip(s) {
-    if (typeof s !== "string") return "";
     return s.length > MAX_BODY ? s.slice(0, MAX_BODY) + "\n… truncated" : s;
   }
 
@@ -76,20 +73,38 @@
     return f.event ? f : null;
   }
 
+  // Cancelled on pagehide: a leaked reader holds the clone buffer across bfcache.
+  var readers = [];
+  addEventListener("pagehide", function () {
+    for (var i = 0; i < readers.length; i++) {
+      try {
+        readers[i].cancel();
+      } catch (err) {
+        /* already closed */
+      }
+    }
+    readers.length = 0;
+  });
+
   // Reads a clone of the response, so the long-lived /_via/sse stream is
   // observed frame by frame without Datastar's own reader ever waiting on us.
   function tee(res, url) {
-    if (!res.body) return;
+    if (!res.body || !wanted(url)) return;
     var reader;
     try {
       reader = res.clone().body.getReader();
     } catch (err) {
       return;
     }
+    readers.push(reader);
     var dec = new TextDecoder();
     var buf = "";
+    function done() {
+      var at = readers.indexOf(reader);
+      if (at !== -1) readers.splice(at, 1);
+    }
     function step(chunk) {
-      if (chunk.done) return;
+      if (chunk.done) return done();
       buf += dec.decode(chunk.value, { stream: true });
       var parts = buf.split(/\r?\n\r?\n/);
       buf = parts.pop();
@@ -97,12 +112,22 @@
         var f = parseFrame(parts[i], url);
         if (f) {
           f.elements = clip(f.elements);
+          f.signals = clip(f.signals);
           record(f);
         }
       }
       return reader.read().then(step);
     }
-    reader.read().then(step).catch(function () {});
+    reader.read().then(step).catch(done);
+  }
+
+  // Action URLs name their demo; the SSE stream names none, so any pane wants it.
+  function wanted(url) {
+    if (!panels.length) return false;
+    var m = /\/_via\/a\/([^/]+)\//.exec(url);
+    if (!m) return true;
+    for (var i = 0; i < panels.length; i++) if (panels[i].t.key === m[1]) return true;
+    return false;
   }
 
   function wrapFetch() {
@@ -130,14 +155,13 @@
     return n;
   }
 
-  // A demo's child container is #via-i{key} (child.go); the first one in the
-  // card is the demo's own, any deeper one belongs to a nested child.
+  // #via-i{key} (child.go). Only id and key are kept: a patch can replace the node.
   function target(panel) {
     var card = panel.closest(".demo");
     if (!card) return null;
     var box = card.querySelector('[id^="via-i"]');
     if (!box) return null;
-    return { id: box.id, key: box.id.slice("via-i".length), box: box };
+    return { id: box.id, key: box.id.slice("via-i".length) };
   }
 
   function matches(e, t) {
@@ -179,11 +203,10 @@
     return wrap;
   }
 
-  // The signal names a child declares are all prefixed with its scope
-  // (greeting__name, _toggle__open), and the container announces them in its
-  // data-signals attribute — so the pane's filter is those prefixes.
-  function signalFilter(box) {
-    var raw = box.getAttribute("data-signals");
+  // A child's signals carry its scope prefix, announced in data-signals.
+  function signalFilter(t) {
+    var box = document.getElementById(t.id);
+    var raw = box && box.getAttribute("data-signals");
     if (!raw) return "";
     var keys;
     try {
@@ -207,7 +230,7 @@
     panel.textContent = "";
     var sig = el("div", "insp-signals");
     sig.appendChild(el("h4", null, "Signals"));
-    var filter = signalFilter(t.box);
+    var filter = signalFilter(t);
     if (filter) {
       var pre = el("pre");
       pre.setAttribute("data-json-signals", filter);
@@ -223,7 +246,18 @@
 
   var panels = [];
 
-  function refresh(p) {
+  // Prepend: a rebuild would close open <details> and jump the scroll.
+  function append(p, e) {
+    if (!matches(e, p.t)) return;
+    var empty = p.log.querySelector(".insp-empty");
+    if (empty) empty.remove();
+    var node = entryNode(e);
+    p.log.insertBefore(node, p.log.firstChild);
+    if (p.el.scrollTop > 0) p.el.scrollTop += node.offsetHeight;
+    while (p.log.childElementCount > MAX_ENTRIES) p.log.lastElementChild.remove();
+  }
+
+  function fill(p) {
     p.log.textContent = "";
     var n = 0;
     for (var i = entries.length - 1; i >= 0; i--) {
@@ -242,13 +276,15 @@
       if (!t) continue;
       var p = { el: nodes[i], t: t, log: build(nodes[i], t) };
       panels.push(p);
-      refresh(p);
+      fill(p);
     }
+    if (panels.length) wrapFetch();
   }
 
-  wrapFetch();
-  document.addEventListener("DOMContentLoaded", mount);
-  document.addEventListener("via:inspect", function () {
-    for (var i = 0; i < panels.length; i++) refresh(panels[i]);
+  // At eval, not DOMContentLoaded: via's data-init POSTs /_via/sse before that event.
+  mount();
+
+  document.addEventListener("via:inspect", function (ev) {
+    for (var i = 0; i < panels.length; i++) append(panels[i], ev.detail);
   });
 })();

@@ -1,4 +1,5 @@
 :root {
+  color-scheme: dark;
   --bg: #16181d;
   --sidebar: #1b1e24;
   --text: #c9ced8;
@@ -86,10 +87,29 @@ pre {
   border-left: 2px solid transparent;
 }
 .nav-link:hover { color: #fff; text-decoration: none; }
-.nav-link.current {
+.nav-link.current,
+.nav-link[aria-current="page"] {
   color: var(--amber);
   border-left-color: var(--amber);
   background: rgba(255, 191, 0, .06);
+  font-weight: 600;
+}
+
+/* Off-screen rather than display:none — a hidden link is not focusable, and
+   the whole point is that the first Tab reaches it. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: .5rem .9rem;
+  color: var(--ink);
+  background: var(--amber);
+  border-radius: 0 0 4px 0;
+}
+.skip:focus {
+  left: 0;
+  text-decoration: none;
 }
 
 .col {
@@ -125,7 +145,7 @@ pre {
 }
 
 .hero { margin-bottom: 2rem; }
-.hero-art { max-width: 100%; border-radius: 8px; }
+.hero-art { display: block; max-width: 100%; height: auto; border-radius: 8px; }
 .hero-mark { display: block; margin: 1.25rem 0 .5rem; }
 .pitch { font-size: 1.1rem; margin: 0; }
 
@@ -139,8 +159,8 @@ pre {
 .demo-prose { padding: .75rem 1rem 0; }
 .demo .row { display: flex; align-items: center; gap: .5rem; }
 
-/* The panels are siblings of the radios, so :checked picks one by position
-   and the card needs no script. */
+/* Panels are siblings of the radios, so :checked picks one by position and the
+   card needs no script (demo/card.go). */
 .demo-tabs { display: flex; flex-wrap: wrap; padding: .75rem 1rem 1rem; }
 .demo-tabs > input {
   position: absolute;
@@ -196,9 +216,8 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--amber); color: #fff; }
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 
-/* Demo controls: the actions and signals demos render plain form elements,
-   which the browser styles nothing like the rest of the page. */
 .demo label { display: block; margin: .5rem 0; }
 .demo label > input { display: block; margin-top: .2rem; }
 .demo input,
@@ -221,8 +240,8 @@ button:hover { border-color: var(--amber); color: #fff; }
 .demo .panel { margin-top: .5rem; padding: .5rem .75rem; border-left: 2px solid var(--amber); }
 .demo .panel p { margin: 0; }
 
-/* Empty is the common case for both: a State renders "" until it has
-   something to say, and an empty box would still take its own line. */
+/* A State renders "" until it has something to say, and an empty box would
+   still take its own line. */
 .demo .err,
 .demo .notice { display: block; margin-top: .25rem; color: var(--amber); }
 .demo .err:empty,
@@ -262,8 +281,8 @@ button:hover { border-color: var(--amber); color: #fff; }
   font-size: .8rem;
 }
 .demo .loglist:empty { display: none; }
-.demo .csp { margin: .5rem 0; padding-left: 1.25rem; font-size: .9rem; }
-.demo .csp code { color: var(--amber); }
+.demo .reflist { margin: .5rem 0; padding-left: 1.25rem; font-size: .9rem; }
+.demo .reflist code { color: var(--amber); }
 
 .ref-table {
   width: 100%;
@@ -292,7 +311,7 @@ button:hover { border-color: var(--amber); color: #fff; }
 .insp-signals pre {
   margin: 0 0 .9rem;
   padding: .5rem;
-  background: #16181d;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   max-height: 120px;

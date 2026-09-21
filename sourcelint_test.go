@@ -163,15 +163,22 @@ func coreGoFiles(t *testing.T) []string {
 func exampleGoFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
-	err := filepath.WalkDir(filepath.Join("internal", "example"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() && strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
-			files = append(files, p)
-		}
-		return nil
-	})
-	require.NoError(t, err)
+	// The site's demos are held to the same rule: each one is shown verbatim
+	// as documentation of the call-site shape.
+	for _, root := range []string{
+		filepath.Join("internal", "example"),
+		filepath.Join("internal", "site", "demos"),
+	} {
+		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() && strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
+				files = append(files, p)
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
 	return files
 }

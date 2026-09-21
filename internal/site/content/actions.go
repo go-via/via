@@ -8,9 +8,6 @@ import (
 	"go-via.dev/site/shell"
 )
 
-// voteLimit is the page's cap, one bucket per session across every vote on it.
-var voteLimit = demo.NewLimiter(30)
-
 // Actions is the page on wiring clicks and form submits to Go methods.
 type Actions struct {
 	Counter demos.Counter
@@ -19,21 +16,25 @@ type Actions struct {
 }
 
 func (p *Actions) PageMeta() via.Meta {
-	return shell.Meta("Actions", "Clicks and form submits as Go methods: via.On, via.OnArg and PostForm, and the morph that answers them.")
+	return shell.Meta(shell.NavFor("/actions"), "Clicks and form submits as Go methods: via.On, via.OnArg and PostForm, and the morph that answers them.")
 }
 
-// OnInit hands the vote demo the page's limiter: via.Child copies the field,
-// so the child renders and acts with whatever this set.
+// NewActions builds the limiter once, so every request's copy of the page
+// spends from the same per-session buckets.
+func NewActions() Actions {
+	return Actions{Vote: demos.Vote{Lim: demo.NewLimiter(30)}}
+}
+
+// OnInit mints the session the limiter keys on.
 func (p *Actions) OnInit(ctx *via.Ctx) error {
 	shell.EnsureSession(ctx)
-	p.Vote.Lim = voteLimit
 	return nil
 }
 
 func (p *Actions) View() h.H {
-	return shell.Page("Actions", shell.Nav[1],
-		h.P(h.Str("A click POSTs to a method on your page type, the handler mutates, and via renders the page again and patches back only what changed. "+
-			"The three demos below are the whole vocabulary: an argless action, an action that carries a row's identity, and a native form the server validates.")),
+	return shell.Page(shell.NavFor("/actions"),
+		h.P(h.Str("A click POSTs to a method on your page type, the handler mutates, and via renders the page "+
+			"again and patches back only what changed.")),
 
 		demo.Card("Counter", h.P(h.Str("via.On(\"click\", c.Dec) binds a method, not a URL you invented. "+
 			"Each click posts to this child alone, and the response patches this region — the rest of the page, including the other demos, is untouched.")),

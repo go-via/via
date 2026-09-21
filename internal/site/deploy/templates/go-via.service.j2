@@ -2,6 +2,8 @@
 Description=go-via.dev
 After=network-online.target
 Wants=network-online.target
+# A crash loop must keep retrying rather than land the unit in failed-forever.
+StartLimitIntervalSec=0
 
 [Service]
 ExecStart={{ bin }}
@@ -10,11 +12,31 @@ Environment=VIA_ORIGIN=https://{{ domain }}
 EnvironmentFile={{ env_file }}
 Restart=always
 RestartSec=2
+TimeoutStopSec=15
+
 DynamicUser=yes
 NoNewPrivileges=yes
+CapabilityBoundingSet=
+UMask=0077
+
 ProtectSystem=strict
 ProtectHome=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
 PrivateTmp=yes
+PrivateDevices=yes
+
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

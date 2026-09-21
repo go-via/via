@@ -11,6 +11,10 @@ import (
 // what makes this unit live, so the list you are reading was pushed to you.
 type Lifecycle struct{ Log via.List[string] }
 
+// logRows keeps the hook log short enough to read at a glance; trim is in
+// shared_contract.go.
+const logRows = 20
+
 func (l *Lifecycle) OnInit(ctx *via.Ctx) error {
 	l.note("OnInit — before the View, on the GET and again on the stream connect")
 	ctx.OnConnect(func() { l.note("OnConnect — the stream is open; every Listen has subscribed") })
@@ -26,9 +30,7 @@ func (l *Lifecycle) Act(ctx *via.Ctx) { l.note("the action handler") }
 
 func (l *Lifecycle) note(s string) {
 	l.Log.Append(time.Now().Format("15:04:05.000") + "  " + s)
-	if n := len(l.Log.Get()); n > keepRows {
-		l.Log.Set(l.Log.Get()[n-keepRows:])
-	}
+	trim(&l.Log, logRows)
 }
 
 func (l *Lifecycle) View() h.H {
