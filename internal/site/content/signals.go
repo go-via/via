@@ -10,18 +10,22 @@ import (
 
 // Signals is the page on client-resident state and the expr vocabulary.
 type Signals struct {
+	page
 	Greeting demos.Greeting
 	Toggle   demos.Toggle
 	Computed demos.Computed
 	Seed     demos.Seed
 }
 
+// NewSignals builds the signals page for a deployment at origin.
+func NewSignals(origin string) Signals { return Signals{page: newPage("/signals", origin)} }
+
 func (p *Signals) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/signals"), "Client-resident state whose wire name is the lower-cased field name: Bind, Display, SignalCS and the expr package.")
+	return p.meta("Client-resident state whose wire name is the lower-cased field name: Bind, Display, SignalCS and the expr package.")
 }
 
 func (p *Signals) View() h.H {
-	return shell.Page(shell.NavFor("/signals"),
+	return shell.Page(p.nav,
 		h.P(h.Str("A Signal lives in the browser, and its wire name is its field name lower-cased, prefixed by the "+
 			"path of children it sits under: a Count on the page is $count, and a Draft inside an embedded Chat is "+
 			"$chat__draft. Bind it to an input, display it somewhere else, compare it in an expression — none of "+

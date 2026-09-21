@@ -28,6 +28,10 @@ func (c *Chart) View() h.H {
 		h.Div(h.Class("row"), h.Button(via.On("click", c.Fresh), h.Str("New data"))),
 		h.Canvas(h.Class("chart"), h.DataIgnoreMorph(),
 			h.Width(420), h.Height(90),
+			// A canvas is opaque to a screen reader; role and label are the
+			// only description of it there is.
+			h.RawAttr("role", "img"),
+			h.RawAttr("aria-label", "Line chart of 16 random samples"),
 			h.DataEffect(expr.Call("viaChart", expr.El, c.Series.Ref()))),
 	)
 }

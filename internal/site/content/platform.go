@@ -10,6 +10,7 @@ import (
 
 // Platform is the page on composition, routing, auth and the security floor.
 type Platform struct {
+	page
 	Compose   demos.Compose
 	Routes    demos.RouteNotes
 	Auth      demos.Auth
@@ -17,8 +18,11 @@ type Platform struct {
 	Lifecycle demos.Lifecycle
 }
 
+// NewPlatform builds the platform page for a deployment at origin.
+func NewPlatform(origin string) Platform { return Platform{page: newPage("/platform", origin)} }
+
 func (p *Platform) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/platform"),
+	return p.meta(
 		"Composition with Child, mount patterns and ctx.Param, auth as an OnInit check, the mount's Content-Security-Policy, and the OnInit/OnReload/OnConnect hooks.")
 }
 
@@ -29,7 +33,7 @@ func (p *Platform) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Platform) View() h.H {
-	return shell.Page(shell.NavFor("/platform"),
+	return shell.Page(p.nav,
 		h.P(h.Str("A page is a struct. Its fields are its children, its methods are its actions and its hooks, "+
 			"and the document it produces is described by one PageMeta method on the mounted root.")),
 

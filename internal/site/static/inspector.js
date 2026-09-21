@@ -164,16 +164,24 @@
     return { id: box.id, key: box.id.slice("via-i".length) };
   }
 
+  function isStream(url) {
+    return url.indexOf("/_via/sse") !== -1;
+  }
+
   function matches(e, t) {
-    if (e.kind === "req" || e.kind === "res") return e.url.indexOf("/_via/a/" + t.key + "/") !== -1;
+    if (e.kind === "req" || e.kind === "res") {
+      // The stream is per page, not per demo, so every pane shows it.
+      return isStream(e.url) || e.url.indexOf("/_via/a/" + t.key + "/") !== -1;
+    }
     if (e.selector === "#" + t.id) return true;
     return e.elements.indexOf('id="' + t.id + '"') !== -1;
   }
 
   function header(e) {
     var time = new Date(e.t).toLocaleTimeString();
-    if (e.kind === "req") return time + "  → " + e.method + " " + path(e.url);
-    if (e.kind === "res") return time + "  ← " + e.status + " " + path(e.url);
+    var tag = isStream(e.url) ? " (stream)" : "";
+    if (e.kind === "req") return time + "  → " + e.method + " " + path(e.url) + tag;
+    if (e.kind === "res") return time + "  ← " + e.status + " " + path(e.url) + tag;
     return time + "  ⇣ " + e.event + (e.mode ? " (" + e.mode + ")" : "");
   }
 
@@ -215,15 +223,22 @@
       return "";
     }
     var pre = [];
+    var exact = [];
     for (var i = 0; i < keys.length; i++) {
       var cut = keys[i].indexOf("__");
       var p = (cut === -1 ? keys[i] : keys[i].slice(0, cut + 2)).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      if (pre.indexOf(p) === -1) pre.push(p);
+      var into = cut === -1 ? exact : pre;
+      if (into.indexOf(p) === -1) into.push(p);
     }
+    var alts = [];
+    // A prefix owns everything under it; an unprefixed key owns only itself,
+    // so it is anchored at both ends or a sibling signal leaks into the pane.
+    if (pre.length) alts.push("^(?:" + pre.join("|") + ")");
+    if (exact.length) alts.push("^(?:" + exact.join("|") + ")$");
     // JSON, not a JS object literal: Datastar JSON.parses the attribute first
     // and only falls back to the Function constructor, and a string include is
     // turned into a RegExp for it.
-    return pre.length ? JSON.stringify({ include: "^(" + pre.join("|") + ")" }) : "";
+    return alts.length ? JSON.stringify({ include: alts.join("|") }) : "";
   }
 
   function build(panel, t) {
@@ -246,14 +261,19 @@
 
   var panels = [];
 
-  // Prepend: a rebuild would close open <details> and jump the scroll.
-  function append(p, e) {
+  // Prepending rather than rebuilding: a rebuild would close open <details>
+  // and jump the scroll.
+  function prepend(p, e) {
     if (!matches(e, p.t)) return;
     var empty = p.log.querySelector(".insp-empty");
     if (empty) empty.remove();
     var node = entryNode(e);
     p.log.insertBefore(node, p.log.firstChild);
-    if (p.el.scrollTop > 0) p.el.scrollTop += node.offsetHeight;
+    // offsetHeight is 0 while the pane's tab is unchecked, which would scroll
+    // the pane to the wrong place on the next visible prepend.
+    if (p.el.offsetParent !== null && p.el.scrollTop > 0) p.el.scrollTop += node.offsetHeight;
+    // The global ring drops old entries but never the nodes already rendered
+    // from them, so each pane trims itself.
     while (p.log.childElementCount > MAX_ENTRIES) p.log.lastElementChild.remove();
   }
 
@@ -274,6 +294,7 @@
     for (var i = 0; i < nodes.length; i++) {
       var t = target(nodes[i]);
       if (!t) continue;
+      nodes[i].tabIndex = 0; // a scroll container is unreachable by keyboard otherwise
       var p = { el: nodes[i], t: t, log: build(nodes[i], t) };
       panels.push(p);
       fill(p);
@@ -285,6 +306,6 @@
   mount();
 
   document.addEventListener("via:inspect", function (ev) {
-    for (var i = 0; i < panels.length; i++) append(panels[i], ev.detail);
+    for (var i = 0; i < panels.length; i++) prepend(panels[i], ev.detail);
   });
 })();

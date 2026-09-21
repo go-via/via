@@ -4,6 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -25,11 +28,22 @@ func (p *cardPage) View() h.H {
 	)
 }
 
-func render(t *testing.T) string {
+// collidingPage titles two cards so that they slug identically; only the
+// digest tells the groups apart.
+type collidingPage struct{}
+
+func (p *collidingPage) View() h.H {
+	return h.Div(
+		demo.Card("Run it", h.P(), h.Div(), "counter.go"),
+		demo.Card("Run-it", h.P(), h.Div(), "counter.go"),
+	)
+}
+
+func render(t *testing.T, mount func(*via.Router)) string {
 	t.Helper()
 	app := via.NewRouter()
 	t.Cleanup(app.Close)
-	via.Mount(app, "/", cardPage{})
+	mount(app)
 
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
@@ -44,20 +58,60 @@ func render(t *testing.T) string {
 	return string(body)
 }
 
+func mountCards(r *via.Router)     { via.Mount(r, "/", cardPage{}) }
+func mountColliding(r *via.Router) { via.Mount(r, "/", collidingPage{}) }
+
+var groupNames = regexp.MustCompile(`name="(tab-[^"]+)"`)
+
 func TestCard_rendersThreeTabsPerCard(t *testing.T) {
 	t.Parallel()
 
-	body := render(t)
+	body := render(t, mountCards)
 
 	assert.Equal(t, 6, strings.Count(body, `type="radio"`),
 		"static/site.css picks the checked tab with :nth-of-type(1..3) rules, so a card has exactly three")
 }
 
+func TestCard_groupsTheTabsInALabelledFieldset(t *testing.T) {
+	t.Parallel()
+
+	body := render(t, mountCards)
+
+	assert.Contains(t, body, `<fieldset class="demo-tabs">`)
+	assert.Contains(t, body, `<legend class="sr-only">Demo view</legend>`)
+}
+
 func TestCard_givesEachCardItsOwnRadioGroup(t *testing.T) {
 	t.Parallel()
 
-	body := render(t)
+	body := render(t, mountCards)
 
-	assert.Contains(t, body, `name="tab-counter-counter"`)
-	assert.Contains(t, body, `name="tab-counter-again-counter"`)
+	assert.Contains(t, body, `name="tab-counter-counter-`)
+	assert.Contains(t, body, `name="tab-counter-again-counter-`)
+}
+
+func TestCard_separatesCardsWhoseTitlesSlugAlike(t *testing.T) {
+	t.Parallel()
+
+	body := render(t, mountColliding)
+
+	seen := map[string]bool{}
+	for _, m := range groupNames.FindAllStringSubmatch(body, -1) {
+		seen[m[1]] = true
+	}
+	assert.Len(t, seen, 2, "two cards slugging to %q must still get their own group", "run-it-counter")
+}
+
+func TestCard_keepsTheEmptyPaneInStepWithTheInspector(t *testing.T) {
+	t.Parallel()
+
+	script, err := os.ReadFile(filepath.Join("..", "static", "inspector.js"))
+	require.NoError(t, err)
+
+	body := render(t, mountCards)
+	empty := "Interact with the demo to see requests, frames and signals here."
+
+	assert.Contains(t, body, empty)
+	assert.Contains(t, string(script), `"`+empty+`"`,
+		"inspector.js restores this string when the log is cleared; card.go writes the first one")
 }

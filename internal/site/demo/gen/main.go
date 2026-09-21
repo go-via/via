@@ -10,8 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-
-	"go-via.dev/site/demo"
 )
 
 // out is resolved from this file's own path, not the working directory, so
@@ -25,7 +23,7 @@ func out() string {
 }
 
 func main() {
-	if err := os.WriteFile(out(), []byte(demo.ChromaCSS()), 0o644); err != nil {
+	if err := os.WriteFile(out(), []byte(chromaCSS()), 0o644); err != nil {
 		log.Fatal(err)
 	}
 }

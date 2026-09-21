@@ -1,3 +1,17 @@
+MapLibre GL JS 5.24.0 — https://github.com/maplibre/maplibre-gl-js
+
+Vendored files:
+
+  maplibre-gl-csp.js         the CSP-safe build (no eval, worker loaded by URL)
+  maplibre-gl-csp-worker.js  its worker, pointed at by maplibregl.setWorkerUrl
+
+To update: download dist/maplibre-gl-csp.js and dist/maplibre-gl-csp-worker.js
+from the desired release, replace both files, and bump the version above.
+
+The upstream LICENSE.txt follows verbatim.
+
+-------------------------------------------------------------------------------
+
 Copyright (c) 2023, MapLibre contributors
 
 All rights reserved.

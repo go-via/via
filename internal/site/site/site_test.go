@@ -1,20 +1,25 @@
-package main
+package site_test
 
 import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go-via.dev/site/site"
 )
 
-func siteServer(t *testing.T) *httptest.Server {
+const testVersion = "test-build"
+
+func siteServer(t *testing.T, opts site.Options) *httptest.Server {
 	t.Helper()
-	app := newApp()
+	opts.Version = testVersion
+	app, mux := site.New(opts)
 	t.Cleanup(app.Close)
-	srv := httptest.NewServer(newMux(app))
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -39,7 +44,7 @@ func get(t *testing.T, srv *httptest.Server, path string, hdr http.Header) (*htt
 
 func TestSite_rendersEveryMountedPage(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
+	srv := siteServer(t, site.Options{})
 
 	pages := []struct {
 		name string
@@ -66,7 +71,7 @@ func TestSite_rendersEveryMountedPage(t *testing.T) {
 
 func TestSite_answersUnknownPathWithTheErrorPage(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
+	srv := siteServer(t, site.Options{})
 
 	resp, body := get(t, srv, "/no-such-page", nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
@@ -75,16 +80,16 @@ func TestSite_answersUnknownPathWithTheErrorPage(t *testing.T) {
 
 func TestSite_servesHealthzWithTheVersion(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
+	srv := siteServer(t, site.Options{})
 
 	resp, body := get(t, srv, "/healthz", nil)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "ok "+version+"\n", body)
+	assert.Equal(t, "ok "+testVersion+"\n", body)
 }
 
 func TestSite_servesRobotsAndRedirectsFavicon(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
+	srv := siteServer(t, site.Options{})
 
 	resp, body := get(t, srv, "/robots.txt", nil)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -95,30 +100,53 @@ func TestSite_servesRobotsAndRedirectsFavicon(t *testing.T) {
 	assert.Equal(t, "/static/brand/icon-amber-ink.svg", resp.Header.Get("Location"))
 }
 
-func TestSite_answers304ForAMatchingETag(t *testing.T) {
+func TestSite_namesItsCanonicalURLOnlyWhenTheOriginIsKnown(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
 
-	resp, body := get(t, srv, "/static/site.css", nil)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.NotEmpty(t, body)
-	etag := resp.Header.Get("ETag")
-	require.NotEmpty(t, etag)
+	_, body := get(t, siteServer(t, site.Options{Origin: "https://go-via.dev"}), "/actions", nil)
+	assert.Contains(t, body, `<link rel="canonical" href="https://go-via.dev/actions">`)
 
-	resp, body = get(t, srv, "/static/site.css", http.Header{"If-None-Match": {etag}})
-	assert.Equal(t, http.StatusNotModified, resp.StatusCode)
-	assert.Empty(t, body)
+	_, body = get(t, siteServer(t, site.Options{}), "/actions", nil)
+	assert.NotContains(t, body, `rel="canonical"`)
 }
 
-func TestSite_cachesVersionedAssetsLongerThanTheRest(t *testing.T) {
+func postAction(t *testing.T, srv *httptest.Server, origin string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/actions/_via/a/1/Cast", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Origin", origin)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func TestSite_refusesACrossOriginActionWhenTheOriginIsSet(t *testing.T) {
 	t.Parallel()
-	srv := siteServer(t)
 
-	resp, _ := get(t, srv, "/static/brand/icon-amber-ink.svg", nil)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "public, max-age=31536000, immutable", resp.Header.Get("Cache-Control"))
+	resp := postAction(t, siteServer(t, site.Options{Origin: "https://go-via.dev"}), "https://evil.example")
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
-	resp, _ = get(t, srv, "/static/site.css", nil)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "public, max-age=3600, must-revalidate", resp.Header.Get("Cache-Control"))
+	resp = postAction(t, siteServer(t, site.Options{}), "https://evil.example")
+	assert.NotEqual(t, http.StatusForbidden, resp.StatusCode,
+		"without a trusted origin every origin is admitted; the per-tab id is the CSRF token")
+}
+
+func sessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
+	t.Helper()
+	resp, _ := get(t, srv, "/actions", nil)
+	for _, c := range resp.Cookies() {
+		if c.Name == "via_session" {
+			return c
+		}
+	}
+	require.Fail(t, "no via_session cookie on a page that calls shell.EnsureSession")
+	return nil
+}
+
+func TestSite_marksTheSessionCookieSecureOnlyWhenTheOriginIsSet(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, sessionCookie(t, siteServer(t, site.Options{Origin: "https://go-via.dev"})).Secure)
+	assert.False(t, sessionCookie(t, siteServer(t, site.Options{})).Secure)
 }

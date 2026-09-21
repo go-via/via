@@ -1,6 +1,7 @@
 package demo
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -8,7 +9,8 @@ import (
 	"github.com/go-via/via"
 )
 
-// Limiter is a per-session token bucket. The zero value is not usable.
+// Limiter is a per-session token bucket, refilling at perMinute a minute and
+// capped at one minute's worth. Build one with NewLimiter.
 type Limiter struct {
 	perMinute float64
 	calls     atomic.Uint64
@@ -18,6 +20,9 @@ type Limiter struct {
 const (
 	bucketIdle = 5 * time.Minute
 	sweepEvery = 256
+	// sweepScan bounds one sweep: it runs on the Allow that tripped the
+	// counter, and a visitor's click may not pay for every bucket ever made.
+	sweepScan = 64
 )
 
 type bucket struct {
@@ -26,7 +31,12 @@ type bucket struct {
 	last   time.Time
 }
 
+// NewLimiter panics on a budget of zero or less: a limiter nobody can spend
+// from is a wiring mistake, and it is cheaper to find at startup.
 func NewLimiter(perMinute int) *Limiter {
+	if perMinute <= 0 {
+		panic("demo: NewLimiter: perMinute must be > 0, got " + strconv.Itoa(perMinute))
+	}
 	return &Limiter{perMinute: float64(perMinute)}
 }
 
@@ -56,8 +66,11 @@ func (l *Limiter) Allow(ctx *via.Ctx) bool {
 }
 
 // A bucket idle past bucketIdle is full again, so deleting it changes nothing.
+// The scan is best-effort: sync.Map has no cursor to resume from, so a sweep
+// that stops at sweepScan leaves the rest to the next one.
 func (l *Limiter) sweep() {
 	cutoff := time.Now().Add(-bucketIdle)
+	seen := 0
 	l.buckets.Range(func(k, v any) bool {
 		b := v.(*bucket)
 		b.mu.Lock()
@@ -66,6 +79,7 @@ func (l *Limiter) sweep() {
 		if idle {
 			l.buckets.Delete(k)
 		}
-		return true
+		seen++
+		return seen < sweepScan
 	})
 }

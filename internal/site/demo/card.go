@@ -1,6 +1,8 @@
 package demo
 
 import (
+	"hash/fnv"
+	"strconv"
 	"strings"
 
 	"github.com/go-via/via/h"
@@ -12,17 +14,21 @@ const tabCount = 3
 
 var tabs = [tabCount]string{"Live", "Source", "Inspect"}
 
+// emptyPane is also inspector.js's EMPTY: the script rewrites the pane and
+// puts this back when the log is cleared. demo/card_test.go pins the pair.
+const emptyPane = "Interact with the demo to see requests, frames and signals here."
+
 // Card renders a demo with Live, Source and Inspect tabs. Tabs are radio
-// inputs picked by :checked, so no signal is needed. The group name includes
-// title because one source file can back several cards.
+// inputs picked by :checked, so no signal is needed — the group name is what
+// keeps two cards on one page from sharing a selection.
 func Card(title string, prose h.H, child h.H, srcName string) h.H {
-	group := "tab-" + slug(title+"-"+srcName)
+	group := "tab-" + group(title, srcName)
 	panels := []h.H{
 		h.Div(child),
 		h.Div(Source(srcName)),
 		h.Div(
 			h.Div(h.Class("inspector"), h.DataIgnoreMorph(), h.Data("inspector", ""),
-				h.P(h.Class("insp-empty"), h.Str("Interact with the demo to see requests, frames and signals here."))),
+				h.P(h.Class("insp-empty"), h.Str(emptyPane))),
 		),
 	}
 
@@ -31,7 +37,9 @@ func Card(title string, prose h.H, child h.H, srcName string) h.H {
 		ids[i] = group + "-" + strings.ToLower(t)
 	}
 
-	kids := []h.H{h.Class("demo-tabs")}
+	// A fieldset so the three radios announce as one group; the legend names
+	// it, and site.css hides the legend and the fieldset's own border.
+	kids := []h.H{h.Class("demo-tabs"), h.Legend(h.Class("sr-only"), h.Str("Demo view"))}
 	for i, id := range ids {
 		kids = append(kids, h.Input(h.Type("radio"), h.Name(group), h.ID(id), h.Checked(i == 0)))
 	}
@@ -42,8 +50,16 @@ func Card(title string, prose h.H, child h.H, srcName string) h.H {
 	return h.Article(h.Class("demo"),
 		h.Header(h.H3(h.Str(title))),
 		h.Div(h.Class("demo-prose"), prose),
-		h.Div(append(kids, panels...)...),
+		h.Fieldset(append(kids, panels...)...),
 	)
+}
+
+// group ends in a digest so two cards whose titles slug the same ("Run it" and
+// "Run-it") still get their own radio group.
+func group(title, srcName string) string {
+	sum := fnv.New32a()
+	sum.Write([]byte(title + "\x00" + srcName))
+	return slug(title+"-"+srcName) + "-" + strconv.FormatUint(uint64(sum.Sum32()), 16)
 }
 
 func slug(s string) string {

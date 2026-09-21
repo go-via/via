@@ -21,19 +21,23 @@ var islandAssets = via.Assets{
 
 // Islands is the page on handing a subtree to a JS library.
 type Islands struct {
+	page
 	Spark demos.Sparkline
 	Maps  demos.MapGrid
 	Chart demos.Chart
 }
 
+// NewIslands builds the islands page for a deployment at origin.
+func NewIslands(origin string) Islands { return Islands{page: newPage("/islands", origin)} }
+
 func (p *Islands) PageMeta() via.Meta {
-	m := shell.Meta(shell.NavFor("/islands"), "Handing a subtree to a JS library: DataIgnoreMorph, DataEffect and a teardown that leaves nothing behind.")
+	m := p.meta("Handing a subtree to a JS library: DataIgnoreMorph, DataEffect and a teardown that leaves nothing behind.")
 	m.Assets = islandAssets
 	return m
 }
 
 func (p *Islands) View() h.H {
-	return shell.Page(shell.NavFor("/islands"),
+	return shell.Page(p.nav,
 		h.P(
 			h.Str("via never generates JavaScript. An island is what it offers instead: a container via renders once and then leaves alone. "),
 			h.Code(h.Str("h.DataIgnoreMorph()")),
@@ -62,7 +66,7 @@ func (p *Islands) View() h.H {
 				h.Str("A data-effect re-runs on every change of every signal it reads, so init has to be idempotent. "),
 				h.Str("viaMap builds the map with "),
 				h.Code(h.Str("??=")),
-				h.Str(" and otherwise only calls jumpTo, which is why Shuffle flies the maps instead of rebuilding them. "),
+				h.Str(" and otherwise only calls jumpTo, which is why Shuffle jumps the maps instead of rebuilding them. "),
 				h.Str("Client-side teardown is yours: via has no client-side unmount hook, so islands.js keeps one MutationObserver on the document and calls "),
 				h.Code(h.Str("_map.remove()")),
 				h.Str(" for every island a patch took out of the DOM. "),

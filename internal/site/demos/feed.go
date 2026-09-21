@@ -34,10 +34,16 @@ type Feed struct {
 	Notice via.State[string]
 }
 
-func (f *Feed) OnInit(ctx *via.Ctx) error {
-	if f.Lim == nil {
-		panic("demos: Feed.Lim must be set by the page that embeds it")
+// NewFeed takes the limiter the page owns; a nil one is a wiring mistake, so
+// it fails here rather than on the first render.
+func NewFeed(lim Limiter) Feed {
+	if lim == nil {
+		panic("demos: NewFeed: Feed.Lim must not be nil")
 	}
+	return Feed{Lim: lim}
+}
+
+func (f *Feed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(feedTopic, f.recv)
 	return nil
 }
@@ -64,7 +70,9 @@ func (f *Feed) View() h.H {
 			h.Button(via.On("click", f.Post), h.Str("post an event")),
 			h.Span(h.Class("note"), f.Notice.Display()),
 		),
-		h.Ul(h.Class("loglist"), f.Posts.Each(func(p FeedPost) h.H {
+		// A scroll container is only keyboard-scrollable while it can hold
+		// focus, and nothing inside this one is focusable.
+		h.Ul(h.Class("loglist"), h.TabIndex(0), f.Posts.Each(func(p FeedPost) h.H {
 			return h.Li(h.Str(p.At.Format("15:04:05") + "  " + p.Text))
 		})),
 	)

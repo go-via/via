@@ -10,21 +10,23 @@ import (
 )
 
 // MapView is what one map reads: the JSON maplibre's jumpTo wants, spelled in
-// Go. Center is [longitude, latitude].
+// Go. Center is [longitude, latitude]. Name is json:"-" because it is for the
+// container's aria-label and not for the library.
 type MapView struct {
 	Center [2]float64 `json:"center"`
 	Zoom   float64    `json:"zoom"`
+	Name   string     `json:"-"`
 }
 
 var cities = []MapView{
-	{[2]float64{-9.14, 38.72}, 4},   // Lisbon
-	{[2]float64{139.69, 35.69}, 4},  // Tokyo
-	{[2]float64{-43.20, -22.91}, 3}, // Rio de Janeiro
-	{[2]float64{18.42, -33.92}, 3},  // Cape Town
-	{[2]float64{-74.01, 40.71}, 4},  // New York
-	{[2]float64{151.21, -33.87}, 3}, // Sydney
-	{[2]float64{28.98, 41.01}, 4},   // Istanbul
-	{[2]float64{77.21, 28.61}, 3},   // Delhi
+	{[2]float64{-9.14, 38.72}, 4, "Lisbon"},
+	{[2]float64{139.69, 35.69}, 4, "Tokyo"},
+	{[2]float64{-43.20, -22.91}, 3, "Rio de Janeiro"},
+	{[2]float64{18.42, -33.92}, 3, "Cape Town"},
+	{[2]float64{-74.01, 40.71}, 4, "New York"},
+	{[2]float64{151.21, -33.87}, 3, "Sydney"},
+	{[2]float64{28.98, 41.01}, 4, "Istanbul"},
+	{[2]float64{77.21, 28.61}, 3, "Delhi"},
 }
 
 // maxMaps is the cap the grid is written to. One Signal per map, as fixed
@@ -85,7 +87,10 @@ func (g *MapGrid) View() h.H {
 		// A stable id so a removal patches away the map that left, not the
 		// last one; DataIgnoreMorph so the patch leaves MapLibre's own DOM
 		// alone.
+		// MapLibre injects a focusable canvas, so the container is what a
+		// screen reader can be told about; the label follows the shuffle.
 		grid = append(grid, h.Div(h.Class("map"), h.ID("map-"+strconv.Itoa(i)),
+			h.RawAttr("aria-label", "Map of "+v.Get().Name),
 			h.Data("island-map", ""), h.DataIgnoreMorph(),
 			h.DataEffect(expr.Call("viaMap", expr.El, v.Ref()))))
 	}

@@ -15,7 +15,7 @@ var (
 	SharedTopic = topic.New[int64]()
 )
 
-func ResetShared() {
+func resetShared() {
 	SharedHits.Store(0)
 	SharedTopic.Publish(0)
 }
@@ -29,11 +29,14 @@ type Shared struct {
 	Notice via.State[string]
 }
 
-func (s *Shared) OnInit(ctx *via.Ctx) error {
-	if s.Lim == nil {
-		panic("demos: Shared.Lim must be set by the page that embeds it")
+// NewShared takes the limiter the page owns, and seeds Hits from the store the
+// topic announces. A nil limiter is a wiring mistake, so it fails here rather
+// than on the first render.
+func NewShared(lim Limiter) Shared {
+	if lim == nil {
+		panic("demos: NewShared: Shared.Lim must not be nil")
 	}
-	return nil
+	return Shared{Lim: lim, Hits: via.StateTrack(SharedTopic, SharedHits.Load)}
 }
 
 func (s *Shared) Inc(ctx *via.Ctx) {
