@@ -32,11 +32,6 @@ func (p *Live) PageMeta() via.Meta {
 	return p.meta("Per-tab SSE: Tick, Listen, StateTrack and per-user fan-out keyed by the session id.")
 }
 
-func (p *Live) OnInit(ctx *via.Ctx) error {
-	shell.EnsureSession(ctx)
-	return nil
-}
-
 func (p *Live) View() h.H {
 	return shell.Page(p.nav,
 		h.P(h.Str("A page is a request and a response until a unit on it acts live: its OnInit registered a "+
@@ -58,7 +53,7 @@ func (p *Live) View() h.H {
 				"Topic is not usable. ctx.Listen subscribes this unit to one, runs the handler "+
 				"on the unit's own goroutine for every value, and unsubscribes when the tab goes away. Posts "+
 				"appear in every tab anyone has open on this page, including yours. The list is this tab's own, "+
-				"keeps the newest 50, and posting is capped at 20 a minute per visitor.")),
+				"keeps the newest 50, and posting is capped at 20 a minute per client IP.")),
 			via.Child(p.Feed), "feed.go"),
 
 		demo.Card("Shared counter",

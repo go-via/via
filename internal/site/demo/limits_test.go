@@ -19,7 +19,8 @@ import (
 
 // limited spends a token per GET. OnInit is where the Ctx a Limiter needs is
 // reachable without an action address to POST to; the page mints no session,
-// so every request shares the "" bucket.
+// and the limiter keys on the client IP, so every request from the test client
+// shares one bucket.
 type limited struct {
 	lim *demo.Limiter
 	ok  bool
@@ -47,7 +48,15 @@ func limiterServer(t *testing.T, perMinute int) *httptest.Server {
 
 func spend(t *testing.T, srv *httptest.Server) bool {
 	t.Helper()
-	resp, err := http.Get(srv.URL + "/")
+	return spendAs(t, srv, func(*http.Request) {})
+}
+
+func spendAs(t *testing.T, srv *httptest.Server, shape func(*http.Request)) bool {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	shape(req)
+	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -129,4 +138,42 @@ func TestLimiter_keepsAnActiveBucketAcrossASweep(t *testing.T) {
 	}
 
 	assert.False(t, spend(t, srv))
+}
+
+func TestLimiter_ignoresTheCookie(t *testing.T) {
+	t.Parallel()
+	srv := limiterServer(t, 1)
+
+	withCookie := spendAs(t, srv, func(r *http.Request) {
+		r.AddCookie(&http.Cookie{Name: "via_session", Value: "whatever"})
+	})
+
+	require.True(t, withCookie)
+	assert.False(t, spend(t, srv), "dropping the cookie does not buy a second bucket")
+}
+
+func TestLimiter_keysOnXForwardedForFromALoopbackPeer(t *testing.T) {
+	t.Parallel()
+	srv := limiterServer(t, 1)
+
+	forwarded := func(ip string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("X-Forwarded-For", ip) }
+	}
+
+	assert.True(t, spendAs(t, srv, forwarded("203.0.113.1")))
+	assert.True(t, spendAs(t, srv, forwarded("203.0.113.2")))
+	assert.False(t, spendAs(t, srv, forwarded("203.0.113.1")))
+}
+
+func TestLimiter_ignoresAnEmptyForwardedForEntry(t *testing.T) {
+	t.Parallel()
+	srv := limiterServer(t, 1)
+
+	require.True(t, spendAs(t, srv, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "203.0.113.5,")
+	}))
+
+	assert.False(t, spendAs(t, srv, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "203.0.113.5")
+	}), "a trailing comma names no proxy, so the entry before it is still the client")
 }

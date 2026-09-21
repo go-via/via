@@ -1,5 +1,5 @@
-/* One dark theme on purpose: it is the brand, and the inspector and chroma
-   palettes are tuned against it. */
+/* One dark theme: it is the brand, and the inspector and chroma palettes are
+   tuned against it. */
 :root {
   color-scheme: dark;
   --bg: #16181d;

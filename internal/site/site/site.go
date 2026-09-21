@@ -38,10 +38,12 @@ func errorPage(ctx *via.Ctx, e via.PageError) h.H {
 	switch e.Reason {
 	case via.ReasonNotFound:
 		title, detail = "Not found", "That URL is not part of the docs."
-	case via.ReasonForbidden, via.ReasonMethodNotAllowed, via.ReasonGone:
+	case via.ReasonBadRequest, via.ReasonForbidden, via.ReasonMethodNotAllowed, via.ReasonGone:
 		title = "Request refused"
 	case via.ReasonTooLarge:
 		title = "Request too large"
+	case via.ReasonUnavailable:
+		title, detail = "Temporarily unavailable", "The session store did not answer. Nothing you did caused this; try again shortly."
 	}
 	return shell.Page(shell.NavItem{Title: title},
 		h.P(h.Str(detail)),
@@ -67,6 +69,11 @@ func routerOptions(origin string) []via.Option {
 			},
 		}),
 		via.WithErrorPage(errorPage),
+		// One VPS: each stream holds a composition tree and up to fifty rows
+		// per live list, and a connect costs the client nothing, so the default
+		// of ten thousand is an OOM lever. The cap 503s connects router-wide,
+		// so it is also the availability ceiling.
+		via.WithMaxSSEConn(1000),
 	}
 	if origin != "" {
 		opts = append(opts, via.WithTrustedOrigin(origin), via.WithSecureCookies())
@@ -92,13 +99,17 @@ func newApp(origin string) *via.Router {
 
 func newMux(app http.Handler, version string) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/static/", staticHandler())
+	mux.Handle("GET /static/", staticHandler())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write([]byte("ok " + version + "\n"))
 	})
 	mux.HandleFunc("GET /robots.txt", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Write([]byte("User-agent: *\nAllow: /\n"))
 	})
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {

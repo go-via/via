@@ -23,8 +23,8 @@ var votes = struct {
 	counts []int
 }{counts: make([]int, len(voteOptions))}
 
-// The tallies have no topic: this demo is deliberately not live, so an open
-// tab redraws on its next vote or reload rather than at the moment of reset.
+// The tallies have no topic, so a change is not pushed: an open tab redraws on
+// its next vote or reload rather than at the moment of reset.
 func resetVotes() {
 	votes.mu.Lock()
 	clear(votes.counts)

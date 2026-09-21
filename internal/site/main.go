@@ -56,6 +56,9 @@ func run() error {
 		return err
 	case <-ctx.Done():
 	}
+	// A second signal during the drain must terminate, not queue behind a
+	// channel nobody reads any more.
+	stop()
 
 	// Close first: Shutdown does not cancel the router's own context, so an
 	// open SSE response would hold it until its deadline. Nothing races the
@@ -65,7 +68,7 @@ func run() error {
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shut); err != nil {
-		log.Print(err)
+		return err
 	}
 	return <-serve
 }

@@ -29,8 +29,9 @@ func (r *Region) View() h.H {
 // it likes.
 type Compose struct{ Left, Right Region }
 
-// OnInit seeds what a parent would normally put in the child's literal; this
-// page is mounted as a zero value, so there is no literal to seed from.
+// OnInit seeds what a parent would normally put in the child's literal;
+// Compose is a zero-value field of its page, so there is no literal to seed
+// from.
 func (c *Compose) OnInit(ctx *via.Ctx) error {
 	c.Left.Label, c.Right.Label = "left", "right"
 	return nil

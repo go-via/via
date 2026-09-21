@@ -13,8 +13,8 @@ type NavItem struct {
 	Heading string // <h1> when it differs from Title
 }
 
-// Nav is the sidebar, in order, and the only place a page's path and title are
-// spelled.
+// Nav is the sidebar, in order, and the only place the nav's paths and titles
+// are spelled; the next-page link at the foot of each page spells its own.
 var Nav = []NavItem{
 	{Title: "Home", Path: "/", Heading: "Server-rendered Go UI that stays live"},
 	{Title: "Actions", Path: "/actions"},

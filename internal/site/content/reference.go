@@ -90,7 +90,7 @@ var options = []row{
 	{"via.WithSessionStore(s)",
 		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey."},
 	{"via.WithSessionStoreTimeout(d)",
-		"Caps one session store round-trip (default 5s). Without it a hung backend pins the request goroutine, since session calls deliberately survive client cancellation."},
+		"Caps one session store round-trip (default 5s). Without it a hung backend pins the request goroutine, since session calls survive client cancellation."},
 	{"via.WithSessionTTL(d)",
 		"How long a session may sit idle before it expires (default 24h). Each access slides the window."},
 	{"via.WithSessionCookieName(name)",
@@ -107,6 +107,21 @@ var options = []row{
 		"Caps a native form submit's whole multipart body (default 8 MiB). Over the cap answers 413."},
 	{"via.WithLogger(l)",
 		"Routes via's own diagnostics to l. Default is slog.Default()."},
+}
+
+var errorSurface = []row{
+	{"via.ErrNotFound",
+		"Return it from OnInit when the data the page needs no longer exists: the request was honest, so the answer is 404, not 500. Wrap it freely; errors.Is matches."},
+	{"via.ErrForbidden",
+		"Denies with a 403. For \"you may not do this\"; queue a ctx.Redirect instead for \"please sign in\"."},
+	{"via.ErrStoreDown",
+		"The session store could not be read for this request. The request was fine, a dependency is not; answer it like an outage."},
+	{"via.ErrStaleTab",
+		"The tab that would have bound this action is gone: its stream closed, or the id belongs to a render that no longer exists. The one failure a reload fixes."},
+	{"via.PageError{Status, Reason, Detail, Err}",
+		"Everything via knows about a failure it is about to answer, handed to the WithErrorPage handler. Status and Reason are the contract; Detail and Err are for logs and dev builds."},
+	{"via.Reason",
+		"The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status class, so a switch with a default is exhaustive."},
 }
 
 var exprAPI = []row{
@@ -205,6 +220,13 @@ func (p *Reference) View() h.H {
 		h.P(h.Str("Router-wide policy, passed to NewRouter or Handler. A page cannot widen its own, which is "+
 			"why none of these is a method on a composition.")),
 		refTable("Option", options),
+
+		h.H2(h.Str("The error surface")),
+		h.P(h.Str("What a WithErrorPage handler is handed, and the sentinels a hook returns to choose the "+
+			"status. Match a sentinel with errors.Is — PageError.Err is nil except for a hook that failed "+
+			"or a panic that was recovered. Switch on PageError.Reason, and keep a default: a status via "+
+			"does not emit today maps to ReasonInternal or ReasonBadRequest.")),
+		refTable("Name", errorSurface),
 
 		h.H2(h.Str("Expressions")),
 		h.P(h.Str("The expr package builds the small JavaScript expressions Datastar evaluates in the browser. "+

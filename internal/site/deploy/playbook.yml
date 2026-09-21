@@ -9,8 +9,8 @@
     env_file: /etc/go-via.env
     build_dir: "{{ playbook_dir }}/.."
     go_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
-    # Pinned so a re-run cannot silently move the proxy under the site. Bump it
-    # deliberately; `apt-cache madison caddy` on the target lists the choices.
+    # Pinned so a re-run cannot silently move the proxy under the site.
+    # `apt-cache madison caddy` on the target lists the choices.
     caddy_version: "2.10.0"
     git_rev: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/.. rev-parse --short HEAD') }}"
     # An uncommitted tree gives a binary no commit describes; say so in /healthz.
@@ -75,6 +75,12 @@
         name: "caddy={{ caddy_version }}"
         state: present
         update_cache: true
+        allow_downgrade: true
+
+    - name: Hold the caddy version
+      ansible.builtin.dpkg_selections:
+        name: caddy
+        selection: hold
 
     - name: Install the binary
       ansible.builtin.copy:
@@ -126,12 +132,22 @@
 
     - name: Wait for the deployed site to answer
       ansible.builtin.uri:
-        url: "https://{{ domain }}/healthz"
+        url: "http://{{ bind }}/healthz"
         return_content: true
       register: healthz
       until: healthz.status == 200
       retries: 10
       delay: 3
+
+    - name: Check the public origin
+      ansible.builtin.uri:
+        url: "https://{{ domain }}/healthz"
+        return_content: true
+      register: public_healthz
+      until: public_healthz.status == 200
+      retries: 10
+      delay: 3
+      when: check_public | default(true)
 
   handlers:
     - name: Restart go-via

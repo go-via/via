@@ -87,12 +87,14 @@ func (g *MapGrid) View() h.H {
 		// A stable id so a removal patches away the map that left, not the
 		// last one; DataIgnoreMorph so the patch leaves MapLibre's own DOM
 		// alone.
-		// MapLibre injects a focusable canvas, so the container is what a
-		// screen reader can be told about; the label follows the shuffle.
-		grid = append(grid, h.Div(h.Class("map"), h.ID("map-"+strconv.Itoa(i)),
+		// MapLibre injects a focusable canvas, so the group is the screen
+		// reader's handle; outside the ignore-morph container, its label
+		// follows the shuffle.
+		grid = append(grid, h.Div(h.Class("map-slot"), h.Role("group"),
 			h.RawAttr("aria-label", "Map of "+v.Get().Name),
-			h.Data("island-map", ""), h.DataIgnoreMorph(),
-			h.DataEffect(expr.Call("viaMap", expr.El, v.Ref()))))
+			h.Div(h.Class("map"), h.ID("map-"+strconv.Itoa(i)),
+				h.Data("island-map", ""), h.DataIgnoreMorph(),
+				h.DataEffect(expr.Call("viaMap", expr.El, v.Ref())))))
 	}
 	return h.Div(
 		h.Div(h.Class("row"),

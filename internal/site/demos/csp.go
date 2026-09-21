@@ -8,8 +8,9 @@ type CSPNotes struct{}
 
 type cspRow struct{ directive, from string }
 
-// Each directive is spelled exactly as in the header: csp_test.go scrapes them
-// from the page and checks them against the real response.
+// Each directive is spelled exactly as in the header: site/csp_test.go scrapes
+// them from the rendered /platform page and checks them against its real
+// response header.
 var cspRows = []cspRow{
 	{"default-src 'self'", "the floor — nothing on the page may load from another origin unless a directive below widens it"},
 	{"script-src 'self' 'unsafe-eval'", "two 'sha256-…' sources follow these in the header: via's own inline scripts (reconnect, redirect). 'unsafe-eval' is required because the bundled Datastar client compiles every data-* expression with the Function constructor"},
@@ -29,7 +30,7 @@ var cspWidens = []cspRow{
 	{"Assets.Scripts{Src: \"https://cdn…\"}", "that origin joins script-src; a relative Src is already covered by 'self'"},
 	{"Assets.Scripts{Inline: …}", "the sha256 of those exact bytes joins script-src"},
 	{"Assets.Styles{Href / Inline}", "the same two, on style-src"},
-	{"Assets.Preload{As: \"font\" | \"image\"}", "an absolute Href's origin joins font-src / img-src; a relative one is already 'self'"},
+	{"Assets.Preload{As: \"script\" | \"style\" | \"font\" | \"image\"}", "an absolute Href's origin joins the matching directive — script-src, style-src, font-src or img-src; a relative one is already 'self'"},
 	{"Head.Raw", "refuses a <script> or <style> outright — via never parses Raw, so the policy could not admit it"},
 }
 

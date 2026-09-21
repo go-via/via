@@ -255,6 +255,7 @@
     }
     panel.appendChild(sig);
     var log = el("div", "insp-log");
+    log.setAttribute("role", "log");
     panel.appendChild(log);
     return log;
   }

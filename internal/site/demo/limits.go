@@ -1,7 +1,10 @@
 package demo
 
 import (
+	"net"
+	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -9,20 +12,17 @@ import (
 	"github.com/go-via/via"
 )
 
-// Limiter is a per-session token bucket, refilling at perMinute a minute and
+// Limiter is a per-client token bucket, refilling at perMinute a minute and
 // capped at one minute's worth. Build one with NewLimiter.
 type Limiter struct {
 	perMinute float64
 	calls     atomic.Uint64
-	buckets   sync.Map // session id -> *bucket
+	buckets   sync.Map // client ip -> *bucket
 }
 
 const (
 	bucketIdle = 5 * time.Minute
 	sweepEvery = 256
-	// sweepScan bounds one sweep: it runs on the Allow that tripped the
-	// counter, and a visitor's click may not pay for every bucket ever made.
-	sweepScan = 64
 )
 
 type bucket struct {
@@ -40,16 +40,16 @@ func NewLimiter(perMinute int) *Limiter {
 	return &Limiter{perMinute: float64(perMinute)}
 }
 
-// Allow spends a token if the session has one. Visitors without a session
-// share the "" bucket, so pages call shell.EnsureSession first.
+// Allow spends a token if the client has one. Buckets are keyed on the client
+// IP, so a visitor cannot buy a fresh budget by dropping the session cookie.
 func (l *Limiter) Allow(ctx *via.Ctx) bool {
 	if l.calls.Add(1)%sweepEvery == 0 {
 		l.sweep()
 	}
-	id := ctx.Session().ID()
-	v, ok := l.buckets.Load(id)
+	key := clientKey(ctx.Request())
+	v, ok := l.buckets.Load(key)
 	if !ok {
-		v, _ = l.buckets.LoadOrStore(id, &bucket{tokens: l.perMinute, last: time.Now()})
+		v, _ = l.buckets.LoadOrStore(key, &bucket{tokens: l.perMinute, last: time.Now()})
 	}
 	b := v.(*bucket)
 
@@ -65,12 +65,33 @@ func (l *Limiter) Allow(ctx *via.Ctx) bool {
 	return true
 }
 
+// clientKey is the client IP. Caddy fronts the deployed site on the same host
+// and by default replaces any X-Forwarded-For the client sent, so a loopback
+// peer is trusted for the rightmost entry; any other peer is the client and the
+// header is ignored. A trusted_proxies block in the Caddyfile would break this.
+func clientKey(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+		for i := len(parts) - 1; i >= 0; i-- {
+			// A stray comma would key every such request on one "" bucket.
+			if e := strings.TrimSpace(parts[i]); e != "" {
+				return e
+			}
+		}
+	}
+	return host
+}
+
 // A bucket idle past bucketIdle is full again, so deleting it changes nothing.
-// The scan is best-effort: sync.Map has no cursor to resume from, so a sweep
-// that stops at sweepScan leaves the rest to the next one.
 func (l *Limiter) sweep() {
 	cutoff := time.Now().Add(-bucketIdle)
-	seen := 0
 	l.buckets.Range(func(k, v any) bool {
 		b := v.(*bucket)
 		b.mu.Lock()
@@ -79,7 +100,6 @@ func (l *Limiter) sweep() {
 		if idle {
 			l.buckets.Delete(k)
 		}
-		seen++
-		return seen < sweepScan
+		return true
 	})
 }

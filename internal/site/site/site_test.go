@@ -1,9 +1,12 @@
 package site_test
 
 import (
+	"bytes"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -100,6 +103,21 @@ func TestSite_servesRobotsAndRedirectsFavicon(t *testing.T) {
 	assert.Equal(t, "/static/brand/icon-amber-ink.svg", resp.Header.Get("Location"))
 }
 
+func TestMux_healthzAndRobotsCarryHeaders(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, _ := get(t, srv, "/healthz", nil)
+	assert.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "no-store", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+
+	resp, _ = get(t, srv, "/robots.txt", nil)
+	assert.Equal(t, "text/plain; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "public, max-age=3600", resp.Header.Get("Cache-Control"))
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+}
+
 func TestSite_namesItsCanonicalURLOnlyWhenTheOriginIsKnown(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +133,8 @@ func postAction(t *testing.T, srv *httptest.Server, origin string) *http.Respons
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/actions/_via/a/1/Cast", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Origin", origin)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	t.Cleanup(func() { resp.Body.Close() })
@@ -128,20 +148,48 @@ func TestSite_refusesACrossOriginActionWhenTheOriginIsSet(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 
 	resp = postAction(t, siteServer(t, site.Options{}), "https://evil.example")
-	assert.NotEqual(t, http.StatusForbidden, resp.StatusCode,
-		"without a trusted origin every origin is admitted; the per-tab id is the CSRF token")
+	assert.Equal(t, http.StatusGone, resp.StatusCode,
+		"without a trusted origin the origin is not checked; the per-tab id is the CSRF token, and no render bound this action for it")
 }
 
+var signInForm = regexp.MustCompile(`<form[^>]*action="([^"]+)"`)
+
+// sessionCookie signs in through the /platform form: no page mints a session
+// on a GET, so the cookie exists only once a handler has stored something.
 func sessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
 	t.Helper()
-	resp, _ := get(t, srv, "/actions", nil)
+	_, body := get(t, srv, "/platform", nil)
+	m := signInForm.FindStringSubmatch(body)
+	require.NotNil(t, m, "no sign-in form on /platform")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	// /platform streams, so the form's tab id is filled client-side from
+	// $viatab. This client has none; Auth is not live, so the action runs on
+	// the plain path anyway.
+	require.NoError(t, mw.WriteField("_viatab", ""))
+	require.NoError(t, mw.WriteField("name", "tester"))
+	require.NoError(t, mw.Close())
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+m[1], &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Origin", srv.URL)
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var cookie *http.Cookie
 	for _, c := range resp.Cookies() {
 		if c.Name == "via_session" {
-			return c
+			cookie = c
 		}
 	}
-	require.Fail(t, "no via_session cookie on a page that calls shell.EnsureSession")
-	return nil
+	require.NotNil(t, cookie, "no via_session cookie after signing in")
+	return cookie
 }
 
 func TestSite_marksTheSessionCookieSecureOnlyWhenTheOriginIsSet(t *testing.T) {

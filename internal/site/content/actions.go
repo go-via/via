@@ -21,15 +21,9 @@ func (p *Actions) PageMeta() via.Meta {
 }
 
 // NewActions builds the limiter once, so every request's copy of the page
-// spends from the same per-session buckets.
+// spends from the same per-client buckets.
 func NewActions(origin string) Actions {
 	return Actions{page: newPage("/actions", origin), Vote: demos.NewVote(demo.NewLimiter(30))}
-}
-
-// OnInit mints the session the limiter keys on.
-func (p *Actions) OnInit(ctx *via.Ctx) error {
-	shell.EnsureSession(ctx)
-	return nil
 }
 
 func (p *Actions) View() h.H {
