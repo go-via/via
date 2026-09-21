@@ -86,7 +86,7 @@ var options = []row{
 	{"via.WithTrustedOrigin(origin)",
 		"Turns on origin enforcement for the action endpoint and allowlists one exact origin. Without any set, every origin is accepted — set this in production."},
 	{"via.WithSessionKey(key)",
-		"The HMAC key signing the session cookie id. Unset, via mints a random per-process key, so those cookies survive neither a restart nor a second process."},
+		"The HMAC key signing the session cookie id; at least 16 bytes, or it panics. Unset, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process."},
 	{"via.WithSessionStore(s)",
 		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey."},
 	{"via.WithSessionStoreTimeout(d)",
@@ -153,15 +153,18 @@ var dataHelpers = []dataHelper{
 }
 
 // Reference is the page listing the API, the links and the attribute helpers.
-type Reference struct{}
+type Reference struct{ page }
+
+// NewReference builds the reference page for a deployment at origin.
+func NewReference(origin string) Reference { return Reference{page: newPage("/reference", origin)} }
 
 func (p *Reference) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/reference"),
+	return p.meta(
 		"The v0.8 API in tables: composition, Ctx, the router options, the expr vocabulary, the h.Data* helpers and the lifecycle hooks.")
 }
 
 func (p *Reference) View() h.H {
-	return shell.Page(shell.NavFor("/reference"),
+	return shell.Page(p.nav,
 		h.H2(h.Str("Install")),
 		h.Pre(h.Code(h.Str("go get github.com/go-via/via@"+branchName))),
 		h.P(h.Str("Go 1.27 or newer, standard library only, no build step. v0.8 is not tagged yet, so the "+

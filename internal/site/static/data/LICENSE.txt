@@ -1,1 +1,8 @@
-Natural Earth: Public Domain
+world-lowres.geojson — Natural Earth, Admin 0 – Countries at 1:110m scale
+(ne_110m_admin_0_countries, 177 features; feature properties were stripped,
+only the geometry is kept).
+
+Source: https://www.naturalearthdata.com/downloads/110m-cultural-vectors/
+
+Natural Earth is public domain. No permission, fee or attribution is
+required, though the project asks that credit be given where practical.

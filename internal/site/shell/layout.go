@@ -37,13 +37,13 @@ func header() h.H {
 func sidebar(current NavItem) h.H {
 	links := make([]h.H, 0, len(Nav))
 	for _, it := range Nav {
-		cls := "nav-link"
-		link := []h.H{h.Href(it.Path), h.Str(it.Title)}
+		// site.css styles the current link off aria-current, so the state is
+		// spelled once and as the thing a screen reader reads.
+		link := []h.H{h.Href(it.Path), h.Class("nav-link"), h.Str(it.Title)}
 		if it.Path == current.Path {
-			cls += " current"
-			link = append(link, AriaCurrentPage)
+			link = append(link, ariaCurrentPage)
 		}
-		links = append(links, h.Li(h.A(append(link, h.Class(cls))...)))
+		links = append(links, h.Li(h.A(link...)))
 	}
 	return h.Nav(h.Class("side"), h.RawAttr("aria-label", "Documentation"), h.Ul(links...))
 }

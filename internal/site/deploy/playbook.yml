@@ -9,12 +9,35 @@
     env_file: /etc/go-via.env
     build_dir: "{{ playbook_dir }}/.."
     go_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+    # Pinned so a re-run cannot silently move the proxy under the site. Bump it
+    # deliberately; `apt-cache madison caddy` on the target lists the choices.
+    caddy_version: "2.10.0"
+    git_rev: "{{ lookup('pipe', 'git -C ' ~ playbook_dir ~ '/.. rev-parse --short HEAD') }}"
+    # An uncommitted tree gives a binary no commit describes; say so in /healthz.
+    git_dirty: "{{ '-dirty' if lookup('pipe', 'git -C ' ~ playbook_dir ~ '/.. status --porcelain') | trim | length > 0 else '' }}"
+    version: "{{ git_rev }}{{ git_dirty }}"
 
   tasks:
     - name: Refuse a non-Debian target
       ansible.builtin.assert:
         that: ansible_os_family == 'Debian'
         fail_msg: "this playbook installs Debian packages; {{ ansible_os_family }} is not supported"
+
+    - name: Vet locally before building
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        cmd: go vet ./...
+        chdir: "{{ build_dir }}"
+      changed_when: false
+
+    - name: Test locally before building
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        cmd: go test ./...
+        chdir: "{{ build_dir }}"
+      changed_when: false
 
     - name: Make the local build directory
       delegate_to: localhost
@@ -31,7 +54,7 @@
       ansible.builtin.command:
         cmd: >-
           go build -trimpath
-          -ldflags "-s -w -X main.version={{ lookup('pipe', 'git rev-parse --short HEAD') }}"
+          -ldflags "-s -w -X main.version={{ version }}"
           -o .build/site-{{ go_arch }} .
         chdir: "{{ build_dir }}"
       changed_when: false
@@ -49,7 +72,7 @@
 
     - name: Install caddy
       ansible.builtin.apt:
-        name: caddy
+        name: "caddy={{ caddy_version }}"
         state: present
         update_cache: true
 
@@ -76,6 +99,8 @@
         src: templates/go-via.service.j2
         dest: /etc/systemd/system/go-via.service
         mode: "0644"
+        # No validate: systemd-analyze verify refuses the template module's
+        # temp path, which carries no .service suffix to name a unit with.
       notify: Restart go-via
 
     - name: Install the Caddyfile
@@ -83,6 +108,7 @@
         src: templates/Caddyfile.j2
         dest: /etc/caddy/Caddyfile
         mode: "0644"
+        validate: caddy validate --adapter caddyfile --config %s
       notify: Reload caddy
 
     - name: Enable the services

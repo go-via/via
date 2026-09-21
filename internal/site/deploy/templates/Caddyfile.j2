@@ -1,5 +1,16 @@
 {{ domain }} {
-	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# The version of the proxy is not the visitor's business.
+		-Server
+	}
+
+	# The site takes no uploads; via's own 8 MiB default never has to be reached.
+	request_body {
+		max_size 2MB
+	}
 
 	# text/* would also compress, and so buffer, text/event-stream.
 	encode zstd gzip {
@@ -19,5 +30,8 @@
 }
 
 www.{{ domain }} {
+	# The redirect is a response of its own, so it carries the HSTS header or
+	# the www host never gets one.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	redir https://{{ domain }}{uri} permanent
 }

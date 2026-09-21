@@ -35,20 +35,24 @@ func (c *Counter) View() h.H {
 
 func main() {
 	r := via.Handler(Counter{n: new(atomic.Int64)})
-	defer r.Close()
-	log.Fatal(http.ListenAndServe(":8080", r))
+	err := http.ListenAndServe(":8080", r)
+	r.Close()
+	log.Fatal(err)
 }
 `
 
 // Landing is the front page.
-type Landing struct{}
+type Landing struct{ page }
+
+// NewLanding builds the front page for a deployment at origin.
+func NewLanding(origin string) Landing { return Landing{page: newPage("/", origin)} }
 
 func (p *Landing) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/"), "via is a Go library for server-rendered, live web UI: HTML from Go functions, actions as methods, no JavaScript to write.")
+	return p.meta("via is a Go library for server-rendered, live web UI: HTML from Go functions, actions as methods, no JavaScript to write.")
 }
 
 func (p *Landing) View() h.H {
-	return shell.Page(shell.NavFor("/"),
+	return shell.Page(p.nav,
 		h.Section(h.Class("hero"),
 			h.Img(h.Class("hero-art"), h.Src("/static/brand/bolt-amber.svg"), h.Alt(""), h.Width(146), h.Height(154)),
 			h.Img(h.Class("hero-mark"), h.Src("/static/brand/wordmark-amber-dark.svg"), h.Alt("via"), h.Height(44)),

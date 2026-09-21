@@ -13,14 +13,16 @@ go run .
 ## Environment
 
 - `VIA_ADDR` — listen address, default `:8080`.
-- `VIA_SESSION_KEY` — cookie signing key, read by via. Under 32 bytes panics;
-  unset mints a random key per boot, logging visitors out on restart.
+- `VIA_SESSION_KEY` — cookie signing key, read by via. Under 16 bytes panics.
+  The default session store is in-memory, so a restart forgets every session
+  either way; a fixed key only matters once a persistent store is configured.
 - `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also turns on
   Secure cookies, so set it only behind HTTPS. Unset accepts action POSTs from
   any origin and warns at boot.
 
 `/healthz` answers `ok <version>`; the playbook stamps the short commit hash
-via `-ldflags "-X main.version=..."`.
+via `-ldflags "-X main.version=..."`, suffixed `-dirty` when the tree is not
+clean. `/robots.txt` and `/favicon.ico` are served next to it.
 
 ## Deploy
 
@@ -38,14 +40,20 @@ Override `domain` or `bind` with `-e`.
 
 ## Layout
 
-- `main.go` — router options, mounts, static serving.
+- `main.go` — the server: flags from the environment, signals, shutdown.
+- `site/` — router options, mounts, static serving. `site.New` is what
+  `main.go` and the tests both build.
 - `shell/` — chrome: `layout.go`, `nav.go` (`Nav`, `NavFor`), `meta.go`,
   `session.go`.
-- `content/` — one mounted page per file.
+- `content/` — one mounted page per file, plus `page.go` for the wiring they
+  share.
 - `demos/` — one demo per file, embedded verbatim for its Source tab.
   `shared_contract.go` holds what the demos use without declaring.
-- `demo/` — the card, chroma highlighting, rate limits and resets.
-- `static/` — CSS, JS, fonts, brand, served from `embed`.
+- `demo/` — the card, chroma highlighting, rate limits and resets. `demo/gen`
+  generates `static/chroma.css`, keeping chroma's styles out of the binary.
+- `static/` — `site.css`, `chroma.css`, `islands.css`, the inspector and
+  island scripts, `brand/`, `fonts/`, `vendor/` (MapLibre) and `data/` (the
+  island's GeoJSON), served from `embed`.
 
 This is a nested module (`go-via.dev/site`, `replace ../..`) so chroma stays
 out of via's `go.mod`; the root `go build ./...` does not see it. No Node, no
@@ -59,13 +67,16 @@ test pins it.
 2. A field on the page's root struct in `content/`.
 3. `demo.Card(title, prose, via.Child(p.X), "<x>.go")`.
 
-A demo that mutates shared state takes a `Limiter` field, set by the page's
-constructor, and checks `Lim.Allow(ctx)` first.
+A demo that mutates shared state takes a `Limiter` field, set by the demo's
+own `New*` constructor from a limiter the page owns, and checks
+`Lim.Allow(ctx)` first.
 
 ## Public-state bounds
 
-- The shared counter resets every 15 minutes, published so open tabs redraw.
+- `demos.ResetAll` runs every 15 minutes. The shared counter's reset is
+  published, so open tabs redraw; the vote tallies have no topic, so a tab
+  redraws them on its next vote or reload.
 - Per-tab lists cap at `keepRows` (50) and are never reset.
-- Mutating actions spend a per-session token: 20/min on `/live`, 30/min on
-  `/actions`. Sessions are minted by `shell.EnsureSession` so the bucket key
-  is not `""`.
+- Mutating actions spend a per-session token: 20/min each for the feed, the
+  shared counter and the pings on `/live`, 30/min for the vote on `/actions`.
+  Sessions are minted by `shell.EnsureSession` so the bucket key is not `""`.

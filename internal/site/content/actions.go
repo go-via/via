@@ -10,19 +10,20 @@ import (
 
 // Actions is the page on wiring clicks and form submits to Go methods.
 type Actions struct {
+	page
 	Counter demos.Counter
 	Vote    demos.Vote
 	Signup  demos.Signup
 }
 
 func (p *Actions) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/actions"), "Clicks and form submits as Go methods: via.On, via.OnArg and PostForm, and the morph that answers them.")
+	return p.meta("Clicks and form submits as Go methods: via.On, via.OnArg and PostForm, and the morph that answers them.")
 }
 
 // NewActions builds the limiter once, so every request's copy of the page
 // spends from the same per-session buckets.
-func NewActions() Actions {
-	return Actions{Vote: demos.Vote{Lim: demo.NewLimiter(30)}}
+func NewActions(origin string) Actions {
+	return Actions{page: newPage("/actions", origin), Vote: demos.NewVote(demo.NewLimiter(30))}
 }
 
 // OnInit mints the session the limiter keys on.
@@ -32,7 +33,7 @@ func (p *Actions) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Actions) View() h.H {
-	return shell.Page(shell.NavFor("/actions"),
+	return shell.Page(p.nav,
 		h.P(h.Str("A click POSTs to a method on your page type, the handler mutates, and via renders the page "+
 			"again and patches back only what changed.")),
 

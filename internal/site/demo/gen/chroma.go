@@ -1,4 +1,4 @@
-package demo
+package main
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters/html"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"go-via.dev/site/demo"
 	"go-via.dev/site/demos"
 )
 
@@ -46,12 +47,12 @@ loop:
 }
 `
 
-// ChromaCSS is static/chroma.css: rules only for classes Go source can emit.
+// chromaCSS is static/chroma.css: rules only for classes Go source can emit.
 // chroma's WriteCSS would also write line-number and line-link rules.
-func ChromaCSS() string {
-	style := styles.Get(ChromaStyle)
+func chromaCSS() string {
+	style := styles.Get(demo.ChromaStyle)
 	if style == nil {
-		panic("demo: no chroma style " + ChromaStyle)
+		panic("gen: no chroma style " + demo.ChromaStyle)
 	}
 
 	used := map[string]bool{}
@@ -61,7 +62,7 @@ func ChromaCSS() string {
 			panic(err)
 		}
 		for _, t := range it.Tokens() {
-			if cls := class(t.Type); cls != "" {
+			if cls := demo.Class(t.Type); cls != "" {
 				used[cls] = true
 			}
 		}
@@ -69,8 +70,9 @@ func ChromaCSS() string {
 
 	bg := style.Get(chroma.Background)
 	var b strings.Builder
-	fmt.Fprintf(&b, "/* Background */ .%sbg { color: %s; background-color: %s }\n", ChromaPrefix, bg.Colour, pageBG)
-	fmt.Fprintf(&b, "/* PreWrapper */ .%schroma { color: %s; background-color: %s }\n", ChromaPrefix, bg.Colour, pageBG)
+	// No .bg rule: chroma's formatter writes one for a wrapper demo.Code never
+	// renders, and bg is only here to be subtracted from each token's style.
+	fmt.Fprintf(&b, "/* PreWrapper */ .%schroma { color: %s; background-color: %s }\n", demo.ChromaPrefix, bg.Colour, pageBG)
 
 	types := make([]int, 0, len(chroma.StandardTypes))
 	for t := range chroma.StandardTypes {
@@ -80,7 +82,7 @@ func ChromaCSS() string {
 	for _, i := range types {
 		t := chroma.TokenType(i)
 		cls := chroma.StandardTypes[t]
-		if cls == "" || !used[ChromaPrefix+cls] {
+		if cls == "" || !used[demo.ChromaPrefix+cls] {
 			continue
 		}
 		// Sub(bg): as chroma's formatter, don't repeat what the background carries.
@@ -88,7 +90,7 @@ func ChromaCSS() string {
 		if css == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "/* %s */ .%schroma .%s%s { %s }\n", t, ChromaPrefix, ChromaPrefix, cls, css)
+		fmt.Fprintf(&b, "/* %s */ .%schroma .%s%s { %s }\n", t, demo.ChromaPrefix, demo.ChromaPrefix, cls, css)
 	}
 	return b.String()
 }

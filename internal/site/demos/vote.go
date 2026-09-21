@@ -23,6 +23,14 @@ var votes = struct {
 	counts []int
 }{counts: make([]int, len(voteOptions))}
 
+// The tallies have no topic: this demo is deliberately not live, so an open
+// tab redraws on its next vote or reload rather than at the moment of reset.
+func resetVotes() {
+	votes.mu.Lock()
+	clear(votes.counts)
+	votes.mu.Unlock()
+}
+
 func voteRows() []VoteRow {
 	votes.mu.Lock()
 	defer votes.mu.Unlock()
@@ -42,10 +50,16 @@ type Vote struct {
 	Notice via.State[string]
 }
 
-func (v *Vote) OnInit(ctx *via.Ctx) error {
-	if v.Lim == nil {
-		panic("demos: Vote.Lim must be set by the page that embeds it")
+// NewVote takes the limiter the page owns; a nil one is a wiring mistake, so
+// it fails here rather than on the first render.
+func NewVote(lim Limiter) Vote {
+	if lim == nil {
+		panic("demos: NewVote: Vote.Lim must not be nil")
 	}
+	return Vote{Lim: lim}
+}
+
+func (v *Vote) OnInit(ctx *via.Ctx) error {
 	v.Rows.Set(voteRows())
 	return nil
 }

@@ -7,6 +7,9 @@ import (
 	"go-via.dev/site/demos"
 )
 
+// The highlighting contract between this package and demo/gen: change either
+// and static/chroma.css is stale until the generator has run.
+//
 //go:generate go run ./gen
 const (
 	ChromaStyle  = "github-dark"
@@ -30,6 +33,8 @@ func init() {
 	}
 }
 
+// Source is the highlighted text of one demos file. An unembedded name is a
+// typo in a demo.Card call site, so it panics rather than render a blank tab.
 func Source(name string) h.H {
 	src, ok := sources[name]
 	if !ok {
@@ -46,7 +51,7 @@ func Code(src string) h.H {
 	}
 	var spans []h.H
 	for _, t := range it.Tokens() {
-		if cls := class(t.Type); cls != "" {
+		if cls := Class(t.Type); cls != "" {
 			spans = append(spans, h.Span(h.Class(cls), h.Str(t.Value)))
 			continue
 		}
@@ -55,8 +60,9 @@ func Code(src string) h.H {
 	return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(spans...))
 }
 
-// class mirrors chroma's unexported html-formatter mapping.
-func class(t chroma.TokenType) string {
+// Class mirrors chroma's unexported html-formatter mapping: the prefixed CSS
+// class a token gets, or "" for a token that gets no span at all.
+func Class(t chroma.TokenType) string {
 	for t != 0 {
 		cls, ok := chroma.StandardTypes[t]
 		if ok {

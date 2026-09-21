@@ -10,26 +10,26 @@ import (
 
 // Live is the page on what makes a page stream, and what it streams over.
 type Live struct {
+	page
 	Pulse  demos.Pulse
 	Feed   demos.Feed
 	Shared demos.Shared
 	Ping   demos.Ping
 }
 
-func NewLive() Live {
-	lim := demo.NewLimiter(20)
+// NewLive gives each demo its own limiter, so a visitor spending the feed's
+// budget still has pings and shared clicks left.
+func NewLive(origin string) Live {
 	return Live{
-		Feed: demos.Feed{Lim: lim},
-		Shared: demos.Shared{
-			Lim:  lim,
-			Hits: via.StateTrack(demos.SharedTopic, demos.SharedHits.Load),
-		},
-		Ping: demos.Ping{Lim: lim},
+		page:   newPage("/live", origin),
+		Feed:   demos.NewFeed(demo.NewLimiter(20)),
+		Shared: demos.NewShared(demo.NewLimiter(20)),
+		Ping:   demos.NewPing(demo.NewLimiter(20)),
 	}
 }
 
 func (p *Live) PageMeta() via.Meta {
-	return shell.Meta(shell.NavFor("/live"), "Per-tab SSE: Tick, Listen, StateTrack and per-user fan-out keyed by the session id.")
+	return p.meta("Per-tab SSE: Tick, Listen, StateTrack and per-user fan-out keyed by the session id.")
 }
 
 func (p *Live) OnInit(ctx *via.Ctx) error {
@@ -38,7 +38,7 @@ func (p *Live) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Live) View() h.H {
-	return shell.Page(shell.NavFor("/live"),
+	return shell.Page(p.nav,
 		h.P(h.Str("A page is a request and a response until a unit on it acts live: its OnInit registered a "+
 			"ctx.Tick or a ctx.Listen, or its View displayed a State. Then via opens one SSE connection for that "+
 			"tab and pushes element patches down it. Actions do not change that — a click still POSTs, and on a "+

@@ -23,16 +23,25 @@ type Ping struct {
 	// Limiter, keepRows and trim: see shared_contract.go.
 	Lim    Limiter
 	sid    string
+	gone   chan struct{}
 	Msgs   via.List[string]
 	Notice via.State[string]
 }
 
-func (p *Ping) OnInit(ctx *via.Ctx) error {
-	if p.Lim == nil {
-		panic("demos: Ping.Lim must be set by the page that embeds it")
+// NewPing takes the limiter the page owns; a nil one is a wiring mistake, so
+// it fails here rather than on the first render.
+func NewPing(lim Limiter) Ping {
+	if lim == nil {
+		panic("demos: NewPing: Ping.Lim must not be nil")
 	}
+	return Ping{Lim: lim}
+}
+
+func (p *Ping) OnInit(ctx *via.Ctx) error {
 	p.sid = ctx.Session().ID()
+	p.gone = make(chan struct{})
 	ctx.Listen(pingTopic, p.recv)
+	ctx.OnDispose(func() { close(p.gone) })
 	return nil
 }
 
@@ -49,10 +58,17 @@ func (p *Ping) Send(ctx *via.Ctx) {
 		p.Notice.Set("slow down — 20 pings a minute")
 		return
 	}
-	to := ctx.Session().ID()
 	p.Notice.Set("scheduled")
 	// A goroutine may not touch unit state; publishing is how it reaches one.
+	// gone is closed by OnDispose, so a tab closed inside the three seconds
+	// does not wake the whole page up to deliver a ping nobody waits for.
+	to, gone := p.sid, p.gone
 	time.AfterFunc(3*time.Second, func() {
+		select {
+		case <-gone:
+			return
+		default:
+		}
 		pingTopic.Publish(pingEvent{To: to, Msg: "ping at " + time.Now().Format("15:04:05")})
 	})
 }
@@ -63,6 +79,6 @@ func (p *Ping) View() h.H {
 			h.Button(via.On("click", p.Send), h.Str("ping me in 3s")),
 			h.Span(h.Class("note"), p.Notice.Display()),
 		),
-		h.Ul(h.Class("loglist"), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),
+		h.Ul(h.Class("loglist"), h.TabIndex(0), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),
 	)
 }

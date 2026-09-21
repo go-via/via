@@ -6,7 +6,8 @@ package demos
 
 import "embed"
 
-// FS is every file of this package, embedded verbatim.
+// FS is every file of this package, source and all, which is what the Source
+// tab of a demo card shows.
 //
 //go:embed *.go
 var FS embed.FS
