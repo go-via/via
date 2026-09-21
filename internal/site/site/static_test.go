@@ -62,3 +62,36 @@ func TestStatic_sendsNosniffOnAMiss(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 }
+
+func TestStatic_doesNotListDirectories(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	for _, path := range []string{"/static/", "/static/brand/", "/static/fonts/", "/static/data/", "/static/vendor/"} {
+		t.Run(path, func(t *testing.T) {
+			t.Parallel()
+			resp, _ := get(t, srv, path, nil)
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		})
+	}
+}
+
+func TestStatic_refusesAnAliasSpelling(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, _ := get(t, srv, "/static/brand/..%2fsite.css", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestStatic_doesNotServeAnAssetToAPOST(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, err := srv.Client().Post(srv.URL+"/static/site.css", "text/css", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+		"the assets are bound to GET, and the router behind the mux's catch-all answers what falls through")
+}

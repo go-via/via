@@ -27,24 +27,26 @@ clean. `/robots.txt` and `/favicon.ico` are served next to it.
 ## Deploy
 
 `deploy/playbook.yml` cross-builds locally, installs under systemd behind
-Caddy, mints the session key once, and ends with a `/healthz` probe. Needs a
-Debian-family host reachable as root, DNS for `domain` and `www.domain`
-already pointing at it, and ansible-core 2.15+.
+Caddy, mints the session key once, and ends by probing `/healthz` on the
+service and then on the public origin. Needs a Debian-family host reachable as
+root, DNS for `domain` and `www.domain` already pointing at it, and
+ansible-core 2.15+.
 
 ```sh
 cd internal/site/deploy
 ansible-playbook -i 203.0.113.10, playbook.yml
 ```
 
-Override `domain` or `bind` with `-e`.
+Override `domain` or `bind` with `-e`; `-e check_public=false` skips the public
+probe, for a host DNS does not point at yet.
 
 ## Layout
 
-- `main.go` — the server: flags from the environment, signals, shutdown.
+- `main.go` — the server: configuration from the environment, signals,
+  shutdown.
 - `site/` — router options, mounts, static serving. `site.New` is what
   `main.go` and the tests both build.
-- `shell/` — chrome: `layout.go`, `nav.go` (`Nav`, `NavFor`), `meta.go`,
-  `session.go`.
+- `shell/` — chrome: `layout.go`, `nav.go` (`Nav`, `NavFor`), `meta.go`.
 - `content/` — one mounted page per file, plus `page.go` for the wiring they
   share.
 - `demos/` — one demo per file, embedded verbatim for its Source tab.
@@ -77,6 +79,6 @@ own `New*` constructor from a limiter the page owns, and checks
   published, so open tabs redraw; the vote tallies have no topic, so a tab
   redraws them on its next vote or reload.
 - Per-tab lists cap at `keepRows` (50) and are never reset.
-- Mutating actions spend a per-session token: 20/min each for the feed, the
-  shared counter and the pings on `/live`, 30/min for the vote on `/actions`.
-  Sessions are minted by `shell.EnsureSession` so the bucket key is not `""`.
+- Mutating actions spend a per-client token, keyed on the client IP: 20/min
+  each for the feed, the shared counter and the pings on `/live`, 30/min for
+  the vote on `/actions`. Dropping the session cookie buys no fresh budget.

@@ -8,20 +8,19 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// The atomic is the store; the topic announces that it moved. Exported for the
-// via.StateTrack literal in content/live.go.
+// The atomic is the store; the topic announces that it moved.
 var (
-	SharedHits  atomic.Int64
-	SharedTopic = topic.New[int64]()
+	sharedHits  atomic.Int64
+	sharedTopic = topic.New[int64]()
 )
 
 func resetShared() {
-	SharedHits.Store(0)
-	SharedTopic.Publish(0)
+	sharedHits.Store(0)
+	sharedTopic.Publish(0)
 }
 
-// Hits follows the counter through a via.StateTrack literal set where the page
-// is mounted; nothing in this file has to run for that.
+// Shared follows the counter through the via.StateTrack literal NewShared
+// builds; the topic re-seeds it on every publish.
 type Shared struct {
 	// Limiter: see shared_contract.go.
 	Lim    Limiter
@@ -36,7 +35,7 @@ func NewShared(lim Limiter) Shared {
 	if lim == nil {
 		panic("demos: NewShared: Shared.Lim must not be nil")
 	}
-	return Shared{Lim: lim, Hits: via.StateTrack(SharedTopic, SharedHits.Load)}
+	return Shared{Lim: lim, Hits: via.StateTrack(sharedTopic, sharedHits.Load)}
 }
 
 func (s *Shared) Inc(ctx *via.Ctx) {
@@ -45,7 +44,7 @@ func (s *Shared) Inc(ctx *via.Ctx) {
 		return
 	}
 	s.Notice.Set("")
-	SharedTopic.Publish(SharedHits.Add(1))
+	sharedTopic.Publish(sharedHits.Add(1))
 }
 
 func (s *Shared) View() h.H {

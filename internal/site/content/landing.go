@@ -55,7 +55,7 @@ func (p *Landing) View() h.H {
 	return shell.Page(p.nav,
 		h.Section(h.Class("hero"),
 			h.Img(h.Class("hero-art"), h.Src("/static/brand/bolt-amber.svg"), h.Alt(""), h.Width(146), h.Height(154)),
-			h.Img(h.Class("hero-mark"), h.Src("/static/brand/wordmark-amber-dark.svg"), h.Alt("via"), h.Height(44)),
+			h.Img(h.Class("hero-mark"), h.Src("/static/brand/wordmark-amber-dark.svg"), h.Alt("via"), h.Width(115), h.Height(44)),
 			h.P(h.Class("pitch"), h.Str("Write the page as Go functions, wire a click to a method, "+
 				"and via streams the parts that changed back to the browser.")),
 		),

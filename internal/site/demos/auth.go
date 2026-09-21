@@ -24,8 +24,8 @@ func (a *Auth) OnReload(ctx *via.Ctx) error { return a.load(ctx) }
 
 func (a *Auth) load(ctx *via.Ctx) error {
 	u, ok := ctx.Session().Get[User]()
-	// The live page mints an empty session to key its rate limit by, so a
-	// stored value with no name is a visitor, not a user.
+	// The ping demo stores null to mint a session id, so a stored value with
+	// no name is a visitor, not a user.
 	a.user, a.in = u, ok && u.Name != ""
 	return nil
 }
@@ -46,7 +46,12 @@ func (a *Auth) Login(ctx *via.Ctx) {
 	ctx.Redirect("/platform")
 }
 
-func (a *Auth) Logout(ctx *via.Ctx) { ctx.Session().Delete() }
+// Delete clears the value; Rotate retires the id, so a cookie captured while
+// signed in is worthless after sign-out.
+func (a *Auth) Logout(ctx *via.Ctx) {
+	ctx.Session().Delete()
+	ctx.Session().Rotate()
+}
 
 func (a *Auth) View() h.H {
 	if !a.in {

@@ -26,12 +26,6 @@ func (p *Platform) PageMeta() via.Meta {
 		"Composition with Child, mount patterns and ctx.Param, auth as an OnInit check, the mount's Content-Security-Policy, and the OnInit/OnReload/OnConnect hooks.")
 }
 
-// auth.go tells visitor from user by the stored value, so one must exist.
-func (p *Platform) OnInit(ctx *via.Ctx) error {
-	shell.EnsureSession(ctx)
-	return nil
-}
-
 func (p *Platform) View() h.H {
 	return shell.Page(p.nav,
 		h.P(h.Str("A page is a struct. Its fields are its children, its methods are its actions and its hooks, "+
@@ -56,8 +50,9 @@ func (p *Platform) View() h.H {
 				"ctx.Session().Get[User](), the View branches on what it found, and a unit that should not be "+
 				"reachable renders a login instead of itself. Signing in is a native form submit, so the handler "+
 				"can Put the user, Rotate the session cookie and Redirect — the browser only sends the new cookie on "+
-				"the request after this one. Signing out is an ordinary action, and OnReload re-reads the session "+
-				"the handler cleared.")),
+				"the request after this one. Signing out is an ordinary action that Deletes the value and Rotates "+
+				"the id again — sign-out is an auth-state change too — and OnReload re-reads the session the "+
+				"handler cleared.")),
 			via.Child(p.Auth), "auth.go"),
 
 		demo.Card("The policy this page carries",
@@ -77,8 +72,8 @@ func (p *Platform) View() h.H {
 				h.P(h.Str("OnInit runs on every request that renders the unit — the GET, the stream connect, and "+
 					"each action on a page that is not streaming.")),
 				h.P(h.Str("On a streaming page the unit outlives the request, so a click runs the handler and "+
-					"then OnReload, never OnInit again. OnInit mints sessions and registers timers, neither of "+
-					"which is safe to repeat after a handler has committed a mutation.")),
+					"then OnReload, never OnInit again. OnInit registers timers and subscriptions and reads the "+
+					"session, none of which is safe to repeat after a handler has committed a mutation.")),
 				h.P(h.Str("OnConnect runs once, when the stream opens, after every Listen has subscribed. Inside "+
 					"OnReload, Tick and Listen are no-ops, so liveness stays the verdict of the GET.")),
 			),

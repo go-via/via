@@ -38,7 +38,10 @@ func staticHandler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		etag, ok := staticETags[r.URL.Path]
 		if !ok {
-			files.ServeHTTP(w, r)
+			// Every file is in the map, so a miss is a directory or an alias
+			// spelling of a file; FileServerFS would list the one and serve
+			// the other with no ETag or Cache-Control.
+			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("ETag", etag)

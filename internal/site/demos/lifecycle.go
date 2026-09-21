@@ -39,6 +39,6 @@ func (l *Lifecycle) View() h.H {
 			h.Button(via.On("click", l.Act), h.Str("run an action")),
 			h.A(h.Href("/platform"), h.Str("reload the page")),
 		),
-		h.Ol(h.Class("loglist"), h.TabIndex(0), l.Log.Each(func(s string) h.H { return h.Li(h.Str(s)) })),
+		h.Ol(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.RawAttr("aria-label", "Lifecycle events"), l.Log.Each(func(s string) h.H { return h.Li(h.Str(s)) })),
 	)
 }

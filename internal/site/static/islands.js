@@ -61,6 +61,11 @@
       // container size on its own resize event, which a reflow does not fire.
       el._ro = new ResizeObserver(() => el._map && el._map.resize());
       el._ro.observe(el);
+      // The container is the map's own element, so the message cannot be
+      // written into it; islands.css renders the attribute.
+      el._map.on("error", (ev) => {
+        el.setAttribute("data-error", "map failed to load: " + ((ev && ev.error && ev.error.message) || "unknown error"));
+      });
     }
     el._map.jumpTo({center: view.center, zoom: view.zoom});
   };
@@ -70,6 +75,9 @@
     for (const r of records) {
       for (const node of r.removedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        // A morph that moves an island removes and re-inserts it in the same
+        // batch: only a node still detached once the mutation is done is gone.
+        if (node.isConnected) continue;
         const gone = node.matches("[data-island-map]") ? [node] : node.querySelectorAll("[data-island-map]");
         for (const el of gone) {
           if (!el._map) continue;

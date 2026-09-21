@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,5 +56,17 @@ func TestSource_namesOnlyEmbeddedFiles(t *testing.T) {
 	for _, name := range names {
 		_, err := demos.FS.ReadFile(name)
 		assert.NoError(t, err, "demo.Card(…, %q) names no file of the demos package", name)
+	}
+}
+
+func TestFS_embedsNoTestFile(t *testing.T) {
+	t.Parallel()
+
+	entries, err := demos.FS.ReadDir(".")
+	require.NoError(t, err)
+
+	for _, e := range entries {
+		assert.False(t, strings.HasSuffix(e.Name(), "_test.go"),
+			"a _test.go in demos is embedded, highlighted at init and served from the Source tab; put demos tests in another package")
 	}
 }
