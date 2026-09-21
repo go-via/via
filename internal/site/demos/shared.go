@@ -8,35 +8,31 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// The store is the atomic; the topic only announces that it moved. State is
-// per connection, so a number every visitor shares cannot live in one.
+// The atomic is the store; the topic announces that it moved. Exported for the
+// via.StateTrack literal in content/live.go.
 var (
-	sharedHits  atomic.Int64
-	sharedTopic = topic.New[int64]()
+	SharedHits  atomic.Int64
+	SharedTopic = topic.New[int64]()
 )
 
-// ResetShared zeroes the counter and announces it, so every tab holding this
-// page redraws instead of showing a total nobody can reach any more.
 func ResetShared() {
-	sharedHits.Store(0)
-	sharedTopic.Publish(0)
+	SharedHits.Store(0)
+	SharedTopic.Publish(0)
 }
 
-// Shared keeps Hits equal to the process-wide counter: Track seeds from the
-// store, re-seeds once the stream has subscribed (so a publish that beat the
-// subscribe is not lost), then follows every publish.
-//
-// The literal form does the same job from the parent's side:
-//
-//	Shared{Hits: via.StateTrack(sharedTopic, sharedHits.Load)}
+// Hits follows the counter through a via.StateTrack literal set where the page
+// is mounted; nothing in this file has to run for that.
 type Shared struct {
+	// Limiter: see shared_contract.go.
 	Lim    Limiter
 	Hits   via.State[int64]
 	Notice via.State[string]
 }
 
 func (s *Shared) OnInit(ctx *via.Ctx) error {
-	s.Hits.Track(ctx, sharedTopic, sharedHits.Load)
+	if s.Lim == nil {
+		panic("demos: Shared.Lim must be set by the page that embeds it")
+	}
 	return nil
 }
 
@@ -46,7 +42,7 @@ func (s *Shared) Inc(ctx *via.Ctx) {
 		return
 	}
 	s.Notice.Set("")
-	sharedTopic.Publish(sharedHits.Add(1))
+	SharedTopic.Publish(SharedHits.Add(1))
 }
 
 func (s *Shared) View() h.H {

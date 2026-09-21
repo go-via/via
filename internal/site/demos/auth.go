@@ -7,8 +7,7 @@ import (
 	"github.com/go-via/via/h"
 )
 
-// User is what this demo keeps in the session. A session holds one value, so
-// this struct is the whole of it.
+// User is the session's one value.
 type User struct{ Name string }
 
 // Auth is a login with no middleware and no guard type: OnInit reads the
@@ -18,11 +17,12 @@ type Auth struct {
 	in   bool
 }
 
-func (a *Auth) OnInit(ctx *via.Ctx) error { return a.OnReload(ctx) }
+func (a *Auth) OnInit(ctx *via.Ctx) error { return a.load(ctx) }
 
-// OnReload re-reads after an action on this unit — sign out mutates the
-// session OnInit had already read.
-func (a *Auth) OnReload(ctx *via.Ctx) error {
+// Sign out mutates the session OnInit already read.
+func (a *Auth) OnReload(ctx *via.Ctx) error { return a.load(ctx) }
+
+func (a *Auth) load(ctx *via.Ctx) error {
 	u, ok := ctx.Session().Get[User]()
 	// The live page mints an empty session to key its rate limit by, so a
 	// stored value with no name is a visitor, not a user.

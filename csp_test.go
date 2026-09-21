@@ -58,6 +58,7 @@ func TestPage_shipsStrictCSPDirectives(t *testing.T) {
 		"default-src 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",
+		"form-action 'self'",
 		"frame-ancestors 'self'",
 		"script-src 'self' 'unsafe-eval' 'sha256-",
 		"style-src 'self';",

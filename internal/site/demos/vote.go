@@ -36,6 +36,7 @@ func voteRows() []VoteRow {
 // Vote is a per-row action: each button carries its own option index, and the
 // handler receives it as a typed parameter.
 type Vote struct {
+	// Limiter: see shared_contract.go.
 	Lim    Limiter
 	Rows   via.List[VoteRow]
 	Notice via.State[string]

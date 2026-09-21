@@ -20,6 +20,7 @@ var pingTopic = topic.New[pingEvent]()
 
 // Ping is per-user fan-out over a shared topic, keyed by the session id.
 type Ping struct {
+	// Limiter, keepRows and trim: see shared_contract.go.
 	Lim    Limiter
 	sid    string
 	Msgs   via.List[string]
@@ -27,6 +28,9 @@ type Ping struct {
 }
 
 func (p *Ping) OnInit(ctx *via.Ctx) error {
+	if p.Lim == nil {
+		panic("demos: Ping.Lim must be set by the page that embeds it")
+	}
 	p.sid = ctx.Session().ID()
 	ctx.Listen(pingTopic, p.recv)
 	return nil
@@ -37,9 +41,7 @@ func (p *Ping) recv(ctx *via.Ctx, e pingEvent) {
 		return
 	}
 	p.Msgs.Append(e.Msg)
-	if n := len(p.Msgs.Get()); n > keepRows {
-		p.Msgs.Set(p.Msgs.Get()[n-keepRows:])
-	}
+	trim(&p.Msgs, keepRows)
 }
 
 func (p *Ping) Send(ctx *via.Ctx) {

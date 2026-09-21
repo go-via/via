@@ -72,6 +72,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
           (cd vtbrowser && govulncheck -tags browser ./...)
+          (cd internal/site && govulncheck ./...)
 
   browser-test:
     # Same shape as build-test: the job always runs and reports, only its heavy

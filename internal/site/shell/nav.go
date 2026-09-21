@@ -1,28 +1,33 @@
 package shell
 
-import "github.com/go-via/via"
+import "github.com/go-via/via/h"
 
-// NavItem is one sidebar entry. The zero value marks a page that is in no
-// section of the nav, so nothing is highlighted.
+// h has no aria helper.
+var AriaCurrentPage = h.RawAttr("aria-current", "page")
+
+// NavItem is the one source of a page's title. The zero value is a page
+// outside the nav.
 type NavItem struct {
-	Title string
-	Path  string
+	Title   string
+	Path    string
+	Heading string // <h1> when it differs from Title
 }
 
-// Nav is the sidebar, in reading order.
 var Nav = []NavItem{
-	{"Home", "/"},
-	{"Actions", "/actions"},
-	{"Signals", "/signals"},
-	{"Live", "/live"},
-	{"Islands", "/islands"},
-	{"Platform", "/platform"},
-	{"Reference", "/reference"},
+	{Title: "Home", Path: "/", Heading: "Server-rendered Go UI that stays live"},
+	{Title: "Actions", Path: "/actions"},
+	{Title: "Signals", Path: "/signals"},
+	{Title: "Live", Path: "/live"},
+	{Title: "Islands", Path: "/islands"},
+	{Title: "Platform", Path: "/platform"},
+	{Title: "Reference", Path: "/reference"},
 }
 
-// Meta fills the document head slots a content page owns. Assets are left
-// zero: the site-wide ones are declared router-wide in main.go, and a page
-// that loads its own sets the field itself (content/islands.go).
-func Meta(title, desc string) via.Meta {
-	return via.Meta{Title: title + " · go-via", Description: desc}
+func NavFor(path string) NavItem {
+	for _, it := range Nav {
+		if it.Path == path {
+			return it
+		}
+	}
+	panic("shell: no nav entry for " + path)
 }

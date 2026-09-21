@@ -20,11 +20,12 @@ func (c *Computed) sum() expr.Expr {
 }
 
 func (c *Computed) View() h.H {
+	sum := c.sum()
 	return h.Div(
 		h.Label(h.Str("A"), h.Input(h.Type("number"), c.A.Bind())),
 		h.Label(h.Str("B"), h.Input(h.Type("number"), c.B.Bind())),
 		h.P(h.Str("A + B = "),
-			h.Span(h.Class("total"), h.DataText(c.sum()), h.DataClass("over", c.sum().Gt(10))),
+			h.Span(h.Class("total"), h.DataText(sum), h.DataClass("over", sum.Gt(10))),
 			h.Small(h.Str(" (turns amber above 10)")),
 		),
 	)

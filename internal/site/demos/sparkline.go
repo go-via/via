@@ -2,6 +2,7 @@ package demos
 
 import (
 	"math/rand/v2"
+	"slices"
 	"time"
 
 	"github.com/go-via/via"
@@ -28,7 +29,9 @@ func (s *Sparkline) beat(ctx *via.Ctx) {
 	if len(s.load) > 40 {
 		s.load = s.load[1:]
 	}
-	s.Load.Set(s.load)
+	// Clone: Set keeps the slice header, and the next beat's append would
+	// otherwise write through it into the value already on the wire.
+	s.Load.Set(slices.Clone(s.load))
 }
 
 func (s *Sparkline) View() h.H {
