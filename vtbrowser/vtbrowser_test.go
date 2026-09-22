@@ -294,6 +294,30 @@ func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
+func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(clicker{}))
+	// Pre-armed at the reload cap so the give-up below stays put instead of probing.
+	var armed bool
+	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
+
+	bg := func(event string) string {
+		var got string
+		s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'`+event+`'}}));`+
+			`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &got)
+		return got
+	}
+	// Headless Chromium's colour scheme is not pinned, so either scheme's value passes.
+	connecting := bg("retrying")
+	if connecting != "rgb(133, 77, 14)" && connecting != "rgb(254, 243, 199)" {
+		t.Fatalf("reconnecting banner is not the yellow state colour: %q", connecting)
+	}
+	offline := bg("retries-failed")
+	if offline != "rgb(127, 29, 29)" && offline != "rgb(254, 226, 226)" {
+		t.Fatalf("disconnected banner is not the red state colour: %q", offline)
+	}
+	s.RequireCleanConsole()
+}
+
 func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 

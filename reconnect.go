@@ -4,15 +4,21 @@ import "strconv"
 
 // Every rule is wrapped in :where() so it has zero specificity. Adopted sheets
 // cascade after author sheets, so without that an app could never restyle the
-// banner; with it, a plain `#via-reconnect-banner{…}` rule wins outright.
+// banner; with it, a plain `#via-reconnect-banner{…}` rule wins outright. The
+// yellow/red state rules key on the data-via-connection attribute on <html>,
+// so an app's state colours use the same selector.
 const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;right:0;` +
 	`z-index:2147483647;display:flex;justify-content:center;align-items:center;gap:.75rem;` +
 	`padding:.5rem 1rem;font:14px/1.4 system-ui,sans-serif;background:#1f2937;color:#f9fafb;` +
 	`box-shadow:0 1px 0 rgba(255,255,255,.08)}` +
 	`:where(#via-reconnect-banner button){font:inherit;padding:.15rem .6rem;` +
 	`border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer}` +
+	`:where([data-via-connection=connecting] #via-reconnect-banner){background:#854d0e;color:#fef3c7}` +
+	`:where([data-via-connection=offline] #via-reconnect-banner){background:#7f1d1d;color:#fee2e2}` +
 	`@media (prefers-color-scheme:light){:where(#via-reconnect-banner){background:#f3f4f6;` +
-	`color:#111827;box-shadow:0 1px 0 rgba(0,0,0,.1)}}`
+	`color:#111827;box-shadow:0 1px 0 rgba(0,0,0,.1)}` +
+	`:where([data-via-connection=connecting] #via-reconnect-banner){background:#fef3c7;color:#78350f}` +
+	`:where([data-via-connection=offline] #via-reconnect-banner){background:#fee2e2;color:#7f1d1d}}`
 
 // reconnectInit is the client-side reconnect manager injected into every live
 // page as a hash-admitted inline script (see csp.go). It watches Datastar's
