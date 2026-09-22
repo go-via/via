@@ -128,9 +128,16 @@ func TestSite_namesItsCanonicalURLOnlyWhenTheOriginIsKnown(t *testing.T) {
 	assert.NotContains(t, body, `rel="canonical"`)
 }
 
+var voteAction = regexp.MustCompile(`@post\('([^'?]+)\?a=0'\)">vote<`)
+
+// postAction fires the vote demo's Cast: action names are hashed per render,
+// so the URL is read off the page rather than spelled.
 func postAction(t *testing.T, srv *httptest.Server, origin string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/actions/_via/a/1/Cast", strings.NewReader("{}"))
+	_, body := get(t, srv, "/actions", nil)
+	m := voteAction.FindStringSubmatch(body)
+	require.NotNil(t, m, "no vote button on /actions")
+	req, err := http.NewRequest(http.MethodPost, srv.URL+m[1], strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Datastar-Request", "true")

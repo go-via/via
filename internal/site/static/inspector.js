@@ -126,7 +126,7 @@
     if (!panels.length) return false;
     var m = /\/_via\/a\/([^/]+)\//.exec(url);
     if (!m) return true;
-    for (var i = 0; i < panels.length; i++) if (panels[i].t.key === m[1]) return true;
+    for (var i = 0; i < panels.length; i++) if (owns(panels[i].t.key, m[1])) return true;
     return false;
   }
 
@@ -168,13 +168,21 @@
     return url.indexOf("/_via/sse") !== -1;
   }
 
+  // A nested child's key and id extend its parent's with "-n", so a demo's
+  // pane owns its children's traffic too.
+  function owns(parent, key) {
+    return key === parent || key.indexOf(parent + "-") === 0;
+  }
+
   function matches(e, t) {
     if (e.kind === "req" || e.kind === "res") {
       // The stream is per page, not per demo, so every pane shows it.
-      return isStream(e.url) || e.url.indexOf("/_via/a/" + t.key + "/") !== -1;
+      if (isStream(e.url)) return true;
+      var m = /\/_via\/a\/([^/]+)\//.exec(e.url);
+      return !!m && owns(t.key, m[1]);
     }
-    if (e.selector === "#" + t.id) return true;
-    return e.elements.indexOf('id="' + t.id + '"') !== -1;
+    if (e.selector === "#" + t.id || e.selector.indexOf("#" + t.id + "-") === 0) return true;
+    return e.elements.indexOf('id="' + t.id + '"') !== -1 || e.elements.indexOf('id="' + t.id + '-') !== -1;
   }
 
   function header(e) {

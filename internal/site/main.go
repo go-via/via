@@ -67,8 +67,9 @@ func run() error {
 	app.Close()
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shut); err != nil {
-		return err
+	err := srv.Shutdown(shut)
+	if serr := <-serve; err == nil {
+		err = serr
 	}
-	return <-serve
+	return err
 }
