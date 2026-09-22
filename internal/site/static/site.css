@@ -51,6 +51,7 @@ code, pre { font-family: var(--mono); font-size: .875rem; }
 
 pre {
   overflow-x: auto;
+  tab-size: 4;
   padding: 1rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -62,6 +63,8 @@ pre {
   display: grid;
   /* minmax(0, …) so wide code blocks scroll inside .col instead of widening the row */
   grid-template-columns: minmax(0, 1fr);
+  /* 1fr on the column row: a short page pads its content, not its nav */
+  grid-template-rows: auto auto 1fr auto;
   grid-template-areas: "top" "side" "col" "bottom";
   min-height: 100vh;
 }
@@ -82,20 +85,28 @@ pre {
   grid-area: side;
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
-  padding: 1rem 0;
 }
-.side ul { list-style: none; margin: 0; padding: 0; }
+/* Under 900px the nav is a wrapping strip under the header, every link in
+   view (a scrolling strip hides the current page off its edge); the current
+   link is underlined rather than edged so the marker reads in both layouts. */
+.side ul {
+  list-style: none;
+  margin: 0;
+  padding: .25rem .75rem;
+  display: flex;
+  flex-wrap: wrap;
+}
 .nav-link {
   display: block;
-  padding: .35rem 1.5rem;
+  padding: .55rem .5rem;
   color: var(--text);
-  border-left: 2px solid transparent;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
 }
 .nav-link:hover { color: var(--bright); text-decoration: none; }
 .nav-link[aria-current="page"] {
   color: var(--amber);
-  border-left-color: var(--amber);
-  background: rgba(255, 191, 0, .06);
+  border-bottom-color: var(--amber);
   font-weight: 600;
 }
 
@@ -183,6 +194,17 @@ pre {
     top: 0;
     align-self: start;
     height: 100vh;
+    padding: 1rem 0;
+  }
+  .side ul { display: block; padding: 0; }
+  .nav-link {
+    padding: .35rem 1.5rem;
+    border-bottom: 0;
+    border-left: 2px solid transparent;
+  }
+  .nav-link[aria-current="page"] {
+    border-left-color: var(--amber);
+    background: rgba(255, 191, 0, .06);
   }
 }
 
@@ -199,7 +221,7 @@ pre {
 }
 .demo > header { padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
 .demo-prose { padding: .75rem 1rem 0; }
-.demo .row { display: flex; align-items: center; gap: .5rem; }
+.demo .row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 
 /* Panels are siblings of the radios, so :checked picks one by position and the
    card needs no script (demo/card.go). */
@@ -345,6 +367,16 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 }
 .ref-table th { color: var(--bright); font-weight: 600; }
 .ref-table td code { color: var(--amber); }
+/* A table ignores min-width: 0 and two columns leave no room for a signature
+   on a phone, so under 900px each row stacks: the call on one line, what it
+   does beneath. The header row is noise once the columns are gone. */
+@media (max-width: 899px) {
+  .ref-table tbody, .ref-table tr, .ref-table td { display: block; }
+  .ref-table tr:first-child { display: none; }
+  .ref-table tr { padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .ref-table td { padding: .15rem 0; border-bottom: 0; }
+  .ref-table td code { overflow-wrap: anywhere; }
+}
 @media (min-width: 900px) { .ref-table td code { white-space: nowrap; } }
 
 .inspector h4 {

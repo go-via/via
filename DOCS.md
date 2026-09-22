@@ -285,6 +285,75 @@ an SSE frame on a connection the POST does not own. Anything that streams bytes
 — a file download, a CSV export — is a sibling `net/http` handler next to the
 via one.
 
+## Composition
+
+Four terms. Two describe a unit, two describe a subtree, and the axes are
+independent.
+
+- **Unit**: a struct with a `View`. The mounted root is one; every
+  `via.Child(p.Field)` in a `View` starts another, with its own `OnInit`.
+- **Plain / live**: *who pushes*. A unit is live when it acts live — its
+  `OnInit` registered a `Tick` or `Listen`, or its `View` rendered a
+  `State`/`List`. Nothing else makes it live; there is no interface to assert.
+- **Child**: a unit embedded by value in its parent and rendered with
+  `via.Child`. Plain or live like any unit. A child gives a region its own
+  hooks, state and patch boundary; it is not a component abstraction.
+- **Island**: a subtree the *client* owns — a chart or map library renders it,
+  via only feeds it signals. See [Client-side islands](#client-side-islands).
+
+Live and island do not overlap. A plain page can hold an island seeded once by
+`Set` in `OnInit`; a live unit can re-feed one on every `Tick`; most live units
+have none. Live is the server pushing, island is the browser drawing.
+
+### The nesting rule
+
+> A page streams iff it contains a live unit; a live child may sit under any
+> plain ancestor; a live unit may not contain another live unit.
+
+What that permits and refuses:
+
+| Parent | Child | |
+|---|---|---|
+| plain | plain | any depth |
+| plain | live | any depth, as long as every ancestor on the path is plain |
+| live root | plain | allowed |
+| live root | live | **panics at render** |
+| live child | anything | **panics at render** — a live child's `View` is flat, no `Child` calls at all |
+
+Both refusals happen on the render, before an action can misroute. A dynamic
+set of live children, or a live child inside a live child, is deferred. The
+workaround: make the outer unit plain and turn the pieces that push into live
+siblings under it, sharing through a pointer dep or a `topic.Topic`.
+
+### What a child gets
+
+- **Its own hooks.** `OnInit` and `OnReload` run per child, on the GET, on each
+  action and on the SSE connect, as for the root.
+- **Its own patch region.** A live child re-renders and pushes only its
+  container, `#via-i{n}`, in place. A parent's patch never morphs it, and it
+  never touches a sibling.
+- **Its own address.** Actions route by child key plus the tab handshake;
+  signals are slot-scoped, so two children of the same type never collide.
+- **One stream per tab.** Every live child on a page shares the tab's single
+  SSE connection and goroutine. A handler that blocks stalls all of them.
+- **Ownership by value.** The parent's field literal seeds the child's deps at
+  registration and each connection gets its own copy, so value state stays
+  per tab. A pointer dep (a `*Topic`, a store) is the deliberate sharing
+  channel. A generic layout — `type Shell[C any] struct{ Body C }` — composes
+  one shell with any page for free.
+- **A stable key.** A child's key is its position among the parent's `Child`
+  calls, composed with the parent's own (`0`, `0-0`). Container id, signal
+  prefix and dispatch address all derive from it, so it must be identical on
+  every render for the life of the connection. A `When` around a `Child`
+  shifts its later siblings' keys — that `When` may depend on data fixed by
+  `OnInit` or the literal, never on time, a client signal or shared state.
+- **No page metadata.** Only the root's `PageMeta` counts; `Child` logs once
+  when a child declares one.
+
+`internal/example/dashboard` is the reference: a plain root holding a plain
+header, a ticking uptime child that also feeds a canvas island, and a queue
+child, the two live ones as siblings.
+
 ## Client-side islands
 
 via never generates or evaluates JavaScript. To hand a subtree to a chart or a
@@ -558,39 +627,12 @@ it.
     yours wins — or drive your own UI from `data-via-connection` on `<html>`.
 
 - **Live-child multiplexing** (`internal/example/dashboard`): child sub-compositions as
-  plain struct fields: `via.Child(p.Clock)` in the parent's `View`. Each child
-  gets its own `OnInit`. A child that neither ticks nor holds `State` is a plain
-  in-place component; one that does is a live child.
-  - All the live children on a page share the tab's *one* SSE stream on one
-    goroutine. Each re-renders and patches only its own region (`#via-i{n}`,
-    pushed in place — its container is never morphed by a parent's patch), its
-    actions route by child id + the tab handshake, and its signals are
-    slot-scoped so siblings never collide.
-  - Ownership is by value: the parent's field literal seeds the child's
-    dependencies (a shared `*Topic`, a store) at registration, each connection
-    gets its own copy (value state stays per-tab), and pointer deps are the
-    deliberate sharing channel. Generic layouts (`Shell[C]{Body C}`) compose
-    one shell with any page.
-  - **Known limitation:** a live child cannot itself embed a further live
-    child. Nesting is one level deep (the root, or a live child directly under
-    a plain root, or through further plain `via.Child`s); it panics at render,
-    loud and early, rather than misroute an action. Plain composition still
-    nests to any depth. Nested live composition (a dynamic set of live children
-    addressed by identity) is a deferred feature.
+  plain struct fields, `via.Child(p.Clock)` in the parent's `View`, each with
+  its own hooks, patch region and address. The vocabulary, the nesting rule and
+  what a child owns are in [Composition](#composition).
   - `State` is per connection: a native `PostForm` submit is a navigation,
     opens a new connection, and reseeds it. Persist through the session or a
     shared pointer dep, or `Redirect` instead of returning a page.
-  - A `Child`'s identity is its **child key**: its ordinal among its own
-    parent's `Child` calls, composed onto the parent's key. The root's children
-    are `0`, `1`, …; a child of `0` is `0-0`. One key drives the container id
-    (`via-i0-0`), the signal prefix (`i0-0_`) and the dispatch address
-    (`/_via/a/0-0/…`), so re-rendering any subtree on its own numbers its
-    descendants exactly as the whole-page render did.
-  - A child's key must be the same on every render for the life of a
-    connection. A `When` around a `Child` shifts its later **siblings**'
-    ordinals, so such a `When` must depend only on data fixed by `OnInit` or
-    the field literal — never on time, a client signal, or shared state that
-    changes while the page is open.
 
 - **Per-row list actions** (`internal/example/poll`): a row's button carries the row's own
   datum — `via.OnArg("click", l.Delete, item.ID)` — and the handler receives it as a
@@ -734,5 +776,5 @@ answers 413. Both panic on a value of 0 or less.
 **Reconnect.** A dropped stream and its reconnect build an entirely new
 `liveConn`. Any action POST still in flight against the old tab id answers 410
 once the old connection is gone, and the client's own reconnect manager is
-what re-bootstraps the page from server truth. See **Live-child multiplexing**
-for the one-level-deep nesting limit.
+what re-bootstraps the page from server truth. See [Composition](#composition)
+for the nesting rule.
