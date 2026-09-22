@@ -52,13 +52,12 @@ func (p *Landing) PageMeta() via.Meta {
 }
 
 func (p *Landing) View() h.H {
-	return shell.Page(p.nav,
-		h.Section(h.Class("hero"),
-			h.Img(h.Class("hero-art"), h.Src("/static/brand/bolt-amber.svg"), h.Alt(""), h.Width(146), h.Height(154)),
-			h.Img(h.Class("hero-mark"), h.Src("/static/brand/wordmark-amber-dark.svg"), h.Alt("via"), h.Width(115), h.Height(44)),
-			h.P(h.Class("pitch"), h.Str("Write the page as Go functions, wire a click to a method, "+
-				"and via streams the parts that changed back to the browser.")),
-		),
+	return shell.Landing(p.nav,
+		// Animated PNG, the same hero as the v0.7 docs; ~840 KB, so it is the
+		// one asset on the page that is not an SVG.
+		h.Img(h.Class("hero-art"), h.Src("/static/brand/punch-dark.png"), h.Alt("via"), h.Width(340), h.Height(340)),
+		"A page is a struct, a click is a method call, and via streams what changed back to the tab. "+
+			"No JavaScript to write, no build step, plain HTTP until something on the page ticks.",
 
 		h.H2(h.Str("The whole program")),
 		demo.Code(quickstart),

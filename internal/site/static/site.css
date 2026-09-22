@@ -196,6 +196,7 @@ pre {
     height: 100vh;
     padding: 1rem 0;
   }
+  .col { max-width: none; padding: 2rem 2.5rem 4rem; }
   .side ul { display: block; padding: 0; }
   .nav-link {
     padding: .35rem 1.5rem;
@@ -208,10 +209,18 @@ pre {
   }
 }
 
-.hero { margin-bottom: 2rem; }
-.hero-art { display: block; max-width: 100%; height: auto; border-radius: 8px; }
-.hero-mark { display: block; margin: 1.25rem 0 .5rem; }
-.pitch { font-size: 1.1rem; margin: 0; }
+.hero {
+  margin: .5rem 0 2.5rem;
+  padding: 1.5rem 1.5rem 2rem;
+  text-align: center;
+  background: var(--well);
+  border: 2px solid var(--amber);
+  border-radius: 20px;
+  box-shadow: 0 0 0 6px rgba(255, 191, 0, .12), 0 0 48px rgba(255, 191, 0, .18);
+}
+.hero h1 { margin: 0 0 .75rem; }
+.hero-art { display: block; width: 340px; max-width: 100%; height: auto; margin: -.5rem auto 0; }
+.pitch { font-size: 1.1rem; max-width: 46ch; margin: 0 auto; color: var(--muted); }
 
 .demo {
   margin: 1.5rem 0;

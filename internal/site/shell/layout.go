@@ -23,6 +23,20 @@ func Page(nav NavItem, body ...h.H) h.H {
 	)
 }
 
+// Landing is Page with the <h1> inside a hero card: art, heading, pitch, then
+// the body.
+func Landing(nav NavItem, art h.H, pitch string, body ...h.H) h.H {
+	hero := h.Section(h.Class("hero"), art, h.H1(h.Str(cmp.Or(nav.Heading, nav.Title))), h.P(h.Class("pitch"), h.Str(pitch)))
+	head := []h.H{h.ID("main"), h.Class("col"), hero}
+	return h.Div(h.Class("shell"),
+		h.A(h.Href("#main"), h.Class("skip"), h.Str("Skip to content")),
+		header(),
+		sidebar(nav),
+		h.Main(append(head, body...)...),
+		footer(),
+	)
+}
+
 func header() h.H {
 	return h.Header(h.Class("top"),
 		h.A(h.Href("/"), h.Class("wordmark"),
@@ -51,6 +65,8 @@ func sidebar(current NavItem) h.H {
 func footer() h.H {
 	return h.Footer(h.Class("bottom"),
 		h.Str("MIT licensed · "),
-		h.A(h.Href(repo), h.Str("github.com/go-via/via")),
+		h.A(h.Href(repo), h.Str("Source on GitHub")),
+		h.Str(" · Created by "),
+		h.A(h.Href("https://github.com/joaomdsg"), h.Str("joaomdsg")),
 	)
 }
