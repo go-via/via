@@ -675,8 +675,8 @@ func (p *Page) OnInit(ctx *via.Ctx) error {
 ```
 
 `Track` and not `via.StateTrack` because the topic depends on the request. Like
-every `Topic` this is in-process: two pods are two fan-outs, so a cross-pod app
-publishes from its own broker instead.
+every `Topic` this is in-process: two pods are two fan-outs. Horizontal scaling
+below shows the bridge.
 
 **Restarts and deploys.** Two separate things have to survive: the cookie and
 the data behind it. A stable key (`WithSessionKey` / `VIA_SESSION_KEY`) keeps
@@ -720,6 +720,57 @@ identical policies. Live-child state is in-memory and per-connection: a deploy
 drops the stream, and the client reconnect manager shows "Reconnecting…" and
 reloads to re-bootstrap, so the page comes back from server truth rather than
 replayed frames.
+
+**Horizontal scaling.** The session lives in the signed cookie and the
+`SessionStore`, so with the key and store above it follows the user to any pod.
+The tab does not: its stream, live children and topic subscriptions are memory
+on the pod that opened it, and an action POST looks its tab id up only there.
+Land on another pod and the answer is 410, which the client reads as "page out
+of date" and reloads. A balancer needs affinity for the life of a tab, not for
+correctness: a miss costs one reload.
+
+- Pin on a balancer-owned cookie, not on `via_session`. That id changes on
+  `Rotate`, which would move a user to another pod mid-login.
+- Streams are long-lived SSE: proxy buffering off, a read timeout well past
+  your idle time, HTTP/1.1 upstream. No path needs special casing.
+- TLS ending at the balancer means via sees plain HTTP, so `WithSecureCookies`.
+- Roll one pod at a time: fail your readiness check, `Router.Close()`, then
+  `srv.Shutdown()`. Open streams finish their frame, new connects answer 503,
+  and tabs reload and re-pin elsewhere. via ships no health endpoint; the app
+  owns one.
+
+Shared state across pods is not automatic. A `Topic` fans out inside one
+process, so a `Publish` on pod A never reaches a `Track` on pod B. Invert the
+write path: handlers publish to your bus, and each pod runs one goroutine
+feeding what it hears into the local topic. Nothing in via changes.
+
+```go
+// per pod, at startup
+go func() {
+	sub := rdb.Subscribe(ctx, "room:"+room.id)
+	for m := range sub.Channel() {
+		var msg Message
+		if json.Unmarshal([]byte(m.Payload), &msg) == nil {
+			room.bus.Publish(msg)
+		}
+	}
+}()
+
+// the write path publishes outward, never to room.bus directly
+func (r *Room) Post(ctx context.Context, msg Message) error {
+	b, _ := json.Marshal(msg)
+	return rdb.Publish(ctx, "room:"+r.id, b).Err()
+}
+```
+
+Pub/sub is fire-and-forget, so a tab mid-reload misses the gap. `StateTrack`
+calls `load` again at every connect, so tracked state converges from the
+database; only `Listen` handlers on events can skip a beat. Derive presence from
+state rather than counting events.
+
+A lost pod costs this: its open tabs go amber and reload, an action in flight
+on it is gone with no replay, and so are unsent client signal edits. Sessions
+survive in the store. via does nothing more for high availability.
 
 **Failure responses.** Failures answer as plain `http.Error` text by default
 (404 for `via.ErrNotFound` / a decode-miss `Param`, 500 for the rest).
