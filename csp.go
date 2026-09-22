@@ -42,8 +42,9 @@ func sha256Source(src string) string {
 // every server-side test passes.
 //
 // style-src carries no inline allowance by default: via emits no <style>
-// element and no style attribute (the reconnect banner sets .style via the
-// CSSOM, which CSP does not gate). A declared inline Style adds its own hash.
+// element and no style attribute (the reconnect banner's rules go through a
+// constructed stylesheet, which CSP does not gate). A declared inline Style
+// adds its own hash.
 var cspHeader = buildCSP(Assets{}, Assets{})
 
 // buildCSP derives a mount's policy from the router-wide assets plus that
