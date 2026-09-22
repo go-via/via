@@ -56,19 +56,16 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // dead tab on every rolling restart. It now probes the page URL with capped
 // exponential backoff and reloads only once the server answers.
 //
-// A give-up reads "Disconnected." next to a Reconnect button. The button is a
-// manual retry: it clears the reload cap — a person clicking is not a reload
-// loop — and probes immediately instead of waiting out the backoff, so a
-// terminal state always has a way out.
+// A give-up reads "Disconnected." next to a Reconnect button: a manual retry
+// that clears the reload cap (a person clicking is not a reload loop) and
+// probes without waiting out the backoff.
 var reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`var K='__via_rc_reloads',b,bt,btn,gen=0,fails=0,nosh;` +
-	// Constructed stylesheet, not a <style> or an inline style attribute: CSP's
-	// style-src gates both of those but not the CSSOM, and an inline style
-	// attribute would beat every app rule.
-	// strconv.Quote, so a quote or backslash in the CSS can never turn into a
-	// silent JS syntax error that kills the IIFE while its hash still matches.
-	// Browsers without adoptedStyleSheets (Safari <16.4, Firefox <101) fall back
-	// to an inline style — unrestyleable, but visible.
+	// A constructed sheet: CSP's style-src gates <style> and style attributes,
+	// not the CSSOM. strconv.Quote, because a quote in the CSS would be a JS
+	// syntax error that kills the IIFE while its hash still matches. Without
+	// adoptedStyleSheets (Safari <16.4, Firefox <101) the banner falls back to
+	// an inline style: visible, not restyleable.
 	`try{var sh=new CSSStyleSheet();sh.replaceSync(` + strconv.Quote(reconnectCSS) + `);` +
 	`document.adoptedStyleSheets=[...document.adoptedStyleSheets,sh]}catch(_){nosh=1}` +
 	`function conn(s){document.documentElement.setAttribute('data-via-connection',s)}` +
