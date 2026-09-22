@@ -735,9 +735,10 @@ correctness: a miss costs one reload.
   your idle time, HTTP/1.1 upstream. No path needs special casing.
 - TLS ending at the balancer means via sees plain HTTP, so `WithSecureCookies`.
 - Roll one pod at a time: fail your readiness check, `Router.Close()`, then
-  `srv.Shutdown()`. Open streams finish their frame, new connects answer 503,
-  and tabs reload and re-pin elsewhere. via ships no health endpoint; the app
-  owns one.
+  `srv.Shutdown()`. Open streams end cleanly and their tabs reload onto pods
+  still in rotation. Readiness fails first because a connect refused 503 stops
+  the client on a red banner rather than reloading it. via ships no health
+  endpoint; the app owns one.
 
 Shared state across pods is not automatic. A `Topic` fans out inside one
 process, so a `Publish` on pod A never reaches a `Track` on pod B. Invert the
