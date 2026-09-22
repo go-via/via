@@ -15,19 +15,23 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 	_, body := do(t, serve(t, via.Handler(quietChild{})), http.MethodGet, "/", "")
 
 	for _, want := range []string{
-		"window.__viaRC",          // single-injection guard
-		"datastar-fetch",          // the lifecycle event it listens on
-		"'retrying'",              // drop → banner
-		"'retries-failed'",        // give-up → reload
-		"location.reload",         // the re-bootstrap
-		"n>=2",                    // terminal state: max 2 reloads, then a pinned banner
-		"data-via-connection",     // connection-status attribute for app CSS
-		"datastar-patch-elements", // a patch is the only "alive again" signal
-		"d.el===document.body",    // a clean close of the SSE @post IS a drop (blocker: retry:"auto" fires only 'finished')
-		"'error'",                 // datastar-fetch error carries the HTTP status
-		"argsRaw",                 // ...in detail.argsRaw.status, per the bundled datastar.js
-		"s===410",                 // a stale tab reloads once
-		"s===403||s>=500",         // a server-side refusal is a banner, never a reload loop
+		"window.__viaRC",                // single-injection guard
+		"datastar-fetch",                // the lifecycle event it listens on
+		"'retrying'",                    // drop → banner
+		"'retries-failed'",              // give-up → reload
+		"location.reload",               // the re-bootstrap
+		"n>=2",                          // terminal state: max 2 reloads, then a pinned banner
+		"data-via-connection",           // connection-status attribute for app CSS
+		"datastar-patch-elements",       // a patch is the only "alive again" signal
+		"d.el===document.body",          // a clean close of the SSE @post IS a drop (blocker: retry:"auto" fires only 'finished')
+		"'error'",                       // datastar-fetch error carries the HTTP status
+		"argsRaw",                       // ...in detail.argsRaw.status, per the bundled datastar.js
+		"s===410",                       // a stale tab reloads once
+		"s===403||s>=500",               // a server-side refusal is a banner, never a reload loop
+		"adoptedStyleSheets",            // the banner's styling is a constructed sheet, not inline
+		":where(#via-reconnect-banner)", // ...whose rules carry zero specificity
+		"'Disconnected",                 // the give-up copy
+		"'Reconnect'",                   // ...and the button that acts on it
 	} {
 		assert.Contains(t, body, want, "streaming page missing reconnect-manager fragment")
 	}

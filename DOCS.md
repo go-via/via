@@ -550,7 +550,11 @@ it.
   - A failed frame write tears the child down (runs disposers, stops ticks), so
     a half-open peer — gone without a FIN — can't leak its goroutine and timers.
   - A client reconnect manager surfaces a "Reconnecting…" banner on a dropped
-    stream and reloads to re-bootstrap when Datastar gives up.
+    stream. On a give-up it reads "Disconnected." with a Reconnect button and
+    probes the server until it answers, then reloads; after two such reloads
+    probing stops and the button is the way back. Style it with a plain
+    `#via-reconnect-banner` rule — via's own rules carry zero specificity, so
+    yours wins — or drive your own UI from `data-via-connection` on `<html>`.
 
 - **Live-child multiplexing** (`internal/example/dashboard`): child sub-compositions as
   plain struct fields: `via.Child(p.Clock)` in the parent's `View`. Each child

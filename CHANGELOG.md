@@ -18,6 +18,15 @@
 
 ### New
 
+- **A dead stream is no longer a dead end**: once the reconnect manager gives
+  up, its banner reads "Disconnected." next to a Reconnect button that clears
+  the reload cap and probes the server immediately. The "Please refresh the
+  page" copy is gone.
+
+- **The reconnect banner is styleable**: its rules ship in a constructed
+  stylesheet, each wrapped in `:where()`, so they carry zero specificity and a
+  plain `#via-reconnect-banner { … }` rule in your CSS wins.
+
 - **A `State` can track a store announced on a `topic.Topic`**: it seeds from
   `load`, seeds again once the stream has subscribed, and applies every publish
   — so shared live state no longer needs a hand-written `ctx.OnConnect`

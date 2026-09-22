@@ -267,8 +267,30 @@ func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 	// Datastar apply a payload-less patch and throw, so this rides the ticker's
 	// next real server push.
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
-		`(document.getElementById('via-reconnect-banner')||{style:{}}).style.display==='none'`,
+		`document.getElementById('via-reconnect-banner')===null`,
 		"a real server-push patch cleared the banner and restored online")
+	s.RequireCleanConsole()
+}
+
+func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
+	app := via.Handler(liveTicker{}, via.WithHead(via.Head{
+		Assets: via.Assets{Styles: []via.Style{{Inline: "#via-reconnect-banner{background:rgb(1, 2, 3)}"}}},
+	}))
+	s := vtbrowser.Open(t, app)
+	s.WaitLiveConnected()
+
+	var status string
+	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
+		`document.documentElement.getAttribute('data-via-connection')`, &status)
+	if status != "connecting" {
+		t.Fatalf("a dropped stream did not flip the status to connecting: %q", status)
+	}
+
+	var bg string
+	s.Eval(`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &bg)
+	if bg != "rgb(1, 2, 3)" {
+		t.Fatalf("a plain app rule must beat via's zero-specificity banner styling: got %q", bg)
+	}
 	s.RequireCleanConsole()
 }
 
@@ -285,10 +307,22 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	if status != "offline" {
 		t.Fatalf("a give-up did not flip the status to offline: %q", status)
 	}
-	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "refresh") {
-		t.Fatalf("at the reload cap the manager must advise a manual refresh: %q", got)
+	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "Disconnected") {
+		t.Fatalf("at the reload cap the manager must report the connection as disconnected: %q", got)
+	}
+	var label string
+	s.Eval(`(document.querySelector('#via-reconnect-banner button')||{}).textContent||''`, &label)
+	if label != "Reconnect" {
+		t.Fatalf("the give-up must offer a way out, not a dead banner: button text %q", label)
 	}
 	s.RequireCleanConsole()
+
+	// The server is still up, so the manual retry probes once and reloads onto a
+	// live page — the cap it cleared is what makes that probe run at all.
+	s.Click("#via-reconnect-banner button")
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
+		`document.getElementById('via-reconnect-banner')===null`,
+		"clicking Reconnect must bring the page back online with no banner left")
 }
 
 func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
@@ -448,7 +482,7 @@ func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
 		"a clean stream close must mark the connection offline")
 	s.WaitEvalTrue(`(function(){var b=document.getElementById('via-reconnect-banner');`+
-		`return !!b&&b.style.display!=='none'&&b.textContent.length>0})()`,
+		`return !!b&&b.isConnected&&b.textContent.length>0})()`,
 		"a clean stream close must put a visible banner on screen")
 }
 

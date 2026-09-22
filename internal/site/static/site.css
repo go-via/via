@@ -99,6 +99,18 @@ pre {
   font-weight: 600;
 }
 
+/* via's own banner rules are zero-specificity, so these plain ones win. */
+#via-reconnect-banner {
+  font-family: var(--sans);
+  background: var(--sidebar);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+#via-reconnect-banner button {
+  color: var(--amber);
+}
+
 /* A <legend> names the tab group for screen readers; showing it would
    duplicate the card title. */
 .sr-only {
