@@ -88,7 +88,7 @@ var options = []row{
 	{"via.WithSessionKey(key)",
 		"The HMAC key signing the session cookie id; at least 16 bytes, or it panics. Unset, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process."},
 	{"via.WithSessionStore(s)",
-		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey."},
+		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey; both are required past one pod, see DOCS.md \"Horizontal scaling\"."},
 	{"via.WithSessionStoreTimeout(d)",
 		"Caps one session store round-trip (default 5s). Without it a hung backend pins the request goroutine, since session calls survive client cancellation."},
 	{"via.WithSessionTTL(d)",

@@ -44,10 +44,10 @@ README section named) rather than hunting for one:
 
 | feature | where |
 | --- | --- |
-| `Router.Close` and graceful shutdown ordering | `go doc via.Router.Close`, README "Shutdown" |
-| `SessionStore` / `WithSessionStore` (durable, multi-pod sessions) | `go doc via.SessionStore`, README "Restarts and deploys" |
+| `Router.Close` and graceful shutdown ordering | `go doc via.Router.Close`, DOCS.md "Shutdown" |
+| `SessionStore` / `WithSessionStore` (durable, multi-pod sessions) | `go doc via.SessionStore`, DOCS.md "Restarts and deploys" and "Horizontal scaling" |
 | `Script`, `Style`, `Preload` in a `PageMeta().Assets` | `go doc via.Assets` |
-| `WithTrustedOrigin` in a real `main` | `go doc via.WithTrustedOrigin`, README "Security floor" |
+| `WithTrustedOrigin` in a real `main` | `go doc via.WithTrustedOrigin`, DOCS.md "Security floor" |
 | `List[E]` outside `chat` | `go doc via.List` |
 | `WithErrorPage` | `go doc via.WithErrorPage` (`forum` mounts one) |
 
