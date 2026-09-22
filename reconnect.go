@@ -13,12 +13,11 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 	`box-shadow:0 1px 0 rgba(255,255,255,.08)}` +
 	`:where(#via-reconnect-banner button){font:inherit;padding:.15rem .6rem;` +
 	`border:1px solid currentColor;border-radius:4px;background:transparent;color:inherit;cursor:pointer}` +
-	`:where([data-via-connection=connecting] #via-reconnect-banner){background:#854d0e;color:#fef3c7}` +
-	`:where([data-via-connection=offline] #via-reconnect-banner){background:#7f1d1d;color:#fee2e2}` +
 	`@media (prefers-color-scheme:light){:where(#via-reconnect-banner){background:#f3f4f6;` +
-	`color:#111827;box-shadow:0 1px 0 rgba(0,0,0,.1)}` +
-	`:where([data-via-connection=connecting] #via-reconnect-banner){background:#fef3c7;color:#78350f}` +
-	`:where([data-via-connection=offline] #via-reconnect-banner){background:#fee2e2;color:#7f1d1d}}`
+	`color:#111827;box-shadow:0 1px 0 rgba(0,0,0,.1)}}` +
+	// Saturated so they read as a warning at a glance in either scheme.
+	`:where([data-via-connection=connecting] #via-reconnect-banner){background:#f59e0b;color:#1c1917;box-shadow:none}` +
+	`:where([data-via-connection=offline] #via-reconnect-banner){background:#dc2626;color:#fff;box-shadow:none}`
 
 // reconnectInit is the client-side reconnect manager injected into every live
 // page as a hash-admitted inline script (see csp.go). It watches Datastar's

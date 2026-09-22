@@ -306,13 +306,10 @@ func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
 			`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &got)
 		return got
 	}
-	// Headless Chromium's colour scheme is not pinned, so either scheme's value passes.
-	connecting := bg("retrying")
-	if connecting != "rgb(133, 77, 14)" && connecting != "rgb(254, 243, 199)" {
-		t.Fatalf("reconnecting banner is not the yellow state colour: %q", connecting)
+	if connecting := bg("retrying"); connecting != "rgb(245, 158, 11)" {
+		t.Fatalf("reconnecting banner is not the amber state colour: %q", connecting)
 	}
-	offline := bg("retries-failed")
-	if offline != "rgb(127, 29, 29)" && offline != "rgb(254, 226, 226)" {
+	if offline := bg("retries-failed"); offline != "rgb(220, 38, 38)" {
 		t.Fatalf("disconnected banner is not the red state colour: %q", offline)
 	}
 	s.RequireCleanConsole()
