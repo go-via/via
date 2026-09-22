@@ -313,12 +313,12 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	var label string
 	s.Eval(`(document.querySelector('#via-reconnect-banner button')||{}).textContent||''`, &label)
 	if label != "Reconnect" {
-		t.Fatalf("the give-up must offer a way out, not a dead banner: button text %q", label)
+		t.Fatalf("give-up banner has no Reconnect button: text %q", label)
 	}
 	s.RequireCleanConsole()
 
-	// The server is still up, so the manual retry probes once and reloads onto a
-	// live page — the cap it cleared is what makes that probe run at all.
+	// The server is up, so the retry's first probe reloads; the pre-armed cap
+	// would have blocked an automatic one.
 	s.Click("#via-reconnect-banner button")
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
 		`document.getElementById('via-reconnect-banner')===null`,
