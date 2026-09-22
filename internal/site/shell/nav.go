@@ -1,10 +1,5 @@
 package shell
 
-import "github.com/go-via/via/h"
-
-// h has no aria helper.
-var ariaCurrentPage = h.RawAttr("aria-current", "page")
-
 // NavItem is the one source of a page's title. The zero value is a page
 // outside the nav.
 type NavItem struct {

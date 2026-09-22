@@ -31,7 +31,7 @@ func (c *Chart) View() h.H {
 			// A canvas is opaque to a screen reader; role and label are the
 			// only description of it there is.
 			h.Role("img"),
-			h.RawAttr("aria-label", "Line chart of 16 random samples"),
+			h.Aria("label", "Line chart of 16 random samples"),
 			h.DataEffect(expr.Call("viaChart", expr.El, c.Series.Ref()))),
 	)
 }

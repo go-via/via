@@ -72,7 +72,7 @@ func (f *Feed) View() h.H {
 		),
 		// A scroll container is only keyboard-scrollable while it can hold
 		// focus, and nothing inside this one is focusable.
-		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.RawAttr("aria-label", "Posted events"), f.Posts.Each(func(p FeedPost) h.H {
+		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Posted events"), f.Posts.Each(func(p FeedPost) h.H {
 			return h.Li(h.Str(p.At.Format("15:04:05") + "  " + p.Text))
 		})),
 	)

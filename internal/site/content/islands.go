@@ -67,7 +67,7 @@ func (p *Islands) View() h.H {
 				h.Str("viaMap builds the map only when "),
 				h.Code(h.Str("el._map")),
 				h.Str(" is unset and otherwise only calls jumpTo, which is why Shuffle jumps the maps instead of rebuilding them. "),
-				h.Str("Client-side teardown is yours: via has no client-side unmount hook, so islands.js keeps one MutationObserver on the document and calls "),
+				h.Str("Client-side teardown is yours, but via says when: it dispatches a via:remove event for every element that leaves the document, and islands.js listens for it and calls "),
 				h.Code(h.Str("_map.remove()")),
 				h.Str(" for every island a patch took out of the DOM. "),
 				h.Str("The server side has one: ctx.OnDispose runs when the unit's connection closes, which is where a producer feeding the island is stopped. "),

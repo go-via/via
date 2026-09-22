@@ -85,6 +85,15 @@ func Lang(s string) Attr { return RawAttr("lang", s) }
 // Role is the ARIA role.
 func Role(s string) Attr { return RawAttr("role", s) }
 
+// Aria builds an aria-<name> attribute — Aria("label", s) is aria-label. The
+// name is validated like any attribute name; empty panics.
+func Aria(name, val string) Attr {
+	if name == "" {
+		panic("h: Aria needs a name — Aria(\"label\", …), not Aria(\"\", …)")
+	}
+	return RawAttr("aria-"+name, val)
+}
+
 // Method is the form submission method — "get" or "post".
 func Method(s string) Attr { return RawAttr("method", s) }
 

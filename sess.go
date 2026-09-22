@@ -744,6 +744,19 @@ func (s *Session) set(value json.RawMessage) {
 // it is not the cookie and grants nothing.
 func (s *Session) ID() string { return s.sid() }
 
+// Ensure mints the session and issues its cookie if there is none yet, storing
+// no value, and returns [Session.ID]. Use it to key per-user state before the
+// app has anything to Put. Returns "" without minting where no cookie can
+// reach the browser — a Tick or Listen Ctx, a WithErrorPage render — or when
+// the store could not be read; Put in those places warns and stores anyway,
+// Ensure has nothing worth storing.
+func (s *Session) Ensure() string {
+	if s.mgr == nil || (s.data == nil && s.w == nil) || s.ensure() == nil {
+		return ""
+	}
+	return s.ID()
+}
+
 // Rotate issues a fresh session id, carries the existing data to it, and
 // re-sets the cookie — call it after every auth-state change (login, privilege
 // elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""

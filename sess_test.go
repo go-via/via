@@ -1542,3 +1542,98 @@ func TestSession_idSurvivesRotate(t *testing.T) {
 	assert.NotEmpty(t, m[1], "ID must be set on a session that has been written to")
 	assert.Equal(t, m[1], m[2], "Rotate re-ids the cookie; ID is the stable identity and must not move")
 }
+
+// ensureComp mints the session without storing anything and copies both the
+// returned id and whether a value is readable into fields the View renders.
+type ensureComp struct {
+	sid   string
+	value string
+}
+
+func (c *ensureComp) Mint(ctx *via.Ctx) {
+	c.sid = ctx.Session().Ensure()
+	if m, ok := ctx.Session().Get[member](); ok {
+		c.value = m.Name
+	} else {
+		c.value = "none"
+	}
+}
+
+func (c *ensureComp) View() h.H {
+	return h.Div(
+		h.P(h.Str("sid="), h.Str(c.sid)),
+		h.P(h.Str("value="), h.Str(c.value)),
+		h.Button(via.On("click", c.Mint), h.Str("mint")), // action 0
+	)
+}
+
+var ensureSID = regexp.MustCompile(`sid=([A-Za-z0-9_-]+)`)
+
+func ensureServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(via.Handler(ensureComp{},
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestSession_ensureMintsAnIdAndCookieWithoutAValue(t *testing.T) {
+	t.Parallel()
+	base := ensureServer(t)
+	c := jarClient(t)
+
+	resp := getPage(t, c, base)
+	for _, ck := range resp.Cookies() {
+		assert.NotEqual(t, "via_session", ck.Name, "a page that never called Ensure issued a session cookie")
+	}
+
+	_, body := fireAction(t, c, base, 0)
+	assert.NotEmpty(t, cookieValue(t, c, base, "via_session"), "Ensure did not issue the session cookie")
+	assert.Regexp(t, ensureSID, body, "Ensure returned an empty id")
+	assert.Contains(t, body, "value=none", "Ensure stored a value; it must mint the id only")
+}
+
+func TestSession_ensureIsIdempotent(t *testing.T) {
+	t.Parallel()
+	base := ensureServer(t)
+	c := jarClient(t)
+
+	_, first := fireAction(t, c, base, 0)
+	_, second := fireAction(t, c, base, 0)
+
+	m1, m2 := ensureSID.FindStringSubmatch(first), ensureSID.FindStringSubmatch(second)
+	require.Len(t, m1, 2)
+	require.Len(t, m2, 2)
+	assert.Equal(t, m1[1], m2[1], "a second Ensure minted a different session id")
+}
+
+// tickEnsurer calls Ensure from a Tick, where no response can carry a cookie.
+type tickEnsurer struct{ got via.State[string] }
+
+func (u *tickEnsurer) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, func(ctx *via.Ctx) {
+		u.got.Set("ensure=[" + ctx.Session().Ensure() + "]")
+	})
+	return nil
+}
+func (u *tickEnsurer) View() h.H { return h.Div(u.got.Display()) }
+
+func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(tickEnsurer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		_ = awaitTabID(t, lines)
+		awaitLine(t, lines, "ensure=[]")
+		synctest.Wait()
+	})
+
+	assert.NotContains(t, buf.String(), "no cookie can be set",
+		"Ensure has nothing to store, so it must not mint a session the browser never learns of")
+}

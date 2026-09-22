@@ -91,7 +91,7 @@ func (g *MapGrid) View() h.H {
 		// reader's handle; outside the ignore-morph container, its label
 		// follows the shuffle.
 		grid = append(grid, h.Div(h.Class("map-slot"), h.Role("group"),
-			h.RawAttr("aria-label", "Map of "+v.Get().Name),
+			h.Aria("label", "Map of "+v.Get().Name),
 			h.Div(h.Class("map"), h.ID("map-"+strconv.Itoa(i)),
 				h.Data("island-map", ""), h.DataIgnoreMorph(),
 				h.DataEffect(expr.Call("viaMap", expr.El, v.Ref())))))

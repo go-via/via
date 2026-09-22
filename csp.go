@@ -52,7 +52,7 @@ var cspHeader = buildCSP(Assets{}, Assets{})
 // byte-identical bytes. Called once per mount, never per request.
 func buildCSP(global, page Assets) string {
 	script := &srcSet{}
-	script.add("'self'", "'unsafe-eval'", sha256Source(reconnectInit), sha256Source(redirectInit))
+	script.add("'self'", "'unsafe-eval'", sha256Source(eventsInit), sha256Source(reconnectInit), sha256Source(redirectInit))
 	style := &srcSet{}
 	style.add("'self'")
 	font, img := &srcSet{}, &srcSet{}

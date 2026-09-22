@@ -58,14 +58,9 @@ func (p *Ping) Send(ctx *via.Ctx) {
 		p.Notice.Set("slow down — 20 pings a minute")
 		return
 	}
-	// No session id exists until something is stored. Minting it here, on a
-	// rate-limited action, keeps a crawler's GETs out of the session store. The
-	// id is re-read rather than cached: a tab opened before the visitor signed
-	// in elsewhere would otherwise Put(nil) over the stored user.
-	if ctx.Session().ID() == "" {
-		ctx.Session().Put(nil)
-	}
-	p.sid = ctx.Session().ID()
+	// Minting the session here, on a rate-limited action, keeps a crawler's
+	// GETs out of the session store.
+	p.sid = ctx.Session().Ensure()
 	p.Notice.Set("scheduled")
 	// A goroutine may not touch unit state; publishing is how it reaches one.
 	// gone is closed by OnDispose on the live unit; a request-scoped instance
@@ -87,6 +82,6 @@ func (p *Ping) View() h.H {
 			h.Button(via.On("click", p.Send), h.Str("ping me in 3s")),
 			h.Span(h.Class("note"), p.Notice.Display()),
 		),
-		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.RawAttr("aria-label", "Pings received"), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),
+		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Pings received"), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),
 	)
 }

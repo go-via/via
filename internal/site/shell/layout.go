@@ -41,11 +41,11 @@ func sidebar(current NavItem) h.H {
 		// spelled once and as the thing a screen reader reads.
 		link := []h.H{h.Href(it.Path), h.Class("nav-link"), h.Str(it.Title)}
 		if it.Path == current.Path {
-			link = append(link, ariaCurrentPage)
+			link = append(link, h.Aria("current", "page"))
 		}
 		links = append(links, h.Li(h.A(link...)))
 	}
-	return h.Nav(h.Class("side"), h.RawAttr("aria-label", "Documentation"), h.Ul(links...))
+	return h.Nav(h.Class("side"), h.Aria("label", "Documentation"), h.Ul(links...))
 }
 
 func footer() h.H {

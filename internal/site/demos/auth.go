@@ -23,10 +23,7 @@ func (a *Auth) OnInit(ctx *via.Ctx) error { return a.load(ctx) }
 func (a *Auth) OnReload(ctx *via.Ctx) error { return a.load(ctx) }
 
 func (a *Auth) load(ctx *via.Ctx) error {
-	u, ok := ctx.Session().Get[User]()
-	// The ping demo stores null to mint a session id, so a stored value with
-	// no name is a visitor, not a user.
-	a.user, a.in = u, ok && u.Name != ""
+	a.user, a.in = ctx.Session().Get[User]()
 	return nil
 }
 

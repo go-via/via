@@ -70,25 +70,19 @@
     el._map.jumpTo({center: view.center, zoom: view.zoom});
   };
 
-  // via has no client unmount hook: one document observer frees the WebGL context and worker of removed maps.
-  new MutationObserver((records) => {
-    for (const r of records) {
-      for (const node of r.removedNodes) {
-        if (node.nodeType !== Node.ELEMENT_NODE) continue;
-        // A morph that moves an island removes and re-inserts it in the same
-        // batch: only a node still detached once the mutation is done is gone.
-        if (node.isConnected) continue;
-        const gone = node.matches("[data-island-map]") ? [node] : node.querySelectorAll("[data-island-map]");
-        for (const el of gone) {
-          if (!el._map) continue;
-          if (el._ro) {
-            el._ro.disconnect();
-            el._ro = null;
-          }
-          el._map.remove();
-          el._map = null;
-        }
+  // via reports removals on via:remove; freeing the WebGL context and worker of
+  // a removed map is still ours to do.
+  document.addEventListener("via:remove", (e) => {
+    const root = e.detail.el;
+    const gone = root.matches("[data-island-map]") ? [root] : root.querySelectorAll("[data-island-map]");
+    for (const el of gone) {
+      if (!el._map) continue;
+      if (el._ro) {
+        el._ro.disconnect();
+        el._ro = null;
       }
+      el._map.remove();
+      el._map = null;
     }
-  }).observe(document, {childList: true, subtree: true});
+  });
 })();
