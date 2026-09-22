@@ -79,6 +79,6 @@ func (p *Platform) View() h.H {
 			),
 			via.Child(p.Lifecycle), "lifecycle.go"),
 
-		h.P(h.A(h.Href("/reference"), h.Str("Next: the reference tables"))),
+		h.P(h.A(h.Href("/deploy"), h.Str("Next: running it, and running more than one"))),
 	)
 }

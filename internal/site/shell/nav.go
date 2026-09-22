@@ -17,6 +17,7 @@ var Nav = []NavItem{
 	{Title: "Live", Path: "/live"},
 	{Title: "Islands", Path: "/islands"},
 	{Title: "Platform", Path: "/platform"},
+	{Title: "Deploy", Path: "/deploy"},
 	{Title: "Reference", Path: "/reference"},
 }
 
