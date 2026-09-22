@@ -497,6 +497,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ha
 	m.cfg.head.Assets.render(&head)
 	meta.Assets.render(&head)
 	head.WriteString(`<script type="module" src="/_via/datastar.js"></script>` +
+		eventsScript() +
 		reconnectScript(hasLive) +
 		bodyOpen)
 	w.Write([]byte(head.String()))

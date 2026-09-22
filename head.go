@@ -56,7 +56,9 @@ type Meta struct {
 	Robots string
 
 	// OG are Open Graph properties without their prefix — "title" becomes
-	// <meta property="og:title">. Rendered in sorted key order.
+	// <meta property="og:title">. Rendered in sorted key order. A non-nil map
+	// defaults "title", "description" and "url" from Title, Description and
+	// Canonical where it does not set them itself; a nil map renders nothing.
 	OG map[string]string
 
 	// Twitter are Twitter card names without their prefix — "card" becomes
@@ -257,12 +259,28 @@ func (m Meta) render(b *strings.Builder) {
 	if m.Canonical != "" {
 		b.WriteString(`<link rel="canonical" href="` + html.EscapeString(m.Canonical) + `">`)
 	}
-	for _, k := range slices.Sorted(maps.Keys(m.OG)) {
-		metaTag(b, "property", "og:"+k, m.OG[k])
+	og := m.openGraph()
+	for _, k := range slices.Sorted(maps.Keys(og)) {
+		metaTag(b, "property", "og:"+k, og[k])
 	}
 	for _, k := range slices.Sorted(maps.Keys(m.Twitter)) {
 		metaTag(b, "name", "twitter:"+k, m.Twitter[k])
 	}
+}
+
+// openGraph fills title/description/url from Meta on a copy of m.OG, leaving
+// m.OG itself untouched for callers that inspect it.
+func (m Meta) openGraph() map[string]string {
+	if m.OG == nil {
+		return nil
+	}
+	og := maps.Clone(m.OG)
+	for k, v := range map[string]string{"title": m.Title, "description": m.Description, "url": m.Canonical} {
+		if _, ok := og[k]; !ok && v != "" {
+			og[k] = v
+		}
+	}
+	return og
 }
 
 func metaTag(b *strings.Builder, key, name, content string) {

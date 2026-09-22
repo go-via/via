@@ -13,7 +13,7 @@ type cspRow struct{ directive, from string }
 // response header.
 var cspRows = []cspRow{
 	{"default-src 'self'", "the floor — nothing on the page may load from another origin unless a directive below widens it"},
-	{"script-src 'self' 'unsafe-eval'", "two 'sha256-…' sources follow these in the header: via's own inline scripts (reconnect, redirect). 'unsafe-eval' is required because the bundled Datastar client compiles every data-* expression with the Function constructor"},
+	{"script-src 'self' 'unsafe-eval'", "three 'sha256-…' sources follow these in the header: via's own inline scripts (client events, reconnect, redirect), hashed into every mount's policy even where the page ships only some of them — the reconnect manager is served on live pages only. 'unsafe-eval' is required because the bundled Datastar client compiles every data-* expression with the Function constructor"},
 	{"style-src 'self'", "via emits no <style> element and no style attribute of its own"},
 	{"object-src 'none'", "fixed"},
 	{"base-uri 'self'", "fixed"},

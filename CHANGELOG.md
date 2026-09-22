@@ -30,6 +30,24 @@
   `Rotate`, `""` when there is no session yet. It is not the cookie and grants
   nothing; it is what keys per-user state, a topic per user included.
 
+- `Session.Ensure()` mints the session and its cookie with nothing stored and
+  returns the id, for keying per-user state before there is a value to `Put`.
+  `""` where no cookie can reach the browser (Tick, Listen, an error page).
+
+- `h.Aria(name, val)` — `aria-<name>` attributes without `RawAttr`.
+
+- Two `CustomEvent`s on `document`, on every page: `via:patch` after each
+  applied patch (`detail.{kind, el, selector, mode, elements, signals}`) and
+  `via:remove` for each element that leaves the document (`detail.el`). The
+  supported seam for inspectors and island teardown; Datastar's own events
+  are not via API. One more hash-admitted inline script, so `script-src`
+  gains a third `'sha256-…'` source.
+
+- `Meta.OG`, when non-nil, defaults `title`, `description` and `url` from
+  `Title`, `Description` and `Canonical`; a key set in the map wins. A page
+  that already set `OG` alongside those fields now emits the three extra
+  tags — spell them out as `""` to keep the old output.
+
 - `via.ErrForbidden` — returned from `OnInit`, answers 403 with
   `ReasonForbidden`.
 

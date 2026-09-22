@@ -112,3 +112,14 @@ func TestValueAttrs_stillEscapeTheValue(t *testing.T) {
 		assert.True(t, strings.Contains(got, "&#34;"), "the quote must be escaped: "+got)
 	}
 }
+
+func TestAria_rendersPrefixedName(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, render(t, h.Button(h.Aria("label", "Close"))), `aria-label="Close"`)
+}
+
+func TestAria_panicsOnInvalidName(t *testing.T) {
+	t.Parallel()
+	assert.Panics(t, func() { h.Aria("bad name", "x") })
+	assert.Panics(t, func() { h.Aria("", "x") })
+}

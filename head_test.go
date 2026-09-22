@@ -500,3 +500,54 @@ func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
 	assert.Contains(t, logged, "*via_test.probeRefusingPage")
 	assert.Contains(t, logged, "SKIPPED")
 }
+
+type ogDefaultsPage struct{}
+
+func (ogDefaultsPage) PageMeta() via.Meta {
+	return via.Meta{
+		Title: "Ticket #7", Description: "A printer is on fire",
+		Canonical: "https://example.com/t/7",
+		OG:        map[string]string{"type": "article"},
+	}
+}
+func (ogDefaultsPage) View() h.H { return h.Div(h.Str("x")) }
+
+type ogExplicitPage struct{}
+
+func (ogExplicitPage) PageMeta() via.Meta {
+	return via.Meta{Title: "y", OG: map[string]string{"title": "x"}}
+}
+func (ogExplicitPage) View() h.H { return h.Div(h.Str("x")) }
+
+type ogAbsentPage struct{}
+
+func (ogAbsentPage) PageMeta() via.Meta { return via.Meta{Title: "Ticket #7"} }
+func (ogAbsentPage) View() h.H          { return h.Div(h.Str("x")) }
+
+func TestPageMeta_defaultsOpenGraphFromTitleDescriptionAndCanonical(t *testing.T) {
+	t.Parallel()
+	_, body := metaBody(t, ogDefaultsPage{})
+	for _, want := range []string{
+		`<meta property="og:title" content="Ticket #7">`,
+		`<meta property="og:description" content="A printer is on fire">`,
+		`<meta property="og:url" content="https://example.com/t/7">`,
+		`<meta property="og:type" content="article">`,
+	} {
+		assert.Contains(t, body, want)
+	}
+}
+
+func TestPageMeta_explicitOpenGraphKeyWinsOverTheDefault(t *testing.T) {
+	t.Parallel()
+	_, body := metaBody(t, ogExplicitPage{})
+	assert.Contains(t, body, `<meta property="og:title" content="x">`)
+	assert.Equal(t, 1, strings.Count(body, `property="og:title"`),
+		"og:title was rendered more than once")
+	assert.NotContains(t, body, `content="y"`)
+}
+
+func TestPageMeta_omitsOpenGraphWhenNoneDeclared(t *testing.T) {
+	t.Parallel()
+	_, body := metaBody(t, ogAbsentPage{})
+	assert.NotContains(t, body, `property="og:`)
+}

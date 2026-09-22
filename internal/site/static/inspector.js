@@ -50,86 +50,6 @@
     return clip(String(b));
   }
 
-  // One SSE frame per blank line; via splits long fragments over several
-  // `data: elements` lines, so those rejoin (stream.go writeElementLines).
-  function parseFrame(block, url) {
-    var f = { kind: "frame", url: url, event: "", selector: "", mode: "", elements: "", signals: "" };
-    var lines = block.split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i];
-      if (line.indexOf("event:") === 0) {
-        f.event = line.slice(6).trim();
-      } else if (line.indexOf("data:") === 0) {
-        var rest = line.slice(5).replace(/^ /, "");
-        var sp = rest.indexOf(" ");
-        var key = sp === -1 ? rest : rest.slice(0, sp);
-        var val = sp === -1 ? "" : rest.slice(sp + 1);
-        if (key === "elements") f.elements += (f.elements ? "\n" : "") + val;
-        else if (key === "selector") f.selector = val;
-        else if (key === "mode") f.mode = val;
-        else if (key === "signals") f.signals = val;
-      }
-    }
-    return f.event ? f : null;
-  }
-
-  // Cancelled on pagehide: a leaked reader holds the clone buffer across bfcache.
-  var readers = [];
-  addEventListener("pagehide", function () {
-    for (var i = 0; i < readers.length; i++) {
-      try {
-        readers[i].cancel();
-      } catch (err) {
-        /* already closed */
-      }
-    }
-    readers.length = 0;
-  });
-
-  // Reads a clone of the response, so the long-lived /_via/sse stream is
-  // observed frame by frame without Datastar's own reader ever waiting on us.
-  function tee(res, url) {
-    if (!res.body || !wanted(url)) return;
-    var reader;
-    try {
-      reader = res.clone().body.getReader();
-    } catch (err) {
-      return;
-    }
-    readers.push(reader);
-    var dec = new TextDecoder();
-    var buf = "";
-    function done() {
-      var at = readers.indexOf(reader);
-      if (at !== -1) readers.splice(at, 1);
-    }
-    function step(chunk) {
-      if (chunk.done) return done();
-      buf += dec.decode(chunk.value, { stream: true });
-      var parts = buf.split(/\r?\n\r?\n/);
-      buf = parts.pop();
-      for (var i = 0; i < parts.length; i++) {
-        var f = parseFrame(parts[i], url);
-        if (f) {
-          f.elements = clip(f.elements);
-          f.signals = clip(f.signals);
-          record(f);
-        }
-      }
-      return reader.read().then(step);
-    }
-    reader.read().then(step).catch(done);
-  }
-
-  // Action URLs name their demo; the SSE stream names none, so any pane wants it.
-  function wanted(url) {
-    if (!panels.length) return false;
-    var m = /\/_via\/a\/([^/]+)\//.exec(url);
-    if (!m) return true;
-    for (var i = 0; i < panels.length; i++) if (owns(panels[i].t.key, m[1])) return true;
-    return false;
-  }
-
   function wrapFetch() {
     if (window.fetch.viaInspect) return;
     var orig = window.fetch;
@@ -140,7 +60,6 @@
       record({ kind: "req", url: url, method: method, body: bodyOf(init) });
       return orig(input, init).then(function (res) {
         record({ kind: "res", url: url, method: method, status: res.status });
-        tee(res, url);
         return res;
       });
     };
@@ -187,10 +106,11 @@
 
   function header(e) {
     var time = new Date(e.t).toLocaleTimeString();
+    // A frame arrives on via:patch, which names no URL.
+    if (e.kind === "frame") return time + "  ⇣ " + e.event + (e.mode ? " (" + e.mode + ")" : "");
     var tag = isStream(e.url) ? " (stream)" : "";
     if (e.kind === "req") return time + "  → " + e.method + " " + path(e.url) + tag;
-    if (e.kind === "res") return time + "  ← " + e.status + " " + path(e.url) + tag;
-    return time + "  ⇣ " + e.event + (e.mode ? " (" + e.mode + ")" : "");
+    return time + "  ← " + e.status + " " + path(e.url) + tag;
   }
 
   function path(u) {
@@ -313,6 +233,21 @@
 
   // At eval, not DOMContentLoaded: via's data-init POSTs /_via/sse before that event.
   mount();
+
+  // via dispatches via:patch for every applied patch, on plain and live pages
+  // alike, so the pane needs no reader of its own on the SSE stream.
+  document.addEventListener("via:patch", function (ev) {
+    if (!panels.length) return;
+    var d = ev.detail;
+    record({
+      kind: "frame",
+      event: "datastar-patch-" + d.kind,
+      selector: d.selector,
+      mode: d.mode,
+      elements: clip(d.elements),
+      signals: clip(d.signals),
+    });
+  });
 
   document.addEventListener("via:inspect", function (ev) {
     for (var i = 0; i < panels.length; i++) prepend(panels[i], ev.detail);

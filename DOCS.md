@@ -305,12 +305,30 @@ needs no `Bind()` or `Display()`. Seed the first-paint value with a `Set` in
 
 Write the init so it can run twice: a `data-effect` re-runs on every change of
 every signal it reads, so build once (`el._map ??= new Map({container: el})`)
-and let later runs only move what already exists. Teardown is yours — via has
-no unmount hook, and a patch that drops the container frees nothing the library
-holds. Mark each container with a data attribute (`h.Data("island-map", "")`)
-and keep one `MutationObserver` on the document: for every removed node, find
-the marked elements inside it and call the library's own `remove()`, so its
+and let later runs only move what already exists. Teardown is still yours — a
+patch that drops the container frees nothing the library holds — but via tells
+you when to do it: it dispatches `via:remove` on `document` for every element
+that leaves the document, with the removed root in `detail.el`. Mark each
+container with a data attribute (`h.Data("island-map", "")`), and on
+`via:remove` find the marked elements in `detail.el` (the root itself, or
+`querySelectorAll` inside it) and call the library's own `remove()`, so its
 worker, WebGL context and timers go with the node.
+
+### Client events
+
+Every via page ships two plain `CustomEvent`s on `document`, on live and plain
+pages alike:
+
+- `via:patch` fires after each applied patch, with
+  `detail.{kind, el, selector, mode, elements, signals}` — `kind` is
+  `"elements"` or `"signals"`, `el` is the element whose fetch carried the
+  patch (the clicked control, or `body` for the stream), and the DOM is
+  already patched when it fires.
+- `via:remove` fires for every element that leaves the document, with the
+  removed root in `detail.el`.
+
+They are the supported way to observe via's DOM work; nothing about Datastar's
+own events is part of via's API.
 
 ## Security floor (built in)
 
@@ -505,6 +523,8 @@ it.
   - `Session.ID()` is the stable identity behind the cookie — unchanged by
     `Rotate`, `""` before the first write. Key per-user state by it; it grants
     nothing on its own.
+  - `Session.Ensure()` mints the id and issues the cookie with nothing
+    stored, for keying per-user state before there is a value to `Put`.
   - Sessions do not rotate their id on their own: call `Session.Rotate` at an
     auth-state change (login, logout, privilege elevation) to invalidate a
     session id an attacker may have planted beforehand (fixation defense).
