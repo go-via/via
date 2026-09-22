@@ -5,7 +5,7 @@ import "strconv"
 // Every rule is wrapped in :where() so it has zero specificity. Adopted sheets
 // cascade after author sheets, so without that an app could never restyle the
 // banner; with it, a plain `#via-reconnect-banner{…}` rule wins outright. The
-// yellow/red state rules key on the data-via-connection attribute on <html>,
+// amber/red state rules key on the data-via-connection attribute on <html>,
 // so an app's state colours use the same selector.
 const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;right:0;` +
 	`z-index:2147483647;display:flex;justify-content:center;align-items:center;gap:.75rem;` +
