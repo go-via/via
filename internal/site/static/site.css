@@ -110,6 +110,17 @@ pre {
 #via-reconnect-banner button {
   color: var(--amber);
 }
+[data-via-connection="connecting"] #via-reconnect-banner {
+  background: #3a2c0a;
+  color: #ffd866;
+}
+[data-via-connection="offline"] #via-reconnect-banner {
+  background: #3b1417;
+  color: #f4b4b4;
+}
+[data-via-connection="offline"] #via-reconnect-banner button {
+  color: #ff9c9c;
+}
 
 /* A <legend> names the tab group for screen readers; showing it would
    duplicate the card title. */

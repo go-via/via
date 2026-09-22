@@ -30,6 +30,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 		"s===403||s>=500",               // a server-side refusal is a banner, never a reload loop
 		"adoptedStyleSheets",            // the banner's styling is a constructed sheet, not inline
 		":where(#via-reconnect-banner)", // ...whose rules carry zero specificity
+		"[data-via-connection=offline]", // ...and colour the banner by state
 		"'Disconnected",                 // the give-up copy
 		"'Reconnect'",                   // ...and the button that acts on it
 	} {
