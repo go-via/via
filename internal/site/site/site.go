@@ -92,6 +92,7 @@ func newApp(origin string) *via.Router {
 	via.Mount(app, "/live", content.NewLive(origin))
 	via.Mount(app, "/islands", content.NewIslands(origin))
 	via.Mount(app, "/platform", content.NewPlatform(origin))
+	via.Mount(app, "/deploy", content.NewDeploy(origin))
 	via.Mount(app, "/reference", content.NewReference(origin))
 
 	return app
