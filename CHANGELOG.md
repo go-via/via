@@ -25,7 +25,7 @@
 
 - **The reconnect banner is styleable**: its rules ship in a constructed
   stylesheet, each wrapped in `:where()`, so they carry zero specificity and a
-  plain `#via-reconnect-banner { … }` rule in your CSS wins. It is yellow while
+  plain `#via-reconnect-banner { … }` rule in your CSS wins. It is amber while
   reconnecting and red once disconnected, keyed on `data-via-connection`.
 
 - **A `State` can track a store announced on a `topic.Topic`**: it seeds from
