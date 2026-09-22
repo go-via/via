@@ -11,7 +11,7 @@ type NavItem struct {
 // Nav is the sidebar, in order, and the only place the nav's paths and titles
 // are spelled; the next-page link at the foot of each page spells its own.
 var Nav = []NavItem{
-	{Title: "Home", Path: "/", Heading: "Server-rendered Go UI that stays live"},
+	{Title: "Home", Path: "/", Heading: "Web UI in Go that stays live"},
 	{Title: "Actions", Path: "/actions"},
 	{Title: "Signals", Path: "/signals"},
 	{Title: "Live", Path: "/live"},

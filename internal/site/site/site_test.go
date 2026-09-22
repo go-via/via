@@ -54,7 +54,7 @@ func TestSite_rendersEveryMountedPage(t *testing.T) {
 		path string
 		h1   string
 	}{
-		{"landing", "/", "Server-rendered Go UI that stays live"},
+		{"landing", "/", "Web UI in Go that stays live"},
 		{"actions", "/actions", "Actions"},
 		{"signals", "/signals", "Signals"},
 		{"live", "/live", "Live"},
