@@ -1,20 +1,28 @@
 # Changelog
 
-## Unreleased
+## v0.8.0 — the v2 core goes mainline (2026-09-23)
 
-### Breaking
+v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
+no subpackages beyond `h` and `topic`, and no configuration knob that a
+constant could serve instead. Module path is now
+`github.com/go-via/via` — unchanged, and still v0.x, so nothing in the module
+path or the version marks the break; v0.7 history is merged, the tree is
+the v2 core. **Requires Go 1.27.**
 
-- `Mount` is now a free function,
-  `via.Mount(r, path, root, opts ...MountOption)`, not a `*Router` method.
-  `Handler` is unchanged.
+### Documented (behaviour unchanged)
 
-- `Signal.Ref` and `SignalCS.Ref` return `expr.Expr`, not `string`. A call site
-  that concatenated the result now composes it (`sig.Ref().Ne("")`) or casts.
-
-- `Initer`, `Reloader` and `PageMetaer` are no longer exported — delete any
-  `var _ via.Initer = (*Page)(nil)` pin. The hooks stay duck-typed, and
-  `Mount` still panics on a hook name with the wrong signature and logs a
-  near-miss name.
+- Query strings do not reach action handlers. An action POSTs to
+  `{mount}/_via/a/{n}/…`, built from the mount pattern's path params and
+  nothing else, so the discovery render runs unfiltered and a row that only
+  exists under `?q=` answers `410` when clicked. Page state — filter, page,
+  sort, tab — belongs in path params or the session. On `Ctx.Param` and in the
+  README.
+- `State.Get` does not make a unit live; only `State.Display` and `List.Each`
+  do. A unit that only `Get`s a State is silently plain. On `State.Get`.
+- `Ctx` has no response writer, so a file download is a sibling `net/http`
+  handler. On `Ctx.Request`.
+- The README and the `Reloader` godoc claimed `OnInit` "seeds signals from the
+  request URL". No such code path exists or ever existed; the claim is deleted.
 
 ### New
 
@@ -92,52 +100,6 @@
   `DataClass`, `DataAttr`, `DataStyle`, `DataOn`, `DataEffect`, `DataComputed`,
   `DataIndicator`, `DataRef`. They take any `~string`, so an `expr.Expr` goes
   straight in. `h.Data` stays for what they miss.
-
-### Fixed
-
-- `ctx.Tick`, `ctx.Listen`, `ctx.OnConnect`, `ctx.OnDispose` and `State.Track`
-  now warn and no-op when called from an action handler, or from any unit with
-  no `OnInit` at all — before, the late-call guard read a flag only `OnInit`
-  itself set, so those calls registered nothing in silence. A `Track` from an
-  action was worse: it copied the store once and never followed it.
-
-- A `Set` inside an `OnConnect` fn now reaches the client: the connect pushes
-  once after the hook runs, where before the value waited for a tick or a
-  publish. `State.Track` re-reads its store in `OnConnect` for the same reason
-  — `ctx.Listen` subscribes at connect, so a publish between `OnInit`'s read
-  and that subscribe would otherwise leave the tab stale.
-
-- A root no longer mints slots for its children's signals: the type walk stops
-  at a field with its own `View`. The dead entry in every first paint is gone,
-  and so is the rebind of the child's handles on each root render. A child
-  rendered without `via.Child` — by calling its `View`, or by binding one of
-  its signals from the parent — now panics naming the cause.
-
-## v0.8.0 — the v2 core goes mainline
-
-v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
-no subpackages beyond `h` and `topic`, and no configuration knob that a
-constant could serve instead. Module path is now
-`github.com/go-via/via` — unchanged, and still v0.x, so nothing in the module
-path or the version marks the break; v0.7 history is merged, the tree is
-the v2 core. **Requires Go 1.27.**
-
-### Documented (behaviour unchanged)
-
-- Query strings do not reach action handlers. An action POSTs to
-  `{mount}/_via/a/{n}/…`, built from the mount pattern's path params and
-  nothing else, so the discovery render runs unfiltered and a row that only
-  exists under `?q=` answers `410` when clicked. Page state — filter, page,
-  sort, tab — belongs in path params or the session. On `Ctx.Param` and in the
-  README.
-- `State.Get` does not make a unit live; only `State.Display` and `List.Each`
-  do. A unit that only `Get`s a State is silently plain. On `State.Get`.
-- `Ctx` has no response writer, so a file download is a sibling `net/http`
-  handler. On `Ctx.Request`.
-- The README and the `Reloader` godoc claimed `OnInit` "seeds signals from the
-  request URL". No such code path exists or ever existed; the claim is deleted.
-
-### New
 
 - **`WithErrorPage` renders failures as HTML documents.**
   `via.WithErrorPage(func(*via.Ctx, via.PageError) h.H)` replaces via's
@@ -393,6 +355,18 @@ v0.8 is a rebuild rather than an incremental release: the v0.7 surface (plugins,
 `h.Group`/`h.If` helpers, theme options, `WithoutSSEReconnect`, the old
 composition types) is replaced wholesale by the core below. Treat migration
 as a re-read of the README rather than a diff.
+
+- `Mount` is now a free function,
+  `via.Mount(r, path, root, opts ...MountOption)`, not a `*Router` method.
+  `Handler` is unchanged.
+
+- `Signal.Ref` and `SignalCS.Ref` return `expr.Expr`, not `string`. A call site
+  that concatenated the result now composes it (`sig.Ref().Ne("")`) or casts.
+
+- `Initer`, `Reloader` and `PageMetaer` are no longer exported — delete any
+  `var _ via.Initer = (*Page)(nil)` pin. The hooks stay duck-typed, and
+  `Mount` still panics on a hook name with the wrong signature and logs a
+  near-miss name.
 
 - **Requires Go 1.27.**
 - **`NewMemorySessionStore` returns `*MemorySessionStore`, not `SessionStore`.**
@@ -728,6 +702,24 @@ as a re-read of the README rather than a diff.
 
 ### Fixed
 
+- `ctx.Tick`, `ctx.Listen`, `ctx.OnConnect`, `ctx.OnDispose` and `State.Track`
+  now warn and no-op when called from an action handler, or from any unit with
+  no `OnInit` at all — before, the late-call guard read a flag only `OnInit`
+  itself set, so those calls registered nothing in silence. A `Track` from an
+  action was worse: it copied the store once and never followed it.
+
+- A `Set` inside an `OnConnect` fn now reaches the client: the connect pushes
+  once after the hook runs, where before the value waited for a tick or a
+  publish. `State.Track` re-reads its store in `OnConnect` for the same reason
+  — `ctx.Listen` subscribes at connect, so a publish between `OnInit`'s read
+  and that subscribe would otherwise leave the tab stale.
+
+- A root no longer mints slots for its children's signals: the type walk stops
+  at a field with its own `View`. The dead entry in every first paint is gone,
+  and so is the rebind of the child's handles on each root render. A child
+  rendered without `via.Child` — by calling its `View`, or by binding one of
+  its signals from the parent — now panics naming the cause.
+
 - **A `Set` inside a `Tick`/`Listen` handler now reaches the client.** A live
   push omits `data-signals` (so a morph never clobbers what the user is
   typing), and the tick path emitted no signal patch of its own — so a server
@@ -1045,7 +1037,7 @@ as a re-read of the README rather than a diff.
 
 ### Verification
 
-- The suite is `-race`-clean, and eight examples build and run against the tree.
+- The suite is `-race`-clean, and nine examples build and run against the tree.
 - The live stack is verified in real headless browsers, not just against the
   Go transport: `vtbrowser/`, behind `-tags browser` (chromedp). `example/chat`
   is verified with two browsers against one server — a message typed in one
