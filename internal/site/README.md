@@ -20,25 +20,14 @@ go run .
   Secure cookies, so set it only behind HTTPS. Unset accepts action POSTs from
   any origin and warns at boot.
 
-`/healthz` answers `ok <version>`; the playbook stamps the short commit hash
-via `-ldflags "-X main.version=..."`, suffixed `-dirty` when the tree is not
-clean. `/robots.txt` and `/favicon.ico` are served next to it.
+`/healthz` answers `ok <version>`, where version is stamped at build time
+with `-ldflags "-X main.version=..."`. `/robots.txt` and `/favicon.ico` are
+served next to it.
 
 ## Deploy
 
-`deploy/playbook.yml` cross-builds locally, installs under systemd behind
-Caddy, mints the session key once, and ends by probing `/healthz` on the
-service and then on the public origin. Needs a Debian-family host reachable as
-root, DNS for `domain` and `www.domain` already pointing at it, and
-ansible-core 2.15+.
-
-```sh
-cd internal/site/deploy
-ansible-playbook -i 203.0.113.10, playbook.yml
-```
-
-Override `domain` or `bind` with `-e`; `-e check_public=false` skips the public
-probe, for a host DNS does not point at yet.
+See [`DEPLOY.md`](./DEPLOY.md): a static binary behind Caddy, on any Linux
+host.
 
 ## Layout
 

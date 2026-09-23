@@ -40,14 +40,14 @@ once, `forum` for the multi-page/router/session/upload side.
 ## Not shown here — read the godoc
 
 These are documented API with no example to copy from. Go to `go doc` (and the
-README section named) rather than hunting for one:
+site page named) rather than hunting for one:
 
 | feature | where |
 | --- | --- |
-| `Router.Close` and graceful shutdown ordering | `go doc via.Router.Close`, DOCS.md "Shutdown" |
-| `SessionStore` / `WithSessionStore` (durable, multi-pod sessions) | `go doc via.SessionStore`, DOCS.md "Restarts and deploys" and "Horizontal scaling" |
+| `Router.Close` and graceful shutdown ordering | `go doc via.Router.Close`, go-via.dev/deploy "Shutdown order" |
+| `SessionStore` / `WithSessionStore` (durable, multi-pod sessions) | `go doc via.SessionStore`, go-via.dev/deploy "Restarts" and "Horizontal scaling" |
 | `Script`, `Style`, `Preload` in a `PageMeta().Assets` | `go doc via.Assets` |
-| `WithTrustedOrigin` in a real `main` | `go doc via.WithTrustedOrigin`, DOCS.md "Security floor" |
+| `WithTrustedOrigin` in a real `main` | `go doc via.WithTrustedOrigin`, go-via.dev/reference |
 | `List[E]` outside `chat` | `go doc via.List` |
 | `WithErrorPage` | `go doc via.WithErrorPage` (`forum` mounts one) |
 

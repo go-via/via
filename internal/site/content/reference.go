@@ -6,11 +6,9 @@ import (
 	"go-via.dev/site/shell"
 )
 
-// v0.8 is unreleased, so the docs point at its branch.
 const (
-	branchName = "release/v0.8-mainline"
-	branch     = "https://github.com/go-via/via/blob/" + branchName + "/"
-	tree       = "https://github.com/go-via/via/tree/" + branchName
+	tagName = "v0.8.0"
+	tag     = "https://github.com/go-via/via/blob/" + tagName + "/"
 )
 
 type row struct{ name, use string }
@@ -88,7 +86,7 @@ var options = []row{
 	{"via.WithSessionKey(key)",
 		"The HMAC key signing the session cookie id; at least 16 bytes, or it panics. Unset, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process."},
 	{"via.WithSessionStore(s)",
-		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey; both are required past one pod, see DOCS.md \"Horizontal scaling\"."},
+		"Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey; both are required past one pod, see Deploy."},
 	{"via.WithSessionStoreTimeout(d)",
 		"Caps one session store round-trip (default 5s). Without it a hung backend pins the request goroutine, since session calls survive client cancellation."},
 	{"via.WithSessionTTL(d)",
@@ -181,23 +179,20 @@ func (p *Reference) PageMeta() via.Meta {
 func (p *Reference) View() h.H {
 	return shell.Page(p.nav,
 		h.H2(h.Str("Install")),
-		h.Pre(h.Code(h.Str("go get github.com/go-via/via@"+branchName))),
-		h.P(h.Str("Go 1.27 or newer, standard library only, no build step. v0.8 is not tagged yet, so the "+
-			"install names the branch.")),
+		h.Pre(h.Code(h.Str("go get github.com/go-via/via@"+tagName))),
+		h.P(h.Str("Go 1.27 or newer, standard library only, no build step.")),
 
 		h.H2(h.Str("Links")),
 		h.Ul(
-			h.Li(h.A(h.Href(tree), h.Str("github.com/go-via/via @ "+branchName)),
-				h.Str(" — the v0.8 source, which is where its API documentation is read from until the tag.")),
-			h.Li(h.A(h.Href("https://pkg.go.dev/github.com/go-via/via"), h.Str("pkg.go.dev/github.com/go-via/via")),
-				h.Str(" — the package documentation for v0.7, the last tagged release. It predates everything on this page.")),
-			h.Li(h.A(h.Href(branch+"DOCS.md"), h.Str("DOCS.md")),
-				h.Str(" — the manual: the whole model, front to back.")),
-			h.Li(h.A(h.Href(branch+"MIGRATION.md"), h.Str("MIGRATION.md")),
+			h.Li(h.A(h.Href("https://github.com/go-via/via"), h.Str("github.com/go-via/via")),
+				h.Str(" — the source.")),
+			h.Li(h.A(h.Href("https://pkg.go.dev/github.com/go-via/via@"+tagName), h.Str("pkg.go.dev/github.com/go-via/via")),
+				h.Str(" — the package documentation, every exported name with its contract.")),
+			h.Li(h.A(h.Href(tag+"MIGRATION.md"), h.Str("MIGRATION.md")),
 				h.Str(" — what changed since v0.7, and how to move a v0.7 app.")),
-			h.Li(h.A(h.Href(branch+"CHANGELOG.md"), h.Str("CHANGELOG.md")),
+			h.Li(h.A(h.Href(tag+"CHANGELOG.md"), h.Str("CHANGELOG.md")),
 				h.Str(" — the release-by-release record.")),
-			h.Li(h.A(h.Href(branch+"AGENTS.md"), h.Str("AGENTS.md")),
+			h.Li(h.A(h.Href(tag+"AGENTS.md"), h.Str("AGENTS.md")),
 				h.Str(" — the rules a coding agent working on via has to follow.")),
 		),
 

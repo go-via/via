@@ -182,9 +182,12 @@
       sig.appendChild(el("pre", null, "(this demo declares no client signals)"));
     }
     panel.appendChild(sig);
+    var traffic = el("div", "insp-traffic");
+    traffic.appendChild(el("h4", null, "Requests, responses and frames"));
     var log = el("div", "insp-log");
     log.setAttribute("role", "log");
-    panel.appendChild(log);
+    traffic.appendChild(log);
+    panel.appendChild(traffic);
     return log;
   }
 
