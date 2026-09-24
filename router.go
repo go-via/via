@@ -204,11 +204,11 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 		http.Error(w, un.body(log), http.StatusGone)
 		return
 	}
-	route := ""
+	attrs := []any{"err", rec, "stack", string(debug.Stack())}
 	if req != nil {
-		route = " [" + req.Method + " " + req.URL.Path + "]"
+		attrs = append(attrs, "method", req.Method, "path", req.URL.Path)
 	}
-	log.Error("via: "+what+" panic"+route, "err", rec, "stack", string(debug.Stack()))
+	log.Error("via: "+what+" panic", attrs...)
 	noteErr(w, fmt.Errorf("via: %s panic: %v", what, rec))
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
