@@ -232,22 +232,6 @@ error via missed.
 - ❌ Accept `FontOrigins: {"https://fonts.example/css"}` and let the browser
   ignore the source because it has a path.
 
-## Secure by Default
-
-Reasoning: Most apps never set most options. Whatever an unset option means
-is what ships.
-
-Rule: An unset security option gives the strictest behaviour that still
-works for a same-origin app. A looser default needs a boot warning and a
-sentence in the option's doc naming what it admits. A comment that says a
-check happens elsewhere ("the tab id is the CSRF token") must hold on every
-path that relies on it.
-
-- ✅ With no `WithTrustedOrigin`, a plain action must prove it is
-  same-origin.
-- ❌ With no `WithTrustedOrigin`, admit every origin because live actions
-  carry a tab id, while plain actions carry none.
-
 ## Browser-Parity Gates
 
 Reasoning: A URL, origin or inline-asset check protects what the browser
