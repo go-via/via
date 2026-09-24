@@ -218,7 +218,67 @@ registration functions.
 
 - ✅ Panic if `View` is never set, if conflicting options are passed, if
   required arguments are zero values.
-- ❌ Return `error` from `Mount[C]` and let callers ignore it.
+- ❌ Return `error` from `Mount` and let callers ignore it.
+
+Rule: Input that would otherwise fail later and somewhere else is checked at
+registration too. A CSP that silently blocks a script in the browser, or a
+ServeMux panic naming a wildcard the user never wrote, is a registration
+error via missed.
+
+- ✅ `Script{Src: "//cdn.example/x.js"}` panics at `Mount`: it has no scheme
+  to take an origin from, so the policy would block it.
+- ✅ `Mount(r, "/u/{child}", P{})` panics with via's message, not
+  ServeMux's "duplicate wildcard name".
+- ❌ Accept `FontOrigins: {"https://fonts.example/css"}` and let the browser
+  ignore the source because it has a path.
+
+## Secure by Default
+
+Reasoning: Most apps never set most options. Whatever an unset option means
+is what ships.
+
+Rule: An unset security option gives the strictest behaviour that still
+works for a same-origin app. A looser default needs a boot warning and a
+sentence in the option's doc naming what it admits. A comment that says a
+check happens elsewhere ("the tab id is the CSRF token") must hold on every
+path that relies on it.
+
+- ✅ With no `WithTrustedOrigin`, a plain action must prove it is
+  same-origin.
+- ❌ With no `WithTrustedOrigin`, admit every origin because live actions
+  carry a tab id, while plain actions carry none.
+
+## Browser-Parity Gates
+
+Reasoning: A URL, origin or inline-asset check protects what the browser
+does with the value, not what Go sees. Browsers drop tab, CR and LF anywhere
+in a URL, read `\` as `/`, and normalize CRLF and NUL before hashing an
+inline script. A gate that checks the raw string passes values the browser
+then treats as something else.
+
+Rule: Each gate lives once, in `internal/hcore`, and every caller uses that
+copy. It normalizes input the way the browser's parser does before deciding.
+Its test is a table of inputs that differ only after browser normalization.
+
+- ✅ `SafeURL` strips `\t\r\n` first, so `"/\t/evil.com"` reads as
+  protocol-relative and is refused.
+- ❌ A second URL check in `head.go` that trims only leading whitespace.
+
+## Response Ownership
+
+Reasoning: The POST handler and the tab's stream goroutine both touch the
+request's `http.ResponseWriter` (a session cookie is set through it). Once
+net/http has the handler's return, any later write races its teardown and
+can crash the process.
+
+Rule: Whoever holds the writer keeps the request alive until done with it.
+After an action is handed to the stream goroutine, the handler returns only
+with that action's result. Deadlines bound the wait to be picked up, never
+work that has started.
+
+- ✅ An action picked up at 4.9s of a 5s deadline runs to completion and
+  answers.
+- ❌ Answer 503 at 5s while the action keeps running and writes a cookie.
 
 ## Assertions
 
@@ -402,6 +462,24 @@ regression.
 Rule: Use `internal/` for code that must not be imported by consumers
 but is shared across packages within the module. Do not use `internal/`
 as a dumping ground — the same responsibility rules apply.
+
+## Behaviour Changes Carry Their Docs
+
+Reasoning: via documents behaviour in four places: the exported doc comment,
+`CHANGELOG.md`, `MIGRATION.md` and the site. A fix that updates only the doc
+comment leaves the others contradicting it, and nothing fails.
+
+Rule: A commit that changes observable behaviour updates each place that
+describes it: the doc comment always, the unreleased `CHANGELOG.md` entry,
+`MIGRATION.md` when an upgrading user must act, and the site page that
+covers it. A test that pins a known defect names it as a defect in its
+comment, and the fix flips or deletes that test in the same commit.
+
+- ✅ Changing the `WithTrustedOrigin` default touches its doc comment,
+  CHANGELOG "Security defaults changed", MIGRATION "Security defaults moved"
+  and the site reference row.
+- ❌ Update the doc comment and leave `MIGRATION.md` describing the old
+  default.
 
 ## Markdown
 
