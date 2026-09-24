@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"regexp"
@@ -506,6 +507,143 @@ func TestChild_allowsPlainChildInLivePage(t *testing.T) {
 
 	assert.Contains(t, body, "LIVEPAGE", "the streaming page renders")
 	assert.Contains(t, body, "BANNER", "the plain child renders in place")
+}
+
+// gcLive is a live grandchild: an OnInit Tick makes it live exactly like the
+// child that embeds it.
+type gcLive struct{ n via.State[int] }
+
+func (g *gcLive) OnInit(ctx *via.Ctx) error { ctx.Tick(time.Hour, func(*via.Ctx) {}); return nil }
+func (g *gcLive) View() h.H                 { return h.Div(h.Str("grand="), g.n.Display()) }
+
+// gcPlain is a plain grandchild: no OnInit, so it never makes its own claim
+// on liveness.
+type gcPlain struct{}
+
+func (g *gcPlain) View() h.H { return h.Div(h.Str("grand=here")) }
+
+// gatedLiveChild is a live embeddable child whose own View lazily Childs a
+// grandchild behind a Bind()ed Gate — legal at GET, where Gate is false and
+// the branch never renders, but reachable only through this child's own push
+// once a posted signal flips it open.
+type gatedLiveChild[G any] struct {
+	Gate  via.Signal[bool]
+	Grand G
+	n     via.State[int]
+}
+
+func (c *gatedLiveChild[G]) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (c *gatedLiveChild[G]) Ping(*via.Ctx) {}
+func (c *gatedLiveChild[G]) grand() h.H    { return via.Child(c.Grand) }
+func (c *gatedLiveChild[G]) View() h.H {
+	return h.Div(
+		h.Input(c.Gate.Bind()),
+		h.Button(via.On("click", c.Ping), h.Str("ping")),
+		c.n.Display(),
+		via.When(c.Gate.Get(), c.grand),
+	)
+}
+
+type plainRootWithGatedLiveChild[G any] struct{ Kid gatedLiveChild[G] }
+
+func (p *plainRootWithGatedLiveChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_hydratedGateCannotGrowALiveGrandchildInsideALiveChildsPush(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+	via.Mount(r, "/", plainRootWithGatedLiveChild[gcLive]{})
+	app := vt.Serve(t, r)
+
+	conn := app.Connect()
+	defer conn.Close()
+
+	// Gate starts false, so GET and connect see no grandchild at all — only
+	// this push, driven by the posted signal, conjures Grand.
+	app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), "live push aborted")
+	}, 2*time.Second, 5*time.Millisecond,
+		"a live grandchild conjured inside a live child's own push must fail loudly, not silently")
+
+	for {
+		line, ok := conn.Peek()
+		if !ok {
+			break
+		}
+		assert.NotContains(t, line, "grand=",
+			"the illegal render must never reach the client as a pushed frame")
+	}
+}
+
+// gatedLiveChildFastTick is gatedLiveChild with a short-interval Tick instead
+// of an hourly one, so a stream that (bug) failed to abort would get many
+// chances to re-panic within a test-sized window instead of just one.
+type gatedLiveChildFastTick[G any] struct {
+	Gate  via.Signal[bool]
+	Grand G
+	n     via.State[int]
+}
+
+func (c *gatedLiveChildFastTick[G]) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, func(*via.Ctx) {})
+	return nil
+}
+func (c *gatedLiveChildFastTick[G]) Ping(*via.Ctx) {}
+func (c *gatedLiveChildFastTick[G]) grand() h.H    { return via.Child(c.Grand) }
+func (c *gatedLiveChildFastTick[G]) View() h.H {
+	return h.Div(
+		h.Input(c.Gate.Bind()),
+		h.Button(via.On("click", c.Ping), h.Str("ping")),
+		c.n.Display(),
+		via.When(c.Gate.Get(), c.grand),
+	)
+}
+
+type plainRootWithFastTickGatedLiveChild[G any] struct{ Kid gatedLiveChildFastTick[G] }
+
+func (p *plainRootWithFastTickGatedLiveChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_liveNestingViolationAbortsTheStreamAndLogsOnce(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+	via.Mount(r, "/", plainRootWithFastTickGatedLiveChild[gcLive]{})
+	app := vt.Serve(t, r)
+
+	conn := app.Connect()
+	defer conn.Close()
+
+	app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(), "live push aborted")
+	}, 2*time.Second, 5*time.Millisecond,
+		"the violation must abort the stream")
+
+	// The Tick fires every 10ms; give a broken abort many chances to re-log
+	// before checking the count stayed at one.
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, 1, strings.Count(out.String(), "live push aborted"),
+		"a permanent nesting violation re-panics identically on every following tick — "+
+			"one log line from tearing the stream down, not one per beat")
+}
+
+func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(plainRootWithGatedLiveChild[gcPlain]{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+	assert.Equal(t, http.StatusNoContent, status)
+
+	assert.Contains(t, conn.Await("grand=here"), "grand=here",
+		"a hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing")
 }
 
 // flipChild's own action count depends on a pointer shared with its parent —

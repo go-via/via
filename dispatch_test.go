@@ -932,6 +932,58 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 	assert.NotContains(t, body, "del:3")
 }
 
+// liveArgRows is argRows made live: pruneToAuthority does the per-arg
+// intersection on this path instead of dispatchPlain's inline one.
+type liveArgRows struct {
+	Filter via.Signal[string]
+	del    string
+}
+
+func (r *liveArgRows) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+
+func (r *liveArgRows) Del(ctx *via.Ctx, id int) { r.del = "del:" + strconv.Itoa(id) }
+
+func (r *liveArgRows) ids() []int {
+	if r.Filter.Get() == "all" {
+		return []int{1, 2, 3}
+	}
+	return []int{1}
+}
+
+func (r *liveArgRows) View() h.H {
+	return h.Div(
+		h.Input(r.Filter.Bind()),
+		h.Ul(via.Each(r.ids(), func(id int) h.H {
+			return h.Li(h.Button(via.OnArg("click", r.Del, id), h.Str("del")))
+		})),
+		h.P(h.Str(r.del)),
+	)
+}
+
+func TestConnect_postedSignalCannotWidenALiveActionsArgSet(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveArgRows{}))
+	conn := app.ConnectWith(`{"filter":"all"}`)
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, code, "the a=1 row must still be dispatchable")
+
+	legitURL := conn.ActionURL("r", 0)
+	require.Contains(t, legitURL, "a=1")
+	widenedURL := strings.Replace(legitURL, "a=1", "a=3", 1)
+
+	code, body := app.Action(0).Over(conn).Raw(widenedURL).Body(`{"filter":"all"}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"a posted signal may widen the rows the client sees, never the args it may call")
+	assert.NotContains(t, body, "del:3")
+
+	code, _ = app.Action(0).Over(conn).Raw(legitURL).Body(`{"filter":"all"}`).Fire()
+	assert.Equal(t, http.StatusNoContent, code, "the auth-render arg must still be dispatchable")
+}
+
 // shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
 // both mint the same content-addressed action id (the id hashes the Go func
 // name plus the receiver's offset, and here both are identical). That is the
@@ -957,11 +1009,22 @@ type shiftPage struct {
 	Flip via.Signal[bool]
 	A    shiftA
 	B    shiftB
+	live bool
 }
+
+func (p *shiftPage) OnInit(ctx *via.Ctx) error {
+	if p.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {})
+	}
+	return nil
+}
+
+func (p *shiftPage) Ping(ctx *via.Ctx) {}
 
 func (p *shiftPage) View() h.H {
 	return h.Div(
 		h.Input(p.Flip.Bind()),
+		h.Button(via.On("click", p.Ping), h.Str("ping")),
 		via.When(!p.Flip.Get(), func() h.H { return via.Child(p.A) }),
 		via.Child(p.B),
 	)
@@ -979,6 +1042,26 @@ func TestDispatchPlain_childKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) 
 	resp, body := do(t, srv, http.MethodPost, aURL, `{"flip":true}`)
 	assert.Equal(t, http.StatusGone, resp.StatusCode,
 		"a key whose type changed between the auth and bind renders must not dispatch")
+	assert.Contains(t, body, "no such child")
+}
+
+func TestDispatchPlain_aLivePagesShiftedChildKeyIsNotDispatchable(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(shiftPage{live: true}))
+	conn := app.ConnectWith(`{"flip":true}`)
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, code, "the root's own action must still work")
+
+	// B is a plain child of a live root, so it never gets its own stream
+	// registration — this POST falls to dispatchPlain, whose own auth render
+	// (always Flip=false) never sees the type at "0" as B either. dispatchPlain's
+	// type-mismatch guard (auth vs. bind at the same key) is what refuses it, not
+	// anything on the live push's own dispatch table.
+	url := conn.ActionURL("0", 0)
+	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"flip":true}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"a child key whose type shifted between the authority and display renders must not dispatch")
 	assert.Contains(t, body, "no such child")
 }
 
@@ -1374,6 +1457,76 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T)
 		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
 		assert.Contains(t, body, "does not bind it")
 	}
+}
+
+// liveConjuredGrandchild sits two levels under a live root's conjured child:
+// dispatchPlain's fresh auth render never produces this key at all, at any
+// depth, so the guard must refuse it there too, not just at its parent.
+type liveConjuredGrandchild struct{ poked bool }
+
+func (g *liveConjuredGrandchild) Poke(ctx *via.Ctx) { g.poked = true }
+
+func (g *liveConjuredGrandchild) View() h.H {
+	return h.Div(h.Button(via.On("click", g.Poke), h.Str("poke")))
+}
+
+// liveConjuredSecret is the child a posted Gate signal conjures into a live
+// display render that the un-hydrated authority render never produced.
+type liveConjuredSecret struct{ Grand liveConjuredGrandchild }
+
+func (s *liveConjuredSecret) Reveal(ctx *via.Ctx) {}
+
+func (s *liveConjuredSecret) View() h.H {
+	return h.Div(
+		h.Button(via.On("click", s.Reveal), h.Str("reveal")),
+		via.Child(s.Grand),
+	)
+}
+
+type liveConjuredRoot struct {
+	Gate   via.Signal[bool]
+	Secret liveConjuredSecret
+}
+
+func (r *liveConjuredRoot) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+
+func (r *liveConjuredRoot) Ping(ctx *via.Ctx) {}
+
+func (r *liveConjuredRoot) View() h.H {
+	return h.Div(
+		h.Input(r.Gate.Bind()),
+		h.Button(via.On("click", r.Ping), h.Str("ping")),
+		via.When(r.Gate.Get(), func() h.H { return via.Child(r.Secret) }),
+	)
+}
+
+func TestDispatchPlain_aLivePagesConjuredChildIsNotDispatchable(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveConjuredRoot{}))
+	conn := app.ConnectWith(`{"gate":true}`)
+
+	code, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, code, "the root's own action must still work")
+	require.Contains(t, conn.Await("reveal"), "reveal", "the client may still SEE what its own signal conjured")
+
+	// Secret is a plain via.Child of a live root, so it never gets its own
+	// stream registration (only the root does) — this POST falls to
+	// dispatchPlain, whose own fresh auth render never sees it gated open
+	// either, at "0" or at the grandchild "0-0" below.
+	url := conn.ActionURL("0", 0)
+	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"gate":true}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"a branch a posted signal conjured must never be dispatchable, only visible")
+	assert.Contains(t, body, "no such child")
+
+	gURL := conn.ActionURL("0-0", 0)
+	code, body = app.Action(0).Over(conn).Raw(gURL).Body(`{"gate":true}`).Fire()
+	assert.Equal(t, http.StatusGone, code,
+		"a conjured child's own conjured grandchild must be cleared too")
+	assert.Contains(t, body, "no such child")
 }
 
 type paramLive struct{ live bool }

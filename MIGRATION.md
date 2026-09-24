@@ -153,9 +153,12 @@ A live child may be embedded directly by a plain root, or by a
 further plain `via.Child` under one. Each streams and patches independently
 over the page's one connection. **Known limitation:** a live child cannot be
 embedded inside another live composition, and a live child's own `View`
-cannot itself call `via.Child`; either panics at render. Nested live
-composition (a dynamic set of live children keyed by identity) is a deferred
-feature; plain composition still nests to any depth.
+cannot itself call `via.Child`; either panics at render. The second rule is a
+GET/discovery-render check only — a live child's own push re-checks
+live-under-live alone, so a hydrated signal may still legally grow a *plain*
+grandchild there; growing a *live* one still panics. Nested live composition
+(a dynamic set of live children keyed by identity) is a deferred feature;
+plain composition still nests to any depth.
 
 ### 4. Fan-out is scoped to a topic
 

@@ -169,6 +169,31 @@ func (c *tabStream) unit(child string) *Ctx {
 	return c.units[child]
 }
 
+// liveAncestor reports whether any node from bind down to (but excluding) the
+// unit at child is itself live — "every ancestor on the path is plain" is
+// Child's own liveness rule, and a plain child dispatched through
+// dispatchPlain can still sit beneath an already-live root (a live page's
+// plain child never gets its own stream registration, see connectUnit), so
+// the re-render at child needs this to seed checkLiveUnderLive correctly.
+func liveAncestor(bind *Ctx, child string) bool {
+	if child == rootAddr {
+		return false
+	}
+	cur := bind
+	segs := strings.Split(child, "-")
+	for _, seg := range segs[:len(segs)-1] {
+		if cur.live {
+			return true
+		}
+		k, err := strconv.Atoi(seg)
+		if err != nil || k < 0 || k >= len(cur.children) {
+			return false
+		}
+		cur = cur.children[k]
+	}
+	return cur.live
+}
+
 // rootAddr is a letter precisely so it cannot collide with a child key, which
 // is always a '-'-joined path of ordinals.
 const rootAddr = "r"
@@ -668,7 +693,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		return
 	}
 	m.respond(w, req, mode, u.redirect, nil, func() []byte {
-		b := m.rerenderPlain(child, rootBefore, inst, bind, u, base)
+		b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
 		if b == nil {
 			m.warnNoChange(act, a.name, actedViewer(inst, u))
 		}
@@ -771,7 +796,7 @@ const maxHydratePasses = 8
 // container plus a data-signals attribute — the piece the old child-action
 // handler omitted, silently dropping a Signal.Set inside a plain child's
 // action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bind, u *Ctx, base string) []byte {
+func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, auth, bind, u *Ctx, base string) []byte {
 	seen := bind.slotSet()
 	if child == rootAddr {
 		// data-signals is a plain action's only channel for a server-side Set,
@@ -788,7 +813,12 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged)
+	// u is always plain here (assertRenderInvariantLiveness below would already
+	// have fired otherwise), but the real page can still hold it beneath an
+	// already-live root — liveAncestor reads that off the discovery tree, since
+	// this re-render's own synthetic root has no ancestor Ctx to walk from.
+	// auth, not bind (I1): liveness is the un-hydrated render's verdict.
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged, liveAncestor(auth, child))
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
@@ -812,6 +842,15 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 // at a key (a When around a Child that a hydrated signal shifted) fails the
 // whole subtree closed rather than authorizing against a unit the authority
 // render never looked at.
+//
+// The top-level handler and per-arg intersection are load-bearing: they are
+// what a live action actually dispatches through. The child recursion below
+// them is a backstop whose output no current dispatch path reads —
+// dispatchOverStream addresses only a top-level unit, and dispatchPlain
+// rebinds its own tree from scratch — because live-unit registration is
+// frozen at connect time and a nested child's key can never alias a
+// registered unit address. It becomes load-bearing the day live-under-live is
+// permitted, or registration ever descends into a pushed bind.
 func pruneToAuthority(bind, auth *Ctx) {
 	if auth == nil || bind.unitV.typ != auth.unitV.typ {
 		clear(bind.actions)

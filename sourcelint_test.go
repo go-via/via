@@ -110,8 +110,11 @@ func TestCore_importsNoReflectPackage(t *testing.T) {
 	allowed := map[string][]string{
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.New", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
-			"reflect.TypeOf", "reflect.ValueOf"},
-		"child.go": {"reflect.TypeOf"},
+			"reflect.TypeOf"},
+		// action.go resolves a handler's Go name off its code pointer, once per
+		// (fn, receiver) pair and memoized — see actionID.
+		"action.go": {"reflect.ValueOf"},
+		"child.go":  {"reflect.TypeOf"},
 		// router.go's kind switch is the Assets constancy probe, which runs once
 		// per Mount and never again.
 		"router.go": {"reflect.Bool", "reflect.Float32", "reflect.Float64", "reflect.Int",

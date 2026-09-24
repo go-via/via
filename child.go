@@ -197,7 +197,13 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 //
 // from is the request-scoped Ctx this re-render belongs to (nil for a live
 // push); it inits the child's nested children — see inheritRequestScope.
-func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool) (*Ctx, []byte) {
+//
+// underLive says whether c itself sits under a live ancestor in the real
+// tree — false for a live child's own push (its ancestor chain was already
+// proven plain, or it could never have become live), and whatever the
+// discovery render found for a plain action's re-render, since that unit may
+// legitimately sit beneath an already-live root (see checkLiveUnderLive).
+func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool) (*Ctx, []byte) {
 	c := newCtx()
 	c.rev = rev
 	c.badDecodeLogged = badDecodeLogged
@@ -206,5 +212,7 @@ func renderChildBind(key string, inst instance, base string, from *Ctx, rev *rev
 	c.unitV = inst
 	c.base = base
 	inheritRequestScope(c, from)
-	return c, renderChildInner(c, inst.v)
+	body := renderChildInner(c, inst.v)
+	checkLiveUnderLive(c, underLive)
+	return c, body
 }
