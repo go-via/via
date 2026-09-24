@@ -38,7 +38,7 @@ host.
 - `shell/` — chrome: `layout.go`, `nav.go` (`Nav`, `NavFor`), `meta.go`.
 - `content/` — one mounted page per file, plus `page.go` for the wiring they
   share.
-- `demos/` — one demo per file, embedded verbatim for its Source tab.
+- `demos/` — one demo per file, embedded verbatim for its card's Source.
   `shared_contract.go` holds what the demos use without declaring.
 - `demo/` — the card, chroma highlighting, rate limits and resets. `demo/gen`
   generates `static/chroma.css`, keeping chroma's styles out of the binary.

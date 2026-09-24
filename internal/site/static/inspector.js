@@ -201,7 +201,7 @@
     if (empty) empty.remove();
     var node = entryNode(e);
     p.log.insertBefore(node, p.log.firstChild);
-    // offsetHeight is 0 while the pane's tab is unchecked, which would scroll
+    // offsetHeight is 0 while the pane is hidden, which would scroll
     // the pane to the wrong place on the next visible prepend.
     if (p.el.offsetParent !== null && p.el.scrollTop > 0) p.el.scrollTop += node.offsetHeight;
     // The global ring drops old entries but never the nodes already rendered
