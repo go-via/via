@@ -25,31 +25,38 @@ actions, `dashboard` for several live children on one stream plus a JS island
 fed by `Set` and a client-only `SignalCS`, `chat` for both topic shapes at
 once, `forum` for the multi-page/router/session/upload side.
 
-| example | what it shows |
-| --- | --- |
-| `counter` | server-rendered state, one action, no client signal |
-| `greeting` | a client-resident `Signal`, two-way bound, displayed, and tested by `expr` |
-| `pulse` | a server tick pushed to one tab over SSE |
-| `shared` | an app-owned counter every tab follows with `via.StateTrack` |
-| `feed` | a `Topic` broadcast fanning out to every connected tab |
-| `poll` | a reordering list where `via.OnArg` carries each row's id; `h.DataAttr` |
-| `dashboard` | live regions on one stream; a canvas island; tag-seeded signals |
-| `chat` | a `Topic` message bus plus a presence count tracked from `OnInit` |
-| `forum` | a multi-page app: router, sessions, `PostForm` + `Redirect`, upload |
+- **`counter`**: server-rendered state, one action, no client signal.
+- **`greeting`**: a client-resident `Signal`, two-way bound, displayed, and
+  tested by `expr`.
+- **`pulse`**: a server tick pushed to one tab over SSE.
+- **`shared`**: an app-owned counter every tab follows with
+  `via.StateTrack`.
+- **`feed`**: a `Topic` broadcast fanning out to every connected tab.
+- **`poll`**: a reordering list where `via.OnArg` carries each row's id;
+  `h.DataAttr`.
+- **`dashboard`**: live regions on one stream; a canvas island;
+  tag-seeded signals.
+- **`chat`**: a `Topic` message bus plus a presence count tracked from
+  `OnInit`.
+- **`forum`**: a multi-page app: router, sessions, `PostForm` +
+  `Redirect`, upload.
 
 ## Not shown here — read the godoc
 
 These are documented API with no example to copy from. Go to `go doc` (and the
 site page named) rather than hunting for one:
 
-| feature | where |
-| --- | --- |
-| `Router.Close` and graceful shutdown ordering | `go doc via.Router.Close`, go-via.dev/deploy "Shutdown order" |
-| `SessionStore` / `WithSessionStore` (durable, multi-pod sessions) | `go doc via.SessionStore`, go-via.dev/deploy "Restarts" and "Horizontal scaling" |
-| `Script`, `Style`, `Preload` in a `PageMeta().Assets` | `go doc via.Assets` |
-| `WithTrustedOrigin` in a real `main` | `go doc via.WithTrustedOrigin`, go-via.dev/reference |
-| `List[E]` outside `chat` | `go doc via.List` |
-| `WithErrorPage` | `go doc via.WithErrorPage` (`forum` mounts one) |
+- **`Router.Close` and graceful shutdown ordering**:
+  `go doc via.Router.Close`, go-via.dev/deploy "Shutdown order".
+- **`SessionStore` / `WithSessionStore`** (durable, multi-pod sessions):
+  `go doc via.SessionStore`, go-via.dev/deploy "Restarts" and "Horizontal
+  scaling".
+- **`Script`, `Style`, `Preload` in a `PageMeta().Assets`**:
+  `go doc via.Assets`.
+- **`WithTrustedOrigin` in a real `main`**: `go doc via.WithTrustedOrigin`,
+  go-via.dev/reference.
+- **`List[E]` outside `chat`**: `go doc via.List`.
+- **`WithErrorPage`**: `go doc via.WithErrorPage` (`forum` mounts one).
 
 ## Conventions these examples share
 

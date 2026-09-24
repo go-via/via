@@ -7,11 +7,11 @@ the one you were using. No tooling will warn you. There is no compatibility
 shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you
 can pin it indefinitely.
 
-So this document is not a rename table you can apply mechanically. Most v0.7 code
-does not port line by line, because the things that changed are the ideas, not
-the spellings. Read the four shifts below first; the mapping table after them
-will make sense only in their light. Budget a re-read of the README rather
-than an afternoon of find-and-replace.
+So this document is not a rename list you can apply mechanically. Most v0.7
+code does not port line by line, because the things that changed are the
+ideas, not the spellings. Read the four shifts below first; the mapping list
+after them will make sense only in their light. Budget a re-read of the
+README rather than an afternoon of find-and-replace.
 
 **If you only want the short version:** delete your `View(ctx)` parameter, drop
 `.Op(ctx)`, replace `Read`/`Write` with `Get`/`Set`, replace the `on` package
@@ -23,8 +23,6 @@ need; every `via.X(ctx, …)` is now `ctx.X(…)`: `Param`,
 all `Ctx`/`Session` methods now (and `r.Mount(…)`
 is `via.Mount(r, …)`, a free function taking the `*Router`). Expect the
 compiler to find the rest.
-Then read shift 1, because that is the one that will actually change your
-design.
 
 ## The four shifts
 
@@ -50,11 +48,11 @@ finds itself.
 
 The knock-on effect is the one to plan for: `via.State[T]` is **child-only**.
 Reading or writing it outside a live child panics with a message naming the
-fix. v0.7's per-tab `StateTab` worked anywhere; v2 asks you to say where the value
-lives. For a value that is genuinely server state, the v2 counter example
-does not use `State` at all. It injects a plain `*Store` dependency and lets
-the re-render read it. That is the idiomatic answer and it is a design change,
-not a syntax change.
+fix. v0.7's per-tab `StateTab` worked anywhere; v2 asks you to say where the
+value lives. For a value that is genuinely server state, the v2 counter
+example does not use `State` at all. It injects a plain `*Store` dependency
+and lets the re-render read it. That is the idiomatic answer and it is a
+design change, not a syntax change.
 
 The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 `StateTabNum`, `StateSessNum`, `StateAppNum`, no `.Op(ctx)` and no
@@ -73,12 +71,11 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 
 v0.7: `View(ctx *via.CtxR) h.H`. v0.8: `View() h.H`. `CtxR` is gone entirely.
 
-This is the load-bearing constraint of the rewrite, so it is worth stating
-plainly: **anything your view needs must be a field on the composition before
-`View` is called.** The hook for that is `OnInit(*Ctx) error`, which runs
-per-request before `View` and can now fail honestly: return `via.ErrNotFound`
-for a 404, anything else for a 500. A view can no longer render a lie about
-data it failed to load.
+This is the load-bearing constraint of the rewrite: **anything your view
+needs must be a field on the composition before `View` is called.** The hook
+for that is `OnInit(*Ctx) error`, which runs per-request before `View` and
+can now fail honestly: return `via.ErrNotFound` for a 404, anything else for
+a 500. A view can no longer render a lie about data it failed to load.
 
 ```go
 // v0.7: the view reaches for what it needs
@@ -129,7 +126,7 @@ catch two of the three ways to get this wrong:
   on the first render that binds it.
 
 The interface assertions above are the only airtight check. Every other
-rename in the table below is a removed identifier, so the compiler finds it.
+rename in the list below is a removed identifier, so the compiler finds it.
 
 `OnInit` runs per request: on the GET, on every
 action, and on the SSE connect. Pair a connection-scoped acquire with
@@ -198,39 +195,66 @@ in the `datastar-script-attributes` header, so the script bytes are constant
 and the strict CSP admits them by SHA-256 with no per-response nonce. An unsafe
 target is still dropped loudly and never reaches the client.
 
-## Mapping table
+## Mapping list
 
 Entries marked **gone** have no replacement; see "Removed outright" below.
 
-| Area | v0.7 | v0.8 |
-| --- | --- | --- |
-| Serve | `via.New()`, `via.Mount[Page]` | `via.Handler(Page{})` or `via.NewRouter()` + `via.Mount(r, "/p", Page{})` |
-| Render | `View(ctx *via.CtxR) h.H` | `View() h.H` |
-| Per-request hook | `Initializer.OnInit(*Ctx) error` | same signature, now the only hook, on the page and on every embedded child |
-| Live child | `Connector.OnConnect` + `Disposer.Dispose` | no interface: a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is automatic |
-| Events | `on.Click(p.Inc)` (package `on`) | `via.On("click"/"submit"/"change", p.Inc)`; typed data via `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a per-row toggle is `OnArg`) |
-| Text node | `h.Text("x")` | `h.Str("x")`, generic over `Stringish` |
-| Attributes | `h.Class`, `h.Type`, `h.Style`, `h.Min`, … | same typed helpers, expanded to ~49 (`h.ColSpan`/`h.RowSpan` carry the Go-style casing); `h.RawAttr` covers the rest |
-| Signal rendering | `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`, `.Class()` | `Bind` remains; the rest are gone, so render the value in Go |
-| Conditionals | `h.If` | `via.When` |
-| Groups | `h.Group` | pass the children directly; every element is variadic |
-| Growing lists | `StateTab[[]E]` + `Update` | `via.List[E]` with `Append` |
-| Sessions | `sess.Put/Get/Clear/Rotate` (subpackage) | `ctx.Session().Put(v)/Get[T]()/Delete()/Rotate` |
-| Fan-out | `app.Broadcast*` | `topic.New[T]` + `ctx.Listen`; a hand-rolled reader uses `Sub.WakeOn(ch)` and `Topic.NumSubs()` |
-| Post-action reload | — | `OnReload(*via.Ctx) error`, run after every action on the unit |
-| Session storage | — | `via.SessionStore`, default `via.NewMemorySessionStore()`; implement `via.VersionedSessionStore` for a compare-and-set backend |
-| Path params | — | `ctx.Param[T]("name")` |
-| Protected pages | — | a session check + `ctx.Redirect` inside `OnInit` (no separate guard mechanism) |
-| Forms | — | `via.PostForm` (always multipart, 303), `ctx.Redirect`, `ctx.Request().FormFile` for uploads |
-| Document shell | theme options, `plugins/picocss` | `via.WithHead(via.Head{…})` |
-| Per-page metadata | — | a `PageMeta() via.Meta` method on the mounted root — title, description, canonical, robots, OG/Twitter, and the page's own assets |
-| Per-page assets & CSP | — | `Meta.Assets` (`Script`/`Style`/`Preload`/`FontOrigins`); the CSP is built per mount from `Head.Assets` + the page's own |
-| `WithHead{Title}` | — | **gone** — `PageMeta().Title` |
-| `WithHead{InlineStyle}` | — | **gone** — `Head.Assets.Styles: []via.Style{{Inline: css}}` |
-| `WithHead{ScriptOrigins/StyleOrigins}` | — | **gone** — declare the `Script`/`Style` itself in `Assets`; via derives the origin |
-| `WithHead{FontOrigins}` | — | `Head.Assets.FontOrigins` |
-| Origin policy | `WithInsecureOrigin` | open by default; `WithTrustedOrigin` enables enforcement |
-| Render plumbing | `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` | **gone** — behind `internal/hcore` |
+- **Serve**: `via.New()`, `via.Mount[Page]` → `via.Handler(Page{})` or
+  `via.NewRouter()` + `via.Mount(r, "/p", Page{})`.
+- **Render**: `View(ctx *via.CtxR) h.H` → `View() h.H`.
+- **Per-request hook**: `Initializer.OnInit(*Ctx) error` → same signature,
+  now the only hook, on the page and on every embedded child.
+- **Live child**: `Connector.OnConnect` + `Disposer.Dispose` → no interface:
+  a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is
+  automatic.
+- **Events**: `on.Click(p.Inc)` (package `on`) →
+  `via.On("click"/"submit"/"change", p.Inc)`; typed data via
+  `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change
+  — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a
+  per-row toggle is `OnArg`).
+- **Text node**: `h.Text("x")` → `h.Str("x")`, generic over `Stringish`.
+- **Attributes**: `h.Class`, `h.Type`, `h.Style`, `h.Min`, … → same typed
+  helpers, expanded to ~49 (`h.ColSpan`/`h.RowSpan` carry the Go-style
+  casing); `h.RawAttr` covers the rest.
+- **Signal rendering**: `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`,
+  `.Class()` → `Bind` remains; the rest are gone, so render the value in Go.
+- **Conditionals**: `h.If` → `via.When`.
+- **Groups**: `h.Group` → pass the children directly; every element is
+  variadic.
+- **Growing lists**: `StateTab[[]E]` + `Update` → `via.List[E]` with
+  `Append`.
+- **Sessions**: `sess.Put/Get/Clear/Rotate` (subpackage) →
+  `ctx.Session().Put(v)/Get[T]()/Delete()/Rotate`.
+- **Fan-out**: `app.Broadcast*` → `topic.New[T]` + `ctx.Listen`; a
+  hand-rolled reader uses `Sub.WakeOn(ch)` and `Topic.NumSubs()`.
+- **Post-action reload**: no v0.7 equivalent → `OnReload(*via.Ctx) error`,
+  run after every action on the unit.
+- **Session storage**: no v0.7 equivalent → `via.SessionStore`, default
+  `via.NewMemorySessionStore()`; implement `via.VersionedSessionStore` for a
+  compare-and-set backend.
+- **Path params**: no v0.7 equivalent → `ctx.Param[T]("name")`.
+- **Protected pages**: no v0.7 equivalent → a session check +
+  `ctx.Redirect` inside `OnInit` (no separate guard mechanism).
+- **Forms**: no v0.7 equivalent → `via.PostForm` (always multipart, 303),
+  `ctx.Redirect`, `ctx.Request().FormFile` for uploads.
+- **Document shell**: theme options, `plugins/picocss` →
+  `via.WithHead(via.Head{…})`.
+- **Per-page metadata**: no v0.7 equivalent → a `PageMeta() via.Meta`
+  method on the mounted root — title, description, canonical, robots,
+  OG/Twitter, and the page's own assets.
+- **Per-page assets & CSP**: no v0.7 equivalent → `Meta.Assets`
+  (`Script`/`Style`/`Preload`/`FontOrigins`); the CSP is built per mount
+  from `Head.Assets` + the page's own.
+- **`WithHead{Title}`**: **gone** — `PageMeta().Title`.
+- **`WithHead{InlineStyle}`**: **gone** —
+  `Head.Assets.Styles: []via.Style{{Inline: css}}`.
+- **`WithHead{ScriptOrigins/StyleOrigins}`**: **gone** — declare the
+  `Script`/`Style` itself in `Assets`; via derives the origin.
+- **`WithHead{FontOrigins}`** → `Head.Assets.FontOrigins`.
+- **Origin policy**: `WithInsecureOrigin` → open by default;
+  `WithTrustedOrigin` enables enforcement.
+- **Render plumbing**: `h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Binder` →
+  **gone** — behind `internal/hcore`.
 
 ## Removed outright
 
@@ -248,8 +272,8 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
   `Binder`. If you were building markup dynamically through these, build it
   with the element constructors instead; `h` now has the full HTML5 vocabulary
   (~105 constructors), minus the page-shell tags via owns.
-- **`via.OnUpload` and `via.File`**. `via.PostForm` is now always multipart, so
-  a file `<input>` just works. Read it with stdlib's
+- **`via.OnUpload` and `via.File`**. `via.PostForm` is now always multipart,
+  so a file `<input>` needs no separate upload verb. Read it with stdlib's
   `ctx.Request().FormFile(name)`.
 - **The SSE knobs are constants**: keepalive cadence (25s), per-frame write
   deadline (10s), and the concurrent-connection cap (10,000) are fixed;
@@ -293,8 +317,11 @@ type Counter struct {
     Step via.SignalNum[int] `via:"step,init=1"`
 }
 
-func (c *Counter) Inc(ctx *via.Ctx)   { c.Hits.Op(ctx).Add(c.Step.Read(ctx)) }
-func (c *Counter) Reset(ctx *via.Ctx) { c.Hits.Write(ctx, 0); c.Step.Write(ctx, 1) }
+func (c *Counter) Inc(ctx *via.Ctx) { c.Hits.Op(ctx).Add(c.Step.Read(ctx)) }
+func (c *Counter) Reset(ctx *via.Ctx) {
+    c.Hits.Write(ctx, 0)
+    c.Step.Write(ctx, 1)
+}
 
 func (c *Counter) View(ctx *via.CtxR) h.H {
     return h.Main(h.Class("container"),
@@ -358,10 +385,11 @@ form:
   `SessionStore` whose default is this process's memory, so surviving a restart
   or spanning pods takes both `WithSessionKey` (or `VIA_SESSION_KEY`) and
   `WithSessionStore`. Session values are now stored as JSON keyed by the Go
-  type, so a `Session.Put` value must round-trip through `encoding/json`. The idle TTL slides on **every** request that carries
-  a valid session cookie — `OnInit` resolves the session eagerly whether or not
-  the page reads it — so a session expires only after a full TTL with no
-  request at all, rather than after a TTL with no `Get`/`Put`.
+  type, so a `Session.Put` value must round-trip through `encoding/json`.
+  The idle TTL slides on **every** request that carries a valid session
+  cookie — `OnInit` resolves the session eagerly whether or not the page
+  reads it — so a session expires only after a full TTL with no request at
+  all, rather than after a TTL with no `Get`/`Put`.
 
 ## Wire break: action URLs
 
@@ -497,7 +525,7 @@ func (p *ThreadPage) PageMeta() via.Meta {
 }
 ```
 
-Four rules worth knowing before porting:
+Four rules:
 
 - It is a **method, not a field**, because real metadata is data-dependent. It
   runs after `OnInit` and after `OnReload`, so the data is loaded. A
@@ -541,8 +569,6 @@ data on the live root and pass it down the field.
 
 ## Known rough edges in v0.8
 
-Stated plainly so you can decide whether to wait:
-
 - **`h.Data` and `<data>` collide**: the `data-*` helper owns the name.
 - **A click 410s only when the current render no longer binds its handler.**
   Actions are addressed by handler identity, so a shifting `View()` shape no
@@ -553,8 +579,8 @@ Stated plainly so you can decide whether to wait:
   server log names the handlers the render did bind, which is the fastest way
   to see it (the response body names only the id that was asked for: the bound
   list is your Go type and method names, and the client is not entitled to
-  them). Datastar resolves a non-2xx response silently; a streaming page heals on
-  the next push, a plain one stays dead until reload.
+  them). Datastar resolves a non-2xx response silently; a streaming page
+  heals on the next push, a plain one stays dead until reload.
 - **Per-connection `State` does not survive a native form submit**: it is a
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared
@@ -587,8 +613,8 @@ and is not being bumped. Pinning v0.7 means taking on its dependency maintenance
 yourself; the affected code is the auth example rather than the library, but
 check that against your own build before relying on it.
 
-If you need a specific fix on v0.7, open an issue and ask. That is a request, not
-a support guarantee.
+If you need a specific fix on v0.7, open an issue and ask. That is a
+request, not a support guarantee.
 
 v0.8 builds only with Go 1.27+.
 
@@ -600,29 +626,76 @@ last stretch of the rebuild. This section is the diff for that jump: what
 renamed, whether the compiler will find it for you, and what a silent one
 looks like at runtime.
 
-| Old (pre-release) | New | Catches it |
-| --- | --- | --- |
-| `via.Embed(child)` | `via.Child(child)` | **compiler** — `Embed` is gone |
-| `vt.EmbedAction` | `vt.ChildAction` | **compiler** — `EmbedAction` is gone |
-| the `{embed}` action-URL segment | `{child}` | wire-only; nothing in your code names it — see "Wire break: action URLs" above |
-| `via.Handler(...)` → `http.Handler` | `via.Handler(...)` → `*via.Router` | **compiler** for a typed variable (`var h http.Handler = via.Handler(...)`); **source-compatible** for `http.Handle("/", via.Handler(...))`, since `*Router` implements `ServeHTTP` — this is what makes `Router.Close()` reachable |
-| `Title() string` hook (briefly `via.Titler`) | `PageMeta() via.Meta` | **warned, not silent** — a leftover `Title() string` is named at boot on stderr, once per type, and never called; the build still succeeds |
-| `Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}` | `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}` | **compiler** — the old fields don't exist; also new: `Head.Raw` now panics at boot if it contains `<script` or `<style` (declare it in `Assets` instead) |
-| `OnClick`/`OnSubmit`/`OnChange`/`OnClickArg` | `via.On(event, fn)` / `via.OnArg(event, fn, arg)` | **compiler** — the old names are gone |
-| `via.Live` interface, `OnConnect(*via.Ctx) error` | one `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open acquire | **silent** — `via.Live` no longer exists to assert against, so a leftover `OnConnect(ctx *via.Ctx) error` method compiles as dead code nothing calls. Symptom: the unit never becomes live from that hook (no `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never happens), and nothing logs it |
-| `Reloader.Reload(*via.Ctx) error` | an `OnReload(*via.Ctx) error` method | **warned, not silent** (correcting an earlier assumption here) — `Mount`/`Child` recognise `Reload` as a near-miss name and log it once at boot; the build still succeeds and the method still never runs |
-| `List.Update` | `List.Append` / `List.Remove` | **compiler** — `Update` is gone |
-| `SignalClientOnly[T]` | removed — `Signal[T]` is the one client-value type | **compiler** — the type is gone |
-| `Session.Clear[T]()` | `Session.Delete()` | **compiler** — `Clear` is gone, and a session now holds one untyped value instead of one per `T` |
-| `MemorySessionStore() SessionStore` | `NewMemorySessionStore() *MemorySessionStore` | **compiler** for the rename; the return-type narrowing also matters if you assigned the old call to a `SessionStore`-typed var expecting `VersionedSessionStore` behavior underneath — that was **silent** (a wrapper built around the interface silently took the lossy merge instead of CAS) and the concrete return type now makes it impossible |
-| `topic.Sub.C()` | `Sub.Ready()` + `Sub.Drain()` | **compiler** — `C` is gone |
-| `topic.Sub.Notify(ch)` | `Sub.WakeOn(ch)` | **compiler** — `Notify` is gone |
-| `topic.Topic.Subs()` | `Topic.NumSubs()` | **compiler** — `Subs` is gone |
-| action ids: flat page-wide counter + `?v=` shape digest | content-addressed id (hash of the handler's Go name), keyed by child path (`0-1`, not a flat `n`) | wire-only; nothing in your code builds these URLs. A tab left open across the upgrade holds the old shape and gets `410` on its first click, then comes back correct on reload — see "Wire break: action URLs" above |
-| signal slot names: render order (`s0`), then byte offset (`f0`, `i0_f0`) | Go field name (`count`, `chat__draft`) | wire-only; nothing in your code writes these. Same as above: old names are ignored, not matched, so a stale tab's post is silently dropped and heals on reload — see "Wire break: signal slot names" above |
-| a `Signal` behind a pointer/slice/array/map field, or held by a composition whose `View` has a value receiver | must be a plain field of a pointer-receiver composition | **compiler catches nothing here — it's a new boot-time panic**, not a rename: `Mount`/`Child` now walk the type and panic naming the field. The one shape the walk cannot see is a `Signal` behind an interface field, which still only panics on the first render that binds it |
-| `via.WithDocumentHead(...)` | `via.WithHead(...)` | **compiler** — old name is gone |
-| `h.Colspan` / `h.Rowspan` | `h.ColSpan` / `h.RowSpan` | **compiler** — old names are gone |
+- **`via.Embed(child)`** → `via.Child(child)`. **Compiler** — `Embed` is gone.
+- **`vt.EmbedAction`** → `vt.ChildAction`. **Compiler** — `EmbedAction` is gone.
+- **The `{embed}` action-URL segment** → `{child}`. Wire-only; nothing in
+  your code names it — see "Wire break: action URLs" above.
+- **`via.Handler(...)` returned `http.Handler`** → now returns `*via.Router`.
+  **Compiler** for a typed variable (`var h http.Handler = via.Handler(...)`);
+  **Source-compatible** for `http.Handle("/", via.Handler(...))`, since
+  `*Router` implements `ServeHTTP` — this is what makes `Router.Close()`
+  reachable.
+- **`Title() string` hook** (briefly `via.Titler`) → `PageMeta() via.Meta`.
+  **Warned, not silent** — a leftover `Title() string` is named at boot on
+  stderr, once per type, and never called; the build still succeeds.
+- **`Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}`** →
+  `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}`.
+  **Compiler** — the old fields don't exist; also new: `Head.Raw` now panics at
+  boot if it contains `<script` or `<style` (declare it in `Assets`
+  instead).
+- **`OnClick`/`OnSubmit`/`OnChange`/`OnClickArg`** → `via.On(event, fn)` /
+  `via.OnArg(event, fn, arg)`. **Compiler** — the old names are gone.
+- **`via.Live` interface, `OnConnect(*via.Ctx) error`** → one
+  `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open
+  acquire. **Silent** — `via.Live` no longer exists to assert against, so a
+  leftover `OnConnect(ctx *via.Ctx) error` method compiles as dead code
+  nothing calls. Symptom: the unit never becomes live from that hook (no
+  `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never
+  happens), and nothing logs it.
+- **`Reloader.Reload(*via.Ctx) error`** → an `OnReload(*via.Ctx) error`
+  method. **Warned, not silent** — `Mount`/`Child` recognise `Reload` as a
+  near-miss name and log it once at boot; the build still succeeds and the
+  method still never runs.
+- **`List.Update`** → `List.Append` / `List.Remove`. **Compiler** — `Update` is
+  gone.
+- **`SignalClientOnly[T]`** → removed, `Signal[T]` is the one client-value
+  type. **Compiler** — the type is gone.
+- **`Session.Clear[T]()`** → `Session.Delete()`. **Compiler** — `Clear` is
+  gone, and a session now holds one untyped value instead of one per `T`.
+- **`MemorySessionStore() SessionStore`** →
+  `NewMemorySessionStore() *MemorySessionStore`. **Compiler** for the rename;
+  the return-type narrowing also matters if you assigned the old call to a
+  `SessionStore`-typed var expecting `VersionedSessionStore` behavior
+  underneath — that was **silent** (a wrapper built around the interface
+  silently took the lossy merge instead of CAS) and the concrete return
+  type now makes it impossible.
+- **`topic.Sub.C()`** → `Sub.Ready()` + `Sub.Drain()`. **Compiler** — `C` is
+  gone.
+- **`topic.Sub.Notify(ch)`** → `Sub.WakeOn(ch)`. **Compiler** — `Notify` is
+  gone.
+- **`topic.Topic.Subs()`** → `Topic.NumSubs()`. **Compiler** — `Subs` is gone.
+- **Action ids**: flat page-wide counter + `?v=` shape digest →
+  content-addressed id (hash of the handler's Go name), keyed by child path
+  (`0-1`, not a flat `n`). Wire-only; nothing in your code builds these
+  URLs. A tab left open across the upgrade holds the old shape and gets
+  `410` on its first click, then comes back correct on reload — see "Wire
+  break: action URLs" above.
+- **Signal slot names**: render order (`s0`), then byte offset (`f0`,
+  `i0_f0`) → Go field name (`count`, `chat__draft`). Wire-only; nothing in
+  your code writes these. Same as above: old names are ignored, not
+  matched, so a stale tab's post is silently dropped and heals on reload —
+  see "Wire break: signal slot names" above.
+- **A `Signal` behind a pointer/slice/array/map field**, or held by a
+  composition whose `View` has a value receiver, must now be a plain field
+  of a pointer-receiver composition. **Compiler catches nothing here — it's a
+  new boot-time panic**, not a rename: `Mount`/`Child` now walk the type and
+  panic naming the field. The one shape the walk cannot see is a `Signal`
+  behind an interface field, which still only panics on the first render
+  that binds it.
+- **`via.WithDocumentHead(...)`** → `via.WithHead(...)`. **Compiler** — old
+  name is gone.
+- **`h.Colspan` / `h.Rowspan`** → `h.ColSpan` / `h.RowSpan`. **Compiler** — old
+  names are gone.
 
 Two more from the same stretch, easy to miss because neither renames anything:
 

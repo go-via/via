@@ -6,7 +6,7 @@
 # via
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-via/via.svg)](https://pkg.go.dev/github.com/go-via/via)
-[![Go Report Card](https://goreportcard.com/badge/github.com/go-via/via)](https://goreportcard.com/report/github.com/go-via/via)
+[![CodeQL](https://github.com/go-via/via/actions/workflows/codeql.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/codeql.yml)
 [![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-go--via.dev-blue)](https://go-via.dev)
@@ -19,7 +19,7 @@ JavaScript to write, no build step, no WebSockets. A page is a plain request
 and response until something on it ticks, listens or displays server state;
 then it streams over SSE, per tab.
 
-📖 **[Documentation](https://go-via.dev)** ·
+**[Documentation](https://go-via.dev)** ·
 [API reference](https://pkg.go.dev/github.com/go-via/via) ·
 [Examples](internal/example/README.md)
 
@@ -87,14 +87,14 @@ out to every connected tab).
 Whether a value lives in the browser, on the server, or is shared by every
 tab is the field's type:
 
-| Handle                | Lives on        | Scope                          |
-| --------------------- | --------------- | ------------------------------ |
-| `via.Signal[T]`       | client + server | per tab, round-trips per action |
-| `via.SignalCS[T]`     | client only     | per tab, never sent            |
-| `via.State[T]`        | server          | per connection, pushed on flush|
-| `via.List[E]`         | server          | `State[[]E]` with row verbs    |
-| `via.StateTrack(t,…)` | server          | one value, every tab follows   |
-| `topic.Topic[T]`      | server          | fan-out to every `ctx.Listen`  |
+| Handle                | Lives on        | Scope                            |
+| --------------------- | --------------- | -------------------------------- |
+| `via.Signal[T]`       | client + server | per tab, round-trips per action  |
+| `via.SignalCS[T]`     | client only     | per tab, never sent              |
+| `via.State[T]`        | server          | per connection, pushed on flush  |
+| `via.List[E]`         | server          | `State[[]E]` with row verbs      |
+| `via.StateTrack(t,…)` | server          | one value, every tab follows     |
+| `topic.Topic[T]`      | server          | fan-out to every `ctx.Listen`    |
 
 Rendering a `State` or registering a `Tick`/`Listen` is what makes a page
 live; a page that does neither is a plain HTTP round trip.

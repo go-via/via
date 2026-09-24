@@ -144,11 +144,11 @@ the v2 core. **Requires Go 1.27.**
   composition declares its document with one `PageMeta() via.Meta` method,
   duck-typed like `OnInit` and read after it (and after `OnReload`), so
   data-dependent metadata works. `Meta` carries `Title`, `Description`,
-  `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to vary
-  with the request — plus `Assets`, which is not. Only the mounted root's counts:
-  an embedded child's is ignored and `Child` logs one line naming the type,
-  because a shared per-request head would let any nested unit silently rename
-  the page.
+  `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to
+  vary with the request — plus `Assets`, which is not. Only the mounted
+  root's counts: an embedded child's is ignored and `Child` logs one line
+  naming the type, because a shared per-request head would let any nested
+  unit silently rename the page.
 
   `Meta.Assets` (`Script`, `Style`, `Preload`, `FontOrigins`) makes the
   **Content-Security-Policy per mount**: it is built once at `Mount` from the
@@ -159,18 +159,19 @@ the v2 core. **Requires Go 1.27.**
   `Preload` widens the directive its `As` names. Element-patch responses keep
   the floor policy: a fragment loads nothing.
 
-  Because the policy is built before any request, `Assets` must be a constant of
-  the type, and via proves it AT `Mount`: it reads `PageMeta` a second time off
-  a probe copy of the mounted literal with its zero fields filled in — what
-  `OnInit` does — and refuses the mount, naming the type, if the assets moved.
-  A field the literal itself set is left alone: that value is fixed for the life
-  of the mount, so a CDN base handed to the literal stays legal. The render-time
-  comparison stays for what the probe cannot reach (assets grown from a slice
-  `OnInit` fills), so a data-dependent script src is caught at boot or on the
-  first GET, never silently blocked in the browser. Boot-time validation panics on a `Script`
-  setting both or neither of `Src`/`Inline`, an `Inline` containing `</script`
-  or `</style`, an absolute URL that is not http(s), and a `Preload.As` outside
-  script/style/font/image.
+  Because the policy is built before any request, `Assets` must be a
+  constant of the type, and via proves it AT `Mount`: it reads `PageMeta` a
+  second time off a probe copy of the mounted literal with its zero fields
+  filled in — what `OnInit` does — and refuses the mount, naming the type,
+  if the assets moved. A field the literal itself set is left alone: that
+  value is fixed for the life of the mount, so a CDN base handed to the
+  literal stays legal. The render-time comparison stays for what the probe
+  cannot reach (assets grown from a slice `OnInit` fills), so a
+  data-dependent script src is caught at boot or on the first GET, never
+  silently blocked in the browser. Boot-time validation panics on a
+  `Script` setting both or neither of `Src`/`Inline`, an `Inline` containing
+  `</script` or `</style`, an absolute URL that is not http(s), and a
+  `Preload.As` outside script/style/font/image.
 
   `Mount` and `Child` extend the hook check to it: a method named `PageMeta`
   with the wrong signature panics at boot, and a near-miss name (`Meta`,
@@ -319,9 +320,9 @@ the v2 core. **Requires Go 1.27.**
   now path-escaped where the base is built AND HTML-escaped where the attribute
   is written. `Param[T]` still sees the decoded value.
 
-Read this even if you read nothing else. Two defaults moved in the permissive
-direction relative to v0.7, deliberately, and neither announces itself at
-runtime unless you look:
+Read this even if you read nothing else. Two defaults moved in the
+permissive direction relative to v0.7, deliberately, and neither announces
+itself at runtime unless you look:
 
 - **Origin enforcement (the "origin floor": the check on every state-changing
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
@@ -335,9 +336,10 @@ runtime unless you look:
   accepted with the floor open, and what defends it is the session cookie's
   `SameSite=Lax`, and the request arrives unauthenticated. The consequence:
   **a production deployment that never calls `WithTrustedOrigin` is running
-  with cross-origin enforcement off.** The option name describes what it allows
-  and says nothing about it also flipping enforcement, so via now logs one line at startup when the floor is open. Set
-  the option in production.
+  with cross-origin enforcement off.** The option name describes what it
+  allows and says nothing about it also flipping enforcement, so via now
+  logs one line at startup when the floor is open. Set the option in
+  production.
 - **Sessions are always on**, lazily: the cookie is issued on first write. If
   no key is configured, via mints a random per-process one and warns once. The
   key signs the cookie only; the data lives behind the new `SessionStore`
@@ -520,9 +522,10 @@ as a re-read of the README rather than a diff.
   emits no attribute at all, which `RawAttr` could not express.
   `RawAttr` and `Data` stay for everything else.
 
-- **`List[E]` gets `Remove`** alongside `Append`: it panics on an out-of-range
-  index rather than silently doing nothing. Rows that can be removed or
-  reordered need a stable `id` so the morph matches by identity rather than position.
+- **`List[E]` gets `Remove`** alongside `Append`: it panics on an
+  out-of-range index rather than silently doing nothing. Rows that can be
+  removed or reordered need a stable `id` so the morph matches by identity
+  rather than position.
 - **`List.Each(row)`**: sugar over `via.Each(l.Get(), row)`.
 - **Full HTML5 vocabulary in `h`** (~105 constructors), minus the page-shell
   and footgun tags (`html`, `head`, `script`, `template`, …) — those stay
@@ -533,10 +536,10 @@ as a re-read of the README rather than a diff.
   `Mount` at `/` — one dispatch pipeline. Mounted pages carry the full live
   stack (SSE, live actions, islands). Every action — a `@post` event
   binding, a native `PostForm` submit, or a live unit's — posts through one
-  `dispatch`/`respond` pair to `/_via/a/{island}/{n}` (the root is island 0);
-  the response mode (element-patch vs a native form's full-page re-render) is
-  read off the request's `Datastar-Request` header rather than the route. `/_via/f/`
-  is gone.
+  `dispatch`/`respond` pair to `/_via/a/{island}/{n}` (the root is island
+  0); the response mode (element-patch vs a native form's full-page
+  re-render) is read off the request's `Datastar-Request` header rather
+  than the route. `/_via/f/` is gone.
 - **Path params**: `Mount("/thread/{id}", …)` + `ctx.Param[T]("id")`, on Go's
   own `http.ServeMux` syntax, named not positional; a segment that doesn't
   decode is an honest 404 on every stateless transport, and naming a segment
@@ -546,8 +549,8 @@ as a re-read of the README rather than a diff.
 - **Arg events**: `via.OnArg` carries a typed render-time datum with the
   event: a per-row action without an `&` at the call site.
 - **Native forms**: `via.PostForm` (server-side submit + 303). Always
-  multipart, so a file `<input>` just works; read it with stdlib's
-  `ctx.Request().FormFile(name)`; no separate upload verb or type.
+  multipart, so a file `<input>` needs no separate upload verb or type;
+  read it with stdlib's `ctx.Request().FormFile(name)`.
 - **`ctx.Redirect`** navigates from OnInit, OnReload, a PostForm submit (303)
   and a Datastar `@post` alike. Targets are gated by the shared URL policy;
   unsafe ones are dropped loudly with an element-patch fallback. A `@post`
@@ -563,11 +566,12 @@ as a re-read of the README rather than a diff.
   works under the strict CSP and an undeclared one stays blocked.
   `InlineStyle` is admitted by its own sha256. Malformed heads panic at
   `Register`; the zero `Head` serves what via served without the option.
-- **Resilience floor** — the fixed, non-configurable guarantees a live stream
-  makes about surviving a flaky network: SSE keepalive comment frames (fixed 25s), per-frame
-  write deadlines (fixed 10s), half-open teardown, a client reconnect manager
-  with a "Reconnecting…" banner and a capped reload-to-re-bootstrap (2), a
-  fixed 10,000-connection cap (503 over it).
+- **Resilience floor** — the fixed, non-configurable guarantees a live
+  stream makes about surviving a flaky network: SSE keepalive comment
+  frames (fixed 25s), per-frame write deadlines (fixed 10s), half-open
+  teardown, a client reconnect manager with a "Reconnecting…" banner and a
+  capped reload-to-re-bootstrap (2), a fixed 10,000-connection cap (503
+  over it).
 - **`vt.App.Client()`**: the harness's `*http.Client`, wired to reach its
   in-memory server. A test that hand-rolls a request past the `Get`/`Action`/
   `Connect` builders must send it through this, not `http.DefaultClient` —
@@ -644,10 +648,11 @@ as a re-read of the README rather than a diff.
 - **Signals are addressed by field identity rather than render position.** A
   `Signal[T]`'s wire name is its Go field name, keyed internally by its byte
   offset within the composition struct — `count`, `chat__draft` for an
-  embedded island — replacing the render-order `s0`/`s1`/`i0_s0`. This is a **wire break** with no code to port: a tab open
-  across the upgrade posts the old names, the server ignores what it does not
-  recognise, and the page is correct on reload. `via.Child`'s signature is
-  unchanged — the child copy it already takes by value is the offset base.
+  embedded island — replacing the render-order `s0`/`s1`/`i0_s0`. This is a
+  **wire break** with no code to port: a tab open across the upgrade posts
+  the old names, the server ignores what it does not recognise, and the
+  page is correct on reload. `via.Child`'s signature is unchanged — the
+  child copy it already takes by value is the offset base.
 
   It fixes conditional `Bind()`. Slots were claimed in first-render order, so
   a `Bind()` inside a `When` (a wizard step) could claim a slot another signal
@@ -655,10 +660,11 @@ as a re-read of the README rather than a diff.
   stateless page the new input came up holding the previous occupant's value.
   A `Signal` reached through a pointer, slice, array or map field — or held by
   a composition whose `View` has a value receiver — is outside the struct, has
-  no offset, and now **panics at `Mount`/`Child`** rather than falling back to
-  a render-order name that carried the old aliasing hazard. A Signal behind an
-  interface field is invisible to the type walk and still panics on render. Make it a direct struct field. Keyed per-row
-  signal slots remain future work.
+  no offset, and now **panics at `Mount`/`Child`** rather than falling back
+  to a render-order name that carried the old aliasing hazard. A Signal
+  behind an interface field is invisible to the type walk and still panics
+  on render. Make it a direct struct field. Keyed per-row signal slots
+  remain future work.
 - **A plain action hydrates signals inside a branch another posted signal
   opens.** Discovery renders once on server state alone (that render, and only
   that render, decides what is dispatchable), applies the body, and re-renders
@@ -697,8 +703,9 @@ as a re-read of the README rather than a diff.
   fails to restore the state the `View` branches on. The server log then names
   the handlers the render did bind, so the mistake reads as a diagnosis instead
   of a dead button; the 410 body names only the id that was asked for, since
-  the bound list is the render's Go type and method names. Two bindings of the same handler (same method, same `?a=`)
-  collapse onto one entry, which is what they mean.
+  the bound list is the render's Go type and method names. Two bindings of
+  the same handler (same method, same `?a=`) collapse onto one entry, which
+  is what they mean.
 
 ### Fixed
 
@@ -737,33 +744,36 @@ as a re-read of the README rather than a diff.
   `Tick`/`Listen` handler read client-controlled data off the instance. It is a
   `defer` now.
 
-- **The live (SSE) path now derives its action table from a render the client
-  did not influence.** The two-phase discovery above was plain-only. On a live
-  page the unit outlives the request, so a hydrated `Bind()`ed signal became the
-  server's own state: it opened a `via.When` branch, the branch's handlers
-  entered the connection's dispatch table, and they stayed callable for the life
-  of the stream — reachable both from the SSE connect body and from the body of
-  any action the client was already allowed to call. Every push now renders the
-  authority first (server-authored values only), applies the client's signals to
-  it for a display render, and registers the intersection of the two, per
-  handler and per arg. The SSE connect body no longer hydrates the render that
-  decides liveness and actions at all; it is kept and applied to display renders
-  instead. **Breaking:** a `Bind()`ed signal's posted value no longer persists as
-  server state between requests on a live page — it is re-applied to each
-  display render wherever that render still binds the slot, which is exactly
-  what the plain path has always done. A push undoes the display render's
-  application before it returns, so reading one in a `Tick`/`Listen` handler, or
-  in a `View` that no longer `Bind()`s it, sees the server's value.
-  **Cost:** a page containing any `Bind()` pays two renders per push, not one —
-  a real Datastar connect body is the whole signal store, so the client's posted
-  slots are never empty once the page has a bindable signal. Each extra render
-  also re-runs every plain child's `OnInit` (`inheritRequestScope` sets
-  `doInit`) and re-walks the live-nesting check, so keep a plain child's
-  `OnInit` cheap or hold the data on the live root.
-  A page's live units share one revert set for the life of the connection: a
-  per-push set left a second live unit's registered `Ctx` pointing at a set
-  nothing restored, which re-opened the escalation above on any page with two
-  live units.
+- **The live (SSE) path now derives its action table from a render the
+  client did not influence.** The two-phase discovery above was plain-only.
+  On a live page the unit outlives the request, so a hydrated `Bind()`ed
+  signal became the server's own state: it opened a `via.When` branch, the
+  branch's handlers entered the connection's dispatch table, and they
+  stayed callable for the life of the stream — reachable both from the SSE
+  connect body and from the body of any action the client was already
+  allowed to call. Every push now renders the authority first
+  (server-authored values only), applies the client's signals to it for a
+  display render, and registers the intersection of the two, per handler
+  and per arg. The SSE connect body no longer hydrates the render that
+  decides liveness and actions at all; it is kept and applied to display
+  renders instead. **Breaking:** a `Bind()`ed signal's posted value no
+  longer persists as server state between requests on a live page — it is
+  re-applied to each display render wherever that render still binds the
+  slot, which is exactly what the plain path has always done. A push
+  undoes the display render's application before it returns, so reading
+  one in a `Tick`/`Listen` handler, or in a `View` that no longer `Bind()`s
+  it, sees the server's value.
+  **Cost:** a page containing any `Bind()` pays two renders per push, not
+  one — a real Datastar connect body is the whole signal store, so the
+  client's posted slots are never empty once the page has a bindable
+  signal. Each extra render also re-runs every plain child's `OnInit`
+  (`inheritRequestScope` sets `doInit`) and re-walks the live-nesting
+  check, so keep a plain child's `OnInit` cheap or hold the data on the
+  live root.
+  A page's live units share one revert set for the life of the connection:
+  a per-push set left a second live unit's registered `Ctx` pointing at a
+  set nothing restored, which re-opened the escalation above on any page
+  with two live units.
 
 - **A `ctx.Param` that no longer decodes answers 404 on the live path too.** It
   was the plain path's 404 and the live path's 500-plus-stack-dump for the same
@@ -914,9 +924,9 @@ as a re-read of the README rather than a diff.
   island-action response rebuilt the container with no `data-signals`
   attribute at all, so a Set that changed only a bound (not displayed) signal
   vanished — server memory updated, browser never told.
-- **`OnInit` now runs on an embedded island's action**, where before only the page GET
-  and the root's own action — the island-action route used to bypass it
-  entirely.
+- **`OnInit` now runs on an embedded island's action**, where before only
+  the page GET and the root's own action — the island-action route used to
+  bypass it entirely.
 - **A stateless island's action re-render under a parametrised mount
   (`r.Mount("/thread/{}", …)`) now carries the concrete path**, not an empty
   action base — an embedded island never inherited its parent's mount prefix
@@ -983,9 +993,9 @@ as a re-read of the README rather than a diff.
   router-wide `WithMaxSSEConn`; a single client can still open many.
 - Action-body JSON decoding is not strict: unknown signal keys and trailing
   bytes after the JSON value are ignored rather than rejected.
-- Session idle-TTL eviction is lazy, enforced on the next access rather than swept
-  proactively — so a session nobody ever touches again outlives its TTL in
-  memory.
+- Session idle-TTL eviction is lazy, enforced on the next access rather
+  than swept proactively — so a session nobody ever touches again outlives
+  its TTL in memory.
 - A `Tick` handler that blocks (I/O, an unbounded loop) pins the connection's
   one goroutine, which defeats a clean shutdown of that connection until the
   handler returns.
