@@ -36,7 +36,6 @@ import (
 // cold headless-Chrome start on a loaded runner can take several seconds.
 const defaultTimeout = 20 * time.Second
 
-// pollInterval is how often the Wait* helpers re-read the DOM.
 const pollInterval = 50 * time.Millisecond
 
 var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "headless-shell"}

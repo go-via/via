@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/expr"
@@ -172,9 +174,8 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	// is no later moment for a stray repaint of the child to arrive from it. The
 	// clicks-2 assertion below is the second line of defence: a repaint from the
 	// seed would make the next click read 1, not 2.
-	if got := s.Text("#via-i0 p"); !strings.Contains(got, "clicks 1") {
-		t.Fatalf("the root's own action patch repainted the live child from its seed: %q", got)
-	}
+	assert.Contains(t, s.Text("#via-i0 p"), "clicks 1",
+		"the root's own action patch repainted the live child from its seed")
 
 	s.Click("#via-i0 button")
 	s.WaitTextContains("#via-i0 p", "clicks 2")
@@ -184,14 +185,10 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
-	if got := s.Text("p"); !strings.Contains(got, "count: 0") {
-		t.Fatalf("Open did not serve the rendered skeleton: %q", got)
-	}
+	assert.Contains(t, s.Text("p"), "count: 0", "Open did not serve the rendered skeleton")
 	var hasRoot bool
 	s.Eval(`!!document.getElementById('root')`, &hasRoot)
-	if !hasRoot {
-		t.Fatal("page is missing the #root morph target")
-	}
+	assert.True(t, hasRoot, "page is missing the #root morph target")
 	s.RequireCleanConsole()
 }
 
@@ -220,9 +217,7 @@ func TestTypeAndValue_driveABoundInput(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(form{}))
 
 	s.Type("input", "alice")
-	if got := s.Value("input"); got != "alice" {
-		t.Fatalf("Type/Value round-trip failed: got %q, want %q", got, "alice")
-	}
+	assert.Equal(t, "alice", s.Value("input"), "Type/Value round-trip failed")
 	s.RequireCleanConsole()
 }
 
@@ -249,19 +244,19 @@ func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 
 	var booted bool
 	s.Eval(`window.__viaRC===1 && document.documentElement.getAttribute('data-via-connection')==='online'`, &booted)
-	if !booted {
-		t.Fatal("reconnect manager did not boot online — the nonce'd IIFE was dropped by the CSP or failed to run")
-	}
+	require.True(t, booted, "reconnect manager did not boot online — the nonce'd IIFE was dropped by the CSP or failed to run")
 
-	var status string
+	// liveTicker's 80ms tick can legitimately clear the banner between two
+	// round-trips, so dispatch and read the banner in one Eval.
+	var got struct {
+		Status string
+		Banner string
+	}
 	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
-		`document.documentElement.getAttribute('data-via-connection')`, &status)
-	if status != "connecting" {
-		t.Fatalf("a dropped stream did not flip the status to connecting: %q", status)
-	}
-	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "Reconnecting") {
-		t.Fatalf("a dropped stream did not surface the reconnect banner: %q", got)
-	}
+		`({status:document.documentElement.getAttribute('data-via-connection'),`+
+		`banner:document.getElementById('via-reconnect-banner').textContent})`, &got)
+	assert.Equal(t, "connecting", got.Status, "a dropped stream did not flip the status to connecting")
+	assert.Contains(t, got.Banner, "Reconnecting", "a dropped stream did not surface the reconnect banner")
 
 	// The resume is not faked like the drop above: a synthetic patch event makes
 	// Datastar apply a payload-less patch and throw, so this rides the ticker's
@@ -279,18 +274,15 @@ func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
 	s := vtbrowser.Open(t, app)
 	s.WaitLiveConnected()
 
-	var status string
+	var got struct {
+		Status string
+		Bg     string
+	}
 	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
-		`document.documentElement.getAttribute('data-via-connection')`, &status)
-	if status != "connecting" {
-		t.Fatalf("a dropped stream did not flip the status to connecting: %q", status)
-	}
-
-	var bg string
-	s.Eval(`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &bg)
-	if bg != "rgb(1, 2, 3)" {
-		t.Fatalf("a plain app rule must beat via's zero-specificity banner styling: got %q", bg)
-	}
+		`({status:document.documentElement.getAttribute('data-via-connection'),`+
+		`bg:getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor})`, &got)
+	assert.Equal(t, "connecting", got.Status, "a dropped stream did not flip the status to connecting")
+	assert.Equal(t, "rgb(1, 2, 3)", got.Bg, "a plain app rule must beat via's zero-specificity banner styling")
 	s.RequireCleanConsole()
 }
 
@@ -306,12 +298,8 @@ func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
 			`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &got)
 		return got
 	}
-	if connecting := bg("retrying"); connecting != "rgb(245, 158, 11)" {
-		t.Fatalf("reconnecting banner is not the amber state colour: %q", connecting)
-	}
-	if offline := bg("retries-failed"); offline != "rgb(220, 38, 38)" {
-		t.Fatalf("disconnected banner is not the red state colour: %q", offline)
-	}
+	assert.Equal(t, "rgb(245, 158, 11)", bg("retrying"), "reconnecting banner is not the amber state colour")
+	assert.Equal(t, "rgb(220, 38, 38)", bg("retries-failed"), "disconnected banner is not the red state colour")
 	s.RequireCleanConsole()
 }
 
@@ -325,17 +313,12 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	var status string
 	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed'}}));`+
 		`document.documentElement.getAttribute('data-via-connection')`, &status)
-	if status != "offline" {
-		t.Fatalf("a give-up did not flip the status to offline: %q", status)
-	}
-	if got := s.Text("#via-reconnect-banner"); !strings.Contains(got, "Disconnected") {
-		t.Fatalf("at the reload cap the manager must report the connection as disconnected: %q", got)
-	}
+	assert.Equal(t, "offline", status, "a give-up did not flip the status to offline")
+	assert.Contains(t, s.Text("#via-reconnect-banner"), "Disconnected",
+		"at the reload cap the manager must report the connection as disconnected")
 	var label string
 	s.Eval(`(document.querySelector('#via-reconnect-banner button')||{}).textContent||''`, &label)
-	if label != "Reconnect" {
-		t.Fatalf("give-up banner has no Reconnect button: text %q", label)
-	}
+	assert.Equal(t, "Reconnect", label, "give-up banner has no Reconnect button")
 	s.RequireCleanConsole()
 
 	// The server is up, so the retry's first probe reloads; the pre-armed cap
@@ -361,9 +344,7 @@ func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
 	b.Click("button") // B sends; fans out and pushes to A
 
 	a.WaitTextContains("ul", "from-b") // A received B's fan-out
-	if got := a.Value("input"); got != "half-typed" {
-		t.Fatalf("fan-out clobbered A's in-progress draft: got %q, want %q", got, "half-typed")
-	}
+	assert.Equal(t, "half-typed", a.Value("input"), "fan-out clobbered A's in-progress draft")
 
 	a.RequireCleanConsole()
 	b.RequireCleanConsole()
@@ -390,9 +371,7 @@ func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
 	// never carries it — and the new document was never sent one.
 	var inserted bool
 	s.Eval(`[...document.querySelectorAll('script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
-	if inserted {
-		t.Fatal("the redirect script must remove itself from the document")
-	}
+	assert.False(t, inserted, "the redirect script must remove itself from the document")
 }
 
 // liveFormBrowser is a live root with a native PostForm — the vehicle for
@@ -430,12 +409,8 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 
 	var status float64
 	s.Eval(`performance.getEntriesByType('navigation')[0].responseStatus`, &status)
-	if status != http.StatusOK {
-		t.Fatalf("native PostForm submit from a live unit did not return 200: got %v", status)
-	}
-	if got := s.Text("body"); strings.Contains(got, "this tab has no stream") {
-		t.Fatalf("submit fell through to the plain 410 fallback: %q", got)
-	}
+	require.Equal(t, float64(http.StatusOK), status, "native PostForm submit from a live unit did not return 200")
+	assert.NotContains(t, s.Text("body"), "this tab has no stream", "submit fell through to the plain 410 fallback")
 	s.RequireCleanConsole()
 }
 
@@ -482,9 +457,7 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 
 	var red bool
 	s.Eval(styledIsRed, &red)
-	if red {
-		t.Fatal("an origin the Head never declared must not be admitted by style-src")
-	}
+	assert.False(t, red, "an origin the Head never declared must not be admitted by style-src")
 	// No console assertion: a refused @import is reported as a browser issue,
 	// not through the console API, so it never reaches ConsoleErrors. The style
 	// not applying is the whole of the evidence — and RequireCleanConsole would
@@ -524,9 +497,7 @@ func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
 	s.Sleep(2500 * time.Millisecond) // longer than the manager's 500-2000ms reload jitter
 	var probe int
 	s.Eval(`window.__probe||0`, &probe)
-	if probe != 1 {
-		t.Fatal("a 403 must not reload: the server would answer the same way again")
-	}
+	assert.Equal(t, 1, probe, "a 403 must not reload: the server would answer the same way again")
 
 	s.Eval(fire+`('410')`, &ok)
 	s.WaitEvalTrue(`window.__probe===undefined`, "a 410 means the page is stale and must reload")
@@ -622,12 +593,8 @@ func TestChild_seededChildSignalReachesTheIslandWithoutRootPhantom(t *testing.T)
 	var root, child string
 	s.Eval(`document.getElementById('root').getAttribute('data-signals')||""`, &root)
 	s.Eval(`document.getElementById('via-i0').getAttribute('data-signals')||""`, &child)
-	if strings.Contains(root, "uptime_load") {
-		t.Fatalf("the root minted a slot for its child's signal: %q", root)
-	}
-	if !strings.Contains(child, "uptime__load") {
-		t.Fatalf("the child unit did not declare its own signal: %q", child)
-	}
+	assert.NotContains(t, root, "uptime_load", "the root minted a slot for its child's signal")
+	assert.Contains(t, child, "uptime__load", "the child unit did not declare its own signal")
 
 	s.Click("#fill")
 	s.WaitTextContains("#n", "3")
@@ -667,9 +634,7 @@ func TestChild_clientOnlyToggleSeededOpenSurvivesChildPushes(t *testing.T) {
 
 	var hidden bool
 	s.Eval(panelHidden, &hidden)
-	if !hidden {
-		t.Fatal("a child push re-declared the root's client-only signal from its seed")
-	}
+	assert.True(t, hidden, "a child push re-declared the root's client-only signal from its seed")
 	s.RequireCleanConsole()
 }
 
@@ -708,9 +673,7 @@ func TestChild_childSetAfterRootRenderBindsToTheChildUnit(t *testing.T) {
 	s.WaitTextContains("#hits", "hits 1")
 
 	after, err := strconv.Atoi(s.Text("#n2"))
-	if err != nil {
-		t.Fatalf("the child's signal is unreadable after the root render: %q", s.Text("#n2"))
-	}
+	require.NoError(t, err, "the child's signal is unreadable after the root render: %q", s.Text("#n2"))
 	s.WaitFor("#n2", func(text string) bool { n, err := strconv.Atoi(text); return err == nil && n > after },
 		"the child's Set to keep arriving on the child's own slot after a root render")
 	s.RequireCleanConsole()
