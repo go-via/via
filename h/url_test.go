@@ -80,9 +80,10 @@ func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 	// still be caught.
 	assert.Contains(t, render(t, h.El("img", h.RawAttr("srcset", "javascript:alert(1)"))), `="#"`)
 
-	// A legitimate relative URL on every gated name must render untouched.
-	assert.Contains(t, render(t, h.El("a", h.RawAttr("formaction", "/ok"))), `formaction="/ok"`)
-	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`)
+	assert.Contains(t, render(t, h.El("a", h.RawAttr("formaction", "/ok"))), `formaction="/ok"`,
+		"a legitimate relative URL on a gated name must render untouched")
+	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`,
+		"a legitimate relative URL on a gated name must render untouched")
 }
 
 func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {

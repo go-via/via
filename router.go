@@ -305,6 +305,8 @@ func (r *Router) init(opts []Option) {
 	})
 }
 
+// ServeHTTP lazily runs r.init on first use, so a zero Router (var r via.Router)
+// is ready to Mount and serve without an explicit constructor call.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.init(nil)
 	ew := r.wrapForErrorPage(w, req)
@@ -358,6 +360,7 @@ func (r *Router) Close() {
 // Handler.
 func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
+	verifyMethodTrampoline()
 	mc := &mountConfig{}
 	for _, opt := range opts {
 		opt(mc)
@@ -680,8 +683,8 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	}
 }
 
-// ctxErrShaped reports whether a method type (receiver still in In(0)) is
-// func(*Ctx) error.
+// ctxErrShaped reports whether mt is func(*via.Ctx) error; NumIn() == 2
+// because the receiver still occupies In(0) for a method's reflect.Type.
 func ctxErrShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) &&
 		mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf((*error)(nil)).Elem() &&
@@ -695,7 +698,6 @@ func stringShaped(mt reflect.Type) bool {
 		!mt.IsVariadic()
 }
 
-// metaShaped reports whether a method type is func() via.Meta.
 func metaShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 1 && mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf(Meta{}) &&
 		!mt.IsVariadic()

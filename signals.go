@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-via/via/expr"
@@ -101,7 +102,9 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 // the value the server last authored, not to the first client value. A
 // Signal.Set drops the slot's entry — a server write supersedes the client's
 // and must survive the revert.
-type revertSet struct{ undo map[string]func() }
+type revertSet struct {
+	undo map[string]func()
+}
 
 func newRevertSet() *revertSet { return &revertSet{undo: map[string]func(){}} }
 
@@ -257,7 +260,23 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 		// livePush closes.
 		b.Hydrator(s.slot, func(raw json.RawMessage) {
 			var v T
-			if json.Unmarshal(raw, &v) != nil {
+			if err := json.Unmarshal(raw, &v); err != nil {
+				// s.bound may be nil outside a live render; Ctx.logger nil-guards.
+				// badDecodeLogged is a pointer shared by the whole render tree it
+				// belongs to (see Ctx.badDecodeLogged): one Warn per plain dispatch
+				// POST no matter how many slots it hydrates or how many passes
+				// dispatchPlain's rebind loop takes (both re-invoke this closure per
+				// malformed slot), and one Warn per live connection for as long as
+				// it stays open. A nil pointer (a bare render with no Ctx wiring)
+				// logs unguarded rather than silently dropping the Warn.
+				var flag *atomic.Bool
+				if c := s.bound; c != nil {
+					flag = c.badDecodeLogged
+				}
+				if flag == nil || !flag.Swap(true) {
+					s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
+						"slot", s.slot, "type", fmt.Sprintf("%T", v))
+				}
 				return
 			}
 			if c := s.bound; c != nil {

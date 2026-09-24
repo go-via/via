@@ -26,8 +26,6 @@ var urlBearingAttrs = map[string]bool{
 	"srcset":     true,
 }
 
-// isURLBearingAttr reports whether name (case-insensitively) is one of
-// urlBearingAttrs.
 func isURLBearingAttr(name string) bool { return urlBearingAttrs[strings.ToLower(name)] }
 
 // safeURL admits what hcore.SafeURL admits; everything else — javascript:,

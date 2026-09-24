@@ -182,3 +182,37 @@ func exampleGoFiles(t *testing.T) []string {
 	}
 	return files
 }
+
+func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
+	t.Parallel()
+	banned := map[string]bool{
+		"Dyn": true, "DynAttr": true, "NewRenderer": true, "Renderer": true, "Binder": true,
+	}
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir("h")
+	require.NoError(t, err)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join("h", e.Name()), nil, 0)
+		require.NoError(t, err)
+		for _, decl := range f.Decls {
+			var name string
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Recv == nil {
+					name = d.Name.Name
+				}
+			case *ast.GenDecl:
+				for _, spec := range d.Specs {
+					if ts, ok := spec.(*ast.TypeSpec); ok {
+						name = ts.Name.Name
+					}
+				}
+			}
+			assert.Falsef(t, name != "" && banned[name],
+				"h package must not export %q — it belongs to internal/hcore", name)
+		}
+	}
+}

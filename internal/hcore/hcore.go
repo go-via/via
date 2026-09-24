@@ -107,14 +107,12 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 	}
 }
 
-// voidElements are HTML void elements: they self-close and carry no body.
 var voidElements = map[string]bool{
 	"area": true, "br": true, "col": true, "embed": true, "hr": true,
 	"img": true, "input": true, "link": true, "meta": true, "source": true,
 	"track": true, "wbr": true,
 }
 
-// element is the concrete node type for all tags.
 type element struct {
 	tag  string
 	kids []H
@@ -162,7 +160,6 @@ func (d dynNode) render(r *Renderer) { d.fn(r) }
 // never a user-supplied closure at a public call site.
 func Dyn(fn func(*Renderer)) H { return dynNode{fn: fn} }
 
-// dynAttr wraps a render function into a sealed Attr.
 type dynAttr struct{ fn func(*Renderer) }
 
 func (d dynAttr) render(r *Renderer) { d.fn(r) }
@@ -209,7 +206,6 @@ type Stringish interface {
 		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64
 }
 
-// textNode is an escaped static text node.
 type textNode struct{ s string }
 
 func (t textNode) render(r *Renderer) { r.WriteEscaped(t.s) }
@@ -261,7 +257,6 @@ func validAttrName(name string) bool {
 	return true
 }
 
-// cutDataPrefix strips a case-insensitive "data-" prefix.
 func cutDataPrefix(name string) (string, bool) {
 	if len(name) < len("data-") || !strings.EqualFold(name[:len("data-")], "data-") {
 		return "", false

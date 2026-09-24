@@ -173,7 +173,6 @@ func (c *tabStream) unit(child string) *Ctx {
 // is always a '-'-joined path of ordinals.
 const rootAddr = "r"
 
-// unitAddr is c's own dispatch address in /_via/a/{child}/{act}.
 func unitAddr(c *Ctx) string {
 	if c != nil && c.isChild {
 		return c.childKey
@@ -548,7 +547,7 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
 	if from != nil {
-		return renderRootBase(inst, true, base, nil, nil, from, nil)
+		return renderRootBase(inst, true, base, nil, nil, from, nil, from.badDecodeLogged)
 	}
 	ctx := newRootCtx(true, base, nil)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
@@ -573,7 +572,11 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// dropped. The action must be present in both, so the executed render is an
 	// intersection with auth, never a superset.
 	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
-	auth.unitV = inst                                // so auth.unit(rootAddr)'s liveness reads the same way a child's does
+	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
+	// several malformed slots at once still logs one Warn, not one per slot per
+	// pass (rebindFrom copies the pointer; childViewer carries it to children).
+	auth.badDecodeLogged = new(atomic.Bool)
+	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	prebindSignals(auth, inst)
 	if runOnInit(inst.v, auth, w, req, m.sessions, false) != nil {
 		return
@@ -776,7 +779,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 		// clobber a value the user is mid-edit. dirtyAll never returns nil,
 		// which would read as "declare everything".
 		only := bind.dirtyAll()
-		afterCtx, after := renderRootBase(inst, true, base, only, seen, u, nil)
+		afterCtx, after := renderRootBase(inst, true, base, only, seen, u, nil, u.badDecodeLogged)
 		if len(liveUnits(bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
 		}
@@ -785,7 +788,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, bi
 		}
 		return after
 	}
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil)
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged)
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil

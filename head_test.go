@@ -97,37 +97,44 @@ func TestDocumentHead_preloadWidensTheDirectiveItsAsNames(t *testing.T) {
 
 func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 	t.Parallel()
-	for name, head := range map[string]via.Head{
-		"bad lang":             {Lang: `en" onload="x`},
-		"relative font origin": {Assets: via.Assets{FontOrigins: []string{"/fonts"}}},
-		"unsafe scheme as src": {Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}},
-		"data url as href":     {Assets: via.Assets{Styles: []via.Style{{Href: "data:text/css,body{}"}}}},
-		"script with src and inline": {Assets: via.Assets{
-			Scripts: []via.Script{{Src: "/a.js", Inline: "x()"}}}},
-		"script with neither": {Assets: via.Assets{Scripts: []via.Script{{}}}},
-		"style with neither":  {Assets: via.Assets{Styles: []via.Style{{}}}},
-		"script breakout": {Assets: via.Assets{
-			Scripts: []via.Script{{Inline: "x()</script><script>y()"}}}},
-		"style breakout": {Assets: via.Assets{
-			Styles: []via.Style{{Inline: "a{}</style><script>x</script>"}}}},
-		"unknown preload as": {Assets: via.Assets{Preload: []via.Preload{{Href: "/a.wasm", As: "wasm"}}}},
-	} {
-		t.Run(name, func(t *testing.T) {
-			assert.Panics(t, func() { via.Handler(headPage{}, via.WithHead(head)) })
+	tests := []struct {
+		name string
+		head via.Head
+	}{
+		{"bad lang", via.Head{Lang: `en" onload="x`}},
+		{"relative font origin", via.Head{Assets: via.Assets{FontOrigins: []string{"/fonts"}}}},
+		{"unsafe scheme as src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}}},
+		{"data url as href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "data:text/css,body{}"}}}}},
+		{"script with src and inline", via.Head{Assets: via.Assets{
+			Scripts: []via.Script{{Src: "/a.js", Inline: "x()"}}}}},
+		{"script with neither", via.Head{Assets: via.Assets{Scripts: []via.Script{{}}}}},
+		{"style with neither", via.Head{Assets: via.Assets{Styles: []via.Style{{}}}}},
+		{"script breakout", via.Head{Assets: via.Assets{
+			Scripts: []via.Script{{Inline: "x()</script><script>y()"}}}}},
+		{"style breakout", via.Head{Assets: via.Assets{
+			Styles: []via.Style{{Inline: "a{}</style><script>x</script>"}}}}},
+		{"unknown preload as", via.Head{Assets: via.Assets{Preload: []via.Preload{{Href: "/a.wasm", As: "wasm"}}}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Panics(t, func() { via.Handler(headPage{}, via.WithHead(tt.head)) })
 		})
 	}
 }
 
 func TestDocumentHead_rejectsScriptsAndStylesSmuggledThroughRaw(t *testing.T) {
 	t.Parallel()
-	for name, raw := range map[string]string{
-		"inline script":   `<script>window.x = 1</script>`,
-		"external script": `<SCRIPT src="/a.js"></SCRIPT>`,
-		"inline style":    `<style>body{margin:0}</style>`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			assert.PanicsWithValue(t, panicOf(t, raw), func() {
-				via.Handler(headPage{}, via.WithHead(via.Head{Raw: raw}))
+	tests := []struct{ name, raw string }{
+		{"inline script", `<script>window.x = 1</script>`},
+		{"external script", `<SCRIPT src="/a.js"></SCRIPT>`},
+		{"inline style", `<style>body{margin:0}</style>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.PanicsWithValue(t, panicOf(t, tt.raw), func() {
+				via.Handler(headPage{}, via.WithHead(via.Head{Raw: tt.raw}))
 			})
 		})
 	}

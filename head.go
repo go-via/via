@@ -323,7 +323,6 @@ func (a Assets) render(b *strings.Builder) {
 	}
 }
 
-// htmlOpen returns the <html> open tag, carrying lang when declared.
 func (hd Head) htmlOpen() string {
 	if hd.Lang == "" {
 		return "<html>"

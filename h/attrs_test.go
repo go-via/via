@@ -23,28 +23,35 @@ func TestBoolAttr_onRendersTheBareName(t *testing.T) {
 
 func TestBoolAttrs_everyHelperIsPresentOrAbsent(t *testing.T) {
 	t.Parallel()
-	for name, fn := range map[string]func(bool) h.Attr{
-		"disabled":    h.Disabled,
-		"checked":     h.Checked,
-		"required":    h.Required,
-		"readonly":    h.ReadOnly,
-		"selected":    h.Selected,
-		"multiple":    h.Multiple,
-		"autofocus":   h.AutoFocus,
-		"hidden":      h.Hidden,
-		"open":        h.Open,
-		"novalidate":  h.NoValidate,
-		"async":       h.Async,
-		"defer":       h.Defer,
-		"inert":       h.Inert,
-		"loop":        h.Loop,
-		"muted":       h.Muted,
-		"controls":    h.Controls,
-		"playsinline": h.PlaysInline,
-		"reversed":    h.Reversed,
-	} {
-		assert.Equal(t, "<div "+name+"></div>", render(t, h.Div(fn(true))), name+" on")
-		assert.Equal(t, "<div></div>", render(t, h.Div(fn(false))), name+" off")
+	tests := []struct {
+		name string
+		fn   func(bool) h.Attr
+	}{
+		{"disabled", h.Disabled},
+		{"checked", h.Checked},
+		{"required", h.Required},
+		{"readonly", h.ReadOnly},
+		{"selected", h.Selected},
+		{"multiple", h.Multiple},
+		{"autofocus", h.AutoFocus},
+		{"hidden", h.Hidden},
+		{"open", h.Open},
+		{"novalidate", h.NoValidate},
+		{"async", h.Async},
+		{"defer", h.Defer},
+		{"inert", h.Inert},
+		{"loop", h.Loop},
+		{"muted", h.Muted},
+		{"controls", h.Controls},
+		{"playsinline", h.PlaysInline},
+		{"reversed", h.Reversed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, "<div "+tt.name+"></div>", render(t, h.Div(tt.fn(true))), tt.name+" on")
+			assert.Equal(t, "<div></div>", render(t, h.Div(tt.fn(false))), tt.name+" off")
+		})
 	}
 }
 

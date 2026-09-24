@@ -1207,7 +1207,6 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 			break
 		}
 	}
-	// The client still sees what it posted — the display render is unchanged.
 	assert.Contains(t, frame, ">99<", "the display render must still show what the client posted")
 }
 
@@ -1496,8 +1495,7 @@ func TestConnect_aTickHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 	require.Contains(t, conn.Await("seen: ["), "seen: []")
 	frame := conn.Await("seen: [")
 	assert.Contains(t, frame, "seen: []", "the handler read the client's value: %s", frame)
-	// The client must still see what it posted — the display render is unchanged.
-	assert.Contains(t, frame, ">ATTACKER<")
+	assert.Contains(t, frame, ">ATTACKER<", "the client must still see what it posted — the display render is unchanged")
 }
 
 type tickAfterDisplayPanic struct {
@@ -1547,10 +1545,10 @@ func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
 	app := vt.Serve(t, via.Handler(tickSetsBoundSignal{}))
 	conn := app.ConnectWith(`{"n":7}`)
 
-	// The signal patch carries the server's value...
-	assert.Contains(t, conn.Await(`"n":3`), `"n":3`)
-	// ...and the display render no longer paints the client's 7 back over it.
-	assert.Contains(t, conn.Await(">3<"), ">3<")
+	assert.Contains(t, conn.Await(`"n":3`), `"n":3`,
+		"the signal patch must carry the server's value, not the client's posted 7")
+	assert.Contains(t, conn.Await(">3<"), ">3<",
+		"the display render must not paint the client's posted 7 back over the server's value")
 }
 
 type dirtyAfterPanic struct{ X via.Signal[int] }
@@ -1979,6 +1977,68 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 	assert.Contains(t, out, "via_test.pinnedLive", "the log must name the unit type to go read")
 	assert.Equal(t, 1, strings.Count(out, "queue not drained"),
 		"a pinned goroutine stays pinned; one line per connection, not one per click")
+}
+
+// slowActionLive pins the connection goroutine from inside the ACTION handler
+// itself, not a Tick: the closure is already queued and running by the time
+// the deadline fires, unlike pinnedLive above where the goroutine was never
+// free to take the dispatch in the first place.
+type slowActionLive struct {
+	beat    via.State[int] // rendering a State is what makes the unit live; unused otherwise
+	n       via.Signal[int]
+	running chan struct{} // closed once, the instant the handler starts running
+	block   chan struct{}
+}
+
+func (p *slowActionLive) Slow(ctx *via.Ctx) {
+	close(p.running)
+	<-p.block
+	p.n.Set(p.n.Get() + 1)
+}
+
+func (p *slowActionLive) View() h.H {
+	return h.Div(p.beat.Display(), p.n.Display(), h.Button(via.On("click", p.Slow), h.Str("go")))
+}
+
+func TestDispatch_pinnedActionStillAppliesAfterThe503(t *testing.T) {
+	t.Parallel()
+	// The handler blocks past WithPinnedDeadline, so the first select queues
+	// fn() while the goroutine is still free and only the second one times
+	// out — the window dispatch.go's bail-out misses, since it runs before
+	// a.fn, not after. Characterization: the 503-then-apply below is a defect
+	// frozen, not a contract.
+	p := slowActionLive{running: make(chan struct{}), block: make(chan struct{})}
+	app := vt.Serve(t, via.Handler(p, via.WithPinnedDeadline(150*time.Millisecond)))
+	conn := app.Connect()
+	defer conn.Close()
+
+	fired := make(chan struct {
+		status int
+		body   string
+	}, 1)
+	go func() {
+		status, body := app.Action(0).Over(conn).Fire()
+		fired <- struct {
+			status int
+			body   string
+		}{status, body}
+	}()
+
+	select {
+	case <-p.running:
+	case <-time.After(3 * time.Second):
+		require.Fail(t, "precondition: the action handler never started")
+	}
+
+	res := <-fired
+	assert.Equal(t, http.StatusServiceUnavailable, res.status,
+		"the POST times out while the handler is still running, not before it started")
+	assert.Contains(t, res.body, "stream busy")
+
+	close(p.block)
+	assert.Contains(t, conn.Await(`"n":1`), `"n":1`,
+		"the handler's mutation still lands and reaches the client over the open stream, "+
+			"after the POST that triggered it was already told 503")
 }
 
 func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {

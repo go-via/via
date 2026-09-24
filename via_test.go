@@ -4,15 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -28,41 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
-	t.Parallel()
-	banned := map[string]bool{
-		"Dyn": true, "DynAttr": true, "NewRenderer": true, "Renderer": true, "Binder": true,
-	}
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir("h")
-	require.NoError(t, err)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, filepath.Join("h", e.Name()), nil, 0)
-		require.NoError(t, err)
-		for _, decl := range f.Decls {
-			var name string
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				if d.Recv == nil {
-					name = d.Name.Name
-				}
-			case *ast.GenDecl:
-				for _, spec := range d.Specs {
-					if ts, ok := spec.(*ast.TypeSpec); ok {
-						name = ts.Name.Name
-					}
-				}
-			}
-			if name != "" && banned[name] {
-				t.Fatalf("h package must not export %q — it belongs to internal/hcore", name)
-			}
-		}
-	}
-}
 
 // store is the in-server state the counter tracks — a plain app dependency.
 type store struct {
@@ -614,7 +575,7 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
 
-func TestUnknownAction_410NamesOnlyTheAskedForIDAndLogsTheBoundHandlers(t *testing.T) {
+func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
 	// Sequential: it captures the global log output.
 	var buf bytes.Buffer
 	prev := log.Writer()

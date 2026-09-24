@@ -584,7 +584,6 @@ func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData)
 	return newID
 }
 
-// verify splits "id.sig" and constant-time-compares the recomputed signature.
 func (m *sessionManager) verify(value string) (string, bool) {
 	i := strings.LastIndexByte(value, '.')
 	if i < 0 {
@@ -868,7 +867,10 @@ func (s *Session) Get[T any]() (T, bool) {
 	return v, true
 }
 
-// Delete removes the session's value.
+// Delete clears the stored value; the session id and cookie survive, so a
+// later Set on this same session starts from nothing rather than minting a
+// new id. Any other handle sharing this request's session sees the value gone
+// too — they share the same underlying data.
 func (s *Session) Delete() {
 	s.clear()
 }

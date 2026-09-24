@@ -24,8 +24,9 @@ type tabStream struct {
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
 	// action reaches them through pushq — so neither takes mu.
-	client map[string]json.RawMessage // the slots the client last posted, re-applied to every display render (livePush)
-	rev    *revertSet                 // how to undo that application before the next authority render
+	client          map[string]json.RawMessage // the slots the client last posted, re-applied to every display render (livePush)
+	rev             *revertSet                 // how to undo that application before the next authority render
+	badDecodeLogged *atomic.Bool               // dedupes the hydrator's decode-failure warning for this connection's life
 
 	id           string      // the per-connection tab id, for correlating a log line with a tab
 	pinnedLogged atomic.Bool // warnPinned is once per connection, not once per click
@@ -53,7 +54,6 @@ func (c *tabStream) bindSession(sid string) {
 	}
 }
 
-// sid is the stable identity of s's session, "" when there is none.
 func (s *Session) sid() string {
 	if s == nil || s.data == nil {
 		return ""

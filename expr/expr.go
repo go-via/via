@@ -22,7 +22,7 @@ type Expr string
 // String returns the expression source.
 func (e Expr) String() string { return string(e) }
 
-// Not negates the expression.
+// Not is JavaScript's !, parenthesized.
 func (e Expr) Not() Expr { return "(!" + e + ")" }
 
 // Eq compares with JavaScript's strict ===.

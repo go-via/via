@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-via/via/h"
@@ -88,7 +89,8 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	}
 
 	child := newCtx()
-	child.rev = parent.rev // a hydrated child must be revertable with its parent (see livePush)
+	child.rev = parent.rev                         // a hydrated child must be revertable with its parent (see livePush)
+	child.badDecodeLogged = parent.badDecodeLogged // one flag per tree: a malformed post hits every child's hydrator
 	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
 	child.isChild = true
 	child.childKey = key
@@ -195,9 +197,10 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 //
 // from is the request-scoped Ctx this re-render belongs to (nil for a live
 // push); it inits the child's nested children — see inheritRequestScope.
-func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet) (*Ctx, []byte) {
+func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool) (*Ctx, []byte) {
 	c := newCtx()
 	c.rev = rev
+	c.badDecodeLogged = badDecodeLogged
 	c.isChild = true
 	c.childKey = key
 	c.unitV = inst

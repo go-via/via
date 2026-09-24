@@ -1415,6 +1415,7 @@ func (c *closePage) tick(*via.Ctx) {}
 func (c *closePage) View() h.H     { return h.Div(c.n.Display()) }
 
 func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
+	t.Parallel()
 	for range 50 {
 		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
 		r := via.NewRouter()

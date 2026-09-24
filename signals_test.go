@@ -1,7 +1,9 @@
 package via_test
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -547,6 +549,121 @@ func TestSignals_oneUnmarshalableValueDropsOnlyItsOwnSlot(t *testing.T) {
 		"the slots that DO marshal must still be declared")
 	assert.NotContains(t, page, `"`+bad+`":`, "the offending slot is dropped, not the rest")
 	assert.NotContains(t, page, `<div id="root" data-signals=''`, "and the declaration is not wiped")
+}
+
+// dropForm carries a non-string signal (N) so an undecodable inbound value hits
+// the hydrator's json.Unmarshal failure path, plus a second signal (Bump) so
+// Save still changes the render and the response is a 200 patch, not a 204.
+type dropForm struct {
+	N    via.Signal[int]
+	Bump via.Signal[int]
+}
+
+func (f *dropForm) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
+
+func (f *dropForm) View() h.H {
+	return h.Div(
+		h.Input(f.N.Bind()), f.N.Display(), h.Input(f.Bump.Bind()),
+		h.Button(via.On("click", f.Save), h.Str("save")),
+	)
+}
+
+func TestSignal_undecodableValueIsDroppedAndLogged(t *testing.T) {
+	// Sequential: it captures the global log output.
+	app := vt.Serve(t, via.Handler(dropForm{}))
+	_, page := app.Get("/")
+	slot := bindSlots(page)[0]
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	status, frag := app.Action(0).Body(`{"` + slot + `":"not-a-number"}`).Fire()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, `data-text="$`+slot+`">0<`, "the undecodable value must not overwrite the zero value")
+	assert.Contains(t, buf.String(), slot, "the log must name the slot that failed to decode")
+	assert.NotContains(t, buf.String(), "not-a-number",
+		"the posted bytes are attacker-controlled and must never reach the log")
+}
+
+// dropFormLive is dropForm's live counterpart: the State field makes the unit
+// live, so its revertSet outlives a single request and can dedupe the
+// decode-failure warning across every action on the connection.
+type dropFormLive struct {
+	beat via.State[int] // rendering a State is what makes the unit live; unused otherwise
+	N    via.Signal[int]
+	Bump via.Signal[int]
+}
+
+func (f *dropFormLive) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
+
+func (f *dropFormLive) View() h.H {
+	return h.Div(
+		f.beat.Display(), h.Input(f.N.Bind()), f.N.Display(),
+		h.Button(via.On("click", f.Save), h.Str("save")),
+	)
+}
+
+func TestSignal_undecodableValueIsLoggedOncePerConnection(t *testing.T) {
+	// Sequential: it captures the global log output.
+	app := vt.Serve(t, via.Handler(dropFormLive{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	for range 3 {
+		status, _ := app.Action(0).Over(conn).Body(`{"n":"not-a-number"}`).Fire()
+		assert.Equal(t, http.StatusNoContent, status)
+	}
+
+	out := buf.String()
+	assert.Contains(t, out, "did not decode", "a dropped value must be observable")
+	assert.Equal(t, 1, strings.Count(out, "did not decode"),
+		"a hostile client looping a malformed value must not amplify into one Warn per click")
+}
+
+// dropFormWide binds several non-string signals so one malformed POST body
+// can carry a bad value for each of them at once. Bump is a second signal
+// Save changes, so the response is a 200 patch, not a 204 (see dropForm).
+type dropFormWide struct {
+	A, B, C, D via.Signal[int]
+	Bump       via.Signal[int]
+}
+
+func (f *dropFormWide) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
+
+func (f *dropFormWide) View() h.H {
+	return h.Div(
+		h.Input(f.A.Bind()), h.Input(f.B.Bind()), h.Input(f.C.Bind()), h.Input(f.D.Bind()),
+		h.Input(f.Bump.Bind()), h.Button(via.On("click", f.Save), h.Str("save")),
+	)
+}
+
+func TestSignal_undecodableValuesAreLoggedOncePerRequest(t *testing.T) {
+	// Sequential: it captures the global log output.
+	app := vt.Serve(t, via.Handler(dropFormWide{}))
+	_, page := app.Get("/")
+	slots := bindSlots(page)[:4] // A, B, C, D — Bump stays well-formed
+
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	body := `{"` + strings.Join(slots, `":"x","`) + `":"x"}`
+	status, _ := app.Action(0).Body(body).Fire()
+	assert.Equal(t, http.StatusOK, status)
+
+	out := buf.String()
+	assert.Contains(t, out, "did not decode", "a dropped value must be observable")
+	assert.Equal(t, 1, strings.Count(out, "did not decode"),
+		"one malformed POST must log once, however many slots it hydrates and however many "+
+			"discovery passes dispatchPlain's rebind loop takes")
 }
 
 // refHolder reaches its signal through a pointer field, which has no field

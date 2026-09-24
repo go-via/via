@@ -93,6 +93,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"crypto/sha256"
@@ -527,6 +528,13 @@ type Ctx struct {
 	viewRan     bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
+
+	// badDecodeLogged dedupes the hydrator's decode-failure warning for the
+	// whole tree this Ctx belongs to: a shared pointer, allocated once per
+	// request root (or per connection, for a live unit) and carried by every
+	// child and rebind so a malformed value posted for several slots at once
+	// still logs one Warn, not one per slot per hydration pass.
+	badDecodeLogged *atomic.Bool
 }
 
 // Request returns the HTTP request that triggered this handler — headers,
@@ -584,7 +592,6 @@ func (c *Ctx) logger() *slog.Logger {
 	return c.sessions.logger()
 }
 
-// newCtx builds a Ctx with the given hydration map (may be nil for a GET page).
 func newCtx() *Ctx {
 	return &Ctx{
 		initial:   map[string]any{},
@@ -702,7 +709,6 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 	c.initial[slot] = initial
 }
 
-// action is one entry in a unit's action table.
 type action struct {
 	fn     func(*Ctx)
 	name   string       // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
@@ -795,6 +801,36 @@ func methodRecv(self unsafe.Pointer) unsafe.Pointer {
 	return *(*unsafe.Pointer)(unsafe.Add(self, unsafe.Sizeof(uintptr(0))))
 }
 
+type trampolineCanary struct{}
+
+func (*trampolineCanary) probe() {}
+
+var trampolineVerified sync.Once
+
+// verifyMethodTrampoline panics if the running Go toolchain's "-fm" method-
+// value layout no longer matches what actionID assumes. The suffix and the
+// receiver read are two independent halves of that assumption — funcName
+// checking only the suffix would let a layout change past a string match and
+// straight into methodRecv's out-of-bounds pointer read, so both are proved
+// here, once per process, before any action id is minted. Every Mount in the
+// test suite calls this; a broken layout panics the suite immediately, so no
+// dedicated test is needed here.
+func verifyMethodTrampoline() {
+	trampolineVerified.Do(func() {
+		c := &trampolineCanary{}
+		fn := c.probe
+		name := funcName(reflect.ValueOf(fn).Pointer()).name
+		self := funcSelf(fn)
+		recv := methodRecv(self)
+		if !strings.HasSuffix(name, "-fm") || recv != unsafe.Pointer(c) {
+			panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
+				"receiver %p, want a \"-fm\" suffix and receiver %p. via's action identity depends on "+
+				"a method value's runtime layout; a Go toolchain change broke that assumption. File a bug.",
+				runtime.Version(), name, recv, c))
+		}
+	})
+}
+
 // actionID content-addresses a handler by its Go name ("main.(*Poll).Vote-fm")
 // plus, when the receiver lies inside this unit's composition, that receiver's
 // byte offset — the name alone drops the receiver, so two instances of one
@@ -845,7 +881,6 @@ func funcName(pc uintptr) funcMeta {
 	return info
 }
 
-// actionIDKey is what an action id is a pure function of.
 type actionIDKey struct {
 	pc     uintptr
 	off    uintptr
@@ -1120,11 +1155,12 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 // half-typed message vanishing when someone else's arrives). Server-driven
 // signal changes ride an explicit signal-patch instead. only restricts the
 // declaration further, for a plain action's patch.
-func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet) (*Ctx, []byte) {
+func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool) (*Ctx, []byte) {
 	ctx := newRootCtx(declareSignals, base, only)
 	ctx.declareSeen = seen
 	ctx.unitV = inst
 	ctx.rev = rev
+	ctx.badDecodeLogged = badDecodeLogged
 	inheritRequestScope(ctx, from)
 	return ctx, renderRootWith(ctx, inst.v)
 }
@@ -1381,7 +1417,7 @@ func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *C
 	var lastBody []byte // nil until the first frame, so the first push always ships
 	last := from        // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	render := func(rev *revertSet) (*Ctx, []byte) {
-		return renderRootBase(inst, false, base, nil, nil, from, rev) // push omits data-signals
+		return renderRootBase(inst, false, base, nil, nil, from, rev, lc.badDecodeLogged) // push omits data-signals
 	}
 	push = func() {
 		lc.flushDirty(last)
@@ -1431,7 +1467,7 @@ func childPush(key string, inst instance, base string, stream *stream, lc *tabSt
 	var lastBody []byte // see skipUnchanged
 	last := from        // the connect render's bind, until the first push replaces it
 	render := func(rev *revertSet) (*Ctx, []byte) {
-		return renderChildBind(key, inst, base, nil, rev)
+		return renderChildBind(key, inst, base, nil, rev, lc.badDecodeLogged)
 	}
 	push = func() {
 		lc.flushDirty(last)
@@ -1560,8 +1596,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// the display render of every push instead (livePush) — which is the only
 	// place it was ever visible, since connect frames no elements of its own.
 	rev := newRevertSet()
+	logFlag := new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
 	bind := newRootCtx(false, base, nil)
 	bind.rev = rev
+	bind.badDecodeLogged = logFlag
 	bind.unitV = pv
 	prebindSignals(bind, pv)
 	if runOnInit(pv.v, bind, w, req, m.sessions, true) != nil {
@@ -1586,15 +1624,16 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// the current unit on every render — a live action always runs against the
 	// last render's actions/hydrators.
 	lc := &tabStream{
-		id:          id,
-		mount:       m,
-		pushq:       pushq,
-		done:        streamCtx.Done(),
-		pushSignals: func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
-		units:       map[string]*Ctx{},
-		sess:        connSID,
-		client:      connectSig,
-		rev:         rev,
+		id:              id,
+		mount:           m,
+		pushq:           pushq,
+		done:            streamCtx.Done(),
+		pushSignals:     func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
+		units:           map[string]*Ctx{},
+		sess:            connSID,
+		client:          connectSig,
+		rev:             rev,
+		badDecodeLogged: logFlag,
 	}
 
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn
