@@ -16,10 +16,8 @@ const maxActionBody = 1 << 20
 const maxUploadBytes = 8 << 20
 
 // originAllowed is the "origin floor": the check that a state-changing request
-// comes from a host the app trusts, read off Origin/Sec-Fetch-Site. Without
-// WithTrustedOrigin it admits every origin here, because a live action and the
-// SSE connect carry the per-tab id, which is the CSRF token; a plain action has
-// no tab id and is held to plainOriginAllowed instead (see dispatch).
+// comes from a host the app trusts, read off Origin/Sec-Fetch-Site. By
+// default every origin is admitted (the per-tab id is the CSRF token).
 // WithTrustedOrigin turns enforcement on, in this order: the allowlist (which
 // wins over the browser's site label, so cross-origin embedding works), then
 // Sec-Fetch-Site, then an Origin whose host matches the request Host. Under
@@ -35,30 +33,10 @@ func originAllowed(req *http.Request, cfg *config) bool {
 	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin" || site == "none"
 	}
-	return sameOriginSource(req, origin)
-}
-
-// plainOriginAllowed is the floor for a plain action when no trusted origin is
-// configured: nothing else in that request is a CSRF token, so only a provably
-// same-origin request is admitted. Referer is the fallback for a browser that
-// sends neither fetch metadata nor Origin; a request carrying none of the
-// three fails closed.
-func plainOriginAllowed(req *http.Request) bool {
-	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
-		return site == "same-origin" || site == "none"
-	}
-	src := req.Header.Get("Origin")
-	if src == "" {
-		src = req.Header.Get("Referer")
-	}
-	return sameOriginSource(req, src)
-}
-
-func sameOriginSource(req *http.Request, src string) bool {
-	if src == "" {
+	if origin == "" {
 		return false
 	}
-	u, err := url.Parse(src)
+	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}

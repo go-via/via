@@ -58,3 +58,15 @@ func TestWithLogger_panicsOnNilLogger(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { via.NewRouter(via.WithLogger(nil)) })
 }
+
+func TestNewRouter_warnsAtStartupOnlyWithoutTrustedOrigin(t *testing.T) {
+	t.Parallel()
+	var open, closed lockedBuf
+	via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&open, nil))))
+	via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&closed, nil))), via.WithTrustedOrigin("https://example.com"))
+
+	assert.Contains(t, open.String(), "level=WARN")
+	assert.Contains(t, open.String(), "accept requests from any origin")
+	assert.Contains(t, open.String(), "WithTrustedOrigin")
+	assert.Empty(t, closed.String())
+}

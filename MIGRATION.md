@@ -372,21 +372,18 @@ Two defaults are more permissive than v0.7's, and they are the entries most
 likely to matter in production. The CHANGELOG has the full reasoning; the short
 form:
 
-- **The origin floor is open by default for live traffic.** The origin floor
-  is via's check that a state-changing request comes from a host you trust,
-  read off `Origin`/`Sec-Fetch-Site`. v0.7 enforced it; v0.8 accepts a live
-  action and the SSE connect from any origin until `WithTrustedOrigin` names
-  one, which switches enforcement on for the whole endpoint.
-  `WithInsecureOrigin` is gone; there is no secure default left to opt out of.
-  The per-tab id is the CSRF token on a live page only: a plain action carries
-  an empty `viatab`/`_viatab`, so with no trusted origin set it is held to
-  same-origin instead. `Sec-Fetch-Site` must be `same-origin` or `none`; a
-  browser that sends no fetch metadata must send an `Origin`, or failing that a
-  `Referer`, matching the request's host. Anything else answers `403`,
-  including a request with none of the three, such as a script or proxy that
-  strips them. If you deployed v0.7 without thinking about origins, **v0.8
-  needs you to think about them.** via logs one line at startup when the floor
-  is open.
+- **The origin floor is open by default.** The origin floor is via's check
+  that a state-changing request comes from a host you trust, read off
+  `Origin`/`Sec-Fetch-Site`. v0.7 enforced it; v0.8 accepts every action and
+  the SSE connect from any origin, including a request with no origin signal,
+  until `WithTrustedOrigin` names one, which switches enforcement on for the
+  whole endpoint. `WithInsecureOrigin` is gone; there is no secure default left
+  to opt out of. The per-tab id is the CSRF token on a live page only: a plain
+  action carries an empty `viatab`/`_viatab`, so with the floor open a
+  cross-origin `PostForm` submit is accepted. If you deployed v0.7 without
+  thinking about origins, **v0.8 needs you to think about them**: set
+  `WithTrustedOrigin` in production. via logs a warning at startup while none
+  is set.
 - **Sessions are always on** and mint a random per-process key if you configure
   none, warning once. The key signs the cookie; the data lives in a
   `SessionStore` whose default is this process's memory, so surviving a restart

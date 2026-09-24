@@ -81,7 +81,7 @@ var options = []row{
 	{"via.WithErrorPage(fn)",
 		"Renders via's failures as HTML documents instead of plain text. It applies to document responses only."},
 	{"via.WithTrustedOrigin(origin)",
-		"Turns on origin enforcement for the action endpoint and allowlists one exact origin. Without any set, a live action and the stream connect accept every origin, since the tab id they carry is the CSRF token, and a plain action accepts only a provably same-origin request — set this in production."},
+		"Turns on origin enforcement for the action endpoint and allowlists one exact origin. Without any set, every action and the stream connect accept any origin and via logs a warning at startup — set this in production."},
 	{"via.WithSessionKey(key)",
 		"The HMAC key signing the session cookie id; at least 16 bytes, or it panics. Unset, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process."},
 	{"via.WithSessionStore(s)",

@@ -261,10 +261,6 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-	if len(m.cfg.trustedOrigins) == 0 && !plainOriginAllowed(req) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
 

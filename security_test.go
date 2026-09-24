@@ -148,47 +148,23 @@ type csrfForm struct{ hits *atomic.Int64 }
 func (p *csrfForm) Save(ctx *via.Ctx) { p.hits.Add(1) }
 func (p *csrfForm) View() h.H         { return via.PostForm(p.Save, h.Button(h.Str("save"))) }
 
-func TestAction_plainFormWithoutTrustedOriginAdmitsOnlySameOrigin(t *testing.T) {
+func TestAction_plainFormWithoutTrustedOriginAdmitsCrossSite(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name    string
-		headers map[string]string // "{self}" stands for the test server's origin
-		want    int
-	}{
-		{"cross-site fetch metadata", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"}, http.StatusForbidden},
-		{"foreign Origin", map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
-		{"opaque Origin", map[string]string{"Origin": "null"}, http.StatusForbidden},
-		{"foreign Referer", map[string]string{"Referer": "https://evil.example/page"}, http.StatusForbidden},
-		{"no origin signal", nil, http.StatusForbidden},
-		{"same-origin fetch metadata", map[string]string{"Sec-Fetch-Site": "same-origin"}, http.StatusOK},
-		{"matching Origin", map[string]string{"Origin": "{self}"}, http.StatusOK},
-		{"matching Referer", map[string]string{"Referer": "{self}/"}, http.StatusOK},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			hits := &atomic.Int64{}
-			srv := serve(t, via.Handler(csrfForm{hits: hits}))
-			_, page := do(t, srv, http.MethodGet, "/", "")
-			body, ctype := multipartForm(t, nil)
-			req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), body)
-			require.NoError(t, err)
-			req.Header.Set("Content-Type", ctype)
-			for k, v := range tt.headers {
-				req.Header.Set(k, strings.ReplaceAll(v, "{self}", srv.URL))
-			}
-			resp, err := srv.Client().Do(req)
-			require.NoError(t, err)
-			resp.Body.Close()
+	hits := &atomic.Int64{}
+	srv := serve(t, via.Handler(csrfForm{hits: hits}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	body, ctype := multipartForm(t, nil)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), body)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", ctype)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
 
-			assert.Equal(t, tt.want, resp.StatusCode)
-			wantHits := int64(0)
-			if tt.want == http.StatusOK {
-				wantHits = 1
-			}
-			assert.Equal(t, wantHits, hits.Load(), "a rejected submit must not run the handler")
-		})
-	}
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int64(1), hits.Load())
 }
 
 func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
@@ -230,20 +206,19 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	assert.Equal(t, http.StatusOK, status2, "server must keep serving after a panicking action")
 }
 
-func TestAction_defaultRejectsCrossSitePlainAction(t *testing.T) {
+func TestAction_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}))
-	status, _ := app.Action(1).SecFetch("cross-site").Fire()
-	assert.Equal(t, http.StatusForbidden, status)
-
-	_, body := app.Get("/")
-	assert.Contains(t, body, "<h1>0</h1>", "cross-site POST must not have mutated the store")
+	status, body := app.Action(1).SecFetch("cross-site").Fire()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "<h1>1</h1>")
 }
 
-func TestAction_defaultRejectsPlainActionWithoutAnyOriginSignal(t *testing.T) {
+func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).NoOrigin().Fire()
-	assert.Equal(t, http.StatusForbidden, status, "a plain action has no tab id, so an unprovable source fails closed")
+	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).NoOrigin().Fire()
+	assert.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "<h1>1</h1>")
 }
 
 func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {

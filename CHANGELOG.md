@@ -344,23 +344,20 @@ itself at runtime unless you look:
 
 - **Origin enforcement (the "origin floor": the check on every state-changing
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
-  default for live traffic.** v0.7 enforced; v0.8 accepts a live action and the
-  SSE connect from any origin until `WithTrustedOrigin` names one, at which
-  point enforcement switches on for the whole endpoint. The reasoning: on a
-  live page the per-tab id is a synchronizer token and does the load-bearing
-  work, and local development over plain http has to work with no
-  configuration. The limit of that reasoning: a plain action has no connection
-  and no tab id (`viatab` and `_viatab` are empty), so nothing in it is a CSRF
-  token. With no trusted origin set, a plain action is therefore held to
-  same-origin: `Sec-Fetch-Site` must be `same-origin` or `none`, or, when the
-  browser sends no fetch metadata, the `Origin` (failing that, the `Referer`)
-  must match the request's host. Anything else answers `403`, and so does a
-  request carrying none of the three. The consequence: **a production
-  deployment that never calls `WithTrustedOrigin` is running with cross-origin
-  enforcement off for live actions and the stream.** The option name describes
-  what it allows and says nothing about it also flipping enforcement, so via
-  logs one line at startup when the floor is open. Set the option in
-  production.
+  default.** v0.7 enforced; v0.8 accepts every action and the SSE connect from
+  any origin, including a request with no origin signal at all, until
+  `WithTrustedOrigin` names one, at which point enforcement switches on for the
+  whole endpoint. The reasoning: on a live page the per-tab id is a
+  synchronizer token and does the load-bearing work, and local development
+  over plain http has to work with no configuration. The limit of that
+  reasoning: a plain action has no connection and no tab id (`viatab` and
+  `_viatab` are empty), so with the floor open a cross-origin `PostForm` submit
+  is accepted, and what defends it is the session cookie's `SameSite=Lax`: the
+  request arrives unauthenticated. The consequence: **a production deployment
+  that never calls `WithTrustedOrigin` is running with cross-origin
+  enforcement off.** The option name describes what it allows and says nothing
+  about it also flipping enforcement, so via logs a warning at startup when no
+  trusted origin is set. Set the option in production.
 - **Sessions are always on**, lazily: the cookie is issued on first write. If
   no key is configured, via mints a random per-process one and warns once. The
   key signs the cookie only; the data lives behind the new `SessionStore`
@@ -484,10 +481,9 @@ as a re-read of the README rather than a diff.
   write); the session options are tune-only. Key resolution:
   `WithSessionKey` → `VIA_SESSION_KEY` → random per-process key (warned at
   first mint).
-- **Origin floor is open by default for live traffic**; `WithTrustedOrigin`
-  turns enforcement on (`WithInsecureOrigin` removed). The per-tab id remains
-  the CSRF token on a live page; a plain action, which has no tab id, must be
-  same-origin until a trusted origin is set.
+- **Origin floor is open by default**: with no `WithTrustedOrigin`, every
+  action accepts any origin and via logs a warning at startup; setting one
+  turns enforcement on (`WithInsecureOrigin` removed).
 - **`h` is elements + attributes + `Str` only**: the render plumbing
   (`Dyn`/`DynAttr`/`NewRenderer`/`Renderer`/`Binder`) moved behind
   `internal/hcore`.

@@ -233,7 +233,6 @@ func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
 	defer log.SetOutput(os.Stderr)
 	req := httptest.NewRequest(http.MethodPost, m[1], strings.NewReader(`{}`))
 	req.Header.Set("Datastar-Request", "true")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	app.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, logs.String(), "made a unit live")

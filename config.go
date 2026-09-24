@@ -2,16 +2,14 @@ package via
 
 import (
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/go-via/via/h"
 )
 
 // config holds Handler's optional settings. The zero set is the dev-friendly
-// default: a live action and the SSE connect accept any origin (the tab id is
-// their CSRF token), a plain action only its own, and production opts into
-// full enforcement with WithTrustedOrigin.
+// default: the action endpoint accepts requests from any origin, and production
+// opts into enforcement with WithTrustedOrigin.
 type config struct {
 	log            *slog.Logger
 	trustedOrigins map[string]bool
@@ -80,24 +78,16 @@ func newConfig(opts []Option) *config {
 	}
 	c.head.validate()
 	if len(c.trustedOrigins) == 0 {
-		originWarnOnce.Do(func() {
-			c.log.Warn("via: live actions and the SSE connect accept requests from any origin — the per-tab id " +
-				"is their CSRF token, and plain actions are held to same-origin, but cross-origin enforcement " +
-				"is OFF until WithTrustedOrigin names one")
-		})
+		c.log.Warn(originWarning)
 	}
 	return c
 }
 
-// originWarnOnce keeps the open-floor notice to one line per process. The floor
-// is open by default, so the quiet state is the permissive one, and an app that
-// never calls WithTrustedOrigin looks configured rather than open — this line
-// is what tells you which mode you are in.
-//
-// Deliberately untested: package-global and fires at most once per test binary,
-// so whichever open-floor test runs first wins the line and every other sees
-// nothing. An assertion would pass or fail on test order, not on the warning.
-var originWarnOnce sync.Once
+// originWarning is logged once per Router when no trusted origin is set. The
+// floor is open by default, so the quiet state is the permissive one, and an
+// app that never calls WithTrustedOrigin looks configured rather than open —
+// this line is what tells you which mode you are in.
+const originWarning = "via: no WithTrustedOrigin set, so actions accept requests from any origin; set WithTrustedOrigin in production"
 
 // WithLogger routes via's own diagnostics to l. Default is slog.Default(). It
 // panics on nil.
@@ -116,9 +106,8 @@ func WithLogger(l *slog.Logger) Option {
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
 // allowlists an exact origin (scheme://host[:port], as the browser sends it).
 // With at least one set, only same-origin requests and listed origins are
-// admitted. WITHOUT ANY, a live action and the SSE connect accept every origin
-// (the per-tab id they carry is the CSRF token) and a plain action, which has
-// no tab id, accepts only a provably same-origin request — fine for
+// admitted. WITHOUT ANY, EVERY ORIGIN IS ACCEPTED, including requests that
+// carry no origin signal, and the Router logs a warning at startup — fine for
 // development, set this in production.
 func WithTrustedOrigin(origin string) Option {
 	return func(c *config) { c.trustedOrigins[origin] = true }
