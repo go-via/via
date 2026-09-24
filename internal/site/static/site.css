@@ -271,6 +271,33 @@ fieldset.demo-tabs { border: 0; margin: 0; min-width: 0; }
   display: block;
 }
 
+/* The inspector toggle (4th input) is not a tab: checking it docks the same
+   .inspector div (3rd pane) below the live demo instead of replacing it. Both
+   the toggle and its pane are scoped to the Live tab — over Source there is no
+   traffic to watch, and the Inspect tab already shows the pane full-height. */
+.demo-tabs > label:nth-of-type(4) { display: none; }
+.demo-tabs > input:nth-of-type(1):checked ~ label:nth-of-type(4) {
+  display: inline;
+}
+.demo-tabs
+  > input:nth-of-type(1):checked
+  ~ input:nth-of-type(4):checked
+  ~ div:nth-of-type(3) {
+  display: block;
+}
+.demo-tabs
+  > input:nth-of-type(1):checked
+  ~ input:nth-of-type(4):checked
+  ~ label:nth-of-type(4) {
+  color: var(--ink);
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.demo-tabs > input:nth-of-type(4):focus-visible ~ label:nth-of-type(4) {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
 .inspector {
   font-family: var(--mono);
   font-size: .8rem;

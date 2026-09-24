@@ -18,9 +18,10 @@ var tabs = [tabCount]string{"Live", "Source", "Inspect"}
 // puts this back when the log is cleared. demo/card_test.go pins the pair.
 const emptyPane = "Interact with the demo to see requests, frames and signals here."
 
-// Card renders a demo with Live, Source and Inspect tabs. Tabs are radio
-// inputs picked by :checked, so no signal is needed — the group name is what
-// keeps two cards on one page from sharing a selection.
+// Card renders a demo with Live, Source and Inspect tabs, plus a Show
+// inspector checkbox that docks the inspector under the running demo. Tabs are
+// radio inputs picked by :checked, so no signal is needed — the group name is
+// what keeps two cards on one page from sharing a selection.
 func Card(title string, prose h.H, child h.H, srcName string) h.H {
 	group := "tab-" + group(title, srcName)
 	panels := []h.H{
@@ -36,6 +37,7 @@ func Card(title string, prose h.H, child h.H, srcName string) h.H {
 	for i, t := range tabs {
 		ids[i] = group + "-" + strings.ToLower(t)
 	}
+	inspectorID := group + "-inspector"
 
 	// A fieldset so the three radios announce as one group; the legend names
 	// it, and site.css hides the legend and the fieldset's own border.
@@ -43,9 +45,14 @@ func Card(title string, prose h.H, child h.H, srcName string) h.H {
 	for i, id := range ids {
 		kids = append(kids, h.Input(h.Type("radio"), h.Name(group), h.ID(id), h.Checked(i == 0)))
 	}
+	// A standalone checkbox, not part of the radio group: site.css counts it
+	// as the 4th <input> and docks .inspector below whichever tab is showing
+	// (site.css:268-272) rather than replacing it.
+	kids = append(kids, h.Input(h.Type("checkbox"), h.ID(inspectorID)))
 	for i, id := range ids {
 		kids = append(kids, h.Label(h.For(id), h.Str(tabs[i])))
 	}
+	kids = append(kids, h.Label(h.For(inspectorID), h.Str("Show inspector")))
 
 	return h.Article(h.Class("demo"),
 		h.Header(h.H3(h.Str(title))),

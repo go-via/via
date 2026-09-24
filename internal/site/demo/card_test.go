@@ -102,6 +102,26 @@ func TestCard_separatesCardsWhoseTitlesSlugAlike(t *testing.T) {
 	assert.Len(t, seen, 2, "two cards slugging to %q must still get their own group", "run-it-counter")
 }
 
+var inspectorToggleIDs = regexp.MustCompile(`<input type="checkbox" id="([^"]+)">`)
+
+func TestCard_givesEachCardsInspectorToggleAUniqueLabelledID(t *testing.T) {
+	t.Parallel()
+
+	body := render(t, mountCards)
+
+	assert.Equal(t, 2, strings.Count(body, `<input type="checkbox"`),
+		"one inspector toggle per card")
+
+	ids := inspectorToggleIDs.FindAllStringSubmatch(body, -1)
+	require.Len(t, ids, 2)
+	assert.NotEqual(t, ids[0][1], ids[1][1],
+		"a hardcoded id would let one card's toggle drive another's inspector")
+
+	for _, m := range ids {
+		assert.Contains(t, body, `<label for="`+m[1]+`">Show inspector</label>`)
+	}
+}
+
 func TestCard_keepsTheEmptyPaneInStepWithTheInspector(t *testing.T) {
 	t.Parallel()
 
