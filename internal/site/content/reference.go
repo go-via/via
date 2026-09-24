@@ -6,10 +6,9 @@ import (
 	"go-via.dev/site/shell"
 )
 
-const (
-	tagName = "v0.8.0"
-	tag     = "https://github.com/go-via/via/blob/" + tagName + "/"
-)
+// Links track the default branch rather than a tag: a pinned version goes
+// stale the day after a release and nobody notices until the links 404.
+const repo = "https://github.com/go-via/via/blob/main/"
 
 type row struct{ name, use string }
 
@@ -179,20 +178,20 @@ func (p *Reference) PageMeta() via.Meta {
 func (p *Reference) View() h.H {
 	return shell.Page(p.nav,
 		h.H2(h.Str("Install")),
-		h.Pre(h.Code(h.Str("go get github.com/go-via/via@"+tagName))),
+		h.Pre(h.Code(h.Str("go get github.com/go-via/via"))),
 		h.P(h.Str("Go 1.27 or newer, standard library only, no build step.")),
 
 		h.H2(h.Str("Links")),
 		h.Ul(
 			h.Li(h.A(h.Href("https://github.com/go-via/via"), h.Str("github.com/go-via/via")),
 				h.Str(" — the source.")),
-			h.Li(h.A(h.Href("https://pkg.go.dev/github.com/go-via/via@"+tagName), h.Str("pkg.go.dev/github.com/go-via/via")),
+			h.Li(h.A(h.Href("https://pkg.go.dev/github.com/go-via/via"), h.Str("pkg.go.dev/github.com/go-via/via")),
 				h.Str(" — the package documentation, every exported name with its contract.")),
-			h.Li(h.A(h.Href(tag+"MIGRATION.md"), h.Str("MIGRATION.md")),
+			h.Li(h.A(h.Href(repo+"MIGRATION.md"), h.Str("MIGRATION.md")),
 				h.Str(" — what changed since v0.7, and how to move a v0.7 app.")),
-			h.Li(h.A(h.Href(tag+"CHANGELOG.md"), h.Str("CHANGELOG.md")),
+			h.Li(h.A(h.Href(repo+"CHANGELOG.md"), h.Str("CHANGELOG.md")),
 				h.Str(" — the release-by-release record.")),
-			h.Li(h.A(h.Href(tag+"AGENTS.md"), h.Str("AGENTS.md")),
+			h.Li(h.A(h.Href(repo+"AGENTS.md"), h.Str("AGENTS.md")),
 				h.Str(" — the rules a coding agent working on via has to follow.")),
 		),
 

@@ -26,7 +26,7 @@ then it streams over SSE, per tab.
 ## Install
 
 ```bash
-go get github.com/go-via/via@v0.8.0
+go get github.com/go-via/via
 ```
 
 Requires Go 1.27 or newer. The public API uses generic methods
