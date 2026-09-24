@@ -39,6 +39,13 @@ var urlCorpus = []struct {
 	{"\n//evil.example/x", false},
 	{" \t//evil.example/x", false},
 	{"mailto:a@b.c", false},
+	{"/\t/evil.example", false},
+	{"/\n/evil.example", false},
+	{"/\r\n/evil.example", false},
+	{"\\\t\\evil.example", false},
+	{"java\tscript:alert(1)", false},
+	{"java\r\nscript:alert(1)", false},
+	{"/threads/\t7", true},
 }
 
 func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {

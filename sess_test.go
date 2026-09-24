@@ -1090,6 +1090,7 @@ type failStore struct {
 	*via.MemorySessionStore
 	mu                       sync.Mutex
 	loadErr, saveErr, delErr error
+	plainSaveErr             error // Save only, not SaveIf: fails a tombstone write while the CAS write lands
 }
 
 func (f *failStore) err(which *error) error {
@@ -1120,6 +1121,9 @@ func (f *failStore) LoadVersion(ctx context.Context, id string) ([]byte, uint64,
 
 func (f *failStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
 	if e := f.err(&f.saveErr); e != nil {
+		return e
+	}
+	if e := f.err(&f.plainSaveErr); e != nil {
 		return e
 	}
 	return f.MemorySessionStore.Save(ctx, id, data, ttl)
@@ -1211,13 +1215,45 @@ func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 	defer log.SetOutput(prev)
 
 	fs.set(&fs.delErr, errors.New("redis down"))
-	fs.set(&fs.saveErr, errors.New("redis down"))
+	fs.set(&fs.plainSaveErr, errors.New("redis down"))
 	resp, _ := auditPost(t, c, base, acts[audRot])
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 		"Rotate reported success with the old id still valid")
 	assert.Contains(t, logs.String(), "pre-rotation id is still valid",
 		"the log must say the rotation could not invalidate the old id")
+}
+
+func TestSession_rotateKeepsOldIDWhenNewIDCannotBeWritten(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+	c := jarClient(t)
+	auditPost(t, c, base, acts[audPut1])
+	old := cookieValue(t, c, base, "via_session")
+	require.NotEmpty(t, old)
+
+	fs.set(&fs.saveErr, errors.New("redis down"))
+	resp, _ := auditPost(t, c, base, acts[audRot])
+	fs.set(&fs.saveErr, nil)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"Rotate reported a rotation whose new id was never written")
+	assert.Empty(t, sessionCookieOf(t, resp), "Rotate issued a cookie for an id with no blob behind it")
+	_, body := auditPostAs(t, base, acts[audShow], old)
+	assert.Contains(t, body, "V=1", "a failed rotation deleted the only copy of the session")
+}
+
+func TestSession_anonymousRotateIssuesNoCookieWhenTheMintCannotBeWritten(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+	fs.set(&fs.saveErr, errors.New("redis down"))
+
+	resp, _ := auditPost(t, jarClient(t), base, acts[audRot])
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
+		"Rotate reported a session that was never written")
+	assert.Empty(t, sessionCookieOf(t, resp), "Rotate issued a cookie for an id with no blob behind it")
 }
 
 func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {

@@ -87,11 +87,28 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	if acted {
 		inst = parent.actedInst
 	}
+	// Same substitution for a hydration pass >= 2, and the same type guard. Its
+	// OnInit already ran on this copy in the first pass; running it again would
+	// overwrite what the pass before hydrated.
+	var prior *Ctx
+	if !acted && parent.passUnits != nil {
+		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ {
+			prior, inst = p, p.unitV
+		}
+	}
 
 	child := newCtx()
 	child.rev = parent.rev                         // a hydrated child must be revertable with its parent (see livePush)
 	child.badDecodeLogged = parent.badDecodeLogged // one flag per tree: a malformed post hits every child's hydrator
 	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
+	child.passUnits = parent.passUnits
+	if prior != nil {
+		// That OnInit is also what registered the Tick or Listen making the unit
+		// live, and a later pass may not lower the first pass's verdict (I5).
+		child.live = prior.live
+	} else if parent.passUnits != nil {
+		parent.passUnits[key] = child
+	}
 	child.isChild = true
 	child.childKey = key
 	// The double underscore marks the scope boundary: a plain nested struct
@@ -123,7 +140,7 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	// and re-register its Tick/Listen — once per beat.
 	if parent.doInit {
 		child.doInit = true
-		if !acted {
+		if !acted && prior == nil {
 			prebindSignals(child, inst)
 			initChild(child, inst.v)
 		}

@@ -282,6 +282,7 @@ func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, urls[1], strings.NewReader(`{}`))
 	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	app.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 	// Two signals on the page; the second twin's is the one that moved.

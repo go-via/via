@@ -129,10 +129,9 @@ func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDe
 
 // run posts fn onto the child goroutine and waits for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
-// triggered it. The result channel is buffered so a late send never blocks a
-// goroutine that already gave up, and every wait is guarded on c.done, reqCtx
-// and pinnedDeadline so a POST racing a closed tab, one whose client hung up,
-// and one whose goroutine never arrives are told apart rather than collapsed.
+// triggered it. The wait to be picked up is guarded on c.done, reqCtx and
+// pinnedDeadline so a POST racing a closed tab, one whose client hung up, and
+// one whose goroutine never arrives are told apart rather than collapsed.
 //
 // res.pushWork runs after result is sent, still on this goroutine: the POST
 // proceeds at once while pushWork stays serialized in the order its mutation
@@ -165,17 +164,11 @@ func (c *tabStream) run(reqCtx context.Context, fn func() actionResult) (actionR
 		c.warnPinned()
 		return actionResult{}, runPinned
 	}
-	select {
-	case res := <-result:
-		return res, runOK
-	case <-c.done:
-		return actionResult{}, runClosed
-	case <-reqCtx.Done():
-		return actionResult{}, runAbandoned
-	case <-pinned.C:
-		c.warnPinned()
-		return actionResult{}, runPinned
-	}
+	// pushq is unbuffered, so the send above means the stream goroutine is
+	// already running fn, and neither a closing stream nor a hung-up client
+	// stops it. fn writes this request's w (a session cookie, a redirect), so
+	// returning before it finishes would hand w back to net/http mid-write.
+	return <-result, runOK
 }
 
 // unitType names the Go type driving this connection, for a log line that has

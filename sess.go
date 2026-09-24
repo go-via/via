@@ -49,10 +49,10 @@ const (
 // Every method may be called concurrently, and from a request goroutine — honour
 // ctx. A failed Load answers every transport with 503 and [ErrStoreDown]
 // rather than serving the request as anonymous. A failed Save or Delete is
-// logged and the write dropped. [Session.Rotate] is the exception: if the old
-// id can be neither deleted nor overwritten with an expired blob, via panics
-// and the request answers 500 rather than reporting a rotation that did not
-// happen.
+// logged and the write dropped. [Session.Rotate] is the exception: if the
+// session cannot be written under its new id, or the old id can be neither
+// deleted nor overwritten with an expired blob, via panics and the request
+// answers 500 rather than reporting a rotation that did not happen.
 //
 // Implement [VersionedSessionStore] as well if the backend can do a conditional
 // write; without it, two requests writing the same session at the same instant
@@ -566,7 +566,12 @@ func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData)
 	ctx, cancel := m.bounded(ctx)
 	defer cancel()
 	newID := randomToken()
-	m.save(ctx, newID, d, true)
+	if !m.save(ctx, newID, d, true) {
+		// Deleting the old id now would leave the session under no id at all,
+		// and the cookie about to be set would name nothing.
+		panic("via: Session.Rotate could not write the session under its new id; " +
+			"the old id is kept and no rotation happened")
+	}
 	if oldID != "" {
 		if err := m.store.Delete(ctx, oldID); err != nil {
 			// Returning the new id while the old one still resolves would void
@@ -770,7 +775,11 @@ func (s *Session) Rotate() string {
 		return ""
 	}
 	if s.data == nil {
-		s.id, s.data = s.mgr.create(s.storeCtx())
+		id, d := s.mgr.create(s.storeCtx())
+		if d.mintFailed {
+			panic("via: Session.Rotate could not write the new session; no cookie was issued")
+		}
+		s.id, s.data = id, d
 		s.mgr.setCookie(s.w, s.id, s.secure)
 		return s.id
 	}
@@ -809,13 +818,27 @@ func (c *Ctx) Session() *Session {
 	if c.session != nil {
 		return c.session
 	}
+	var (
+		id  string
+		d   *sessionData
+		err error
+	)
+	if c.sessions != nil {
+		id, d, err = c.sessions.resolve(c.req)
+	}
+	return c.adoptSession(id, d, err)
+}
+
+// adoptSession installs the handle for a resolve that already happened, so a
+// transport that had to resolve early does not read the store a second time.
+func (c *Ctx) adoptSession(id string, d *sessionData, err error) *Session {
 	s := &Session{ctx: sessionCtx(c.req)}
 	if c.sessions != nil {
 		s.mgr = c.sessions
 		s.w = c.sessW
 		s.errPage = c.errPage
 		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
-		switch id, d, err := c.sessions.resolve(c.req); {
+		switch {
 		case err != nil:
 			s.down = true
 		case d != nil:

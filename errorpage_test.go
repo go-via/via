@@ -164,6 +164,7 @@ func TestErrorPage_skipsDatastarActionResponse(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/r/nope", strings.NewReader("{}"))
 	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()

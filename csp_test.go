@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-via/via"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,4 +105,17 @@ func TestActionPatch_carriesSecurityHeaders(t *testing.T) {
 	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "frame-ancestors 'self'")
+}
+
+func TestPage_inlineAssetHashMatchesTheParsedSource(t *testing.T) {
+	t.Parallel()
+	resp, _ := headResp(t, via.Head{Assets: via.Assets{
+		Scripts: []via.Script{{Inline: "a()\r\nb()\rc('\x00')"}},
+		Styles:  []via.Style{{Inline: "a{}\r\nb{}\rc{content:'\x00'}"}},
+	}})
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, hashSource("a()\nb()\nc('\uFFFD')"),
+		"the browser hashes the script after newline normalization and NUL replacement")
+	assert.Contains(t, csp, hashSource("a{}\nb{}\nc{content:'\uFFFD'}"),
+		"the browser hashes the style after newline normalization and NUL replacement")
 }

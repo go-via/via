@@ -114,6 +114,19 @@ func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 		{"style breakout", via.Head{Assets: via.Assets{
 			Styles: []via.Style{{Inline: "a{}</style><script>x</script>"}}}}},
 		{"unknown preload as", via.Head{Assets: via.Assets{Preload: []via.Preload{{Href: "/a.wasm", As: "wasm"}}}}},
+		{"protocol-relative script src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "//cdn.example/a.js"}}}}},
+		{"protocol-relative style href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "//cdn.example/a.css"}}}}},
+		{"protocol-relative preload href", via.Head{Assets: via.Assets{
+			Preload: []via.Preload{{Href: "//cdn.example/a.woff2", As: "font"}}}}},
+		{"backslash protocol-relative src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: `/\cdn.example/a.js`}}}}},
+		{"font origin with a path", via.Head{Assets: via.Assets{FontOrigins: []string{"https://fonts.example/css"}}}},
+		{"font origin smuggling a directive", via.Head{Assets: via.Assets{
+			FontOrigins: []string{"https://fonts.example;script-src"}}}},
+		{"font origin with a comma", via.Head{Assets: via.Assets{FontOrigins: []string{"https://a.example,https://b.example"}}}},
+		{"script src smuggling a directive", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "https://a;sandbox/x.js"}}}}},
+		{"style href with a comma host", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "https://a,b/x.css"}}}}},
+		{"preload href smuggling a directive", via.Head{Assets: via.Assets{
+			Preload: []via.Preload{{Href: "https://a;sandbox/x.avif", As: "image"}}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -160,6 +173,12 @@ func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	r2, _ := headResp(t, head)
 	require.NotEmpty(t, r1.Header.Get("Content-Security-Policy"))
 	assert.Equal(t, r1.Header.Get("Content-Security-Policy"), r2.Header.Get("Content-Security-Policy"))
+}
+
+func TestDocumentHead_fontOriginEntersThePolicyNormalized(t *testing.T) {
+	t.Parallel()
+	resp, _ := headResp(t, via.Head{Assets: via.Assets{FontOrigins: []string{"https://fonts.example/"}}})
+	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "font-src 'self' https://fonts.example;")
 }
 
 type metaPage struct {

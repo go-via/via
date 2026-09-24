@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/go-via/via/internal/hcore"
 )
 
 // Head describes the router-wide document shell: the <html lang>, raw head
@@ -191,8 +193,8 @@ func (a Assets) validate(where string) {
 		validAssetURL(where, "Preload.Href", p.Href)
 	}
 	for _, o := range a.FontOrigins {
-		if originOf(o) == "" {
-			panic(where + ": FontOrigin " + quote(o) + " is not an absolute http(s) origin")
+		if !isBareOrigin(o) {
+			panic(where + ": FontOrigin " + quote(o) + " is not an absolute http(s) origin (scheme://host[:port], no path)")
 		}
 	}
 }
@@ -214,6 +216,22 @@ func validAssetURL(where, field, raw string) {
 	if u.Scheme != "" && originOf(raw) == "" {
 		panic(where + ": " + field + " " + quote(raw) + " is not a relative URL or an absolute http(s) one")
 	}
+	// A protocol-relative URL has no scheme to read an origin off, so the CSP
+	// would admit it only as 'self' and the browser would block the load.
+	if u.Scheme == "" && !hcore.SafeURL(raw) {
+		panic(where + ": " + field + " " + quote(raw) + " is protocol-relative; write it as https://… so its origin can join the CSP")
+	}
+}
+
+// isBareOrigin reports whether o is exactly an http(s) origin, optionally with
+// a trailing "/".
+func isBareOrigin(o string) bool {
+	if originOf(o) == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	return err == nil && u.User == nil && (u.Path == "" || u.Path == "/") &&
+		!u.ForceQuery && u.RawQuery == "" && u.Fragment == ""
 }
 
 // fingerprint is the Assets identity the constancy check compares. It is a
@@ -355,7 +373,9 @@ func isLangTag(s string) bool {
 // relative URL (same-origin) or anything else.
 func originOf(raw string) string {
 	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	// ';' would end the CSP directive and ',' start another policy; url.Parse
+	// admits both in a host.
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || strings.ContainsAny(u.Host, ";,") {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host

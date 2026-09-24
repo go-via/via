@@ -173,7 +173,89 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 		"an anonymous connection must not be blocked — there is no session to mismatch")
 }
 
-func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConnection(t *testing.T) {
+// signIn establishes a session on c through the plain mount at path, whose
+// first action writes one.
+func signIn(t *testing.T, srv *httptest.Server, c *http.Client, path string) {
+	t.Helper()
+	loginResp, err := c.Get(srv.URL + path)
+	require.NoError(t, err)
+	loginPage, err := io.ReadAll(loginResp.Body)
+	require.NoError(t, err)
+	loginResp.Body.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.NotEmpty(t, cookieValue(t, c, srv.URL, "via_session"), "precondition: signing in must establish a session")
+}
+
+type namedLogin struct{ name string }
+
+func (l *namedLogin) SignIn(ctx *via.Ctx) { ctx.Session().Put(member{Name: l.name}) }
+func (l *namedLogin) View() h.H           { return h.Button(via.On("click", l.SignIn), h.Str("in")) }
+
+// whoLive publishes, over the stream, whose session its action ran under.
+type whoLive struct{ who via.State[string] }
+
+func (w *whoLive) Whoami(ctx *via.Ctx) {
+	w.who.Set("nobody")
+	if m, ok := ctx.Session().Get[member](); ok {
+		w.who.Set(m.Name)
+	}
+}
+func (w *whoLive) View() h.H {
+	return h.Div(h.P(h.Str("who: "), w.who.Display()), h.Button(via.On("click", w.Whoami)))
+}
+
+func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/as-victim", namedLogin{name: "vicky"})
+	via.Mount(r, "/as-attacker", namedLogin{name: "mallory"})
+	via.Mount(r, "/live", whoLive{})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+	victim, attacker := jarClient(t), jarClient(t)
+	signIn(t, srv, victim, "/as-victim")
+	signIn(t, srv, attacker, "/as-attacker")
+
+	atkResp, err := attacker.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	require.NoError(t, err)
+	atkBody, _ := io.ReadAll(atkResp.Body)
+	atkResp.Body.Close()
+	require.Equal(t, http.StatusNoContent, atkResp.StatusCode, "the leaked id still drives the anonymous tab")
+	assert.NotContains(t, string(atkBody), "vicky")
+
+	vicResp, err := victim.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	require.NoError(t, err)
+	vicResp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, vicResp.StatusCode, "the first session to reach the tab owns it")
+
+	deadline := time.After(2 * time.Second)
+	for seen := false; !seen; {
+		select {
+		case <-deadline:
+			require.Fail(t, "the attacker's action never reached the stream")
+		case line := <-lines:
+			assert.NotContains(t, line, "vicky", "an action ran under the victim's session")
+			seen = strings.Contains(line, "mallory")
+		}
+	}
+}
+
+func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	via.Mount(r, "/login", loginComp{})
@@ -181,50 +263,33 @@ func TestDispatch_liveReadOnlySessionTouchByAForeignCookieDoesNotCaptureTheConne
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	attacker := jarClient(t)
-	loginResp, err := attacker.Get(srv.URL + "/login")
-	require.NoError(t, err)
-	loginPage, err := io.ReadAll(loginResp.Body)
-	require.NoError(t, err)
-	loginResp.Body.Close()
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
-	require.NoError(t, err)
-	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
-	signInReq.Header.Set("Datastar-Request", "true")
-	signInResp, err := attacker.Do(signInReq)
-	require.NoError(t, err)
-	signInResp.Body.Close()
-	require.NotEmpty(t, cookieValue(t, attacker, srv.URL, "via_session"), "attacker must hold a real session of their own")
-
-	// The victim's tab connects anonymously — nothing about it identifies the
-	// attacker; only its id, echoed on the wire, is assumed leaked.
+	// The tab connects anonymously; the user then logs in from another tab.
 	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
 	defer cancel()
 	tab := awaitTabID(t, lines)
-
 	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
+	owner := jarClient(t)
+	signIn(t, srv, owner, "/login")
 
-	// The attacker dispatches Peek — read-only — against the victim's tab,
-	// carrying their own cookie via a plain http.Request (not the jar client,
-	// so we control exactly which cookie rides along).
-	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek
-	peekReq.AddCookie(&http.Cookie{Name: "via_session", Value: cookieValue(t, attacker, srv.URL, "via_session")})
-	peekResp, err := http.DefaultClient.Do(peekReq)
+	ownResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 1)) // Peek, owner's cookie
 	require.NoError(t, err)
-	peekResp.Body.Close()
+	ownResp.Body.Close()
+	require.Equal(t, http.StatusNoContent, ownResp.StatusCode)
 
-	// The victim's own later cookieless dispatch must still succeed — the
-	// connection must not have been captured by the attacker's cookie.
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
+	bareResp, err := http.DefaultClient.Do(liveActionRequest(t, srv, string(page), tab, "r", 0)) // Bump, no cookie
 	require.NoError(t, err)
-	defer bumpResp.Body.Close()
-	assert.Equal(t, http.StatusNoContent, bumpResp.StatusCode,
-		"a read-only action carrying a foreign cookie must not bind the connection to it")
+	bareResp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, bareResp.StatusCode,
+		"once a session reached the tab, its id must stop being a bearer credential")
+
+	againResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	require.NoError(t, err)
+	againResp.Body.Close()
+	assert.Equal(t, http.StatusNoContent, againResp.StatusCode, "the binding session still dispatches")
 }
 
 func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {

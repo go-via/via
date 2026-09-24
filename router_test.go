@@ -402,6 +402,31 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	assert.Empty(t, resp.Header.Get("Location"), "an unsafe OnInit redirect target must never reach http.Redirect")
 }
 
+type redirectThenMissPage struct{ id int }
+
+func (p *redirectThenMissPage) OnInit(ctx *via.Ctx) error {
+	ctx.Redirect("/login")
+	p.id = ctx.Param[int]("id")
+	return nil
+}
+func (p *redirectThenMissPage) View() h.H { return h.Div() }
+
+func TestRouter_onInitParamMissWinsOverAQueuedRedirect(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/thread/{id}", redirectThenMissPage{})
+	srv := serve(t, r)
+
+	c := &http.Client{CheckRedirect: noFollow}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/thread/abc", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a URL that names no page must 404 even behind a Redirect")
+	assert.Empty(t, resp.Header.Get("Location"), "the Redirect queued before the param miss must not be followed")
+}
+
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
@@ -586,6 +611,42 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, "r", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, after, `<h1>1</h1>`)
+}
+
+func TestMount_trailingSlashPathServesExactlyThatPath(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/docs/", counter{count: &store{}})
+	srv := serve(t, r)
+
+	resp, body := do(t, srv, http.MethodGet, "/docs/", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Mount(\"/docs/\") must serve /docs/")
+	assert.Contains(t, body, `<h1>0</h1>`)
+	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, "r", 1), "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, after, `<h1>1</h1>`)
+	resp, _ = do(t, srv, http.MethodGet, "/docs/deeper", "")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a page is not a subtree; like \"/\", it serves its own path only")
+}
+
+func TestMount_panicsOnAWildcardItCannotRouteUnder(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"reserved child", "/x/{child}", `via: Mount path "/x/{child}": {child} is reserved for via's action route; rename the wildcard`},
+		{"reserved act", "/x/{act}/y", `via: Mount path "/x/{act}/y": {act} is reserved for via's action route; rename the wildcard`},
+		{"rest wildcard", "/files/{rest...}", `via: Mount path "/files/{rest...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`},
+		{"end anchor", "/docs/{$}", `via: Mount path "/docs/{$}": {$} is not supported — a path ending in "/" already matches only itself`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.PanicsWithValue(t, tt.want, func() { via.Mount(via.NewRouter(), tt.path, counter{count: &store{}}) })
+		})
+	}
 }
 
 func TestRouter_mountedActionElementPatches(t *testing.T) {

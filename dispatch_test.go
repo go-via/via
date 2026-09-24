@@ -821,6 +821,39 @@ func TestDispatchPlain_hydratesASignalInABranchAnotherPostedSignalOpens(t *testi
 		"the response must not wipe the client's value for that slot")
 }
 
+type disclosureHost struct{ D disclosure }
+
+func (p *disclosureHost) View() h.H { return h.Div(via.Child(p.D)) }
+
+func TestDispatchPlain_hydratesAChildSignalInABranchAnotherPostedChildSignalOpens(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(disclosureHost{}))
+
+	code, body := app.ChildAction("0", 1).Body(`{"d__mode":"x","d__name":"bob"}`).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, "seen: saw:bob",
+		"an embedded child must discover a branch its own posted signal opens, exactly as a root does")
+}
+
+type echoKid struct{ Name via.Signal[string] }
+
+func (k *echoKid) View() h.H { return h.Div(h.Input(k.Name.Bind()), h.P(h.Str("name: "+k.Name.Get()))) }
+
+type echoKidHost struct{ K echoKid }
+
+func (p *echoKidHost) Noop(ctx *via.Ctx) {}
+func (p *echoKidHost) View() h.H {
+	return h.Div(via.Child(p.K), h.Button(via.On("click", p.Noop)))
+}
+
+func TestDispatchPlain_aNoOpRootActionWithAPostedChildSignalAnswers204(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(echoKidHost{}))
+
+	code, body := app.Action(0).Body(`{"k__name":"bob"}`).Fire()
+	assert.Equal(t, http.StatusNoContent, code, "the root render did not change, so there is nothing to patch: %s", body)
+}
+
 func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(disclosure{}))
@@ -1743,6 +1776,15 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
 }
 
+func TestDispatchLive_aNullConnectBodyStillAcceptsActions(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(dirtyAfterPanic{}))
+	conn := app.ConnectWith(`null`)
+
+	status, _ := app.Action(1).Over(conn).Body(`{"x":5}`).Fire()
+	assert.Equal(t, http.StatusNoContent, status, "an action on a tab that connected with a null body must not fail")
+}
+
 // gatedHits is shared by pointer so a child taken by value into a Child can
 // still report, from the root's always-rendered markup, that it ran.
 type gatedHits = atomic.Int64
@@ -2133,9 +2175,10 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 }
 
 // slowActionLive pins the connection goroutine from inside the ACTION handler
-// itself, not a Tick: the closure is already queued and running by the time
-// the deadline fires, unlike pinnedLive above where the goroutine was never
-// free to take the dispatch in the first place.
+// itself, not a Tick: the closure is already running by the time the deadline
+// fires, unlike pinnedLive above where the goroutine was never free to take the
+// dispatch in the first place. The session write lands on the POST's own
+// ResponseWriter, which must still be live when it happens.
 type slowActionLive struct {
 	beat    via.State[int] // rendering a State is what makes the unit live; unused otherwise
 	n       via.Signal[int]
@@ -2146,6 +2189,7 @@ type slowActionLive struct {
 func (p *slowActionLive) Slow(ctx *via.Ctx) {
 	close(p.running)
 	<-p.block
+	ctx.Session().Put(member{Name: "late"})
 	p.n.Set(p.n.Get() + 1)
 }
 
@@ -2153,45 +2197,45 @@ func (p *slowActionLive) View() h.H {
 	return h.Div(p.beat.Display(), p.n.Display(), h.Button(via.On("click", p.Slow), h.Str("go")))
 }
 
-func TestDispatch_pinnedActionStillAppliesAfterThe503(t *testing.T) {
-	t.Parallel()
-	// The handler blocks past WithPinnedDeadline, so the first select queues
-	// fn() while the goroutine is still free and only the second one times
-	// out — the window dispatch.go's bail-out misses, since it runs before
-	// a.fn, not after. Characterization: the 503-then-apply below is a defect
-	// frozen, not a contract.
-	p := slowActionLive{running: make(chan struct{}), block: make(chan struct{})}
-	app := vt.Serve(t, via.Handler(p, via.WithPinnedDeadline(150*time.Millisecond)))
-	conn := app.Connect()
-	defer conn.Close()
+func TestDispatch_actionRunningPastThePinnedDeadlineStillAnswersItsResult(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := slowActionLive{running: make(chan struct{}), block: make(chan struct{})}
+		srv := liveServer(t, via.Handler(p, via.WithPinnedDeadline(50*time.Millisecond),
+			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		tab := awaitTabID(t, lines)
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), strings.NewReader(withTab(tab, "{}")))
+		require.NoError(t, err)
+		req.Header.Set("Datastar-Request", "true")
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
 
-	fired := make(chan struct {
-		status int
-		body   string
-	}, 1)
-	go func() {
-		status, body := app.Action(0).Over(conn).Fire()
-		fired <- struct {
-			status int
-			body   string
-		}{status, body}
-	}()
+		fired := make(chan int, 1)
+		go func() {
+			resp, err := srv.Client().Do(req)
+			if err != nil {
+				fired <- -1
+				return
+			}
+			resp.Body.Close()
+			fired <- resp.StatusCode
+		}()
+		<-p.running
+		time.Sleep(time.Second) // the fake clock runs well past the deadline while the handler blocks
+		synctest.Wait()
+		early := 0
+		select {
+		case early = <-fired:
+		default:
+		}
+		close(p.block)
+		require.Zero(t, early, "the POST answered while its action was still running")
 
-	select {
-	case <-p.running:
-	case <-time.After(3 * time.Second):
-		require.Fail(t, "precondition: the action handler never started")
-	}
-
-	res := <-fired
-	assert.Equal(t, http.StatusServiceUnavailable, res.status,
-		"the POST times out while the handler is still running, not before it started")
-	assert.Contains(t, res.body, "stream busy")
-
-	close(p.block)
-	assert.Contains(t, conn.Await(`"n":1`), `"n":1`,
-		"the handler's mutation still lands and reaches the client over the open stream, "+
-			"after the POST that triggered it was already told 503")
+		assert.Equal(t, http.StatusNoContent, <-fired,
+			"an action that already started is waited for; the pinned deadline bounds only the queue wait")
+		awaitLine(t, lines, `"n":1`)
+	})
 }
 
 func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
@@ -2219,6 +2263,73 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 		"a store that cannot answer is an outage, not a session mismatch")
 	assert.Contains(t, body, "session store unavailable")
 	assert.NotContains(t, body, "session mismatch")
+}
+
+func TestDispatch_liveActionOnAnUnboundTabAnswers503WhileTheStoreIsDown(t *testing.T) {
+	t.Parallel()
+	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
+	r := via.NewRouter(via.WithSessionStore(store), via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/login", loginComp{})
+	via.Mount(r, "/live", sessionLive{})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	owner := jarClient(t)
+	signIn(t, srv, owner, "/login")
+
+	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
+	require.NoError(t, err)
+	page, err := io.ReadAll(getResp.Body)
+	require.NoError(t, err)
+	getResp.Body.Close()
+
+	store.mu.Lock()
+	store.down = true
+	store.mu.Unlock()
+
+	resp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
+		"a store that cannot answer must not be read as \"no prior session\"")
+}
+
+// loadCounter counts store reads, the cost a live action pays per session
+// resolve.
+type loadCounter struct {
+	via.SessionStore
+	loads atomic.Int64
+}
+
+func (s *loadCounter) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	s.loads.Add(1)
+	return s.SessionStore.Load(ctx, id)
+}
+
+func TestDispatch_aBoundLiveActionReadsTheSessionStoreOnce(t *testing.T) {
+	t.Parallel()
+	store := &loadCounter{SessionStore: via.NewMemorySessionStore()}
+	app := vt.Serve(t, via.Handler(sessBoundLive{},
+		via.WithSessionStore(store),
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+	conn := app.Connect()
+	defer conn.Close()
+
+	// The first action also fetches the page to read its URL, which reads the store too.
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Less(t, status, 300)
+	conn.Await(">1<")
+
+	before := store.loads.Load()
+	status, _ = app.Action(0).Over(conn).Fire()
+	require.Less(t, status, 300)
+	conn.Await(">2<")
+	assert.Equal(t, int64(1), store.loads.Load()-before, "one request resolves its session once")
 }
 
 // sessBoundLive establishes a session in OnInit so its stream is bound to one,

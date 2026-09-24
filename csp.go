@@ -21,7 +21,15 @@ func randomToken() string {
 // sha256Source returns the CSP source expression admitting exactly src. CSP
 // hash sources are standard base64 (padded), not the URL-safe alphabet used
 // elsewhere in via — the browser rejects a mismatch silently.
+//
+// The hash is of src as the browser holds it after parsing, which is what it
+// checks: the input stream preprocessor turns CRLF and lone CR into LF, and the
+// script-data and RAWTEXT tokenizer states emit U+FFFD for NUL (HTML spec,
+// "Preprocessing the input stream" and the "Script data" and "RAWTEXT" states).
 func sha256Source(src string) string {
+	src = strings.ReplaceAll(src, "\r\n", "\n")
+	src = strings.ReplaceAll(src, "\r", "\n")
+	src = strings.ReplaceAll(src, "\x00", "\uFFFD")
 	sum := sha256.Sum256([]byte(src))
 	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 }
@@ -86,7 +94,9 @@ func buildCSP(global, page Assets) string {
 				img.addOrigin(p.Href)
 			}
 		}
-		font.add(a.FontOrigins...)
+		for _, o := range a.FontOrigins {
+			font.add(originOf(o))
+		}
 	}
 
 	csp := "default-src 'self'; script-src " + script.join() + "; style-src " + style.join() + "; "

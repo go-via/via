@@ -516,12 +516,17 @@ type Ctx struct {
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
-	inInit      bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
-	reinit      bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
-	errPage     bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
-	viewRan     bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
-	rev         *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
-	streamCtx   context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
+	// passUnits is dispatchPlain's discovery-only record of each child key's
+	// first-pass Ctx, shared by the whole tree. Later passes render that pass's
+	// instance again instead of a fresh copy off the parent's field, so a
+	// child's hydrated values survive into the next pass the way a root's do.
+	passUnits map[string]*Ctx
+	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
+	reinit    bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
+	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
+	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
+	streamCtx context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
 
 	// badDecodeLogged dedupes the hydrator's decode-failure warning for the
 	// whole tree this Ctx belongs to: a shared pointer, allocated once per

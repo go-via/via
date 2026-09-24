@@ -9,8 +9,9 @@ import (
 )
 
 // config holds Handler's optional settings. The zero set is the dev-friendly
-// default: the action endpoint accepts requests from any origin, and production
-// opts into enforcement with WithTrustedOrigin.
+// default: a live action and the SSE connect accept any origin (the tab id is
+// their CSRF token), a plain action only its own, and production opts into
+// full enforcement with WithTrustedOrigin.
 type config struct {
 	log            *slog.Logger
 	trustedOrigins map[string]bool
@@ -80,8 +81,9 @@ func newConfig(opts []Option) *config {
 	c.head.validate()
 	if len(c.trustedOrigins) == 0 {
 		originWarnOnce.Do(func() {
-			c.log.Warn("via: action endpoint accepts requests from any origin — the per-tab id is still " +
-				"the CSRF token, but cross-origin enforcement is OFF until WithTrustedOrigin names one")
+			c.log.Warn("via: live actions and the SSE connect accept requests from any origin — the per-tab id " +
+				"is their CSRF token, and plain actions are held to same-origin, but cross-origin enforcement " +
+				"is OFF until WithTrustedOrigin names one")
 		})
 	}
 	return c
@@ -114,8 +116,10 @@ func WithLogger(l *slog.Logger) Option {
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
 // allowlists an exact origin (scheme://host[:port], as the browser sends it).
 // With at least one set, only same-origin requests and listed origins are
-// admitted; WITHOUT ANY, EVERY ORIGIN IS ACCEPTED — fine for development, set
-// this in production.
+// admitted. WITHOUT ANY, a live action and the SSE connect accept every origin
+// (the per-tab id they carry is the CSRF token) and a plain action, which has
+// no tab id, accepts only a provably same-origin request — fine for
+// development, set this in production.
 func WithTrustedOrigin(origin string) Option {
 	return func(c *config) { c.trustedOrigins[origin] = true }
 }
@@ -219,9 +223,10 @@ func WithMaxSSEConn(n int) Option {
 // goroutine to pick it up before answering 503 and logging the tab as pinned
 // (default 5s). The goroutine is serialized across every Tick, Listen and
 // action on that tab, so one handler that blocks stalls the rest; this deadline
-// is what turns that into a diagnosable 503 instead of a hang. Set it below the
-// load balancer's own timeout so via answers first. A value of 0 or less
-// restores the default.
+// is what turns that into a diagnosable 503 instead of a hang. It bounds only
+// the wait to be picked up: an action that has started running is waited for,
+// because it writes the POST's own response. Set it below the load balancer's
+// own timeout so via answers first. A value of 0 or less restores the default.
 func WithPinnedDeadline(d time.Duration) Option {
 	return func(c *config) { c.pinnedDeadline = d }
 }

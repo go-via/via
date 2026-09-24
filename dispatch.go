@@ -261,6 +261,10 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+	if len(m.cfg.trustedOrigins) == 0 && !plainOriginAllowed(req) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
 
@@ -299,6 +303,11 @@ func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, "malformed request body", http.StatusBadRequest)
 		return nil, false
 	}
+	if in == nil {
+		// A JSON null decodes to a nil map, and connect keeps this map as the
+		// stream's client slots, which every live action writes into.
+		in = map[string]json.RawMessage{}
+	}
 	return in, true
 }
 
@@ -306,15 +315,13 @@ func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode act
 // connection's serialized goroutine and waits for the result — synchronous,
 // unlike the old fire-and-forget child dispatch, so a Redirect, the session
 // cookie, and a panic all resolve on this response like a plain action. The
-// wait is bounded by req.Context() as well as the connection closing, so a
-// stalled peer elsewhere can't park this POST's goroutine forever.
+// wait for the goroutine to pick the action up is bounded by req.Context(), the
+// connection closing and the pinned deadline; an action already running is
+// waited for, since it writes this response.
 func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, child string, act string, in map[string]json.RawMessage, base string) {
 	res, outcome := lc.run(req.Context(), func() actionResult {
-		// A queued closure runs regardless of what its caller did meanwhile: if
-		// req.Context() is already done, run has given up and answered 410, so
-		// applying the action now would double-apply on a client retry, and w
-		// is a dead ResponseWriter whose Header() would race the server's
-		// post-handler teardown.
+		// The client hung up between the handoff and now: applying the action
+		// would double-apply on its retry, and nobody reads this answer.
 		if req.Context().Err() != nil {
 			return actionResult{gone: "request abandoned"}
 		}
@@ -322,20 +329,20 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// dispatch that passed a pre-queue check while the connection was
 		// unbound could be applied after a concurrent live login bound it. Here
 		// the compare and the run are atomic on one serialized goroutine.
+		// Resolved once, here, for both the binding check and the action. The
+		// store error is kept, not discarded: a store that could not answer
+		// yields a nil session, which used to read as "wrong session" (or "no
+		// prior session") rather than an outage.
+		sessID, sess, err := m.sessions.resolve(req)
+		if err != nil {
+			return actionResult{unavailable: "session store unavailable"}
+		}
 		if bound := lc.boundSession(); bound != "" {
-			// A dispatch must carry the same session, by pointer not id (a
-			// Rotate moves the pointer to a new id, never a new data object).
-			// Otherwise a leaked tab id is a bearer credential good from any
-			// request, session or none, once the origin floor is open.
-			// The store error is kept, not discarded: a store that could not
-			// answer yields s == nil, which used to read as "wrong session"
-			// and answer 403. A blip is not a rejection, and the developer got
-			// only sess.go's "Load failed" with nothing tying it to the 403.
-			_, s, err := m.sessions.resolve(req)
-			if err != nil {
-				return actionResult{unavailable: "session store unavailable"}
-			}
-			if s == nil || s.sid != bound {
+			// A dispatch must carry the same session, compared by sid (a Rotate
+			// moves the cookie id, never the sid). Otherwise a leaked tab id is a
+			// bearer credential good from any request, session or none, once
+			// the origin floor is open.
+			if sess == nil || sess.sid != bound {
 				return actionResult{forbidden: "session mismatch"}
 			}
 		}
@@ -352,7 +359,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		if !ok {
 			return actionResult{gone: m.unknownAction(u, act)}
 		}
-		return liveRunAction(w, req, m.sessions, lc, u, in, a)
+		return liveRunAction(w, req, m.sessions, sessID, sess, lc, u, in, a)
 	})
 	switch outcome {
 	case runPinned:
@@ -424,7 +431,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 // delays only the next push item, never this response. A detached goroutine
 // doing the enqueue used to race other actions' goroutines and reorder their
 // pushes; returning it as data keeps everything on the one goroutine, in order.
-func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
+func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			if bad, ok := rec.(badActionArg); ok {
@@ -456,6 +463,19 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// the hydrated values; a Set inside the handler drops its own slot, so a
 	// server write still survives.
 	defer lc.rev.restore()
+	// beforeSession is resolved before the action runs, not inferred from the
+	// handle afterwards: a request already carrying a cookie and one whose
+	// action just minted look the same once the action is done.
+	//
+	// An unbound connection binds to the session the request carries: the user
+	// may have logged in from another tab after this one connected, and the tab
+	// id must stop being a bearer credential once a session reaches it. A
+	// leaked id presented with someone else's cookie binds to that cookie
+	// instead, which locks the rightful tab out (403, recovered by a reload) but
+	// grants nothing: every action still runs under its own request's session.
+	if beforeSession != nil {
+		lc.bindSession(beforeSession.sid)
+	}
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
 			hydrate(raw)
@@ -471,15 +491,8 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	//
-	// beforeSession is resolved before the action runs, not inferred from
-	// "rc.session == nil after": Ctx.Session() lazily resolves the same
-	// request's cookie whether the action reads or writes, so a request already
-	// carrying a valid (e.g. an attacker's) cookie would look post-hoc
-	// identical to one that just minted a session, binding the connection to a
-	// session the action never created (I1).
-	_, beforeSession, _ := sessions.resolve(req)
 	rc := &Ctx{req: req, sessions: sessions, sessW: w}
+	rc.adoptSession(sessID, beforeSession, nil)
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
 	// push) is the only place that owns clearing it. Resetting unconditionally
 	// on every dispatch dropped an earlier action's Set the moment it panicked
@@ -499,10 +512,10 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 		rc.redirect = rl.redirect
 	}
 
-	// A session minted on a connection that was anonymous at connect: bind it
-	// now so the tab id stops being a bearer credential the instant this action
-	// logs it in (H1; bindSession is a no-op once bound).
-	if beforeSession == nil && rc.session != nil && rc.session.data != nil {
+	// A session this action minted: bind it now so the tab id stops being a
+	// bearer credential the instant this action logs it in (H1; bindSession is
+	// a no-op once bound).
+	if beforeSession == nil && rc.session.data != nil {
 		lc.bindSession(rc.session.sid())
 	}
 
@@ -602,6 +615,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// pass (rebindFrom copies the pointer; childViewer carries it to children).
 	auth.badDecodeLogged = new(atomic.Bool)
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
+	auth.passUnits = map[string]*Ctx{}
 	prebindSignals(auth, inst)
 	if runOnInit(inst.v, auth, w, req, m.sessions, false) != nil {
 		return
@@ -620,6 +634,19 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		// silently half-hydrated render.
 		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
 			"passes", maxHydratePasses, "act", act)
+	}
+	if child == rootAddr && n > 0 && len(auth.passUnits) > 0 {
+		// The response render re-copies every child from its field, as it must
+		// to show what the root action did to them, so the render it is
+		// compared against has to as well: the last pass shows the children's
+		// hydrated copies, and every root action would differ from it. bind is
+		// rendered again afterwards so the handler's Sets land on the Ctx the
+		// response reads.
+		fresh := rebindFrom(auth)
+		fresh.passUnits = nil
+		rootBefore = renderRootWith(fresh, inst.v)
+		bind = rebindFrom(auth)
+		renderRootWith(bind, inst.v)
 	}
 	ua := auth.unit(child)
 	if ua == nil {
@@ -787,8 +814,9 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 // slot takes exactly 2 passes (2 renders), which is the floor: the handler has
 // to run on a render that already saw the posted values.
 //
-// Each pass re-renders the whole tree, so an embedded child's OnInit runs once
-// per pass — twice for the common case. Keep OnInit cheap and idempotent.
+// Each pass re-renders the whole tree, but an embedded child keeps the instance
+// its first pass made (see Ctx.passUnits), so its OnInit runs once, as a root's
+// does.
 const maxHydratePasses = 8
 
 // rerenderPlain re-renders the acted-on unit for a Datastar action's response,

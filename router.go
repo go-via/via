@@ -77,7 +77,9 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 		return nil
 	}
 	// A paramMiss (a segment that doesn't decode) becomes a 404: the URL names a
-	// page that doesn't exist. Any other panic keeps propagating.
+	// page that doesn't exist. Any other panic keeps propagating. One defer with
+	// the redirect below, so a Redirect queued before the miss is never written
+	// ahead of the 404.
 	defer func() {
 		if rec := recover(); rec != nil {
 			if _, isMiss := rec.(paramMiss); !isMiss {
@@ -85,9 +87,8 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 			}
 			http.Error(w, "not found", http.StatusNotFound)
 			err = ErrNotFound
+			return
 		}
-	}()
-	defer func() {
 		if err == nil && ctx.redirect != "" {
 			switch {
 			case sse:
@@ -358,6 +359,13 @@ func (r *Router) Close() {
 // Its actions post to {path}/_via/a/{child}/{act}. root is taken by value; the
 // PT constraint makes a missing or mistyped View() a compile error, like
 // Handler.
+//
+// A page serves its own path only, never a subtree: "/" serves "/", and
+// "/docs/" serves "/docs/" but not "/docs/intro", and ServeMux redirects a GET
+// of "/docs" to it. "/docs" and "/docs/" share one action route, so only one
+// of the two can be mounted. {name} wildcards are allowed; {name...} and {$}
+// are not, since the page's action and stream routes live under its path, and
+// {child} and {act} are reserved for the action route. Mount panics on either.
 func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
 	verifyMethodTrampoline()
@@ -367,8 +375,9 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	}
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase
-	if getPattern == "" {
-		getPattern = "/{$}"
+	if patternBase == "" || strings.HasSuffix(path, "/") {
+		// Without the anchor ServeMux would read a trailing slash as a subtree.
+		getPattern += "/{$}"
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
@@ -440,9 +449,20 @@ func mountBase(path string) (base string, names []string) {
 		return "", nil
 	}
 	for _, seg := range strings.Split(path, "/") {
-		if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") {
-			names = append(names, seg[1:len(seg)-1])
+		if !strings.HasPrefix(seg, "{") || !strings.HasSuffix(seg, "}") {
+			continue
 		}
+		name := seg[1 : len(seg)-1]
+		switch {
+		case name == "$":
+			panic(fmt.Sprintf(`via: Mount path %q: {$} is not supported — a path ending in "/" already matches only itself`, path))
+		case strings.HasSuffix(name, "..."):
+			panic(fmt.Sprintf("via: Mount path %q: a {name...} wildcard is not supported — "+
+				"a page's action and stream routes live under its path", path))
+		case name == "child" || name == "act":
+			panic(fmt.Sprintf("via: Mount path %q: {%s} is reserved for via's action route; rename the wildcard", path, name))
+		}
+		names = append(names, name)
 	}
 	return strings.TrimSuffix(path, "/"), names
 }
