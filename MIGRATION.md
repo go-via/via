@@ -46,10 +46,10 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.hits.Set(c.hits.Get() + c.step.Get()) }
 use it for sessions, path params and subscriptions. It is no longer how state
 finds itself.
 
-The knock-on effect is the one to plan for: `via.State[T]` is **child-only**.
-Reading or writing it outside a live child panics with a message naming the
-fix. v0.7's per-tab `StateTab` worked anywhere; v2 asks you to say where the
-value lives. For a value that is genuinely server state, the v2 counter
+The knock-on effect is the one to plan for: `via.State[T]` is per-connection
+state, and **rendering one makes its unit live**, so the page streams over SSE.
+v0.7's per-tab `StateTab` was just a value; v2 asks you to say where the value
+lives. For a value that is genuinely server state, the v2 counter
 example does not use `State` at all. It injects a plain `*Store` dependency
 and lets the re-render read it. That is the idiomatic answer and it is a
 design change, not a syntax change.
@@ -60,7 +60,7 @@ The numeric shapes are gone with the `ctx`: there is no `SignalNum`,
 
 | v0.7 | v0.8 |
 | --- | --- |
-| `StateTab[T]` | `State[T]` (live children only) |
+| `StateTab[T]` | `State[T]` (rendering it makes the unit live) |
 | `StateSess[T]` | per-session topic keyed by `Session.ID()` + `State.Track` |
 | `StateApp[T]` | your own dependency, injected; via does not own it |
 | `Signal[T]` | `Signal[T]`, client-side reactivity with zero round-trips |
@@ -278,10 +278,11 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 - **`via.OnUpload` and `via.File`**. `via.PostForm` is now always multipart,
   so a file `<input>` needs no separate upload verb. Read it with stdlib's
   `ctx.Request().FormFile(name)`.
-- **The SSE knobs are constants**: keepalive cadence (25s), per-frame write
-  deadline (10s), and the concurrent-connection cap (10,000) are fixed;
-  `WithSessionCookieName` is the only SSE/session option that remains. Open an
-  issue if a deployment needs one of these tunable.
+- **Most SSE knobs are constants**: keepalive cadence (25s) and the per-frame
+  write deadline (10s) are fixed. The connection cap (`WithMaxSSEConn`,
+  default 10,000) and the pinned deadline (`WithPinnedDeadline`, default 5s)
+  are the two that stayed options. Open an issue if a deployment needs another
+  one tunable.
 - **`RequireSession` and `Mount`'s bare `guards ...Guard` parameter**. There is
   no separate guard mechanism: the check moves into `OnInit`, on the page
   itself. See the worked example below.
@@ -371,18 +372,21 @@ Two defaults are more permissive than v0.7's, and they are the entries most
 likely to matter in production. The CHANGELOG has the full reasoning; the short
 form:
 
-- **The origin floor is open by default.** The origin floor is via's check
-  that a state-changing request comes from a host you trust, read off
-  `Origin`/`Sec-Fetch-Site`. v0.7 enforced it; v0.8 accepts an action
-  from any origin until `WithTrustedOrigin` names one, which switches
-  enforcement on for the whole endpoint. `WithInsecureOrigin` is gone; there is
-  no secure default left to opt out of. The per-tab id is the CSRF token on a
-  live page only: a plain page carries an empty `viatab`/`_viatab`, so with the
-  floor open a cross-origin `PostForm` submit is accepted and what actually
-  defends it is the session cookie's `SameSite=Lax` (the request arrives
-  unauthenticated). If you deployed v0.7 without thinking about origins,
-  **v0.8 needs you to think about them.** via logs one line at startup when the
-  floor is open.
+- **The origin floor is open by default for live traffic.** The origin floor
+  is via's check that a state-changing request comes from a host you trust,
+  read off `Origin`/`Sec-Fetch-Site`. v0.7 enforced it; v0.8 accepts a live
+  action and the SSE connect from any origin until `WithTrustedOrigin` names
+  one, which switches enforcement on for the whole endpoint.
+  `WithInsecureOrigin` is gone; there is no secure default left to opt out of.
+  The per-tab id is the CSRF token on a live page only: a plain action carries
+  an empty `viatab`/`_viatab`, so with no trusted origin set it is held to
+  same-origin instead. `Sec-Fetch-Site` must be `same-origin` or `none`; a
+  browser that sends no fetch metadata must send an `Origin`, or failing that a
+  `Referer`, matching the request's host. Anything else answers `403`,
+  including a request with none of the three, such as a script or proxy that
+  strips them. If you deployed v0.7 without thinking about origins, **v0.8
+  needs you to think about them.** via logs one line at startup when the floor
+  is open.
 - **Sessions are always on** and mint a random per-process key if you configure
   none, warning once. The key signs the cookie; the data lives in a
   `SessionStore` whose default is this process's memory, so surviving a restart
@@ -493,8 +497,8 @@ the client store already held.
 
 ## New startup panics
 
-Both fail loudly rather than writing the wrong field at runtime, and both can
-surface on an upgrade in code that compiled fine before.
+Each fails loudly rather than misbehaving at runtime, and each can surface on
+an upgrade in code that compiled fine before.
 
 - A `Signal` that is **not a plain field of its composition** panics at
   `Mount`/`Child` — at startup, not once per request. A signal reached through
@@ -512,6 +516,12 @@ surface on an upgrade in code that compiled fine before.
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
   `A__b`. Rename one of them.
+- A `Mount` path with a `{name...}` or `{$}` wildcard panics, since a page's
+  action and stream routes live under its path, and so does one naming a
+  wildcard `{child}` or `{act}`, which the action route reserves. Mounting
+  both `/docs` and `/docs/` panics too: they share one action route. A page
+  serves its own path only, never a subtree: `Mount(r, "/docs/", …)` does not
+  answer `/docs/intro`, and `ServeMux` redirects `/docs` to `/docs/`.
 
 ## The page's metadata is a method on the root
 

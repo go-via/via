@@ -62,7 +62,10 @@ func (r redisSessions) Delete(ctx context.Context, id string) error {
 }
 
 via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))`),
-		h.P(h.Str("Rotate is a Save under the new id then a Delete of the old. Expiry is the ttl handed to Save, "+
+		h.P(h.Str("Rotate is a Save under the new id then a Delete of the old. If the Save fails, or the old "+
+			"id can be neither deleted nor expired, Rotate panics and the request answers 500 rather than report "+
+			"a rotation that did not happen; a failed Save leaves the old session valid. Expiry is the ttl handed "+
+			"to Save, "+
 			"and via stamps the same deadline into the blob and refuses an expired Load, so a backend with no TTL "+
 			"support is still correct; it only leaks dead rows. Behind a TLS-terminating proxy via sees plain "+
 			"HTTP, so pass WithSecureCookies or the Secure attribute never gets set.")),

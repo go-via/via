@@ -10,7 +10,7 @@ Rule: Use `Test` + PascalCase subject + underscore + camelCase behavior
 
 - ✅ `TestSignal_returnAsString`
 - ✅ `TestPage_panicsOnNoView`
-- ✅ `TestPlugin_servesGzipWhenAccepted`
+- ✅ `TestMount_panicsOnReservedWildcard`
 - ❌ `TestSignal` (vague — what about it?)
 - ❌ `Test_signal_return_as_string` (wrong casing)
 
@@ -135,7 +135,7 @@ Rule:
 - All test helpers live in `_test.go` files.
 - Helpers that call `t.Fatal` or `t.Error` must call `t.Helper()` as
   their first statement.
-- Use setup helpers (e.g. `registerPlugin(...)`) to reduce repetition,
+- Use setup helpers (e.g. `serveCounter(t)`) to reduce repetition,
   not `TestMain` unless truly necessary.
 
 ## Field-Embeddable Types Keep Fields Unexported
@@ -149,7 +149,7 @@ handle's identity. Exposing fields would let a caller desync that name
 from the stored value, or forge one.
 
 Rule: For handle types whose binding is established by the runtime
-(`Signal`, `Local`, `State`, `List`), keep all stored state in unexported
+(`Signal`, `SignalCS`, `State`, `List`), keep all stored state in unexported
 fields. The type name is exported; the contents aren't.
 
 ```go
@@ -161,22 +161,6 @@ type Signal[T any] struct {
 
 // ❌ Exported fields — caller can desync the wire name from the value
 type Signal[T any] struct { ID string; Val T }
-```
-
-## Plugin Constructor Naming
-
-Reasoning: A uniform constructor name across all plugin packages makes the
-API predictable and call sites consistent.
-
-Rule: Every plugin package exposes `Plugin(...)` as its public constructor,
-not `New(...)`. This keeps `via.WithPlugins(...)` call sites uniform.
-
-```go
-// ✅
-via.WithPlugins(picocss.Plugin(), echarts.Plugin())
-
-// ❌
-via.WithPlugins(picocss.New(), echarts.Plugin())
 ```
 
 ## Functional Options
@@ -224,12 +208,12 @@ than expose the shared internal type in its signatures.
 
 ## Panic on Invalid Registration
 
-Reasoning: Errors during page or plugin registration are programming
+Reasoning: Errors during page or router registration are programming
 mistakes, not recoverable runtime conditions. Panicking at startup makes
 misconfiguration impossible to miss and impossible to ship.
 
-Rule: Validation that runs once at registration time (inside `Mount[C]`,
-`Plugin(...)`, etc.) panics on invalid input. Do not return errors from
+Rule: Validation that runs once at registration time (inside `Mount`,
+`WithHead`, etc.) panics on invalid input. Do not return errors from
 registration functions.
 
 - ✅ Panic if `View` is never set, if conflicting options are passed, if
@@ -264,17 +248,17 @@ it.
 
 ```go
 // ✅ Adds information the name doesn't
-// MustJSON marshals v to JSON, returning "null" on error.
-func MustJSON(v any) string
+// ErrNotFound from OnInit answers 404; any other error answers 500.
+var ErrNotFound = errors.New("via: not found")
 
 // ✅ States a non-obvious contract
-// Notify JSON-encodes message so arbitrary user text is safe inside
-// the rendered toast snippet.
-func (ctx *Ctx) Notify(message string)
+// Redirect navigates after the current handler returns. A target that is
+// not http(s) or same-origin relative is dropped and logged, never followed.
+func (c *Ctx) Redirect(path string)
 
 // ❌ Restates the name
-// WithTitle sets the chart title.
-func WithTitle(title string) ChartOption
+// WithMaxBody sets the max body.
+func WithMaxBody(bytes int64) Option
 ```
 
 ### Unexported symbols and inner logic
@@ -309,13 +293,12 @@ precondition whose absence would make the test logic misleading:
 
 ```go
 // ✅ Non-obvious precondition
-// Two charts share a page; both must render without ID collision.
-c1 := echarts.NewChart()
-c2 := echarts.NewChart()
+// Two fields of one child type share a parent; their slots must not collide.
+p := pair{A: note{}, B: note{}}
 
 // ❌ Describes what the next line already says
-// Create a new chart with a title.
-chart := echarts.NewChart(echarts.WithTitle("CPU"))
+// Create a new router.
+r := via.NewRouter()
 ```
 
 ## Errors

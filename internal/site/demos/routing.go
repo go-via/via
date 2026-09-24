@@ -11,7 +11,7 @@ type routeRow struct{ code, note string }
 
 var routeRows = []routeRow{
 	{`via.Mount(r, "/thread/{id}", Thread{})`,
-		"the path is an http.ServeMux pattern. via.Handler(root) is the same thing mounted at \"/\"."},
+		"the path is an http.ServeMux pattern that serves itself only, never a subtree. via.Handler(root) is the same thing mounted at \"/\"."},
 	{`ctx.Param[int]("id")`,
 		"reads one named segment, decoded into T. A segment that will not decode answers 404 rather than a zero value, and naming a segment the pattern does not have panics."},
 	{"OnInit, actions, Tick, Listen",

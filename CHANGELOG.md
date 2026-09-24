@@ -140,7 +140,7 @@ the v2 core. **Requires Go 1.27.**
   framed separately off the dirty set, so a signal change with an unchanged DOM
   still ships, and so does the reverse.
 
-- **`via.PageMetaer` — a page describes itself, and owns its own CSP.** A root
+- **`PageMeta` — a page describes itself, and owns its own CSP.** A root
   composition declares its document with one `PageMeta() via.Meta` method,
   duck-typed like `OnInit` and read after it (and after `OnReload`), so
   data-dependent metadata works. `Meta` carries `Title`, `Description`,
@@ -155,7 +155,8 @@ the v2 core. **Requires Go 1.27.**
   router-wide `Head.Assets` plus that page's own — one string per mount, zero
   work per request — so one page's CDN never widens another page's policy. A
   relative URL is covered by `'self'`, an absolute one contributes its origin,
-  an inline script or style is admitted by the sha256 of its exact bytes, and a
+  an inline script or style is admitted by the sha256 of its body as the
+  browser parses it (CRLF and a lone CR become LF, NUL becomes U+FFFD), and a
   `Preload` widens the directive its `As` names. Element-patch responses keep
   the floor policy: a fragment loads nothing.
 
@@ -170,13 +171,19 @@ the v2 core. **Requires Go 1.27.**
   data-dependent script src is caught at boot or on the first GET, never
   silently blocked in the browser. Boot-time validation panics on a
   `Script` setting both or neither of `Src`/`Inline`, an `Inline` containing
-  `</script` or `</style`, an absolute URL that is not http(s), and a
-  `Preload.As` outside script/style/font/image.
+  `</script` or `</style`, an absolute URL that is not http(s), a
+  protocol-relative `//host/…` `Script.Src`, `Style.Href` or `Preload.Href`
+  (it has no scheme to read an origin off, so the policy could only admit it
+  as `'self'`; write `https://`), a `FontOrigins` entry that is not a bare
+  http(s) origin (`scheme://host[:port]`, no path, query or second source),
+  an asset or font host containing `;` or `,` (it would end the CSP source
+  list and start a new directive), and a `Preload.As` outside
+  script/style/font/image.
 
   `Mount` and `Child` extend the hook check to it: a method named `PageMeta`
   with the wrong signature panics at boot, and a near-miss name (`Meta`,
-  `Metadata`, …) carrying `func() via.Meta` on a type implementing no
-  `via.PageMetaer` is logged.
+  `Metadata`, …) carrying `func() via.Meta` on a type with no
+  `PageMeta` method is logged.
 
 - **BREAKING: `Head` is now `{Lang, Raw, Assets}`.** `Head.Title` is
   `PageMeta().Title`; `Head.InlineStyle` is `Assets.Styles`; `ScriptOrigins` and
@@ -240,7 +247,9 @@ the v2 core. **Requires Go 1.27.**
   handler. The pinned case — which also stops keepalives, so the connection is
   cut by a proxy and the goroutine leaks for the life of the process — now
   answers `503 stream busy` and logs once per tab with the tab id and the unit
-  type. A session-store outage during a dispatch answers `503 session store
+  type. That answer covers only an action the goroutine never picked up: one
+  that has started runs to completion and answers on its own POST. A
+  session-store outage during a dispatch answers `503 session store
   unavailable` instead of `403 session mismatch`, matching what the connect
   already did. A refusal at the stream cap, and every live panic, now carry the
   tab, unit and action in the log; the unknown-action log (which prints the
@@ -262,9 +271,12 @@ the v2 core. **Requires Go 1.27.**
   many live SSE streams one Router serves at once (default 10000; past it a
   connect is 503) — it is a memory budget, and the right value is the box's,
   not via's. `WithPinnedDeadline(d)` sets how long an action POST waits for the
-  tab's stream goroutine before answering 503 and logging the tab as pinned
-  (default 5s) — set it under the load balancer's own timeout so via answers
-  first. Both take a value of 0 or less as "restore the default".
+  tab's stream goroutine to pick it up before answering 503 and logging the tab
+  as pinned (default 5s) — set it under the load balancer's own timeout so via
+  answers first. It bounds only that wait: an action that has started running
+  is waited for, because it writes the POST's own response, so a slow handler
+  holds its POST open rather than answering 503 and applying anyway. Both take
+  a value of 0 or less as "restore the default".
 
 - **`WithSessionStoreTimeout`** caps one session store round-trip (default 5s).
   Store calls deliberately outlive the request's context, so without it a hung
@@ -284,10 +296,16 @@ the v2 core. **Requires Go 1.27.**
   without reading any of via's internals. Rotation is Save-then-Delete and
   expiry is the `ttl` handed to Save, so no implementation reimplements either;
   via also stamps its own deadline into the blob, so a backend with no TTL
-  support stays correct. **Breaking:** session values now round-trip through
-  `encoding/json`, keyed by the Go type's printed name, so a `Session.Put`
-  value must be JSON-encodable (it panics if not) and a value written under a
-  type that has since been renamed reads back as absent.
+  support stays correct. A rotation that cannot complete is not reported as
+  one: if the Save under the new id fails, or the old id can be neither
+  deleted nor overwritten with an expired blob, `Rotate` panics and the
+  request answers 500. A failed Save leaves the old session valid. The same
+  holds for a first `Rotate` with no session yet: if its Save fails, no
+  cookie is issued.
+  **Breaking:** session values now round-trip through `encoding/json`, keyed
+  by the Go type's printed name, so a `Session.Put` value must be
+  JSON-encodable (it panics if not) and a value written under a type that has
+  since been renamed reads back as absent.
 
 - **`Reloader`**: `OnReload(*via.Ctx) error`, run after an action and before the
   response render, on the plain path and the live path alike. It fixes the
@@ -326,18 +344,21 @@ itself at runtime unless you look:
 
 - **Origin enforcement (the "origin floor": the check on every state-changing
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
-  default.** v0.7 enforced; v0.8 accepts an action
-  from any origin until `WithTrustedOrigin` names one, at which point
-  enforcement switches on for the whole endpoint. The reasoning: on a live page
-  the per-tab id is a synchronizer token and does the load-bearing work, and
-  local development over plain http has to work with no configuration. The
-  limit of that reasoning: a plain page has no connection and no tab id
-  (`viatab` and `_viatab` are empty), so a cross-origin `PostForm` submit is
-  accepted with the floor open, and what defends it is the session cookie's
-  `SameSite=Lax`, and the request arrives unauthenticated. The consequence:
-  **a production deployment that never calls `WithTrustedOrigin` is running
-  with cross-origin enforcement off.** The option name describes what it
-  allows and says nothing about it also flipping enforcement, so via now
+  default for live traffic.** v0.7 enforced; v0.8 accepts a live action and the
+  SSE connect from any origin until `WithTrustedOrigin` names one, at which
+  point enforcement switches on for the whole endpoint. The reasoning: on a
+  live page the per-tab id is a synchronizer token and does the load-bearing
+  work, and local development over plain http has to work with no
+  configuration. The limit of that reasoning: a plain action has no connection
+  and no tab id (`viatab` and `_viatab` are empty), so nothing in it is a CSRF
+  token. With no trusted origin set, a plain action is therefore held to
+  same-origin: `Sec-Fetch-Site` must be `same-origin` or `none`, or, when the
+  browser sends no fetch metadata, the `Origin` (failing that, the `Referer`)
+  must match the request's host. Anything else answers `403`, and so does a
+  request carrying none of the three. The consequence: **a production
+  deployment that never calls `WithTrustedOrigin` is running with cross-origin
+  enforcement off for live actions and the stream.** The option name describes
+  what it allows and says nothing about it also flipping enforcement, so via
   logs one line at startup when the floor is open. Set the option in
   production.
 - **Sessions are always on**, lazily: the cookie is issued on first write. If
@@ -385,7 +406,7 @@ as a re-read of the README rather than a diff.
 - **The zero `Router` is usable**, like `http.ServeMux`: `new(Router)` no
   longer nil-dereferences at the first `Mount`. Prefer `NewRouter` when you
   have options to pass.
-- **`via.Live` and `OnConnect` are gone: there is one hook, `Initer`/`OnInit`.**
+- **`via.Live` and `OnConnect` are gone: there is one hook, `OnInit`.**
   `OnConnect(*Ctx) error` and `OnInit(*Ctx) error` had the same signature, the
   same Ctx powers, and ran at the same point; keeping both meant a composition
   with nothing to load still had to write an empty method to flip a liveness
@@ -437,22 +458,22 @@ as a re-read of the README rather than a diff.
 - **`h.SafeURL` is gone.** The URL policy (http/https/relative admitted,
   `javascript:`/`data:`/protocol-relative refused, including a leading `\` or
   `/\` (WHATWG parsing treats `\` as `/`, so `/\evil.com` is protocol-relative
-  too) moved to `internal/hcore`, where `h`'s typed attributes and via's
-  `Redirect` gate share one implementation. It was exported only to cross a
-  package boundary, and it carried a second copy of the three checks: two
-  gates that agreed today is how one of them later admits a `javascript:`
-  target the other refuses. Nothing outside via needed it; the typed
-  `h.Href`/`h.Src`/`h.Action` attributes and `via.Redirect` enforce the
-  policy for you.
+  too, and strips tab, CR and LF anywhere, so the check drops them first and
+  `/\t/evil.com` is refused as well) moved to `internal/hcore`, where `h`'s
+  typed attributes and via's `Redirect` gate share one implementation. It was
+  exported only to cross a package boundary, and it carried a second copy of
+  the three checks: two gates that agreed today is how one of them later
+  admits a `javascript:` target the other refuses. Nothing outside via
+  needed it; the typed `h.Href`/`h.Src`/`h.Action` attributes and
+  `ctx.Redirect` enforce the policy for you.
 - **`via/sess` merged into the root package**: `Session` is a real type with
-  `Put`/`Get[T]`/`Clear[T]`/`Rotate` methods, reached via `ctx.Session()`; the
+  `Put`/`Get[T]`/`Delete`/`Rotate` methods, reached via `ctx.Session()`; the
   `sess` subpackage and its `internal/sessbridge` shim are gone.
 - **Bare mutators**: `Signal.Set(v)`, `State.Set(v)`, `List.Append(v)`, with no
   `ctx` argument. State is bare; ctx is for the request.
 - **Composition is `via.Child`**: child compositions are plain struct fields
   rendered with `via.Child(p.Field)`. `Slot`, `Child[C]`, `NewChild`, `Fill`
   and the `.Child` method are gone. Generic layouts: `Shell[C]{Body C}`.
-- **`via.Mount(r, …)` is `r.Mount(…)`**: the router owns its mounts.
 - **`via.Param[T](ctx, n)` is `ctx.Param[T](n)`; `via.Redirect(ctx, path)` is
   `ctx.Redirect(path)`**: request-scoped verbs are Ctx methods.
 - **`via.Listen` is a Ctx method**: `ctx.Listen(topic, handler)`.
@@ -463,9 +484,10 @@ as a re-read of the README rather than a diff.
   write); the session options are tune-only. Key resolution:
   `WithSessionKey` → `VIA_SESSION_KEY` → random per-process key (warned at
   first mint).
-- **Origin floor is open by default**; `WithTrustedOrigin` turns enforcement
-  on (`WithInsecureOrigin` removed). The per-tab id remains the CSRF token on a
-  live page; a plain page relies on the session cookie's `SameSite=Lax`.
+- **Origin floor is open by default for live traffic**; `WithTrustedOrigin`
+  turns enforcement on (`WithInsecureOrigin` removed). The per-tab id remains
+  the CSRF token on a live page; a plain action, which has no tab id, must be
+  same-origin until a trusted origin is set.
 - **`h` is elements + attributes + `Str` only**: the render plumbing
   (`Dyn`/`DynAttr`/`NewRenderer`/`Renderer`/`Binder`) moved behind
   `internal/hcore`.
@@ -483,7 +505,7 @@ as a re-read of the README rather than a diff.
 - **`ctx.OnConnect(fn)`**: run fn once when this unit's stream opens.
   The acquire half of `OnDispose`, and the only correct place for a
   connection-scoped side effect now that `OnInit` is per-request.
-- **`topic.Topic.Subs() int`**: the live subscription count, for publishing
+- **`topic.Topic.NumSubs() int`**: the live subscription count, for publishing
   presence and for proving a subscription was actually released.
 - **`topic` delivery is lossless, and `ctx.Listen` renders once per batch.**
   The broker used to give each subscriber a 64-value buffer and drop anything
@@ -531,19 +553,25 @@ as a re-read of the README rather than a diff.
   and footgun tags (`html`, `head`, `script`, `template`, …) — those stay
   via's. Typed `h.Href`/`h.Src`/`h.Action` attributes gate their URL through
   a `javascript:`/`data:` allowlist and neutralize to `#` loudly.
-- **Router**: `via.NewRouter` + `r.Mount("/path", Page{})`
-  serves a multi-page app behind one handler; `via.Register` is now literally
+- **Router**: `via.NewRouter` + `via.Mount(r, "/path", Page{})`
+  serves a multi-page app behind one handler; `via.Handler` is literally
   `Mount` at `/` — one dispatch pipeline. Mounted pages carry the full live
   stack (SSE, live actions, islands). Every action — a `@post` event
   binding, a native `PostForm` submit, or a live unit's — posts through one
-  `dispatch`/`respond` pair to `/_via/a/{island}/{n}` (the root is island
-  0); the response mode (element-patch vs a native form's full-page
+  `dispatch`/`respond` pair to `/_via/a/{child}/{act}` (the root is `r`);
+  the response mode (element-patch vs a native form's full-page
   re-render) is read off the request's `Datastar-Request` header rather
   than the route. `/_via/f/` is gone.
 - **Path params**: `Mount("/thread/{id}", …)` + `ctx.Param[T]("id")`, on Go's
   own `http.ServeMux` syntax, named not positional; a segment that doesn't
   decode is an honest 404 on every stateless transport, and naming a segment
   the mount pattern doesn't have panics at request time (a wiring mistake).
+  A page serves its own path only, never a subtree: `Mount(r, "/docs/", …)`
+  serves `/docs/` but not `/docs/intro`, and `ServeMux` redirects a GET of
+  `/docs` to it. `/docs` and `/docs/` share one action route, so only one of
+  the two can be mounted. `Mount` panics on a `{name...}` or `{$}` wildcard,
+  since a page's action and stream routes live under its path, and on
+  `{child}` or `{act}`, which the action route reserves.
 - **`ctx.Listen[T](topic, handler)`**: subscribe + pump + auto-dispose
   in one line.
 - **Arg events**: `via.OnArg` carries a typed render-time datum with the
@@ -557,15 +585,13 @@ as a re-read of the README rather than a diff.
   answers with a constant `location.assign` script Datastar executes through
   its `text/javascript` branch, with the target in a
   `datastar-script-attributes` header so the CSP can admit the bytes by hash.
-- **`WithDocumentHead(via.Head{...})`**: the document shell. `Title`, `Lang`,
-  `Raw` head markup (emitted verbatim after via's own `<meta charset>`), one
-  inline style, and `ScriptOrigins`/`StyleOrigins`/`FontOrigins` are the app's
-  own origin declaration for whatever `Raw` references, one list per
-  directive so a stylesheet CDN isn't also script-trusted. `script-src`,
-  `style-src` and `font-src` are derived from those lists, so a declared host
-  works under the strict CSP and an undeclared one stays blocked.
-  `InlineStyle` is admitted by its own sha256. Malformed heads panic at
-  `Register`; the zero `Head` serves what via served without the option.
+- **`WithHead(via.Head{...})`**: the document shell. `Lang`, `Raw` head
+  markup (emitted verbatim after via's own `<meta charset>`), and `Assets`,
+  the scripts, styles, preloads and font origins every page carries.
+  `script-src`, `style-src` and `font-src` are derived from `Assets`, so a
+  declared host works under the strict CSP and an undeclared one stays
+  blocked. Malformed heads panic at startup; the zero `Head` serves what via
+  served without the option.
 - **Resilience floor** — the fixed, non-configurable guarantees a live
   stream makes about surviving a flaky network: SSE keepalive comment
   frames (fixed 25s), per-frame write deadlines (fixed 10s), half-open
@@ -587,7 +613,7 @@ as a re-read of the README rather than a diff.
   bridge its ready channel onto the connection's select loop — about a third of
   all goroutines at scale (15k at 5,000 tabs x 3 listens). The connection now
   owns one coalescing wake channel that every subscription signals
-  (`topic.Sub.Notify`), and `runStream` sweeps its listeners itself. Measured:
+  (`topic.Sub.WakeOn`), and `runStream` sweeps its listeners itself. Measured:
   8 -> 5 goroutines per connection at three listens, and publish-to-handler
   latency 112us -> 70us. Handler order across two `Listen`s on one unit is now
   registration order rather than a race between reader goroutines. Delivery is
@@ -600,7 +626,7 @@ as a re-read of the README rather than a diff.
   it is now computed once per pair. A thousand bindings render in 281us,
   down from 436us. The receiver-offset folding — which is what keeps two
   instances of one type from sharing an id — is part of the memo key.
-- **`topic.Sub.Notify(ch)`** routes a subscription's wake-ups to a shared
+- **`topic.Sub.WakeOn(ch)`** routes a subscription's wake-ups to a shared
   channel alongside `Ready`, so one reader can multiplex many subscriptions on
   a single select.
 
@@ -629,8 +655,11 @@ as a re-read of the README rather than a diff.
   POST that triggers one now waits for it to finish (the shape a stateless
   action already had), so it can set the session cookie and answer a
   `ctx.Redirect` on the same response instead of firing-and-forgetting into
-  the next SSE push. A slow handler slows its own click; nothing else on the
-  connection.
+  the next SSE push. An action the goroutine has picked up runs to completion
+  and the POST stays open until it has, whatever the pinned deadline, a
+  closing stream or the client does meanwhile; only the wait to be picked up
+  is bounded. A slow handler slows its own click and whatever else is queued
+  on that tab's goroutine.
 - **`vt` runs the live runtime under `testing/synctest` on an in-memory
   network** (`httptest.NewTestServer`): the 25s keepalive and 10s write
   deadline are exercised at their real production values in milliseconds of
@@ -676,9 +705,10 @@ as a re-read of the README rather than a diff.
   open the branch that authorizes a handler, nor widen an `Each` so that an
   `OnArg` arg the server-state render never bound becomes dispatchable. A
   handler that exists only inside such a branch still answers 410 on a plain
-  page. Every discovery pass re-renders the whole tree, so an embedded child's
-  `OnInit` runs once per pass (two passes for a page whose posted body carries
-  any `Bind()`ed slot) — keep `OnInit` cheap and idempotent.
+  page. Every discovery pass re-renders the whole tree, but an embedded child
+  keeps the instance its first pass made, so its `OnInit` runs once per plain
+  action, as a root's does, and a value hydrated in one pass survives into
+  the next.
 
   A stateless action's patch now also declares any slot the pre-action render
   did not carry, so an input that appears for the first time in the response is
@@ -928,9 +958,9 @@ as a re-read of the README rather than a diff.
   the page GET and the root's own action — the island-action route used to
   bypass it entirely.
 - **A stateless island's action re-render under a parametrised mount
-  (`r.Mount("/thread/{}", …)`) now carries the concrete path**, not an empty
-  action base — an embedded island never inherited its parent's mount prefix
-  at all.
+  (`via.Mount(r, "/thread/{id}", …)`) now carries the concrete path**, not an
+  empty action base — an embedded island never inherited its parent's mount
+  prefix at all.
 - **A live push under a parametrised mount now carries the concrete path**,
   not the literal `{p0}` pattern wildcard — the SSE connect closed over the
   mount's pattern instead of resolving it per connection.
@@ -955,14 +985,18 @@ as a re-read of the README rather than a diff.
   on every dispatch against it.** The tab id used to be the sole credential —
   with the origin floor open (the default), a leaked tab id let a request
   carrying no session cookie at all, from any origin, drive that connection's
-  actions. Bound by the session's `*sessionData` pointer, not its id, so a
+  actions. Bound by the session's stable `ID()`, not the cookie's id, so a
   `Rotate` after connect does not break the binding. **Extended:** a
-  connection that started anonymous and only logs in afterward — a live
-  action calling `Session().Put`/`Rotate`, or the recommended
-  "establish the session in `OnInit`" pattern — now binds too, on that
-  first mint; previously only a session that already existed at connect time
-  was covered, so a tab that logged in mid-connection kept accepting a
-  cookieless dispatch until reload.
+  connection that started anonymous binds to the first session any live
+  action against it carries, whether that action mints it
+  (`Session().Put`/`Rotate`) or arrives with a cookie from a login in
+  another tab, and from then on requires that session (`403` otherwise).
+  Previously only a session that already existed at connect time was
+  covered, so a tab that logged in mid-connection kept accepting a
+  cookieless dispatch until reload. A leaked tab id presented with someone
+  else's cookie binds to that cookie instead: it locks the rightful tab out
+  (a `403` a reload recovers) but grants nothing, because every action runs
+  under its own request's session.
 - **A panicking `OnDispose` function no longer skips every disposer
   registered after it.** Each disposer now runs through the same per-item
   recover a Tick/Listen/action pulse already gets; a skipped disposer (e.g.
@@ -981,9 +1015,9 @@ as a re-read of the README rather than a diff.
 ### Known limitations
 
 - A live connection's tab id is a bearer credential for that connection's
-  actions until it binds to a session (at connect, or on first login
-  afterward); an anonymous connection has no session to check against at
-  all, so never render, log, or leak a tab id outside its own client.
+  actions until it binds to a session (at connect, or on the first action
+  that carries one); an anonymous connection has no session to check against
+  at all, so never render, log, or leak a tab id outside its own client.
 - An island's key is its ordinal among its parent's `Child` calls, so a `When`
   wrapped around a `Child` renumbers every later sibling of that parent when
   it flips. Composition made the numbering stable across partial re-renders;
@@ -1015,12 +1049,11 @@ as a re-read of the README rather than a diff.
   `data-signals` patch, so one shared sink would make a child's patch
   re-declare a sibling's slots and clobber a value the user is mid-edit.
 
-- A live connection only binds to a session an action actually mints
-  (`Session().Put`/`.Rotate`) while none existed at the start of that
-  request; a merely read-only `Session().Get` never binds it, even one
-  carrying a foreign valid cookie, closing the capture window an earlier
-  fix left open. Until an action mints one, the tab id above remains the
-  connection's only credential.
+- An anonymous live connection binds to the first session a live action
+  against it carries, cookie or fresh mint. Until one does, the tab id above
+  remains the connection's only credential, and whoever presents it first
+  with a session decides the binding: a leaked id can lock its tab out
+  (`403` until reload), though never grant another session's access.
 - A live action racing a concurrent `Session.Rotate` on the same
   connection can answer one spurious 403 "session mismatch" — the action
   ran against the id the cookie held a moment before Rotate moved it. A

@@ -103,12 +103,13 @@ live; a page that does neither is a plain HTTP round trip.
 ## The hard guarantees
 
 - **No reflection in your wiring.** Nothing you write is bound by name: no
-  tags, no method lookup by string, no struct shape kept in sync with a
+  naming tags, no method lookup by string, no struct shape kept in sync with a
   template. via reflects in a few narrow places, none of them on your
   identifiers: a handler's code pointer for its action id, a composition's
   field offsets to name signal slots and find children, and the hook
   signature check at `Mount`.
 - **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
+  The one tag, `via:"init=<json>"`, sets a start value and names nothing.
 - **No closures at a via call site.** Named method values only.
 - **No `any` in element or child signatures.** The `h.H` tree is sealed.
 - **Zero `&` at any user call site.** via owns addressing.

@@ -22,13 +22,13 @@ var cspRows = []cspRow{
 }
 
 var cspAbsent = []cspRow{
-	{"font-src", "absent unless an Assets.Preload with As \"font\" names another origin, or an Assets.FontOrigins is declared — this site's font preloads are relative, so 'self' already covers them"},
+	{"font-src", "absent unless an Assets.Preload with As \"font\" names another origin, or an Assets.FontOrigins is declared, each a bare scheme://host[:port] — this site's font preloads are relative, so 'self' already covers them"},
 	{"img-src", "absent unless an Assets.Preload with As \"image\" names another origin"},
 }
 
 var cspWidens = []cspRow{
-	{"Assets.Scripts{Src: \"https://cdn…\"}", "that origin joins script-src; a relative Src is already covered by 'self'"},
-	{"Assets.Scripts{Inline: …}", "the sha256 of those exact bytes joins script-src"},
+	{"Assets.Scripts{Src: \"https://cdn…\"}", "that origin joins script-src; a relative Src is already covered by 'self', and a protocol-relative //cdn… one panics at startup"},
+	{"Assets.Scripts{Inline: …}", "the sha256 of the body as the browser parses it (CRLF and CR as LF, NUL as U+FFFD) joins script-src"},
 	{"Assets.Styles{Href / Inline}", "the same two, on style-src"},
 	{"Assets.Preload{As: \"script\" | \"style\" | \"font\" | \"image\"}", "an absolute Href's origin joins the matching directive — script-src, style-src, font-src or img-src; a relative one is already 'self'"},
 	{"Head.Raw", "refuses a <script> or <style> outright — via never parses Raw, so the policy could not admit it"},

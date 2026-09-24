@@ -17,8 +17,8 @@ go run .
   The default session store is in-memory, so a restart forgets every session
   either way; a fixed key only matters once a persistent store is configured.
 - `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also turns on
-  Secure cookies, so set it only behind HTTPS. Unset accepts action POSTs from
-  any origin and warns at boot.
+  Secure cookies, so set it only behind HTTPS. Unset, live actions accept any
+  origin, plain actions only their own, and via warns at boot.
 
 `/healthz` answers `ok <version>`, where version is stamped at build time
 with `-ldflags "-X main.version=..."`. `/robots.txt` and `/favicon.ico` are
