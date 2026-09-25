@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.8.2 — events by function (2026-09-25)
 
 ### New
 
