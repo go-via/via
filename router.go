@@ -184,6 +184,9 @@ func checkViewReceiver(t reflect.Type) {
 
 var valueReceiverChecked sync.Map // reflect.Type -> true
 
+// slog's built-in handlers escape newlines; a custom handler may not.
+var logLineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
+
 // recoverToHTTP answers a recovered panic on a request transport: each via
 // sentinel gets the status it means, anything else is a server fault — logged
 // with its stack, answered 500.
@@ -206,7 +209,7 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 	}
 	attrs := []any{"err", rec, "stack", string(debug.Stack())}
 	if req != nil {
-		attrs = append(attrs, "method", req.Method, "path", req.URL.Path)
+		attrs = append(attrs, "method", req.Method, "path", logLineEscaper.Replace(req.URL.Path))
 	}
 	log.Error("via: "+what+" panic", attrs...)
 	noteErr(w, fmt.Errorf("via: %s panic: %v", what, rec))
