@@ -46,6 +46,8 @@ func TestParseVersions_refusesMalformedInput(t *testing.T) {
 		{"only the first = splits", "a=b=/x"},
 		{"duplicate label", "v0.8=/,v0.8=/v0.8"},
 		{"duplicate base", "v0.9=/,v0.8=/"},
+		{"protocol-relative base", "v0.8=//evil.example"},
+		{"backslash base", `v0.8=/\evil.example`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -112,6 +114,17 @@ func TestSite_redirectsLatestToTheNewestVersion(t *testing.T) {
 			assert.Equal(t, http.StatusFound, resp.StatusCode, "302: the target moves on each release")
 			assert.Equal(t, tt.want, resp.Header.Get("Location"))
 		})
+	}
+}
+
+func TestSite_latestNeverRedirectsOffHost(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{Versions: []shell.Version{{Label: "v0.9"}, {Label: "v0.8", Base: "/v0.8"}}})
+	// Browsers read a leading /\ like //, so "/\evil.example" would leave the host.
+	for _, p := range []string{`/latest/%5Cevil.example`, `/latest//evil.example`, `/latest/%2F%2Fevil.example`} {
+		resp, _ := get(t, srv, p, nil)
+		loc := resp.Header.Get("Location")
+		assert.False(t, strings.HasPrefix(loc, "//") || strings.HasPrefix(loc, `/\`), "%s redirected to %q", p, loc)
 	}
 }
 

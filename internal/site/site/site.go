@@ -285,8 +285,14 @@ func canonicalSlash(next http.Handler, s *shell.Site) http.Handler {
 // permanent redirect would pin readers to the old one.
 func latestRedirect(s *shell.Site) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		page := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/latest"))
+		// path.Clean keeps a backslash, and browsers read a leading /\ as //.
+		if strings.Contains(page, `\`) {
+			http.NotFound(w, r)
+			return
+		}
 		latest := s.Latest()
-		target := latest.Href(path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/latest")))
+		target := latest.Href(page)
 		if r.URL.RawQuery != "" && !strings.Contains(target, "://") {
 			target += "?" + r.URL.RawQuery
 		}

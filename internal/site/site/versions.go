@@ -27,6 +27,10 @@ func ParseVersions(raw string) ([]shell.Version, error) {
 		}
 		switch {
 		case strings.HasPrefix(base, "http://"), strings.HasPrefix(base, "https://"):
+		case strings.HasPrefix(base, "//"), strings.HasPrefix(base, `/\`):
+			// Browsers read both as another host, which would turn the
+			// picker and /latest into links off the site.
+			return nil, fmt.Errorf("site: VIA_VERSIONS: %s's base %q points off the host; use an https URL", label, base)
 		case strings.HasPrefix(base, "/"):
 			base = strings.TrimSuffix(base, "/")
 		default:
