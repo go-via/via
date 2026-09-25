@@ -83,7 +83,9 @@ func operand(v any) string {
 	if err != nil {
 		panic(fmt.Sprintf("expr: %T does not encode as a JSON literal", v))
 	}
-	return string(b)
+	// Datastar rewrites @name( into an action call even inside a string
+	// literal. JSON puts @ only inside strings, where \u0040 reads back as @.
+	return strings.ReplaceAll(string(b), "@", `\u0040`)
 }
 
 // All joins the expressions with &&, parenthesizing any operand that is not
@@ -154,8 +156,12 @@ func oneGroup(s string) bool {
 // Do sequences statements, for an attribute that runs more than one.
 func Do(es ...Expr) Expr { return Expr(strings.Join(sources(es), "; ")) }
 
-// Lit encodes v as a JavaScript literal; an Expr passes through unchanged.
-func Lit(v any) Expr { return Expr(operand(v)) }
+// Val encodes v as a JavaScript literal; an Expr passes through unchanged. An @
+// is escaped so Datastar does not read an @name( in a string as an action call.
+func Val(v any) Expr { return Expr(operand(v)) }
+
+// Deprecated: use Val. Lit is kept for v0.8 callers and goes in v0.9.
+func Lit(v any) Expr { return Val(v) }
 
 var callName = regexp.MustCompile(`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$`)
 
@@ -168,10 +174,23 @@ func Call(name string, args ...Expr) Expr {
 	return Expr(name + "(" + strings.Join(sources(args), ", ") + ")")
 }
 
-// Copy writes text to the clipboard. Browsers allow that only in a secure
-// context and from a user gesture, so bind it to a click. The returned promise
-// is not awaited: a refused write fails silently.
-func Copy(text Expr) Expr { return Call("navigator.clipboard.writeText", text) }
+// CopyToClipboard writes text to the clipboard. Browsers allow that only in a
+// secure context and from a user gesture, so bind it to a click. The returned
+// promise is not awaited: a refused write fails silently.
+func CopyToClipboard(text Expr) Expr { return Call("navigator.clipboard.writeText", text) }
+
+// CopyTextOf copies the text of the first element matching sel inside the
+// handler element's parent, so a button copies the block beside it without
+// repeating that text in its own attribute.
+func CopyTextOf(sel string) Expr {
+	return CopyToClipboard(Rawf(`%s.parentElement?.querySelector(%s)?.textContent ?? ""`, El, Val(sel)))
+}
+
+// Class adds or removes a class on the handler element, for feedback not
+// worth a signal. A morph of the element resets it.
+func Class(name string, on bool) Expr {
+	return Call(string(El)+".classList.toggle", Val(name), Val(on))
+}
 
 // El is the element the attribute is written on.
 const El Expr = "el"

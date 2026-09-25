@@ -39,6 +39,19 @@ func TestDataSignals_declaresNumericSignalForHydration(t *testing.T) {
 	assert.Contains(t, body, `data-signals='{"n":0}'`, "numeric signal declaration missing/malformed")
 }
 
+type atComp struct {
+	Msg via.SignalCS[string] `via:"init=\"send @post('/x') now\""`
+}
+
+func (c *atComp) View() h.H { return h.Div(c.Msg.Display()) }
+
+func TestDataSignals_escapesAtSignsDatastarWouldRewrite(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(atComp{})).Get("/")
+
+	assert.Contains(t, body, `"send \u0040post(&#39;/x&#39;) now"`, "@ in a data-signals value was not escaped")
+}
+
 // nameComp is a string signal plus a no-op action. The signal is Bound to an
 // input — only a Bound signal is client-writable, and so only a Bound one
 // round-trips an arbitrary string back into the page-level data-signals

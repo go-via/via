@@ -29,18 +29,21 @@ func TestExpr_emitsComposedExpressions(t *testing.T) {
 		{"all", expr.All(expr.Expr("$a"), expr.Expr("$b")), "($a && $b)"},
 		{"any", expr.Any(expr.Expr("$a"), expr.Expr("$b"), expr.Expr("$c")), "($a || $b || $c)"},
 		{"do", expr.Do(expr.Expr("$a").Toggle(), expr.Expr("$n").Add(1)), "$a = !$a; $n += 1"},
-		{"lit", expr.Lit([]int{1, 2}), "[1,2]"},
+		{"val", expr.Val([]int{1, 2}), "[1,2]"},
 		{"call", expr.Call("drawChart", expr.El, expr.Expr("$series")), "drawChart(el, $series)"},
 		{"call dotted, no args", expr.Call("console.log"), "console.log()"},
-		{"copy literal", expr.Copy(expr.Lit("go get github.com/go-via/via")), `navigator.clipboard.writeText("go get github.com/go-via/via")`},
-		{"copy el-relative", expr.Copy(expr.Raw("el.dataset.copy")), "navigator.clipboard.writeText(el.dataset.copy)"},
+		{"copy literal", expr.CopyToClipboard(expr.Val("go get github.com/go-via/via")), `navigator.clipboard.writeText("go get github.com/go-via/via")`},
+		{"copy el-relative", expr.CopyToClipboard(expr.Raw("el.dataset.copy")), "navigator.clipboard.writeText(el.dataset.copy)"},
+		{"copy text", expr.CopyTextOf("pre"), `navigator.clipboard.writeText(el.parentElement?.querySelector("pre")?.textContent ?? "")`},
+		{"class on", expr.Class("copied", true), `el.classList.toggle("copied", true)`},
+		{"class off", expr.Class("copied", false), `el.classList.toggle("copied", false)`},
 		{"raw", expr.Raw("$n > 0 ? 1 : 2"), "$n > 0 ? 1 : 2"},
 		{"el", expr.El, "el"},
 		{"nested", expr.All(expr.Expr("$a").Not(), expr.Expr("$n").Ge(2)), "((!$a) && ($n >= 2))"},
 		{"all parenthesizes an assignment", expr.All(expr.Raw("evt.key").Eq("Escape"), expr.Expr("$q").Assign("")), `((evt.key === "Escape") && ($q = ""))`},
 		{"any parenthesizes a looser operand", expr.Any(expr.Raw("$a && $b"), expr.Expr("$c")), "(($a && $b) || $c)"},
 		{"two groups are not one", expr.All(expr.Raw("($a) || ($b)"), expr.Raw("$c")), "((($a) || ($b)) && $c)"},
-		{"literal operand stays bare", expr.All(expr.Lit(true), expr.Lit(`a)`)), `(true && "a)")`},
+		{"literal operand stays bare", expr.All(expr.Val(true), expr.Val(`a)`)), `(true && "a)")`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,6 +51,32 @@ func TestExpr_emitsComposedExpressions(t *testing.T) {
 			assert.Equal(t, tt.want, tt.got.String())
 		})
 	}
+}
+
+func TestVal_escapesAtSignsDatastarWouldRewrite(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		got  expr.Expr
+		want string
+	}{
+		{"plain string unchanged", expr.Val("hello"), `"hello"`},
+		{"dollar unchanged", expr.Val("$5"), `"$5"`},
+		{"at sign escaped", expr.Val("@post("), `"\u0040post("`},
+		{"at sign in a slice escaped", expr.Val([]string{"@get("}), `["\u0040get("]`},
+		{"operand escaped", expr.Expr("$q").Eq("@x"), `($q === "\u0040x")`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, tt.got.String())
+		})
+	}
+}
+
+func TestLit_matchesVal(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, expr.Val("send @post('/x')"), expr.Lit("send @post('/x')"))
 }
 
 func TestAllAny_returnASingleArgumentUnchanged(t *testing.T) {

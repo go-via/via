@@ -24,7 +24,11 @@ import (
 // quotes stay intact: legal inside a single-quoted attribute, and the browser
 // hands Datastar the same decoded value either way.
 //
-// only nil declares every slot (the GET first paint). Non-nil declares just the
+// Datastar compiles the attribute as an expression, not JSON.parse, and
+// rewrites @name( into an action call even inside a string literal, so every @
+// goes out as \u0040; JSON puts @ only inside strings, where it reads back as @.
+//
+// only nil declares every slot (the GET first paint). Non-nil declares only the
 // slots named, so a plain action patch ships what it wrote without clobbering a
 // value the user is mid-edit; if that leaves nothing, no attribute is written.
 func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
@@ -32,8 +36,8 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 	for _, slot := range order {
 		if only != nil {
 			_, dirty := only[slot]
-			// A slot the pre-action render did not carry is a control that just
-			// appeared (a branch opened): the client store has no value for it,
+			// A slot the pre-action render did not carry is a control new to
+			// this render (a branch opened): the client store has no value for it,
 			// or worse a stale one from whatever occupied the slot before, so
 			// seed it even though the action never wrote it. seen nil means
 			// there is no pre-action render to compare against.
@@ -78,11 +82,14 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 
 	buf.WriteString(` data-signals='`)
 	for _, b := range raw {
-		if b == '\'' {
+		switch b {
+		case '\'':
 			buf.WriteString("&#39;")
-			continue
+		case '@':
+			buf.WriteString(`\u0040`)
+		default:
+			buf.WriteByte(b)
 		}
-		buf.WriteByte(b)
 	}
 	buf.WriteByte('\'')
 }
