@@ -15,6 +15,7 @@ func Links() h.H {
 		a("javascript:alert(1)", "js"),
 		a("//evil.example", "//host"),
 		a("mailto:ada@x.org", "mailto"),
+		a("data:text/html,x", "data"),
 	)
 }
 
@@ -25,5 +26,6 @@ const LinksHTML = `<nav>
   <a href="https://go.dev">https</a>
   <a href="#">js</a>
   <a href="#">//host</a>
-  <a href="#">mailto</a>
+  <a href="mailto:ada@x.org">mailto</a>
+  <a href="#">data</a>
 </nav>`

@@ -12,12 +12,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -594,4 +596,70 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 			assert.Contains(t, body, "deleted: [2]", "only bob's own row may have been deleted")
 		})
 	}
+}
+
+// rowStore is a list another request edits while a tab holds its old render.
+type rowStore struct {
+	mu     sync.Mutex
+	ids    []string
+	picked []string
+}
+
+func (s *rowStore) list() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.ids...)
+}
+
+func (s *rowStore) setIDs(ids ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids = ids
+}
+
+func (s *rowStore) pick(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.picked = append(s.picked, id)
+}
+
+func (s *rowStore) picks() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.picked...)
+}
+
+type rowPage struct {
+	Store *rowStore
+	ids   []string
+}
+
+func (p *rowPage) OnInit(ctx *via.Ctx) error {
+	p.ids = p.Store.list()
+	return nil
+}
+
+func (p *rowPage) Pick(ctx *via.Ctx, id string) { p.Store.pick(id) }
+
+func (p *rowPage) row(id string) h.H {
+	return h.Li(h.ID("row-"+id), h.Button(on.Click(on.WithArg(p.Pick, id)), h.Str(id)))
+}
+
+func (p *rowPage) View() h.H { return h.Ul(via.Each(p.ids, p.row)) }
+
+func TestOnArg_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing.T) {
+	t.Parallel()
+	store := &rowStore{ids: []string{"a", "b", "c"}}
+	app := vt.Serve(t, via.Handler(rowPage{Store: store}))
+	_, _ = app.Action(0).Fire() // caches the a, b, c render the tab keeps clicking
+
+	store.setIDs("c", "a")
+	status, _ := app.Action(0).Fire()
+	assert.Less(t, status, 300, "row a moved but still exists")
+	status, _ = app.Action(1).Fire()
+	assert.Equal(t, http.StatusGone, status, "row b is gone; its click must not land on the row now in its place")
+	status, _ = app.Action(2).Fire()
+	assert.Less(t, status, 300, "row c moved but still exists")
+
+	assert.Equal(t, []string{"a", "a", "c"}, store.picks())
 }

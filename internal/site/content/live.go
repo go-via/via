@@ -135,7 +135,8 @@ func (p *Live) View() h.H {
 				h.Str(" is the routing key: it is stable, it is not the cookie, and it grants nothing. The session "+
 					"is the unit of fan-out, not the tab.")),
 			via.Child(p.Ping), "ping.go",
-			demo.Try(h.Str("Ping once here. The first ping mints the session; a tab opened before it has none to match."),
+			demo.Try(h.Str("Ping once here. The first ping mints the session. A tab opened before then joins once it pings or "+
+				"reloads; pings from other tabs cannot reach it until it sends the cookie."),
 				secondTab("ping-me"),
 				h.Str("Ping from the second tab: both tabs of this browser light up."),
 				h.Str("Open this page in a different browser and ping: only the browser that pinged lights up."))),

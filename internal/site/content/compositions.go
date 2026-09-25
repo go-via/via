@@ -83,8 +83,9 @@ func (p *Compositions) View() h.H {
 			h.P(h.Str("A When around a Child may depend only on what the field literal or "), Code("OnInit"),
 				h.Str(" fixed when the page loaded. A condition that can change while the page is open (time, a client signal, "+
 					"a store another request writes) goes inside the child, or the conditional Child goes after all its siblings, "+
-					"where its absence moves nobody. A stale key that lands on a unit of another type answers 410; "+
-					"one that lands on another unit of the same type runs the action on that unit."))),
+					"where its absence moves nobody. A stale key that lands on a unit of another type answers 410. "+
+					"One of the same type answers 410 when the two come from separate Child calls in the View or a When branch; "+
+					"one call that renders either copy (a loop, a variable swapped between two fields) cannot tell them apart."))),
 
 		d.H2("Lifecycle hooks"),
 		h.P(h.Str("A hook is a method with a fixed name and signature; via calls it if the type has it. "+

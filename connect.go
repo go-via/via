@@ -325,7 +325,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// live action sees a session that already existed at connect — and the tab
 	// id would be a bearer credential for the connection's whole life. Fail the
 	// connect instead; the client's reconnect logic retries.
-	_, sessDat, err := m.sessions.resolve(req)
+	sessID, sessDat, err := m.sessions.resolve(req)
 	if err != nil {
 		http.Error(w, "session store unavailable", http.StatusServiceUnavailable)
 		return
@@ -346,6 +346,11 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	bind.badDecodeLogged = logFlag
 	bind.unitV = pv
 	prebindSignals(bind, pv)
+	// OnInit gets the load above rather than a second one: when that load slid
+	// the idle window, only its handle knows to re-send the cookie, and a
+	// reconnect may be the only request an open tab ever makes.
+	bind.req, bind.sessions, bind.sessW = req, m.sessions, w
+	bind.adoptSession(sessID, sessDat, nil)
 	if runOnInit(pv.v, bind, w, req, m.sessions, true) != nil {
 		return
 	}
@@ -375,6 +380,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		pushSignals:     func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:           map[string]*Ctx{},
 		sess:            connSID,
+		handlers:        units,
 		client:          connectSig,
 		rev:             rev,
 		badDecodeLogged: logFlag,

@@ -133,8 +133,9 @@ func Str[T Stringish](v T) H { return hcore.Str(v) }
 //
 // A URL-bearing name (formaction, action, href, src, xlink:href, poster, the
 // <object> data attribute, cite, background, ping, manifest, srcset) is run
-// through the same policy as Href/Src/Action, so h.RawAttr("formaction", …)
-// cannot smuggle a javascript: scheme past the typed constructors. srcdoc is
+// through the same policy as Href/Src/Action (mailto: and tel: pass on href
+// only), so h.RawAttr("formaction", …) cannot smuggle a javascript: scheme
+// past the typed constructors. srcdoc is
 // rejected outright: a browser entity-decodes it and parses the result as a
 // same-origin document, so single-escaping it is not a safe render.
 func RawAttr(name, val string) Attr {

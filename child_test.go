@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,7 +236,7 @@ func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 func TestMux_liveChildActionBindingCarriesChildID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'\)`, body,
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+(\?u=[A-Za-z0-9_-]+)?'\)`, body,
 		"a live child action must carry its child id")
 	assert.NotContains(t, body, "X-Via-Tab", "the tab id is a signal now, not a per-action header")
 }
@@ -316,8 +317,8 @@ func TestChild_rendersEachChildInItsOwnContainerWithScopedActions(t *testing.T) 
 	} {
 		assert.Contains(t, body, want, "children missing container/scoped-action")
 	}
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body)
-	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+'`, body)
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+(\?u=[A-Za-z0-9_-]+)?'`, body)
+	assert.Regexp(t, `@post\('/_via/a/1/[A-Za-z0-9_-]+(\?u=[A-Za-z0-9_-]+)?'`, body)
 }
 
 func TestChild_actionRoutesToItsChildAndPatchesThatContainer(t *testing.T) {
@@ -1303,4 +1304,230 @@ func TestLive_childInitFailureOnThePushPathTearsTheStreamDown(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		require.Fail(t, "the stream never closed: every frame is dropped and the tab has no signal at all")
 	}
+}
+
+// twin is a child type its parent holds twice, so the parent cannot name
+// either copy by type and a key alone is all that tells them apart.
+type twin struct {
+	Label string
+	hits  int
+}
+
+func (w *twin) Hit(ctx *via.Ctx) { w.hits++ }
+
+func (w *twin) View() h.H {
+	return h.Div(h.P(h.Str(w.Label+" hits="+strconv.Itoa(w.hits))), h.Button(on.Click(w.Hit), h.Str("hit")))
+}
+
+// twinShift's When moves B from key 1 to key 0 once Hide is set, so a URL A's
+// render shipped for key 0 now names B's position.
+type twinShift struct {
+	Hide *atomic.Bool
+	A, B twin
+	hide bool
+}
+
+func (p *twinShift) OnInit(ctx *via.Ctx) error {
+	p.hide = p.Hide.Load()
+	return nil
+}
+
+func (p *twinShift) first() h.H { return via.Child(p.A) }
+
+func (p *twinShift) View() h.H { return h.Div(via.When(!p.hide, p.first), via.Child(p.B)) }
+
+func TestChild_staleKeyNowHoldingASiblingOfTheSameTypeIsGone(t *testing.T) {
+	t.Parallel()
+	hide := new(atomic.Bool)
+	app := vt.Serve(t, via.Handler(twinShift{Hide: hide, A: twin{Label: "A"}, B: twin{Label: "B"}}))
+
+	status, body := app.ChildAction("0", 0).Fire()
+	require.Equal(t, http.StatusOK, status, "an unchanged render still dispatches")
+	require.Contains(t, body, "A hits=1")
+
+	hide.Store(true)
+	status, body = app.ChildAction("0", 0).Fire()
+	assert.Equal(t, http.StatusGone, status, "A's stale URL must not run B's handler")
+	assert.NotContains(t, body, "B hits=1")
+
+	_, page := app.Get("/")
+	fresh, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "0", 0), strings.NewReader("{}"))
+	require.NoError(t, err)
+	fresh.Header.Set("Datastar-Request", "true")
+	fresh.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := app.Client().Do(fresh)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, http.StatusOK, resp.StatusCode, "B's own URL at its new key dispatches")
+	assert.Contains(t, string(b), "B hits=1")
+}
+
+// liveTwin is live (it renders State), so each copy is a unit registered on
+// the connection under the key it held at connect.
+type liveTwin struct {
+	Label string
+	n     via.State[int]
+}
+
+func (w *liveTwin) Hit(ctx *via.Ctx) { w.n.Set(w.n.Get() + 1) }
+
+func (w *liveTwin) View() h.H {
+	return h.Div(h.Str(w.Label+"="), w.n.Display(), h.Button(on.Click(w.Hit), h.Str("hit")))
+}
+
+type liveTwinShift struct {
+	Hide *atomic.Bool
+	A, B liveTwin
+	hide bool
+}
+
+func (p *liveTwinShift) OnInit(ctx *via.Ctx) error {
+	p.hide = p.Hide.Load()
+	return nil
+}
+
+func (p *liveTwinShift) Toggle(ctx *via.Ctx) {
+	p.Hide.Store(true)
+	p.hide = true
+}
+
+func (p *liveTwinShift) first() h.H { return via.Child(p.A) }
+
+func (p *liveTwinShift) View() h.H {
+	return h.Div(via.When(!p.hide, p.first), via.Child(p.B), h.Button(on.Click(p.Toggle), h.Str("hide A")))
+}
+
+func TestChild_liveUnitRefusesAURLRenderedForASameTypeSiblingAtItsKey(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveTwinShift{Hide: new(atomic.Bool), A: liveTwin{Label: "A"}, B: liveTwin{Label: "B"}}))
+	conn := app.Connect()
+
+	status, patch := app.Action(0).Tab(conn.TabID()).Fire()
+	require.Equal(t, http.StatusOK, status, "the root's Toggle re-renders the page")
+	require.NotContains(t, patch, "A=")
+
+	status, _ = app.ChildAction("0", 0).Raw(actionURL(t, patch, "0", 0)).Tab(conn.TabID()).Fire()
+	assert.Equal(t, http.StatusGone, status, "B's button at key 0 must not run A, the unit registered there at connect")
+}
+
+type argTwin struct{ picked string }
+
+func (w *argTwin) Pick(ctx *via.Ctx, id string) { w.picked = id }
+
+func (w *argTwin) View() h.H {
+	return h.Div(h.P(h.Str("picked="+w.picked)), h.Button(on.Click(on.WithArg(w.Pick, "x7")), h.Str("pick")))
+}
+
+type argTwins struct{ A, B argTwin }
+
+func (p *argTwins) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
+
+func TestChild_rowArgRidesAlongsideTheIdentityOfASameTypeSibling(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(argTwins{}))
+
+	status, body := app.ChildAction("1", 0).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "picked=x7")
+}
+
+// twinBranches renders both twins from When branches, the other render-time
+// caller via tells apart.
+type twinBranches struct {
+	Hide *atomic.Bool
+	A, B twin
+	hide bool
+}
+
+func (p *twinBranches) OnInit(ctx *via.Ctx) error {
+	p.hide = p.Hide.Load()
+	return nil
+}
+
+func (p *twinBranches) first() h.H  { return via.Child(p.A) }
+func (p *twinBranches) second() h.H { return via.Child(p.B) }
+
+func (p *twinBranches) View() h.H {
+	return h.Div(via.When(!p.hide, p.first), via.When(true, p.second))
+}
+
+func TestChild_staleKeyNowHoldingATwinFromAnotherBranchIsGone(t *testing.T) {
+	t.Parallel()
+	hide := new(atomic.Bool)
+	app := vt.Serve(t, via.Handler(twinBranches{Hide: hide, A: twin{Label: "A"}, B: twin{Label: "B"}}))
+
+	status, _ := app.ChildAction("0", 0).Fire()
+	require.Equal(t, http.StatusOK, status)
+	hide.Store(true)
+	status, _ = app.ChildAction("0", 0).Fire()
+	assert.Equal(t, http.StatusGone, status)
+}
+
+type storedCard struct {
+	Label string
+	hits  int
+}
+
+func (c *storedCard) Hit(ctx *via.Ctx) { c.hits++ }
+
+func (c *storedCard) View() h.H {
+	return h.Div(h.P(h.Str(c.Label+" hits="+strconv.Itoa(c.hits))), h.Button(on.Click(c.Hit), h.Str("hit")))
+}
+
+// storedBody builds its child's markup in a helper that OnInit and OnReload
+// both call, so the GET and an action's re-render reach via.Child through
+// different frames.
+type storedBody struct{ body h.H }
+
+func (p *storedBody) load()                       { p.body = via.Child(storedCard{Label: "S"}) }
+func (p *storedBody) OnInit(ctx *via.Ctx) error   { p.load(); return nil }
+func (p *storedBody) OnReload(ctx *via.Ctx) error { p.load(); return nil }
+func (p *storedBody) Poke(ctx *via.Ctx)           {}
+func (p *storedBody) View() h.H                   { return h.Div(p.body, h.Button(on.Click(p.Poke), h.Str("poke"))) }
+
+func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossAReRender(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(storedBody{}))
+
+	status, patch := app.Action(0).Fire()
+	require.Less(t, status, 300)
+	if status == http.StatusNoContent {
+		_, patch = app.Get("/")
+	}
+	status, body := app.ChildAction("0", 0).Raw(actionURL(t, patch, "0", 0)).Fire()
+	assert.Equal(t, http.StatusOK, status, "the URL the root action's re-render shipped must still dispatch")
+	assert.Contains(t, body, "S hits=1")
+}
+
+type liveStoredBody struct {
+	body h.H
+	n    via.State[int]
+}
+
+func (p *liveStoredBody) load()                       { p.body = via.Child(storedCard{Label: "S"}) }
+func (p *liveStoredBody) OnInit(ctx *via.Ctx) error   { p.load(); return nil }
+func (p *liveStoredBody) OnReload(ctx *via.Ctx) error { p.load(); return nil }
+func (p *liveStoredBody) Poke(ctx *via.Ctx)           { p.n.Set(p.n.Get() + 1) }
+
+func (p *liveStoredBody) View() h.H {
+	return h.Div(h.Span(h.Str("n="), p.n.Display()), p.body, h.Button(on.Click(p.Poke), h.Str("poke")))
+}
+
+func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossALivePushAndAReconnect(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveStoredBody{}))
+	conn := app.Connect()
+
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Less(t, status, 300)
+	conn.Await("S hits=0")
+	status, _ = app.ChildAction("0", 0).Over(conn).Fire()
+	assert.Less(t, status, 300, "the URL the push shipped must still dispatch")
+
+	conn.Close()
+	again := app.Connect()
+	_, page := app.Get("/")
+	status, _ = app.ChildAction("0", 0).Raw(actionURL(t, page, "0", 0)).Tab(again.TabID()).Fire()
+	assert.Less(t, status, 300, "a reconnect re-runs OnInit without re-framing; the page's URL must still dispatch")
 }

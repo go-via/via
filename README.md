@@ -119,7 +119,7 @@ program and a running copy.
 
 ## Status
 
-Pre-1.0: APIs change between minor versions. The current release is v0.8.2;
+Pre-1.0: APIs change between minor versions. The current release is v0.8.3;
 v0.8.0 is retracted. Deprecated names stay until the next minor version
 (`via.On`, `via.OnArg` and `expr.Lit` are removed in v0.9).
 [`CHANGELOG.md`](CHANGELOG.md) is the release-by-release record, and

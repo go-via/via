@@ -93,6 +93,15 @@ func (c *Ctx) OnDispose(fn func()) {
 // and every plain action, and subscribing there would hand out a Sub nothing
 // will ever Stop. It happens before any OnConnect fn runs, so a unit that
 // publishes on connect observes its own publish.
+//
+// handler's ctx.Session() is the session the stream connected with. A tab that
+// connected before its session existed sees none until an action posted with
+// its tab id carries a session cookie: that binds the tab to the session, and
+// handler sees it from then on (a reconnect with the cookie does the same). A
+// session minted by another tab does not reach it by itself, because only a
+// request naming this tab can bind it. Read the id from ctx.Session() in
+// handler rather than caching it in OnInit, and mint the session in OnInit if
+// every tab must be addressable by session from its first frame.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if c.reinit {
 		return // see Tick

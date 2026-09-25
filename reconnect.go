@@ -51,7 +51,7 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // CSS. A DOM attribute, not a signal, because Datastar exposes no supported way
 // to merge a signal from outside its own fetch lifecycle.
 //
-// A sessionStorage counter bounds reloads to 3 per episode so a server that
+// A sessionStorage counter bounds reloads to 2 per episode so a server that
 // stays down can't pin the tab in a reload loop. One IIFE, so a double injection
 // is a no-op via the window guard.
 //

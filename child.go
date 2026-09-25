@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"log/slog"
 	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -42,7 +45,15 @@ import (
 // for the life of a connection, and a When wrapped around a Child shifts its
 // later siblings' ordinals — so such a When may depend only on data fixed by
 // OnInit or the field literal, never on time, a client signal, or shared state
-// that changes while the page is open.
+// that changes while the page is open. A stale action URL whose key now holds
+// a child of another type answers 410. One of the same type answers 410 when
+// the two were reached through different calls during the render: separate
+// via.Child expressions in a View or a When branch, or one helper called from
+// separate places there. Otherwise it still runs on the child now at the key:
+// one expression that renders either copy (a loop, a closure built per copy,
+// c := p.A; if swap { c = p.B }; via.Child(c)), and any Child built outside
+// the render, such as markup OnInit or OnReload stores in a field. A row is
+// markup with on.WithArg, not a Child.
 //
 // It panics if the child has no View() method.
 func Child[C any](child C) h.H {
@@ -58,20 +69,103 @@ func Child[C any](child C) h.H {
 	// slog.Default(): no Router in scope.
 	checkHooks(slog.Default(), typ, &childHookWarned, false)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
-	return hcore.Dyn(func(r *hcore.Renderer) { childViewer(r, inst) })
+	var site childSite
+	runtime.Callers(2, site[:])
+	return hcore.Dyn(func(r *hcore.Renderer) { childViewer(r, inst, site) })
+}
+
+// childSite is the call stack above a via.Child call. It is what tells apart
+// two children the parent holds in fields of one type: the copy Child gets
+// carries no trace of its field, but the calls that rendered each one differ.
+type childSite [8]uintptr
+
+var (
+	childSiteIDs sync.Map // childSite -> string
+	viaPkg       = reflect.TypeOf(instance{}).PkgPath() + "."
+	hcorePkg     = reflect.TypeOf((*hcore.Renderer)(nil)).Elem().PkgPath() + "."
+)
+
+// id hashes the user frames of the site, from the Child call up to the first
+// frame inside via: the frames above that differ between a GET, an action
+// and a push, and must not change the id. Names and offsets into them rather
+// than raw PCs, so a rebuild of unchanged code keeps every shipped action URL
+// valid; an edit to a function that renders such a child 410s the URLs open
+// tabs hold for it, once.
+//
+// Only a Child called while rendering (from a View, or a When branch) gets a
+// site of its own. One built elsewhere and rendered later, such as markup a
+// load helper builds in both OnInit and OnReload, is reached through
+// different frames on the GET and on the action's re-render, so its site
+// would change under a click that is still valid. Those all share the empty
+// site: no worse than a positional key, and never a false 410.
+func (s childSite) id() string {
+	if v, ok := childSiteIDs.Load(s); ok {
+		return v.(string)
+	}
+	n := 0
+	for n < len(s) && s[n] != 0 {
+		n++
+	}
+	var key strings.Builder
+	rendering := false
+	frames := runtime.CallersFrames(s[:n])
+	for {
+		f, more := frames.Next()
+		if strings.HasPrefix(f.Function, viaPkg) || strings.HasPrefix(f.Function, hcorePkg) {
+			rendering = renderCaller(f.Function)
+			break
+		}
+		// The offset, not just the line: via.Child(p.A), via.Child(p.B) on one
+		// line are two sites.
+		key.WriteString(f.Function + "+" + strconv.FormatUint(uint64(f.PC-f.Entry), 10) + "\n")
+		if !more {
+			break
+		}
+	}
+	id := ""
+	if rendering {
+		id = hashID(key.String())
+	}
+	childSiteIDs.Store(s, id)
+	return id
+}
+
+// renderCaller reports whether fn is a via frame that calls user code during
+// a render: the two View callers and via.When's branch. A rename here that
+// this list misses degrades to the shared site, which the twin tests catch.
+func renderCaller(fn string) bool {
+	for _, name := range []string{"renderRootWith", "renderChildInner", "When."} {
+		if strings.HasPrefix(fn, viaPkg+name) {
+			return true
+		}
+	}
+	return false
 }
 
 // childViewer renders the child into <div id="via-i{key}">, binds its
 // signals/actions into a child-scoped Ctx, and appends it to the parent's
 // children so a push or action patches exactly this one. A non-Ctx binder is a
 // bare render with no parent to attach to, so it writes nothing.
-func childViewer(r *hcore.Renderer, inst instance) {
+func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 	parent := ctxOf(r.Binder())
 	if parent == nil {
 		return
 	}
 
 	key := parent.keyOf(len(parent.children))
+	// The key is positional, so a When that closes ahead of a child moves a
+	// sibling onto its key, and only the type guards below catch that. A
+	// child named by its field is the one field of its type, so a matching
+	// type is the same child. Two fields of one type need more: the render's
+	// call stack into via.Child (see childSite.id), composed down the tree
+	// because a shifted parent moves its children too. Child takes a copy, so
+	// the field itself is out of reach.
+	// It rides on every action URL the child renders (see actionPath).
+	name := childFieldName(parent.unitV.typ, inst.typ)
+	ident := parent.unitV.ident
+	if name == "" {
+		ident = hashID(ident + "/" + site.id())
+	}
 
 	// An action's response re-render substitutes the instance the handler
 	// mutated for this fresh copy (see inheritRequestScope); re-running its
@@ -83,7 +177,8 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	// key pointing at a slot a different type now occupies, and splicing the
 	// instance in there renders the wrong View under the wrong slot prefix.
 	// Fall back to the fresh copy rather than render a lie.
-	acted := parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ
+	acted := parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ &&
+		ident == parent.actedInst.ident
 	if acted {
 		inst = parent.actedInst
 	}
@@ -92,7 +187,7 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	// overwrite what the pass before hydrated.
 	var prior *Ctx
 	if !acted && parent.passUnits != nil {
-		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ {
+		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ && p.unitV.ident == ident {
 			prior, inst = p, p.unitV
 		}
 	}
@@ -116,7 +211,8 @@ func childViewer(r *hcore.Renderer, inst instance) {
 	// (slot "c_s") and also embeds p.C (slot "c__s") keeps the two apart —
 	// different copies that must never share a slot. Stamped onto the instance
 	// because a live child's push re-renders with no parent in scope.
-	if name := childFieldName(parent.unitV.typ, inst.typ); name != "" {
+	inst.ident = ident
+	if name != "" {
 		inst.slotPrefix = parent.scopePrefix() + name + "__"
 	} else {
 		// Ambiguous field: fall back to the positional key, always right if

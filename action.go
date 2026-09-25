@@ -201,8 +201,26 @@ func actionIDFor(pc uintptr, name string, off uintptr, scoped bool) string {
 	if scoped {
 		key = name + "@" + strconv.FormatUint(uint64(off), 10)
 	}
-	sum := sha256.Sum256([]byte(key))
-	id := base64.RawURLEncoding.EncodeToString(sum[:])[:8]
+	id := hashID(key)
 	actionIDs.Store(k, id)
 	return id
+}
+
+func hashID(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(sum[:])[:8]
+}
+
+// unitIdentParam carries a child's call-site identity (instance.ident) on its
+// action URLs, so dispatch can refuse a stale URL whose key now holds another
+// child of the same type.
+const unitIdentParam = "u"
+
+// actionPath is the POST path of action id on c's unit, unescaped.
+func actionPath(c *Ctx, id string) string {
+	path := c.base + "/_via/a/" + unitAddr(c) + "/" + id
+	if c.unitV.ident != "" {
+		path += "?" + unitIdentParam + "=" + c.unitV.ident
+	}
+	return path
 }

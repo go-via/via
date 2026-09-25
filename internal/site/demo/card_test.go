@@ -122,7 +122,7 @@ func TestCard_putsACopyButtonAfterEveryCodeBlock(t *testing.T) {
 
 	assert.Equal(t, 2, strings.Count(body, `</pre><button class="copy" type="button" aria-label="Copy code"`),
 		"each card's Source pane is one code block with its button right after it")
-	assert.Contains(t, body, `data-on:click="navigator.clipboard.writeText(el.parentElement?.querySelector(&#34;pre&#34;)?.textContent ?? &#34;&#34;); el.classList.toggle(&#34;copied&#34;, true)"`)
+	assert.Contains(t, body, `data-on:click="navigator.clipboard.writeText(el.parentElement?.querySelector(&#34;pre&#34;)?.textContent ?? &#34;&#34;).catch(() =&gt; {}); el.classList.toggle(&#34;copied&#34;, true)"`)
 	assert.Contains(t, body, `data-on:click__debounce.1500ms="el.classList.toggle(&#34;copied&#34;, false)"`,
 		"a second listener clears the feedback once clicks stop")
 }

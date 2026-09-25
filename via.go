@@ -81,7 +81,9 @@ package via
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"maps"
@@ -105,6 +107,15 @@ import (
 //go:embed datastar.js
 var datastarJS []byte
 
+// datastarHash names this build's client. Pages load it as
+// /_via/datastar.js?v=<hash>, so the versioned URL can be cached as immutable:
+// a new client is a new URL. The bare path keeps working for anything that
+// hard-coded it, and revalidates against the same hash as its ETag.
+var datastarHash = func() string {
+	sum := sha256.Sum256(datastarJS)
+	return hex.EncodeToString(sum[:8])
+}()
+
 // viewer is the (pointer) contract a root must satisfy: a pure, ctx-free View.
 type viewer interface{ View() h.H }
 
@@ -121,6 +132,9 @@ type instance struct {
 	// push re-renders the child with no parent in scope and must still mint
 	// the exact same names the full-page walk did.
 	slotPrefix string
+	// ident is set on a child its parent cannot name by field (see
+	// childViewer), for the same reason: a push must ship the URLs the walk did.
+	ident string
 }
 
 // slotID is embedded first in Signal[T] so prebindSignals can stamp it through
@@ -733,7 +747,7 @@ func PostForm(handler func(*Ctx), children ...h.H) h.H {
 		}
 		idx := ctx.actionSlot(handler)
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			hcore.EscapeString(ctx.base) + `/_via/a/` + unitAddr(ctx) + `/` + idx + `">`)
+			hcore.EscapeString(actionPath(ctx, idx)) + `">`)
 		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
 		for _, c := range children {
 			r.Render(c)
@@ -945,11 +959,13 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
 func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
-	base := ""
+	path := "/_via/a/" + rootAddr + "/" + idx
 	if ctx != nil {
-		base = ctx.base // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
+		path = actionPath(ctx, idx) // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
 	}
-	path := base + "/_via/a/" + unitAddr(ctx) + "/" + idx
+	if query != "" && strings.Contains(path, "?") {
+		query = "&" + query[1:]
+	}
 	r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path+query) + `')"`)
 }
 

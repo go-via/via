@@ -348,7 +348,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// at render time, so acting against an older unit attributes the write
 		// to a Ctx nothing downstream reads, silently dropping the patch.
 		u := lc.unit(child)
-		if u == nil {
+		if u == nil || u.unitV.ident != req.URL.Query().Get(unitIdentParam) {
 			return actionResult{gone: "no such child"}
 		}
 		a, ok := u.actions[act]
@@ -514,6 +514,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	if beforeSession == nil && rc.session.data != nil {
 		lc.bindSession(rc.session.sid())
 	}
+	lc.shareSession(rc.session)
 
 	// The dirty set this action wrote is shipped by the push itself
 	// (tabStream.flushDirty), on the one path every server-driven signal change
@@ -665,6 +666,12 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// bind renders. Child's docs forbid such a When; fail closed rather than
 	// run the handler against a unit the authorization never looked at.
 	if ua.unitV.typ != u.unitV.typ {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	// A matching type is not yet the same unit: a sibling of the same type
+	// shifted onto this key carries a different identity (see childViewer).
+	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
 		http.Error(w, "no such child", http.StatusGone)
 		return
 	}

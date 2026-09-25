@@ -100,6 +100,7 @@ error_log=/var/log/myapp.log
 
 depend() {
 	need net
+	before caddy
 }
 
 start_pre() {
@@ -108,6 +109,7 @@ start_pre() {
 	set +a
 	export VIA_ADDR=127.0.0.1:8080
 	export VIA_ORIGIN=https://example.com
+	checkpath -f -o myapp:myapp -m 0600 /var/log/myapp.log
 }`
 
 func (p *Deploy) View() h.H {

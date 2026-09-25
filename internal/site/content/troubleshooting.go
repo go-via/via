@@ -217,10 +217,10 @@ func (p *Troubleshooting) View() h.H {
 
 		d.H2("Copy to clipboard does nothing"),
 		h.P(API("expr.CopyToClipboard"), h.Str(" and "), API("expr.CopyTextOf"), h.Str(" call "),
-			Code("navigator.clipboard.writeText"), h.Str(" and do not await it, so a refused write fails with only a "+
-				"console error. Browsers allow it in a secure context (HTTPS, or "), Code("localhost"),
+			Code("navigator.clipboard.writeText"), h.Str(" and swallow a refused write, so it fails with nothing in the "+
+				"console. Browsers allow it in a secure context (HTTPS, or "), Code("localhost"),
 			h.Str("), from a user gesture, in a focused document. Over plain HTTP on a LAN address "),
-			Code("navigator.clipboard"), h.Str(" is undefined; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
+			Code("navigator.clipboard"), h.Str(" is undefined and the call throws; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
 				"is refused. Bind it to "), API("on.ClickCS"), h.Str(" and serve over HTTPS.")),
 		tsSee(d, "/signals#expressions", "Signals: Expressions"),
 	)

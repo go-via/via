@@ -142,7 +142,7 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 		`<h1>0</h1>`, // value rendered server-side, not a signal
 		`data-on:click="@post('` + actionURL(t, body, "r", 0) + `'`, // Dec, declared first
 		`data-on:click="@post('` + actionURL(t, body, "r", 1) + `'`, // Inc, declared second
-		`src="/_via/datastar.js">`,                                  // module script tag (external, admitted by 'self')
+		`src="/_via/datastar.js?v=`,                                 // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
 	}
@@ -209,6 +209,69 @@ func TestEmbeddedDatastarClient_isServedAsJS(t *testing.T) {
 	ct := resp.Header.Get("Content-Type")
 	assert.True(t, strings.HasPrefix(ct, "text/javascript"), "Content-Type = %q, want text/javascript", ct)
 	assert.NotEmpty(t, body, "served datastar.js was empty")
+}
+
+var datastarSrc = regexp.MustCompile(`<script type="module" src="(/_via/datastar\.js\?v=[0-9a-f]+)">`)
+
+func getWithHeader(t *testing.T, srv *httptest.Server, path, key, val string) (*http.Response, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+	require.NoError(t, err)
+	if key != "" {
+		req.Header.Set(key, val)
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp, string(b)
+}
+
+func TestEmbeddedDatastarClient_cachesByURL(t *testing.T) {
+	t.Parallel()
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	m := datastarSrc.FindStringSubmatch(page)
+	require.NotNil(t, m, "page must reference datastar.js by a versioned URL")
+
+	tests := []struct {
+		name  string
+		path  string
+		cache string
+	}{
+		{"versioned URL is immutable", m[1], "public, max-age=31536000, immutable"},
+		{"bare URL revalidates", "/_via/datastar.js", "public, max-age=3600, must-revalidate"},
+		{"stale version revalidates", "/_via/datastar.js?v=0000", "public, max-age=3600, must-revalidate"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resp, body := getWithHeader(t, srv, tt.path, "", "")
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tt.cache, resp.Header.Get("Cache-Control"))
+			etag := resp.Header.Get("ETag")
+			assert.Regexp(t, `^"[0-9a-f]+"$`, etag, "a strong ETag, quoted, no W/ prefix")
+			assert.NotEmpty(t, body)
+		})
+	}
+}
+
+func TestEmbeddedDatastarClient_answersAMatchingIfNoneMatchWith304(t *testing.T) {
+	t.Parallel()
+	srv := newCounter(t)
+	resp, _ := getWithHeader(t, srv, "/_via/datastar.js", "", "")
+	etag := resp.Header.Get("ETag")
+	require.NotEmpty(t, etag)
+
+	resp, body := getWithHeader(t, srv, "/_via/datastar.js", "If-None-Match", etag)
+	assert.Equal(t, http.StatusNotModified, resp.StatusCode)
+	assert.Empty(t, body)
+	assert.Equal(t, etag, resp.Header.Get("ETag"))
+
+	resp, body = getWithHeader(t, srv, "/_via/datastar.js", "If-None-Match", `"stale"`)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotEmpty(t, body)
 }
 
 func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {

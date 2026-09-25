@@ -230,6 +230,10 @@ type sessionData struct {
 	// later dropped write is reported as the store outage it is rather than as
 	// a rotation that never happened.
 	mintFailed bool
+	// slid marks a load that extended the idle window. The cookie's Max-Age
+	// was armed when it was last set, so it is re-sent with the extension or
+	// the browser drops an active session one TTL after sign-in.
+	slid bool
 	// dropLogged keeps the dropped-write warning to one line per handle: every
 	// later Put/Delete through a retired handle is dropped too, and a handler
 	// that writes in a loop would otherwise flood the log with the same fact.
@@ -405,7 +409,8 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 	}
 	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp, dirty: map[string]json.RawMessage{}}
 	if m.ttl > 0 && time.Until(exp) < m.ttl/2 {
-		m.save(ctx, id, d, false) // sliding idle window, at one write per half-TTL rather than per request
+		// sliding idle window, at one write per half-TTL rather than per request
+		d.slid = m.save(ctx, id, d, false)
 	}
 	return d, nil
 }
@@ -843,6 +848,9 @@ func (c *Ctx) adoptSession(id string, d *sessionData, err error) *Session {
 			s.down = true
 		case d != nil:
 			s.id, s.data = id, d
+			if d.slid && s.w != nil {
+				s.mgr.setCookie(s.w, id, s.secure)
+			}
 		}
 	}
 	c.session = s
