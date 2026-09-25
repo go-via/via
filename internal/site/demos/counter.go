@@ -3,6 +3,7 @@ package demos
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Counter is the smallest live unit: rendering a State is what earns this
@@ -14,8 +15,8 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.N.Set(c.N.Get() - 1) }
 
 func (c *Counter) View() h.H {
 	return h.Div(h.Class("row"),
-		h.Button(via.On("click", c.Dec), h.Str("−")),
+		h.Button(on.Click(c.Dec), h.Str("−")),
 		h.Output(c.N.Display()),
-		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }

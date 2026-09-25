@@ -1,5 +1,50 @@
 # Changelog
 
+## v0.8.2 — events by function (2026-09-25)
+
+### New
+
+- **Package `on` binds DOM events by function, not by string**: a misspelled
+  event or modifier is a compile error instead of a listener that never fires.
+  Each event has a server form that posts an action and a `CS` twin that runs
+  an expression in the browser; `on.Event` and `on.EventCS` take any other
+  event by name, `on.WithArg` attaches a row's datum, and modifiers are
+  options: `on.Input(c.Search, on.Debounce(250*time.Millisecond))`. An event
+  name that is not lower-case letters and digits joined by `:`, `.` or `-`
+  panics, so a quote or a `__` modifier cannot be smuggled in.
+
+- **`expr.CopyToClipboard(text)`** writes text to the clipboard. Browsers
+  allow it only in a secure context and from a user gesture, so bind it to a
+  click.
+  `expr.CopyTextOf(sel)` copies the text of the first match of sel inside the
+  handler element's parent, so a button copies the block beside it.
+
+- **`expr.Class(name, on)`** adds or removes a class on the handler element,
+  for feedback not worth a signal. A morph of the element resets it.
+
+### Fixed
+
+- `expr.All` and `expr.Any` parenthesize each operand that is not already a
+  group, so `expr.All(cond, $q.Assign(""))` no longer renders a syntax error.
+
+- `expr.Val` (and the deprecated `expr.Lit`) of a string containing `@name(`
+  no longer breaks the handler. Datastar rewrote it into an action call even
+  inside the string literal, so `expr.Val("send @post('/x')")` threw a
+  SyntaxError in the browser. Val now encodes `@` as `\u0040`.
+
+- A string signal holding `@name(` no longer vanishes from the client store.
+  Datastar compiles `data-signals` as an expression and rewrote it there too,
+  so the first paint and a plain action's patch dropped every signal on the
+  element. `data-signals` now encodes `@` as `\u0040`.
+
+### Deprecated
+
+- `via.On` and `via.OnArg`, in favour of package `on` (`on.Click`,
+  `on.Event`, `on.WithArg`). They are removed in v0.9.
+
+- `expr.Lit` is renamed `expr.Val`; `Lit` stays as a deprecated alias until
+  v0.9.
+
 ## v0.8.1 — the v2 core goes mainline (2026-09-25)
 
 v0.8.0 is retracted. Its tag points at a commit from before the release review

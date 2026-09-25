@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Seed never binds or displays its signal: Set is what declares one, so the
@@ -22,7 +23,7 @@ func (s *Seed) Refresh(ctx *via.Ctx) { s.Clock.Set(serverTime()) }
 
 func (s *Seed) View() h.H {
 	return h.Div(h.Class("row"),
-		h.Button(via.On("click", s.Refresh), h.Str("read the clock")),
+		h.Button(on.Click(s.Refresh), h.Str("read the clock")),
 		h.Output(h.DataText(s.Clock.Ref())),
 	)
 }

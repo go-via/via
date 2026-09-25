@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -67,7 +68,7 @@ func (f *Feed) Post(ctx *via.Ctx) {
 func (f *Feed) View() h.H {
 	return h.Div(
 		h.Div(h.Class("row"),
-			h.Button(via.On("click", f.Post), h.Str("post an event")),
+			h.Button(on.Click(f.Post), h.Str("post an event")),
 			h.Span(h.Class("note"), f.Notice.Display()),
 		),
 		// A scroll container is only keyboard-scrollable while it can hold

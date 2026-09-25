@@ -53,7 +53,9 @@ install -d -o caddy -g caddy -m 0750 /var/log/caddy
 Then a service that:
 
 - runs `/usr/local/bin/go-via-site` as `go-via`,
-- sets `VIA_ADDR=127.0.0.1:8080` and `VIA_ORIGIN=https://go-via.dev`,
+- sets `VIA_ADDR=127.0.0.1:8080`, `VIA_ORIGIN=https://go-via.dev` and
+  `VIA_VERSIONS="v0.8=/,v0.7=https://go-via.github.io/via/"` (see
+  [Versions](#versions)),
 - sources `/etc/go-via.env`,
 - restarts on exit with a short delay and no retry cap (a crash loop must
   keep trying rather than land the unit in failed-forever),
@@ -73,6 +75,7 @@ StartLimitIntervalSec=0
 ExecStart=/usr/local/bin/go-via-site
 Environment=VIA_ADDR=127.0.0.1:8080
 Environment=VIA_ORIGIN=https://go-via.dev
+Environment="VIA_VERSIONS=v0.8=/,v0.7=https://go-via.github.io/via/"
 EnvironmentFile=/etc/go-via.env
 User=go-via
 Restart=always
@@ -109,7 +112,7 @@ WantedBy=multi-user.target
 
 OpenRC: an `/etc/init.d/go-via` script with `supervisor=supervise-daemon`,
 `respawn_delay=2`, `respawn_max=0`, `command_user=go-via:go-via`, and a
-`start_pre` that sources `/etc/go-via.env` and exports the two variables.
+`start_pre` that sources `/etc/go-via.env` and exports the three variables.
 
 Install the Caddyfile, validate it, enable both services, start the site
 first and Caddy second.
@@ -142,6 +145,72 @@ wget -qO- http://127.0.0.1:8080/healthz
 The restart drops every open stream; clients reconnect on their own. The
 Caddyfile only changes when the proxy contract does; reload Caddy, do not
 restart it, so in-flight TLS handshakes survive.
+
+Pages link static files by fingerprinted URL (`/static/<hash8>/site.css`),
+served `immutable` for a year, so a redeploy needs no cache purge. A plain
+`/static/x` URL, or a fingerprint that no longer matches the file, gets the
+current file with `max-age=3600, must-revalidate` and an ETag. Don't add
+caching for `/static/` in Caddy: the binary sets `Cache-Control` itself.
+
+## Versions
+
+The picker in the sidebar lists every version of the docs, and a page on an
+older one carries a banner linking to the same page on the latest. Two
+variables drive it:
+
+- `VIA_BASE` — the path prefix this build is served under: empty for the
+  latest, `/v0.8` for an older one. No trailing slash. Every mount, link,
+  asset and action URL is built under it.
+- `VIA_VERSIONS` — `label=base` pairs, comma-separated, latest first. A base
+  is `/` for the root, `/vX.Y` for a prefix on this host, or an https URL for
+  docs hosted elsewhere. Set the same string on every service; each build
+  finds its own entry by `VIA_BASE` and refuses to start without one.
+
+The first entry is the latest: the picker's `latest (vX.Y)` entry points at
+it, and the root build answers `/latest` and `/latest/<page>` with a 302 to
+that page on it (the front page, if the latest is hosted elsewhere).
+
+A build under a prefix sets `noindex` on its pages, so an old version does not
+compete with the latest in search results, and names its session cookie after
+the prefix (`via_session_v0_8`): the cookie is host-wide, and two versions
+sharing one name would overwrite each other's session.
+
+Each version is its own binary and service, built from that version's tag: a
+second service `go-via-v0.8` on `127.0.0.1:8081` with `VIA_BASE=/v0.8`,
+the same `VIA_ORIGIN`, `VIA_VERSIONS` and env file, and the binary at
+`/usr/local/bin/go-via-site-v0.8`.
+
+### Releasing a new version
+
+1. Build the outgoing version from its tag and install it as the prefixed
+   service (`VIA_BASE=/vX.Y`, next free port). Check its `/vX.Y/` page.
+2. Add a `@vXY` block for it to the Caddyfile, validate, reload Caddy.
+3. Put the new label first in `VIA_VERSIONS` on every service, the root one
+   pointing at `/` and the outgoing one at `/vX.Y`, and restart them.
+4. Redeploy the root service from the new tag as in [4. Redeploy](#4-redeploy).
+
+### Caddy
+
+Route each prefix to its own upstream, ahead of the default. Do not strip the
+prefix: action and SSE URLs are derived from the prefixed mount, so the
+upstream has to see the path the browser used.
+
+```caddyfile
+	@v08 path /v0.8 /v0.8/*
+	handle @v08 {
+		reverse_proxy 127.0.0.1:8081 {
+			flush_interval -1
+		}
+	}
+	handle {
+		reverse_proxy 127.0.0.1:8080 {
+			flush_interval -1
+		}
+	}
+```
+
+These `handle` blocks replace the single `reverse_proxy` in the site block
+below.
 
 ## Caddyfile
 

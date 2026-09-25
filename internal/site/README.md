@@ -19,6 +19,10 @@ go run .
 - `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also turns on
   Secure cookies, so set it only behind HTTPS. Unset, actions accept any origin
   and via logs a warning at startup; set it in production.
+- `VIA_BASE` — path prefix this build serves under, empty for the latest. See
+  [`DEPLOY.md`](./DEPLOY.md#versions).
+- `VIA_VERSIONS` — `label=base` pairs for the version picker, latest first.
+  See [`DEPLOY.md`](./DEPLOY.md#versions).
 
 `/healthz` answers `ok <version>`, where version is stamped at build time
 with `-ldflags "-X main.version=..."`. `/robots.txt` and `/favicon.ico` are
@@ -35,7 +39,10 @@ host.
   shutdown.
 - `site/` — router options, mounts, static serving. `site.New` is what
   `main.go` and the tests both build.
-- `shell/` — chrome: `layout.go`, `nav.go` (`Nav`, `NavFor`), `meta.go`.
+- `shell/` — chrome: `layout.go` (sidebar, version picker), `nav.go` (`Nav`,
+  `NavFor`), `meta.go`.
+- `search/` — full-text search: an index built from the rendered pages at
+  startup, and the sidebar box that queries it.
 - `content/` — one mounted page per file, plus `page.go` for the wiring they
   share.
 - `demos/` — one demo per file, embedded verbatim for its card's Source.

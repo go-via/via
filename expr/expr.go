@@ -83,11 +83,13 @@ func operand(v any) string {
 	if err != nil {
 		panic(fmt.Sprintf("expr: %T does not encode as a JSON literal", v))
 	}
-	return string(b)
+	// Datastar rewrites @name( into an action call even inside a string
+	// literal. JSON puts @ only inside strings, where \u0040 reads back as @.
+	return strings.ReplaceAll(string(b), "@", `\u0040`)
 }
 
-// All joins the expressions with &&. A single one is returned unchanged; none
-// panics.
+// All joins the expressions with &&, parenthesizing any operand that is not
+// already a group. A single one is returned unchanged; none panics.
 func All(es ...Expr) Expr { return join("All", "&&", es) }
 
 // Any joins the expressions with ||, with the same single/none rule as [All].
@@ -100,14 +102,66 @@ func join(name, op string, es []Expr) Expr {
 	if len(es) == 1 {
 		return es[0]
 	}
-	return "(" + Expr(strings.Join(sources(es), " "+op+" ")) + ")"
+	parts := make([]string, len(es))
+	for i, e := range es {
+		parts[i] = grouped(e)
+	}
+	return "(" + Expr(strings.Join(parts, " "+op+" ")) + ")"
+}
+
+var atom = regexp.MustCompile(`^(?:[\w$.]+|"(?:[^"\\]|\\.)*")$`)
+
+// grouped parenthesizes e unless it is already one group or an atom: an
+// operand such as an assignment binds looser than && and would otherwise
+// escape it.
+func grouped(e Expr) string {
+	s := string(e)
+	if atom.MatchString(s) || oneGroup(s) {
+		return s
+	}
+	return "(" + s + ")"
+}
+
+// oneGroup reports whether s is a single parenthesized group, skipping
+// parentheses inside string literals.
+func oneGroup(s string) bool {
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return false
+	}
+	depth := 0
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'' || c == '`':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 && i < len(s)-1 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
 
 // Do sequences statements, for an attribute that runs more than one.
 func Do(es ...Expr) Expr { return Expr(strings.Join(sources(es), "; ")) }
 
-// Lit encodes v as a JavaScript literal; an Expr passes through unchanged.
-func Lit(v any) Expr { return Expr(operand(v)) }
+// Val encodes v as a JavaScript literal; an Expr passes through unchanged. An @
+// is escaped so Datastar does not read an @name( in a string as an action call.
+func Val(v any) Expr { return Expr(operand(v)) }
+
+// Deprecated: use Val. Lit is kept for v0.8 callers and goes in v0.9.
+func Lit(v any) Expr { return Val(v) }
 
 var callName = regexp.MustCompile(`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$`)
 
@@ -118,6 +172,24 @@ func Call(name string, args ...Expr) Expr {
 		panic(fmt.Sprintf("expr: %q is not a function name", name))
 	}
 	return Expr(name + "(" + strings.Join(sources(args), ", ") + ")")
+}
+
+// CopyToClipboard writes text to the clipboard. Browsers allow that only in a
+// secure context and from a user gesture, so bind it to a click. The returned
+// promise is not awaited: a refused write fails silently.
+func CopyToClipboard(text Expr) Expr { return Call("navigator.clipboard.writeText", text) }
+
+// CopyTextOf copies the text of the first element matching sel inside the
+// handler element's parent, so a button copies the block beside it without
+// repeating that text in its own attribute.
+func CopyTextOf(sel string) Expr {
+	return CopyToClipboard(Rawf(`%s.parentElement?.querySelector(%s)?.textContent ?? ""`, El, Val(sel)))
+}
+
+// Class adds or removes a class on the handler element, for feedback not
+// worth a signal. A morph of the element resets it.
+func Class(name string, on bool) Expr {
+	return Call(string(El)+".classList.toggle", Val(name), Val(on))
 }
 
 // El is the element the attribute is written on.

@@ -1,37 +1,52 @@
 // Called through data-effect, which re-runs on any signal change: both must be idempotent.
 
 (function () {
+  // Relative to this script, not the host root, so the site works under a
+  // path prefix.
+  const base = document.currentScript.src;
   const css = getComputedStyle(document.documentElement);
   const color = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
   const BG = color("--bg", "#16181d");
   const BORDER = color("--border", "#2a2e37");
   const AMBER = color("--amber", "#ffbf00");
 
-  window.viaChart = (el, series) => {
+  // slots fixes the x spacing, so a series still filling up grows in from
+  // the right instead of stretching one sample across the canvas.
+  window.viaChart = (el, series, slots) => {
     const c = el.getContext("2d");
     if (!c) return;
     const w = el.width, h = el.height;
     c.clearRect(0, 0, w, h);
-    if (!Array.isArray(series) || series.length === 0) return;
-    const max = Math.max(...series, 1);
-    const step = w / series.length;
-    c.fillStyle = AMBER;
-    series.forEach((v, i) => {
-      const bar = (v / max) * (h - 2);
-      c.fillRect(i * step + 1, h - bar, Math.max(step - 2, 1), bar);
-    });
     c.strokeStyle = BORDER;
+    c.lineWidth = 1;
     c.beginPath();
     c.moveTo(0, h - 0.5);
     c.lineTo(w, h - 0.5);
     c.stroke();
+    if (!Array.isArray(series) || series.length === 0) return;
+    const n = Math.max(slots || series.length, series.length, 2);
+    const step = (w - 4) / (n - 1);
+    const max = Math.max(...series, 1);
+    const x = (i) => w - 2 - (series.length - 1 - i) * step;
+    const y = (v) => h - 3 - (v / max) * (h - 6);
+    c.strokeStyle = AMBER;
+    c.fillStyle = AMBER;
+    c.lineWidth = 1.5;
+    c.lineJoin = "round";
+    c.beginPath();
+    series.forEach((v, i) => (i === 0 ? c.moveTo(x(i), y(v)) : c.lineTo(x(i), y(v))));
+    c.stroke();
+    const last = series.length - 1;
+    c.beginPath();
+    c.arc(x(last), y(series[last]), 2.5, 0, 2 * Math.PI);
+    c.fill();
   };
 
   // Same-origin GeoJSON only, so default-src 'self' needs no widening.
   const STYLE = {
     version: 8,
     sources: {
-      world: {type: "geojson", data: "/static/data/world-lowres.geojson"},
+      world: {type: "geojson", data: new URL("data/world-lowres.geojson", base).href},
     },
     layers: [
       {id: "sea", type: "background", paint: {"background-color": BG}},
@@ -41,7 +56,7 @@
   };
 
   if (window.maplibregl) {
-    maplibregl.setWorkerUrl("/static/vendor/maplibre-gl-csp-worker.js");
+    maplibregl.setWorkerUrl(new URL("vendor/maplibre-gl-csp-worker.js", base).href);
   }
 
   // First run builds and starts watching the container; later runs jumpTo.

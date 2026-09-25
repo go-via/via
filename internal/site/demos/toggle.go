@@ -3,6 +3,7 @@ package demos
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Toggle holds a panel open or closed with a SignalCS, whose wire name is
@@ -14,7 +15,7 @@ type Toggle struct {
 
 func (t *Toggle) View() h.H {
 	return h.Div(
-		h.Button(h.DataOn("click", t.Open.Ref().Toggle()), h.Str("open: "), t.Open.Display()),
+		h.Button(on.ClickCS(t.Open.Ref().Toggle()), h.Str("open: "), t.Open.Display()),
 		h.Div(h.Class("panel"), h.DataShow(t.Open.Ref()),
 			h.P(h.Str("Shown by data-show, not by a re-render. The server has no field "+
 				"for this and no handler ran.")),

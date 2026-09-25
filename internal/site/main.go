@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -30,7 +31,16 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	app, mux := site.New(site.Options{Version: version, Origin: os.Getenv("VIA_ORIGIN")})
+	versions, err := site.ParseVersions(os.Getenv("VIA_VERSIONS"))
+	if err != nil {
+		return err
+	}
+	app, mux := site.New(site.Options{
+		Version:  version,
+		Origin:   os.Getenv("VIA_ORIGIN"),
+		Base:     strings.TrimSuffix(os.Getenv("VIA_BASE"), "/"),
+		Versions: versions,
+	})
 	demo.Reset(ctx, 15*time.Minute, demos.ResetAll)
 
 	srv := &http.Server{
@@ -67,7 +77,7 @@ func run() error {
 	app.Close()
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := srv.Shutdown(shut)
+	err = srv.Shutdown(shut)
 	if serr := <-serve; err == nil {
 		err = serr
 	}

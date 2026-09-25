@@ -10,6 +10,8 @@ import (
 	"github.com/go-via/via/h"
 )
 
+const maxSamples = 40
+
 // Sparkline feeds a canvas JavaScript owns from Go. Load is a Signal nothing
 // renders: Set declares the slot, so every tick's patch carries the series to
 // the island without a Bind or a Display. The tag starts it at an empty array,
@@ -26,7 +28,7 @@ func (s *Sparkline) OnInit(ctx *via.Ctx) error {
 
 func (s *Sparkline) beat(ctx *via.Ctx) {
 	s.load = append(s.load, 20+rand.IntN(80))
-	if len(s.load) > 40 {
+	if len(s.load) > maxSamples {
 		s.load = s.load[1:]
 	}
 	// Clone: Set keeps the slice header, and the next beat's append would
@@ -43,5 +45,5 @@ func (s *Sparkline) View() h.H {
 		// description of it there is.
 		h.Role("img"),
 		h.Aria("label", "Line chart of the last 40 load samples, one a second"),
-		h.DataEffect(expr.Call("viaChart", expr.El, s.Load.Ref())))
+		h.DataEffect(expr.Call("viaChart", expr.El, s.Load.Ref(), expr.Val(maxSamples))))
 }

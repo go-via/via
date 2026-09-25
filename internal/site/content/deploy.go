@@ -3,121 +3,280 @@ package content
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"go-via.dev/site/demo"
 	"go-via.dev/site/shell"
+	"go-via.dev/site/snippet"
 )
 
-// Deploy is the operations page: what a running process holds, the order a
-// shutdown must take, and what it takes to run more than one of it.
+// Deploy is the operations page: the settings production needs, the proxy and
+// service config around the binary, the order a shutdown must take, and what
+// it takes to run more than one process.
 type Deploy struct{ page }
 
-// NewDeploy builds the deploy page for a deployment at origin.
-func NewDeploy(origin string) Deploy { return Deploy{page: newPage("/deploy", origin)} }
+func NewDeploy(env Env) Deploy { return Deploy{page: newPage("/deploy", env)} }
 
 func (p *Deploy) PageMeta() via.Meta {
-	return p.meta("Shutdown order, sessions that survive a restart, sticky load balancing and a cross-pod topic bridge.")
+	return p.meta("Production checklist, Caddy and nginx config, timeouts, readiness, shutdown order, " +
+		"rolling deploys, shared sessions and a cross-pod topic bridge.")
 }
 
-func (p *Deploy) View() h.H {
-	return shell.Page(p.nav,
-		h.P(h.Str("A via process holds two kinds of state. A session is a signed cookie plus a blob in a "+
-			"SessionStore; it is the user's and it can follow them anywhere. A tab is a stream, the live children "+
-			"behind it, their Tick timers and Listen subscriptions; it is the process's and it dies with it.")),
-
-		h.H2(h.Str("Shutdown order")),
-		h.P(h.Str("The Router owns one goroutine per live tab. They hang off a context of the router's own, which "+
-			"http.Server.Shutdown does not cancel, so close the router first or Shutdown waits on streams that "+
-			"never end.")),
-		demo.Code(`<-stop
-r.Close()         // ends every stream cleanly, runs each OnDispose
-srv.Shutdown(ctx) // then drains the plain requests`),
-		h.P(h.Str("Close returns once the last stream goroutine is gone. An open stream ends the way a closed "+
-			"tab ends, a clean end of response, not a truncated one. An action against a closing tab answers "+
-			"410, which the client turns into a reload. A connect arriving after Close is refused 503, which "+
-			"stops the client on a red banner, so a pod leaves the balancer before it calls Close. Calling "+
-			"Close twice is fine.")),
-
-		h.H2(h.Str("Restarts")),
-		h.P(h.Str("Two things have to survive a restart: the cookie and the data behind it. The cookie is signed, "+
-			"not stored, so a stable key is all it needs. Unset, via reads VIA_SESSION_KEY and failing that mints a "+
-			"random key per process, and every cookie is worthless the moment the process ends.")),
-		h.P(h.Str("The data lives in the SessionStore, and the default one is a map in this process. With the key "+
-			"alone a restart still logs everyone out. The interface is three methods over opaque bytes.")),
-		demo.Code(`type redisSessions struct{ c *redis.Client }
-
-func (r redisSessions) Load(ctx context.Context, id string) ([]byte, bool, error) {
-	b, err := r.c.Get(ctx, "via:"+id).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, false, nil
-	}
-	return b, err == nil, err
-}
-
-func (r redisSessions) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
-	return r.c.Set(ctx, "via:"+id, data, ttl).Err()
-}
-
-func (r redisSessions) Delete(ctx context.Context, id string) error {
-	return r.c.Del(ctx, "via:"+id).Err()
-}
-
-via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))`),
-		h.P(h.Str("Rotate is a Save under the new id then a Delete of the old. If the Save fails, or the old "+
-			"id can be neither deleted nor expired, Rotate panics and the request answers 500 rather than report "+
-			"a rotation that did not happen; a failed Save leaves the old session valid. Expiry is the ttl handed "+
-			"to Save, "+
-			"and via stamps the same deadline into the blob and refuses an expired Load, so a backend with no TTL "+
-			"support is still correct; it only leaks dead rows. Behind a TLS-terminating proxy via sees plain "+
-			"HTTP, so pass WithSecureCookies or the Secure attribute never gets set.")),
-
-		h.H2(h.Str("Horizontal scaling")),
-		h.P(h.Str("With the key and the store above, the session follows the user to any pod. The tab does not. "+
-			"An action POST carries a tab id and looks it up in the registry of the pod that opened the stream, so "+
-			"an action landing on another pod answers 410 and the client reloads. A balancer needs affinity for "+
-			"the life of a tab, not for correctness: a miss costs one reload.")),
-		h.Ul(
-			h.Li(h.Str("Pin on a cookie the balancer owns, not on via_session. That id changes on Rotate, which "+
-				"would move a user to another pod in the middle of signing in.")),
-			h.Li(h.Str("The stream is long-lived SSE over a plain POST: proxy buffering off, a read timeout past "+
-				"your idle time, HTTP/1.1 to the upstream. No path needs special casing; the endpoints sit under "+
-				"each mount.")),
-			h.Li(h.Str("Roll one pod at a time: fail your readiness check, r.Close(), srv.Shutdown(). Tabs reload "+
-				"and the balancer pins them elsewhere. via ships no health endpoint; the app owns one.")),
-			h.Li(h.Str("The Content-Security-Policy is a pure function of the Head, so pods with different "+
-				"session keys still serve identical policies.")),
-		),
-
-		h.H2(h.Str("State across pods")),
-		h.P(h.Str("A Topic fans out inside one process. Two pods are two brokers, and a Publish on one never "+
-			"reaches a Track or Listen on the other. Nothing in via bridges them. Invert the write path: "+
-			"handlers publish to your bus, and each pod runs one goroutine that feeds what it "+
-			"hears into the local topic. Track and Listen do not change.")),
-		demo.Code(`// per pod, at startup
-go func() {
-	sub := rdb.Subscribe(ctx, "room:"+room.id)
-	for m := range sub.Channel() {
-		var msg Message
-		if json.Unmarshal([]byte(m.Payload), &msg) == nil {
-			room.bus.Publish(msg)
+const deployCaddyfile = `example.com {
+	# text/* would also compress, and so buffer, text/event-stream.
+	encode zstd gzip {
+		match {
+			header Content-Type text/html*
+			header Content-Type text/css*
+			header Content-Type text/plain*
+			header Content-Type text/javascript*
+			header Content-Type application/javascript*
+			header Content-Type application/json*
+			header Content-Type image/svg+xml*
 		}
 	}
-}()
 
-// the write path publishes outward, never to room.bus directly
-func (r *Room) Post(ctx context.Context, msg Message) error {
-	b, _ := json.Marshal(msg)
-	return rdb.Publish(ctx, "room:"+r.id, b).Err()
-}`),
-		h.P(h.Str("Pub/sub is fire-and-forget, so a tab in the middle of a reload misses the gap. StateTrack calls "+
-			"load again at every connect, so tracked state converges from the database whatever was missed; "+
-			"only a Listen handler reacting to events can skip a beat. Derive presence from state rather than "+
-			"counting arrivals and departures.")),
+	reverse_proxy 127.0.0.1:8080 {
+		# SSE: never buffer the upstream stream.
+		flush_interval -1
+	}
+}`
 
-		h.H2(h.Str("What a lost pod costs")),
-		h.P(h.Str("Its open tabs go amber, then reload onto a pod that is still there. An action in flight on it is "+
-			"gone, with no replay. Unsent client signal edits go with it. Sessions survive in the store. via does "+
-			"nothing more for high availability.")),
+const deployNginx = `server {
+	listen 443 ssl;
+	http2 on;
+	server_name example.com;
+	ssl_certificate     /etc/ssl/example.com/fullchain.pem;
+	ssl_certificate_key /etc/ssl/example.com/privkey.pem;
 
-		h.P(h.A(h.Href("/reference"), h.Str("Next: the reference tables"))),
+	location / {
+		proxy_pass http://127.0.0.1:8080;
+		proxy_http_version 1.1;
+		proxy_set_header Connection "";
+		proxy_set_header Host $host;
+		# SSE: pass each frame on as it arrives.
+		proxy_buffering off;
+		# Must exceed via's fixed 25 s keepalive.
+		proxy_read_timeout 60s;
+	}
+}`
+
+const deploySystemd = `[Unit]
+Description=myapp
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/local/bin/myapp
+Environment=VIA_ADDR=127.0.0.1:8080
+Environment=VIA_ORIGIN=https://example.com
+EnvironmentFile=/etc/myapp.env
+User=myapp
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target`
+
+const deployOpenRC = `#!/sbin/openrc-run
+description="myapp"
+
+supervisor=supervise-daemon
+command=/usr/local/bin/myapp
+command_user=myapp:myapp
+respawn_delay=2
+respawn_max=0
+output_log=/var/log/myapp.log
+error_log=/var/log/myapp.log
+
+depend() {
+	need net
+}
+
+start_pre() {
+	set -a
+	. /etc/myapp.env
+	set +a
+	export VIA_ADDR=127.0.0.1:8080
+	export VIA_ORIGIN=https://example.com
+}`
+
+func (p *Deploy) View() h.H {
+	d := p.doc()
+	return d.Page(
+		h.P(h.Str("One binary behind a TLS-terminating proxy. Set these before it faces the internet; "+
+			"the proxy, service unit and multi-instance notes follow.")),
+
+		d.H2("Production checklist"),
+		table([]string{"Setting", "Set it with", "Left unset"},
+			[]h.H{h.Str("Session key"),
+				h.Span(Code("VIA_SESSION_KEY"), h.Str(" or "), API("via.WithSessionKey"),
+					h.Str(", at least 16 bytes. Generate with "), Code("openssl rand -hex 32"), h.Str(".")),
+				h.Str("A random key per process: every cookie dies on restart and no other pod accepts it.")},
+			[]h.H{h.Str("Session store"), API("via.WithSessionStore"),
+				h.Str("A map in this process. A restart logs everyone out even with a fixed key.")},
+			[]h.H{h.Str("Trusted origin"), API("via.WithTrustedOrigin"),
+				h.Str("Fails open: actions accept requests from every origin, including ones that carry no " +
+					"origin signal at all. via logs one warning at startup.")},
+			[]h.H{h.Str("Secure cookies"), API("via.WithSecureCookies"),
+				h.Str("Secure is set only when the request itself came over TLS. Behind a proxy that " +
+					"terminates TLS, never.")},
+			[]h.H{h.Str("Stream cap"), API("via.WithMaxSSEConn"),
+				h.Str("10000 streams per router; the next connect answers 503.")},
+			[]h.H{h.Str("Idle timeouts"), h.Span(h.Str("Proxy and balancer, above 25 s; "), API("via.WithPinnedDeadline"),
+				h.Str(" below the balancer's request timeout")),
+				h.Str("The proxy cuts idle streams, or answers a stuck action before via can.")},
+			[]h.H{h.Str("Readiness probe"), h.Str("Your own handler, below"),
+				h.Str("The balancer keeps sending new tabs to a pod that is shutting down.")},
+		),
+		snippet.Region("deploy/main.go", "router", snippet.Title("main.go"),
+			snippet.Mark("WithTrustedOrigin", "WithSecureCookies", "WithSessionStore")),
+		h.P(h.Str("via uses the bytes of "), Code("VIA_SESSION_KEY"), h.Str(" as they are; it does not "+
+			"hex-decode them. The 64 characters "), Code("openssl rand -hex 32"), h.Str(" prints are a 64-byte "+
+			"key, and a key under 16 bytes panics when the router is built. Rotating the key logs every "+
+			"session out.")),
+		Callout(Note, "Only VIA_SESSION_KEY is via's",
+			h.P(h.Str("via reads one environment variable. "), Code("VIA_ORIGIN"), h.Str(" and "), Code("VIA_ADDR"),
+				h.Str(" are read by the "), Code("main.go"), h.Str(" on this page, and the unit files below "+
+					"set them for it. Why the origin check and Secure cookie matter is in "),
+				h.A(h.Href(d.Href("/security")+"#origin-checks-and-csrf"), h.Str("Origin checks and CSRF")), h.Str("."))),
+
+		d.H2("Reverse proxy"),
+		snippet.Text("Caddyfile", deployCaddyfile),
+		snippet.Text("nginx.conf", deployNginx),
+		h.P(h.Str("A tab's stream is one long "), Code("text/event-stream"), h.Str(" response to a POST. A proxy "+
+			"that buffers or compresses it holds every patch back, and the page never updates while clicks "+
+			"still POST. Do not strip a path prefix: action and stream URLs sit under each mount, so the "+
+			"upstream has to see the path the browser used. With nginx, forward "), Code("Host"), h.Str(": without a trusted "+
+			"origin match, via's same-origin check compares the browser's Origin with it.")),
+
+		d.H2("Timeouts"),
+		snippet.Region("deploy/main.go", "server", snippet.Title("main.go"), snippet.Mark("WriteTimeout")),
+		table([]string{"Timer", "Value", "What it means for you"},
+			[]h.H{h.Str("Keepalive frame"), h.Str("25 s, fixed"),
+				h.Str("The longest a healthy stream stays silent. Every proxy and balancer idle timeout on " +
+					"the path must be longer: 60 s is enough.")},
+			[]h.H{h.Str("Frame write"), h.Str("10 s, fixed"),
+				h.Str("A peer that stops reading loses its stream after this.")},
+			[]h.H{h.Str("Pinned deadline"), h.Span(h.Str("5 s, "), API("via.WithPinnedDeadline")),
+				h.Str("How long an action waits for its tab's goroutine before answering 503. Keep it under " +
+					"the balancer's request timeout so the answer is via's.")},
+			[]h.H{h.Code(h.Str("http.Server.WriteTimeout")), h.Str("0"),
+				h.Str("It bounds the whole response, and a stream is one response for the life of the tab.")},
+		),
+		h.P(h.Str("The keepalive is the only way via notices a peer that vanished without closing the "+
+			"connection, which is why it cannot be turned off or slowed down.")),
+
+		d.H2("Health and readiness"),
+		snippet.Region("deploy/main.go", "health", snippet.Title("main.go")),
+		h.P(h.Str("via ships no health endpoint; the app owns both. "), Code("/healthz"), h.Str(" answers while "+
+			"the process is up. "), Code("/readyz"), h.Str(" answers 503 from the moment shutdown starts, so "+
+			"the balancer stops sending new tabs to this pod before its streams close. Mount them on a mux in "+
+			"front of the router so a probe never touches sessions.")),
+
+		d.H2("Shutdown order"),
+		snippet.Region("deploy/main.go", "shutdown", snippet.Title("main.go"), snippet.Mark("r.Close()")),
+		Steps(
+			Step("Fail readiness, then wait",
+				h.P(h.Str("Long enough for the balancer to mark the pod down: probe interval times failure "+
+					"threshold."))),
+			Step("Close the router",
+				h.P(API("via.Router.Close"), h.Str(" ends every stream the way a closed tab ends, with a clean "+
+					"end of response, and runs each "), API("via.Ctx.OnDispose"), h.Str(". It returns once the "+
+					"last stream goroutine is gone. An action in flight answers normally or 410; a connect "+
+					"after Close answers 503. Calling it twice is fine."))),
+			Step("Shut the server down",
+				h.P(h.Code(h.Str("http.Server.Shutdown")), h.Str(" drains the plain requests. It does not "+
+					"cancel the router's streams: called first, it waits on tabs that never end."))),
+		),
+		h.P(h.Str("Five seconds of drain and five of Shutdown fit inside the 15 s the systemd unit below gives "+
+			"the process to stop ("), Code("TimeoutStopSec"), h.Str(").")),
+
+		d.H2("Service unit"),
+		snippet.Text("/etc/systemd/system/myapp.service", deploySystemd),
+		snippet.Text("/etc/init.d/myapp", deployOpenRC),
+		h.P(h.Str("Both run the binary as its own user, source "), Code("/etc/myapp.env"), h.Str(" (mode 0600, "+
+			"one line: "), Code("VIA_SESSION_KEY=…"), h.Str("), and restart on exit after 2 s with no retry "+
+			"cap, so a crash loop keeps trying instead of parking the unit as failed. They mirror the files "+
+			"go-via.dev itself runs under; "),
+			shell.ExtLink(repo+"internal/site/DEPLOY.md", h.Str("DEPLOY.md")),
+			h.Str(" has the full hardening list and the first-install steps.")),
+
+		d.H2("What a process holds"),
+		table([]string{"State", "Where it lives", "Survives restart?"},
+			[]h.H{h.Str("Session cookie"), h.Str("The browser, signed with the session key"),
+				h.Span(h.Str("Only with a fixed key: "), API("via.WithSessionKey"), h.Str(" or "),
+					Code("VIA_SESSION_KEY"))},
+			[]h.H{h.Str("Session data"), h.Span(h.Str("The "), API("via.SessionStore"), h.Str("; by default a map in this process")),
+				h.Span(h.Str("Only with a shared store: "), API("via.WithSessionStore"))},
+			[]h.H{h.Span(h.Str("Tabs: streams, live units, "), API("via.State"), h.Str(" and "), API("via.List"), h.Str(" values")),
+				h.Str("This process"),
+				h.Str("No. The tab reloads and OnInit seeds it again")},
+			[]h.H{h.Span(API("via.Ctx.Tick"), h.Str(" timers, "), API("via.Ctx.Listen"), h.Str(" subscriptions, topics")),
+				h.Str("This process"),
+				h.Str("No. OnInit registers them again on the next connect")},
+		),
+
+		d.H2("Rolling deploys"),
+		h.P(h.Str("When a pod closes, each of its open tabs sees its stream end. via's client shows a "+
+			"Disconnected banner, polls the page URL with backoff from 500 ms to 8 s, and reloads once it "+
+			"answers. The reload is a fresh GET: "), Code("OnInit"), h.Str(" runs again, "), API("via.State"),
+			h.Str(" and signal values start from their seeds, and the session carries over if the store is "+
+				"shared. An action against a tab the server no longer knows answers 410, and the client "+
+				"reloads the same way.")),
+		Callout(Warning, "A connect refused 503 does not retry",
+			h.P(h.Str("A tab whose stream connect lands on a closed router, or one past "), API("via.WithMaxSSEConn"),
+				h.Str(", stops on the banner with a Reconnect button and waits for the user. Fail readiness "+
+					"before "), API("via.Router.Close"), h.Str(" so reloading tabs land on a pod that is "+
+					"staying up."))),
+		h.P(h.Str("Roll one pod at a time. Unsent client edits and any action in flight on the closing pod are "+
+			"lost; there is no replay.")),
+
+		d.H2("Sessions that survive a restart"),
+		snippet.Region("deploy/store.go", "store", snippet.Title("store.go")),
+		h.P(h.Str("A "), API("via.SessionStore"), h.Str(" is three methods over opaque bytes. Against Redis "+
+			"they are GET, SET with an expiry, and DEL. Implement "), API("via.VersionedSessionStore"),
+			h.Str(" as well if the backend can make a write conditional on the revision it read.")),
+		h.P(h.Str("Rotate is a Save under the new id, then a Delete of the old. If the Save fails, or the old id "+
+			"can be neither deleted nor expired, "), API("via.Session.Rotate"), h.Str(" panics and the request "+
+			"answers 500 rather than report a rotation that did not happen. Expiry is the ttl handed to Save, "+
+			"and via stamps the same deadline into the blob and refuses an expired Load, so a backend with no "+
+			"TTL support is still correct; it only keeps dead rows until you delete them.")),
+
+		d.H2("Horizontal scaling"),
+		h.P(h.Str("With a shared key and store, the session follows the user to any pod. The tab does not. An "+
+			"action POST carries a tab id and looks it up on the pod that opened the stream, so an action "+
+			"landing on another pod answers 410 and the tab reloads. A balancer needs affinity for the life of "+
+			"a tab to avoid that reload; correctness does not depend on it.")),
+		Callout(Caveat, "Pin on a cookie the balancer owns",
+			h.P(h.Str("Not on "), Code("via_session"), h.Str(": its value changes on "), API("via.Session.Rotate"),
+				h.Str(", which would move a user to another pod in the middle of signing in."))),
+
+		d.H2("State across pods"),
+		snippet.Region("deploy/bridge.go", "bus", snippet.Title("bridge.go")),
+		snippet.Region("deploy/bridge.go", "bridge", snippet.Title("bridge.go"), snippet.Mark("r.Local.Publish", "r.Bus.Publish")),
+		h.P(h.Str("A "), API("topic.Topic"), h.Str(" fans out inside one process. Two pods are two brokers, and a "+
+			"publish on one never reaches a listener on the other; via has no bridge of its own. Invert the "+
+			"write path: handlers publish to your bus, and each pod runs one goroutine that feeds what it hears "+
+			"into the local topic.")),
+		snippet.Region("deploy/bridge.go", "listen", snippet.Title("bridge.go"), snippet.Mark("c.Room.Local")),
+		h.P(h.Str("Units keep listening to the local topic with "), API("via.Ctx.Listen"), h.Str(" or "),
+			API("via.StateTrack"), h.Str(" and do not change. "), Code("Bus"), h.Str(" is a few lines over "+
+				"go-redis ("), Code("Publish(…).Err()"), h.Str(", "), Code("Subscribe(…).Channel()"),
+			h.Str(") or nats.go ("), Code("Publish"), h.Str(", "), Code("ChanSubscribe"), h.Str(").")),
+		Callout(Caveat, "Pub/sub drops what a reloading tab misses",
+			h.P(API("via.StateTrack"), h.Str(" calls its load again at every connect, so tracked state converges "+
+				"from the database whatever was missed. A "), API("via.Ctx.Listen"), h.Str(" handler reacting to "+
+				"events can skip a beat: derive presence from state rather than counting arrivals and "+
+				"departures."))),
 	)
 }

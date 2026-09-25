@@ -13,8 +13,8 @@ type Computed struct {
 	B via.Signal[int] `via:"init=3"`
 }
 
-// expr has no arithmetic past Add, so the addition is Rawf text — with the two
-// refs spliced in checked rather than spelled by hand.
+// expr has no arithmetic operators (Add is the in-place +=), so the sum is
+// Rawf text with the two refs spliced in checked rather than spelled by hand.
 func (c *Computed) sum() expr.Expr {
 	return expr.Rawf("(%s + %s)", c.A.Ref(), c.B.Ref())
 }

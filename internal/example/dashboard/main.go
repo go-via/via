@@ -16,6 +16,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Header is a plain child: no State, no Tick, so it never streams. The parent
@@ -86,8 +87,8 @@ func (q *Queue) View() h.H {
 	return h.Div(
 		h.H2(h.Str("build queue")),
 		h.P(q.Pending.Display(), h.Str(" pending")),
-		h.Button(via.On("click", q.Enqueue), h.Str("enqueue")),
-		h.Button(via.On("click", q.Run), h.Str("run one")),
+		h.Button(on.Click(q.Enqueue), h.Str("enqueue")),
+		h.Button(on.Click(q.Run), h.Str("run one")),
 	)
 }
 

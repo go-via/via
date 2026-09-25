@@ -10,11 +10,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -26,14 +27,31 @@ type Message struct{ Who, Text string }
 type Room struct {
 	bus      *topic.Topic[Message]
 	presence *topic.Topic[int64]
-	online   atomic.Int64
+	mu       sync.Mutex
+	online   int64
 }
 
 func NewRoom() *Room {
 	return &Room{bus: topic.New[Message](), presence: topic.New[int64]()}
 }
-func (r *Room) join() { r.presence.Publish(r.online.Add(1)) }
-func (r *Room) part() { r.presence.Publish(r.online.Add(-1)) }
+func (r *Room) join() { r.add(1) }
+func (r *Room) part() { r.add(-1) }
+
+// add holds mu across the change and the publish: two tabs joining at once
+// would otherwise publish their counts in either order, and every tab could
+// settle on the older one.
+func (r *Room) add(n int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.online += n
+	r.presence.Publish(r.online)
+}
+
+func (r *Room) count() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.online
+}
 
 // Chat is one connected tab's live child.
 type Chat struct {
@@ -47,7 +65,7 @@ type Chat struct {
 
 func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
-	c.Online.Track(ctx, c.room.presence, c.room.online.Load)
+	c.Online.Track(ctx, c.room.presence, c.room.count)
 
 	// Registered, not performed: OnInit also runs on the plain GET and on every
 	// action, and only a real connection gets an OnConnect/OnDispose pair.
@@ -75,7 +93,7 @@ func (c *Chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Room — "), c.Online.Display(), h.Str(" online")),
 		h.Ul(c.Log.Each(c.row)),
-		h.Form(via.On("submit", c.Send),
+		h.Form(on.Submit(c.Send),
 			h.Label(h.Str("you "), h.Input(c.Who.Bind())),
 			h.Input(c.Draft.Bind(), h.Placeholder("message")),
 			h.Button(h.Str("send")),

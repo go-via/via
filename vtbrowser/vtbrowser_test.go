@@ -23,6 +23,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vtbrowser"
 )
@@ -715,4 +716,87 @@ func TestTrack_keepsEveryTabOnTheSharedValue(t *testing.T) {
 	a.RequireCleanConsole()
 	b.RequireCleanConsole()
 	c.RequireCleanConsole()
+}
+
+const (
+	atLiteral  = "send @post('/x') now"
+	getLiteral = "then @get('/y')"
+)
+
+// Datastar rewrites @name( into an action call even inside a string literal;
+// Val must hand it the string so the handler still parses and yields the text.
+type bAtLiteral struct{}
+
+func (bAtLiteral) View() h.H {
+	return h.Div(
+		h.Span(h.ID("out"), h.Str("-")),
+		h.Button(h.ID("send"), on.ClickCS(expr.Rawf(`document.getElementById('out').textContent = %s + "|" + %s`,
+			expr.Val(atLiteral), expr.Val(getLiteral))), h.Str("send")),
+	)
+}
+
+func TestVal_atSignInStringSurvivesDatastarRewrite(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bAtLiteral{}))
+	s.WaitLoaded()
+
+	s.Click("#send")
+	s.WaitTextContains("#out", "|")
+
+	assert.Equal(t, atLiteral+"|"+getLiteral, s.Text("#out"))
+	s.RequireCleanConsole()
+}
+
+// The #out spans carry no server-rendered text, so what they show is the
+// client store's value and nothing else.
+type bAtSeed struct {
+	Msg via.SignalCS[string] `via:"init=\"send @post('/x') now\""`
+}
+
+func (p *bAtSeed) View() h.H { return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref()))) }
+
+func TestSignal_atSignInSeededValueReachesTheStoreIntact(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bAtSeed{}))
+	s.WaitLoaded()
+
+	s.WaitTextContains("#out", "now")
+	assert.Equal(t, atLiteral, s.Text("#out"))
+	s.RequireCleanConsole()
+}
+
+type bAtPlain struct{ Msg via.Signal[string] }
+
+func (p *bAtPlain) Send(ctx *via.Ctx) { p.Msg.Set(atLiteral) }
+func (p *bAtPlain) View() h.H {
+	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), via.On("click", p.Send), h.Str("send")))
+}
+
+func TestSignal_atSignInPlainActionPatchReachesTheStoreIntact(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bAtPlain{}))
+	s.WaitLoaded()
+
+	s.Click("#send")
+	s.WaitTextContains("#out", "now")
+	assert.Equal(t, atLiteral, s.Text("#out"))
+	s.RequireCleanConsole()
+}
+
+type bAtLive struct{ Msg via.Signal[string] }
+
+func (p *bAtLive) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *bAtLive) Send(ctx *via.Ctx) { p.Msg.Set(atLiteral) }
+func (p *bAtLive) View() h.H {
+	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), via.On("click", p.Send), h.Str("send")))
+}
+
+func TestSignal_atSignInLivePatchSignalsReachesTheStoreIntact(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(bAtLive{}))
+	s.WaitLiveConnected()
+
+	s.Click("#send")
+	s.WaitTextContains("#out", "now")
+	assert.Equal(t, atLiteral, s.Text("#out"))
+	s.RequireCleanConsole()
 }
