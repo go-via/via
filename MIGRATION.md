@@ -1,7 +1,7 @@
 # Migrating from v0.7 to v0.8
 
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
-changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.0 as
+changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.1 as
 an ordinary bump and hands you a tree that shares almost no identifiers with
 the one you were using. No tooling will warn you. There is no compatibility
 shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you

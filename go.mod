@@ -2,6 +2,9 @@ module github.com/go-via/via
 
 go 1.27
 
+// Tagged before the release review fixes; use v0.8.1.
+retract v0.8.0
+
 require github.com/stretchr/testify v1.11.1
 
 require (

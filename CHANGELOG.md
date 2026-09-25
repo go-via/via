@@ -1,6 +1,11 @@
 # Changelog
 
-## v0.8.0 — the v2 core goes mainline (2026-09-23)
+## v0.8.1 — the v2 core goes mainline (2026-09-25)
+
+v0.8.0 is retracted. Its tag points at a commit from before the release review
+fixes (action ownership, session writes, URL and CSP gates, origin checks), and
+the Go module proxy has cached it, so the tag cannot move. Use v0.8.1. The notes
+below cover v0.7 → v0.8.1.
 
 v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
 no subpackages beyond `h` and `topic`, and no configuration knob that a
