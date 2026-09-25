@@ -240,8 +240,9 @@ a > code { color: inherit; }
 .versions[open] > summary { border-color: var(--amber); color: var(--bright); }
 .versions[open] > summary::after { margin-top: .15rem; transform: rotate(-135deg); }
 .versions > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
-/* Left-anchored in the drawer, where the picker is the row's first item;
-   right-anchored in the bar, where it sits near the window's edge. */
+.side-version { margin: .25rem 1.25rem .75rem; }
+.side-version:empty { display: none; }
+.side-version .versions > summary { justify-content: space-between; }
 .versions ul {
   position: absolute;
   top: 100%;
@@ -396,7 +397,6 @@ a > code { color: inherit; }
     box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
   }
   .top-links { flex-wrap: nowrap; margin: 0 0 0 auto; }
-  .top-tools .versions ul { left: auto; right: 0; }
   .side {
     position: fixed;
     background: var(--sidebar);
