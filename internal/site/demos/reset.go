@@ -7,4 +7,6 @@ package demos
 func ResetAll() {
 	resetShared()
 	resetVotes()
+	resetStart()
+	resetLanding()
 }

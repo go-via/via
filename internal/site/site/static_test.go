@@ -48,7 +48,7 @@ func TestStatic_revalidatesEveryAsset(t *testing.T) {
 			resp, _ := get(t, srv, path, nil)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
 			assert.Equal(t, "public, max-age=3600, must-revalidate", resp.Header.Get("Cache-Control"),
-				"nothing here is content-addressed, so no asset may be cached immutably")
+				"an unfingerprinted URL can change under a redeploy, so it is never cached immutably")
 			assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 		})
 	}

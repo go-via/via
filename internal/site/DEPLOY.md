@@ -146,6 +146,12 @@ The restart drops every open stream; clients reconnect on their own. The
 Caddyfile only changes when the proxy contract does; reload Caddy, do not
 restart it, so in-flight TLS handshakes survive.
 
+Pages link static files by fingerprinted URL (`/static/<hash8>/site.css`),
+served `immutable` for a year, so a redeploy needs no cache purge. A plain
+`/static/x` URL, or a fingerprint that no longer matches the file, gets the
+current file with `max-age=3600, must-revalidate` and an ETag. Don't add
+caching for `/static/` in Caddy: the binary sets `Cache-Control` itself.
+
 ## Versions
 
 The picker in the sidebar lists every version of the docs, and a page on an
@@ -159,6 +165,10 @@ variables drive it:
   is `/` for the root, `/vX.Y` for a prefix on this host, or an https URL for
   docs hosted elsewhere. Set the same string on every service; each build
   finds its own entry by `VIA_BASE` and refuses to start without one.
+
+The first entry is the latest: the picker's `latest (vX.Y)` entry points at
+it, and the root build answers `/latest` and `/latest/<page>` with a 302 to
+that page on it (the front page, if the latest is hosted elsewhere).
 
 A build under a prefix sets `noindex` on its pages, so an old version does not
 compete with the latest in search results, and names its session cookie after

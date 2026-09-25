@@ -13,10 +13,14 @@ type Version struct {
 // Href is path on this version's docs. An external version has no page map,
 // so every path lands on its front page.
 func (v Version) Href(path string) string {
-	if strings.HasPrefix(v.Base, "http://") || strings.HasPrefix(v.Base, "https://") {
+	if v.external() {
 		return v.Base
 	}
 	return join(v.Base, path)
+}
+
+func (v Version) external() bool {
+	return strings.HasPrefix(v.Base, "http://") || strings.HasPrefix(v.Base, "https://")
 }
 
 // Site is where this build is served: its path prefix, its origin, and the

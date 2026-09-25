@@ -2,20 +2,34 @@ package content
 
 import "github.com/go-via/via/h"
 
-func table(heads []string, rows ...[]h.H) h.H {
+func table(heads []string, rows ...[]h.H) h.H { return captionedTable("", heads, rows...) }
+
+// captionedTable is table with a <caption>; "" leaves it out.
+func captionedTable(caption string, heads []string, rows ...[]h.H) h.H {
 	head := make([]h.H, 0, len(heads))
 	for _, t := range heads {
-		head = append(head, h.Th(h.Str(t)))
+		head = append(head, h.Th(h.RawAttr("scope", "col"), h.Str(t)))
 	}
-	out := []h.H{h.Class("ref-table"), h.Tr(head...)}
+	// Under 50rem a row stacks and the header row is hidden; with three or
+	// more columns a cell needs its head beside it to make sense.
+	labelled := len(heads) >= 3
+	body := make([]h.H, 0, len(rows))
 	for _, r := range rows {
 		cells := make([]h.H, 0, len(r))
-		for _, c := range r {
+		for i, c := range r {
+			if labelled && i < len(heads) && heads[i] != "" {
+				cells = append(cells, h.Td(h.Data("label", heads[i]), c))
+				continue
+			}
 			cells = append(cells, h.Td(c))
 		}
-		out = append(out, h.Tr(cells...))
+		body = append(body, h.Tr(cells...))
 	}
-	return h.Table(out...)
+	out := []h.H{h.Class("ref-table")}
+	if caption != "" {
+		out = append(out, h.Caption(h.Str(caption)))
+	}
+	return h.Table(append(out, h.Thead(h.Tr(head...)), h.Tbody(body...))...)
 }
 
 func refTable(head string, rows []row) h.H {

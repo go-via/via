@@ -34,7 +34,7 @@ func TestSource_namesOnlyEmbeddedFiles(t *testing.T) {
 		require.NoError(t, err)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) != 4 {
+			if !ok || len(call.Args) < 4 {
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)

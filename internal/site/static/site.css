@@ -11,6 +11,9 @@
   --well: #0f1116;
   --muted: #8b93a1;
   --bright: #fff;
+  --band: #14161a;
+  --btn: #23272f;
+  --top: 3.75rem;
   --sans: Inter, system-ui, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, monospace;
 }
@@ -30,6 +33,9 @@
 
 * { box-sizing: border-box; }
 
+/* Anchor jumps park the heading below the bar rather than under it. */
+html { scroll-padding-top: 1rem; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -43,11 +49,17 @@ a { color: var(--amber); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 h1, h2, h3 { color: var(--bright); line-height: 1.25; }
-h1 { font-size: 1.9rem; margin: 0 0 1rem; }
-h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; }
-h3 { font-size: 1.05rem; margin: 0; }
+h1 { font-size: 2.25rem; font-weight: 500; margin: 0 0 1rem; }
+h2 { font-size: 1.5rem; font-weight: 500; margin: 2.5rem 0 .75rem; }
+h3 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+main h3 { margin: 2rem 0 .5rem; }
+main h2 + h3 { margin-top: 1rem; }
+/* Prose lines past ~70 characters are hard to track back; code, tables and
+   cards keep the full column. */
+main p, main li { max-width: 70ch; }
 
-code, pre { font-family: var(--mono); font-size: .875rem; }
+/* JetBrains Mono's ligatures turn === into ≡, which misreads in JS. */
+code, pre { font-family: var(--mono); font-size: .875rem; font-variant-ligatures: none; }
 
 pre {
   overflow-x: auto;
@@ -55,64 +67,154 @@ pre {
   padding: 1rem;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--well);
+  background: var(--sidebar);
   line-height: 1.5;
 }
 
-/* Under 50rem the sidebar is a header: wordmark, a Menu toggle and the
-   version picker, with the nav folded beneath it until the toggle is on. */
-.side {
-  background: var(--sidebar);
-  border-bottom: 1px solid var(--border);
+/* Inline code is a chip so it reads as code in tables and callouts too; a
+   linked name keeps the link colour, plain code stays neutral. */
+:not(pre) > code {
+  padding: .05em .3em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--well);
+  color: var(--bright);
+  font-size: .85em;
 }
-.side-head {
+a > code { color: inherit; }
+
+/* Inline SVGs; style-src 'self' leaves no room for presentation attributes'
+   inline equivalents, so stroke and size are set here. */
+.icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: -.125em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.icon-ext { width: .8em; height: .8em; margin-left: .25em; vertical-align: -.05em; }
+
+/* Under 50rem the top bar is the menu button and wordmark; the checkbox slides
+   a drawer in from the left: the search, version picker and links, then the
+   nav. */
+.top { background: var(--sidebar); border-bottom: 1px solid var(--border); }
+.top-brand {
   display: flex;
   align-items: center;
   gap: .75rem;
   padding: .85rem 1.25rem;
 }
-.wordmark { display: flex; margin-right: auto; }
+.wordmark { display: flex; }
 
 /* The checkbox stays in the tab order (display:none would drop it), so its
    focus ring is drawn on the label it drives. */
 .nav-toggle { position: absolute; opacity: 0; width: 1px; height: 1px; }
 .menu-btn {
-  font-size: .9rem;
-  padding: .3rem .7rem;
-  border: 1px solid var(--border);
+  display: flex;
+  padding: .25rem;
+  color: var(--amber);
+  font-size: 1.4rem;
   border-radius: 4px;
   cursor: pointer;
 }
-.nav-toggle:focus-visible ~ .side .menu-btn { outline: 2px solid var(--amber); outline-offset: 2px; }
-.nav-toggle:checked ~ .side .menu-btn { border-color: var(--amber); color: var(--bright); }
-.side-body { display: none; padding: 0 0 1rem; }
-.nav-toggle:checked ~ .side .side-body { display: block; }
+.nav-toggle:focus-visible ~ .top .menu-btn { outline: 2px solid var(--amber); outline-offset: 2px; }
+.nav-toggle:checked ~ .top .menu-btn { background: var(--band); }
 
-.nav ul { list-style: none; margin: 0 0 .75rem; padding: 0; }
+/* visibility, not only the transform, so a closed drawer's links leave the
+   tab order; it is transitioned so the panel stays visible while it slides
+   out. */
+.drawer {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 20;
+  width: min(20rem, 85vw);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform .2s ease, visibility .2s;
+}
+.nav-toggle:checked ~ .drawer { transform: none; visibility: visible; }
+/* The open drawer covers the bar, so it repeats the wordmark and carries
+   its own way out. */
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .85rem .75rem .85rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.drawer-close {
+  display: flex;
+  padding: .25rem;
+  color: var(--amber);
+  font-size: 1.4rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.drawer-close:hover { background: var(--band); }
+.nav-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: rgba(0, 0, 0, .55);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .2s, visibility .2s;
+}
+.nav-toggle:checked ~ .nav-backdrop { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) {
+  .drawer, .nav-backdrop { transition: none; }
+}
+@media (max-width: 49.99rem) {
+  body:has(.nav-toggle:checked) { overflow: hidden; }
+}
+
+.top-tools { padding: 1rem 1.25rem; border-bottom: 1px solid var(--border); }
+.top-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem 1.25rem;
+  margin-top: .75rem;
+  font-size: .85rem;
+}
+.top-links > a { white-space: nowrap; }
+
+.side-body { padding: .5rem 0 1rem; }
+
+.nav ul { list-style: none; margin: 0 0 .5rem; padding: 0; }
 .nav-group {
-  margin: .75rem 1.25rem .25rem;
+  margin: .9rem 1.25rem .3rem;
   color: var(--muted);
-  font-size: .75rem;
+  font-size: .7rem;
   font-weight: 600;
-  letter-spacing: .06em;
+  letter-spacing: .08em;
   text-transform: uppercase;
 }
 .nav-link {
   display: block;
-  padding: .3rem 1.25rem;
+  padding: .3rem 1.25rem .3rem 2rem;
+  font-size: .925rem;
   color: var(--text);
-  border-left: 2px solid transparent;
 }
+.nav-top .nav-link { padding-left: 1.25rem; color: var(--amber); }
 .nav-link:hover { color: var(--bright); text-decoration: none; }
-.nav-link[aria-current="page"] {
+.nav-top .nav-link:hover { color: var(--amber); background: var(--band); }
+.nav-link[aria-current="page"],
+.nav-top .nav-link[aria-current="page"] {
   color: var(--amber);
-  border-left-color: var(--amber);
-  background: rgba(255, 191, 0, .06);
+  background: var(--band);
   font-weight: 600;
 }
-.nav-ext::after { content: " ↗"; color: var(--muted); }
 
-/* Above .search, which follows it and is positioned too. */
+/* Above .search, whose results are positioned too. */
 .versions { position: relative; z-index: 6; font-size: .85rem; }
 .versions > summary {
   display: flex;
@@ -138,12 +240,13 @@ pre {
 .versions[open] > summary { border-color: var(--amber); color: var(--bright); }
 .versions[open] > summary::after { margin-top: .15rem; transform: rotate(-135deg); }
 .versions > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+/* Left-anchored in the drawer, where the picker is the row's first item;
+   right-anchored in the bar, where it sits near the window's edge. */
 .versions ul {
   position: absolute;
   top: 100%;
-  right: 0;
+  left: 0;
   min-width: 100%;
-  max-width: calc(100vw - 2.5rem);
   margin: .25rem 0 0;
   padding: .25rem 0;
   list-style: none;
@@ -153,7 +256,8 @@ pre {
   box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
 }
 .versions li a {
-  display: block;
+  display: flex;
+  align-items: center;
   padding: .3rem .9rem;
   white-space: nowrap;
   color: var(--text);
@@ -224,7 +328,7 @@ pre {
 
 .col {
   min-width: 0;
-  padding: 2rem 1.5rem 4rem;
+  padding: 2rem 1.5rem 2rem;
 }
 
 .bottom {
@@ -233,29 +337,93 @@ pre {
   font-size: .85rem;
 }
 
+/* From 50rem the bar spans the window: the wordmark over the sidebar
+   column, then search and links over the page column. --side is the sidebar
+   width, which past 66.5rem grows leftwards so sidebar and column sit centred
+   together while the sidebar's contents stay pinned to the column's edge. */
 @media (min-width: 50rem) {
+  :root { --side: 16.5rem; }
+  html { scroll-padding-top: calc(var(--top) + 1rem); }
+  .top {
+    position: fixed;
+    inset: 0 0 auto 0;
+    z-index: 5;
+    display: flex;
+    height: var(--top);
+    background: var(--bg);
+  }
+  .top-brand {
+    width: var(--side);
+    flex: none;
+    padding: 0 1.25rem 0 calc(var(--side) - 16.5rem + 1.25rem);
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+  }
+  .menu-btn, .drawer-head { display: none; }
+  /* visibility inherits through display:contents; the tools would vanish. */
+  .drawer { display: contents; visibility: visible; }
+  .nav-backdrop { display: none; }
+  /* Out of the drawer and over the bar, starting where the wordmark's column
+     ends. */
+  .top-tools {
+    position: fixed;
+    top: 0;
+    left: var(--side);
+    right: 0;
+    z-index: 6;
+    height: var(--top);
+    border-bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    min-width: 0;
+    max-width: 50rem;
+    padding: 0 2.5rem;
+  }
+  .top-tools .search { flex: 1; max-width: 24rem; }
+  .top-tools .search-hits,
+  .top-tools .search-none {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: min(32rem, 70vw);
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: .75rem 1rem;
+    background: var(--sidebar);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
+  }
+  .top-links { flex-wrap: nowrap; margin: 0 0 0 auto; }
+  .top-tools .versions ul { left: auto; right: 0; }
   .side {
     position: fixed;
-    inset: 0 auto 0 0;
-    width: 16.5rem;
-    overflow-y: auto;
     background: var(--sidebar);
+    inset: var(--top) auto 0 0;
+    width: var(--side);
+    overflow-y: auto;
     border-bottom: 0;
     border-right: 1px solid var(--border);
   }
-  .side-body { display: block; }
-  .menu-btn { display: none; }
-  .main-wrap { margin-left: 16.5rem; }
-  .col { padding: 2rem 2.5rem 4rem; }
+  .side-body { display: block; padding-top: 1.25rem; }
+  .main-wrap { margin-left: var(--side); padding-top: var(--top); }
+  .col { padding: 2rem 2.5rem 2rem; }
 }
 
-/* Past 66.5rem the sidebar and column sit centred together: the sidebar
-   grows leftwards and its contents stay pinned to the column's edge. */
+/* From 66.5rem the contents list leaves the column for a sticky rail on its
+   right; sidebar, column and rail (16.5 + 50 + 14rem) centre together. The
+   rail's track stays on pages without one, so every column starts at the
+   same x. */
 @media (min-width: 66.5rem) {
-  .side { width: max(16.5rem, calc(50% - 16.75rem)); }
+  :root { --side: max(16.5rem, calc(50% - 23.75rem)); }
   .side-inner { width: 16.5rem; margin-left: auto; }
-  .main-wrap { margin-left: max(16.5rem, calc(50% - 16.75rem)); }
-  .col { max-width: 50rem; }
+  .page {
+    display: grid;
+    grid-template-columns: minmax(0, 50rem) 14rem;
+    grid-template-rows: auto 1fr;
+  }
+  .page > main, .page-foot { grid-column: 1; }
 }
 
 .crumbs { margin: 0 0 .35rem; font-size: .85rem; color: var(--muted); }
@@ -268,17 +436,53 @@ pre {
   background: rgba(255, 191, 0, .06);
 }
 
-.toc {
+.toc-inline {
   margin: 0 0 2rem;
-  padding: .75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--sidebar);
   font-size: .9rem;
 }
-.toc-title { margin: 0 0 .35rem; color: var(--muted); font-size: .8rem; font-weight: 600; }
-.toc ul { margin: 0; padding-left: 1.1rem; }
-.toc ul ul { padding-left: 1rem; }
+.toc-inline > summary {
+  padding: .55rem 1rem;
+  color: var(--muted);
+  font-size: .85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.toc-inline > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.toc-inline[open] > summary { color: var(--bright); }
+.toc-inline > ul { margin: 0; padding: 0 1rem .75rem 2.1rem; }
+.toc-inline ul ul { padding-left: 1rem; }
+
+.toc-rail { display: none; font-size: .85rem; line-height: 1.4; }
+.toc-title { margin: 0 0 .5rem; color: var(--muted); font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.toc-rail ul { list-style: none; margin: 0; padding: 0; }
+.toc-rail > ul { border-left: 1px solid var(--border); }
+.toc-rail a {
+  display: block;
+  margin-left: -1px;
+  padding: .25rem 0 .25rem .8rem;
+  border-left: 1px solid transparent;
+  color: var(--muted);
+}
+.toc-rail ul ul a { padding-left: 1.6rem; }
+.toc-rail a:hover { color: var(--bright); text-decoration: none; }
+.toc-rail a[aria-current] { color: var(--amber); border-left-color: var(--amber); }
+@media (min-width: 66.5rem) {
+  .toc-inline { display: none; }
+  .toc-rail {
+    display: block;
+    grid-column: 2;
+    grid-row: 1 / 3;
+    align-self: start;
+    position: sticky;
+    top: var(--top);
+    max-height: calc(100vh - var(--top));
+    overflow-y: auto;
+    padding: 2.4rem 1.5rem 2rem 0;
+  }
+}
 
 h2, h3 { position: relative; }
 /* In the gutter left of the heading, so the heading text starts where the
@@ -293,63 +497,158 @@ h2, h3 { position: relative; }
 }
 h2:hover .anchor, h3:hover .anchor, .anchor:focus-visible { opacity: 1; }
 .anchor:hover { color: var(--amber); text-decoration: none; }
-
-.next { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-
-.hero-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; }
-.btn {
-  display: inline-block;
-  padding: .5rem 1.1rem;
-  border: 1px solid var(--amber);
-  border-radius: 6px;
-  color: var(--amber);
-  font-weight: 600;
+.anchor:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+/* No hover to reveal it on a touch screen, so it stays faintly there. */
+@media (hover: none) { .anchor { opacity: .45; } }
+/* The phone gutter is narrower than the glyph, so it moves into the line. */
+@media (max-width: 49.99rem) {
+  .anchor { float: none; width: auto; margin: 0 .35em 0 0; }
 }
-.btn:hover { text-decoration: none; background: rgba(255, 191, 0, .08); }
-.btn-primary { background: var(--amber); color: var(--ink); }
-.btn-primary:hover { background: var(--amber); color: var(--ink); filter: brightness(1.08); }
+
+.page-foot { padding: 0 1.5rem 3rem; }
+@media (min-width: 50rem) { .page-foot { padding: 0 2.5rem 3rem; } }
+.pager {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+.pager a {
+  display: block;
+  min-width: 0;
+  padding: .7rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-weight: 500;
+}
+.pager a:hover { border-color: var(--amber); text-decoration: none; }
+.pager a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.pager small { display: block; color: var(--muted); font-size: .8rem; font-weight: 400; }
+.pager-next { grid-column: 2; text-align: right; }
+.page-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: .5rem 1.5rem;
+  margin: 1.25rem 0 0;
+  font-size: .85rem;
+}
+.page-links a { color: var(--muted); }
+.page-links a:hover { color: var(--bright); }
+
+.search-page { max-width: 24rem; margin: 1.5rem 0 .5rem; }
+@media (min-width: 50rem) { .search-page { display: none; } }
+
+hr { margin: 2.5rem 0 2rem; border: 0; border-top: 1px solid var(--border); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: .45rem 1rem;
+  border: 1px solid #3a3f4b;
+  border-radius: 4px;
+  background: var(--btn);
+  color: var(--amber);
+  font-weight: 500;
+}
+.btn:hover { text-decoration: none; border-color: var(--amber); }
+.btn-primary { background: var(--amber); border-color: var(--amber); color: var(--ink); }
+.btn-primary:hover { filter: brightness(1.08); }
 .btn:focus-visible { outline: 2px solid var(--bright); outline-offset: 2px; }
 
-.search { position: relative; margin: 0 1.25rem .5rem; }
+.search { position: relative; }
+.search > .icon {
+  position: absolute;
+  left: .6rem;
+  top: .55rem;
+  color: var(--muted);
+  pointer-events: none;
+}
 .search input {
   width: 100%;
   font: inherit;
-  font-size: .9rem;
+  font-size: .95rem;
   color: var(--text);
   background: var(--well);
   border: 1px solid var(--border);
   border-radius: 4px;
-  padding: .35rem .6rem;
+  padding: .35rem .6rem .35rem 2.1rem;
 }
+.search input::placeholder { color: var(--muted); }
 .search input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .search-hits { list-style: none; margin: .4rem 0 0; padding: 0; font-size: .85rem; }
-.search-hits li { margin: 0 0 .5rem; }
+.search-hits li { margin: 0 -.5rem .2rem; padding: .3rem .5rem; border-radius: 3px; }
+.search-hits li.active { background: var(--btn); }
+.search-hits li.active a { text-decoration: underline; }
+.search input { padding-right: 2rem; }
+.search-key {
+  position: absolute;
+  right: .5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0 .35rem;
+  font: .75rem/1.5 var(--mono);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.search input:focus ~ .search-key,
+.search input:not(:placeholder-shown) ~ .search-key { display: none; }
+/* pointer, not hover: headless desktop Chromium reports hover:none. */
+@media (pointer: coarse) { .search-key { display: none; } }
 .search-hits small { display: block; color: var(--muted); }
 .search-none { margin: .4rem 0 0; font-size: .85rem; color: var(--muted); }
 
 .code { position: relative; }
-.copy { position: absolute; top: .5rem; right: .5rem; font-size: .75rem; padding: .15rem .5rem; }
-
-.hero {
-  margin: .5rem 0 2.5rem;
-  padding: 1.5rem 1.5rem 2rem;
-  text-align: center;
-  background: var(--well);
-  border: 2px solid var(--amber);
-  border-radius: 20px;
-  box-shadow: 0 0 0 6px rgba(255, 191, 0, .12), 0 0 48px rgba(255, 191, 0, .18);
+/* Room for the copy button, so it never covers the end of the first line: to
+   its left on a wide column, above the code on a phone, where most lines
+   scroll sideways under it. */
+.code:not(.code-file) > pre { padding-right: 3rem; }
+@media (max-width: 49.99rem) {
+  .code:not(.code-file) > pre { padding: 2.4rem 1rem 1rem; }
+  .code:not(.code-file) > .copy { top: .4rem; right: .4rem; }
 }
-.hero h1 { margin: 0 0 .75rem; }
-.hero-art { display: block; width: 340px; max-width: 100%; height: auto; margin: -.5rem auto 0; }
-.pitch { font-size: 1.1rem; max-width: 46ch; margin: 0 auto; color: var(--muted); }
+.copy {
+  position: absolute;
+  top: .5rem;
+  right: .5rem;
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  font-size: .85rem;
+  padding: .3rem .4rem;
+  color: var(--muted);
+}
+.copy .icon-check, .copy-done { display: none; }
+.copy.copied { color: var(--amber); border-color: var(--amber); }
+.copy.copied .icon-clip { display: none; }
+.copy.copied .icon-check { display: block; }
+.copy.copied .copy-done { display: inline; font-size: .75rem; }
 
+.hero { margin: 0 0 1rem; }
+.hero h1 { margin: .5rem 0 .5rem; font-size: 2.6rem; font-weight: 500; }
+/* The PNG is square with the bolt in its middle half; cover crops the empty
+   bands above and below at any width. */
+.hero-art { display: block; width: 440px; max-width: 100%; height: auto; aspect-ratio: 44 / 25; object-fit: cover; margin: 0 auto; }
+.pitch { margin: 0; font-size: 1.35rem; line-height: 1.4; color: var(--text); }
+.hero-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-top: 1.5rem; }
+
+/* A container, so the Wire pane lays out by the card's width, which Beside
+   narrows, not the window's. */
 .demo {
+  container-type: inline-size;
   margin: 1.5rem 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--sidebar);
 }
 .demo > header { padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.demo > header h3 { margin: 0; }
+/* The card's padding is narrower than the glyph, so a hanging anchor would
+   sit on the border. */
+.demo > header .anchor { display: none; }
 .demo-prose { padding: .75rem 1rem 0; }
 .demo .row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 
@@ -454,8 +753,10 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   font-size: .8rem;
 }
 .demo .loglist:empty { display: none; }
+/* Room for a two-digit marker. */
+.demo ol.loglist { padding-left: 2.5em; }
 .demo .reflist { margin: .5rem 0; padding-left: 1.25rem; font-size: .9rem; }
-.demo .reflist code { color: var(--amber); }
+.demo .reflist code { overflow-wrap: break-word; }
 
 .ref-table {
   width: 100%;
@@ -470,18 +771,40 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   border-bottom: 1px solid var(--border);
 }
 .ref-table th { color: var(--bright); font-weight: 600; }
-.ref-table td code { color: var(--amber); }
+.ref-table td code { overflow-wrap: break-word; }
+/* API names break only where reference.go put a <wbr>, after a dot. */
+.ref-table td:first-child code { overflow-wrap: normal; word-break: keep-all; }
+.ref-sym code { padding: 0; border: 0; background: none; font-size: 1em; }
+.ref-sig {
+  display: block;
+  margin-top: .15rem;
+  font: .78rem/1.45 var(--mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.ref-table tr:hover .anchor { opacity: 1; }
+.ref-sym.deprecated, .ref-sym.deprecated code { color: var(--muted); }
+.ref-table caption { caption-side: top; padding: 0 0 .4rem; text-align: left; color: var(--muted); font-size: .85rem; }
 /* A table ignores min-width: 0 and two columns leave no room for a signature
    on a phone, so under 50rem each row stacks: the call on one line, what it
    does beneath. The header row is noise once the columns are gone. */
 @media (max-width: 49.99rem) {
   .ref-table tbody, .ref-table tr, .ref-table td { display: block; }
-  .ref-table tr:first-child { display: none; }
+  .ref-table thead { display: none; }
   .ref-table tr { padding: .5rem 0; border-bottom: 1px solid var(--border); }
   .ref-table td { padding: .15rem 0; border-bottom: 0; }
-  .ref-table td code { overflow-wrap: anywhere; }
+  .ref-table td code, .demo .reflist code { overflow-wrap: anywhere; }
+  .ref-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--muted);
+    font-size: .75rem;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+  }
+  .ref-table td[data-label] + td[data-label] { padding-top: .4rem; }
 }
-@media (min-width: 50rem) { .ref-table td code { white-space: nowrap; } }
 
 .inspector h4 {
   margin: 0 0 .35rem;
@@ -519,3 +842,198 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .insp-res > summary { color: #7cc; }
 .insp-frame { border-left-color: #58f; }
 .insp-frame > summary { color: #8ab4ff; }
+
+/* A labelled block: the name bar shares the block's border, and the copy
+   button sits in the bar so it never covers the first line of code. */
+.code-file {
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+}
+.code-file > pre { margin: 0; border: 0; border-radius: 0 0 6px 6px; }
+.code-name {
+  padding: .45rem 3.25rem .45rem 1rem;
+  border-bottom: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  background: var(--band);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: .8rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.code-file > .copy {
+  top: .2rem;
+  right: .35rem;
+  padding: .15rem .35rem;
+  background: transparent;
+  border-color: transparent;
+}
+.code-file > .copy:hover { border-color: var(--border); }
+
+/* code is widened to the scroll width so a marked line's band runs under
+   text that only shows after scrolling sideways. */
+.code-hl > code { display: inline-block; min-width: 100%; }
+.code-hl .ln {
+  display: block;
+  margin: 0 -1rem;
+  padding: 0 1rem 0 calc(1rem - 2px);
+  border-left: 2px solid transparent;
+}
+.code-hl .ln.hl { background: rgba(255, 191, 0, .06); border-left-color: var(--amber); }
+
+.callout {
+  --tone: var(--muted);
+  margin: 1.25rem 0;
+  padding: .75rem 1rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tone);
+  border-radius: 6px;
+  background: var(--sidebar);
+}
+.callout-note { --tone: #61afef; }
+.callout-warning { --tone: var(--amber); }
+.callout-caveat { --tone: #e06c75; }
+.callout-title { margin: 0 0 .3rem; color: var(--bright); font-weight: 600; }
+.callout-label {
+  margin-right: .6rem;
+  color: var(--tone);
+  font-size: .72rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.callout > :not(.callout-title) { margin: .35rem 0 0; }
+.callout > .code, .callout > .code-file { margin-top: .6rem; }
+
+.steps { list-style: none; counter-reset: step; margin: 1.5rem 0; padding: 0; }
+.step { position: relative; counter-increment: step; padding: 0 0 1.5rem 2.75rem; }
+.step::before {
+  content: counter(step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--sidebar);
+  color: var(--amber);
+  font: .8rem/1.65rem var(--mono);
+  text-align: center;
+}
+.step::after {
+  content: "";
+  position: absolute;
+  top: 2.1rem;
+  bottom: .35rem;
+  left: .875rem;
+  border-left: 1px solid var(--border);
+}
+.step:last-child { padding-bottom: 0; }
+.step:last-child::after { display: none; }
+.step-title { margin: 0 0 .4rem; color: var(--bright); font-weight: 600; line-height: 1.75rem; }
+.step > :not(.step-title) { margin-top: .5rem; margin-bottom: 0; }
+.step > .code > pre { margin: 0; }
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 14rem), 1fr));
+  gap: .75rem;
+  margin: 1.25rem 0;
+}
+.link-card {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  padding: .85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+  color: var(--text);
+}
+.link-card:hover { text-decoration: none; border-color: var(--amber); }
+.link-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.link-card-title { display: flex; justify-content: space-between; gap: .5rem; color: var(--bright); font-weight: 600; }
+.link-card-arrow { color: var(--amber); }
+.link-card-line { color: var(--muted); font-size: .9rem; line-height: 1.45; }
+
+.compare { display: grid; gap: 1rem; margin: 1.25rem 0; }
+.compare-side { display: flex; flex-direction: column; min-width: 0; margin: 0; }
+.compare-side > figcaption {
+  margin: 0 0 .4rem;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.compare-side > .code, .compare-side > .code-file { flex: 1; display: flex; flex-direction: column; margin: 0; }
+.compare-side pre { flex: 1; margin: 0; }
+
+.ex-links { white-space: nowrap; }
+
+.kbd { white-space: nowrap; color: var(--muted); }
+kbd {
+  padding: .05rem .35rem;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--sidebar);
+  color: var(--bright);
+  font-family: var(--mono);
+  font-size: .78rem;
+}
+
+.demo-try {
+  margin: 0 1rem 1rem;
+  padding: .6rem .85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--band);
+  font-size: .9rem;
+}
+.demo-try-title {
+  margin: 0 0 .2rem;
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.demo-try ul { margin: 0; padding-left: 1.1rem; }
+.demo-try li { margin: .15rem 0; }
+.demo-try li::marker { color: var(--amber); }
+
+/* Wire pane rows: time, kind, target, outcome; a status note wraps under. */
+.insp-e > summary {
+  display: grid;
+  grid-template-columns: 4.5rem 7.5rem minmax(0, 1fr) auto;
+  gap: .1rem .75rem;
+  align-items: baseline;
+  list-style: none;
+  color: var(--text);
+}
+.insp-e > summary::-webkit-details-marker { display: none; }
+.insp-req, .insp-frame { border-left-color: var(--border); }
+.insp-req > summary, .insp-frame > summary { color: var(--text); }
+.insp-e[open] { border-left-color: var(--amber); }
+.w-time { color: var(--muted); }
+.w-kind { color: var(--bright); }
+.insp-frame .w-kind { color: #61afef; }
+.w-target { overflow-wrap: anywhere; }
+.w-meta { color: var(--muted); text-align: right; white-space: nowrap; }
+.w-status { font-weight: 600; }
+.w-ok { color: #98c379; }
+.w-warn { color: var(--amber); }
+.w-bad { color: #e06c75; }
+.w-note { grid-column: 2 / -1; color: var(--amber); }
+@container (max-width: 40rem) {
+  .insp-e > summary { grid-template-columns: auto minmax(0, 1fr); }
+  .w-time { display: none; }
+  .w-meta { grid-column: 1 / -1; text-align: left; }
+  .w-note { grid-column: 1 / -1; }
+}
+
+/* Native file inputs size to their text, which overflows at phone width. */
+.demo input[type="file"] { max-width: 100%; }

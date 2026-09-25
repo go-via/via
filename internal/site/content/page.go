@@ -15,7 +15,7 @@ type Env struct {
 
 // page is the wiring every content page needs and nothing else: its nav entry,
 // so the path is spelled once instead of in both PageMeta and View, the site
-// its links and canonical URL are built from, and the sidebar's search box.
+// its links and canonical URL are built from, and the top bar's search box.
 type page struct {
 	nav    shell.NavItem
 	site   *shell.Site

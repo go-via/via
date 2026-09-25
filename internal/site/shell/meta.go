@@ -14,15 +14,19 @@ import (
 // and a page that loads its own sets the field itself (content/islands.go).
 func Meta(s *Site, nav NavItem, desc string) via.Meta {
 	// Heading, where it differs, is the page's full sentence — the front page
-	// wants that in the tab, not "Overview".
+	// wants that in the tab, not "Home".
 	title := cmp.Or(nav.Heading, nav.Title) + " · go-via"
 	m := via.Meta{
 		Title:       title,
 		Description: desc,
 		OG:          map[string]string{"type": "website"},
+		Twitter:     map[string]string{"card": "summary_large_image"},
 	}
 	if s.Origin != "" {
 		m.Canonical = s.Origin + s.Href(nav.Path)
+		// The unfingerprinted URL: link unfurlers cache the image per URL,
+		// and this one survives a redeploy.
+		m.OG["image"] = s.Origin + s.Href("/static/brand/punch-dark.png")
 	}
 	if s.Base != "" {
 		// An older version's pages would otherwise compete with the latest's

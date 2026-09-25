@@ -226,37 +226,6 @@ func TestSite_givesEveryHeadingAUniqueAnchor(t *testing.T) {
 	}
 }
 
-func TestSite_linksNextFollowingTheNavOrder(t *testing.T) {
-	t.Parallel()
-	srv := siteServer(t, site.Options{})
-
-	pages := shell.Pages()
-	for i, p := range pages {
-		t.Run(p.Path, func(t *testing.T) {
-			t.Parallel()
-			_, body := get(t, srv, p.Path, nil)
-			if i == len(pages)-1 {
-				assert.NotContains(t, body, `class="next"`)
-				return
-			}
-			next := pages[i+1]
-			assert.Contains(t, body, `<p class="next"><a href="`+next.Path+`">Next: `+html.EscapeString(next.Title)+`</a></p>`)
-		})
-	}
-}
-
-func TestSite_listsContentsOnlyOnLongPages(t *testing.T) {
-	t.Parallel()
-	srv := siteServer(t, site.Options{})
-
-	_, body := get(t, srv, "/deploy", nil)
-	assert.Contains(t, body, `<nav class="toc" aria-label="On this page">`)
-	assert.Contains(t, body, `<a href="#shutdown-order">Shutdown order</a>`)
-
-	_, body = get(t, srv, "/actions", nil)
-	assert.NotContains(t, body, `class="toc"`, "a page with no h2 sections has no contents list")
-}
-
 func TestSite_prefixesLinksAndMountsWithTheBase(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, site.Options{
@@ -267,7 +236,7 @@ func TestSite_prefixesLinksAndMountsWithTheBase(t *testing.T) {
 	resp, body := get(t, srv, "/v0.8/actions", nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, `href="/v0.8/signals"`)
-	assert.Contains(t, body, `href="/v0.8/static/site.css"`)
+	assert.Regexp(t, `href="/v0.8/static/[0-9a-f]{8}/site\.css"`, body)
 	assert.Contains(t, body, `@post('/v0.8/actions/_via/a/`)
 	assert.Contains(t, body, `<p class="old-version" role="note">You are reading the docs for v0.8. <a href="/actions">Read the latest (v0.9)</a></p>`)
 	assert.Contains(t, body, `<meta name="robots" content="noindex">`)
@@ -315,4 +284,46 @@ func TestSite_searchReturnsAnchoredHits(t *testing.T) {
 	out, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(out), `href="/deploy#shutdown-order"`)
+}
+
+// Under 50rem a table row stacks and its header row is hidden, so each cell of
+// a three-column table carries its head; a two-column one needs none.
+func TestSite_labelsTheCellsOfWideTables(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/migrate", nil)
+	assert.Contains(t, body, `<td data-label="Caught by">`)
+	_, body = get(t, srv, "/start", nil)
+	assert.NotContains(t, body, `data-label="What via does"`)
+}
+
+func TestSite_foldsTheContentsListAfterTheLead(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+	_, body := get(t, srv, "/security", nil)
+	lead := strings.Index(body, "An action is an HTTP POST")
+	toc := strings.Index(body, `class="toc toc-inline"`)
+	h2 := strings.Index(body, `<h2 id="origin-checks-and-csrf"`)
+	require.True(t, lead >= 0 && toc >= 0 && h2 >= 0, "lead %d, toc %d, h2 %d", lead, toc, h2)
+	assert.Less(t, lead, toc)
+	assert.Less(t, toc, h2)
+}
+
+func TestSite_leavesTheContentsRailOffTheFrontPage(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+	_, body := get(t, srv, "/", nil)
+	assert.NotContains(t, body, "toc-rail")
+	_, body = get(t, srv, "/security", nil)
+	assert.Contains(t, body, "toc-rail")
+}
+
+func TestSite_keepsASearchInTheTopBarOfTheNotFoundPage(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+	_, body := get(t, srv, "/no-such-page", nil)
+	tools := strings.Index(body, `class="top-tools"`)
+	require.GreaterOrEqual(t, tools, 0)
+	assert.Contains(t, body[tools:strings.Index(body, `class="side"`)], `name="q"`)
 }

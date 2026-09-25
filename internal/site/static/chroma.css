@@ -1,17 +1,15 @@
-/* PreWrapper */ .c-chroma { color: #e6edf3; background-color: #0f1116 }
-/* Keyword */ .c-chroma .c-k { color: #ff7b72 }
-/* KeywordConstant */ .c-chroma .c-kc { color: #79c0ff }
-/* KeywordDeclaration */ .c-chroma .c-kd { color: #ff7b72 }
-/* KeywordNamespace */ .c-chroma .c-kn { color: #ff7b72 }
-/* KeywordType */ .c-chroma .c-kt { color: #ff7b72 }
-/* NameFunction */ .c-chroma .c-nf { color: #d2a8ff; font-weight: bold }
-/* LiteralString */ .c-chroma .c-s { color: #a5d6ff }
-/* LiteralStringChar */ .c-chroma .c-sc { color: #a5d6ff }
-/* LiteralNumberFloat */ .c-chroma .c-mf { color: #a5d6ff }
-/* LiteralNumberHex */ .c-chroma .c-mh { color: #a5d6ff }
-/* LiteralNumberInteger */ .c-chroma .c-mi { color: #a5d6ff }
-/* Operator */ .c-chroma .c-o { color: #ff7b72; font-weight: bold }
-/* CommentMultiline */ .c-chroma .c-cm { color: #8b949e; font-style: italic }
-/* CommentSingle */ .c-chroma .c-c1 { color: #8b949e; font-style: italic }
-/* CommentPreproc */ .c-chroma .c-cp { color: #8b949e; font-weight: bold; font-style: italic }
-/* TextWhitespace */ .c-chroma .c-w { color: #6e7681 }
+/* PreWrapper */ .c-chroma { color: #abb2bf; background-color: #1b1e24 }
+/* Keyword */ .c-chroma .c-k { color: #c678dd }
+/* KeywordConstant */ .c-chroma .c-kc { color: #d19a66 }
+/* KeywordDeclaration */ .c-chroma .c-kd { color: #c678dd }
+/* KeywordNamespace */ .c-chroma .c-kn { color: #c678dd }
+/* KeywordType */ .c-chroma .c-kt { color: #c678dd }
+/* NameBuiltin */ .c-chroma .c-nb { color: #e5c07b }
+/* LiteralString */ .c-chroma .c-s { color: #98c379 }
+/* LiteralStringChar */ .c-chroma .c-sc { color: #98c379 }
+/* LiteralNumberFloat */ .c-chroma .c-mf { color: #d19a66 }
+/* LiteralNumberHex */ .c-chroma .c-mh { color: #d19a66 }
+/* LiteralNumberInteger */ .c-chroma .c-mi { color: #d19a66 }
+/* CommentMultiline */ .c-chroma .c-cm { color: #7f848e; font-style: italic }
+/* CommentSingle */ .c-chroma .c-c1 { color: #7f848e; font-style: italic }
+/* CommentPreproc */ .c-chroma .c-cp { color: #7f848e; font-style: italic }

@@ -1,7 +1,7 @@
 package demos
 
 import (
-	"sync/atomic"
+	"sync"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -9,14 +9,32 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// The atomic is the store; the topic announces that it moved.
+// sharedHits is the store and the topic announces that it moved. sharedMu
+// covers each change and its publish together, so publishes leave in the order
+// the count moved and the last one a tab sees is the current count.
 var (
-	sharedHits  atomic.Int64
+	sharedMu    sync.Mutex
+	sharedHits  int64
 	sharedTopic = topic.New[int64]()
 )
 
+func sharedAdd(n int64) {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	sharedHits += n
+	sharedTopic.Publish(sharedHits)
+}
+
+func sharedLoad() int64 {
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	return sharedHits
+}
+
 func resetShared() {
-	sharedHits.Store(0)
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	sharedHits = 0
 	sharedTopic.Publish(0)
 }
 
@@ -36,7 +54,7 @@ func NewShared(lim Limiter) Shared {
 	if lim == nil {
 		panic("demos: NewShared: Shared.Lim must not be nil")
 	}
-	return Shared{Lim: lim, Hits: via.StateTrack(sharedTopic, sharedHits.Load)}
+	return Shared{Lim: lim, Hits: via.StateTrack(sharedTopic, sharedLoad)}
 }
 
 func (s *Shared) Inc(ctx *via.Ctx) {
@@ -45,7 +63,7 @@ func (s *Shared) Inc(ctx *via.Ctx) {
 		return
 	}
 	s.Notice.Set("")
-	sharedTopic.Publish(sharedHits.Add(1))
+	sharedAdd(1)
 }
 
 func (s *Shared) View() h.H {
