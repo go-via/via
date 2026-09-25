@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -75,7 +76,7 @@ func (c *Chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Room — "), c.Online.Display(), h.Str(" online")),
 		h.Ul(c.Log.Each(c.row)),
-		h.Form(via.On("submit", c.Send),
+		h.Form(on.Submit(c.Send),
 			h.Label(h.Str("you "), h.Input(c.Who.Bind())),
 			h.Input(c.Draft.Bind(), h.Placeholder("message")),
 			h.Button(h.Str("send")),

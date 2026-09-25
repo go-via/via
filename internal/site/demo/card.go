@@ -8,10 +8,12 @@ const emptyPane = "Interact with the demo to see requests, frames and signals he
 
 // Card renders a running demo followed by its Inspector and Source, each in a
 // <details> that starts closed, so the card needs no script or signal to open
-// them. inspector.js finds a pane's demo through the enclosing .demo.
-func Card(title string, prose h.H, child h.H, srcName string) h.H {
+// them. inspector.js finds a pane's demo through the enclosing .demo. heading
+// is the card's own heading element, so the page's anchors and contents list
+// include it.
+func Card(heading h.H, prose h.H, child h.H, srcName string) h.H {
 	return h.Article(h.Class("demo"),
-		h.Header(h.H3(h.Str(title))),
+		h.Header(heading),
 		h.Div(h.Class("demo-prose"), prose),
 		h.Div(h.Class("demo-live"), child),
 		h.Details(h.Class("demo-more"),

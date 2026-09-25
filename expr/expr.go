@@ -86,8 +86,8 @@ func operand(v any) string {
 	return string(b)
 }
 
-// All joins the expressions with &&. A single one is returned unchanged; none
-// panics.
+// All joins the expressions with &&, parenthesizing any operand that is not
+// already a group. A single one is returned unchanged; none panics.
 func All(es ...Expr) Expr { return join("All", "&&", es) }
 
 // Any joins the expressions with ||, with the same single/none rule as [All].
@@ -100,7 +100,55 @@ func join(name, op string, es []Expr) Expr {
 	if len(es) == 1 {
 		return es[0]
 	}
-	return "(" + Expr(strings.Join(sources(es), " "+op+" ")) + ")"
+	parts := make([]string, len(es))
+	for i, e := range es {
+		parts[i] = grouped(e)
+	}
+	return "(" + Expr(strings.Join(parts, " "+op+" ")) + ")"
+}
+
+var atom = regexp.MustCompile(`^(?:[\w$.]+|"(?:[^"\\]|\\.)*")$`)
+
+// grouped parenthesizes e unless it is already one group or an atom: an
+// operand such as an assignment binds looser than && and would otherwise
+// escape it.
+func grouped(e Expr) string {
+	s := string(e)
+	if atom.MatchString(s) || oneGroup(s) {
+		return s
+	}
+	return "(" + s + ")"
+}
+
+// oneGroup reports whether s is a single parenthesized group, skipping
+// parentheses inside string literals.
+func oneGroup(s string) bool {
+	if len(s) < 2 || s[0] != '(' || s[len(s)-1] != ')' {
+		return false
+	}
+	depth := 0
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'' || c == '`':
+			quote = c
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+			if depth == 0 && i < len(s)-1 {
+				return false
+			}
+		}
+	}
+	return depth == 0
 }
 
 // Do sequences statements, for an attribute that runs more than one.
@@ -119,6 +167,11 @@ func Call(name string, args ...Expr) Expr {
 	}
 	return Expr(name + "(" + strings.Join(sources(args), ", ") + ")")
 }
+
+// Copy writes text to the clipboard. Browsers allow that only in a secure
+// context and from a user gesture, so bind it to a click. The returned promise
+// is not awaited: a refused write fails silently.
+func Copy(text Expr) Expr { return Call("navigator.clipboard.writeText", text) }
 
 // El is the element the attribute is written on.
 const El Expr = "el"

@@ -7,6 +7,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // MapView is what one map reads: the JSON maplibre's jumpTo wants, spelled in
@@ -98,9 +99,9 @@ func (g *MapGrid) View() h.H {
 	}
 	return h.Div(
 		h.Div(h.Class("row"),
-			h.Button(via.On("click", g.Add), h.Str("Add map")),
-			h.Button(via.On("click", g.Remove), h.Str("Remove last")),
-			h.Button(via.On("click", g.Shuffle), h.Str("Shuffle")),
+			h.Button(on.Click(g.Add), h.Str("Add map")),
+			h.Button(on.Click(g.Remove), h.Str("Remove last")),
+			h.Button(on.Click(g.Shuffle), h.Str("Shuffle")),
 			h.Small(g.N.Display(), h.Str(" of "), h.Str(maxMaps)),
 		),
 		h.Div(grid...),

@@ -3,6 +3,7 @@ package demos
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Region is one region: its own State, its own action, its own container. Two
@@ -20,7 +21,7 @@ func (r *Region) View() h.H {
 	return h.Div(h.Class("row"),
 		h.Strong(h.Str(r.Label)),
 		h.Output(r.N.Display()),
-		h.Button(via.On("click", r.Bump), h.Str("+")),
+		h.Button(on.Click(r.Bump), h.Str("+")),
 	)
 }
 

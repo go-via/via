@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // VoteRow is one poll row. Option is the row's identity — it rides with the
@@ -81,7 +82,7 @@ func (v *Vote) Cast(ctx *via.Ctx, option int) {
 
 func (v *Vote) row(r VoteRow) h.H {
 	return h.Li(h.Class("row"),
-		h.Button(via.OnArg("click", v.Cast, r.Option), h.Str("vote")),
+		h.Button(on.Click(on.WithArg(v.Cast, r.Option)), h.Str("vote")),
 		h.Span(h.Str(r.Label)),
 		h.Output(h.Str(r.Count)),
 	)

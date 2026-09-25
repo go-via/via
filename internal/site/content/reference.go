@@ -3,7 +3,7 @@ package content
 import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"go-via.dev/site/shell"
+	"go-via.dev/site/demo"
 )
 
 // Links track the default branch rather than a tag: a pinned version goes
@@ -27,9 +27,9 @@ var composition = []row{
 		"Renders build() when cond holds and does not call it otherwise. cond decides what is dispatchable as well as what is drawn, so a handler inside a closed branch answers 410."},
 	{"via.Each(items, p.row)",
 		"Renders row(item) for every item, in order, in place. Rows morph by position, so give a row a stable id when the order can change."},
-	{"via.On(event, p.Handler)",
-		"Binds a DOM event to a method. The click posts to the method, not to a URL you invented."},
-	{"via.OnArg(event, p.Handler, arg)",
+	{"on.Click(p.Handler)",
+		"Binds a DOM event to a method. The click posts to the method, not to a URL you invented. The other events are in the table below."},
+	{"on.Click(on.WithArg(p.Handler, arg))",
 		"The same, carrying one typed value with the click. Only an argument the render bound is dispatchable."},
 	{"via.PostForm(p.Submit, children…)",
 		"A native multipart form whose submit is a real navigation, read back with ctx.Request().FormValue."},
@@ -41,6 +41,21 @@ var composition = []row{
 		"Seed a State or List from a parent's composite literal, for a child that has no OnInit of its own to Set it in."},
 	{"via.StateTrack(t, load)",
 		"A State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, then follows the topic. For a source fixed at mount; State.Track in OnInit is for one that depends on the request."},
+}
+
+var events = []row{
+	{"on.Click, on.DblClick, on.Input, on.Change, on.Submit, on.Keydown, on.Keyup, on.Focus, on.Blur, on.Load, on.MouseEnter, on.MouseLeave, on.Scroll",
+		"Post a method on that event. Each takes a method value or an on.WithArg, then modifiers."},
+	{"on.Event(name, fn, opts…)",
+		"The same for an event with no function of its own. The name must be lower-case, such as \"pointerdown\" or \"via:patch\"; anything else panics."},
+	{"on.ClickCS(e, opts…), on.EventCS(name, e, opts…), …",
+		"The client-only twin of each: runs the expression in the browser and posts nothing."},
+	{"on.WithArg(p.Handler, arg)",
+		"Attaches a typed value to the method, so the row's own datum rides with the event."},
+	{"on.Debounce(d), on.Throttle(d)",
+		"Run the handler once the event stops firing for d, or at most once per d. A non-positive d panics."},
+	{"on.Once(), on.Prevent(), on.Stop(), on.Outside(), on.Window()",
+		"Run once, call preventDefault, call stopPropagation, fire only for targets outside the element, listen on window."},
 }
 
 var hooks = []row{
@@ -132,6 +147,8 @@ var exprAPI = []row{
 		"Sequences statements, for an attribute that runs more than one."},
 	{"expr.Call(name, args…)",
 		"Applies a function by name, which may be a dotted path (\"console.log\"). An invalid name panics."},
+	{"expr.Copy(text)",
+		"Writes text to the clipboard. Browsers allow it only in a secure context and from a user gesture, so bind it to a click."},
 	{"expr.Raw(js)",
 		"Emits js verbatim and unchecked. Never build one from user input."},
 	{"expr.Rawf(format, args…)",
@@ -156,7 +173,7 @@ var dataHelpers = []dataHelper{
 	{"h.DataClass(name, e)", "data-class:<name>", "Toggles the named class while the expression is truthy."},
 	{"h.DataAttr(name, e)", "data-attr:<name>", "Sets the named attribute from the expression."},
 	{"h.DataStyle(prop, e)", "data-style:<prop>", "Sets the named CSS property from the expression."},
-	{"h.DataOn(event, stmts…)", "data-on:<event>", "Runs the statements on that DOM event. via.On writes the same attribute."},
+	{"h.DataOn(event, stmts…)", "data-on:<event>", "Runs the statements on that DOM event. Package on writes the same attribute."},
 	{"h.DataEffect(stmts…)", "data-effect", "Runs the statements whenever a signal they read changes."},
 	{"h.DataComputed(name, e)", "data-computed:<name>", "Declares a read-only signal derived from the expression."},
 	{"h.DataIndicator(sig)", "data-indicator", "Names the signal held true while a request from this element is in flight."},
@@ -167,91 +184,75 @@ var dataHelpers = []dataHelper{
 // Reference is the page listing the API, the links and the attribute helpers.
 type Reference struct{ page }
 
-// NewReference builds the reference page for a deployment at origin.
-func NewReference(origin string) Reference { return Reference{page: newPage("/reference", origin)} }
+func NewReference(env Env) Reference { return Reference{page: newPage("/reference", env)} }
 
 func (p *Reference) PageMeta() via.Meta {
 	return p.meta(
-		"The v0.8 API in tables: composition, Ctx, the router options, the expr vocabulary, the h.Data* helpers and the lifecycle hooks.")
+		"The v0.8 API in tables: composition, Ctx, the events, the router options, the expr vocabulary, the h.Data* helpers and the lifecycle hooks.")
 }
 
 func (p *Reference) View() h.H {
-	return shell.Page(p.nav,
-		h.H2(h.Str("Install")),
-		h.Pre(h.Code(h.Str("go get github.com/go-via/via"))),
+	d := p.doc()
+	return d.Page(
+		d.H2("Install"),
+		demo.Plain("go get github.com/go-via/via"),
 		h.P(h.Str("Go 1.27 or newer, standard library only, no build step.")),
 
-		h.H2(h.Str("Links")),
+		d.H2("Links"),
 		h.Ul(
 			h.Li(h.A(h.Href("https://github.com/go-via/via"), h.Str("github.com/go-via/via")),
 				h.Str(" — the source.")),
 			h.Li(h.A(h.Href("https://pkg.go.dev/github.com/go-via/via"), h.Str("pkg.go.dev/github.com/go-via/via")),
 				h.Str(" — the package documentation, every exported name with its contract.")),
-			h.Li(h.A(h.Href(repo+"MIGRATION.md"), h.Str("MIGRATION.md")),
-				h.Str(" — what changed since v0.7, and how to move a v0.7 app.")),
+			h.Li(h.A(h.Href(d.Href("/migrate")), h.Str("Migrating from v0.7")),
+				h.Str(" — what changed since v0.7, and how to move a v0.7 app. The full text is "),
+				h.A(h.Href(repo+"MIGRATION.md"), h.Str("MIGRATION.md")), h.Str(".")),
 			h.Li(h.A(h.Href(repo+"CHANGELOG.md"), h.Str("CHANGELOG.md")),
 				h.Str(" — the release-by-release record.")),
 			h.Li(h.A(h.Href(repo+"AGENTS.md"), h.Str("AGENTS.md")),
 				h.Str(" — the rules a coding agent working on via has to follow.")),
 		),
 
-		h.H2(h.Str("Composition")),
+		d.H2("Composition"),
 		h.P(h.Str("A router, the pages mounted on it, and the handles a page renders.")),
 		refTable("Call", composition),
 
-		h.H2(h.Str("Lifecycle hooks")),
+		d.H2("Events"),
+		h.P(h.Str("Package on names each DOM event as a function, so a misspelled event or modifier does not "+
+			"compile. via.On and via.OnArg still work, but are deprecated and removed in v0.9.")),
+		refTable("Call", events),
+
+		d.H2("Lifecycle hooks"),
 		h.P(h.Str("Four methods on your own type, duck-typed: a unit opts in by having one. A hook-named "+
 			"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
 			"signature is logged once.")),
 		refTable("Method", hooks),
 
-		h.H2(h.Str("Ctx")),
+		d.H2("Ctx"),
 		h.P(h.Str("The per-request binder, handed to every callback but View. It is not safe for concurrent "+
 			"use: call it only from the via callback it was given to.")),
 		refTable("Call", ctxCalls),
 
-		h.H2(h.Str("Router options")),
+		d.H2("Router options"),
 		h.P(h.Str("Router-wide policy, passed to NewRouter or Handler. A page cannot widen its own, which is "+
 			"why none of these is a method on a composition.")),
 		refTable("Option", options),
 
-		h.H2(h.Str("The error surface")),
+		d.H2("The error surface"),
 		h.P(h.Str("What a WithErrorPage handler is handed, and the sentinels a hook returns to choose the "+
 			"status. Match a sentinel with errors.Is — PageError.Err is nil except for a hook that failed "+
 			"or a panic that was recovered. Switch on PageError.Reason, and keep a default: a status via "+
 			"does not emit today maps to ReasonInternal or ReasonBadRequest.")),
 		refTable("Name", errorSurface),
 
-		h.H2(h.Str("Expressions")),
+		d.H2("Expressions"),
 		h.P(h.Str("The expr package builds the small JavaScript expressions Datastar evaluates in the browser. "+
 			"Signal.Ref() is where one starts: it returns the signal's $name as an Expr.")),
 		refTable("Call", exprAPI),
 
-		h.H2(h.Str("Attribute helpers")),
+		d.H2("Attribute helpers"),
 		h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. The helpers take "+
 			"an expr.Expr, and h.Data(name, value) writes a plugin attribute h has no helper for.")),
 		helperTable(),
 	)
-}
-
-func refTable(head string, rows []row) h.H {
-	out := []h.H{h.Class("ref-table"), h.Tr(h.Th(h.Str(head)), h.Th(h.Str("Does")))}
-	for _, r := range rows {
-		out = append(out, h.Tr(h.Td(h.Code(h.Str(r.name))), h.Td(h.Str(r.use))))
-	}
-	return h.Table(out...)
-}
-
-func helperTable() h.H {
-	rows := []h.H{h.Class("ref-table"), h.Tr(
-		h.Th(h.Str("Helper")), h.Th(h.Str("Attribute")), h.Th(h.Str("Does")),
-	)}
-	for _, d := range dataHelpers {
-		rows = append(rows, h.Tr(
-			h.Td(h.Code(h.Str(d.name))),
-			h.Td(h.Code(h.Str(d.attr))),
-			h.Td(h.Str(d.use)),
-		))
-	}
-	return h.Table(rows...)
 }

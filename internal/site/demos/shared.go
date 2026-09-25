@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -51,7 +52,7 @@ func (s *Shared) View() h.H {
 	return h.Div(
 		h.P(h.Class("metric"), s.Hits.Display()),
 		h.Div(h.Class("row"),
-			h.Button(via.On("click", s.Inc), h.Str("+1 for everyone")),
+			h.Button(on.Click(s.Inc), h.Str("+1 for everyone")),
 			h.Span(h.Class("note"), s.Notice.Display()),
 		),
 	)

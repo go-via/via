@@ -43,7 +43,7 @@
 //
 // # The Datastar escape hatch
 //
-// via generates the data-* attributes that make a page live (via.On,
+// via generates the data-* attributes that make a page live (package on,
 // Signal.Bind, State.Display). The DataShow/DataClass/DataOn family spells the
 // rest of Datastar's vocabulary:
 //
@@ -87,7 +87,7 @@ import (
 type H = hcore.H
 
 // Attr is an H that renders inside the opening tag instead of the element
-// body: h.Class, h.Href, h.Data, [RawAttr], via.On and Signal.Bind all return
+// body: h.Class, h.Href, h.Data, [RawAttr], on.Click and Signal.Bind all return
 // one. Because Attr is an H, attributes and children share one variadic
 // argument list and may be interleaved in any order; the renderer sorts them.
 //

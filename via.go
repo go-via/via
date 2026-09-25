@@ -822,6 +822,8 @@ func (c *Ctx) Redirect(path string) {
 // action. fn is a named method value (e.g. c.Inc) — pointer-bound to the
 // via-owned instance, so no '&' at the call site. Datastar auto-prevents a
 // wired form's default submit, so no prevent modifier is needed for "submit".
+//
+// Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
 func On(event string, fn func(*Ctx)) h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
@@ -863,6 +865,8 @@ func On(event string, fn func(*Ctx)) h.Attr {
 // goes stale the moment any push re-renders the button, and the click already
 // in flight 410s. Read changing state from the composition in an argless On
 // handler instead.
+//
+// Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
 func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())

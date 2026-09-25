@@ -1,5 +1,5 @@
 // Command poll is a CRUD list with per-row actions. The list re-sorts by vote
-// count on every render, and via.OnArg carries each row's id with the click, so a
+// count on every render, and on.WithArg carries each row's id with the click, so a
 // vote lands on the option you clicked rather than whatever now sits in that slot.
 package main
 
@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Option is one poll choice. Plain app data; ID is its natural key.
@@ -86,8 +87,8 @@ func (a *PollApp) Remove(ctx *via.Ctx, id int) { a.poll.remove(id) }
 func (a *PollApp) row(o Option) h.H {
 	return h.Li(
 		h.Span(h.Str(o.Label+" — "), h.Str(o.Votes)),
-		h.Button(via.OnArg("click", a.Vote, o.ID), h.Str("vote")),
-		h.Button(via.OnArg("click", a.Remove, o.ID), h.Str("remove")),
+		h.Button(on.Click(on.WithArg(a.Vote, o.ID)), h.Str("vote")),
+		h.Button(on.Click(on.WithArg(a.Remove, o.ID)), h.Str("remove")),
 	)
 }
 
@@ -95,7 +96,7 @@ func (a *PollApp) View() h.H {
 	return h.Div(
 		h.H1(h.Str("poll")),
 		h.Ul(via.Each(a.poll.ranked(), a.row)), // rows reorder by votes each render
-		h.Form(via.On("submit", a.Add),
+		h.Form(on.Submit(a.Add),
 			h.Input(a.Draft.Bind(), h.Placeholder("new option")),
 			// Disabled client-side while the draft is empty; Add still checks, the
 			// client is not trusted to.

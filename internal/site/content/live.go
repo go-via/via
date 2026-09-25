@@ -5,7 +5,6 @@ import (
 	"github.com/go-via/via/h"
 	"go-via.dev/site/demo"
 	"go-via.dev/site/demos"
-	"go-via.dev/site/shell"
 )
 
 // Live is the page on what makes a page stream, and what it streams over.
@@ -19,9 +18,9 @@ type Live struct {
 
 // NewLive gives each demo its own limiter, so a visitor spending the feed's
 // budget still has pings and shared clicks left.
-func NewLive(origin string) Live {
+func NewLive(env Env) Live {
 	return Live{
-		page:   newPage("/live", origin),
+		page:   newPage("/live", env),
 		Feed:   demos.NewFeed(demo.NewLimiter(20)),
 		Shared: demos.NewShared(demo.NewLimiter(20)),
 		Ping:   demos.NewPing(demo.NewLimiter(20)),
@@ -33,7 +32,8 @@ func (p *Live) PageMeta() via.Meta {
 }
 
 func (p *Live) View() h.H {
-	return shell.Page(p.nav,
+	d := p.doc()
+	return d.Page(
 		h.P(h.Str("A page is a request and a response until a unit on it acts live: its OnInit registered a "+
 			"ctx.Tick or a ctx.Listen, or its View displayed a State. Then via opens one SSE connection for that "+
 			"tab and pushes element patches down it. Actions do not change that — a click still POSTs, and on a "+
@@ -41,14 +41,14 @@ func (p *Live) View() h.H {
 			"Liveness is the verdict of the render that served the page, so a State behind a branch that was "+
 			"closed at GET wires the page plain: render it unconditionally, or register the Tick in OnInit.")),
 
-		demo.Card("Pulse",
+		demo.Card(d.H3("Pulse"),
 			h.P(h.Str("ctx.Tick(time.Second, p.beat) is the whole subscription. Every beat runs the handler, "+
 				"re-renders this unit and patches it; the header, the sidebar and the demos below it are not "+
 				"touched. One stream per tab, not per unit — every live unit on this page shares this one "+
 				"connection.")),
 			via.Child(p.Pulse), "pulse.go"),
 
-		demo.Card("Broadcast feed",
+		demo.Card(d.H3("Broadcast feed"),
 			h.P(h.Str("A topic.Topic is built with topic.New[T]() and held for the life of the process; the zero "+
 				"Topic is not usable. ctx.Listen subscribes this unit to one, runs the handler "+
 				"on the unit's own goroutine for every value, and unsubscribes when the tab goes away. Posts "+
@@ -56,7 +56,7 @@ func (p *Live) View() h.H {
 				"keeps the newest 50, and posting is capped at 20 a minute per client IP.")),
 			via.Child(p.Feed), "feed.go"),
 
-		demo.Card("Shared counter",
+		demo.Card(d.H3("Shared counter"),
 			h.Div(
 				h.P(h.Str("State is per connection, so a number every visitor must agree on lives in a store you "+
 					"own — here an atomic.Int64. The topic only announces that the store moved. "+
@@ -70,7 +70,7 @@ func (p *Live) View() h.H {
 			),
 			via.Child(p.Shared), "shared.go"),
 
-		demo.Card("Ping me",
+		demo.Card(d.H3("Ping me"),
 			h.P(h.Str("One topic carries every visitor's pings. Each event names the session it is for, and the "+
 				"Listen handler drops the rest. ctx.Session().ID() is the routing key: it is stable, it is not "+
 				"the cookie, and it grants nothing. Open this page in a second browser and ping from one — only "+
@@ -78,6 +78,13 @@ func (p *Live) View() h.H {
 				"unit of fan-out and not the tab.")),
 			via.Child(p.Ping), "ping.go"),
 
-		h.P(h.A(h.Href("/islands"), h.Str("Next: handing a subtree to a JS library"))),
+		d.H2("What makes a page stream"),
+		table([]string{"Trigger", "Where", "Effect"},
+			[]h.H{h.Code(h.Str("ctx.Tick(d, fn)")), h.Str("OnInit"), h.Str("Runs fn every d, then re-renders the unit and pushes the patch.")},
+			[]h.H{h.Code(h.Str("ctx.Listen(t, fn)")), h.Str("OnInit"), h.Str("Runs fn for every value published on t, then re-renders and pushes. Unsubscribes when the tab goes away.")},
+			[]h.H{h.Code(h.Str("State.Display(), List.Each(row)")), h.Str("View"), h.Str("Renders server state; a change pushes a patch on the tab's stream.")},
+			[]h.H{h.Code(h.Str("via.StateTrack(t, load)")), h.Str("field literal"), h.Str("Seeds from load, seeds again once the stream has subscribed, then follows t. For a source fixed at mount.")},
+			[]h.H{h.Code(h.Str("State.Track(ctx, t, load)")), h.Str("OnInit"), h.Str("The same, for a source that depends on the request, such as a path param.")},
+		),
 	)
 }

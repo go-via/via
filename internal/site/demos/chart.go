@@ -6,6 +6,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Chart drives the same island function as Sparkline, from a click instead of
@@ -25,7 +26,7 @@ func (c *Chart) Fresh(ctx *via.Ctx) { c.Series.Set(samples()) }
 
 func (c *Chart) View() h.H {
 	return h.Div(
-		h.Div(h.Class("row"), h.Button(via.On("click", c.Fresh), h.Str("New data"))),
+		h.Div(h.Class("row"), h.Button(on.Click(c.Fresh), h.Str("New data"))),
 		h.Canvas(h.Class("chart"), h.DataIgnoreMorph(),
 			h.Width(420), h.Height(90),
 			// A canvas is opaque to a screen reader; role and label are the

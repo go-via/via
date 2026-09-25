@@ -32,9 +32,15 @@ func TestExpr_emitsComposedExpressions(t *testing.T) {
 		{"lit", expr.Lit([]int{1, 2}), "[1,2]"},
 		{"call", expr.Call("drawChart", expr.El, expr.Expr("$series")), "drawChart(el, $series)"},
 		{"call dotted, no args", expr.Call("console.log"), "console.log()"},
+		{"copy literal", expr.Copy(expr.Lit("go get github.com/go-via/via")), `navigator.clipboard.writeText("go get github.com/go-via/via")`},
+		{"copy el-relative", expr.Copy(expr.Raw("el.dataset.copy")), "navigator.clipboard.writeText(el.dataset.copy)"},
 		{"raw", expr.Raw("$n > 0 ? 1 : 2"), "$n > 0 ? 1 : 2"},
 		{"el", expr.El, "el"},
 		{"nested", expr.All(expr.Expr("$a").Not(), expr.Expr("$n").Ge(2)), "((!$a) && ($n >= 2))"},
+		{"all parenthesizes an assignment", expr.All(expr.Raw("evt.key").Eq("Escape"), expr.Expr("$q").Assign("")), `((evt.key === "Escape") && ($q = ""))`},
+		{"any parenthesizes a looser operand", expr.Any(expr.Raw("$a && $b"), expr.Expr("$c")), "(($a && $b) || $c)"},
+		{"two groups are not one", expr.All(expr.Raw("($a) || ($b)"), expr.Raw("$c")), "((($a) || ($b)) && $c)"},
+		{"literal operand stays bare", expr.All(expr.Lit(true), expr.Lit(`a)`)), `(true && "a)")`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

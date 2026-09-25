@@ -2,6 +2,8 @@ package site_test
 
 import (
 	"bytes"
+	"cmp"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go-via.dev/site/shell"
 	"go-via.dev/site/site"
 )
 
@@ -49,25 +52,12 @@ func TestSite_rendersEveryMountedPage(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, site.Options{})
 
-	pages := []struct {
-		name string
-		path string
-		h1   string
-	}{
-		{"landing", "/", "Web UI in Go that stays live"},
-		{"actions", "/actions", "Actions"},
-		{"signals", "/signals", "Signals"},
-		{"live", "/live", "Live"},
-		{"islands", "/islands", "Islands"},
-		{"platform", "/platform", "Platform"},
-		{"reference", "/reference", "Reference"},
-	}
-	for _, p := range pages {
-		t.Run(p.name, func(t *testing.T) {
+	for _, p := range shell.Pages() {
+		t.Run(p.Path, func(t *testing.T) {
 			t.Parallel()
-			resp, body := get(t, srv, p.path, nil)
+			resp, body := get(t, srv, p.Path, nil)
 			require.Equal(t, http.StatusOK, resp.StatusCode)
-			assert.Contains(t, body, "<h1>"+p.h1+"</h1>")
+			assert.Contains(t, body, "<h1>"+html.EscapeString(cmp.Or(p.Heading, p.Title))+"</h1>")
 		})
 	}
 }
@@ -161,17 +151,17 @@ func TestSite_refusesACrossOriginActionWhenTheOriginIsSet(t *testing.T) {
 
 var signInForm = regexp.MustCompile(`<form[^>]*action="([^"]+)"`)
 
-// sessionCookie signs in through the /platform form: no page mints a session
+// sessionCookie signs in through the /security form: no page mints a session
 // on a GET, so the cookie exists only once a handler has stored something.
 func sessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
 	t.Helper()
-	_, body := get(t, srv, "/platform", nil)
+	_, body := get(t, srv, "/security", nil)
 	m := signInForm.FindStringSubmatch(body)
-	require.NotNil(t, m, "no sign-in form on /platform")
+	require.NotNil(t, m, "no sign-in form on /security")
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	// /platform streams, so the form's tab id is filled client-side from
+	// /security streams, so the form's tab id is filled client-side from
 	// $viatab. This client has none; Auth is not live, so the action runs on
 	// the plain path anyway.
 	require.NoError(t, mw.WriteField("_viatab", ""))
@@ -204,4 +194,125 @@ func TestSite_marksTheSessionCookieSecureOnlyWhenTheOriginIsSet(t *testing.T) {
 
 	assert.True(t, sessionCookie(t, siteServer(t, site.Options{Origin: "https://go-via.dev"})).Secure)
 	assert.False(t, sessionCookie(t, siteServer(t, site.Options{})).Secure)
+}
+
+func TestSite_redirectsPlatformToSecurity(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, _ := get(t, srv, "/platform", nil)
+	assert.Equal(t, http.StatusMovedPermanently, resp.StatusCode)
+	assert.Equal(t, "/security", resp.Header.Get("Location"))
+}
+
+var anyID = regexp.MustCompile(`\sid="([^"]+)"`)
+var bareHeading = regexp.MustCompile(`<h[23]>`)
+
+func TestSite_givesEveryHeadingAUniqueAnchor(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	for _, p := range shell.Pages() {
+		t.Run(p.Path, func(t *testing.T) {
+			t.Parallel()
+			_, body := get(t, srv, p.Path, nil)
+			assert.NotRegexp(t, bareHeading, body, "every h2 and h3 carries an id")
+			seen := map[string]bool{}
+			for _, m := range anyID.FindAllStringSubmatch(body, -1) {
+				assert.False(t, seen[m[1]], "id %q appears twice", m[1])
+				seen[m[1]] = true
+			}
+		})
+	}
+}
+
+func TestSite_linksNextFollowingTheNavOrder(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	pages := shell.Pages()
+	for i, p := range pages {
+		t.Run(p.Path, func(t *testing.T) {
+			t.Parallel()
+			_, body := get(t, srv, p.Path, nil)
+			if i == len(pages)-1 {
+				assert.NotContains(t, body, `class="next"`)
+				return
+			}
+			next := pages[i+1]
+			assert.Contains(t, body, `<p class="next"><a href="`+next.Path+`">Next: `+html.EscapeString(next.Title)+`</a></p>`)
+		})
+	}
+}
+
+func TestSite_listsContentsOnlyOnLongPages(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/deploy", nil)
+	assert.Contains(t, body, `<nav class="toc" aria-label="On this page">`)
+	assert.Contains(t, body, `<a href="#shutdown-order">Shutdown order</a>`)
+
+	_, body = get(t, srv, "/actions", nil)
+	assert.NotContains(t, body, `class="toc"`, "a page with no h2 sections has no contents list")
+}
+
+func TestSite_prefixesLinksAndMountsWithTheBase(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{
+		Base:     "/v0.8",
+		Versions: []shell.Version{{Label: "v0.9", Base: ""}, {Label: "v0.8", Base: "/v0.8"}},
+	})
+
+	resp, body := get(t, srv, "/v0.8/actions", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, `href="/v0.8/signals"`)
+	assert.Contains(t, body, `href="/v0.8/static/site.css"`)
+	assert.Contains(t, body, `@post('/v0.8/actions/_via/a/`)
+	assert.Contains(t, body, `<p class="old-version" role="note">You are reading the docs for v0.8. <a href="/actions">Read the latest (v0.9)</a></p>`)
+	assert.Contains(t, body, `<meta name="robots" content="noindex">`)
+	assert.Contains(t, body, `<a href="/v0.8/actions" aria-current="page">v0.8</a>`, "the version picker marks the one being read")
+
+	resp, _ = get(t, srv, "/v0.8/static/site.css", nil)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, _ = get(t, srv, "/actions", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, _ = get(t, srv, "/v0.8", nil)
+	assert.Equal(t, 3, resp.StatusCode/100, "the bare base redirects to its trailing-slash front page")
+	assert.Equal(t, "/v0.8/", resp.Header.Get("Location"))
+
+	_, body = get(t, siteServer(t, site.Options{}), "/actions", nil)
+	assert.NotContains(t, body, `class="old-version"`)
+	assert.NotContains(t, body, `name="robots"`)
+}
+
+var (
+	searchSlot = regexp.MustCompile(`data-bind="([^"]+)"`)
+	searchPost = regexp.MustCompile(`data-on:input__debounce\.250ms="@post\('([^']+)'\)"`)
+)
+
+func TestSite_searchReturnsAnchoredHits(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/deploy", nil)
+	slot := searchSlot.FindStringSubmatch(body)
+	post := searchPost.FindStringSubmatch(body)
+	require.NotNil(t, slot, "no bound search input on /deploy")
+	require.NotNil(t, post, "no search action on /deploy")
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+post[1],
+		strings.NewReader(`{"viatab":"","`+slot[1]+`":"shutdown order"}`))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	out, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(out), `href="/deploy#shutdown-order"`)
 }

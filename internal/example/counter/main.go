@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Store is a plain app dependency, shared across every request and tab.
@@ -31,8 +32,8 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.count.Add(-1) }
 func (c *Counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str(c.count.Value())),
-		h.Button(via.On("click", c.Dec), h.Str("-")),
-		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Dec), h.Str("-")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }
 

@@ -1,6 +1,9 @@
 // Called through data-effect, which re-runs on any signal change: both must be idempotent.
 
 (function () {
+  // Relative to this script, not the host root, so the site works under a
+  // path prefix.
+  const base = document.currentScript.src;
   const css = getComputedStyle(document.documentElement);
   const color = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
   const BG = color("--bg", "#16181d");
@@ -31,7 +34,7 @@
   const STYLE = {
     version: 8,
     sources: {
-      world: {type: "geojson", data: "/static/data/world-lowres.geojson"},
+      world: {type: "geojson", data: new URL("data/world-lowres.geojson", base).href},
     },
     layers: [
       {id: "sea", type: "background", paint: {"background-color": BG}},
@@ -41,7 +44,7 @@
   };
 
   if (window.maplibregl) {
-    maplibregl.setWorkerUrl("/static/vendor/maplibre-gl-csp-worker.js");
+    maplibregl.setWorkerUrl(new URL("vendor/maplibre-gl-csp-worker.js", base).href);
   }
 
   // First run builds and starts watching the container; later runs jumpTo.

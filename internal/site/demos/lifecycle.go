@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // Lifecycle logs its own hooks as they run. The log is a List, which is also
@@ -36,8 +37,8 @@ func (l *Lifecycle) note(s string) {
 func (l *Lifecycle) View() h.H {
 	return h.Div(
 		h.Div(h.Class("row"),
-			h.Button(via.On("click", l.Act), h.Str("run an action")),
-			h.A(h.Href("/platform"), h.Str("reload the page")),
+			h.Button(on.Click(l.Act), h.Str("run an action")),
+			h.A(h.Href("/security"), h.Str("reload the page")),
 		),
 		h.Ol(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Lifecycle events"), l.Log.Each(func(s string) h.H { return h.Li(h.Str(s)) })),
 	)

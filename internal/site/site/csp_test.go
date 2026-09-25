@@ -13,11 +13,11 @@ import (
 
 var cspCode = regexp.MustCompile(`<code class="(csp-has|csp-absent)">([^<]*)</code>`)
 
-func TestPlatform_printsTheDirectivesItsResponseCarries(t *testing.T) {
+func TestSecurity_printsTheDirectivesItsResponseCarries(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, site.Options{})
 
-	resp, body := get(t, srv, "/platform", nil)
+	resp, body := get(t, srv, "/security", nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	policy := resp.Header.Get("Content-Security-Policy")
 	require.NotEmpty(t, policy)

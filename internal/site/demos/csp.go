@@ -9,7 +9,7 @@ type CSPNotes struct{}
 type cspRow struct{ directive, from string }
 
 // Each directive is spelled exactly as in the header: site/csp_test.go scrapes
-// them from the rendered /platform page and checks them against its real
+// them from the rendered /security page and checks them against its real
 // response header.
 var cspRows = []cspRow{
 	{"default-src 'self'", "the floor — nothing on the page may load from another origin unless a directive below widens it"},
@@ -49,6 +49,6 @@ func (c *CSPNotes) View() h.H {
 		cspList("What widens it, from the router's WithHead assets and the mount's PageMeta().Assets:", "csp-widens", cspWidens),
 		h.P(h.Class("note"), h.Str("To read the real header: open the Network tab, pick the document request, "),
 			h.Code(h.Str("Response Headers → Content-Security-Policy")), h.Str(" — or run:")),
-		h.Pre(h.Code(h.Str("curl -sI http://localhost:8080/platform | grep -i content-security-policy"))),
+		h.Pre(h.Code(h.Str("curl -sI http://localhost:8080/security | grep -i content-security-policy"))),
 	)
 }

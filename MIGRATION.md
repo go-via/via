@@ -14,8 +14,9 @@ after them will make sense only in their light. Budget a re-read of the
 README rather than an afternoon of find-and-replace.
 
 **If you only want the short version:** delete your `View(ctx)` parameter, drop
-`.Op(ctx)`, replace `Read`/`Write` with `Get`/`Set`, replace the `on` package
-with `via.On*`, replace `h.Text` with `h.Str`, keep your typed attributes
+`.Op(ctx)`, replace `Read`/`Write` with `Get`/`Set`, keep the `on` package
+(`on.Click(p.Inc)` reads the same; modifiers are options), replace `h.Text`
+with `h.Str`, keep your typed attributes
 (`h.Class`, `h.Type`, `h.Style`, `h.Min`, … all still exist, plus 40+ more)
 and reach for `h.RawAttr` only when no typed helper covers the attribute you
 need; every `via.X(ctx, …)` is now `ctx.X(…)`: `Param`,
@@ -210,17 +211,20 @@ Entries marked **gone** have no replacement; see "Removed outright" below.
 - **Live child**: `Connector.OnConnect` + `Disposer.Dispose` → no interface:
   a `Tick`/`Listen` in `OnInit`, or a rendered `State`/`List`; disposal is
   automatic.
-- **Events**: `on.Click(p.Inc)` (package `on`) →
-  `via.On("click"/"submit"/"change", p.Inc)`; typed data via
-  `via.OnArg(event, fn, arg)` (no `OnInput` or an arg-carrying submit/change
-  — per-keystroke work is a `Signal.Bind` + `On("change"/"submit", ...)`, a
-  per-row toggle is `OnArg`).
+- **Events**: `on.Click(p.Inc)` (package `on`) → unchanged, with
+  `on.Submit`, `on.Change`, `on.Input` and the rest alongside and
+  `on.Event(name, fn)` for any other event; typed data via
+  `on.Click(on.WithArg(fn, arg))`; modifiers are options
+  (`on.Input(p.Search, on.Debounce(250*time.Millisecond))`). `via.On` and
+  `via.OnArg` still compile but are deprecated and removed in v0.9.
 - **Text node**: `h.Text("x")` → `h.Str("x")`, generic over `Stringish`.
 - **Attributes**: `h.Class`, `h.Type`, `h.Style`, `h.Min`, … → same typed
   helpers, expanded to ~49 (`h.ColSpan`/`h.RowSpan` carry the Go-style
   casing); `h.RawAttr` covers the rest.
 - **Signal rendering**: `sig.Bind()`, `.Text()`, `.TextSpan()`, `.Show()`,
-  `.Class()` → `Bind` remains; the rest are gone, so render the value in Go.
+  `.Class()` → `Bind()` remains and `Display()` (a text-bound span) replaces
+  `.Text()`/`.TextSpan()`; `.Show()` and `.Class()` are gone, so use
+  `h.DataShow`/`h.DataClass` on `sig.Ref()` or render the value in Go.
 - **Conditionals**: `h.If` → `via.When`.
 - **Groups**: `h.Group` → pass the children directly; every element is
   variadic.
@@ -351,7 +355,7 @@ func (c *Counter) Inc(ctx *via.Ctx) { c.count.Add(1) }
 func (c *Counter) View() h.H {
     return h.Main(h.Class("container"),
         h.P(h.Str("Count: "), h.Str(c.count.Value())),
-        h.Button(via.On("click", c.Inc), h.Str("+")),
+        h.Button(on.Click(c.Inc), h.Str("+")),
     )
 }
 
@@ -653,8 +657,10 @@ looks like at runtime.
   **Compiler** — the old fields don't exist; also new: `Head.Raw` now panics at
   boot if it contains `<script` or `<style` (declare it in `Assets`
   instead).
-- **`OnClick`/`OnSubmit`/`OnChange`/`OnClickArg`** → `via.On(event, fn)` /
-  `via.OnArg(event, fn, arg)`. **Compiler** — the old names are gone.
+- **`OnClick`/`OnSubmit`/`OnChange`/`OnClickArg`** → `on.Click(fn)` /
+  `on.Submit(fn)` / `on.Change(fn)` / `on.Click(on.WithArg(fn, arg))`.
+  **Compiler** — the old names are gone. (`via.On` and `via.OnArg` also work,
+  but are deprecated and removed in v0.9.)
 - **`via.Live` interface, `OnConnect(*via.Ctx) error`** → one
   `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open
   acquire. **Silent** — `via.Live` no longer exists to assert against, so a

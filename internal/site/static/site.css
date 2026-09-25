@@ -19,13 +19,13 @@
   font-family: Inter;
   font-weight: 400 700;
   font-display: swap;
-  src: url("/static/fonts/inter.woff2") format("woff2");
+  src: url("fonts/inter.woff2") format("woff2");
 }
 @font-face {
   font-family: "JetBrains Mono";
   font-weight: 400;
   font-display: swap;
-  src: url("/static/fonts/jetbrains-mono-400.woff2") format("woff2");
+  src: url("fonts/jetbrains-mono-400.woff2") format("woff2");
 }
 
 * { box-sizing: border-box; }
@@ -59,54 +59,111 @@ pre {
   line-height: 1.5;
 }
 
-.shell {
-  display: grid;
-  /* minmax(0, …) so wide code blocks scroll inside .col instead of widening the row */
-  grid-template-columns: minmax(0, 1fr);
-  /* 1fr on the column row: a short page pads its content, not its nav */
-  grid-template-rows: auto auto 1fr auto;
-  grid-template-areas: "top" "side" "col" "bottom";
-  min-height: 100vh;
-}
-
-.top {
-  grid-area: top;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: .85rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-}
-.wordmark { display: flex; }
-.top-link { font-size: .9rem; }
-
+/* Under 50rem the sidebar is a header: wordmark, a Menu toggle and the
+   version picker, with the nav folded beneath it until the toggle is on. */
 .side {
-  grid-area: side;
   background: var(--sidebar);
   border-bottom: 1px solid var(--border);
 }
-/* Under 900px the nav is a wrapping strip under the header, every link in
-   view (a scrolling strip hides the current page off its edge); the current
-   link is underlined rather than edged so the marker reads in both layouts. */
-.side ul {
-  list-style: none;
-  margin: 0;
-  padding: .25rem .75rem;
+.side-head {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem;
+  padding: .85rem 1.25rem;
+}
+.wordmark { display: flex; margin-right: auto; }
+
+/* The checkbox stays in the tab order (display:none would drop it), so its
+   focus ring is drawn on the label it drives. */
+.nav-toggle { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.menu-btn {
+  font-size: .9rem;
+  padding: .3rem .7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.nav-toggle:focus-visible ~ .side .menu-btn { outline: 2px solid var(--amber); outline-offset: 2px; }
+.nav-toggle:checked ~ .side .menu-btn { border-color: var(--amber); color: var(--bright); }
+.side-body { display: none; padding: 0 0 1rem; }
+.nav-toggle:checked ~ .side .side-body { display: block; }
+
+.nav ul { list-style: none; margin: 0 0 .75rem; padding: 0; }
+.nav-group {
+  margin: .75rem 1.25rem .25rem;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
 }
 .nav-link {
   display: block;
-  padding: .55rem .5rem;
+  padding: .3rem 1.25rem;
   color: var(--text);
-  white-space: nowrap;
-  border-bottom: 2px solid transparent;
+  border-left: 2px solid transparent;
 }
 .nav-link:hover { color: var(--bright); text-decoration: none; }
 .nav-link[aria-current="page"] {
   color: var(--amber);
-  border-bottom-color: var(--amber);
+  border-left-color: var(--amber);
+  background: rgba(255, 191, 0, .06);
+  font-weight: 600;
+}
+.nav-ext::after { content: " ↗"; color: var(--muted); }
+
+/* Above .search, which follows it and is positioned too. */
+.versions { position: relative; z-index: 6; font-size: .85rem; }
+.versions > summary {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  cursor: pointer;
+  list-style: none;
+  padding: .2rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+}
+.versions > summary::-webkit-details-marker { display: none; }
+.versions > summary::after {
+  content: "";
+  width: .35rem;
+  height: .35rem;
+  margin-top: -.2rem;
+  border: solid var(--muted);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+.versions[open] > summary { border-color: var(--amber); color: var(--bright); }
+.versions[open] > summary::after { margin-top: .15rem; transform: rotate(-135deg); }
+.versions > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.versions ul {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  min-width: 100%;
+  max-width: calc(100vw - 2.5rem);
+  margin: .25rem 0 0;
+  padding: .25rem 0;
+  list-style: none;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .4);
+}
+.versions li a {
+  display: block;
+  padding: .3rem .9rem;
+  white-space: nowrap;
+  color: var(--text);
+  border-left: 2px solid transparent;
+}
+.versions li a:hover { color: var(--bright); text-decoration: none; }
+.versions li a[aria-current="page"] {
+  color: var(--amber);
+  border-left-color: var(--amber);
+  background: rgba(255, 191, 0, .06);
   font-weight: 600;
 }
 
@@ -166,48 +223,112 @@ pre {
 }
 
 .col {
-  grid-area: col;
   min-width: 0;
-  max-width: 72ch;
   padding: 2rem 1.5rem 4rem;
 }
 
 .bottom {
-  grid-area: bottom;
   padding: 1.25rem 1.5rem;
   border-top: 1px solid var(--border);
   font-size: .85rem;
 }
 
-@media (min-width: 900px) {
-  .shell {
-    grid-template-columns: 240px minmax(0, 1fr);
-    grid-template-areas:
-      "top top"
-      "side col"
-      "side bottom";
-  }
+@media (min-width: 50rem) {
   .side {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: 16.5rem;
+    overflow-y: auto;
+    background: var(--sidebar);
     border-bottom: 0;
     border-right: 1px solid var(--border);
-    position: sticky;
-    top: 0;
-    align-self: start;
-    height: 100vh;
-    padding: 1rem 0;
   }
-  .col { max-width: none; padding: 2rem 2.5rem 4rem; }
-  .side ul { display: block; padding: 0; }
-  .nav-link {
-    padding: .35rem 1.5rem;
-    border-bottom: 0;
-    border-left: 2px solid transparent;
-  }
-  .nav-link[aria-current="page"] {
-    border-left-color: var(--amber);
-    background: rgba(255, 191, 0, .06);
-  }
+  .side-body { display: block; }
+  .menu-btn { display: none; }
+  .main-wrap { margin-left: 16.5rem; }
+  .col { padding: 2rem 2.5rem 4rem; }
 }
+
+/* Past 66.5rem the sidebar and column sit centred together: the sidebar
+   grows leftwards and its contents stay pinned to the column's edge. */
+@media (min-width: 66.5rem) {
+  .side { width: max(16.5rem, calc(50% - 16.75rem)); }
+  .side-inner { width: 16.5rem; margin-left: auto; }
+  .main-wrap { margin-left: max(16.5rem, calc(50% - 16.75rem)); }
+  .col { max-width: 50rem; }
+}
+
+.crumbs { margin: 0 0 .35rem; font-size: .85rem; color: var(--muted); }
+
+.old-version {
+  margin: 0 0 1.25rem;
+  padding: .6rem .9rem;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  background: rgba(255, 191, 0, .06);
+}
+
+.toc {
+  margin: 0 0 2rem;
+  padding: .75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--sidebar);
+  font-size: .9rem;
+}
+.toc-title { margin: 0 0 .35rem; color: var(--muted); font-size: .8rem; font-weight: 600; }
+.toc ul { margin: 0; padding-left: 1.1rem; }
+.toc ul ul { padding-left: 1rem; }
+
+h2, h3 { position: relative; }
+/* In the gutter left of the heading, so the heading text starts where the
+   paragraph text does. */
+.anchor {
+  float: left;
+  margin-left: -1.1em;
+  width: 1.1em;
+  color: var(--muted);
+  opacity: 0;
+  text-decoration: none;
+}
+h2:hover .anchor, h3:hover .anchor, .anchor:focus-visible { opacity: 1; }
+.anchor:hover { color: var(--amber); text-decoration: none; }
+
+.next { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+
+.hero-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: .75rem; margin-top: 1.25rem; }
+.btn {
+  display: inline-block;
+  padding: .5rem 1.1rem;
+  border: 1px solid var(--amber);
+  border-radius: 6px;
+  color: var(--amber);
+  font-weight: 600;
+}
+.btn:hover { text-decoration: none; background: rgba(255, 191, 0, .08); }
+.btn-primary { background: var(--amber); color: var(--ink); }
+.btn-primary:hover { background: var(--amber); color: var(--ink); filter: brightness(1.08); }
+.btn:focus-visible { outline: 2px solid var(--bright); outline-offset: 2px; }
+
+.search { position: relative; margin: 0 1.25rem .5rem; }
+.search input {
+  width: 100%;
+  font: inherit;
+  font-size: .9rem;
+  color: var(--text);
+  background: var(--well);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .35rem .6rem;
+}
+.search input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.search-hits { list-style: none; margin: .4rem 0 0; padding: 0; font-size: .85rem; }
+.search-hits li { margin: 0 0 .5rem; }
+.search-hits small { display: block; color: var(--muted); }
+.search-none { margin: .4rem 0 0; font-size: .85rem; color: var(--muted); }
+
+.code { position: relative; }
+.copy { position: absolute; top: .5rem; right: .5rem; font-size: .75rem; padding: .15rem .5rem; }
 
 .hero {
   margin: .5rem 0 2.5rem;
@@ -351,16 +472,16 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .ref-table th { color: var(--bright); font-weight: 600; }
 .ref-table td code { color: var(--amber); }
 /* A table ignores min-width: 0 and two columns leave no room for a signature
-   on a phone, so under 900px each row stacks: the call on one line, what it
+   on a phone, so under 50rem each row stacks: the call on one line, what it
    does beneath. The header row is noise once the columns are gone. */
-@media (max-width: 899px) {
+@media (max-width: 49.99rem) {
   .ref-table tbody, .ref-table tr, .ref-table td { display: block; }
   .ref-table tr:first-child { display: none; }
   .ref-table tr { padding: .5rem 0; border-bottom: 1px solid var(--border); }
   .ref-table td { padding: .15rem 0; border-bottom: 0; }
   .ref-table td code { overflow-wrap: anywhere; }
 }
-@media (min-width: 900px) { .ref-table td code { white-space: nowrap; } }
+@media (min-width: 50rem) { .ref-table td code { white-space: nowrap; } }
 
 .inspector h4 {
   margin: 0 0 .35rem;

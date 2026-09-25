@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 // User is the session's one value.
@@ -40,7 +41,7 @@ func (a *Auth) Login(ctx *via.Ctx) {
 	ctx.Session().Put(User{Name: name})
 	// A pre-auth id an attacker planted must not survive the login.
 	ctx.Session().Rotate()
-	ctx.Redirect("/platform")
+	ctx.Redirect("/security")
 }
 
 // Delete clears the value; Rotate retires the id, so a cookie captured while
@@ -63,6 +64,6 @@ func (a *Auth) View() h.H {
 	return h.Div(h.Class("row"),
 		h.Str("signed in as "),
 		h.Strong(h.Str(a.user.Name)),
-		h.Button(via.On("click", a.Logout), h.Str("sign out")),
+		h.Button(on.Click(a.Logout), h.Str("sign out")),
 	)
 }

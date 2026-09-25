@@ -13,8 +13,8 @@
 
 **Reactive web UIs in pure Go.** A page is a struct, a click is a method
 call, and via streams what changed back to the tab. Markup is Go functions,
-state is a typed field, and the compiler checks the wiring: `via.On("click",
-c.Inc)` takes a method value, so a misspelled handler does not build. No
+state is a typed field, and the compiler checks the wiring: `on.Click(c.Inc)`
+takes a method value, so a misspelled handler or event does not build. No
 JavaScript to write, no build step, no WebSockets. A page is a plain request
 and response until something on it ticks, listens or displays server state;
 then it streams over SSE, per tab.
@@ -46,6 +46,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 )
 
 type Counter struct{ n *atomic.Int64 }
@@ -55,9 +56,9 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.n.Add(-1) }
 
 func (c *Counter) View() h.H {
 	return h.Div(
-		h.Button(via.On("click", c.Dec), h.Str("-")),
+		h.Button(on.Click(c.Dec), h.Str("-")),
 		h.H1(h.Str(c.n.Load())),
-		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }
 
@@ -98,7 +99,7 @@ tab is the field's type:
 
 Rendering a `State` or registering a `Tick`/`Listen` is what makes a page
 live; a page that does neither is a plain HTTP round trip.
-[Signals →](https://go-via.dev/signals) · [Live →](https://go-via.dev/live)
+[Signals →](https://go-via.dev/signals) · [Live state →](https://go-via.dev/live)
 
 ## The hard guarantees
 
@@ -135,19 +136,24 @@ example violates the `&`/closure rules.
 
 The guide lives at **[go-via.dev](https://go-via.dev)**.
 
+- [Getting started](https://go-via.dev/start) — install, one-file counter,
+  and what each part does.
 - [Actions](https://go-via.dev/actions) — clicks and form submits as Go
-  methods: `via.On`, `via.OnArg`, `PostForm`, and the morph that answers them.
+  methods: package `on`, `on.WithArg`, `PostForm`, and the morph that
+  answers them.
 - [Signals](https://go-via.dev/signals) — client-resident state: `Bind`,
   `Display`, `SignalCS` and the `expr` package.
-- [Live](https://go-via.dev/live) — per-tab SSE: `Tick`, `Listen`,
+- [Live state](https://go-via.dev/live) — per-tab SSE: `Tick`, `Listen`,
   `StateTrack`, and per-user fan-out keyed by the session id.
 - [Islands](https://go-via.dev/islands) — handing a subtree to a JS library.
-- [Platform](https://go-via.dev/platform) — `Child`, mount patterns, auth as
-  an `OnInit` check, the derived CSP, and the lifecycle hooks.
+- [Sessions & security](https://go-via.dev/security) — `Child`, mount
+  patterns, auth as an `OnInit` check, the derived CSP, and the lifecycle
+  hooks.
 - [Deploy](https://go-via.dev/deploy) — shutdown order, sessions across a
   restart, sticky load balancing and a cross-pod topic bridge.
 - [Reference](https://go-via.dev/reference) — the API in tables.
-- [`MIGRATION.md`](./MIGRATION.md) — coming from v0.7.
+- [Migrating from v0.7](https://go-via.dev/migrate) — the short version and
+  the v0.7 → v0.8 mapping; [`MIGRATION.md`](./MIGRATION.md) is the full text.
 - [`CHANGELOG.md`](./CHANGELOG.md) — the release-by-release record.
 
 ## Develop

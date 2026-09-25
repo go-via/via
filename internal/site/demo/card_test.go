@@ -20,8 +20,8 @@ type cardPage struct{}
 
 func (p *cardPage) View() h.H {
 	return h.Div(
-		demo.Card("Counter", h.P(h.Str("prose")), h.Div(h.Str("live")), "counter.go"),
-		demo.Card("Counter again", h.P(), h.Div(), "counter.go"),
+		demo.Card(h.H3(h.Str("Counter")), h.P(h.Str("prose")), h.Div(h.Str("live")), "counter.go"),
+		demo.Card(h.H3(h.Str("Counter again")), h.P(), h.Div(), "counter.go"),
 	)
 }
 
@@ -79,4 +79,14 @@ func TestCard_keepsTheEmptyPaneInStepWithTheInspector(t *testing.T) {
 	assert.Contains(t, body, empty)
 	assert.Contains(t, string(script), `"`+empty+`"`,
 		"inspector.js restores this string when the log is cleared; card.go writes the first one")
+}
+
+func TestCard_putsACopyButtonAfterEveryCodeBlock(t *testing.T) {
+	t.Parallel()
+
+	body := render(t, mountCards)
+
+	assert.Equal(t, 2, strings.Count(body, `</pre><button class="copy" type="button" aria-label="Copy code"`),
+		"each card's Source pane is one code block with its button right after it")
+	assert.Contains(t, body, `data-on:click="navigator.clipboard.writeText(el.previousElementSibling.textContent)"`)
 }

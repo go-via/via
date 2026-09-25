@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -26,7 +27,7 @@ func (c *Counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Shared counter")),
 		h.P(h.Str("hits: "), c.Hits.Display()),
-		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }
 

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### New
+
+- **Package `on` binds DOM events by function, not by string**: a misspelled
+  event or modifier is a compile error instead of a listener that never fires.
+  Each event has a server form that posts an action and a `CS` twin that runs
+  an expression in the browser; `on.Event` and `on.EventCS` take any other
+  event by name, `on.WithArg` attaches a row's datum, and modifiers are
+  options: `on.Input(c.Search, on.Debounce(250*time.Millisecond))`. An event
+  name that is not lower-case letters and digits joined by `:`, `.` or `-`
+  panics, so a quote or a `__` modifier cannot be smuggled in.
+
+- **`expr.Copy(text)`** writes text to the clipboard. Browsers allow it only in
+  a secure context and from a user gesture, so bind it to a click.
+
+### Fixed
+
+- `expr.All` and `expr.Any` parenthesize each operand that is not already a
+  group, so `expr.All(cond, $q.Assign(""))` no longer renders a syntax error.
+
+### Deprecated
+
+- `via.On` and `via.OnArg`, in favour of package `on` (`on.Click`,
+  `on.Event`, `on.WithArg`). They are removed in v0.9.
+
 ## v0.8.1 — the v2 core goes mainline (2026-09-25)
 
 v0.8.0 is retracted. Its tag points at a commit from before the release review

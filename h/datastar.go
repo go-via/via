@@ -30,7 +30,7 @@ func DataAttr[V ~string](name string, e V) Attr { return Data("attr:"+name, stri
 func DataStyle[V ~string](prop string, e V) Attr { return Data("style:"+prop, string(e)) }
 
 // DataOn runs the statements on the named DOM event. It writes the same
-// attribute via.On does, so an element carrying both for one event emits
+// attribute package on does, so an element carrying both for one event emits
 // data-on:<event> twice.
 func DataOn[V ~string](event string, stmts ...V) Attr {
 	return Data("on:"+event, joinStmts(stmts))

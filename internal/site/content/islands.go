@@ -5,39 +5,43 @@ import (
 	"github.com/go-via/via/h"
 	"go-via.dev/site/demo"
 	"go-via.dev/site/demos"
-	"go-via.dev/site/shell"
 )
-
-// islandAssets is a package var, not a literal built in PageMeta: Assets
-// decides the mount's CSP and via reads it at Mount, so it has to be a
-// constant of the type.
-var islandAssets = via.Assets{
-	Scripts: []via.Script{
-		{Src: "/static/vendor/maplibre-gl-csp.js", Defer: true},
-		{Src: "/static/islands.js", Defer: true},
-	},
-	Styles: []via.Style{{Href: "/static/islands.css"}},
-}
 
 // Islands is the page on handing a subtree to a JS library.
 type Islands struct {
 	page
-	Spark demos.Sparkline
-	Maps  demos.MapGrid
-	Chart demos.Chart
+	// Assets decides the mount's CSP and via reads it at Mount, so it is built
+	// once in NewIslands and never per request. via.Assets is a foreign struct,
+	// which the Mount probe does not fill, so the probe reads it as set.
+	assets via.Assets
+	Spark  demos.Sparkline
+	Maps   demos.MapGrid
+	Chart  demos.Chart
 }
 
-// NewIslands builds the islands page for a deployment at origin.
-func NewIslands(origin string) Islands { return Islands{page: newPage("/islands", origin)} }
+// NewIslands builds the islands page, with its scripts under the site's base.
+func NewIslands(env Env) Islands {
+	return Islands{
+		page: newPage("/islands", env),
+		assets: via.Assets{
+			Scripts: []via.Script{
+				{Src: env.Site.Href("/static/vendor/maplibre-gl-csp.js"), Defer: true},
+				{Src: env.Site.Href("/static/islands.js"), Defer: true},
+			},
+			Styles: []via.Style{{Href: env.Site.Href("/static/islands.css")}},
+		},
+	}
+}
 
 func (p *Islands) PageMeta() via.Meta {
 	m := p.meta("Handing a subtree to a JS library: DataIgnoreMorph, DataEffect and a teardown that leaves nothing behind.")
-	m.Assets = islandAssets
+	m.Assets = p.assets
 	return m
 }
 
 func (p *Islands) View() h.H {
-	return shell.Page(p.nav,
+	d := p.doc()
+	return d.Page(
 		h.P(
 			h.Str("via never generates JavaScript. An island is what it offers instead: a container via renders once and then leaves alone. "),
 			h.Code(h.Str("h.DataIgnoreMorph()")),
@@ -47,7 +51,7 @@ func (p *Islands) View() h.H {
 			h.Str("The script is yours; via only decides when it runs."),
 		),
 
-		demo.Card("Sparkline on a clock",
+		demo.Card(d.H3("Sparkline on a clock"),
 			h.P(
 				h.Str("A "),
 				h.Code(h.Str("Tick")),
@@ -58,7 +62,7 @@ func (p *Islands) View() h.H {
 			),
 			via.Child(p.Spark), "sparkline.go"),
 
-		demo.Card("Six maps, one script",
+		demo.Card(d.H3("Six maps, one script"),
 			h.P(
 				h.Str("Add, remove and shuffle MapLibre instances; the script tag is declared once, in the page's "),
 				h.Code(h.Str("PageMeta().Assets")),
@@ -77,13 +81,11 @@ func (p *Islands) View() h.H {
 			),
 			via.Child(p.Maps), "mapgrid.go"),
 
-		demo.Card("The same island, no clock",
+		demo.Card(d.H3("The same island, no clock"),
 			h.P(
 				h.Str("The same viaChart, driven by a click. This demo holds no State and never ticks, so the page does not stream for it: "),
 				h.Str("the action's element patch carries the one signal the handler wrote, and the effect re-runs on arrival."),
 			),
 			via.Child(p.Chart), "chart.go"),
-
-		h.P(h.A(h.Href("/platform"), h.Str("Next: composition, auth and the security floor"))),
 	)
 }

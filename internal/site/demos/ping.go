@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 )
 
@@ -79,7 +80,7 @@ func (p *Ping) Send(ctx *via.Ctx) {
 func (p *Ping) View() h.H {
 	return h.Div(
 		h.Div(h.Class("row"),
-			h.Button(via.On("click", p.Send), h.Str("ping me in 3s")),
+			h.Button(on.Click(p.Send), h.Str("ping me in 3s")),
 			h.Span(h.Class("note"), p.Notice.Display()),
 		),
 		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Pings received"), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),

@@ -47,7 +47,7 @@ func Source(name string) h.H {
 func Code(src string) h.H {
 	it, err := lexers.Get("go").Tokenise(nil, src)
 	if err != nil {
-		return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(h.Str(src)))
+		return withCopy(h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(h.Str(src))))
 	}
 	var spans []h.H
 	for _, t := range it.Tokens() {
@@ -57,8 +57,11 @@ func Code(src string) h.H {
 		}
 		spans = append(spans, h.Str(t.Value))
 	}
-	return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(spans...))
+	return withCopy(h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(spans...)))
 }
+
+// Plain is an unhighlighted block, for shell commands.
+func Plain(src string) h.H { return withCopy(h.Pre(h.Code(h.Str(src)))) }
 
 // Class mirrors chroma's unexported html-formatter mapping: the prefixed CSS
 // class a token gets, or "" for a token that gets no span at all.
