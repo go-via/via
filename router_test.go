@@ -402,6 +402,35 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	assert.Empty(t, resp.Header.Get("Location"), "an unsafe OnInit redirect target must never reach http.Redirect")
 }
 
+type schemeRedirectPage struct{ To string }
+
+func (p *schemeRedirectPage) OnInit(ctx *via.Ctx) error {
+	ctx.Redirect(p.To)
+	return nil
+}
+func (p *schemeRedirectPage) View() h.H { return h.Div() }
+
+func TestRouter_onInitRedirectRefusesMailtoAndTel(t *testing.T) {
+	t.Parallel()
+	for _, to := range []string{"mailto:a@b.c", "tel:+15550100"} {
+		t.Run(to, func(t *testing.T) {
+			t.Parallel()
+			r := via.NewRouter()
+			via.Mount(r, "/go", schemeRedirectPage{To: to})
+			srv := serve(t, r)
+
+			c := &http.Client{CheckRedirect: noFollow}
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+"/go", nil)
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			resp, err := c.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+			assert.Empty(t, resp.Header.Get("Location"), "a redirect stays http(s)/relative; href's mailto:/tel: allowance must not reach it")
+		})
+	}
+}
+
 type redirectThenMissPage struct{ id int }
 
 func (p *redirectThenMissPage) OnInit(ctx *via.Ctx) error {

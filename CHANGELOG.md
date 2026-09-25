@@ -1,5 +1,57 @@
 # Changelog
 
+## v0.8.3 — stale clicks, sliding cookies (2026-09-25)
+
+### Fixed
+
+- An active session no longer drops 24h after sign-in. The idle window slid
+  on the server, but the cookie's `Max-Age` was set only when the cookie was
+  issued or rotated, so the browser discarded it one TTL after sign-in. The
+  request that extends the window (once less than half of it is left) now
+  re-sends the cookie; other requests still send none.
+
+- A stream connect that extends the idle window re-sends the cookie too. The
+  connect read the session twice and only the first read knew it had slid it.
+
+- A stale action URL no longer runs on another child of the same type,
+  where via can tell them apart. When a `When` ahead of a `Child` closed, the
+  next child of that type moved onto the key the old URL named, and the click
+  ran there. A child whose parent holds two fields of its type now carries
+  the render's call stack into `via.Child` as `?u=` on its action URLs, and a
+  URL whose key holds a child reached through other calls answers 410, on
+  plain and live units alike. Separate `Child` calls in a View or a `When`
+  branch are told apart; one call that renders either copy (a loop, a
+  variable swapped between two fields) and a `Child` built outside the render
+  (markup stored by `OnInit`/`OnReload`) are not, and behave as before.
+  Children of a type the parent holds once are unchanged: the type check
+  already covers them.
+
+- A tab whose stream connected before its session existed sees that session
+  in its `Tick` and `Listen` handlers once an action posted with its tab id
+  carries it. They kept an empty `Session().ID()` for the connection's life,
+  so per-session fan-out never reached the tab. A session minted in another
+  tab still does not reach it until such an action or a reconnect (see
+  `Ctx.Listen`).
+
+- `expr.CopyToClipboard` and `expr.CopyTextOf` swallow a refused write, as
+  their doc said, instead of logging "Uncaught (in promise)". The emitted
+  call now ends in `.catch(() => {})`.
+
+- Doc fixes: the reconnect manager caps auto-reloads at 2 per episode, not 3;
+  `Each` points per-row actions at `on.WithArg`, not the deprecated `OnArg`.
+
+### Changed
+
+- `h.Href`, and `h.RawAttr("href", …)`, admit `mailto:` and `tel:`. `h.Src`,
+  `h.Action`, the other URL-bearing `RawAttr` names and `Ctx.Redirect` still
+  admit only http, https and relative URLs.
+
+- `/_via/datastar.js` is cacheable. Pages load it as
+  `/_via/datastar.js?v=<content hash>`, served
+  `Cache-Control: public, max-age=31536000, immutable`; the bare path still
+  works, with `max-age=3600, must-revalidate`. Both carry a strong ETag and
+  answer a matching `If-None-Match` with 304.
+
 ## v0.8.2 — events by function (2026-09-25)
 
 ### New

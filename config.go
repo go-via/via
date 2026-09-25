@@ -114,7 +114,9 @@ func WithTrustedOrigin(origin string) Option {
 }
 
 // WithSessionTTL sets how long a session may sit idle before it expires
-// (default 24h). Each access slides the window.
+// (default 24h). Each access slides the window; once less than half of it is
+// left, the access re-saves the session and re-sends the cookie so the
+// browser's expiry moves with it.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) {
 		c.sessionTTL = d

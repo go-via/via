@@ -2421,3 +2421,73 @@ func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
 	assert.Contains(t, out, "unit=*via_test.panicLive", "a panic log must name the unit type")
 	assert.Contains(t, out, "panicLive).Boom", "a panic log must name the action that blew up")
 }
+
+// sidBox hands the test the session id an action minted.
+type sidBox struct {
+	mu sync.Mutex
+	v  string
+}
+
+func (b *sidBox) set(v string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.v = v
+}
+
+func (b *sidBox) get() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.v
+}
+
+// sessEcho addresses publishes by session id and reads its own from the Listen
+// Ctx, the way per-user fan-out over one shared topic is written.
+type sessEcho struct {
+	Topic *topic.Topic[string]
+	Box   *sidBox
+	got   via.State[string]
+}
+
+func (s *sessEcho) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(s.Topic, s.recv)
+	return nil
+}
+
+func (s *sessEcho) recv(ctx *via.Ctx, to string) {
+	if to != "" && to == ctx.Session().ID() {
+		s.got.Set("got " + to)
+	}
+}
+
+func (s *sessEcho) SignIn(ctx *via.Ctx) { s.Box.set(ctx.Session().Ensure()) }
+func (s *sessEcho) Poke(ctx *via.Ctx)   {}
+
+func (s *sessEcho) View() h.H {
+	return h.Div(s.got.Display(),
+		h.Button(via.On("click", s.SignIn)), // action 0
+		h.Button(via.On("click", s.Poke)))   // action 1
+}
+
+func TestDispatch_listenHandlerSeesTheSessionALaterActionOnItsTabCarried(t *testing.T) {
+	t.Parallel()
+	tp, box := topic.New[string](), &sidBox{}
+	app := vt.Serve(t, via.Handler(sessEcho{Topic: tp, Box: box},
+		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+
+	early := app.Connect()
+	other := app.Connect()
+	status, _ := app.Action(0).Over(other).Fire()
+	require.Less(t, status, 300)
+	sid := box.get()
+	require.NotEmpty(t, sid, "precondition: SignIn minted the session")
+
+	status, _ = app.Action(1).Over(early).Fire()
+	require.Less(t, status, 300, "the early tab's action carries the cookie the other tab minted")
+
+	tp.Publish(sid)
+	early.Await("got " + sid)
+	other.Await("got " + sid)
+}

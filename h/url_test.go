@@ -13,50 +13,64 @@ import (
 )
 
 // urlCorpus is the hostile set both gates have to agree on. Each entry pairs a
-// URL with whether the policy admits it verbatim.
+// URL with whether the policy admits it verbatim; href widens it by mailto:
+// and tel: only.
 var urlCorpus = []struct {
 	url  string
 	safe bool
+	href bool
 }{
-	{"/threads/7", true},
-	{"threads/7", true},
-	{"", false},
-	{"https://example.com/x", true},
-	{"HTTP://example.com/x", true},
-	{"?q=1", true},
-	{"#frag", true},
-	{"javascript:alert(1)", false},
-	{"JavaScript:alert(1)", false},
-	{"\njavascript:alert(1)", false},
-	{" \t javascript:alert(1)", false},
-	{"data:text/html,x", false},
-	{"vbscript:msgbox", false},
-	{"//evil.example/x", false},
-	{`\\evil.example\x`, false},
-	{`/\evil.example`, false},
-	{`/\/evil.example`, false},
-	{`\/evil.example`, false},
-	{"\n//evil.example/x", false},
-	{" \t//evil.example/x", false},
-	{"mailto:a@b.c", false},
-	{"/\t/evil.example", false},
-	{"/\n/evil.example", false},
-	{"/\r\n/evil.example", false},
-	{"\\\t\\evil.example", false},
-	{"java\tscript:alert(1)", false},
-	{"java\r\nscript:alert(1)", false},
-	{"/threads/\t7", true},
+	{"/threads/7", true, true},
+	{"threads/7", true, true},
+	{"", false, false},
+	{"https://example.com/x", true, true},
+	{"HTTP://example.com/x", true, true},
+	{"?q=1", true, true},
+	{"#frag", true, true},
+	{"javascript:alert(1)", false, false},
+	{"JavaScript:alert(1)", false, false},
+	{"\njavascript:alert(1)", false, false},
+	{" \t javascript:alert(1)", false, false},
+	{"data:text/html,x", false, false},
+	{"vbscript:msgbox", false, false},
+	{"//evil.example/x", false, false},
+	{`\\evil.example\x`, false, false},
+	{`/\evil.example`, false, false},
+	{`/\/evil.example`, false, false},
+	{`\/evil.example`, false, false},
+	{"\n//evil.example/x", false, false},
+	{" \t//evil.example/x", false, false},
+	{"mailto:a@b.c", false, true},
+	{"MailTo:a@b.c?subject=hi", false, true},
+	{"tel:+15550100", false, true},
+	{" \ttel:+15550100", false, true},
+	{"mail\tto:a@b.c", false, true},
+	{"sms:+15550100", false, false},
+	{"mailto//a@b.c", true, true},
+	{"/\t/evil.example", false, false},
+	{"/\n/evil.example", false, false},
+	{"/\r\n/evil.example", false, false},
+	{"\\\t\\evil.example", false, false},
+	{"java\tscript:alert(1)", false, false},
+	{"java\r\nscript:alert(1)", false, false},
+	{"/threads/\t7", true, true},
 }
 
 func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {
 	t.Parallel()
 	for _, c := range urlCorpus {
 		assert.Equal(t, c.safe, hcore.SafeURL(c.url), "predicate verdict for %q", c.url)
+		assert.Equal(t, c.href, hcore.SafeHref(c.url), "href predicate verdict for %q", c.url)
 
 		rendered := render(t, h.A(h.Href(c.url)))
 		neutralized := strings.Contains(rendered, `href="#"`)
+		assert.Equal(t, !c.href, neutralized,
+			"the href gate and the predicate disagree about %q: rendered %s", c.url, rendered)
+
+		rendered = render(t, h.Img(h.Src(c.url)))
+		neutralized = strings.Contains(rendered, `src="#"`)
 		assert.Equal(t, !c.safe, neutralized,
-			"the attribute gate and the predicate disagree about %q: rendered %s", c.url, rendered)
+			"the src gate and the predicate disagree about %q: rendered %s", c.url, rendered)
 	}
 }
 
@@ -91,6 +105,21 @@ func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 		"a legitimate relative URL on a gated name must render untouched")
 	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`,
 		"a legitimate relative URL on a gated name must render untouched")
+}
+
+func TestURLPolicy_mailtoAndTelPassInHrefOnly(t *testing.T) {
+	t.Parallel()
+	for _, u := range []string{"mailto:a@b.c", "tel:+15550100"} {
+		assert.Contains(t, render(t, h.A(h.Href(u))), `href="`+u+`"`)
+		assert.Contains(t, render(t, h.El("a", h.RawAttr("href", u))), `href="`+u+`"`)
+		assert.Contains(t, render(t, h.El("a", h.RawAttr("HREF", u))), `="`+u+`"`)
+		assert.Contains(t, render(t, h.Img(h.Src(u))), `src="#"`)
+		assert.Contains(t, render(t, h.Form(h.Action(u))), `action="#"`)
+		for _, name := range []string{"src", "action", "formaction", "ping", "poster"} {
+			assert.Containsf(t, render(t, h.El("a", h.RawAttr(name, u))), `="#"`,
+				"h.RawAttr(%q, %q) must neutralize: only href admits mailto:/tel:", name, u)
+		}
+	}
 }
 
 func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {

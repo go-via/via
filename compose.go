@@ -12,7 +12,7 @@ import (
 // trap: Datastar morphs the re-rendered list by position, which is right for an
 // append-only list but wrong for reorder or delete — give each row a stable id
 // (h.RawAttr("id", …)) so the morph matches by id instead. Per-row actions use
-// OnArg, carrying the row's own key with the click. Per-row signals are not
+// on.WithArg, carrying the row's own key with the click. Per-row signals are not
 // supported: a Signal inside a slice element is outside the composition struct,
 // so it has no field offset to name itself by and rendering it panics.
 func Each[T any](items []T, row func(T) h.H) h.H {

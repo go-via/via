@@ -1,6 +1,7 @@
 package via
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/go-via/via/internal/hcore"
@@ -301,10 +303,16 @@ func (r *Router) init(opts []Option) {
 		r.maxLive = r.cfg.maxSSEConn
 		r.ctx, r.cancel = context.WithCancel(context.Background())
 		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{})
-		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, _ *http.Request) {
+		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Write(datastarJS)
+			w.Header().Set("ETag", `"`+datastarHash+`"`)
+			if req.URL.Query().Get("v") == datastarHash {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
+			}
+			http.ServeContent(w, req, "", time.Time{}, bytes.NewReader(datastarJS))
 		})
 	})
 }
@@ -522,7 +530,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ha
 	head.WriteString(m.cfg.head.Raw)
 	m.cfg.head.Assets.render(&head)
 	meta.Assets.render(&head)
-	head.WriteString(`<script type="module" src="/_via/datastar.js"></script>` +
+	head.WriteString(`<script type="module" src="/_via/datastar.js?v=` + datastarHash + `"></script>` +
 		eventsScript() +
 		reconnectScript(hasLive) +
 		bodyOpen)

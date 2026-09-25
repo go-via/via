@@ -35,9 +35,9 @@ const InviteHTML = `<div id="root" data-signals='{"query":""}'>
     <p data-show="($query !== &#34;&#34;)">
       Searching for <span data-text="$query"></span>
     </p>
-    <button data-on:click="navigator.clipboard.writeText(&#34;https://example.com/join?ref=\u0040ada&#34;)">Copy invite link</button>
+    <button data-on:click="navigator.clipboard.writeText(&#34;https://example.com/join?ref=\u0040ada&#34;).catch(() =&gt; {})">Copy invite link</button>
     <pre><code>go get github.com/go-via/via</code></pre>
-    <button data-on:click="navigator.clipboard.writeText(el.parentElement?.querySelector(&#34;code&#34;)?.textContent ?? &#34;&#34;);
+    <button data-on:click="navigator.clipboard.writeText(el.parentElement?.querySelector(&#34;code&#34;)?.textContent ?? &#34;&#34;).catch(() =&gt; {});
       el.classList.toggle(&#34;copied&#34;, true)">Copy</button>
   </div>
 </div>`

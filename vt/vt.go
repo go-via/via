@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"html"
 	"io"
 	"log"
 	"net/http"
@@ -56,7 +57,9 @@ func nthActionURL(markup []byte, child string, n int) (string, bool) {
 	if n < 0 || n >= len(m) {
 		return "", false
 	}
-	return string(m[n][1]), true
+	// The URL sits in an attribute, so it is entity-escaped there: the
+	// browser posts the decoded text ("&amp;" joins two query params as "&").
+	return html.UnescapeString(string(m[n][1])), true
 }
 
 // Serve mounts handler on an in-memory httptest server (req.TLS is nil), so

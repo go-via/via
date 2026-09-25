@@ -20,6 +20,7 @@ type tabStream struct {
 	mu          sync.Mutex        // replace runs on the child goroutine, unit is read from the dispatching request's
 	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
 	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
+	handlers    []*Ctx            // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
@@ -51,6 +52,25 @@ func (c *tabStream) bindSession(sid string) {
 	defer c.mu.Unlock()
 	if c.sess == "" {
 		c.sess = sid
+	}
+}
+
+// shareSession hands s to the handler Ctxs of a connection that opened with no
+// session, once an action has bound the tab to it. A stream that connected
+// before its session existed otherwise kept an anonymous Session in every
+// Tick and Listen handler for its whole life, even after its own action
+// carried the cookie, so per-session addressing never reached it. Only the
+// bound session is shared: it is the one every later action must carry.
+// Runs on the connection's goroutine, like every handler that reads it.
+func (c *tabStream) shareSession(s *Session) {
+	sid := s.sid()
+	if sid == "" || sid != c.boundSession() {
+		return
+	}
+	for _, u := range c.handlers {
+		if u.session.sid() == "" {
+			u.adoptSession(s.id, s.data, nil)
+		}
 	}
 }
 

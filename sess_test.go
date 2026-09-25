@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -327,6 +328,62 @@ func TestSession_expiresAfterIdleTTL(t *testing.T) {
 		_, body := fireAction(t, c, srv.URL, 1) // Greet
 		assert.NotContains(t, body, "hi alice", "an idle session past its TTL must not resolve")
 	})
+}
+
+func TestSession_activeSessionOutlivesTheTTLCountedFromSignIn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, via.Handler(loginComp{},
+			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
+
+		fireAction(t, c, srv.URL, 0) // SignIn
+		for range 5 {
+			time.Sleep(10 * time.Hour)
+			fireAction(t, c, srv.URL, 1)
+		}
+		_, body := fireAction(t, c, srv.URL, 1)
+		assert.Contains(t, body, "hi alice", "a session in use every 10h must survive 50h past sign-in")
+	})
+}
+
+func TestSession_streamConnectThatSlidesTheWindowReissuesTheCookie(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+		via.Mount(r, "/", loginComp{})
+		via.Mount(r, "/live", sessionLive{})
+		srv := httptest.NewTestServer(t, r)
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
+
+		fireAction(t, c, srv.URL, 0) // SignIn
+		time.Sleep(13 * time.Hour)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/live/_via/sse", strings.NewReader("{}"))
+		require.NoError(t, err)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		resp, err := c.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.NotEmpty(t, resp.Header.Values("Set-Cookie"),
+			"a reconnect is often the only request an open tab makes; the one that slides the window must re-send the cookie")
+	})
+}
+
+func TestSession_cookieIsNotReissuedOnEveryRequest(t *testing.T) {
+	t.Parallel()
+	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	c := jarClient(t)
+	fireAction(t, c, base, 0) // SignIn
+
+	resp := getPage(t, c, base)
+	assert.Empty(t, resp.Header.Values("Set-Cookie"),
+		"a session well inside its idle window must not re-send its cookie")
 }
 
 func TestSession_enabledByTTLAloneUsesAnAutoKey(t *testing.T) {
@@ -1672,4 +1729,55 @@ func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
 
 	assert.NotContains(t, buf.String(), "no cookie can be set",
 		"Ensure has nothing to store, so it must not mint a session the browser never learns of")
+}
+
+// namePutter writes the session from a Listen handler, whose Session is the
+// snapshot its stream connected with.
+type namePutter struct {
+	Names *topic.Topic[string]
+	done  via.State[string]
+}
+
+func (p *namePutter) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.Names, p.put)
+	return nil
+}
+
+func (p *namePutter) put(ctx *via.Ctx, name string) {
+	ctx.Session().Put(member{Name: name})
+	p.done.Set("put " + name)
+}
+
+func (p *namePutter) View() h.H { return h.Div(p.done.Display()) }
+
+func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *testing.T) {
+	t.Parallel()
+	names := topic.New[string]()
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/", loginComp{})
+	via.Mount(r, "/live", namePutter{Names: names})
+	app := vt.Serve(t, r)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+	c := app.Client()
+
+	fireAction(t, c, app.URL(), 0) // SignIn
+	u, err := url.Parse(app.URL())
+	require.NoError(t, err)
+	old := jar.Cookies(u)
+	require.NotEmpty(t, old)
+	conn := app.ConnectAt("/live", "{}")
+
+	fireAction(t, c, app.URL(), 3) // Rotate
+	names.Publish("mallory")
+	conn.Await("put mallory")
+
+	stale := jarClient(t)
+	stale.Transport = c.Transport
+	stale.Jar.SetCookies(u, old)
+	_, body := fireAction(t, stale, app.URL(), 1) // Greet
+	assert.NotContains(t, body, "hi ", "the rotated-away id must not resolve again")
+	_, body = fireAction(t, c, app.URL(), 1)
+	assert.Contains(t, body, "hi alice", "the rotated session keeps its own value")
 }
