@@ -1,305 +1,208 @@
 package via
 
 import (
-	"cmp"
-	"errors"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
-	"mime/multipart"
-	"net/http"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/go-via/via/internal/spec"
-	"github.com/starfederation/datastar-go/datastar"
+	"unsafe"
 )
 
-// methodNameCanary is the well-known target for verifyMethodNameTrampoline.
-// Defined as a method (not a free function) so the boot-time canary can
-// pass a bound method value through spec.MethodName and check the result.
-type methodNameCanary struct{}
-
-func (methodNameCanary) Probe() {}
-
-// verifyMethodNameTrampoline fails fast at App construction if a Go
-// runtime change has broken spec.MethodName's trampoline-name parsing.
-// The expected result for a bound method value is the method name minus
-// receiver and "-fm" suffix; a regression that returns "" or anything
-// else means every on.Click-style binding would silently fail to
-// resolve at request time.
-func verifyMethodNameTrampoline() {
-	got := spec.MethodName(methodNameCanary{}.Probe)
-	if got != "Probe" {
-		panic("via: MethodName canary failed; got " + strconv.Quote(got) +
-			", want \"Probe\". The Go runtime trampoline format may have " +
-			"changed — file a bug.")
-	}
+type action struct {
+	fn     func(*Ctx)
+	name   string       // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
+	handle actionHandle // runtime identity, compared to catch an id collision
+	// args is the set of ?a= payloads this render bound for the handler, in the
+	// exact JSON the binding shipped. nil marks an argless action (On/PostForm).
+	args map[string]struct{}
 }
 
-// sigsPool reuses the per-action signals map across requests. json.Unmarshal
-// into a non-nil map merges keys, so acquireSigs returns an already-cleared
-// map ready to be passed by pointer.
-var sigsPool = sync.Pool{
-	New: func() any { return make(map[string]any, 8) },
+// actionSlot registers run under the content-addressed id of ident — for
+// OnArg that is the user's fn, not the decoding wrapper, which would name the
+// same via-internal closure for every row.
+//
+// The id hashes the func's Go name plus its receiver's byte offset, not its
+// code pointer: the name survives a rebuild, so a deploy does not invalidate
+// every action URL an open tab is holding, while the offset keeps two
+// instances of one type (struct{ A, B Counter }) from minting one id for A.Inc
+// and B.Inc. A receiver not addressable inside the composition (a closure, a
+// child behind a pointer or slice field, a value receiver) has no offset and
+// falls back to the name alone; two such handlers that hash alike would
+// last-wins misroute, so claimAction panics instead.
+func (c *Ctx) actionSlot(run func(*Ctx)) string {
+	id, _, a := c.claimSlot(run)
+	a.fn = run
+	c.actions[id] = a
+	return id
 }
 
-func acquireSigs() map[string]any {
-	m := sigsPool.Get().(map[string]any)
-	clear(m)
-	return m
+// actionSlotArg is actionSlot for a value-carrying action: it records arg in
+// the slot's allowed set, so dispatch can reject a (handler, arg) pair this
+// render never produced. The set is created once per slot and mutated in place
+// as later rows claim it, so the closure stored here (the last row's) closes
+// over the finished set no matter which row wrote it.
+func (c *Ctx) actionSlotArg(ident any, run func(rc *Ctx, name string, bound map[string]struct{}), arg string) string {
+	id, name, a := c.claimSlot(ident)
+	if a.args == nil {
+		a.args = map[string]struct{}{}
+	}
+	a.args[arg] = struct{}{}
+	args := a.args
+	a.fn = func(rc *Ctx) { run(rc, name, args) }
+	c.actions[id] = a
+	return id
 }
 
-func releaseSigs(m map[string]any) {
-	if m == nil || len(m) > 256 {
-		return // drop outliers so a one-off broadcast doesn't pin a giant map
+// claimSlot resolves ident's action id and rejects a collision between two
+// handlers via cannot tell apart, returning the id, the handler name, and the
+// row to fill in (carrying any args a previous claim on this id recorded).
+func (c *Ctx) claimSlot(ident any) (string, string, action) {
+	id, name, ah := c.actionID(ident)
+	prev, dup := c.actions[id]
+	if dup && prev.handle != ah {
+		panic("via: two different actions share the action id " + id + ": " + prev.name +
+			" and " + name + " — their receivers are not addressable inside this unit " +
+			"(a closure, or a child held through a pointer/slice field), so via cannot tell " +
+			"them apart; give each child its own via.Child")
 	}
-	sigsPool.Put(m)
+	return id, name, action{name: name, handle: ah, args: prev.args}
 }
 
-// handleAction dispatches POST /_action/{methodName}. The {id} URL segment
-// is the bare method name, resolved against the mounted page's root
-// composition (action methods are registered from the root type only —
-// see buildDescriptor). Actions must therefore live on the root
-// composition; a method on a nested child composition is not registered
-// and will 404. Children forward to their own methods from a root action
-// instead (see internal/examples/countercomp).
-func (a *App) handleAction(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		http.NotFound(w, r)
-		return
-	}
+// actionHandle is a handler's runtime identity within one render: its code
+// pointer plus the bound receiver (method value) or funcval. Never hashed into
+// the id — both halves move every request — only compared, to turn a would-be
+// silent last-wins overwrite into a panic.
+type actionHandle struct {
+	code uintptr
+	self unsafe.Pointer
+}
 
-	// JSON action bodies and multipart upload bodies have very different
-	// size profiles; pick the right cap per content-type so file uploads
-	// don't trip the JSON-tuned ceiling.
-	var maxBody int64
-	if isMultipart(r) {
-		maxBody = cmp.Or(a.cfg.maxUploadSize, int64(32<<20))
-	} else {
-		maxBody = cmp.Or(a.cfg.maxRequestBody, int64(1<<20))
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+// eface is the runtime layout of an interface value; for a func in an any,
+// data is the *funcval.
+type eface struct{ typ, data unsafe.Pointer }
 
-	sigs := acquireSigs()
-	released := false
-	defer func() {
-		if !released {
-			releaseSigs(sigs)
+// funcSelf returns the func value's *funcval.
+//
+// A funcval is a code pointer followed by the captured words, and the compiler
+// heap-allocates a method-value wrapper even for a zero-sized receiver — so
+// the second word is in bounds for a "-fm" func and only for one. A plain func
+// or capture-free closure is a one-word static symbol; reading past it would
+// be out of bounds, so those are identified by the pointer itself, never
+// dereferenced.
+func funcSelf(fn any) unsafe.Pointer { return (*eface)(unsafe.Pointer(&fn)).data }
+
+// methodRecv reads the captured receiver. Valid only for a "-fm" func value —
+// see funcSelf.
+func methodRecv(self unsafe.Pointer) unsafe.Pointer {
+	if self == nil {
+		return nil
+	}
+	return *(*unsafe.Pointer)(unsafe.Add(self, unsafe.Sizeof(uintptr(0))))
+}
+
+type trampolineCanary struct{}
+
+func (*trampolineCanary) probe() {}
+
+var trampolineVerified sync.Once
+
+// verifyMethodTrampoline panics if the running Go toolchain's "-fm" method-
+// value layout no longer matches what actionID assumes. The suffix and the
+// receiver read are two independent halves of that assumption — funcName
+// checking only the suffix would let a layout change past a string match and
+// straight into methodRecv's out-of-bounds pointer read, so both are proved
+// here, once per process, before any action id is minted. Every Mount in the
+// test suite calls this; a broken layout panics the suite immediately, so no
+// dedicated test is needed here.
+func verifyMethodTrampoline() {
+	trampolineVerified.Do(func() {
+		c := &trampolineCanary{}
+		fn := c.probe
+		name := funcName(reflect.ValueOf(fn).Pointer()).name
+		self := funcSelf(fn)
+		recv := methodRecv(self)
+		if !strings.HasSuffix(name, "-fm") || recv != unsafe.Pointer(c) {
+			panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
+				"receiver %p, want a \"-fm\" suffix and receiver %p. via's action identity depends on "+
+				"a method value's runtime layout; a Go toolchain change broke that assumption. File a bug.",
+				runtime.Version(), name, recv, c))
 		}
-	}()
-
-	var (
-		form *multipart.Form
-		err  error
-	)
-	if isMultipart(r) {
-		// Memory cap for buffered text fields — file parts spill to disk.
-		form, err = readMultipartSignals(r, maxBody, sigs)
-	} else {
-		err = datastar.ReadSignals(r, &sigs)
-	}
-	if err != nil {
-		var mb *http.MaxBytesError
-		if errors.As(err, &mb) {
-			// The body cap trips here, before the action handler runs, so a
-			// friendly response (vs the bare 413) is only reachable via the
-			// app-level WithRequestTooLarge hook.
-			if h := a.cfg.tooLargeHandler; h != nil {
-				h.ServeHTTP(w, r)
-			} else {
-				http.Error(w, "request too large", http.StatusRequestEntityTooLarge)
-			}
-			return
-		}
-		// Malformed body / wrong content type — fall through to the
-		// tabID="" 404 path below; existing tests rely on that posture.
-	}
-	tabID, _ := sigs[tabSignalKey].(string)
-
-	ctx, ok := a.getCtx(tabID)
-	if !ok {
-		// A well-formed tab id this pod doesn't hold is the symptom of a
-		// request routed to the wrong pod (no sticky sessions) — surface it so
-		// a non-sticky LB shows up as a metric, not just mute 404s. An empty id
-		// is a malformed probe and doesn't count.
-		if tabID != "" {
-			a.metricsOrNoop().Counter("via.tab.unknown", "kind", "action")
-		}
-		// If the id is recoverable (well-formed and names a mounted route — a
-		// wrong-pod hit, TTL sweep, or restart), push a reload so a fresh page
-		// GET re-bootstraps the tab instead of silently dropping the click. The
-		// SSE handshake already recovers the same stale id (recoverSSE); this
-		// removes the action/SSE asymmetry. Run the descriptor's group
-		// middleware first so an auth guard vetoes recovery exactly as it
-		// vetoes the page. A forged id (no mounted route) keeps the 404.
-		if d := a.descriptorForStaleTab(tabID); d != nil {
-			reload := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				a.metricsOrNoop().Counter("via.action.recover", "mode", "reload")
-				a.streamReloadScript(w, r)
-			})
-			applyMiddleware(d.groupMW, reload).ServeHTTP(w, r)
-			return
-		}
-		http.NotFound(w, r)
-		return
-	}
-	if sess := ctx.session.Load(); sess != nil && a.sessionFromRequest(r) != sess {
-		a.metricsOrNoop().Counter("via.session.mismatch")
-		a.logErr(ctx, "session mismatch on action: the tab's bound session no longer matches the request cookie (two via apps on the same host:port clobbering via_session?)")
-		http.Error(w, "session mismatch", http.StatusForbidden)
-		return
-	}
-
-	d := ctx.desc
-	slotIdx, ok := d.actionByName[id]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	slot := &d.actionSlots[slotIdx]
-
-	// Wrap the dispatch in the descriptor's group middleware so a
-	// requireAuth (or any group-level guard) checks the request before
-	// the action runs — same auth posture as the rendered route.
-	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runAction(a, ctx, slotIdx, slot, w, r, sigs, form)
 	})
-	applyMiddleware(d.groupMW, dispatch).ServeHTTP(w, requestWithRoute(r, d.route))
-	// runAction has finished by the time ServeHTTP returns. Release the
-	// sigs map back to the pool. We deliberately don't null out
-	// ctx.lastSignals here — a concurrent action POST on the same tab
-	// (serialized via actionMu inside runAction) will have already
-	// reassigned it, and writing nil from this goroutine would race the
-	// reassignment. The stale pointer between actions is benign:
-	// lastSignals is only read inside an action body, which holds
-	// actionMu, so the pre-read assignment is always under the lock.
-	released = true
-	releaseSigs(sigs)
 }
 
-// isMultipart reports whether r carries a multipart/form-data body.
-func isMultipart(r *http.Request) bool {
-	ct := r.Header.Get("Content-Type")
-	return strings.HasPrefix(ct, "multipart/form-data")
-}
-
-func runAction(a *App, ctx *Ctx, slotIdx int, slot *actionSlot,
-	w http.ResponseWriter, r *http.Request, sigs map[string]any, form *multipart.Form) {
-	// Action latency timing covers the per-tab serialization wait *and*
-	// the handler body — the metric reflects the user-perceived time
-	// from POST receipt to handler return, which is what an SLO cares
-	// about. Recorded in seconds for prom/otel convention.
-	started := time.Now()
-	m := a.metricsOrNoop()
-	defer func() {
-		m.Histogram("via.action.latency", time.Since(started).Seconds(), "method", slot.name)
-		m.Counter("via.action.total", "method", slot.name)
-	}()
-	// Serialize per-tab so parallel POSTs to the same ctx don't race
-	// on State writes, dirty bits, or Writer/Request assignment.
-	ctx.actionMu.Lock()
-	defer ctx.actionMu.Unlock()
-
-	// Hold queue wakes for the whole handler so the auto re-render and any
-	// explicit Patch pushes drain as one frame at action end, auto render
-	// before explicit (last-wins keeps the override authoritative).
-	// Registered before the flush defer below so it runs AFTER it (LIFO):
-	// the flush populates the queue, then the release fires the single
-	// wake. Resilient to a panic in the flush defer.
-	ctx.queue.holdNotify()
-	defer ctx.queue.releaseNotify()
-
-	ctx.mu.Lock()
-	ctx.w = w
-	ctx.r = r
-	ctx.mu.Unlock()
-	defer func() {
-		ctx.mu.Lock()
-		ctx.w = nil
-		ctx.r = nil
-		ctx.mu.Unlock()
-	}()
-	// Every handler entry starts loud — Silent doesn't leak between
-	// actions. Atomic store so concurrent reads from user-launched
-	// goroutines driving Update → broadcastRender aren't racy.
-	ctx.silent.Store(false)
-	// flushDirty runs even on panic so state mutated before the panic
-	// still reaches the browser alongside the error toast. Placed
-	// *before* the recover defer so the recover runs first (defers are
-	// LIFO) and turns the panic back into a normal return. If the
-	// handler ended in silent mode, drop any accumulated dirty bits so
-	// they don't leak into a subsequent loud action's flush.
-	defer func() {
-		if ctx.silent.Load() {
-			ctx.discardDirty()
-			return
-		}
-		flushDirty(ctx)
-	}()
-	defer func() {
-		rec := recover()
-		if rec == nil {
-			return
-		}
-		a.logErr(ctx, "action %q panicked: %v", slot.name, rec)
-		// Preserve a typed error from panic(err) so a custom
-		// WithActionErrorHandler can errors.As / errors.Is it.
-		err, ok := rec.(error)
-		if !ok {
-			err = fmt.Errorf("panic: %v", rec)
-		}
-		a.dispatchActionError(ctx, err, true)
-	}()
-
-	ctx.lastSignals = sigs
-	if err := injectSignals(ctx, sigs); err != nil {
-		// Strict decode rejected a client value — surface the error and skip
-		// the handler so corrupt input never reaches it.
-		a.dispatchActionError(ctx, err, false)
-		return
-	}
-	if form != nil {
-		bindFiles(ctx, form)
-		defer clearFiles(ctx)
-		defer form.RemoveAll()
-	}
-
-	if err := ctx.actionFns[slotIdx](ctx); err != nil {
-		a.dispatchActionError(ctx, err, false)
-	}
-}
-
-func (a *App) dispatchActionError(ctx *Ctx, err error, fromPanic bool) {
-	if a.cfg.actionErrorHandler != nil {
-		a.cfg.actionErrorHandler(ctx, err)
-		return
-	}
-	msg := err.Error()
-	if fromPanic && !a.cfg.verboseErrors {
-		msg = "Something went wrong"
-	}
-	ctx.Notify(msg)
-}
-
-// injectSignals applies signals from a request body into the bound *C's
-// Signal[T] fields by wire key.
-func injectSignals(ctx *Ctx, sigs map[string]any) error {
-	strict := ctx.app != nil && ctx.app.cfg.strictDecode
-	for slot, ref := range ctx.signalRefs {
-		s := ctx.desc.signalSlots[slot]
-		if s.kind != kindSignal {
-			continue
-		}
-		if v, ok := sigs[s.wireKey]; ok {
-			// decodeRaw still applies a best-effort value; the returned error is
-			// surfaced only under WithStrictDecode, where a lossy decode must
-			// reject the action rather than act on corrupt input.
-			if err := ref.decodeRaw(v); err != nil && strict {
-				return fmt.Errorf("via: signal %q: %w", s.wireKey, err)
+// actionID content-addresses a handler by its Go name ("main.(*Poll).Vote-fm")
+// plus, when the receiver lies inside this unit's composition, that receiver's
+// byte offset — the name alone drops the receiver, so two instances of one
+// type would collapse onto a single action.
+func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
+	pc := reflect.ValueOf(fn).Pointer()
+	fnName := funcName(pc)
+	name, isMethod := fnName.name, fnName.method
+	self := funcSelf(fn)
+	ah = actionHandle{code: pc, self: self}
+	off, scoped := uintptr(0), false
+	if isMethod {
+		recv := methodRecv(self)
+		ah.self = recv // two takes of the same method value are two funcvals; the receiver is the identity
+		if base := c.unitV.base; base != nil && recv != nil {
+			// Unsigned, so a receiver below the base wraps past size and fails
+			// the bound check along with one above it.
+			if o := uintptr(recv) - uintptr(base); o < c.unitV.size {
+				off, scoped = o, true
 			}
 		}
 	}
-	return nil
+	return actionIDFor(pc, name, off, scoped), name, ah
+}
+
+// funcMeta is the per-code-pointer half of the actionID memo; both halves
+// are fixed by the PC.
+type funcMeta struct {
+	name   string
+	method bool
+}
+
+var funcNames sync.Map // uintptr (code pointer) -> funcMeta
+
+// funcName resolves a code pointer's Go name once per process:
+// runtime.FuncForPC walks the module's pclntab (~190ns with the sha256 below),
+// which at a thousand bindings is a measurable slice of every render.
+func funcName(pc uintptr) funcMeta {
+	if v, ok := funcNames.Load(pc); ok {
+		return v.(funcMeta)
+	}
+	info := funcMeta{name: "unknown"}
+	if f := runtime.FuncForPC(pc); f != nil {
+		info.name = f.Name()
+	}
+	info.method = strings.HasSuffix(info.name, "-fm")
+	funcNames.Store(pc, info)
+	return info
+}
+
+type actionIDKey struct {
+	pc     uintptr
+	off    uintptr
+	scoped bool
+}
+
+var actionIDs sync.Map // actionIDKey -> string
+
+func actionIDFor(pc uintptr, name string, off uintptr, scoped bool) string {
+	k := actionIDKey{pc: pc, off: off, scoped: scoped}
+	if v, ok := actionIDs.Load(k); ok {
+		return v.(string)
+	}
+	key := name
+	if scoped {
+		key = name + "@" + strconv.FormatUint(uint64(off), 10)
+	}
+	sum := sha256.Sum256([]byte(key))
+	id := base64.RawURLEncoding.EncodeToString(sum[:])[:8]
+	actionIDs.Store(k, id)
+	return id
 }

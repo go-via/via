@@ -1,390 +1,245 @@
 package via
 
 import (
-	"fmt"
-	"net/http"
+	"log/slog"
 	"time"
+
+	"github.com/go-via/via/h"
 )
 
-// LogLevel selects the minimum log severity written to stdout.
-type LogLevel int
-
-const (
-	LogDebug LogLevel = iota
-	LogInfo
-	LogWarn
-	LogError
-)
-
+// config holds Handler's optional settings. The zero set is the dev-friendly
+// default: the action endpoint accepts requests from any origin, and production
+// opts into enforcement with WithTrustedOrigin.
 type config struct {
-	addr               string
-	title              string
-	lang               string
-	description        string
-	logLevel           LogLevel
-	plugins            []Plugin
-	shutdownTimeout    time.Duration
-	sessionTTL         time.Duration
-	contextTTL         time.Duration
-	reconcileInterval  time.Duration
-	snapshotInterval   int
-	foldVerify         bool
-	keyStore           KeyStore
-	sseHeartbeat       time.Duration
-	sseWriteTimeout    time.Duration
-	secureCookies      bool
-	cookieSecuritySet  bool
-	cookieName         string
-	httpServerHook     func(*http.Server)
-	readHeaderTimeout  time.Duration
-	readTimeout        time.Duration
-	writeTimeout       time.Duration
-	idleTimeout        time.Duration
-	maxRequestBody     int64
-	maxUploadSize      int64
-	maxContexts        int
-	maxSessions        int
-	noHealth           bool
-	noReconnect        bool
-	verboseErrors      bool
-	devChecks          bool
-	strictDecode       bool
-	actionErrorHandler func(*Ctx, error)
-	logger             Logger
-	notFoundHandler    http.Handler
-	tooLargeHandler    http.Handler
-	metrics            Metrics
-	backplane          Backplane
+	log            *slog.Logger
+	trustedOrigins map[string]bool
+	sessionKey     []byte
+	sessionTTL     time.Duration
+	sessionCookie  string
+	sessionSecure  bool
+	sessionStore   SessionStore
+	sessionTimeout time.Duration
+	head           Head
+	errorPage      func(*Ctx, PageError) h.H
+	maxSSEConn     int
+	pinnedDeadline time.Duration
+	maxBody        int64
+	maxUpload      int64
 }
 
-// Option configures a via App.
+// sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
+// keepalive write is the only in-band detector of a peer that vanished without
+// a FIN, so the stream goroutine and its timers would leak without it.
+const sseHeartbeat = 25 * time.Second
+
+// sseWriteTimeout caps a single frame write, so a stalled peer can't pin the
+// child's goroutine. Fixed: disabling it would let one pin a net/http goroutine
+// per click, since an action POST waits behind this same deadline.
+const sseWriteTimeout = 10 * time.Second
+
+// defaultMaxSSEConn caps concurrent live SSE streams per Router; past it a
+// connect is refused 503. See WithMaxSSEConn.
+const defaultMaxSSEConn = 10_000
+
+// defaultPinnedDeadline is how long a dispatch waits for the child goroutine
+// before declaring it pinned. See WithPinnedDeadline.
+const defaultPinnedDeadline = 5 * time.Second
+
+// Option configures a Handler or a NewRouter. On a Router the options apply to
+// the whole app, not to an individual Mount: there is one session cookie and
+// one origin policy across every page mounted on it.
 type Option func(*config)
 
-// validate panics on clearly-invalid option values at New — a registration-time
-// programming mistake, per CONVENTIONS "Panic on Invalid Registration". Only
-// negatives are rejected: 0 is a meaningful value (unlimited/default) for the
-// size and context caps, and a 0 shutdown timeout is a deliberate force-kill.
-func (c *config) validate() {
-	if c.shutdownTimeout < 0 {
-		panic(fmt.Sprintf("via.WithShutdownTimeout: must be >= 0, got %v", c.shutdownTimeout))
+type mountConfig struct{}
+
+// MountOption configures a single Mount call, as opposed to Option which
+// configures the whole Router.
+type MountOption func(*mountConfig)
+
+func newConfig(opts []Option) *config {
+	c := &config{
+		trustedOrigins: map[string]bool{},
+		maxSSEConn:     defaultMaxSSEConn,
+		pinnedDeadline: defaultPinnedDeadline,
+		maxBody:        maxActionBody,
+		maxUpload:      maxUploadBytes,
 	}
-	if c.maxRequestBody < 0 {
-		panic(fmt.Sprintf("via.WithMaxRequestBody: must be >= 0, got %d", c.maxRequestBody))
+	for _, opt := range opts {
+		opt(c)
 	}
-	if c.maxUploadSize < 0 {
-		panic(fmt.Sprintf("via.WithMaxUploadSize: must be >= 0, got %d", c.maxUploadSize))
+	if c.maxSSEConn <= 0 {
+		c.maxSSEConn = defaultMaxSSEConn
 	}
-	if c.maxContexts < 0 {
-		panic(fmt.Sprintf("via.WithMaxContexts: must be >= 0, got %d", c.maxContexts))
+	if c.pinnedDeadline <= 0 {
+		c.pinnedDeadline = defaultPinnedDeadline
 	}
-	if c.maxSessions < 0 {
-		panic(fmt.Sprintf("via.WithMaxSessions: must be >= 0, got %d", c.maxSessions))
+	if c.log == nil {
+		c.log = slog.Default()
+	}
+	c.head.validate()
+	if len(c.trustedOrigins) == 0 {
+		c.log.Warn(originWarning)
+	}
+	return c
+}
+
+// originWarning is logged once per Router when no trusted origin is set. The
+// floor is open by default, so the quiet state is the permissive one, and an
+// app that never calls WithTrustedOrigin looks configured rather than open —
+// this line is what tells you which mode you are in.
+const originWarning = "via: no WithTrustedOrigin set, so actions accept requests from any origin; set WithTrustedOrigin in production"
+
+// WithLogger routes via's own diagnostics to l. Default is slog.Default(). It
+// panics on nil.
+//
+// The h package and via/topic have no Router to reach and keep writing to
+// slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(c *config) {
+		if l == nil {
+			panic("via: WithLogger(nil)")
+		}
+		c.log = l
 	}
 }
 
-// WithAddr sets the HTTP listen address.
-func WithAddr(addr string) Option { return func(c *config) { c.addr = addr } }
-
-// WithTitle sets the rendered <title> on every page.
-func WithTitle(title string) Option { return func(c *config) { c.title = title } }
-
-// WithLang sets the <html lang="…"> attribute. Required for screen
-// readers and language-aware browser features.
-func WithLang(lang string) Option { return func(c *config) { c.lang = lang } }
-
-// WithDescription sets the <meta name="description"> tag included in
-// every rendered page. Search engines and link previews use it.
-func WithDescription(d string) Option { return func(c *config) { c.description = d } }
-
-// WithLogLevel sets the minimum log severity.
-func WithLogLevel(level LogLevel) Option { return func(c *config) { c.logLevel = level } }
-
-// WithShutdownTimeout sets the graceful shutdown timeout.
-func WithShutdownTimeout(d time.Duration) Option { return func(c *config) { c.shutdownTimeout = d } }
-
-// WithSessionTTL sets the per-session expiry. Default 30 minutes.
-func WithSessionTTL(d time.Duration) Option { return func(c *config) { c.sessionTTL = d } }
-
-// WithContextTTL sets how long a *stream-less* tab Ctx lingers before the
-// idle sweep reclaims it. Default 15 minutes; a value <= 0 disables the
-// sweep (contexts never expire).
-//
-// It governs only ctxs with no open SSE stream — a page GET that never
-// opened the stream, or the gap after a stream drops. A connected tab is
-// kept alive for its stream's lifetime regardless of this value, so a short
-// TTL can never reap a live tab.
-func WithContextTTL(d time.Duration) Option { return func(c *config) { c.contextTTL = d } }
-
-// WithReconcileInterval sets how often each pod re-pulls its value-shaped
-// StateApp keys to the backplane Store HEAD. This periodic sweep makes the
-// changes feed a pure latency optimization: a pod converges to shared state
-// even when no Change hint reached it (a pod that joined after the write, a
-// crash between the CAS and the hint append, or a silent Update). 0 disables
-// the sweep (the changes feed alone then carries convergence). Default 5s.
-func WithReconcileInterval(d time.Duration) Option {
-	return func(c *config) { c.reconcileInterval = d }
+// WithTrustedOrigin turns on origin enforcement for the action endpoint and
+// allowlists an exact origin (scheme://host[:port], as the browser sends it).
+// With at least one set, only same-origin requests and listed origins are
+// admitted. WITHOUT ANY, EVERY ORIGIN IS ACCEPTED, including requests that
+// carry no origin signal, and the Router logs a warning at startup — fine for
+// development, set this in production.
+func WithTrustedOrigin(origin string) Option {
+	return func(c *config) { c.trustedOrigins[origin] = true }
 }
 
-// WithSnapshotInterval sets how many folds a StateAppEvents projector applies
-// before persisting a fold snapshot, so a cold start replays only the tail
-// after the snapshot's offset instead of re-folding the whole log. 0 (or less)
-// disables snapshot writes. The snapshot is a disposable cache — never required
-// for correctness; a missing or stale-codec snapshot just re-folds from genesis.
-// Default 64.
-func WithSnapshotInterval(n int) Option { return func(c *config) { c.snapshotInterval = n } }
-
-// WithFoldVerify turns on runtime fold-determinism checking for every
-// StateAppEvents projector: each record is folded a SECOND time from the same
-// accumulator and the two results compared. A mismatch means the reducer is
-// impure (it read a clock, RNG, mutable global, or otherwise depends on
-// something other than (acc, event)) — the runtime emits via.fold.divergence AND
-// permanently REFUSES to compact that key, so a non-deterministic fold can never
-// be crystallized into a durable-genesis snapshot (which no later re-fold could
-// recover). It roughly doubles fold CPU, so it is opt-in — run it in dev/CI (and
-// optionally a canary pod) to catch impurity before it reaches production
-// compaction. Off by default.
-//
-// The check uses reflect.DeepEqual on the two fold results, which can spuriously
-// flag a PURE fold whose V contains uncomparable parts (func/chan fields, or NaN
-// floats — for which a==a is false). That is fail-SAFE, not fail-open: the worst
-// case is a needless via.fold.divergence and a refusal to compact, never a bad
-// snapshot. Such a V is also not JSON-snapshottable, so it could not be compacted
-// anyway.
-func WithFoldVerify() Option { return func(c *config) { c.foldVerify = true } }
-
-// WithKeyStore enables per-data-subject encryption (crypto-shred GDPR erasure)
-// for StateAppEvents. Events whose type implements DataSubject have their
-// payload encrypted under the subject's key (from the KeyStore) before they are
-// appended to the durable log, and App.EraseDataSubject drops a subject's key so
-// every ciphertext for them becomes permanently unreadable — even in an
-// append-only log or a backup — without rewriting history. Non-DataSubject
-// events are unaffected (stored plaintext).
-//
-// In a cluster every pod must share the SAME KeyStore (a KMS/Vault-backed impl),
-// or a pod without a subject's key cannot decode that subject's events.
-func WithKeyStore(ks KeyStore) Option { return func(c *config) { c.keyStore = ks } }
-
-// WithSSEHeartbeat sets the SSE keepalive cadence. Default 25s.
-//
-// A connected tab is kept alive for its stream's lifetime regardless of this
-// value — the keepalive's only job is to detect a silently-dropped (half-
-// open) client via a failed write, which then reaps the Ctx. Because that
-// failed write is the sole in-band detector of a vanished client, a value
-// <= 0 does NOT disable the keepalive; it floors to a safe default (25s).
-// Slow it down if you must, but it can't be silenced.
-func WithSSEHeartbeat(d time.Duration) Option { return func(c *config) { c.sseHeartbeat = d } }
-
-// WithSSEWriteTimeout caps how long a single SSE drain may block on the
-// underlying connection before the stream is torn down. Bounds the
-// blast radius of slow / stalled clients (without this, a wedged TCP
-// peer pins the server goroutine for the lifetime of the tab). Default
-// 10 seconds.
-//
-// Keep it nonzero in production: a failed keepalive write is the only
-// in-band detector of a vanished (half-open) client, and a connected Ctx
-// is never TTL-swept — so setting 0 lets a half-open peer pin its Ctx and
-// goroutine until the OS TCP keepalive fires (or the process exits).
-func WithSSEWriteTimeout(d time.Duration) Option {
-	return func(c *config) { c.sseWriteTimeout = d }
+// WithSessionTTL sets how long a session may sit idle before it expires
+// (default 24h). Each access slides the window.
+func WithSessionTTL(d time.Duration) Option {
+	return func(c *config) {
+		c.sessionTTL = d
+	}
 }
 
-// WithSecureCookies marks the session cookie Secure. This is the default;
-// the option remains for explicit intent and conflicts with
-// [WithInsecureCookies].
+// WithSessionCookieName overrides the session cookie name (default
+// "via_session"). Set a distinct name per app when two via apps share a host,
+// or their session cookies clobber each other.
+func WithSessionCookieName(name string) Option {
+	return func(c *config) {
+		c.sessionCookie = name
+	}
+}
+
+// WithSecureCookies forces Secure on the session cookie even when via can't see
+// TLS. By default Secure is set only when req.TLS != nil, which keeps plain
+// http://localhost dev working — but behind a TLS-terminating proxy req.TLS is
+// nil even though the user is on https, so set this there.
 func WithSecureCookies() Option {
 	return func(c *config) {
-		if c.cookieSecuritySet && !c.secureCookies {
-			panic("via: conflicting cookie security options")
-		}
-		c.secureCookies = true
-		c.cookieSecuritySet = true
+		c.sessionSecure = true
 	}
 }
 
-// WithInsecureCookies clears the Secure flag so the session cookie rides
-// a plain-http origin. The Secure default is the safe production posture
-// (a framework aimed at internal tools should not ship a cookie that leaks
-// on an http downgrade); reach for this only on a local http:// dev loop.
-// Conflicts with [WithSecureCookies].
-func WithInsecureCookies() Option {
+// WithSessionStore points sessions at a shared, durable store instead of the
+// default process-local map — the difference between a deploy logging every
+// user out and a deploy nobody notices, and what makes a second pod see the
+// first pod's sessions. Pair it with WithSessionKey: the key keeps the cookie
+// valid, the store keeps the data behind it.
+//
+//	type redisSessions struct{ c *redis.Client }
+//
+//	func (r redisSessions) Load(ctx context.Context, id string) ([]byte, bool, error) {
+//		b, err := r.c.Get(ctx, "via:"+id).Bytes()
+//		if errors.Is(err, redis.Nil) {
+//			return nil, false, nil
+//		}
+//		return b, err == nil, err
+//	}
+//
+//	func (r redisSessions) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+//		return r.c.Set(ctx, "via:"+id, data, ttl).Err()
+//	}
+//
+//	func (r redisSessions) Delete(ctx context.Context, id string) error {
+//		return r.c.Del(ctx, "via:"+id).Err()
+//	}
+//
+//	via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))
+func WithSessionStore(s SessionStore) Option {
 	return func(c *config) {
-		if c.cookieSecuritySet && c.secureCookies {
-			panic("via: conflicting cookie security options")
+		if s == nil {
+			panic("via: WithSessionStore(nil)")
 		}
-		c.secureCookies = false
-		c.cookieSecuritySet = true
+		c.sessionStore = s
 	}
 }
 
-// WithSessionCookieName overrides the default "via_session" cookie name. Two
-// via apps on the same host (different ports) otherwise share — and clobber —
-// one cookie, since the port is not part of a cookie's scope. Give co-located
-// apps distinct names to keep their sessions independent.
-func WithSessionCookieName(name string) Option {
-	if name == "" {
-		panic("via: WithSessionCookieName requires a non-empty name")
+// WithSessionStoreTimeout caps how long one session store round-trip may take
+// (default 5s; a value of 0 or less restores the default). Without it a hung
+// backend pins the request goroutine for as long as it hangs — session calls
+// deliberately survive client cancellation, so the request's own context is no
+// escape. A read-modify-write with retries (see [Session]) is bounded as a
+// whole, not per attempt.
+func WithSessionStoreTimeout(d time.Duration) Option {
+	return func(c *config) {
+		c.sessionTimeout = d
 	}
-	return func(c *config) { c.cookieName = name }
 }
 
-// WithPlugins registers plugins. They run Register at New time.
-func WithPlugins(plugins ...Plugin) Option {
-	return func(c *config) { c.plugins = append(c.plugins, plugins...) }
+// WithSessionKey sets the HMAC key signing the session cookie id. The key
+// resolves WithSessionKey → VIA_SESSION_KEY → a random per-process key (warned
+// on first use) — fine for dev, but those cookies survive neither a restart nor
+// a second process, so set a stable key in production. It keeps the cookie
+// valid only; the data behind it lives in the SessionStore, so a stable key
+// without WithSessionStore still logs everyone out on restart.
+func WithSessionKey(key []byte) Option {
+	return func(c *config) {
+		c.sessionKey = key
+	}
 }
 
-// WithHTTPServer hands the user the *http.Server before listening so
-// non-default fields (TLSConfig, ConnState, …) can be set.
-func WithHTTPServer(hook func(*http.Server)) Option {
-	return func(c *config) { c.httpServerHook = hook }
+// WithMaxSSEConn caps how many live SSE streams this Router serves at once
+// (default 10000); past the cap a connect is refused 503. Each stream is a
+// goroutine plus a composition tree held for the tab's life, so the right value
+// is the one the box has memory for — raise it with the memory to back it, and
+// lower it when a single pod should shed load to its siblings rather than swap.
+// A value of 0 or less restores the default.
+func WithMaxSSEConn(n int) Option {
+	return func(c *config) { c.maxSSEConn = n }
 }
 
-// WithReadHeaderTimeout overrides the default 10 s read-header timeout.
-func WithReadHeaderTimeout(d time.Duration) Option {
-	return func(c *config) { c.readHeaderTimeout = d }
+// WithPinnedDeadline sets how long an action POST waits for the tab's stream
+// goroutine to pick it up before answering 503 and logging the tab as pinned
+// (default 5s). The goroutine is serialized across every Tick, Listen and
+// action on that tab, so one handler that blocks stalls the rest; this deadline
+// is what turns that into a diagnosable 503 instead of a hang. It bounds only
+// the wait to be picked up: an action that has started running is waited for,
+// because it writes the POST's own response. Set it below the load balancer's
+// own timeout so via answers first. A value of 0 or less restores the default.
+func WithPinnedDeadline(d time.Duration) Option {
+	return func(c *config) { c.pinnedDeadline = d }
 }
 
-// WithReadTimeout sets http.Server.ReadTimeout. The SSE handler doesn't
-// honor it (the stream is meant to be long-lived), but action POSTs do.
-func WithReadTimeout(d time.Duration) Option { return func(c *config) { c.readTimeout = d } }
-
-// WithWriteTimeout sets http.Server.WriteTimeout. Be cautious: SSE
-// streams are long-lived, so a non-zero WriteTimeout can cut them off
-// mid-stream. Default 0 (no timeout) is safer for SSE-heavy apps.
-func WithWriteTimeout(d time.Duration) Option { return func(c *config) { c.writeTimeout = d } }
-
-// WithIdleTimeout overrides the default 120 s idle-timeout. Affects the
-// lifetime of HTTP/1.1 keep-alive connections; SSE streams are exempt.
-func WithIdleTimeout(d time.Duration) Option { return func(c *config) { c.idleTimeout = d } }
-
-// WithMaxRequestBody caps body bytes for action POSTs that ship as
-// application/json (Datastar's default action payload). Default 1 MiB.
-// File-upload actions use a multipart body and are governed by the
-// separate [WithMaxUploadSize] knob, since file parts inflate body
-// size beyond what a typed-signal JSON payload ever needs.
-func WithMaxRequestBody(n int64) Option { return func(c *config) { c.maxRequestBody = n } }
-
-// WithMaxUploadSize caps total multipart body bytes for action POSTs
-// that include file parts. Default 32 MiB. The cap applies to the wire
-// body (all files + form fields combined); the per-file in-memory cap
-// is the lower of this value and 32 MiB before parts spill to disk.
-func WithMaxUploadSize(n int64) Option { return func(c *config) { c.maxUploadSize = n } }
-
-// WithMaxContexts caps the number of concurrent live tabs. New page
-// renders past the cap return 503 instead of registering a Ctx — a
-// crude but effective floor against tab-spam DoS. Default 0 (no
-// cap). Tune to (expected peak users × tabs per user × 2).
-func WithMaxContexts(n int) Option { return func(c *config) { c.maxContexts = n } }
-
-// WithMaxSessions caps the number of concurrent live sessions. Once the cap
-// is met, a request that would mint or adopt a NEW session is rejected with
-// 503 instead of growing the session map — a crude floor against the
-// cookieless-crawler flood that would otherwise OOM the pod. A client that
-// already holds a session is unaffected. Default 0 (no cap). Tune to
-// (expected peak users × 2).
-func WithMaxSessions(n int) Option { return func(c *config) { c.maxSessions = n } }
-
-// WithoutHealthEndpoints disables via's built-in GET /livez, /healthz, and
-// /readyz probes. By default they are served before the session and middleware
-// chain (so a frequent probe never mints a session or logs a request): /livez
-// and /healthz report 200 while the process is up; /readyz reports 503 once
-// Shutdown begins draining. Opt out when the app needs to own those paths.
-func WithoutHealthEndpoints() Option { return func(c *config) { c.noHealth = true } }
-
-// WithoutSSEReconnect removes the small client-side reconnect manager via
-// injects into every page. By default that manager watches Datastar's fetch
-// lifecycle: it shows a "Reconnecting…" banner while the SSE stream is retrying
-// and, once Datastar's retries are exhausted (a graceful-deploy clean close or
-// a persistent failure that would otherwise leave the tab silently frozen),
-// reloads the page to re-bootstrap a fresh stream and session — bounded by a
-// reload-loop guard. Opt out to supply your own reconnect handling.
-func WithoutSSEReconnect() Option { return func(c *config) { c.noReconnect = true } }
-
-// WithVerboseErrors surfaces the real error message of a recovered action
-// panic to the browser instead of the generic "Something went wrong". The
-// typed error already reaches a custom WithActionErrorHandler and the server
-// log regardless; this only controls what the DEFAULT client notification
-// shows. Off by default — leaking raw panic text to clients is an
-// information-disclosure risk. Turn it on in development for faster feedback.
-//
-// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
-func WithVerboseErrors() Option { return func(c *config) { c.verboseErrors = true } }
-
-// WithoutDevChecks disables via's by-default runtime binding check. That check
-// runs once per composition descriptor (the cost amortizes to ~zero across
-// renders): after OnInit it verifies no bound state handle was orphaned by
-// reassigning a child composition (p.Child = &T{...}), which silently
-// orphans the runtime's by-address binding and leaves the page rendering once
-// then going dead. It's on by default because that footgun is silent and
-// expensive to debug; opt out only if it ever false-positives in your build.
-//
-// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
-func WithoutDevChecks() Option { return func(c *config) { c.devChecks = false } }
-
-// WithStrictDecode rejects a client signal value that cannot be represented in
-// its Signal[T] type — a number that overflows the target int/uint/float width,
-// or a value whose JSON shape doesn't match the field — instead of silently
-// truncating it (the best-effort default). The offending action surfaces an
-// error and its handler does not run, so corrupt input can't reach server
-// state. Off by default; turn it on when client input is untrusted and a lossy
-// decode must fail loud rather than silently clamp.
-//
-// EXPERIMENTAL: a diagnostic knob; its name or default may change before 1.0.
-func WithStrictDecode() Option { return func(c *config) { c.strictDecode = true } }
-
-// WithActionErrorHandler replaces the default browser-alert with a custom
-// callback for action errors and panics. The error from a panic is wrapped
-// as fmt.Errorf("panic: %v", recovered).
-func WithActionErrorHandler(fn func(*Ctx, error)) Option {
-	return func(c *config) { c.actionErrorHandler = fn }
+// WithMaxBody caps an action POST body in bytes, and how much of a native form
+// submit stays in RAM before the rest spills to a temp file (default 1 MiB).
+// Over the cap the request answers 413. It panics on a value of 0 or less.
+func WithMaxBody(bytes int64) Option {
+	return func(c *config) {
+		if bytes <= 0 {
+			panic("via: WithMaxBody must be positive")
+		}
+		c.maxBody = bytes
+	}
 }
 
-// WithLogger replaces the default log.Printf-backed logger with a custom
-// Logger (slog, zap, zerolog, a test buffer, …). All runtime warnings
-// and errors flow through this callback as level + message + key/value
-// pairs.
-func WithLogger(l Logger) Option { return func(c *config) { c.logger = l } }
-
-// WithNotFound replaces the default 404 page with a custom handler. The
-// handler runs after the session middleware, so it can read the session
-// and decide whether to redirect, render a "not found" composition, or
-// short-circuit with an empty body.
-func WithNotFound(h http.Handler) Option { return func(c *config) { c.notFoundHandler = h } }
-
-// WithRequestTooLarge sets the handler invoked when an action POST exceeds the
-// body cap (WithMaxRequestBody / WithMaxUploadSize) — the limit trips in
-// MaxBytesReader before any action handler runs, so this is the only place to
-// turn the default bare "request too large" 413 into a friendly response (e.g.
-// redirect a too-large file upload back to its form with a flash message).
-// h receives the raw request; without this option the framework writes a plain
-// 413. This covers action POSTs only: an oversize SSE-close body always gets
-// the bare 413, since that payload is Datastar's internal reconnect frame, not
-// a user-facing submit.
-func WithRequestTooLarge(h http.Handler) Option {
-	return func(c *config) { c.tooLargeHandler = h }
-}
-
-// WithMetrics installs a [Metrics] backend that receives counter / gauge
-// / histogram events for actions, renders, SSE connect/disconnect, and
-// tab-count gauges. Default is a no-op backend, so configuring this is
-// purely additive. See the [Metrics] godoc for the event catalogue.
-func WithMetrics(m Metrics) Option { return func(c *config) { c.metrics = m } }
-
-// WithBackplane wires the state backplane that makes app/session-scoped
-// reactive state survive restarts and span a cluster. The default (no option,
-// or a nil b) resolves internally to [InMemory], so the Backplane interface is
-// exercised on every single-pod run and there is no nil-special-case path. Wire
-// it once at boot; it is never swapped at runtime.
-//
-// EXPERIMENTAL: the clustered/distributed path is pre-GA. Single-pod use (the
-// default InMemory backplane) is stable, but the [Backplane] interface and its
-// cross-pod consistency semantics may change before 1.0 — 1.0 does not promise
-// a distributed GA. Wire a custom backplane knowing the contract can shift.
-func WithBackplane(b Backplane) Option { return func(c *config) { c.backplane = b } }
-
-// Plugin extends the App at registration time.
-//
-// EXPERIMENTAL: the plugin system (this interface and the bundled picocss /
-// echarts / maplibre packages) is young and may change before 1.0.
-type Plugin interface {
-	Register(*App)
+// WithMaxUpload caps a native PostForm submit's whole multipart body in bytes
+// (default 8 MiB). Over the cap the request answers 413. It panics on a value
+// of 0 or less.
+func WithMaxUpload(bytes int64) Option {
+	return func(c *config) {
+		if bytes <= 0 {
+			panic("via: WithMaxUpload must be positive")
+		}
+		c.maxUpload = bytes
+	}
 }

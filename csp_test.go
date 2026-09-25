@@ -1,204 +1,121 @@
 package via_test
 
 import (
-	"io"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/go-via/via"
-	"github.com/go-via/via/h"
-	"github.com/go-via/via/mw"
-	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func readAll(t *testing.T, r io.Reader) string {
+// hashSource returns the CSP source expression that admits js as an inline
+// script — the same digest the browser computes. CSP hashes are standard base64,
+// not the URL-safe alphabet via uses for tokens.
+func hashSource(js string) string {
+	sum := sha256.Sum256([]byte(js))
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+}
+
+// inlineScripts returns the text content of every inline <script> in a page. A
+// script with a src is not inline: it is governed by 'self', not by a hash.
+func inlineScripts(t *testing.T, body string) []string {
 	t.Helper()
-	b, _ := io.ReadAll(r)
-	return string(b)
+	var out []string
+	rest := body
+	for {
+		i := strings.Index(rest, "<script")
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		open := strings.IndexByte(rest, '>')
+		require.GreaterOrEqual(t, open, 0, "unterminated <script tag")
+		tag, after := rest[:open+1], rest[open+1:]
+		end := strings.Index(after, "</script>")
+		require.GreaterOrEqual(t, end, 0, "unterminated script element")
+		if !strings.Contains(tag, " src=") {
+			out = append(out, after[:end])
+		}
+		rest = after[end:]
+	}
 }
 
-type cspEchoPage struct{}
-
-func (p *cspEchoPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
-}
-
-type strictCSPPage struct{}
-
-func (p *strictCSPPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.ID("nonce"), h.Text(ctx.CSPNonce()))
-}
-
-func TestStrictCSP_setsHeaderAndMatchesViewNonce(t *testing.T) {
+func TestPage_setsContentTypeAndNosniff(t *testing.T) {
 	t.Parallel()
+	resp, _ := do(t, newCounter(t), http.MethodGet, "/", "")
+	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+}
 
-	app := via.New()
-	server := vt.Serve(t, app)
-	app.Use(mw.CSP())
-	via.Mount[strictCSPPage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-
+func TestPage_shipsStrictCSPDirectives(t *testing.T) {
+	t.Parallel()
+	resp, _ := do(t, newCounter(t), http.MethodGet, "/", "")
 	csp := resp.Header.Get("Content-Security-Policy")
-	require.NotEmpty(t, csp, "StrictCSP must set the header")
-	assert.Contains(t, csp, "default-src 'self'")
-	assert.Contains(t, csp, "object-src 'none'")
-	assert.Contains(t, csp, "base-uri 'self'")
-	assert.Contains(t, csp, "script-src 'self' 'nonce-")
-
-	body := readAll(t, resp.Body)
-	// The CSP header has 'nonce-XYZ'; pull the XYZ and confirm it
-	// matches the rendered <div>.
-	const prefix = "'nonce-"
-	idx := strings.Index(csp, prefix)
-	require.NotEqual(t, -1, idx)
-	end := strings.Index(csp[idx+len(prefix):], "'")
-	require.NotEqual(t, -1, end)
-	nonce := csp[idx+len(prefix) : idx+len(prefix)+end]
-	assert.Contains(t, body, `<div id="nonce">`+nonce+`</div>`)
+	for _, want := range []string{
+		"default-src 'self'",
+		"object-src 'none'",
+		"base-uri 'self'",
+		"form-action 'self'",
+		"frame-ancestors 'self'",
+		"script-src 'self' 'unsafe-eval' 'sha256-",
+		"style-src 'self';",
+	} {
+		assert.Contains(t, csp, want)
+	}
 }
 
-func TestStrictCSP_extraDirectivesAppended(t *testing.T) {
+func TestPage_cspAllowsDatastarFunctionEval(t *testing.T) {
 	t.Parallel()
+	resp, _ := do(t, newCounter(t), http.MethodGet, "/", "")
+	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "'unsafe-eval'")
+}
 
-	app := via.New()
-	server := vt.Serve(t, app)
-	app.Use(mw.CSP("img-src 'self' data:"))
-	via.Mount[strictCSPPage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
+func TestPage_everyInlineScriptIsAdmittedByItsHash(t *testing.T) {
+	t.Parallel()
+	// newCounter is plain and ships no inline script at all — a streaming page
+	// is required so the loop below actually has bytes to check.
+	resp, body := do(t, newPulse(t), http.MethodGet, "/", "")
 	csp := resp.Header.Get("Content-Security-Policy")
-	assert.Contains(t, csp, "img-src 'self' data:")
-}
-
-func TestCSPNonce_middlewareThreadedNonceReachesView(t *testing.T) {
-	t.Parallel()
-
-	const nonce = "test-mw-nonce-XYZ"
-	app := via.New()
-	server := vt.Serve(t, app)
-	app.Use(func(w http.ResponseWriter, r *http.Request, next http.Handler) {
-		w.Header().Set("Content-Security-Policy",
-			"script-src 'self' 'nonce-"+nonce+"'")
-
-		next.ServeHTTP(w, via.RequestWithCSPNonce(r, nonce))
-	})
-	via.Mount[cspEchoPage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "nonce-"+nonce)
-	body := readAll(t, resp.Body)
-	assert.Contains(t, body, `<div id="nonce">`+nonce+`</div>`,
-		"View should observe the nonce middleware injected via r.Context")
-}
-
-// CSP nonce — externally observable via rendered HTML in views that
-// embed ctx.CSPNonce(). Format / stability / uniqueness all assertable
-// without reaching into Ctx internals.
-
-type cspTwoNoncePage struct{}
-
-func (p *cspTwoNoncePage) View(ctx *via.CtxR) h.H {
-	// Two embeds within the same render: stability means both spans
-	// contain the same value.
-	return h.Div(
-		h.Span(h.ID("a"), h.Text(ctx.CSPNonce())),
-		h.Span(h.ID("b"), h.Text(ctx.CSPNonce())),
-	)
-}
-
-func extractNonceFromSpan(body, id string) string {
-	prefix := `<span id="` + id + `">`
-	i := strings.Index(body, prefix)
-	if i < 0 {
-		return ""
-	}
-	j := strings.Index(body[i+len(prefix):], "</span>")
-	if j < 0 {
-		return ""
-	}
-	return body[i+len(prefix) : i+len(prefix)+j]
-}
-
-func TestCSPNonce_renderedValueIsBase64URLFormatted(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[cspEchoPage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body := readAll(t, resp.Body)
-
-	prefix := `<div id="nonce">`
-	i := strings.Index(body, prefix)
-	require.NotEqual(t, -1, i)
-	j := strings.Index(body[i+len(prefix):], "</div>")
-	require.NotEqual(t, -1, j)
-	nonce := body[i+len(prefix) : i+len(prefix)+j]
-
-	require.NotEmpty(t, nonce)
-	assert.GreaterOrEqual(t, len(nonce), 22,
-		"16 bytes ≈ 22 url-safe base64 chars; got %q", nonce)
-	for _, r := range nonce {
-		ok := (r >= 'A' && r <= 'Z') ||
-			(r >= 'a' && r <= 'z') ||
-			(r >= '0' && r <= '9') ||
-			r == '_' || r == '-'
-		assert.True(t, ok, "nonce char %q must be url-safe base64", r)
+	scripts := inlineScripts(t, body)
+	require.NotEmpty(t, scripts, "a streaming page must ship at least one inline script (the reconnect manager)")
+	for _, js := range scripts {
+		assert.Contains(t, csp, hashSource(js),
+			"an inline script the page served is not admitted by its own policy")
 	}
 }
 
-func TestCSPNonce_isStableAcrossCallsInSameRequest(t *testing.T) {
+func TestPage_cspCarriesNoNonce(t *testing.T) {
 	t.Parallel()
-	// A view that embeds the nonce twice must observe the same value —
-	// otherwise the script tag the view writes and the header the
-	// middleware writes would desync on every request.
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[cspTwoNoncePage](app, "/")
-
-	resp, err := server.Client().Get(server.URL + "/")
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	body := readAll(t, resp.Body)
-
-	a := extractNonceFromSpan(body, "a")
-	b := extractNonceFromSpan(body, "b")
-	require.NotEmpty(t, a)
-	assert.Equal(t, a, b,
-		"two ctx.CSPNonce() calls in the same render must return the same value")
+	resp, body := do(t, newCounter(t), http.MethodGet, "/", "")
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.NotContains(t, csp, "'nonce-", "a hash-based policy must mint no nonce")
+	assert.NotContains(t, body, "nonce=", "no script tag may carry a nonce attribute")
+	assert.Contains(t, csp, "'sha256-", "via's inline scripts are admitted by hash")
 }
 
-func TestCSPNonce_differsAcrossRequests(t *testing.T) {
+func TestActionPatch_carriesSecurityHeaders(t *testing.T) {
 	t.Parallel()
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "frame-ancestors 'self'")
+}
 
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[cspEchoPage](app, "/")
-
-	get := func() string {
-		resp, err := server.Client().Get(server.URL + "/")
-		require.NoError(t, err)
-		defer resp.Body.Close()
-		body := readAll(t, resp.Body)
-		prefix := `<div id="nonce">`
-		i := strings.Index(body, prefix)
-		j := strings.Index(body[i+len(prefix):], "</div>")
-		return body[i+len(prefix) : i+len(prefix)+j]
-	}
-
-	assert.NotEqual(t, get(), get(),
-		"two separate requests must produce distinct nonces")
+func TestPage_inlineAssetHashMatchesTheParsedSource(t *testing.T) {
+	t.Parallel()
+	resp, _ := headResp(t, via.Head{Assets: via.Assets{
+		Scripts: []via.Script{{Inline: "a()\r\nb()\rc('\x00')"}},
+		Styles:  []via.Style{{Inline: "a{}\r\nb{}\rc{content:'\x00'}"}},
+	}})
+	csp := resp.Header.Get("Content-Security-Policy")
+	assert.Contains(t, csp, hashSource("a()\nb()\nc('\uFFFD')"),
+		"the browser hashes the script after newline normalization and NUL replacement")
+	assert.Contains(t, csp, hashSource("a{}\nb{}\nc{content:'\uFFFD'}"),
+		"the browser hashes the style after newline normalization and NUL replacement")
 }

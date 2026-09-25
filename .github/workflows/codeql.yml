@@ -28,7 +28,10 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.26.8'
+          # Matches ci.yml: scan with the latest stable toolchain and let
+          # go.mod hold the compatibility floor. v1 pinned an exact patch here,
+          # which meant the scan and the CI build could disagree.
+          go-version: stable
           cache: true
 
       - name: Initialize CodeQL

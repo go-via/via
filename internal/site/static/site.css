@@ -1,0 +1,400 @@
+/* One dark theme: it is the brand, and the inspector and chroma palettes are
+   tuned against it. */
+:root {
+  color-scheme: dark;
+  --bg: #16181d;
+  --sidebar: #1b1e24;
+  --text: #c9ced8;
+  --border: #2a2e37;
+  --amber: #ffbf00;
+  --ink: #0b0b0f;
+  --well: #0f1116;
+  --muted: #8b93a1;
+  --bright: #fff;
+  --sans: Inter, system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+@font-face {
+  font-family: Inter;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/static/fonts/inter.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-400.woff2") format("woff2");
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+a { color: var(--amber); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { color: var(--bright); line-height: 1.25; }
+h1 { font-size: 1.9rem; margin: 0 0 1rem; }
+h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; }
+h3 { font-size: 1.05rem; margin: 0; }
+
+code, pre { font-family: var(--mono); font-size: .875rem; }
+
+pre {
+  overflow-x: auto;
+  tab-size: 4;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--well);
+  line-height: 1.5;
+}
+
+.shell {
+  display: grid;
+  /* minmax(0, …) so wide code blocks scroll inside .col instead of widening the row */
+  grid-template-columns: minmax(0, 1fr);
+  /* 1fr on the column row: a short page pads its content, not its nav */
+  grid-template-rows: auto auto 1fr auto;
+  grid-template-areas: "top" "side" "col" "bottom";
+  min-height: 100vh;
+}
+
+.top {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .85rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.wordmark { display: flex; }
+.top-link { font-size: .9rem; }
+
+.side {
+  grid-area: side;
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--border);
+}
+/* Under 900px the nav is a wrapping strip under the header, every link in
+   view (a scrolling strip hides the current page off its edge); the current
+   link is underlined rather than edged so the marker reads in both layouts. */
+.side ul {
+  list-style: none;
+  margin: 0;
+  padding: .25rem .75rem;
+  display: flex;
+  flex-wrap: wrap;
+}
+.nav-link {
+  display: block;
+  padding: .55rem .5rem;
+  color: var(--text);
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+}
+.nav-link:hover { color: var(--bright); text-decoration: none; }
+.nav-link[aria-current="page"] {
+  color: var(--amber);
+  border-bottom-color: var(--amber);
+  font-weight: 600;
+}
+
+/* via's own banner rules are zero-specificity, so these plain ones win. */
+#via-reconnect-banner {
+  font-family: var(--sans);
+  background: var(--sidebar);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  box-shadow: none;
+}
+#via-reconnect-banner button {
+  color: var(--amber);
+}
+[data-via-connection="connecting"] #via-reconnect-banner {
+  background: #3a2c0a;
+  color: #ffd866;
+}
+[data-via-connection="offline"] #via-reconnect-banner {
+  background: #3b1417;
+  color: #f4b4b4;
+}
+[data-via-connection="offline"] #via-reconnect-banner button {
+  color: #ff9c9c;
+}
+
+/* A <legend> names the tab group for screen readers; showing it would
+   duplicate the card title. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Off-screen rather than display:none — a hidden link is not focusable, and
+   the whole point is that the first Tab reaches it. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  padding: .5rem .9rem;
+  color: var(--ink);
+  background: var(--amber);
+  border-radius: 0 0 4px 0;
+}
+.skip:focus {
+  left: 0;
+  text-decoration: none;
+}
+
+.col {
+  grid-area: col;
+  min-width: 0;
+  max-width: 72ch;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.bottom {
+  grid-area: bottom;
+  padding: 1.25rem 1.5rem;
+  border-top: 1px solid var(--border);
+  font-size: .85rem;
+}
+
+@media (min-width: 900px) {
+  .shell {
+    grid-template-columns: 240px minmax(0, 1fr);
+    grid-template-areas:
+      "top top"
+      "side col"
+      "side bottom";
+  }
+  .side {
+    border-bottom: 0;
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    padding: 1rem 0;
+  }
+  .col { max-width: none; padding: 2rem 2.5rem 4rem; }
+  .side ul { display: block; padding: 0; }
+  .nav-link {
+    padding: .35rem 1.5rem;
+    border-bottom: 0;
+    border-left: 2px solid transparent;
+  }
+  .nav-link[aria-current="page"] {
+    border-left-color: var(--amber);
+    background: rgba(255, 191, 0, .06);
+  }
+}
+
+.hero {
+  margin: .5rem 0 2.5rem;
+  padding: 1.5rem 1.5rem 2rem;
+  text-align: center;
+  background: var(--well);
+  border: 2px solid var(--amber);
+  border-radius: 20px;
+  box-shadow: 0 0 0 6px rgba(255, 191, 0, .12), 0 0 48px rgba(255, 191, 0, .18);
+}
+.hero h1 { margin: 0 0 .75rem; }
+.hero-art { display: block; width: 340px; max-width: 100%; height: auto; margin: -.5rem auto 0; }
+.pitch { font-size: 1.1rem; max-width: 46ch; margin: 0 auto; color: var(--muted); }
+
+.demo {
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar);
+}
+.demo > header { padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.demo-prose { padding: .75rem 1rem 0; }
+.demo .row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+
+.demo-live { padding: .75rem 1rem 1rem; }
+.demo-more { border-top: 1px solid var(--border); }
+.demo-more > summary {
+  padding: .6rem 1rem;
+  font-size: .85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+.demo-more > summary:hover,
+.demo-more[open] > summary { color: var(--bright); }
+.demo-more > summary:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.demo-more > :not(summary) { margin: 0 1rem 1rem; }
+
+.inspector {
+  font-family: var(--mono);
+  font-size: .8rem;
+  max-height: 320px;
+  overflow: auto;
+  padding: .75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--well);
+}
+.inspector:focus-visible,
+.demo .loglist:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: #23272f;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .3rem .7rem;
+  cursor: pointer;
+}
+button:hover { border-color: var(--amber); color: var(--bright); }
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+.demo label { display: block; margin: .5rem 0; }
+.demo label > input { display: block; margin-top: .2rem; }
+.demo input,
+.demo output {
+  font: inherit;
+  color: var(--text);
+  background: var(--well);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .25rem .5rem;
+}
+.demo input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.demo input[type="number"] { width: 6rem; }
+.demo output { min-width: 2.5rem; text-align: right; font-family: var(--mono); }
+
+.demo .tally { list-style: none; padding: 0; margin: 0; }
+.demo .tally > li { margin: .35rem 0; }
+.demo .tally span { flex: 1; }
+
+.demo .panel { margin-top: .5rem; padding: .5rem .75rem; border-left: 2px solid var(--amber); }
+.demo .panel p { margin: 0; }
+
+/* A State renders "" until it has something to say, and an empty box would
+   still take its own line. */
+.demo .err,
+.demo .notice { display: block; margin-top: .25rem; color: var(--amber); }
+.demo .err:empty,
+.demo .notice:empty { display: none; }
+
+.demo .total { font-family: var(--mono); }
+.demo .total.over { color: var(--amber); }
+
+.map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: .75rem;
+  margin-top: .9rem;
+}
+.chart {
+  display: block;
+  max-width: 100%;
+  margin-top: .9rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.demo .metric {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 2rem;
+  color: var(--bright);
+}
+.demo .note { font-size: .85rem; color: var(--muted); }
+.demo .pair { display: flex; flex-wrap: wrap; gap: 1rem; }
+.demo .loglist {
+  margin: .75rem 0 0;
+  padding: 0 0 0 1.25rem;
+  max-height: 200px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: .8rem;
+}
+.demo .loglist:empty { display: none; }
+.demo .reflist { margin: .5rem 0; padding-left: 1.25rem; font-size: .9rem; }
+.demo .reflist code { color: var(--amber); }
+
+.ref-table {
+  width: 100%;
+  margin: 1rem 0 1.5rem;
+  border-collapse: collapse;
+  font-size: .9rem;
+}
+.ref-table th, .ref-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: .45rem .6rem;
+  border-bottom: 1px solid var(--border);
+}
+.ref-table th { color: var(--bright); font-weight: 600; }
+.ref-table td code { color: var(--amber); }
+/* A table ignores min-width: 0 and two columns leave no room for a signature
+   on a phone, so under 900px each row stacks: the call on one line, what it
+   does beneath. The header row is noise once the columns are gone. */
+@media (max-width: 899px) {
+  .ref-table tbody, .ref-table tr, .ref-table td { display: block; }
+  .ref-table tr:first-child { display: none; }
+  .ref-table tr { padding: .5rem 0; border-bottom: 1px solid var(--border); }
+  .ref-table td { padding: .15rem 0; border-bottom: 0; }
+  .ref-table td code { overflow-wrap: anywhere; }
+}
+@media (min-width: 900px) { .ref-table td code { white-space: nowrap; } }
+
+.inspector h4 {
+  margin: 0 0 .35rem;
+  color: var(--muted);
+  font-size: .75rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.insp-signals pre {
+  margin: 0 0 .9rem;
+  padding: .5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 120px;
+  overflow: auto;
+}
+.insp-empty { margin: 0; color: var(--muted); }
+.insp-e {
+  border-left: 2px solid var(--border);
+  padding: .1rem 0 .1rem .5rem;
+  margin-bottom: .25rem;
+}
+.insp-e > summary { cursor: pointer; color: var(--muted); }
+.insp-e > pre {
+  margin: .3rem 0 .2rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+}
+.insp-req { border-left-color: var(--amber); }
+.insp-req > summary { color: var(--amber); }
+.insp-res { border-left-color: #4b8; }
+.insp-res > summary { color: #7cc; }
+.insp-frame { border-left-color: #58f; }
+.insp-frame > summary { color: #8ab4ff; }

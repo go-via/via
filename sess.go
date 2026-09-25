@@ -1,311 +1,899 @@
 package via
 
 import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
-
-	"github.com/go-via/via/internal/sessbridge"
 )
 
-// Wire the sess package's access path to the unexported KV methods.
-// See internal/sessbridge for why this is a function-var bridge.
-func init() {
-	sessbridge.Load = func(s any, key string) (any, bool) { return s.(*Session).load(key) }
-	sessbridge.Store = func(s any, key string, value any) { s.(*Session).store(key, value) }
-	sessbridge.Delete = func(s any, key string) { s.(*Session).delete(key) }
+const (
+	defaultSessionTTL = 24 * time.Hour
+	// defaultSessionStoreTimeout bounds one store operation. Store calls
+	// deliberately outlive the request's context (see sessionCtx), so without a
+	// deadline of their own a hung backend pins the goroutine indefinitely.
+	defaultSessionStoreTimeout = 5 * time.Second
+	defaultSessionCookie       = "via_session"
+	minSessionKeyLen           = 16 // bytes; below this an HMAC-SHA256 key is guessable
+	sessionSlot                = "v"
+)
+
+// SessionStore is where session state lives between requests. The default is a
+// process-local map, which is why a restart logs everyone out and a second pod
+// sees none of the first pod's sessions; point [WithSessionStore] at Redis, a
+// SQL table, or anything else that outlives the process and both stop being
+// true.
+//
+// A store is a blob map and nothing more. via hands each session over
+// already-serialized and never asks a store to understand it, so there is no
+// session type to implement against:
+//
+//   - Rotation is Save under the new id then Delete of the old one; a store
+//     implements neither.
+//   - Expiry is the ttl handed to Save. Honour it if the backend does it for
+//     free (Redis SETEX, a SQL expires_at column); via stamps the blob with the
+//     same deadline and refuses an expired Load regardless, so a store that
+//     ignores ttl is still correct — it just keeps dead rows around.
+//   - The idle window slides: via re-Saves a session once less than half its
+//     TTL is left, so a store never has to touch expiry on Load.
+//
+// Every method may be called concurrently, and from a request goroutine — honour
+// ctx. A failed Load answers every transport with 503 and [ErrStoreDown]
+// rather than serving the request as anonymous. A failed Save or Delete is
+// logged and the write dropped. [Session.Rotate] is the exception: if the
+// session cannot be written under its new id, or the old id can be neither
+// deleted nor overwritten with an expired blob, via panics and the request
+// answers 500 rather than reporting a rotation that did not happen.
+//
+// Implement [VersionedSessionStore] as well if the backend can do a conditional
+// write; without it, two requests writing the same session at the same instant
+// can still lose one.
+type SessionStore interface {
+	// Load returns the blob stored under id. ok is false when id is unknown or
+	// expired. err is for backend failures only.
+	Load(ctx context.Context, id string) (data []byte, ok bool, err error)
+	// Save writes data under id and arms its expiry ttl from now, replacing any
+	// blob already there.
+	Save(ctx context.Context, id string, data []byte, ttl time.Duration) error
+	// Delete removes id. Deleting an id that is not there is not an error.
+	Delete(ctx context.Context, id string) error
 }
 
-// sessionCookieName is the name of the HTTP cookie via uses to identify
-// a browser session across requests. Centralized here so set/read/delete
-// paths can never drift.
-const sessionCookieName = "via_session"
-
-type session struct {
-	id         string
-	data       kvStore
-	lastAccess atomic.Int64
-
-	// revs is the per-StateSess-key monotone revision this pod has applied for
-	// THIS session — the gate that makes the changes feed / reconcile sweep
-	// idempotent and non-regressing. Lazily initialized under revsMu.
-	revs   map[string]Rev
-	revsMu sync.Mutex
+// VersionedSessionStore is the optional half of [SessionStore], for a backend that
+// can make a write conditional on the revision it read. via writes a session by
+// re-reading the stored blob and overlaying the keys this request touched; with
+// a plain store that read-modify-write is not atomic, so two requests writing at
+// the same instant can still lose one of them. Implement this and via retries
+// the merge until its write applies to the revision it merged against, which
+// closes the window entirely.
+//
+// version is opaque and store-defined; 0 means "no blob stored". Redis does this
+// with WATCH/MULTI or a Lua script, SQL with an UPDATE ... WHERE version = $n.
+// The default memory store implements it.
+type VersionedSessionStore interface {
+	SessionStore
+	// LoadVersion is Load, plus the revision token of the blob returned.
+	LoadVersion(ctx context.Context, id string) (data []byte, version uint64, ok bool, err error)
+	// SaveIf is Save, applied only while the stored revision is still version.
+	// ok is false — with a nil error — when it moved on and the caller must
+	// re-read and retry.
+	SaveIf(ctx context.Context, id string, data []byte, ttl time.Duration, version uint64) (ok bool, err error)
 }
 
-// loadRev returns the highest revision applied for key on this session (0 if none).
-func (s *session) loadRev(key string) Rev {
-	s.revsMu.Lock()
-	defer s.revsMu.Unlock()
-	return s.revs[key]
+// NewMemorySessionStore returns the default process-local store: a map that is
+// lost on restart and invisible to every other pod. Use it explicitly only to
+// make that choice visible at the call site.
+//
+// It returns the concrete type, not the [SessionStore] interface: the store
+// also implements [VersionedSessionStore], and a wrapper built around the
+// interface would silently drop the CAS path and take the lossy merge instead.
+func NewMemorySessionStore() *MemorySessionStore {
+	return &MemorySessionStore{m: map[string]memoryEntry{}}
 }
 
-// advanceRev sets the applied revision for key to r and reports true ONLY if r
-// is strictly greater than the current one — the atomic monotone gate shared by
-// Update, the changes tailer, and the reconcile sweep.
-func (s *session) advanceRev(key string, r Rev) bool {
-	s.revsMu.Lock()
-	defer s.revsMu.Unlock()
-	if r <= s.revs[key] {
+type memoryEntry struct {
+	data []byte
+	exp  time.Time
+	ver  uint64
+}
+
+// MemorySessionStore is the process-local default store — a map guarded by a
+// mutex, with CAS support ([VersionedSessionStore]). Build one with
+// [NewMemorySessionStore]; the zero value is not usable.
+type MemorySessionStore struct {
+	mu     sync.Mutex
+	m      map[string]memoryEntry
+	writes int
+	ver    uint64
+}
+
+// Load implements [SessionStore]. An entry past its TTL is deleted on sight
+// and reported absent.
+func (s *MemorySessionStore) Load(_ context.Context, id string) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[id]
+	if !ok {
+		return nil, false, nil
+	}
+	if !e.exp.IsZero() && time.Now().After(e.exp) {
+		delete(s.m, id)
+		return nil, false, nil
+	}
+	return e.data, true, nil
+}
+
+// LoadVersion implements [VersionedSessionStore]. The revision is a
+// process-wide counter, so it changes on any write, not only this id's.
+func (s *MemorySessionStore) LoadVersion(_ context.Context, id string) ([]byte, uint64, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[id]
+	if !ok {
+		return nil, 0, false, nil
+	}
+	if !e.exp.IsZero() && time.Now().After(e.exp) {
+		delete(s.m, id)
+		return nil, 0, false, nil
+	}
+	return e.data, e.ver, true, nil
+}
+
+// SaveIf implements [VersionedSessionStore]. An absent or expired entry reads
+// as version 0, so a first write must pass 0.
+func (s *MemorySessionStore) SaveIf(_ context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var cur uint64
+	if e, ok := s.m[id]; ok && (e.exp.IsZero() || !time.Now().After(e.exp)) {
+		cur = e.ver
+	}
+	if cur != version {
+		return false, nil
+	}
+	s.store(id, data, ttl)
+	return true, nil
+}
+
+// Save implements [SessionStore]. A ttl of 0 or less stores the blob without
+// an expiry.
+func (s *MemorySessionStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store(id, data, ttl)
+	return nil
+}
+
+// store writes under the held lock and stamps a fresh revision.
+func (s *MemorySessionStore) store(id string, data []byte, ttl time.Duration) {
+	var exp time.Time
+	if ttl > 0 {
+		exp = time.Now().Add(ttl)
+	}
+	s.ver++
+	s.m[id] = memoryEntry{data: data, exp: exp, ver: s.ver}
+	// Expiry is otherwise lazy-on-read, so a session nobody ever revisits is
+	// never reclaimed. Amortised over writes rather than per write: the sweep
+	// is O(n) and a login-heavy burst would otherwise pay it every time.
+	s.writes++
+	if s.writes%memorySweepEvery == 0 {
+		now := time.Now()
+		for k, e := range s.m {
+			if !e.exp.IsZero() && now.After(e.exp) {
+				delete(s.m, k)
+			}
+		}
+	}
+}
+
+// Delete implements [SessionStore]. Deleting an absent id is not an error.
+func (s *MemorySessionStore) Delete(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, id)
+	return nil
+}
+
+const memorySweepEvery = 256
+
+// sessionData is one browser session as this request sees it: a decoded blob,
+// not a shared live object. sid is the session's identity, minted once and
+// carried across every Rotate, so a connection bound to a session still
+// recognises it after its id changed — and recognises it on another pod, which
+// a pointer identity could never do.
+type sessionData struct {
+	mu   sync.Mutex
+	sid  string
+	vals map[string]json.RawMessage
+	exp  time.Time
+	// dirty is this request's write set: the keys it Put or Cleared, a nil
+	// value marking a Clear. Saving overlays only these onto whatever the
+	// store holds now, so a concurrent request writing a different key is not
+	// erased by this one re-encoding its own stale copy. It accumulates for
+	// the life of the handle and is never trimmed: a re-save must be able to
+	// re-apply every write the request made.
+	dirty map[string]json.RawMessage
+	// retired is set once a save finds the id no longer names this session —
+	// rotated away, expired, or recycled. Later writes through the same handle
+	// then short-circuit instead of re-round-tripping the store to relearn it.
+	retired bool
+	// mintFailed records that the store refused the very first write, so a
+	// later dropped write is reported as the store outage it is rather than as
+	// a rotation that never happened.
+	mintFailed bool
+	// dropLogged keeps the dropped-write warning to one line per handle: every
+	// later Put/Delete through a retired handle is dropped too, and a handler
+	// that writes in a loop would otherwise flood the log with the same fact.
+	dropLogged bool
+}
+
+// sessionBlob is the wire form of a session. Field names are short because
+// every request that writes re-encodes the whole thing.
+type sessionBlob struct {
+	SID  string                     `json:"sid"`
+	Exp  int64                      `json:"exp"` // unix nanos; via's own expiry check, independent of the store's
+	Vals map[string]json.RawMessage `json:"v"`
+}
+
+// sessionManager holds the per-Router session config and store. Sessions are
+// always available; the cookie is issued lazily on the first write.
+type sessionManager struct {
+	store        SessionStore
+	key          []byte
+	cookie       string
+	ttl          time.Duration
+	forceSecure  bool // WithSecureCookies: set Secure even when req.TLS is nil
+	randomKey    bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
+	memoryStore  bool // no WithSessionStore: sessions die with the process
+	storeTimeout time.Duration
+	log          *slog.Logger // the Router's logger
+	keyWarnOnce  sync.Once    // warn about the random key at the first session mint, not at boot
+	storeWarn    sync.Once    // warn about the process-local store at the first session mint
+	mismatchOnce sync.Once    // warn once about signature-mismatch cookies (the two-apps clobber)
+}
+
+// newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
+// → a random per-process key. The random fallback warns on first use; a stable
+// key is what makes the cookie survive restarts and span pods, and a shared
+// SessionStore is what makes the data behind it do the same.
+// logger tolerates a nil manager so a Session handle built without one (a bare
+// render) still logs somewhere.
+func (m *sessionManager) logger() *slog.Logger {
+	if m == nil || m.log == nil {
+		return slog.Default()
+	}
+	return m.log
+}
+
+func newSessionManager(cfg *config) *sessionManager {
+	key := cfg.sessionKey
+	if len(key) == 0 {
+		if env := os.Getenv("VIA_SESSION_KEY"); env != "" {
+			key = []byte(env)
+		}
+	}
+	random := false
+	if len(key) == 0 {
+		key = make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			panic("via: session key generation failed: " + err.Error())
+		}
+		random = true
+	} else if len(key) < minSessionKeyLen {
+		// HMAC-SHA256 accepts any length, so a short key would fail silently
+		// into a forgeable signature. Fail at construction, not at request time.
+		panic(fmt.Sprintf("via: session key must be at least %d bytes (got %d)", minSessionKeyLen, len(key)))
+	}
+	ttl := cfg.sessionTTL
+	if ttl <= 0 {
+		ttl = defaultSessionTTL
+	}
+	name := cfg.sessionCookie
+	if name == "" {
+		name = defaultSessionCookie
+	}
+	timeout := cfg.sessionTimeout
+	if timeout <= 0 {
+		timeout = defaultSessionStoreTimeout
+	}
+	store, inMemory := cfg.sessionStore, false
+	if store == nil {
+		store, inMemory = NewMemorySessionStore(), true
+	}
+	return &sessionManager{store: store, key: key, cookie: name, ttl: ttl,
+		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory,
+		storeTimeout: timeout, log: cfg.log}
+}
+
+// sign returns the signature appended to the id in the cookie, so a tampered
+// id is rejected.
+func (m *sessionManager) sign(id string) string {
+	mac := hmac.New(sha256.New, m.key)
+	mac.Write([]byte(id))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// resolve returns the session data for the request's cookie when it verifies
+// and is still in the store. It never creates one — reads must not mint. A nil
+// sessionData with a nil error is "no session"; a non-nil error is "the store
+// could not answer", which callers must not treat as "no session".
+func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error) {
+	if req == nil {
+		return "", nil, nil
+	}
+	ck, err := req.Cookie(m.cookie)
+	if err != nil {
+		return "", nil, nil
+	}
+	id, ok := m.verify(ck.Value)
+	if !ok {
+		// Almost always another app on the same host signing the same cookie
+		// name with a different key (two dev servers on localhost ports).
+		// Silence here reads as "my session randomly resets".
+		m.mismatchOnce.Do(func() {
+			m.logger().Warn("via: session cookie failed its signature check — likely another app on this host " +
+				"uses the same cookie name with a different key; issuing a fresh session " +
+				"(set WithSessionCookieName or share VIA_SESSION_KEY to stop the clobber)")
+		})
+		return "", nil, nil
+	}
+	d, err := m.get(sessionCtx(req), id)
+	if err != nil {
+		return "", nil, err
+	}
+	return id, d, nil
+}
+
+// bounded caps one store operation. Applied at the sessionManager entry points
+// rather than at each m.store call, so a save's CAS retry loop is bounded as a
+// whole instead of restarting its clock on every attempt.
+func (m *sessionManager) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if m.storeTimeout <= 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, m.storeTimeout)
+}
+
+// sessionCtx detaches the request's context for store calls: a session write
+// must land even when the client hung up mid-request, and a live unit's Ctx
+// holds a request whose context is already done.
+func sessionCtx(req *http.Request) context.Context {
+	if req == nil {
+		return context.Background()
+	}
+	return context.WithoutCancel(req.Context())
+}
+
+// get returns the session stored under id. A nil sessionData with a nil error
+// means "no such session"; a non-nil error means the store is unreachable,
+// which is a third state and not the same thing — minting a replacement on a
+// backend blip would overwrite the user's cookie and orphan their real session
+// the moment the backend came back.
+func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, error) {
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
+	raw, ok, err := m.store.Load(ctx, id)
+	if err != nil {
+		m.logger().Error("via: session store Load failed", "err", err)
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	var b sessionBlob
+	if json.Unmarshal(raw, &b) != nil || b.SID == "" {
+		return nil, nil
+	}
+	exp := time.Unix(0, b.Exp)
+	if b.Exp > 0 && time.Now().After(exp) {
+		// via's own expiry, so a store that ignores the ttl it was handed
+		// cannot resurrect an idle session.
+		_ = m.store.Delete(ctx, id)
+		return nil, nil
+	}
+	if b.Vals == nil {
+		b.Vals = map[string]json.RawMessage{}
+	}
+	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp, dirty: map[string]json.RawMessage{}}
+	if m.ttl > 0 && time.Until(exp) < m.ttl/2 {
+		m.save(ctx, id, d, false) // sliding idle window, at one write per half-TTL rather than per request
+	}
+	return d, nil
+}
+
+// save writes d back under id, merging rather than replacing: the blob the
+// store holds right now is re-read and only this request's write set is
+// overlaid onto it. Two requests on one session therefore each keep their own
+// keys, where re-encoding a whole decoded copy silently dropped whichever
+// finished first. What is left is a read-modify-write window of one store
+// round-trip, and last-writer-wins on the same key — see [Session].
+//
+// mint says id is a brand-new home for d — a freshly created session, or the
+// new id of a Rotate — and is the only case allowed to write where the store
+// holds no live blob for it. Without that gate a handle still holding a
+// pre-rotation id would re-create a valid session under it on its next write:
+// the rotated-away session never sees the write, and the id Rotate exists to
+// invalidate resolves again.
+//
+// sessionSaveRetries caps the CAS loop. Contention on one session id is a
+// handful of tabs, not a thundering herd, so exhausting it means the store is
+// pathological; the write is dropped rather than applied unconditionally over
+// a blob up to that many revisions stale, which is the very lost update the
+// CAS loop exists to prevent.
+const sessionSaveRetries = 8
+
+func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
+	d.mu.Lock()
+	if d.retired {
+		first := !d.dropLogged
+		d.dropLogged = true
+		d.mu.Unlock()
+		if first {
+			// Every other drop in save() logs its own cause; this branch is the
+			// short-circuit for a handle already known to be retired, and was
+			// the one path that lost a user's Put in silence. Session.Put
+			// returns nothing, so the log is the only place the drop surfaces.
+			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
+				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
+		}
 		return false
 	}
-	if s.revs == nil {
-		s.revs = make(map[string]Rev)
+	mintFailed := d.mintFailed
+	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
+	for k, v := range d.dirty {
+		dirty[k] = v
 	}
-	s.revs[key] = r
+	own := make(map[string]json.RawMessage, len(d.vals))
+	for k, v := range d.vals {
+		own[k] = v
+	}
+	d.mu.Unlock()
+
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
+	cas, _ := m.store.(VersionedSessionStore)
+	for attempt := 0; ; attempt++ {
+		if cas != nil && attempt >= sessionSaveRetries {
+			m.logger().Error("via: session write gave up after CAS attempts — the store is under pathological "+
+				"contention on one session; the write is dropped rather than clobbering the writers "+
+				"that got through", "attempts", sessionSaveRetries)
+			return false
+		}
+		var (
+			raw []byte
+			ver uint64
+			ok  bool
+			err error
+		)
+		if cas != nil {
+			raw, ver, ok, err = cas.LoadVersion(ctx, id)
+		} else {
+			raw, ok, err = m.store.Load(ctx, id)
+		}
+		if err != nil {
+			// Writing d's copy over a store that could not be read is exactly
+			// the clobber this merge exists to avoid.
+			m.logger().Error("via: session store Load failed before save", "err", err)
+			return false
+		}
+		var b sessionBlob
+		// Deliberately no b.Vals != nil clause: get accepts a nil value map as
+		// an empty session, and a store that normalises {} to null would
+		// otherwise yield a session that reads fine and retires on first write.
+		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
+			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
+		if !live && !mint {
+			if mintFailed {
+				m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
+					"so there is nothing under its id to merge into")
+			} else {
+				m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
+					"writing under it would revive an id that no longer names this session")
+			}
+			d.mu.Lock()
+			d.retired = true
+			d.mu.Unlock()
+			return false
+		}
+		vals := make(map[string]json.RawMessage, len(own))
+		for k, v := range own {
+			vals[k] = v
+		}
+		if live && b.Vals != nil {
+			vals = b.Vals
+		}
+		for k, v := range dirty {
+			if v == nil {
+				delete(vals, k)
+				continue
+			}
+			vals[k] = v
+		}
+
+		exp := time.Now().Add(m.ttl)
+		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
+		if err != nil {
+			m.logger().Error("via: session encode failed", "err", err)
+			return false
+		}
+		if cas != nil {
+			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
+			if err != nil {
+				m.logger().Error("via: session store SaveIf failed", "err", err)
+				return false
+			}
+			if !applied {
+				continue // another request wrote first; re-merge onto its blob
+			}
+		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
+			m.logger().Error("via: session store Save failed", "err", err)
+			return false
+		}
+		d.mu.Lock()
+		// The merged view is what this request should read back too: a Tick
+		// handler holding a connect-time snapshot otherwise keeps serving
+		// values another request has since replaced.
+		d.vals, d.exp = vals, exp
+		d.mu.Unlock()
+		return true
+	}
+}
+
+func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
+	id := randomToken() // 128-bit URL-safe token, same generator as the tab id
+	d := &sessionData{sid: randomToken(), vals: map[string]json.RawMessage{}, dirty: map[string]json.RawMessage{}}
+	if !m.save(ctx, id, d, true) {
+		d.mu.Lock()
+		d.mintFailed = true
+		d.mu.Unlock()
+	}
+	return id, d
+}
+
+// reID moves a session's data to a fresh id and drops the old one, so a
+// captured pre-rotation id no longer resolves. sid is untouched: it is the
+// session's identity, and a live connection bound to it stays bound.
+func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData) string {
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
+	newID := randomToken()
+	if !m.save(ctx, newID, d, true) {
+		// Deleting the old id now would leave the session under no id at all,
+		// and the cookie about to be set would name nothing.
+		panic("via: Session.Rotate could not write the session under its new id; " +
+			"the old id is kept and no rotation happened")
+	}
+	if oldID != "" {
+		if err := m.store.Delete(ctx, oldID); err != nil {
+			// Returning the new id while the old one still resolves would void
+			// the fixation defence Rotate exists to provide, and void it
+			// exactly when the store is flaky. Overwrite the old id with a
+			// blob that is already expired instead: get deletes it on sight.
+			m.logger().Error("via: session store Delete failed on rotate, writing an expired tombstone", "err", err)
+			dead, _ := json.Marshal(sessionBlob{SID: d.sid, Exp: time.Now().Add(-time.Minute).UnixNano()})
+			if err := m.store.Save(ctx, oldID, dead, time.Second); err != nil {
+				panic("via: Session.Rotate could neither delete nor invalidate the old session id, " +
+					"so the pre-rotation id is still valid: " + err.Error())
+			}
+		}
+	}
+	return newID
+}
+
+func (m *sessionManager) verify(value string) (string, bool) {
+	i := strings.LastIndexByte(value, '.')
+	if i < 0 {
+		return "", false
+	}
+	id, sig := value[:i], value[i+1:]
+	if !hmac.Equal([]byte(sig), []byte(m.sign(id))) {
+		return "", false
+	}
+	return id, true
+}
+
+func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     m.cookie,
+		Value:    id + "." + m.sign(id),
+		Path:     "/",
+		MaxAge:   int(m.ttl.Seconds()), // persist up to the idle TTL, not just the browser session
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// Session is a browser session's value bag, resolved from the signed cookie,
+// created lazily on the first write — an app that never stores anything stays
+// cookieless. The value is stored as JSON: T must round-trip through
+// encoding/json, because the bytes may be read back by a different process. A
+// session holds one value; nest what you need in a struct.
+//
+// SECURITY: sessions do NOT rotate their id on their own. Call [Session.Rotate]
+// at every auth-state change (login, logout, privilege elevation) to invalidate
+// an id an attacker may have planted before it — fixation defense.
+//
+// Where the data lives is [SessionStore]'s business: the default is
+// process-local, so a restart logs everyone out and a second pod sees nothing —
+// [WithSessionStore] is the fix. Expiry is an idle window (default 24h) that
+// slides as the session is used.
+//
+// Each request decodes its own copy, so a write is visible to the next request,
+// not to a request already in flight. A live unit's Tick or Listen handler sees
+// the snapshot taken when its stream connected — and refreshed by its own next
+// write.
+//
+// Writes from two in-flight requests on one session resolve last-writer-wins:
+// each write re-reads the stored blob and overlays its own value onto it.
+//
+// The merge is a read-modify-write. Against a store that implements
+// [VersionedSessionStore] — the default one does — it re-merges and retries until
+// its write applies to the revision it merged against, so a concurrent write is
+// not clobbered; under contention that will not settle it gives up after a
+// bounded number of attempts and drops its own write, with a log. Against a
+// store that does not, the window between the read and the write is real: a
+// write landing inside another's round-trip is dropped. Either way a session is
+// a value bag, not a counter and not a lock.
+//
+// A write through a handle whose id has been rotated away or has expired is
+// also dropped, with a log: reviving that id would undo [Session.Rotate].
+//
+// The handle itself is not safe for concurrent use — only the stored data is
+// merged across requests. Call it from the via callback that handed it to you;
+// see the package doc for the goroutine model.
+type Session struct {
+	mgr    *sessionManager
+	id     string // "" until resolved or created
+	data   *sessionData
+	w      http.ResponseWriter // nil when no response is open to carry a cookie (a Tick/Listen Ctx); live in a plain action, OnInit, and a live action
+	ctx    context.Context
+	secure bool
+	// errPage marks the session of a WithErrorPage render, which has no response
+	// of its own to carry a Set-Cookie.
+	errPage bool
+	// down is set when the store could not be read for this request. The
+	// session is then neither present nor absent, and writes are dropped
+	// rather than minting a replacement over the user's real cookie.
+	down bool
+}
+
+func (s *Session) storeCtx() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+
+// ensure creates the session and issues the cookie on first write. A write with
+// no open response at all — a Tick or Listen handler's Ctx — still stores into a
+// fresh session but warns, since the browser will never carry that id back.
+func (s *Session) ensure() *sessionData {
+	if s.mgr == nil {
+		return nil
+	}
+	if s.data != nil {
+		return s.data
+	}
+	if s.down {
+		// The user almost certainly has a session; the store just could not say
+		// so. Minting one here would Set-Cookie over their real id and log them
+		// out permanently once the backend recovered — a far worse outcome than
+		// a dropped write, and the store contract already says a backend error
+		// never fails the request.
+		s.mgr.logger().Error("via: session write dropped — the session store could not be read for this request, " +
+			"so via will not mint a replacement session over the one the browser already holds")
+		return nil
+	}
+	if s.mgr.randomKey {
+		s.mgr.keyWarnOnce.Do(func() {
+			s.mgr.logger().Warn("via: session minted under a random per-process key — sessions will not survive a " +
+				"restart or span pods; set WithSessionKey or the VIA_SESSION_KEY env for a stable key")
+		})
+	}
+	if s.mgr.memoryStore {
+		s.mgr.storeWarn.Do(func() {
+			s.mgr.logger().Warn("via: sessions are held in this process's memory — every restart or deploy logs " +
+				"every user out, and a second pod sees none of them; pass WithSessionStore for a " +
+				"shared store")
+		})
+	}
+	id, d := s.mgr.create(s.storeCtx())
+	s.id, s.data = id, d
+	if s.w != nil {
+		s.mgr.setCookie(s.w, id, s.secure)
+	} else if s.errPage {
+		s.mgr.logger().Warn("via: session written from a WithErrorPage handler, where no cookie can be set — the " +
+			"failing response is already committed; treat the session as read-only in an error page")
+	} else {
+		s.mgr.logger().Warn("via: session created where no cookie can be set (a Tick or Listen handler, which has no " +
+			"request in flight); establish the session in OnInit or an action instead")
+	}
+	return d
+}
+
+func (s *Session) load() (json.RawMessage, bool) {
+	if s.data == nil {
+		return nil, false
+	}
+	s.data.mu.Lock()
+	defer s.data.mu.Unlock()
+	v, ok := s.data.vals[sessionSlot]
+	return v, ok
+}
+
+func (s *Session) set(value json.RawMessage) {
+	d := s.ensure()
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.vals[sessionSlot] = value
+	d.dirty[sessionSlot] = value
+	d.mu.Unlock()
+	s.mgr.save(s.storeCtx(), s.id, d, false)
+}
+
+// ID is the session's stable identity: minted once, unchanged by
+// [Session.Rotate], "" when there is no session yet. Key per-user state by it;
+// it is not the cookie and grants nothing.
+func (s *Session) ID() string { return s.sid() }
+
+// Ensure mints the session and issues its cookie if there is none yet, storing
+// no value, and returns [Session.ID]. Use it to key per-user state before the
+// app has anything to Put. Returns "" without minting where no cookie can
+// reach the browser — a Tick or Listen Ctx, a WithErrorPage render — or when
+// the store could not be read; Put in those places warns and stores anyway,
+// Ensure has nothing worth storing.
+func (s *Session) Ensure() string {
+	if s.mgr == nil || (s.data == nil && s.w == nil) || s.ensure() == nil {
+		return ""
+	}
+	return s.ID()
+}
+
+// Rotate issues a fresh session id, carries the existing data to it, and
+// re-sets the cookie — call it after every auth-state change (login, privilege
+// elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""
+// when no response is open to carry the cookie; rotate from a plain action or
+// OnInit.
+func (s *Session) Rotate() string {
+	if s.mgr == nil || s.w == nil {
+		return ""
+	}
+	if s.down {
+		s.mgr.logger().Warn("via: Session.Rotate skipped — the session store could not be read for this request")
+		return ""
+	}
+	if s.data == nil {
+		id, d := s.mgr.create(s.storeCtx())
+		if d.mintFailed {
+			panic("via: Session.Rotate could not write the new session; no cookie was issued")
+		}
+		s.id, s.data = id, d
+		s.mgr.setCookie(s.w, s.id, s.secure)
+		return s.id
+	}
+	s.data.mu.Lock()
+	retired := s.data.retired
+	s.data.mu.Unlock()
+	if retired {
+		// Another request already rotated this id away, so the browser's cookie
+		// names that request's new id. reID would short-circuit on the retired
+		// flag and write nothing, then Set-Cookie an id with no blob behind it —
+		// overwriting a good cookie and logging the user out. Leave it alone.
+		s.mgr.logger().Warn("via: Session.Rotate skipped — this handle's session id was already rotated away by " +
+			"another request; the cookie the browser now holds is left untouched")
+		return ""
+	}
+	s.id = s.mgr.reID(s.storeCtx(), s.id, s.data)
+	s.mgr.setCookie(s.w, s.id, s.secure)
+	return s.id
+}
+
+func (s *Session) clear() {
+	if s.data == nil {
+		return
+	}
+	s.data.mu.Lock()
+	delete(s.data.vals, sessionSlot)
+	s.data.dirty[sessionSlot] = nil // tombstone: a Clear must survive the merge, not just be absent from it
+	s.data.mu.Unlock()
+	s.mgr.save(s.storeCtx(), s.id, s.data, false)
+}
+
+// Session resolves the browser session for this Ctx, always returning a usable
+// handle so callers never need a nil check. The cookie is read here but issued
+// only on the first write (see Session.ensure).
+func (c *Ctx) Session() *Session {
+	if c.session != nil {
+		return c.session
+	}
+	var (
+		id  string
+		d   *sessionData
+		err error
+	)
+	if c.sessions != nil {
+		id, d, err = c.sessions.resolve(c.req)
+	}
+	return c.adoptSession(id, d, err)
+}
+
+// adoptSession installs the handle for a resolve that already happened, so a
+// transport that had to resolve early does not read the store a second time.
+func (c *Ctx) adoptSession(id string, d *sessionData, err error) *Session {
+	s := &Session{ctx: sessionCtx(c.req)}
+	if c.sessions != nil {
+		s.mgr = c.sessions
+		s.w = c.sessW
+		s.errPage = c.errPage
+		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
+		switch {
+		case err != nil:
+			s.down = true
+		case d != nil:
+			s.id, s.data = id, d
+		}
+	}
+	c.session = s
+	return s
+}
+
+// storeDown answers 503 when the store could not be read; "could not answer" is
+// not "anonymous".
+func storeDown(w http.ResponseWriter, ctx *Ctx) bool {
+	if !ctx.Session().down {
+		return false
+	}
+	noteErr(w, ErrStoreDown)
+	http.Error(w, "session store unavailable", http.StatusServiceUnavailable)
 	return true
 }
 
-// Session is the per-browser session value bag. Survives tab close;
-// expires per [WithSessionTTL].
+// Put stores v as the session's value. The first Put issues the cookie, and
+// only where a response is open: a plain action, OnInit, or a live action. It
+// panics if v does not marshal to JSON.
 //
-// A Session obtained via [Ctx.Session] marks the page dirty + fans out
-// to subscribed tabs on writes; one obtained via [RequestSession] (in a
-// middleware, before a Ctx exists) is cookie-only and does not trigger
-// re-render.
-//
-// All value access is typed and lives in the via/sess subpackage —
-// sess.Get[T] / sess.Put[T] / sess.Clear[T]. Session itself only
-// exposes [Session.Rotate].
-type Session struct {
-	data *session
-	ctx  *Ctx
-	app  *App
-}
-
-// load reads the value stored under key, or nil/false if absent or if
-// the Session is detached (no underlying session record). Unexported:
-// the only sanctioned access path is the typed via/sess package, which
-// reaches these through internal/sessbridge.
-func (s *Session) load(key string) (any, bool) {
-	if s == nil || s.data == nil {
-		return nil, false
-	}
-	return s.data.data.Load(key)
-}
-
-// store writes value under key. When the Session is bound to a Ctx,
-// also marks the page dirty so the view re-renders and fans the write
-// out to every other live tab on the same session subscribed to key.
-func (s *Session) store(key string, value any) {
-	if s == nil || s.data == nil {
-		return
-	}
-	s.data.data.Store(key, value)
-	if s.ctx != nil {
-		s.ctx.markStateDirty()
-	}
-	if s.app != nil {
-		s.app.broadcastRender(s.ctx, s.data, key)
-	}
-}
-
-// delete removes the value stored under key. When the Session is bound
-// to a Ctx, also marks the page dirty so the view re-renders.
-func (s *Session) delete(key string) {
-	if s == nil || s.data == nil {
-		return
-	}
-	s.data.data.Delete(key)
-	if s.ctx != nil {
-		s.ctx.markStateDirty()
-	}
-}
-
-// Rotate issues a fresh session id, copies the existing session's data
-// into it, and points the bound Ctx + the cookie on the in-flight
-// response at the new session. Returns the new session id, or "" if
-// rotation could not be performed (no bound Ctx, no Writer, no App).
-//
-// Use after authentication state changes (login, privilege elevation,
-// password reset) so any captured pre-auth session id can no longer
-// impersonate the user.
-func (s *Session) Rotate() string {
-	if s == nil || s.app == nil || s.ctx == nil {
-		return ""
-	}
-	app := s.app
-	old := s.data
-
-	fresh := &session{id: genSecureID()}
-	fresh.lastAccess.Store(time.Now().UnixNano())
-
-	if old != nil {
-		old.data.Range(func(k, v any) bool {
-			fresh.data.Store(k.(string), v)
-			return true
-		})
-	}
-
-	app.sessionsMu.Lock()
-	app.sessions[fresh.id] = fresh
-	if old != nil {
-		delete(app.sessions, old.id)
-	}
-	app.sessionsMu.Unlock()
-
-	s.ctx.session.Store(fresh)
-	s.data = fresh
-
-	if w := s.ctx.Writer(); w != nil {
-		http.SetCookie(w, app.sessionCookie(fresh.id))
-	}
-	return fresh.id
-}
-
-// RequestSession returns the [Session] cookie-resolved off r, or a
-// detached Session (reads/writes no-op) if the request carries no via
-// session yet. Use this from middleware that needs to read or write
-// session state before any composition is rendered.
-//
-// Writes performed via the returned Session do not trigger a tab
-// re-render — there is no Ctx attached. Use [Ctx.Session] from inside
-// actions / handlers when re-render fan-out is required.
-func RequestSession(r *http.Request) *Session {
-	a, _ := r.Context().Value(appKey{}).(*App)
-	if a == nil {
-		return &Session{}
-	}
-	return &Session{data: a.sessionFromRequest(r), app: a}
-}
-
-// adoptSession returns the session for a cross-pod-presented sid, creating and
-// registering it under the SAME id if this pod has never seen it. The re-check
-// under the write lock is the LoadOrStore guard: concurrent adopters of the same
-// sid converge on one *session — never a double-register that would split state.
-func (a *App) adoptSession(sid string) *session {
-	a.sessionsMu.Lock()
-	defer a.sessionsMu.Unlock()
-	if sess, ok := a.sessions[sid]; ok {
-		return sess
-	}
-	if a.cfg.maxSessions > 0 && len(a.sessions) >= a.cfg.maxSessions {
-		return nil // at capacity: refuse to grow the map
-	}
-	sess := &session{id: sid}
-	a.sessions[sid] = sess
-	return sess
-}
-
-// getOrCreateSession returns the request's session, minting or adopting one if
-// needed. Returns nil ONLY when WithMaxSessions is set and the cap is met for a
-// new session — a client that already holds a live session is never refused.
-func (a *App) getOrCreateSession(w http.ResponseWriter, r *http.Request) *session {
-	now := time.Now().UnixNano()
-	if c, err := r.Cookie(a.cookieName()); err == nil {
-		a.sessionsMu.RLock()
-		sess, ok := a.sessions[c.Value]
-		a.sessionsMu.RUnlock()
-		if ok {
-			sess.lastAccess.Store(now)
-			return sess
-		}
-		// Cross-pod adoption: a well-formed sid this pod never issued is a
-		// session some other pod created and the client legitimately holds (the
-		// 256-bit sid is the bearer credential). Adopt it under the SAME id so
-		// state keyed by that sid converges here — no sticky sessions needed.
-		// A malformed value is never adopted; it falls through to a fresh mint.
-		if validSessionID(c.Value) {
-			sess := a.adoptSession(c.Value)
-			if sess == nil {
-				return nil // at capacity
-			}
-			sess.lastAccess.Store(now)
-			r.AddCookie(&http.Cookie{Name: a.cookieName(), Value: sess.id})
-			return sess
-		}
-	}
-
-	sess := &session{id: genSecureID()}
-	sess.lastAccess.Store(now)
-
-	a.sessionsMu.Lock()
-	if a.cfg.maxSessions > 0 && len(a.sessions) >= a.cfg.maxSessions {
-		a.sessionsMu.Unlock()
-		return nil // at capacity: refuse to mint, fused with the insert
-	}
-	a.sessions[sess.id] = sess
-	a.sessionsMu.Unlock()
-
-	http.SetCookie(w, a.sessionCookie(sess.id))
-	// Plant the cookie on the request too so sessionFromRequest in
-	// downstream handlers (renderPage/handleAction/handleSSE) can find
-	// the session it just created without waiting for the next round-trip.
-	r.AddCookie(&http.Cookie{Name: a.cookieName(), Value: sess.id})
-
-	return sess
-}
-
-type appKey struct{}
-
-// sessionCookie returns the canonical via_session cookie for id with
-// the app's configured Secure flag applied. Single source of truth
-// shared by getOrCreateSession and Session.Rotate so the two paths
-// can never drift.
-//
-// SameSite=Lax is chosen (over Strict) so users following an inbound
-// link from another origin still see their session on the first page
-// load — a Strict cookie would force them to re-auth after every
-// external referral, which is hostile to e-mailed deep links. The CSRF
-// surface that Lax leaves open is closed separately by the via_tab
-// signal binding (see feedback_csrf_threat_model.md): every action
-// POST and SSE handshake validates via_tab against the session, so a
-// cross-site form submission can't reach an action even if the cookie
-// rides along.
-// cookieName returns the configured session cookie name, defaulting to the
-// canonical sessionCookieName when WithSessionCookieName was not used.
-func (a *App) cookieName() string {
-	if a.cfg.cookieName != "" {
-		return a.cfg.cookieName
-	}
-	return sessionCookieName
-}
-
-func (a *App) sessionCookie(id string) *http.Cookie {
-	return &http.Cookie{
-		Name:     a.cookieName(),
-		Value:    id,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   a.cfg.secureCookies,
-		SameSite: http.SameSiteLaxMode,
-	}
-}
-
-// sessionFromRequest returns the session for the cookie on r, or nil
-// if there's no session yet (no cookie or unknown id). The session is
-// established by the withSession middleware on the first request, so
-// by the time SSE/action handlers run there is always a session present.
-func (a *App) sessionFromRequest(r *http.Request) *session {
-	c, err := r.Cookie(a.cookieName())
+// SECURITY: Put does NOT rotate the session id. Call [Session.Rotate] right
+// after a Put that changes auth state, so a pre-auth id an attacker planted
+// doesn't survive the login.
+func (s *Session) Put(v any) {
+	raw, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		panic("via: Session.Put: does not marshal to JSON: " + err.Error())
 	}
-	a.sessionsMu.RLock()
-	defer a.sessionsMu.RUnlock()
-	return a.sessions[c.Value]
+	s.set(raw)
 }
 
-// touchSession bumps the bound session's lastAccess so a live SSE stream keeps
-// its session warm. The connected ctx is already pinned against the context
-// sweep (connected>0), but removeExpiredSessions keys on lastAccess, which only
-// the request path otherwise updates — without this a long-idle but still-
-// streaming tab would have its session reaped, and the next action would 403 on
-// session mismatch. Nil-safe: a ctx with no bound session is a no-op.
-func (ctx *Ctx) touchSession() {
-	if sess := ctx.session.Load(); sess != nil {
-		sess.lastAccess.Store(time.Now().UnixNano())
+// Get reads the session's value as T, returning the zero value and false when
+// nothing is stored or the stored bytes no longer decode into T.
+func (s *Session) Get[T any]() (T, bool) {
+	var zero T
+	raw, ok := s.load()
+	if !ok {
+		return zero, false
 	}
+	var v T
+	if json.Unmarshal(raw, &v) != nil {
+		return zero, false
+	}
+	return v, true
 }
 
-func (a *App) removeExpiredSessions() {
-	cutoff := time.Now().Add(-a.cfg.sessionTTL).UnixNano()
-	a.sessionsMu.Lock()
-	for id, sess := range a.sessions {
-		if sess.lastAccess.Load() < cutoff {
-			delete(a.sessions, id)
-		}
-	}
-	a.sessionsMu.Unlock()
+// Delete clears the stored value; the session id and cookie survive, so a
+// later Set on this same session starts from nothing rather than minting a
+// new id. Any other handle sharing this request's session sees the value gone
+// too — they share the same underlying data.
+func (s *Session) Delete() {
+	s.clear()
 }

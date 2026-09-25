@@ -1,146 +1,204 @@
 package via
 
 import (
-	"encoding/json"
-	"reflect"
-	"strconv"
+	"fmt"
+	"slices"
+	"unsafe"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/topic"
 )
 
-// StateTab is a typed, server-only reactive value. Mutations trigger a view
-// re-render and SSE patch. Tab-scoped: each browser tab has its own value.
+// State is server-authoritative, per-connection unit state. Unlike Signal it
+// never reaches the client as a signal: it is server-rendered as literal text
+// and morphed into the live DOM when it changes, with no client-side hook to
+// write it at all. Rendering one makes its unit live.
 //
-// For session-scoped or app-scoped state use StateSess[T] / StateApp[T].
+// The zero State is ready to use, so a page normally leaves it zero and writes
+// its starting value in OnInit with [State.Set]. Use [StateOf] instead when the
+// starting value comes from outside the unit — a parent seeding an embedded
+// child from a composite literal, where there is no OnInit of the child's to
+// run. The two are the same job from opposite ends; pick by who owns the value.
 //
-//	type Counter struct {
-//	    Hits   via.StateTab[int]
-//	    Filter via.StateTab[string] `via:"filter,init=all"`
-//	}
-//	c.Hits.Read(ctx)       // returns int
-//	c.Hits.Write(ctx, 0)   // direct write
-//	c.Hits.Update(ctx, func(n int) (int, error) { return n + 1, nil}) // numeric delta
+// A constant start value can also be a field tag, `via:"init=<json>"`, read
+// once when via walks the composition type at Mount. A [StateOf] literal wins
+// over the tag, and a [State.Set] in OnInit wins over both.
 //
-// The optional `via:"name,init=value"` tag mirrors Signal[T]: either part
-// is optional, and init=… is decoded into the field at bind time.
-type StateTab[T any] struct {
+// Not safe for concurrent use. Call it only from via callbacks (OnInit, an
+// action handler, a Tick or Listen handler); to reach a unit from a goroutine
+// of your own, publish to a [topic.Topic] the unit Listens to. See the package
+// doc for the goroutine model.
+//
+// State has no Ref and reaches no client expression. When markup must react
+// to it client-side, mirror it into a Signal with a Set in the same callback
+// and use that Signal's Ref instead.
+type State[T any] struct {
 	val T
-	key string
+	// lit marks the start value as decided — by StateOf, by ListOf, or by the
+	// one apply of a via:"init=…" tag — so a literal wins over the tag and no
+	// later render re-seeds over what a Set has authored.
+	lit   bool
+	track *stateTracking[T] // set by StateTrack; nil on every other State
 }
 
-// Read returns the current value. The ctx is unused today but kept so
-// StateTab[T] mirrors Signal[T]'s shape (and so future tab-scoped reads
-// can move into the runtime without an API break). Accepts either *Ctx
-// (action handlers) or *CtxR (View).
-func (s *StateTab[T]) Read(_ readCtx) T {
-	return s.val
+type stateTracking[T any] struct {
+	topic *topic.Topic[T]
+	load  func() T
 }
 
-// Write stores a new value and marks the composition dirty so the
-// next flush re-renders the view fragment. From inside an action
-// method or a via.Stream callback, the flush is automatic. From a raw
-// goroutine you started yourself, call ctx.SyncNow() at a coalescing
-// boundary — the dirty bit alone won't reach the browser without a
-// flush.
-//
-// Sugar over Update(ctx, func(T) (T, error) { return v, nil }) — the
-// non-fallible path for "replace with a constant." Panics on nil ctx
-// for the same reason as Update.
-func (s *StateTab[T]) Write(ctx *Ctx, v T) {
-	if ctx == nil {
-		panic("via: StateTab.Write called with nil *Ctx")
-	}
-	_ = s.Update(ctx, func(T) (T, error) { return v, nil })
+// tracker is how a StateTrack literal is started without naming T: the type
+// walk holds the handle as an any, so the closure it asks for here carries T
+// out of the generic type, exactly as seedApplier does for a seed tag.
+type tracker interface {
+	trackStarter() func(handle unsafe.Pointer, ctx *Ctx)
 }
 
-// Update atomically applies fn to the current value. fn receives the
-// current T and returns (new T, error). On non-nil error the value is
-// unchanged and the error is returned. Saves a Read/Write pair on
-// common increment/transform patterns and is the only mutation path
-// that lets a user reject a write (validation, conflict detection):
-//
-//	err := c.Hits.Update(ctx, func(n int) (int, error) {
-//	    if n >= max { return 0, errBudget }
-//	    return n + 1, nil
-//	})
-//
-// Panics on nil ctx: without one the next flush cannot re-render, so
-// silently succeeding would desync server state from the client.
-func (s *StateTab[T]) Update(ctx *Ctx, fn func(T) (T, error)) error {
-	if ctx == nil {
-		panic("via: StateTab.Update called with nil *Ctx")
-	}
-	if fn == nil {
-		return nil
-	}
-	next, err := fn(s.val)
-	if err != nil {
-		return err
-	}
-	s.val = next
-	ctx.markStateDirty()
-	return nil
-}
-
-// Text returns a static text node carrying the current value. Re-renders
-// happen as part of the view fragment, not via a client signal. Mirrors
-// StateSess/StateApp.Text so every reactive-value Text(ctx) reads the
-// same way; the ctx is unused on StateTab (the value lives on the
-// struct) and accepted only for signature parity. Accepts either *Ctx
-// (action handlers) or *CtxR (View).
-func (s *StateTab[T]) Text(_ readCtx) h.H {
-	return h.Text(scalarString(reflect.ValueOf(s.val)))
-}
-
-// Key returns the local key. Useful in tests.
-func (s *StateTab[T]) Key() string { return s.key }
-
-func (s *StateTab[T]) bindSlot(_ uint16, key string) {
-	// State doesn't carry a per-slot dirty bit (it uses Ctx.stateDirty)
-	// so the slot index is intentionally discarded; the bindSlot
-	// signature is fixed by the signalRef interface that Signal[T] also
-	// implements.
-	s.key = key
-}
-
-func (s *StateTab[T]) encode() ([]byte, error) {
-	return encodeScalar(reflect.ValueOf(s.val))
-}
-
-func (s *StateTab[T]) decodeRaw(raw any) error {
-	return decodeScalarChecked(reflect.ValueOf(&s.val).Elem(), raw)
-}
-
-// stateTabMarker tags StateTab[T] (and types that embed it). See
-// signalMarker for the rationale.
-type stateTabMarker interface{ isStateTab() }
-
-func (*StateTab[T]) isStateTab() {}
-
-// scalarString returns the string form of a scalar value without going
-// through fmt.Sprintf (which costs interface boxing for every call).
-func scalarString(v reflect.Value) string {
-	switch v.Kind() {
-	case reflect.String:
-		return v.String()
-	case reflect.Bool:
-		if v.Bool() {
-			return "true"
+func (*State[T]) trackStarter() func(unsafe.Pointer, *Ctx) {
+	return func(handle unsafe.Pointer, ctx *Ctx) {
+		s := (*State[T])(handle)
+		if s.track == nil {
+			return
 		}
-		return "false"
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return strconv.FormatInt(v.Int(), 10)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return strconv.FormatUint(v.Uint(), 10)
-	case reflect.Float32, reflect.Float64:
-		// reflect.Value.Float widens a float32 to float64; formatting at
-		// bitSize 64 would surface the widening (float32(0.1) → 0.10000000149011612).
-		bits := 64
-		if v.Kind() == reflect.Float32 {
-			bits = 32
-		}
-		return strconv.FormatFloat(v.Float(), 'g', -1, bits)
+		s.Track(ctx, s.track.topic, s.track.load)
 	}
-	b, _ := json.Marshal(v.Interface())
-	return string(b)
+}
+
+// StateTrack is the literal form of [State.Track]: a State that seeds from
+// load at every init of its unit, re-seeds once the stream has subscribed, and
+// follows t.
+//
+//	via.Handler(Counter{Hits: via.StateTrack(room, n.Load)})
+//
+// load runs at each init, not here, so a request renders whatever the store
+// holds then; the unit needs no OnInit of its own, and a literal on one that
+// has an OnInit runs first so it reads the seeded value. Use it when the
+// source is fixed at mount time; use Track in OnInit when it depends on the
+// request.
+func StateTrack[T any](t *topic.Topic[T], load func() T) State[T] {
+	return State[T]{lit: true, track: &stateTracking[T]{topic: t, load: load}}
+}
+
+func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+
+// seedApplier writes through the handle pointer the type walk found by offset.
+// List[E] embeds State[[]E] first, so that pointer is the embedded State's
+// address too and a List seeds through this same closure.
+func (*State[T]) seedApplier(v any) func(unsafe.Pointer) any {
+	seed := v.(T)
+	return func(handle unsafe.Pointer) any {
+		s := (*State[T])(handle)
+		if !s.lit {
+			s.lit, s.val = true, seed
+		}
+		return s.val
+	}
+}
+
+// StateOf seeds a State with v, so a parent can hand an embedded child its
+// starting value from a composite literal. A unit seeding its own state wants
+// the zero [State] plus a [State.Set] in OnInit instead — that one can read the
+// request, the path params and the session; a literal cannot:
+//
+//	type Page struct{ Chat Chat }
+//	p := Page{Chat: Chat{Room: via.StateOf("lobby")}}
+//
+// The stored value is unexported (see the Field-Embeddable Types convention),
+// so this constructor is the only way to write one outside a callback.
+func StateOf[T any](v T) State[T] { return State[T]{val: v, lit: true} }
+
+// Get returns this connection's value. It is server-authoritative: nothing the
+// client sends can change it.
+//
+// Get does not make the unit live — only [State.Display] and [List.Each] do,
+// because only a rendered State has anything to push. A unit that holds a State
+// and merely Gets it (say, to build a string its View writes with h.Str) is a
+// plain unit: it opens no stream, and a Set on it reaches no browser. Render
+// the State with Display, or register a Tick/Listen in OnInit.
+func (s *State[T]) Get() T { return s.val }
+
+// Set assigns the value on this unit instance. The change reaches the browser
+// on the next push — a Tick re-render, an action response, or a stream flush.
+func (s *State[T]) Set(v T) { s.val = v }
+
+// Track keeps s equal to a store announced on t: it seeds s from load now,
+// seeds it again once the stream has subscribed, and then applies every
+// publish. Valid only inside OnInit; a later call is ignored and logged. load
+// may return one field of a larger store, in which case t carries that field's
+// type.
+func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
+	if !ctx.inInit {
+		// No partial seed: a one-shot copy that never follows is the trap this
+		// whole method exists to remove.
+		ctx.logger().Warn("via: Track called after OnInit returned — ignored; Track is valid only inside OnInit")
+		return
+	}
+	s.Set(load())
+	// The subscribe runs before any OnConnect fn, so this re-read covers every
+	// write between OnInit and it.
+	ctx.OnConnect(func() { s.Set(load()) })
+	ctx.Listen(t, s.recv)
+}
+
+func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
+
+// Display renders the current value as literal, escaped server text and marks
+// its unit live, so server-held state alone earns a connection.
+//
+// trap: liveness must be render-invariant. Only the GET's verdict bootstraps an
+// SSE stream, so a Display reached through a branch closed at GET wires the page
+// plain, and an action that later opens the branch leaves the tab demanding a
+// connection it never opened — via fails that action loudly rather than letting
+// every action after it 410. Render the State unconditionally (put via.When
+// inside the row, not around the Display), or register a Tick/Listen in OnInit.
+func (s *State[T]) Display() h.H {
+	return hcore.Dyn(func(r *hcore.Renderer) {
+		markLive(r)
+		r.WriteEscaped(fmt.Sprint(s.val))
+	})
+}
+
+// List is server-authoritative slice state — a chat log, a feed, a todo list.
+// It children State[[]E], so Get and Set remain the general door
+// (l.Set(slices.Insert(...))) and Append/Remove/Each spell the common cases.
+// Rows morph by position unless each carries a stable id, so give the row an
+// h.ID(…) when the order can change. Like State, rendering one makes its unit
+// live, and like State it reads a `via:"init=<json>"` field tag —
+// `via:"init=[\"a\",\"b\"]"` — that a [ListOf] literal wins over.
+//
+// Not safe for concurrent use — same rule as [State].
+type List[E any] struct{ State[[]E] }
+
+// ListOf seeds a List with the given elements — the [StateOf] of lists, and the
+// same choice against a zero List filled in OnInit.
+func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true}} }
+
+// Append adds v to the end of this connection's list and schedules the push,
+// like any Set. It re-slices in place when there is capacity, so appending in a
+// tick loop does not reallocate every frame — but the whole list re-renders on
+// each push, so a list that grows without bound grows the frame without bound
+// too. Cap it, or page it.
+func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
+
+// Remove deletes the element at i, shifting the rest left, and panics if i is
+// out of range. The freed slot is zeroed, so a pointer element does not stay
+// reachable through the backing array.
+func (l *List[E]) Remove(i int) { l.Set(slices.Delete(l.Get(), i, i+1)) }
+
+// Each renders row(item) for every element, in order — sugar over
+// via.Each(l.Get(), row), and like State.Display it marks the unit live. Same
+// by-position morph trap as via.Each.
+func (l *List[E]) Each(row func(E) h.H) h.H {
+	return hcore.Dyn(func(r *hcore.Renderer) {
+		markLive(r)
+		r.Render(Each(l.Get(), row))
+	})
+}
+
+// markLive marks the rendering unit live: rendering server-authoritative state
+// is itself what earns the unit a connection.
+func markLive(r *hcore.Renderer) {
+	if ctx := ctxOf(r.Binder()); ctx != nil {
+		ctx.live = true
+	}
 }

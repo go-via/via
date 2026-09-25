@@ -1,0 +1,31 @@
+/* MapLibre's own stylesheet is not vendored: it embeds data: image URIs, which
+   this site's default-src 'self' blocks. The maps render with no controls and
+   no attribution bar, so none of its control styles are needed. */
+
+.map {
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.map canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.map[data-error]::after {
+  content: attr(data-error);
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: .5rem;
+  text-align: center;
+  background: var(--bg);
+  color: var(--amber);
+}

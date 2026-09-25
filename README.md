@@ -1,30 +1,27 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="branding/punch-dark.png">
-    <img src="branding/punch-light.png" alt="Via — reactive web apps in pure Go" width="220">
-  </picture>
+  <img src="internal/site/static/brand/punch-dark.png"
+       alt="via — reactive web UIs in pure Go" width="220">
 </p>
 
-# Via
+# via
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/go-via/via.svg)](https://pkg.go.dev/github.com/go-via/via)
-[![Go Report Card](https://goreportcard.com/badge/github.com/go-via/via)](https://goreportcard.com/report/github.com/go-via/via)
+[![CodeQL](https://github.com/go-via/via/actions/workflows/codeql.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/codeql.yml)
 [![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-go--via.github.io%2Fvia-blue)](https://go-via.github.io/via)
+[![Docs](https://img.shields.io/badge/docs-go--via.dev-blue)](https://go-via.dev)
 
-**Reactive web apps in pure Go.** A composition is a struct, reactive state
-is a typed field, actions are methods — and the compiler understands your UI.
-Via is the only framework, in any language, that expresses the
-**client/server reactive split as a Go type**: `Signal[T]` lives in the
-browser, `StateTab/Sess/App[T]` live only on the server. Which side owns a
-piece of state is a field declaration the compiler checks, not a convention
-you grep for. Transport is SSE only — no WebSockets, no build step, no
-hand-written JS.
+**Reactive web UIs in pure Go.** A page is a struct, a click is a method
+call, and via streams what changed back to the tab. Markup is Go functions,
+state is a typed field, and the compiler checks the wiring: `via.On("click",
+c.Inc)` takes a method value, so a misspelled handler does not build. No
+JavaScript to write, no build step, no WebSockets. A page is a plain request
+and response until something on it ticks, listens or displays server state;
+then it streams over SSE, per tab.
 
-📖 **[Documentation](https://go-via.github.io/via)** ·
+**[Documentation](https://go-via.dev)** ·
 [API reference](https://pkg.go.dev/github.com/go-via/via) ·
-[Examples](https://go-via.github.io/via/examples)
+[Examples](internal/example/README.md)
 
 ## Install
 
@@ -32,122 +29,139 @@ hand-written JS.
 go get github.com/go-via/via
 ```
 
-## Quickstart: the counter
+Requires Go 1.27 or newer. The public API uses generic methods
+(`ctx.Param[int]("id")`, `ctx.Session().Get[User]()`); on an older toolchain
+those read as ordinary syntax errors, not as a version complaint, so check
+`go version` first if the program below will not compile.
 
-Two counters, two scopes. `Local` is per-tab server state; `Shared` is one
-value across every session — clicking `+1` bumps `Local` only in that tab, but
-`Shared` everywhere at once. No `Broadcast`, no WebSocket, no client JS.
-`on.Click(p.IncShared)` is a typed method reference: the handler signature is
-compile-checked and a misspelled method name won't build. It must be a real
-bound method, though — a closure or plain function satisfies the type but has
-no name to route to, so it panics at the first render rather than at compile
-time.
+## Quickstart: the whole program
 
 ```go
 package main
 
 import (
-    "net/http"
+	"log"
+	"net/http"
+	"sync/atomic"
 
-    "github.com/go-via/via"
-    "github.com/go-via/via/h"
-    "github.com/go-via/via/on"
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
 )
 
-type Page struct {
-    Local  via.StateTabNum[int] // per-tab — independent in every tab
-    Shared via.StateAppNum[int] // global — synced across every session
-}
+type Counter struct{ n *atomic.Int64 }
 
-func (p *Page) IncLocal(ctx *via.Ctx)  { p.Local.Op(ctx).Inc() }
-func (p *Page) IncShared(ctx *via.Ctx) { p.Shared.Op(ctx).Inc() }
+func (c *Counter) Inc(ctx *via.Ctx) { c.n.Add(1) }
+func (c *Counter) Dec(ctx *via.Ctx) { c.n.Add(-1) }
 
-func (p *Page) View(ctx *via.CtxR) h.H {
-    return h.Div(
-        h.P(h.Text("Local: "), p.Local.Text(ctx)),
-        h.Button(h.Text("+1"), on.Click(p.IncLocal)),
-        h.P(h.Text("Shared: "), p.Shared.Text(ctx)),
-        h.Button(h.Text("+1"), on.Click(p.IncShared)),
-    )
+func (c *Counter) View() h.H {
+	return h.Div(
+		h.Button(via.On("click", c.Dec), h.Str("-")),
+		h.H1(h.Str(c.n.Load())),
+		h.Button(via.On("click", c.Inc), h.Str("+")),
+	)
 }
 
 func main() {
-    app := via.New()
-    via.Mount[Page](app, "/")
-    _ = http.ListenAndServe(":3000", app)
+	r := via.Handler(Counter{n: new(atomic.Int64)})
+	err := http.ListenAndServe(":8080", r)
+	r.Close()
+	log.Fatal(err)
 }
 ```
 
-```bash
-go run ./internal/examples/counterscope   # open in two browsers
-```
+The same program with a mutex-guarded store is
+[`internal/example/counter`](internal/example/counter).
 
-![Two browsers, two scopes — StateTab is per-tab, StateApp is shared across every session.](docs/counter-scope.gif)
+A composition is a struct. Its `View` is a pure, `ctx`-free function. Actions
+are methods, wired by named method value: no strings, no closures. `Handler`
+and `Mount` take the composition by value, so there is no `&` at any call
+site, and a missing or mistyped `View` is a compile error. A click POSTs, the
+server re-renders, and the page morphs in place.
 
-For state shared across users, see the live chatroom — one app-scoped field
-that fans every message out to every connected tab:
-[`internal/examples/chat`](internal/examples/chat/main.go) ·
-[tutorial](https://go-via.github.io/via/tutorial).
+For a page that pushes, see [`pulse`](internal/example/pulse) (a server tick
+over SSE) and [`chat`](internal/example/chat) (a `Topic` fanning every message
+out to every connected tab).
 
-## The four reactive shapes
+## Where state lives
 
-Whether state lives on the client, the server, or both is the field's type:
+Whether a value lives in the browser, on the server, or is shared by every
+tab is the field's type:
 
-| Handle             | Scope       | Lives on        |
-| ------------------ | ----------- | --------------- |
-| `via.Signal[T]`    | per-tab     | client + server |
-| `via.StateTab[T]`  | per-tab     | server only     |
-| `via.StateSess[T]` | per-session | server only     |
-| `via.StateApp[T]`  | global      | server only     |
+| Handle                | Lives on        | Scope                            |
+| --------------------- | --------------- | -------------------------------- |
+| `via.Signal[T]`       | client + server | per tab, round-trips per action  |
+| `via.SignalCS[T]`     | client only     | per tab, never sent              |
+| `via.State[T]`        | server          | per connection, pushed on flush  |
+| `via.List[E]`         | server          | `State[[]E]` with row verbs      |
+| `via.StateTrack(t,…)` | server          | one value, every tab follows     |
+| `topic.Topic[T]`      | server          | fan-out to every `ctx.Listen`    |
 
-`Read(ctx)` / `Update(ctx, fn)` everywhere; `Signal` and `StateTab` add
-`Write(ctx, v)`. The `Num` / `Bool` / `Str` / `Slice` / `Map` wrappers add
-typed `Op(ctx)` verbs (`Add`, `Toggle`, `Append`, …).
-[Full model →](https://go-via.github.io/via/reactive-state)
+Rendering a `State` or registering a `Tick`/`Listen` is what makes a page
+live; a page that does neither is a plain HTTP round trip.
+[Signals →](https://go-via.dev/signals) · [Live →](https://go-via.dev/live)
 
-## What Via is — and is not
+## The hard guarantees
 
-- **Is:** server-rendered pages with typed end-to-end state, a reactive
-  browser runtime (Datastar — it keeps the page reactive and updates it in
-  place), and no build step —
-  best for internal tools, dashboards, and line-of-business apps you'd
-  otherwise build with LiveView, Hotwire, or htmx + hand-written JS.
-- **Is not** an SPA framework — the browser receives HTML, not a JSON bundle.
-- **Single-process by default** — without a backplane `StateApp[T]` and
-  `Broadcast` are per-pod and horizontal scaling needs sticky sessions.
-  `WithBackplane` (in preview) converges `StateApp` state across pods and fans
-  `Broadcast` out to every pod's tabs; both inherit the backplane's pre-1.0
-  status.
-- **Is not** offline-first or stable yet — drop the SSE stream and the tab
-  freezes until the client reconnects (transient drops retry automatically; a
-  clean-close deploy may fall back to a reload), and APIs can still shift pre-1.0.
+- **No reflection in your wiring.** Nothing you write is bound by name: no
+  naming tags, no method lookup by string, no struct shape kept in sync with a
+  template. via reflects in a few narrow places, none of them on your
+  identifiers: a handler's code pointer for its action id, a composition's
+  field offsets to name signal slots and find children, and the hook
+  signature check at `Mount`.
+- **No user-facing identifier strings.** No `via:"name"` tags, no wire keys.
+  The one tag, `via:"init=<json>"`, sets a start value and names nothing.
+- **No closures at a via call site.** Named method values only.
+- **No `any` in element or child signatures.** The `h.H` tree is sealed.
+- **Zero `&` at any user call site.** via owns addressing.
+- **`View` is pure and `ctx`-free.**
+- **Safe by construction.** Output is escaped with no opt-out, only what a
+  render bound is dispatchable, and every page carries a derived CSP.
+
+`TestExamples_takeNoAddressOfOrClosureAtViaCallSites` fails the build if an
+example violates the `&`/closure rules.
+
+## What via is, and is not
+
+- **Is:** server-rendered pages with typed state, a reactive browser runtime
+  (Datastar, which morphs the page in place) and no build step. Best for
+  internal tools, dashboards and line-of-business apps you would otherwise
+  build with LiveView, Hotwire or htmx plus hand-written JS.
+- **Is not** an SPA framework. The browser receives HTML, not a JSON bundle.
+- **Is not** a shared-state store. `topic.Topic` is in-process; past one pod
+  you bring a bus and sticky sessions. [Deploy →](https://go-via.dev/deploy)
+- **Is not** stable yet. APIs can still shift before 1.0.
 
 ## Documentation
 
-The full guide and reference live at
-**[go-via.github.io/via](https://go-via.github.io/via)**.
+The guide lives at **[go-via.dev](https://go-via.dev)**.
 
-- [Why Via](https://go-via.github.io/via/why-via) — the thesis, and Via vs.
-  LiveView / Hotwire / htmx / templ.
-- [Getting started](https://go-via.github.io/via/getting-started) ·
-  [Tutorial](https://go-via.github.io/via/tutorial) — install, your first
-  composition, then build the live chatroom.
-- [Reactive state](https://go-via.github.io/via/reactive-state) — `Signal`
-  vs `StateTab/Sess/App`, typed ops, view helpers.
-- [Actions & lifecycle](https://go-via.github.io/via/actions-and-lifecycle)
-  — events, hooks, streaming, broadcast.
-- [Rendering](https://go-via.github.io/via/rendering) ·
-  [h helpers](https://go-via.github.io/via/h-helpers) — the HTML DSL.
-- [Routing & sessions](https://go-via.github.io/via/routing-sessions-middleware)
-  — routing, groups, sessions, auth, the middleware stack.
-- [File uploads](https://go-via.github.io/via/file-uploads) — `via.File`.
-- [Plugins](https://go-via.github.io/via/plugins) — picocss, echarts, maplibre.
-- [Testing](https://go-via.github.io/via/testing) ·
-  [Production & ops](https://go-via.github.io/via/production) — `vt`; config,
-  metrics, security, deploys.
-- [Examples](https://go-via.github.io/via/examples) ·
-  [Troubleshooting](https://go-via.github.io/via/troubleshooting) ·
-  [Glossary](https://go-via.github.io/via/glossary).
+- [Actions](https://go-via.dev/actions) — clicks and form submits as Go
+  methods: `via.On`, `via.OnArg`, `PostForm`, and the morph that answers them.
+- [Signals](https://go-via.dev/signals) — client-resident state: `Bind`,
+  `Display`, `SignalCS` and the `expr` package.
+- [Live](https://go-via.dev/live) — per-tab SSE: `Tick`, `Listen`,
+  `StateTrack`, and per-user fan-out keyed by the session id.
+- [Islands](https://go-via.dev/islands) — handing a subtree to a JS library.
+- [Platform](https://go-via.dev/platform) — `Child`, mount patterns, auth as
+  an `OnInit` check, the derived CSP, and the lifecycle hooks.
+- [Deploy](https://go-via.dev/deploy) — shutdown order, sessions across a
+  restart, sticky load balancing and a cross-pod topic bridge.
+- [Reference](https://go-via.dev/reference) — the API in tables.
+- [`MIGRATION.md`](./MIGRATION.md) — coming from v0.7.
+- [`CHANGELOG.md`](./CHANGELOG.md) — the release-by-release record.
+
+## Develop
+
+```bash
+GO='env -u GOROOT /usr/bin/go' ./ci.sh   # fmt + vet + build + test -race
+```
+
+See [`CONVENTIONS.md`](./CONVENTIONS.md) for the test and code conventions.
+
+`TestLive_onDisposeContinuesAfterAPanickingDisposer` is known-flaky under
+heavy sweeps (`-race -cpu 1 -count=40` and up): a race in the test harness
+between `synctest.Wait()` and real network I/O, not a product defect. CI gates
+at `-count=1`, which is green.
 
 ## License
 

@@ -10,7 +10,7 @@ Rule: Use `Test` + PascalCase subject + underscore + camelCase behavior
 
 - ✅ `TestSignal_returnAsString`
 - ✅ `TestPage_panicsOnNoView`
-- ✅ `TestPlugin_servesGzipWhenAccepted`
+- ✅ `TestMount_panicsOnReservedWildcard`
 - ❌ `TestSignal` (vague — what about it?)
 - ❌ `Test_signal_return_as_string` (wrong casing)
 
@@ -20,7 +20,7 @@ test does internally.
 ## Test-First
 
 Reasoning: Writing the test first forces you to define the contract before
-the implementation, and ensures every behavior has a corresponding test.
+the implementation, and every behavior ends up with a corresponding test.
 
 Rule: No implementation before a failing test. The sequence is always:
 write test → confirm it fails correctly → implement → confirm it passes.
@@ -113,6 +113,18 @@ slow test beats a flaky fast one.
 
 Always run tests with `-race` (`go test -race ./...`).
 
+### Carve-out: `testing/synctest`
+
+`synctest.Test`'s doc is explicit: "T.Run, T.Parallel, and T.Deadline must
+not be called" on the `*testing.T` it hands to the bubble callback. When a
+test's entire body is that one `synctest.Test(t, func(t *testing.T) {…})`
+call, there is no outer `t` left to call `Parallel` on — omit it.
+
+If a test runs plain code before entering the bubble (e.g. an ordinary GET
+against a real listener, which needs no fake clock), call `t.Parallel()` as
+the first line as usual — it runs on the outer `*testing.T`, before the
+bubble exists, and is unaffected by the restriction.
+
 ## Test Helpers
 
 Reasoning: Test helpers that don't call `t.Helper()` produce misleading
@@ -123,7 +135,7 @@ Rule:
 - All test helpers live in `_test.go` files.
 - Helpers that call `t.Fatal` or `t.Error` must call `t.Helper()` as
   their first statement.
-- Use setup helpers (e.g. `registerPlugin(...)`) to reduce repetition,
+- Use setup helpers (e.g. `serveCounter(t)`) to reduce repetition,
   not `TestMain` unless truly necessary.
 
 ## Field-Embeddable Types Keep Fields Unexported
@@ -131,39 +143,24 @@ Rule:
 Reasoning: Callers should work with behavior, not struct internals.
 Composition handles like `Signal[T]` / `State[T]` are *exported* because
 users declare them as struct fields (`Step via.Signal[int]`), but their
-internals are bound by the runtime via reflection — exposing fields
-would let callers desync the wire key, slot index, and stored value.
+wire identity is assigned by the runtime at render time — the `Binder`
+hands each handle a stable wire name on first render, which becomes the
+handle's identity. Exposing fields would let a caller desync that name
+from the stored value, or forge one.
 
-Rule: For types whose zero value is meaningful via reflection-driven
-binding (Signal, StateTab, StateSess, StateApp), keep all stored state
-in unexported fields. The type name is exported; the contents aren't.
+Rule: For handle types whose binding is established by the runtime
+(`Signal`, `SignalCS`, `State`, `List`), keep all stored state in unexported
+fields. The type name is exported; the contents aren't.
 
 ```go
-// ✅ Exported type, unexported fields — runtime binds via reflection
+// ✅ Exported type, unexported fields — runtime assigns the wire name at render
 type Signal[T any] struct {
-    val    T
-    slot   uint16
-    key    string
+    slot string // stable wire name, assigned lazily on first render
+    val  T
 }
 
-// ❌ Exported fields — caller can desync internal state
+// ❌ Exported fields — caller can desync the wire name from the value
 type Signal[T any] struct { ID string; Val T }
-```
-
-## Plugin Constructor Naming
-
-Reasoning: A uniform constructor name across all plugin packages makes the
-API predictable and call sites consistent.
-
-Rule: Every plugin package exposes `Plugin(...)` as its public constructor,
-not `New(...)`. This keeps `via.WithPlugins(...)` call sites uniform.
-
-```go
-// ✅
-via.WithPlugins(picocss.Plugin(), echarts.Plugin())
-
-// ❌
-via.WithPlugins(picocss.New(), echarts.Plugin())
 ```
 
 ## Functional Options
@@ -211,17 +208,61 @@ than expose the shared internal type in its signatures.
 
 ## Panic on Invalid Registration
 
-Reasoning: Errors during page or plugin registration are programming
+Reasoning: Errors during page or router registration are programming
 mistakes, not recoverable runtime conditions. Panicking at startup makes
 misconfiguration impossible to miss and impossible to ship.
 
-Rule: Validation that runs once at registration time (inside `Mount[C]`,
-`Plugin(...)`, etc.) panics on invalid input. Do not return errors from
+Rule: Validation that runs once at registration time (inside `Mount`,
+`WithHead`, etc.) panics on invalid input. Do not return errors from
 registration functions.
 
 - ✅ Panic if `View` is never set, if conflicting options are passed, if
   required arguments are zero values.
-- ❌ Return `error` from `Mount[C]` and let callers ignore it.
+- ❌ Return `error` from `Mount` and let callers ignore it.
+
+Rule: Input that would otherwise fail later and somewhere else is checked at
+registration too. A CSP that silently blocks a script in the browser, or a
+ServeMux panic naming a wildcard the user never wrote, is a registration
+error via missed.
+
+- ✅ `Script{Src: "//cdn.example/x.js"}` panics at `Mount`: it has no scheme
+  to take an origin from, so the policy would block it.
+- ✅ `Mount(r, "/u/{child}", P{})` panics with via's message, not
+  ServeMux's "duplicate wildcard name".
+- ❌ Accept `FontOrigins: {"https://fonts.example/css"}` and let the browser
+  ignore the source because it has a path.
+
+## Browser-Parity Gates
+
+Reasoning: A URL, origin or inline-asset check protects what the browser
+does with the value, not what Go sees. Browsers drop tab, CR and LF anywhere
+in a URL, read `\` as `/`, and normalize CRLF and NUL before hashing an
+inline script. A gate that checks the raw string passes values the browser
+then treats as something else.
+
+Rule: Each gate lives once, in `internal/hcore`, and every caller uses that
+copy. It normalizes input the way the browser's parser does before deciding.
+Its test is a table of inputs that differ only after browser normalization.
+
+- ✅ `SafeURL` strips `\t\r\n` first, so `"/\t/evil.com"` reads as
+  protocol-relative and is refused.
+- ❌ A second URL check in `head.go` that trims only leading whitespace.
+
+## Response Ownership
+
+Reasoning: The POST handler and the tab's stream goroutine both touch the
+request's `http.ResponseWriter` (a session cookie is set through it). Once
+net/http has the handler's return, any later write races its teardown and
+can crash the process.
+
+Rule: Whoever holds the writer keeps the request alive until done with it.
+After an action is handed to the stream goroutine, the handler returns only
+with that action's result. Deadlines bound the wait to be picked up, never
+work that has started.
+
+- ✅ An action picked up at 4.9s of a 5s deadline runs to completion and
+  answers.
+- ❌ Answer 503 at 5s while the action keeps running and writes a cookie.
 
 ## Assertions
 
@@ -251,17 +292,17 @@ it.
 
 ```go
 // ✅ Adds information the name doesn't
-// MustJSON marshals v to JSON, returning "null" on error.
-func MustJSON(v any) string
+// ErrNotFound from OnInit answers 404; any other error answers 500.
+var ErrNotFound = errors.New("via: not found")
 
 // ✅ States a non-obvious contract
-// Notify JSON-encodes message so arbitrary user text is safe inside
-// the rendered toast snippet.
-func (ctx *Ctx) Notify(message string)
+// Redirect navigates after the current handler returns. A target that is
+// not http(s) or same-origin relative is dropped and logged, never followed.
+func (c *Ctx) Redirect(path string)
 
 // ❌ Restates the name
-// WithTitle sets the chart title.
-func WithTitle(title string) ChartOption
+// WithMaxBody sets the max body.
+func WithMaxBody(bytes int64) Option
 ```
 
 ### Unexported symbols and inner logic
@@ -276,12 +317,12 @@ otherwise require the reader to reconstruct non-obvious reasoning:
 
 ```go
 // ✅ Non-obvious invariant
-// underscore prefix keeps the name a valid JS identifier; dots are not allowed.
-return fmt.Sprintf("echart_%d", c.seq)
+// underscore ⇒ Datastar keeps it client-only (never POSTs an _-prefixed signal).
+l.slot = "_" + b.SignalName()
 
 // ❌ Obvious from context
 // increment the counter
-chartCounter.Add(1)
+counter.Add(1)
 ```
 
 ### Tests
@@ -296,13 +337,12 @@ precondition whose absence would make the test logic misleading:
 
 ```go
 // ✅ Non-obvious precondition
-// Two charts share a page; both must render without ID collision.
-c1 := echarts.NewChart()
-c2 := echarts.NewChart()
+// Two fields of one child type share a parent; their slots must not collide.
+p := pair{A: note{}, B: note{}}
 
 // ❌ Describes what the next line already says
-// Create a new chart with a title.
-chart := echarts.NewChart(echarts.WithTitle("CPU"))
+// Create a new router.
+r := via.NewRouter()
 ```
 
 ## Errors
@@ -361,14 +401,69 @@ Rule: Group by responsibility, not by type. A file contains the types,
 functions, and methods that serve a single concern. Name files after the
 concern, not the type (`state.go`, not `signal_of.go`).
 
-Split a file when it exceeds ~300 lines or when it contains two concerns
-that change for different reasons. Don't split preemptively.
+Split a file when it contains two concerns that change for different
+reasons — not when it merely gets large. Don't split preemptively.
+
+### Concern/test parity
+
+Reasoning: When tests live beside the source they exercise and share its
+name, the test for any concern is found by name, and a `_test.go` whose name
+matches no source is a smell — it means the test was grouped by feature
+("chat", "sugar") rather than by the file whose code it actually drives.
+
+Rule: Every `<concern>_test.go` pairs with a `<concern>.go` of the same name.
+No dangling test files — a `*_test.go` with no matching source is not allowed.
+If a test has no home, either the concern it covers belongs in a source file
+of that name, or the test belongs in the `_test.go` for the file whose code it
+actually exercises. A behavioral claim about `live.go`'s runtime lives in
+`live_test.go`; it does not get its own `chat_test.go`.
+
+Parity is one-directional: tests pair to source, source need not pair to
+tests. A pure-wiring or trivial-helper file (e.g. `config.go`, `sprint.go`)
+may have no `_test.go` — it is verified by build/vet and by the behavioral
+tests that drive it, not by a unit test of its own.
+
+Tests are black-box (`package <x>_test`) — there are no `_internal_test.go`
+white-box files. Behavior that the plain HTTP idiom can't reach cleanly (a
+controlled request Host, a TLS request, the per-connection tab handshake, a
+live render) is still exercised as a black box through the `vt` harness rather
+than by reaching into unexported state. If a behavior genuinely cannot be
+observed through the public surface even with `vt`, that is a design signal —
+change the surface, not the test boundary. Test-only modules (`vt/` the
+harness, `vtbrowser/` the chromedp tier) are exempt from pairing: they support
+the system rather than a single source file.
+
+One further exemption: `sourcelint_test.go`. It holds the source-TEXT lints
+(the reflect allowlist, the no-`&`/no-closure guard over the examples, and the
+guard that keeps `h`'s binder plumbing off the public surface) — they
+parse the tree and assert on what is written in it, so they pair with every
+source file and therefore with none. They are named and isolated so a failure
+there reads as "the source drifted from a design rule", never as a behavioral
+regression.
 
 ### Internal Packages
 
 Rule: Use `internal/` for code that must not be imported by consumers
 but is shared across packages within the module. Do not use `internal/`
 as a dumping ground — the same responsibility rules apply.
+
+## Behaviour Changes Carry Their Docs
+
+Reasoning: via documents behaviour in four places: the exported doc comment,
+`CHANGELOG.md`, `MIGRATION.md` and the site. A fix that updates only the doc
+comment leaves the others contradicting it, and nothing fails.
+
+Rule: A commit that changes observable behaviour updates each place that
+describes it: the doc comment always, the unreleased `CHANGELOG.md` entry,
+`MIGRATION.md` when an upgrading user must act, and the site page that
+covers it. A test that pins a known defect names it as a defect in its
+comment, and the fix flips or deletes that test in the same commit.
+
+- ✅ Changing the `WithTrustedOrigin` default touches its doc comment,
+  CHANGELOG "Security defaults changed", MIGRATION "Security defaults moved"
+  and the site reference row.
+- ❌ Update the doc comment and leave `MIGRATION.md` describing the old
+  default.
 
 ## Markdown
 

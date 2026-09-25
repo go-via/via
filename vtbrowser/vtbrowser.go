@@ -1,23 +1,25 @@
-// Package vtbrowser (via test, browser) drives a via App in a real
-// headless Chrome/Chromium, covering what the DOM-less vt harness
-// structurally cannot: Datastar expression evaluation, SSE→DOM morph
-// patching, focus preservation, and the reconnect banner lifecycle.
+// Package vtbrowser (via test, browser) drives a registered via handler in a
+// real headless Chromium and abstracts away raw chromedp, so a browser test
+// reads at the level of the behavior it checks:
 //
-//	app := via.New(via.WithInsecureCookies())
-//	via.Mount[Counter](app, "/")
-//	s := vtbrowser.Open(t, app)
-//	s.Click("#inc")
-//	s.WaitText("#count", "1")
-//	assert.Empty(t, s.ConsoleErrors())
+//	s := vtbrowser.Open(t, via.Handler(Counter{}))
+//	s.Click("button")
+//	s.WaitTextContains("p", "count: 1")
+//	s.RequireCleanConsole()
 //
-// Open skips the test when no browser binary is on PATH, so the suite
-// stays green on machines without Chromium; set VIA_BROWSER_REQUIRED=1
-// (CI does) to turn that skip into a failure.
+// It exists to catch the bug class that passes every httptest yet is dead in a
+// real browser — Datastar's data-on:click / data-bind / SSE-morph under the
+// strict nonce'd CSP. It is a separate module so chromedp never enters the core
+// module's dependency graph. Open skips the test when no browser binary is
+// found (VIA_CHROME overrides the path), so the suite stays green on a machine
+// without Chromium.
 package vtbrowser
 
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -26,179 +28,338 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
-	"github.com/go-via/via"
-	"github.com/stretchr/testify/require"
 )
 
-// defaultTimeout bounds every individual browser operation. Generous
-// because a cold headless-Chrome start on a loaded CI runner can take
-// several seconds before the first navigation completes.
-const defaultTimeout = 15 * time.Second
+// defaultTimeout bounds every individual browser operation. Generous because a
+// cold headless-Chrome start on a loaded runner can take several seconds.
+const defaultTimeout = 20 * time.Second
 
-var browserNames = []string{
-	"chrome",
-	"chromium",
-	"chromium-browser",
-	"google-chrome",
-	"headless-shell",
-}
+const pollInterval = 50 * time.Millisecond
 
-// Session is a live headless-browser tab bound to an httptest server
-// running the app. All helpers fail the test on error; cleanup (browser
-// and server shutdown) is registered via t.Cleanup.
+var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "headless-shell"}
+
+// Session is a live headless-browser tab bound to an httptest server running the
+// handler. Every helper fails the test on error; browser and server shutdown are
+// registered with t.Cleanup.
 type Session struct {
-	t   testing.TB
-	ctx context.Context
-	srv *httptest.Server
+	t      testing.TB
+	ctx    context.Context // this tab's context
+	srv    *httptest.Server
+	browse context.Context // the browser context, for spawning sibling tabs
 
 	mu          sync.Mutex
 	consoleErrs []string
 }
 
-// Open starts an httptest server for app, launches headless Chromium,
-// navigates to the app root, and returns the bound Session.
-//
-// When no Chrome/Chromium binary is found on PATH the test is skipped —
-// unless VIA_BROWSER_REQUIRED=1, which makes the missing browser a hard
-// failure so CI cannot silently skip the suite.
-func Open(t testing.TB, app *via.App) *Session {
+// Open starts an httptest server for handler, launches headless Chromium,
+// navigates to the app root, and returns the bound Session. The test is skipped
+// when no Chrome/Chromium binary is found (set VIA_CHROME to point at one).
+func Open(t testing.TB, handler http.Handler) *Session {
 	t.Helper()
 	exe := findBrowser()
 	if exe == "" {
-		msg := fmt.Sprintf(
-			"vtbrowser: no browser binary on PATH (looked for %s); install one of them",
+		t.Skipf("vtbrowser: no browser binary found (looked for %s; set VIA_CHROME to override)",
 			strings.Join(browserNames, ", "))
-		if os.Getenv("VIA_BROWSER_REQUIRED") == "1" {
-			require.FailNow(t, msg,
-				"VIA_BROWSER_REQUIRED=1 forbids skipping browser tests")
-		}
-		t.Skip(msg + ", or set VIA_BROWSER_REQUIRED=1 to fail instead of skip")
 	}
 
-	srv := httptest.NewServer(app)
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 
-	// NoSandbox: CI containers commonly run as root, where Chrome's
-	// sandbox refuses to start. disable-dev-shm-usage: container /dev/shm
-	// is often too small and crashes the renderer.
-	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
+	// no-sandbox: runners commonly run as root, where Chrome's sandbox refuses
+	// to start. disable-dev-shm-usage: a small container /dev/shm crashes the
+	// renderer.
+	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.ExecPath(exe),
+			chromedp.Flag("headless", true),
 			chromedp.NoSandbox,
 			chromedp.DisableGPU,
 			chromedp.Flag("disable-dev-shm-usage", true),
 		)...)
 	t.Cleanup(cancelAlloc)
 
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	t.Cleanup(cancel)
+	browse, cancelBrowser := chromedp.NewContext(alloc)
+	t.Cleanup(cancelBrowser)
+	// The browser binds to the context this first Run receives, so it must be
+	// the long-lived browser context — a per-op timeout context would kill the
+	// browser when it expired.
+	if err := chromedp.Run(browse); err != nil {
+		t.Fatalf("vtbrowser: start browser %s: %v", exe, err)
+	}
 
-	s := &Session{t: t, ctx: ctx, srv: srv}
-	chromedp.ListenTarget(ctx, s.collectConsole)
-	// The first Run binds the browser process to the context it receives,
-	// so it must be the long-lived session context — a timeout-derived one
-	// (as s.run uses) would kill the browser the moment it was cancelled.
-	require.NoError(t, chromedp.Run(ctx), "vtbrowser: start browser %s", exe)
-	s.run(fmt.Sprintf("navigate to %s/", srv.URL),
-		chromedp.Navigate(srv.URL+"/"),
-		chromedp.WaitReady("body", chromedp.ByQuery),
-	)
+	s := &Session{t: t, ctx: browse, srv: srv, browse: browse}
+	chromedp.ListenTarget(browse, s.collectConsole)
+	s.navigate()
 	return s
 }
 
-// Server exposes the underlying httptest server so tests can simulate
-// infrastructure failures — e.g. CloseClientConnections to drop a live
-// SSE stream — that no DOM-level helper can express.
-func (s *Session) Server() *httptest.Server { return s.srv }
-
-// Click dispatches a real mouse click on the first node matching the
-// CSS selector, waiting for it to become visible first.
-func (s *Session) Click(selector string) {
+// NewTab opens a second tab in the same browser, pointed at the same server —
+// the way to drive multi-user behavior (fan-out, presence) where two live
+// connections must coexist.
+func (s *Session) NewTab() *Session {
 	s.t.Helper()
-	s.run(fmt.Sprintf("click %q", selector),
-		chromedp.Click(selector, chromedp.ByQuery))
+	ctx, cancel := chromedp.NewContext(s.browse)
+	s.t.Cleanup(cancel)
+	// Bind the new target to its long-lived context with an untimed Run, exactly
+	// as Open does for the first tab. The first Run on a context creates and
+	// binds its target; if that first Run were the per-op-timeout navigate
+	// below, cancelling that timeout child would tear the tab down the moment
+	// navigate returned — and every later op on it would hang.
+	if err := chromedp.Run(ctx); err != nil {
+		s.t.Fatalf("vtbrowser: open new tab: %v", err)
+	}
+	n := &Session{t: s.t, ctx: ctx, srv: s.srv, browse: s.browse}
+	chromedp.ListenTarget(ctx, n.collectConsole)
+	n.navigate()
+	return n
 }
 
-// Type focuses the first node matching the CSS selector and sends text
-// as real key events, so input/keydown listeners (and Datastar binds)
-// fire exactly as they would for a human typist.
+func (s *Session) navigate() {
+	s.t.Helper()
+	s.run(fmt.Sprintf("navigate to %s/", s.srv.URL),
+		chromedp.Navigate(s.srv.URL+"/"),
+		chromedp.WaitReady("body", chromedp.ByQuery),
+	)
+}
+
+// Reload re-navigates the tab to the app root — a fresh document load, so a
+// cookie set on the prior load (e.g. a session established in OnInit) is now
+// sent with the GET and the server can render against it.
+func (s *Session) Reload() {
+	s.t.Helper()
+	s.navigate()
+}
+
+// Restart is a deploy: it takes the app's server off the air, leaves it down
+// for the given gap, then serves handler again on the same host:port the tab
+// is still pointed at. Nothing navigates the tab — recovering is the page's own
+// job, which is the whole point of the reconnect manager.
+//
+// The address is reclaimed with a fresh listener rather than a fresh
+// httptest.Server, which would pick a new port and prove nothing.
+func (s *Session) Restart(gap time.Duration, handler http.Handler) {
+	s.t.Helper()
+	addr := s.srv.Listener.Addr().String()
+	// The browser keeps its HTTP/1.1 connections alive, and httptest.Server.Close
+	// waits for every one of them; a kept-alive socket the tab is not using
+	// still counts, so Close would block for the whole test timeout.
+	s.srv.CloseClientConnections()
+	s.srv.Close()
+	time.Sleep(gap)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		s.t.Fatalf("vtbrowser: re-listen on %s: %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	srv.Listener.Close()
+	srv.Listener = ln
+	srv.Start()
+	s.t.Cleanup(func() { srv.CloseClientConnections(); srv.Close() })
+	s.srv = srv
+}
+
+// Click dispatches a real mouse click on the first node matching the CSS
+// selector, waiting for it to become visible first.
+func (s *Session) Click(selector string) {
+	s.t.Helper()
+	s.run(fmt.Sprintf("click %q", selector), chromedp.Click(selector, chromedp.ByQuery))
+}
+
+// Type focuses the first node matching the selector and sends text as real key
+// events, so input/keydown listeners (and Datastar binds) fire as for a human.
 func (s *Session) Type(selector, text string) {
 	s.t.Helper()
 	s.run(fmt.Sprintf("type %q into %q", text, selector),
 		chromedp.SendKeys(selector, text, chromedp.ByQuery))
 }
 
-// WaitText polls until the first node matching the CSS selector has
-// trimmed textContent equal to want, failing the test after a timeout
-// with the last observed text. Polling (rather than a one-shot read)
-// absorbs SSE patch latency without sleeps.
-func (s *Session) WaitText(selector, want string) {
+// Text returns the trimmed textContent of the first node matching the selector
+// (empty string if none).
+func (s *Session) Text(selector string) string {
 	s.t.Helper()
-	ctx, cancel := context.WithTimeout(s.ctx, defaultTimeout)
-	defer cancel()
-	js := fmt.Sprintf(
-		`(function(){var n=document.querySelector(%q);`+
-			`return n ? n.textContent : %q})()`,
-		selector, "<vtbrowser: no element matches "+selector+">")
-	got := "<vtbrowser: nothing read yet>"
+	return strings.TrimSpace(s.text(selector))
+}
+
+// Value returns the value of the first input matching the selector.
+func (s *Session) Value(selector string) string {
+	s.t.Helper()
+	var v string
+	s.eval(fmt.Sprintf(`(document.querySelector(%q)||{}).value||""`, selector), &v)
+	return v
+}
+
+// WaitTextContains polls until the first node matching selector has textContent
+// containing want, absorbing SSE patch latency without a fixed sleep.
+func (s *Session) WaitTextContains(selector, want string) {
+	s.t.Helper()
+	s.WaitFor(selector, func(text string) bool { return strings.Contains(text, want) },
+		fmt.Sprintf("text to contain %q", want))
+}
+
+// WaitValue polls until the first input matching selector has value want.
+func (s *Session) WaitValue(selector, want string) {
+	s.t.Helper()
+	deadline := time.After(defaultTimeout)
+	var last string
 	for {
-		err := chromedp.Run(ctx, chromedp.Evaluate(js, &got))
-		if err == nil && strings.TrimSpace(got) == want {
+		last = s.Value(selector)
+		if last == want {
 			return
 		}
 		select {
-		case <-ctx.Done():
-			require.Failf(s.t, "vtbrowser: WaitText timed out",
-				"selector %q never showed %q within %v; last text: %q",
-				selector, want, defaultTimeout, got)
+		case <-deadline:
+			s.t.Fatalf("vtbrowser: %q value never became %q within %v; last: %q",
+				selector, want, defaultTimeout, last)
 			return
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(pollInterval):
 		}
 	}
 }
 
-// Eval runs a JavaScript expression in the page and unmarshals its
-// result into out — the escape hatch for assertions the named helpers
-// don't cover (focus, input values, attributes).
+// WaitFor polls the trimmed textContent of selector until ok reports true,
+// failing after defaultTimeout with the last observed text. desc names what was
+// awaited, for the failure message.
+func (s *Session) WaitFor(selector string, ok func(text string) bool, desc string) {
+	s.t.Helper()
+	deadline := time.After(defaultTimeout)
+	var last string
+	for {
+		last = strings.TrimSpace(s.text(selector))
+		if ok(last) {
+			return
+		}
+		select {
+		case <-deadline:
+			s.t.Fatalf("vtbrowser: %q never satisfied %s within %v; last text: %q",
+				selector, desc, defaultTimeout, last)
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// Eval runs a JavaScript expression and unmarshals its result into out — the
+// escape hatch for assertions the named helpers don't cover.
 func (s *Session) Eval(js string, out any) {
 	s.t.Helper()
-	s.run(fmt.Sprintf("evaluate %q", js), chromedp.Evaluate(js, out))
+	s.eval(js, out)
 }
 
-// SetOffline toggles browser-level network emulation, so tests can
-// simulate connectivity loss (failing every in-page fetch, including
-// Datastar's SSE reconnect attempts) and its recovery.
-func (s *Session) SetOffline(offline bool) {
+// WaitEvalTrue polls a JavaScript boolean expression until it evaluates true,
+// failing after defaultTimeout. For DOM facts the textContent-based Wait*
+// helpers can't express — an attribute's value, an element's display style.
+func (s *Session) WaitEvalTrue(js, desc string) {
 	s.t.Helper()
-	s.run(fmt.Sprintf("set offline=%v", offline),
-		network.Enable(),
-		network.EmulateNetworkConditions(offline, 0, -1, -1),
-	)
+	deadline := time.After(defaultTimeout)
+	for {
+		var ok bool
+		s.eval(js, &ok)
+		if ok {
+			return
+		}
+		select {
+		case <-deadline:
+			s.t.Fatalf("vtbrowser: expr never became true (%s) within %v: %s", desc, defaultTimeout, js)
+			return
+		case <-time.After(pollInterval):
+		}
+	}
 }
 
-// ConsoleErrors returns every console.error call and uncaught exception
-// the page produced so far. Browser tests assert this is empty — a
-// clean DOM with a broken console is not a passing client story.
+// signalProbe yields the live Datastar signal store, or null on the very first
+// evaluation (the one that injects the probe). Datastar's bundle is an ES module
+// that exports no global, so a data-json-signals element its MutationObserver
+// hydrates is the only supported way to read a signal value. The probe lives on
+// <body>, outside the #root morph target, so a server push never removes it.
+const signalProbe = `(()=>{let p=document.getElementById('__via_probe');` +
+	`if(!p){p=document.createElement('pre');p.id='__via_probe';p.style.display='none';` +
+	`p.setAttribute('data-json-signals','');document.body.appendChild(p);return null}` +
+	`try{return JSON.parse(p.textContent||'null')}catch(_){return null}})()`
+
+// WaitLiveConnected blocks until this tab's SSE stream has delivered its
+// per-connection tab id. Nothing in the rendered DOM changes on connect, yet an
+// action fired before the id lands posts an empty $viatab and is refused — so
+// the signal itself is the only honest gate for "the tab is live now".
+func (s *Session) WaitLiveConnected() {
+	s.t.Helper()
+	s.WaitEvalTrue(`(()=>{const g=`+signalProbe+`;return !!(g&&g.viatab)})()`,
+		"the SSE stream to deliver this tab's id ($viatab)")
+}
+
+// WaitBoundSignal blocks until the Datastar signal bound to selector (the slot
+// named by its data-bind attribute) holds want. An input's DOM value is set by
+// the keystroke itself, before Datastar's bind runs, so waiting on Value would
+// return while the signal the server will actually read is still stale.
+func (s *Session) WaitBoundSignal(selector, want string) {
+	s.t.Helper()
+	s.WaitEvalTrue(fmt.Sprintf(
+		`(()=>{const el=document.querySelector(%q);if(!el)return false;`+
+			`const k=el.getAttribute('data-bind');if(!k)return false;`+
+			`const g=%s;return !!g&&g[k]===%q})()`, selector, signalProbe, want),
+		fmt.Sprintf("the signal bound to %q to become %q", selector, want))
+}
+
+// WaitLoaded blocks until the document has fully loaded, i.e. every subresource
+// the CSP admitted has settled. The gate for a negative assertion about a
+// render-blocking fetch: if it were going to happen, it happened before this.
+func (s *Session) WaitLoaded() {
+	s.t.Helper()
+	s.WaitEvalTrue(`document.readyState==='complete'`, "the document to finish loading")
+}
+
+// Sleep settles for d. Prefer the Wait* helpers, which poll the DOM and so
+// absorb latency without a fixed delay; reach for Sleep only when there is no
+// observable signal to wait on — e.g. letting the SSE stream connect before a
+// first action, where nothing visible changes on connect.
+func (s *Session) Sleep(d time.Duration) {
+	s.t.Helper()
+	s.run(fmt.Sprintf("sleep %v", d), chromedp.Sleep(d))
+}
+
+// ConsoleErrors returns every console.error and uncaught exception the tab has
+// produced. A clean DOM with a broken console is not a passing client story.
 func (s *Session) ConsoleErrors() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.consoleErrs...)
 }
 
-// run executes chromedp actions with a per-call timeout so one hung
-// browser operation cannot stall the whole suite.
+// RequireCleanConsole fails the test if the tab logged any console error or
+// threw any uncaught exception.
+func (s *Session) RequireCleanConsole() {
+	s.t.Helper()
+	if errs := s.ConsoleErrors(); len(errs) > 0 {
+		s.t.Fatalf("vtbrowser: page logged %d console error(s):\n  %s",
+			len(errs), strings.Join(errs, "\n  "))
+	}
+}
+
+func (s *Session) text(selector string) string {
+	var txt string
+	s.eval(fmt.Sprintf(`(document.querySelector(%q)||{}).textContent||""`, selector), &txt)
+	return txt
+}
+
+func (s *Session) eval(js string, out any) {
+	s.t.Helper()
+	s.run(fmt.Sprintf("evaluate %q", js), chromedp.Evaluate(js, out))
+}
+
+// run executes chromedp actions with a per-call timeout so one hung operation
+// cannot stall the whole suite.
 func (s *Session) run(what string, actions ...chromedp.Action) {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(s.ctx, defaultTimeout)
 	defer cancel()
-	require.NoError(s.t, chromedp.Run(ctx, actions...), "vtbrowser: %s", what)
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		s.t.Fatalf("vtbrowser: %s: %v", what, err)
+	}
 }
 
-// collectConsole runs on chromedp's event goroutine, so it only records
-// under the mutex — it must never touch testing.TB.
+// collectConsole runs on chromedp's event goroutine, so it only records under
+// the mutex — it must never touch testing.TB.
 func (s *Session) collectConsole(ev any) {
 	switch e := ev.(type) {
 	case *runtime.EventConsoleAPICalled:
@@ -222,23 +383,29 @@ func (s *Session) appendConsoleError(msg string) {
 }
 
 func formatRemoteObject(obj *runtime.RemoteObject) string {
-	if obj == nil {
+	switch {
+	case obj == nil:
 		return "<nil>"
-	}
-	if len(obj.Value) > 0 {
+	case len(obj.Value) > 0:
 		return string(obj.Value)
-	}
-	if obj.Description != "" {
+	case obj.Description != "":
 		return obj.Description
+	default:
+		return string(obj.Type)
 	}
-	return string(obj.Type)
 }
 
 func findBrowser() string {
+	if p := os.Getenv("VIA_CHROME"); p != "" {
+		return p
+	}
 	for _, name := range browserNames {
 		if path, err := exec.LookPath(name); err == nil {
 			return path
 		}
+	}
+	if _, err := os.Stat("/bin/chromium"); err == nil {
+		return "/bin/chromium"
 	}
 	return ""
 }

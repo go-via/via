@@ -1,140 +1,213 @@
 package via
 
 import (
-	"sync/atomic"
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"runtime/debug"
 	"time"
 )
 
-// Ticker is the handle returned by [Stream]. It lets the caller pause,
-// resume, or change the cadence of the running ticker. The underlying
-// goroutine stops automatically when ctx is disposed; calling Pause /
-// Resume / SetInterval on a stopped ticker is a no-op.
-type Ticker struct {
-	paused   atomic.Bool
-	stopped  atomic.Bool
-	interval atomic.Int64  // nanoseconds; read by the goroutine after each reset
-	reset    chan struct{} // wakes the goroutine when interval changes
-	stop     chan struct{} // closed by Stop to wake the goroutine for exit
+// writePatchFrame writes one Datastar element-patch SSE event; the client
+// morphs the fragment into the live DOM by id (default mode).
+func writePatchFrame(w io.Writer, fragment []byte) {
+	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	writeElementLines(w, fragment)
+	_, _ = io.WriteString(w, "\n")
 }
 
-// Pause stops further callbacks from firing until Resume is called.
-// In-flight callbacks complete normally.
-func (t *Ticker) Pause() {
-	if t == nil {
-		return
-	}
-	t.paused.Store(true)
+// writeInnerPatchFrame patches the children of #id, never comparing id's own
+// element: mode inner hands the client a DocumentFragment, and the both-sided
+// data-ignore-morph check only fires when the incoming node is an Element. That
+// is how a live child's push still lands on a container the root-walk render
+// marked data-ignore-morph.
+func writeInnerPatchFrame(w io.Writer, id string, fragment []byte) {
+	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, "data: selector #"+id+"\n")
+	_, _ = io.WriteString(w, "data: mode inner\n")
+	writeElementLines(w, fragment)
+	_, _ = io.WriteString(w, "\n")
 }
 
-// Resume restarts callbacks after a Pause. No-op on a running ticker.
-func (t *Ticker) Resume() {
-	if t == nil {
-		return
-	}
-	t.paused.Store(false)
-}
-
-// Stop terminates the ticker permanently. After Stop returns, no further
-// callbacks fire and the underlying goroutine exits — Pause/Resume on a
-// stopped ticker are no-ops. Idempotent; calling Stop on an already-
-// stopped ticker is safe.
-//
-// Stop is the explicit-shutdown counterpart to Ctx disposal: use it
-// when the user navigates away from a sub-region but the page itself
-// stays mounted (e.g. closing a modal that owned a polling ticker).
-func (t *Ticker) Stop() {
-	if t == nil {
-		return
-	}
-	if t.stopped.Swap(true) {
-		return
-	}
-	close(t.stop)
-}
-
-// SetInterval changes the tick cadence to d. The new interval takes
-// effect on the next tick boundary; the current in-flight callback
-// (if any) is unaffected. Non-positive d is a no-op.
-func (t *Ticker) SetInterval(d time.Duration) {
-	if t == nil || d <= 0 {
-		return
-	}
-	t.interval.Store(int64(d))
-	select {
-	case t.reset <- struct{}{}:
-	default: // a reset is already pending; the goroutine will pick up the latest value
+// writeElementLines emits one `data: elements` field per physical line: a bare
+// newline in rendered content would otherwise split the SSE event and truncate
+// the patch. The client rejoins them.
+func writeElementLines(w io.Writer, fragment []byte) {
+	for line := range bytes.SplitSeq(fragment, []byte{'\n'}) {
+		_, _ = io.WriteString(w, "data: elements ")
+		_, _ = w.Write(line)
+		_, _ = io.WriteString(w, "\n")
 	}
 }
 
-// Stream runs fn on a ticker until ctx is disposed. Use it in OnConnect
-// to drive periodic UI updates without managing a goroutine and ticker by
-// hand:
-//
-//	func (p *Page) OnConnect(ctx *via.Ctx) error {
-//	    via.Stream(ctx, time.Second, func(ctx *via.Ctx, t time.Time) {
-//	        p.Now.Write(ctx, t.Format("15:04:05"))
-//	    })
-//	    return nil
-//	}
-//
-// fn runs on the same goroutine for every tick; it must return promptly.
-// Long work should be offloaded with its own goroutine that observes
-// ctx.Done(). After fn returns, dirty signals/state are auto-flushed.
-//
-// Stream takes the per-Ctx action mutex for the duration of fn, so the
-// fn body has the same exclusivity guarantees as an action handler:
-// Signal/State writes don't race with concurrent action POSTs or with
-// other Stream callbacks on the same Ctx.
-//
-// The returned [*Ticker] lets the caller pause, resume, or change the
-// cadence at runtime. It is safe to ignore the return value if those
-// controls are not needed.
-func Stream(ctx *Ctx, interval time.Duration, fn func(ctx *Ctx, t time.Time)) *Ticker {
-	if ctx == nil || interval <= 0 || fn == nil {
-		return nil
+// writeKeepaliveFrame writes one SSE comment frame, which the client ignores
+// entirely. Its real job is the write itself: a failure on a vanished
+// (half-open) peer is what lets the stream tear down instead of leaking.
+func writeKeepaliveFrame(w io.Writer) {
+	_, _ = io.WriteString(w, ": keepalive\n\n")
+}
+
+// errWriter records the first write error so a frame's many small writes are
+// checked once, at the end.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	if e.err != nil {
+		return 0, e.err
 	}
-	t := &Ticker{
-		reset: make(chan struct{}, 1),
-		stop:  make(chan struct{}),
+	n, err := e.w.Write(p)
+	if err != nil {
+		e.err = err
 	}
-	t.interval.Store(int64(interval))
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.doneChan:
-				return
-			case <-t.stop:
-				return
-			case <-t.reset:
-				ticker.Reset(time.Duration(t.interval.Load()))
-			case now := <-ticker.C:
-				if t.paused.Load() {
-					continue
-				}
-				streamTick(ctx, now, fn)
+	return n, err
+}
+
+// stream serializes every write and tears the stream down on the first write
+// or flush failure. A half-open peer (vanished without a FIN) never cancels the
+// request context, so a failed frame write is the only in-band signal it's
+// gone; cancelling stops the child goroutine, its tickers and subscriptions and
+// runs disposers instead of leaking them against a dead socket. The per-frame
+// deadline keeps a stalled-but-alive peer from pinning the goroutine forever.
+// All calls run on the child goroutine, so it needs no lock.
+type stream struct {
+	w       io.Writer
+	rc      *http.ResponseController
+	timeout time.Duration
+	cancel  context.CancelFunc
+	failed  bool
+}
+
+// frame emits one SSE event and flushes it, cancelling the stream on any
+// error. Once failed it is a no-op, so a write racing a just-torn-down stream
+// can't re-trigger teardown.
+func (s *stream) frame(write func(io.Writer)) {
+	if s.failed {
+		return
+	}
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
+	ew := &errWriter{w: s.w}
+	write(ew)
+	err := ew.err
+	if err == nil {
+		err = s.rc.Flush()
+	}
+	if err != nil {
+		s.failed = true
+		s.cancel()
+	}
+}
+
+// abort tears the connection down from inside a push — the one exit a render
+// that cannot succeed has, since a push carries no response to answer with.
+func (s *stream) abort() {
+	s.failed = true
+	s.cancel()
+}
+
+// runStream drives one or more live units on a single goroutine: every unit's
+// ticks, subscriptions, dispatched actions and the keepalive feed through it,
+// so all mutation, render and stream writes are serialized without a lock. Each
+// push item pushes only its own child's container. It always loops, even with
+// no ticks or subs, so an interactive-only child still receives actions and
+// beats; disposers run on exit.
+// listeners and wake are built by the caller, before any OnConnect runs, so a
+// unit observes its own connect-time publish; runStream only drains them.
+func runStream(log *slog.Logger, reqCtx context.Context, label string, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
+	defer func() {
+		for _, child := range children {
+			for _, d := range child.disposers {
+				// runPushItem, not a bare call: a disposer is user code, and one
+				// panicking must not skip the rest and leak what they release.
+				runPushItem(log, label, d)
 			}
 		}
 	}()
-	return t
+	for _, child := range children {
+		for _, t := range child.ticks {
+			startTicker(reqCtx, child, t, pushq)
+		}
+	}
+	beat := time.NewTicker(interval)
+	defer beat.Stop()
+	for {
+		select {
+		case <-reqCtx.Done():
+			return
+		case fn := <-pushq:
+			runPushItem(log, label, fn)
+		case <-wake:
+			sweepListeners(log, label, listeners)
+		case <-beat.C:
+			runPushItem(log, label, keepalive)
+		}
+	}
 }
 
-// streamTick runs one fn invocation under actionMu and flushes any
-// dirty state before releasing the lock — same exclusivity as an
-// action handler, so fn's reads/writes don't race with a concurrent
-// POST or another Stream callback on the same Ctx.
-func streamTick(ctx *Ctx, t time.Time, fn func(*Ctx, time.Time)) {
-	ctx.actionMu.Lock()
-	defer ctx.actionMu.Unlock()
-	ctx.silent.Store(false)
-	defer func() {
-		if ctx.silent.Load() {
-			ctx.discardDirty()
-			return
+// sweepListeners drains every listener once, in registration order, so two
+// Listens fire deterministically instead of racing two reader goroutines;
+// one wake token may stand for any number of pending subscriptions.
+func sweepListeners(log *slog.Logger, label string, listeners []listener) {
+	for _, l := range listeners {
+		if work := l.poll(); work != nil {
+			runPushItem(log, label, work)
 		}
-		flushDirty(ctx)
+	}
+}
+
+// runPushItem recovers per item, so one bad render logs and drops that item
+// instead of unwinding runStream: an action's result is already sent to the
+// waiting POST by the time pushWork runs, so without this the stream would die
+// silently after a 204 the client already saw as success. label carries the
+// connection's identity, so a busy deploy's stacks group by tab and unit
+// instead of being read one by one.
+func runPushItem(log *slog.Logger, label string, fn func()) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Error("via: live push panic", "label", label, "err", rec, "stack", string(debug.Stack()))
+		}
 	}()
-	defer recoverLog(ctx, "Stream callback")
-	fn(ctx, t)
+	fn()
+}
+
+// writeSignalsFrame writes one Datastar patch-signals SSE event — via uses it
+// to hand the client its tab id, whose name must stay underscore-free (see
+// tabSignal).
+func writeSignalsFrame(w io.Writer, signalsJSON string) {
+	_, _ = io.WriteString(w, "event: datastar-patch-signals\ndata: signals ")
+	_, _ = io.WriteString(w, signalsJSON)
+	_, _ = io.WriteString(w, "\n\n")
+}
+
+// writeSSEHeaders sets the event-stream headers; Cache-Control keeps proxies
+// and the browser from buffering frames.
+func writeSSEHeaders(w http.ResponseWriter) {
+	hdr := w.Header()
+	hdr.Set("Content-Type", "text/event-stream")
+	hdr.Set("Cache-Control", "no-cache")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+}
+
+// canFlush reports whether w can stream, looking through wrappers the way
+// http.ResponseController does. A raw w.(http.Flusher) is wrong here — any
+// middleware wrapper answers no — and ResponseController.Flush cannot serve as
+// the probe either, because flushing commits a 200 ahead of the checks that
+// follow it.
+func canFlush(w http.ResponseWriter) bool {
+	for {
+		switch v := w.(type) {
+		case interface{ FlushError() error }:
+			return true
+		case http.Flusher:
+			return true
+		case interface{ Unwrap() http.ResponseWriter }:
+			w = v.Unwrap()
+		default:
+			return false
+		}
+	}
 }

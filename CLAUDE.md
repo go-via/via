@@ -1,3 +1,3 @@
-# Follow at ALL times
+# Follow at all times
 
 Read [AGENTS.md](./AGENTS.md).

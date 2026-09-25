@@ -1,32 +1,23 @@
 name: via CodeQL config
 
-# We run the full `security-and-quality` suite (set on the workflow) and
-# exclude only the specific queries whose findings on this repo are
-# false positives. Rationale per rule is given inline so future
-# additions are deliberate, not cargo-culted.
+# The full `security-and-quality` suite runs; only queries whose findings on
+# this tree are false positives are excluded, each with its reason inline so
+# additions stay deliberate rather than cargo-culted.
+#
+# v1 carried three further exclusions — go/log-injection,
+# go/unhandled-writable-file-close and go/allocation-size-overflow — each
+# justified by a specific v1 file (log.go's stripCRLF, mw/mw.go's sanitizeLog,
+# file.go's Save). None of those files exist in the v2 core, so the exclusions
+# were dropped rather than carried over: a suppression whose rationale points at
+# deleted code is a blind spot. Re-add one only when a real finding on real v2
+# code turns out to be a false positive.
 queries:
   - uses: security-and-quality
 
 query-filters:
-  # CWE-117. We sanitize every user-derived value before it reaches a
-  # log sink via stripCRLF (log.go) / sanitizeLog (mw/mw.go). CodeQL's
-  # taint model doesn't recognize the custom sanitizer.
-  - exclude:
-      id: go/log-injection
-
-  # ctx.SetCookie is a pass-through over http.SetCookie; the Secure
-  # decision belongs to the caller. App-level enforcement on the
-  # session cookie is configured via via.WithSecureCookies.
+  # via sets the session cookie's Secure flag from the request (req.TLS != nil)
+  # or explicitly via WithSecureCookies, because a TLS-terminating proxy leaves
+  # req.TLS nil on a genuinely https request. CodeQL sees only that the field is
+  # not unconditionally true.
   - exclude:
       id: go/cookie-secure-not-set
-
-  # file.go:Save already captures the writable handle's close error
-  # via a named-return + deferred assignment — the canonical Go
-  # pattern. CodeQL's pattern matcher doesn't recognize it.
-  - exclude:
-      id: go/unhandled-writable-file-close
-
-  # `len(s) + 8` flagged as potential int overflow. On 64-bit Go,
-  # len(s) is bounded by addressable memory; +8 cannot overflow.
-  - exclude:
-      id: go/allocation-size-overflow

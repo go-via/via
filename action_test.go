@@ -1,494 +1,597 @@
 package via_test
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/spec"
-	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type counterPage struct {
-	Hits via.StateTabNum[int]
-	Step via.SignalNum[int] `via:"step,init=1"`
+type todoItem struct {
+	ID   int
+	Text string
 }
 
-func (c *counterPage) Inc(ctx *via.Ctx) error {
-	c.Hits.Write(ctx, c.Hits.Read(ctx)+c.Step.Read(ctx))
-	return nil
+type todoBox struct{ items []todoItem }
+
+func (b *todoBox) remove(id int) {
+	out := b.items[:0]
+	for _, it := range b.items {
+		if it.ID != id {
+			out = append(out, it)
+		}
+	}
+	b.items = out
 }
 
-func (c *counterPage) View(ctx *via.CtxR) h.H {
+// todoList is a plain list whose rows each carry a delete action bound to the
+// row's id — the per-row-action case. Del receives the id as a typed parameter.
+type todoList struct{ box *todoBox }
+
+func (l *todoList) Del(ctx *via.Ctx, id int) { l.box.remove(id) }
+func (l *todoList) row(t todoItem) h.H {
+	return h.Li(h.Str(t.Text), h.Button(via.OnArg("click", l.Del, t.ID), h.Str("x")))
+}
+func (l *todoList) View() h.H { return h.Ul(via.Each(l.box.items, l.row)) }
+
+func newTodoList() *todoBox {
+	return &todoBox{items: []todoItem{{1, "alpha"}, {2, "bravo"}, {3, "gamma"}}}
+}
+
+func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Handler(todoList{box: newTodoList()})), http.MethodGet, "/", "")
+	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
+}
+
+func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the row whose value was sent must be deleted")
+	assert.Contains(t, body, "alpha")
+	assert.Contains(t, body, "gamma")
+}
+
+func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
+	// value (2) while keeping alpha's slot and shape digest.
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=2", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}") // slot 0 (alpha), but arg=2 (bravo)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
+	assert.Contains(t, body, "alpha")
+}
+
+func TestActionArg_malformedArgAnswers400(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=%22abc%22", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}")
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
+}
+
+func TestActionArg_missingArgAnswers400(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+	}{
+		{"empty", "a="},
+		{"null", "a=null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+			_, page := do(t, srv, http.MethodGet, "/", "")
+			url := strings.Replace(actionURL(t, page, "r", 0), "a=1", tt.a, 1)
+			resp, body := do(t, srv, http.MethodPost, url, "{}")
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a missing arg")
+		})
+	}
+}
+
+// todoBoard embeds the todo list as a plain child — per-row value-actions
+// must work there too, not only at the root.
+type todoBoard struct{ List todoList }
+
+func (b *todoBoard) View() h.H { return h.Div(via.Child(b.List)) }
+
+func TestActionArg_worksInsideAPlainChild(t *testing.T) {
+	t.Parallel()
+	board := todoBoard{List: todoList{box: newTodoList()}}
+	srv := serve(t, via.Handler(board))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // child 1, bravo's slot, arg=2
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.NotContains(t, body, "bravo", "the child row's value-action did not fire")
+	assert.Contains(t, body, "alpha")
+}
+
+func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
+	t.Parallel()
+	box := newTodoList()
+	srv := serve(t, via.Handler(todoList{box: box}))
+
+	_, tabB := do(t, srv, http.MethodGet, "/", "") // tab B paints, then sits idle
+	bravoFromB := rowActionURL(t, tabB, 2)
+
+	_, tabA := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, rowActionURL(t, tabA, 1), "{}") // tab A deletes alpha
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, body := do(t, srv, http.MethodPost, bravoFromB, "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"tab B's already-rendered row action must survive another tab resizing the list")
+	assert.NotContains(t, body, "bravo", "and it must have deleted bravo — the row it named")
+	assert.Contains(t, body, "gamma", "not some other row")
+}
+
+func rowActionURL(t *testing.T, html string, id int) string {
+	t.Helper()
+	m := regexp.MustCompile(`@post\('([^']*_via/a/r/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
+	require.NotEmptyf(t, m, "no row action for id %d in:\n%s", id, html)
+	return m[1]
+}
+
+func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
+	t.Parallel()
+	_, first := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
+	_, second := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
+	assert.Equal(t, actionURL(t, first, "r", 1), actionURL(t, second, "r", 1),
+		"two independent instances must address the same handler identically")
+}
+
+// twinButtons binds the same handler twice. Both buttons mean the same thing,
+// so they collapse onto one action entry and one URL — identity is the
+// handler, never the render position.
+type twinButtons struct{ count *store }
+
+func (c *twinButtons) Inc(ctx *via.Ctx) { c.count.Add(1) }
+func (c *twinButtons) View() h.H {
 	return h.Div(
-		h.Button(h.Text("+"), on.Click(c.Inc)),
-		c.Hits.Text(ctx),
+		h.H1(h.Str(strconv.Itoa(c.count.Value()))),
+		h.Button(via.On("click", c.Inc)),
+		h.Button(via.On("click", c.Inc)),
 	)
 }
 
-func TestAction_methodNameAppearsInOnClickPost(t *testing.T) {
+func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	t.Parallel()
+	srv := serve(t, via.Handler(twinButtons{count: &store{}}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	assert.Equal(t, actionURL(t, page, "r", 0), actionURL(t, page, "r", 1),
+		"two bindings of one handler must share one id")
 
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[counterPage](app, "/")
-
-	body := getBody(t, server, "/")
-	assert.Contains(t, body, `@post(&#39;/_action/Inc&#39;)`,
-		"on.Click(c.Inc) must render @post('/_action/Inc')")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
 
-func TestAction_unknownMethodReturns404(t *testing.T) {
+func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
+	// Sequential: it captures the global log output.
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), "{}")
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
+	assert.NotContains(t, body, "Inc", "but never the Go method names of the render")
+	assert.Contains(t, buf.String(), "Inc", "the bound handlers go to the server log instead")
+}
+
+type idCounter struct {
+	N via.Signal[int]
+}
+
+func (c *idCounter) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
+
+func (c *idCounter) View() h.H {
+	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+}
+
+type idPair struct{ A, B idCounter }
+
+func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
+
+// idTwins holds two instances of one type as plain fields (no Child), so both
+// bind into the same action table. runtime.FuncForPC drops the receiver, so
+// without the offset in the id both buttons would render the same action URL
+// and A's click would run B's handler.
+//
+// It renders through a plain method: a field with its own View is a child
+// composition, and only via.Child may render one.
+type idTwin struct {
+	N via.Signal[int]
+}
+
+func (c *idTwin) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
+
+func (c *idTwin) row() h.H {
+	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+}
+
+type idTwins struct{ A, B idTwin }
+
+func (p *idTwins) View() h.H { return h.Div(p.A.row(), p.B.row()) }
+
+var actionURLRe = regexp.MustCompile(`@post\('([^']+)'`)
+
+func actionURLs(t *testing.T, h http.Handler) []string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out []string
+	for _, m := range actionURLRe.FindAllStringSubmatch(rec.Body.String(), -1) {
+		out = append(out, m[1])
+	}
+	return out
+}
+
+func TestActionID_twoInstancesOfOneTypeGetDistinctIDs(t *testing.T) {
 	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[counterPage](app, "/")
-
-	resp, err := server.Client().Post(server.URL+"/_action/Nope", "application/json", strings.NewReader(`{}`))
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	urls := actionURLs(t, via.Handler(idTwins{}))
+	require.Len(t, urls, 2)
+	require.NotEqual(t, urls[0], urls[1],
+		"two instances of one type must not share an action id — A's click would run B")
 }
 
-// TestMethodName_resolvesBoundMethod doubles as a Go-runtime canary:
-// spec.MethodName recovers a method name by stripping the "-fm"
-// trampoline suffix that the Go runtime emits for bound method values
-// (e.g. "pkg.(*counterPage).Inc-fm"). The "-fm" suffix is a runtime
-// internal, not a language contract — a Go release that changes the
-// trampoline naming would silently break every `on.Click(c.Inc)` call
-// site in via and downstream apps. If this test ever starts failing
-// after a Go upgrade, fix MethodName before bumping the toolchain.
-func TestMethodName_resolvesBoundMethod(t *testing.T) {
+func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
 	t.Parallel()
-
-	c := &counterPage{}
-	assert.Equal(t, "Inc", spec.MethodName(c.Inc))
+	urls := actionURLs(t, via.Handler(idPair{}))
+	require.Len(t, urls, 2)
+	require.NotEqual(t, urls[0], urls[1])
 }
 
-func TestMethodName_returnsEmptyForAnonymousFunction(t *testing.T) {
+func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	t.Parallel()
-	// Anonymous closures have no "-fm" suffix; MethodName returns "".
-	// The on/* helpers turn that empty string into a panic so misuse
-	// is loud — see TestClick_panicsOnAnonymousFunction.
-	assert.Equal(t, "", spec.MethodName(func() {}))
+	app := via.Handler(idTwins{})
+	urls := actionURLs(t, app)
+	require.Len(t, urls, 2)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, urls[1], strings.NewReader(`{}`))
+	req.Header.Set("Datastar-Request", "true")
+	app.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+	// Two signals on the page; the second twin's is the one that moved.
+	slots := regexp.MustCompile(`data-text="\$([a-z0-9_]+)"`).FindAllStringSubmatch(rec.Body.String(), -1)
+	require.Len(t, slots, 2)
+	require.Contains(t, rec.Body.String(), `"`+slots[1][1]+`":1`, "body: %s", rec.Body.String())
 }
 
-func TestMethodName_returnsEmptyForTopLevelFunction(t *testing.T) {
-	t.Parallel()
-	// Package-level funcs (no receiver) have no "-fm" suffix either, so
-	// MethodName must reject them just like anonymous closures.
-	assert.Equal(t, "", spec.MethodName(topLevelHandler))
-}
+type idSameMethodTwice struct{ N via.Signal[int] }
 
-func TestMethodName_returnsEmptyForNil(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "", spec.MethodName(nil))
-}
+func (c *idSameMethodTwice) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
 
-func topLevelHandler(ctx *via.Ctx) error { return nil }
-
-func TestMethodName_returnsSameStringForSameMethod(t *testing.T) {
-	t.Parallel()
-
-	// Two distinct *counterPage instances → same method PC → same
-	// resolved name. Catches a regression in the PC-keyed cache where
-	// e.g. caching by closure address (changes per instance) instead of
-	// PC would silently re-parse.
-	a := &counterPage{}
-	b := &counterPage{}
-	assert.Equal(t, spec.MethodName(a.Inc), spec.MethodName(b.Inc))
-	assert.Equal(t, "Inc", spec.MethodName(b.Inc))
-}
-
-type erroringActionPage struct{}
-
-func (p *erroringActionPage) Save(ctx *via.Ctx) error {
-	return assertSaveErr("validation: email required")
-}
-
-func (p *erroringActionPage) View(ctx *via.CtxR) h.H { return h.Div() }
-
-type assertSaveErr string
-
-func (e assertSaveErr) Error() string { return string(e) }
-
-func TestAction_defaultErrorPathToastsTheBrowser(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[erroringActionPage](app, "/")
-
-	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
-	defer cancel()
-	require.Equal(t, 200, tc.Action("Save").Fire())
-
-	// A returned error surfaces its message through the default toast,
-	// which arrives in the SSE stream as a script-patch event.
-	got := vt.AwaitFrame(t, frames, 2*time.Second,
-		"via-toast-root", "validation: email required")
-	assert.NotContains(t, got, "alert(",
-		"default error surface must be a styled toast, not a blocking alert")
-}
-
-type customErrPage struct{}
-
-func (p *customErrPage) Save(ctx *via.Ctx) error {
-	return assertSaveErr("nope")
-}
-
-func (p *customErrPage) View(ctx *via.CtxR) h.H { return h.Div() }
-
-type panicStringPage struct{}
-
-func (p *panicStringPage) Crash(ctx *via.Ctx) error {
-	panic("internal database connection string: secret-leaks-here")
-}
-
-func (p *panicStringPage) View(ctx *via.CtxR) h.H { return h.Div() }
-
-func TestAction_defaultPanicToastHidesInternalMessage(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[panicStringPage](app, "/")
-
-	tc := vt.NewClient(t, server, "/")
-	frames, cancel := tc.SSE()
-	defer cancel()
-	require.Equal(t, 200, tc.Action("Crash").Fire())
-
-	got := vt.AwaitFrame(t, frames, 2*time.Second,
-		"via-toast-root", "Something went wrong")
-	assert.NotContains(t, got, "secret-leaks-here",
-		"default panic toast must not leak the internal panic message")
-}
-
-type panicTypedErr struct {
-	Code string
-}
-
-func (e *panicTypedErr) Error() string { return e.Code }
-
-type panicTypedPage struct{}
-
-func (p *panicTypedPage) Boom(ctx *via.Ctx) error {
-	panic(&panicTypedErr{Code: "E_TYPED"})
-}
-
-func (p *panicTypedPage) View(ctx *via.CtxR) h.H { return h.Div() }
-
-func TestAction_panicWithTypedErrorPreservesType(t *testing.T) {
-	t.Parallel()
-
-	var got error
-	app := via.New(
-		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
-			got = err
-		}),
+func (c *idSameMethodTwice) View() h.H {
+	return h.Div(
+		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(via.On("click", c.Inc), h.Str("also +")),
 	)
-	server := vt.Serve(t, app)
-	via.Mount[panicTypedPage](app, "/")
-
-	tc := vt.NewClient(t, server, "/")
-	require.Equal(t, 200, tc.Action("Boom").Fire())
-
-	require.NotNil(t, got)
-	te, ok := got.(*panicTypedErr)
-	require.True(t, ok, "panic with typed *panicTypedErr should be passed through to the handler verbatim, got %T", got)
-	assert.Equal(t, "E_TYPED", te.Code)
 }
 
-func TestAction_WithActionErrorHandler_replacesDefaultAlert(t *testing.T) {
+func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
 	t.Parallel()
+	urls := actionURLs(t, via.Handler(idSameMethodTwice{}))
+	require.Len(t, urls, 2)
+	require.Equal(t, urls[0], urls[1])
+}
 
-	var seenErr atomic.Pointer[string]
-	app := via.New(
-		via.WithActionErrorHandler(func(ctx *via.Ctx, err error) {
-			s := err.Error()
-			seenErr.Store(&s)
-		}),
+type idClosurePair struct{ hits [2]int }
+
+func (p *idClosurePair) View() h.H {
+	var kids []h.H
+	for i := range p.hits {
+		kids = append(kids, h.Button(via.On("click", func(ctx *via.Ctx) { p.hits[i]++ })))
+	}
+	return h.Div(kids...)
+}
+
+func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
+	// Sequential: it captures the global log output.
+	app := via.Handler(idClosurePair{})
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Contains(t, logs.String(), "share the action id")
+}
+
+// gridBench binds one handler a thousand times, which is the shape actionID's
+// cost shows up in: the id is a pure function of (code pointer, receiver
+// offset), so resolving the Go name and hashing it per binding per render was
+// pure waste.
+type gridBench struct{ rows []int }
+
+func (g *gridBench) Hit(ctx *via.Ctx) {}
+
+func (g *gridBench) row(int) h.H { return h.Button(via.On("click", g.Hit)) }
+
+func (g *gridBench) View() h.H { return h.Div(via.Each(g.rows, g.row)) }
+
+func BenchmarkRender_thousandActionBindings(b *testing.B) {
+	handler := via.Handler(gridBench{rows: make([]int, 1000)})
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	for b.Loop() {
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
+func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
+	// Not Parallel: it captures the process-global log, which every other test writes to.
+	handler := via.Handler(idTwins{})
+	first := actionURLs(t, handler)
+	second := actionURLs(t, handler)
+	require.Len(t, first, 2)
+	assert.Equal(t, first, second, "an action URL must survive a re-render, or every open tab 410s")
+	assert.Equal(t, first, actionURLs(t, via.Handler(idTwins{})),
+		"the id is content-addressed, not per-instance")
+}
+
+// ownedRows is the arg-authorization fixture: a list filtered by owner, plus
+// an admin-only row reachable only through a via.When. Two users see two
+// disjoint sets of ?a= values from one handler and one action id — which is
+// the whole point: the action id is content-addressed on the handler, so the
+// arg is the only thing separating alice's row from bob's.
+type ownedRows struct {
+	me    string
+	admin bool
+	rows  map[int]string // id -> owner
+	gone  []int
+}
+
+func newOwnedRows(me string, admin bool) ownedRows {
+	return ownedRows{me: me, admin: admin, rows: map[int]string{1: "alice", 2: "bob", 9: "system"}}
+}
+
+func (o *ownedRows) Delete(ctx *via.Ctx, id int) { o.gone = append(o.gone, id) }
+
+func (o *ownedRows) mine() []int {
+	var out []int
+	for id, owner := range o.rows {
+		if owner == o.me {
+			out = append(out, id)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+func (o *ownedRows) systemRow() h.H {
+	return h.Li(h.ID("system"), h.Button(via.OnArg("click", o.Delete, 9), h.Str("drop system")))
+}
+
+func (o *ownedRows) row(id int) h.H {
+	return h.Li(h.ID("r"+strconv.Itoa(id)), h.Str(strconv.Itoa(id)),
+		h.Button(via.OnArg("click", o.Delete, id), h.Str("delete")))
+}
+
+func (o *ownedRows) View() h.H {
+	return h.Div(
+		h.P(h.Str("deleted: "+fmt.Sprint(o.gone))),
+		h.Ul(via.Each(o.mine(), o.row)),
+		via.When(o.admin, o.systemRow),
 	)
-	server := vt.Serve(t, app)
-	via.Mount[customErrPage](app, "/")
-
-	tc := vt.NewClient(t, server, "/")
-	require.Equal(t, 200, tc.Action("Save").Fire())
-
-	got := seenErr.Load()
-	require.NotNil(t, got, "WithActionErrorHandler should fire on errored action")
-	assert.Equal(t, "nope", *got)
 }
 
-// Per-Ctx serialization
+func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	require.Contains(t, page, "a=2", "bob's own row must be bound")
+	require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
 
-type serialPage struct {
-	N via.StateTabNum[int]
+	url := strings.Replace(actionURL(t, page, "r", 0), "a=2", "a=1", 1)
+	resp, body := do(t, srv, http.MethodPost, url, "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "an arg bob's render never bound must not dispatch")
+	assert.NotContains(t, body, "deleted: [1]", "alice's row was deleted by an arg swap")
 }
 
-// Bump is intentionally non-atomic on N.Get/N.Set so the only thing
-// keeping a parallel race from corrupting it is the runtime's per-Ctx
-// action serialization.
-func (p *serialPage) Bump(ctx *via.Ctx) error {
-	cur := p.N.Read(ctx)
-	p.N.Write(ctx, cur+1)
+func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveOwnedRows{}))
+		conn := app.Connect()
+
+		url := strings.Replace(conn.ActionURL("r", 0), "a=2", "a=1", 1)
+		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+		assert.Equal(t, http.StatusGone, status, "an unrendered arg must not dispatch over a live stream")
+
+		status, _ = app.Action(0).Over(conn).Fire() // the rendered arg, same slot
+		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
+		conn.Await("deleted 2")
+	})
+}
+
+// liveOwnedRows is ownedRows' live twin: one rendered arg (2), a State to make
+// the unit live, and a handler that reports what it was asked to delete.
+type liveOwnedRows struct{ last via.State[string] }
+
+func (l *liveOwnedRows) Delete(ctx *via.Ctx, id int) { l.last.Set("deleted " + strconv.Itoa(id)) }
+func (l *liveOwnedRows) View() h.H {
+	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Delete, 2)))
+}
+
+func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
+	t.Parallel()
+	admin := serve(t, via.Handler(newOwnedRows("alice", true)))
+	_, adminPage := do(t, admin, http.MethodGet, "/", "")
+	require.Contains(t, adminPage, `id="system"`)
+	systemURL := actionURL(t, adminPage, "r", 1) // the When branch's own binding
+	require.Contains(t, systemURL, "a=9")
+
+	// Same handler, same action id, same URL — but a render with the branch shut.
+	plain := serve(t, via.Handler(newOwnedRows("alice", false)))
+	_, plainPage := do(t, plain, http.MethodGet, "/", "")
+	require.NotContains(t, plainPage, `id="system"`)
+	require.Contains(t, plainPage, "a=1", "the handler must still be bound, or this proves nothing")
+
+	resp, body := do(t, plain, http.MethodPost, systemURL, "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.NotContains(t, body, "deleted: [9]")
+}
+
+func TestActionArg_renderedArgStillDispatches(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "deleted: [2]", "bob's own row must still be deletable")
+}
+
+// bigList is via.Each over a large list: one handler, one action id, one
+// thousand bound args. It pins that the arg set stays bounded by the render
+// (a set of the very strings the HTML already carries) and that every row in
+// it still dispatches.
+type bigList struct{ hit int }
+
+func (b *bigList) Pick(ctx *via.Ctx, id int) { b.hit = id }
+func (b *bigList) row(id int) h.H            { return h.Li(h.Button(via.OnArg("click", b.Pick, id))) }
+func (b *bigList) View() h.H {
+	ids := make([]int, 1000)
+	for i := range ids {
+		ids[i] = i + 1
+	}
+	return h.Div(h.P(h.Str(b.hit)), h.Ul(via.Each(ids, b.row)))
+}
+
+func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(bigList{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	base := actionURL(t, page, "r", 0)
+	for _, id := range []string{"1", "500", "1000"} {
+		url := strings.Replace(base, "a=1", "a="+id, 1)
+		resp, body := do(t, srv, http.MethodPost, url, "{}")
+		require.Equalf(t, http.StatusOK, resp.StatusCode, "row %s must dispatch", id)
+		assert.Containsf(t, body, "<p>"+id+"</p>", "row %s did not reach the handler", id)
+	}
+	resp, _ := do(t, srv, http.MethodPost, strings.Replace(base, "a=1", "a=1001", 1), "{}")
+	assert.Equal(t, http.StatusGone, resp.StatusCode, "an id past the end of the list must not dispatch")
+}
+
+// The arg set's cost, measured rather than asserted by eye: rendering 1000
+// value-carrying bindings must stay within a small constant per binding. The
+// ceiling is deliberately loose (it is a regression tripwire, not a budget) —
+// what it catches is the set turning into something super-linear, or the args
+// being retained per row rather than merged per slot.
+func BenchmarkEachArgSet(b *testing.B) {
+	h := via.Handler(bigList{})
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	b.ReportAllocs()
+	for b.Loop() {
+		resp, err := srv.Client().Get(srv.URL)
+		if err != nil {
+			b.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+}
+
+// liveOwned promotes ownedRows' whole ownership model — two users, disjoint
+// ?a= sets, one handler id — onto a unit that can be live, so the arg check
+// can be held to the same claim off the root unit it is held to on it. The
+// live twin below it (liveOwnedRows) proves only that an unrendered arg 410s;
+// what matters is that another user's arg does, with his row left intact.
+type liveOwned struct {
+	ownedRows
+	live bool
+}
+
+func (l *liveOwned) OnInit(ctx *via.Ctx) error {
+	if l.live {
+		ctx.Tick(time.Hour, func(*via.Ctx) {})
+	}
 	return nil
 }
 
-func (p *serialPage) View(ctx *via.CtxR) h.H {
-	return h.Div(p.N.Text(ctx), h.Button(h.Text("+"), on.Click(p.Bump)))
+// ownedChildPage is the same model one level down: the dispatch address gains
+// a child key, which is the part the root-only tests never exercise.
+type ownedChildPage struct{ Rows liveOwned }
+
+func (p *ownedChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(p.Rows)) }
+
+func bobsRows(live bool) liveOwned {
+	return liveOwned{ownedRows: newOwnedRows("bob", false), live: live}
 }
 
-func TestAction_concurrentPOSTsAreSerializedPerCtx(t *testing.T) {
+func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) {
 	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[serialPage](app, "/")
-
-	tc := vt.NewClient(t, server, "/")
-
-	const N = 50
-	var wg sync.WaitGroup
-	wg.Add(N)
-	for range N {
-		go func() {
-			defer wg.Done()
-			tc.Action("Bump").Fire()
-		}()
+	shapes := []struct {
+		name    string
+		handler http.Handler
+		child   string
+		live    bool
+	}{
+		{"live root", via.Handler(bobsRows(true)), "r", true},
+		{"plain child", via.Handler(ownedChildPage{Rows: bobsRows(false)}), "0", false},
+		{"live child", via.Handler(ownedChildPage{Rows: bobsRows(true)}), "0", true},
 	}
-	wg.Wait()
+	for _, shape := range shapes {
+		t.Run(shape.name, func(t *testing.T) {
+			t.Parallel()
+			app := vt.Serve(t, shape.handler)
+			_, page := app.Get("/")
+			require.Contains(t, page, "a=2", "bob's own row must be bound")
+			require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
 
-	frames, cancel := tc.SSE()
-	defer cancel()
+			own := actionURL(t, page, shape.child, 0)
+			stolen := strings.Replace(own, "a=2", "a=1", 1)
+			require.NotEqual(t, own, stolen, "the swap must actually change the URL")
 
-	tc.Action("Bump").Fire() // N+1 increments by now
+			var conn *vt.Conn
+			attack, legit := app.Action(0).Raw(stolen), app.Action(0).Raw(own)
+			if shape.live {
+				conn = app.Connect()
+				attack, legit = attack.Over(conn), legit.Over(conn)
+			}
 
-	// After 51 serialized increments the rendered count must be 51 — if
-	// the per-Ctx mutex were broken, parallel Get/Set would lose updates
-	// and we'd see a number lower than 51.
-	vt.AwaitFrame(t, frames, 5*time.Second, "<div>51")
-}
+			code, body := attack.Fire()
+			assert.Equal(t, http.StatusGone, code, "alice's arg must not dispatch off bob's render")
+			assert.NotContains(t, body, "deleted: [1", "alice's row was deleted by an arg swap")
 
-type queueOrderPage struct {
-	N via.StateTabNum[int]
-}
-
-func (p *queueOrderPage) Bump(ctx *via.Ctx) error {
-	return p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil })
-}
-
-func (p *queueOrderPage) BumpAndOverride(ctx *via.Ctx) error {
-	if err := p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil }); err != nil {
-		return err
+			code, body = legit.Fire()
+			require.Contains(t, []int{http.StatusOK, http.StatusNoContent}, code,
+				"bob's own row must still dispatch")
+			if shape.live {
+				body = conn.Await("deleted: [")
+			}
+			assert.Contains(t, body, "deleted: [2]", "only bob's own row may have been deleted")
+		})
 	}
-	ctx.Patch().Elements(h.Div(h.ID("n"), h.Text("OVERRIDE")))
-	return nil
-}
-
-func (p *queueOrderPage) View(ctx *via.CtxR) h.H {
-	return h.Div(h.ID("n"), p.N.Text(ctx))
-}
-
-// A tab whose SSE is down (hidden tab, transient drop) keeps acting via
-// POSTs; every flush re-renders the view into the patch queue. On
-// reconnect the drained frame must leave the client on the NEWEST
-// render — datastar applies same-id patches last-wins, so a stale
-// fragment surviving after the fresh one silently rewinds the UI
-// (observed live: tab stuck on the first of five increments).
-func TestReconnectAfterOfflineActionsShowsNewestState(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[queueOrderPage](app, "/q")
-
-	tc := vt.NewClient(t, server, "/q")
-	// Three state-mutating actions with no SSE stream open: each flush
-	// queues a fresh view render while nothing drains.
-	for i := 0; i < 3; i++ {
-		require.Equal(t, http.StatusOK, tc.Action("Bump").Fire())
-	}
-
-	frames, cancel := tc.SSE()
-	defer cancel()
-	body := vt.AwaitFrame(t, frames, 2*time.Second, ": ready")
-
-	assert.Contains(t, body, ">3<",
-		"reconnect drain must carry the newest render")
-	assert.NotContains(t, body, ">1<",
-		"stale renders must not survive in the drained frame — last-wins morph would rewind the UI to them")
-	assert.NotContains(t, body, ">2<",
-		"stale renders must not survive in the drained frame — last-wins morph would rewind the UI to them")
-}
-
-// A user-explicit Patch.Elements targeting an id the auto re-render also
-// ships must stay authoritative: datastar applies patches in document
-// order, so the explicit fragment has to come AFTER the auto render in
-// the wire frame.
-func TestExplicitElementPatchOverridesAutoRender(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[queueOrderPage](app, "/q")
-
-	tc := vt.NewClient(t, server, "/q")
-	frames, cancel := tc.SSEReady()
-	defer cancel()
-
-	require.Equal(t, http.StatusOK, tc.Action("BumpAndOverride").Fire())
-	body := vt.AwaitFrame(t, frames, 2*time.Second, ">1<", "OVERRIDE")
-
-	auto := strings.Index(body, ">1<")
-	override := strings.Index(body, "OVERRIDE")
-	require.GreaterOrEqual(t, auto, 0, "auto render must be in the frame")
-	assert.Greater(t, override, auto,
-		"explicit patch must come after the auto render so last-wins keeps it authoritative")
-	// One action's patches must drain as ONE element-patch event. If the
-	// mid-action Patch.Elements notify triggers an early drain, the
-	// override ships in its own frame BEFORE the end-of-action auto render
-	// — two events, with the auto render last, silently rewinding the UI
-	// off the override under datastar's last-wins-per-id morph.
-	assert.Equal(t, 1, strings.Count(body, "datastar-patch-elements"),
-		"an action's auto render and explicit patch must ship in a single element-patch event")
-}
-
-// Explicit patches from separate offline actions are independent pushes
-// (often to different targets) — both must survive the reconnect drain,
-// in the order they were queued.
-func TestExplicitPatchesFromSeparateActionsAllSurviveReconnect(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[explicitQueuePage](app, "/e")
-
-	tc := vt.NewClient(t, server, "/e")
-	require.Equal(t, http.StatusOK, tc.Action("PushA").Fire())
-	require.Equal(t, http.StatusOK, tc.Action("PushB").Fire())
-
-	frames, cancel := tc.SSE()
-	defer cancel()
-	body := vt.AwaitFrame(t, frames, 2*time.Second, ": ready")
-
-	a := strings.Index(body, "PATCH-A")
-	b := strings.Index(body, "PATCH-B")
-	require.GreaterOrEqual(t, a, 0, "first explicit patch must survive")
-	require.GreaterOrEqual(t, b, 0, "second explicit patch must survive")
-	assert.Greater(t, b, a, "explicit patches must drain in queue order")
-}
-
-// A view that panics once N reaches the panic threshold. Used to prove a
-// later panicking re-render does not erase a previously queued good render.
-type panicRenderPage struct {
-	N via.StateTabNum[int]
-}
-
-func (p *panicRenderPage) Bump(ctx *via.Ctx) error {
-	return p.N.Update(ctx, func(n int) (int, error) { return n + 1, nil })
-}
-
-func (p *panicRenderPage) View(ctx *via.CtxR) h.H {
-	if p.N.Read(ctx) >= 2 {
-		panic("boom")
-	}
-	return h.Div(h.ID("n"), p.N.Text(ctx))
-}
-
-// A disconnected tab queues a good auto-render, then a later action's
-// re-render panics (yielding an empty fragment). The empty fragment must
-// NOT clobber the queued good render: on reconnect the client must still
-// receive the last good view, not an empty frame.
-func TestPanickingRenderDoesNotEraseQueuedGoodRender(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[panicRenderPage](app, "/p")
-
-	tc := vt.NewClient(t, server, "/p")
-	// N=1: good render queued. N=2: view panics, empty fragment — must not
-	// erase the queued ">1<".
-	require.Equal(t, http.StatusOK, tc.Action("Bump").Fire())
-	require.Equal(t, http.StatusOK, tc.Action("Bump").Fire())
-
-	frames, cancel := tc.SSE()
-	defer cancel()
-	body := vt.AwaitFrame(t, frames, 2*time.Second, ": ready")
-
-	assert.Contains(t, body, ">1<",
-		"a later panicking render must not erase the last good queued render")
-}
-
-type explicitQueuePage struct{}
-
-func (p *explicitQueuePage) PushA(ctx *via.Ctx) {
-	ctx.Patch().Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
-}
-
-func (p *explicitQueuePage) PushB(ctx *via.Ctx) {
-	ctx.Patch().Elements(h.Div(h.ID("b"), h.Text("PATCH-B")))
-}
-
-func (p *explicitQueuePage) PushSilent(ctx *via.Ctx) {
-	ctx.SyncOff()
-	ctx.Patch().Elements(h.Div(h.ID("a"), h.Text("PATCH-A")))
-}
-
-func (p *explicitQueuePage) View(ctx *via.CtxR) h.H { return h.Div(h.ID("root")) }
-
-// An action that pushes an explicit patch but mutates no State queues no
-// auto render, so the end-of-action flush renders nothing. The explicit
-// push is then the only thing that can wake the SSE goroutine on a live
-// stream — if an action that holds wakes until it returns fails to
-// release that wake when there's no render, the push never reaches the
-// tab.
-func TestExplicitOnlyActionStillReachesLiveStream(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[explicitQueuePage](app, "/e")
-
-	tc := vt.NewClient(t, server, "/e")
-	frames, cancel := tc.SSEReady()
-	defer cancel()
-
-	require.Equal(t, http.StatusOK, tc.Action("PushA").Fire())
-	body := vt.AwaitFrame(t, frames, 2*time.Second, "PATCH-A")
-	assert.Equal(t, 1, strings.Count(body, "datastar-patch-elements"),
-		"the explicit push must drain in one element-patch event")
-}
-
-// SyncOff suppresses the dirty-bit re-render but NOT explicit Patch.Elements
-// pushes (so a recovery toast still reaches the user on a silent action).
-// The silent branch skips flushDirty entirely, so the held explicit-push
-// wake must still be released at action end or the push is lost.
-func TestSilentActionStillShipsExplicitPatch(t *testing.T) {
-	t.Parallel()
-
-	app := via.New()
-	server := vt.Serve(t, app)
-	via.Mount[explicitQueuePage](app, "/e")
-
-	tc := vt.NewClient(t, server, "/e")
-	frames, cancel := tc.SSEReady()
-	defer cancel()
-
-	require.Equal(t, http.StatusOK, tc.Action("PushSilent").Fire())
-	body := vt.AwaitFrame(t, frames, 2*time.Second, "PATCH-A")
-	assert.Contains(t, body, "PATCH-A",
-		"explicit pushes survive SyncOff even though the auto render is suppressed")
 }
