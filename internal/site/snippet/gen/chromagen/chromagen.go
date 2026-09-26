@@ -1,7 +1,12 @@
-package main
+// Package chromagen renders static/chroma.css, the stylesheet for the token
+// classes the snippet package's highlighter emits. snippet/gen is the command
+// that runs it.
+package chromagen
 
 import (
 	"fmt"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -61,12 +66,22 @@ loop:
 }
 `
 
-// chromaCSS is static/chroma.css: rules only for classes Go source can emit.
+// Out is static/chroma.css, resolved from this file's own path rather than the
+// working directory, so `go generate`, a hand-run and the test agree.
+func Out() string {
+	_, self, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("chromagen: no caller information")
+	}
+	return filepath.Join(filepath.Dir(self), "..", "..", "..", "static", "chroma.css")
+}
+
+// CSS is static/chroma.css: rules only for classes Go source can emit.
 // chroma's WriteCSS would also write line-number and line-link rules.
-func chromaCSS() string {
+func CSS() string {
 	style := styles.Get(snippet.ChromaStyle)
 	if style == nil {
-		panic("gen: no chroma style " + snippet.ChromaStyle)
+		panic("chromagen: no chroma style " + snippet.ChromaStyle)
 	}
 
 	used := map[string]bool{}

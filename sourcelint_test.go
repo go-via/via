@@ -11,14 +11,22 @@ package via_test
 //
 // Each one guards a promise made in the README and the docs:
 //   - reflection-free wiring (the reflect allowlist)
-//   - no '&' and no closures at a via call site (the example lint)
+//   - no '&' and no closures where via takes a handler (the example lint)
+//   - black-box tests, and none of package main (CONVENTIONS.md)
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
-	"io/fs"
+	"go/types"
+	"io"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -29,74 +37,313 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// viaCallNames are the via entry points whose arguments must be named method
-// values or by-value compositions — never an address-of or a closure. Param
-// (a *Ctx method, called as ctx.Param) cannot appear here: isViaCall only
-// matches a package-qualified call (via.X), and Param is never spelled that
-// way.
-var viaCallNames = map[string]bool{
-	"Handler": true, "Mount": true, "Child": true, "When": true, "Each": true,
-	"On": true, "OnArg": true, "PostForm": true,
+const viaPkg = "github.com/go-via/via"
+
+// handlerSites are the via callees whose func arguments must be named method
+// values; the value says whether '&' is refused too. Callees resolve through
+// go/types, so an aliased or dot import is caught and an unrelated Listen or a
+// local named via is not. Every func in package on binds a handler, so
+// handlerSite matches that package whole. Ctx.Listen admits '&': its topic is
+// a pointer.
+var handlerSites = map[string]bool{
+	viaPkg + ".Handler": true, viaPkg + ".Mount": true, viaPkg + ".Child": true,
+	viaPkg + ".When": true, viaPkg + ".Each": true, viaPkg + ".On": true,
+	viaPkg + ".OnArg": true, viaPkg + ".PostForm": true,
+	viaPkg + ".List.Each":     true,
+	viaPkg + ".Ctx.OnDispose": true, viaPkg + ".Ctx.Listen": false,
 }
 
 func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 	t.Parallel()
-	files := exampleGoFiles(t)
-	require.NotEmpty(t, files, "expected example sources to lint")
+	// The site's demos and snippets are held to the same rule: each is shown
+	// verbatim as documentation of the call-site shape. internal/site is its
+	// own module, so it is listed from its own directory.
+	for _, mod := range []struct {
+		dir      string
+		patterns []string
+	}{
+		{".", []string{"./internal/example/..."}},
+		{filepath.Join("internal", "site"), []string{"./demos/...", "./snippet/src/..."}},
+	} {
+		listed := listPackages(t, mod.dir, mod.patterns...)
+		fset := token.NewFileSet()
+		imp := exportImporter(fset, listed)
+		var linted int
+		for _, p := range listed {
+			if p.DepOnly {
+				continue
+			}
+			linted++
+			t.Run(p.ImportPath, func(t *testing.T) {
+				var files []*ast.File
+				for _, name := range p.GoFiles {
+					f, err := parser.ParseFile(fset, filepath.Join(p.Dir, name), nil, 0)
+					require.NoError(t, err)
+					files = append(files, f)
+				}
+				info, err := typeCheck(fset, imp, p.ImportPath, files)
+				require.NoError(t, err)
+				for _, v := range callSiteViolations(fset, files, info) {
+					assert.Fail(t, v.msg, "%s", v.pos)
+				}
+			})
+		}
+		require.NotZero(t, linted, "expected example sources to lint under %s", mod.dir)
+	}
+}
 
-	for _, file := range files {
-		t.Run(file, func(t *testing.T) {
+func TestCallSiteLint_flagsOnlyViaHandlerCallees(t *testing.T) {
+	t.Parallel()
+	listed := listPackages(t, ".", ".", "./on", "./topic", "strings")
+	const header = `package p
+
+import (
+	"github.com/go-via/via"
+	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
+	"github.com/go-via/via/topic"
+)
+
+var (
+	_  = on.Click[func(*via.Ctx)]
+	_  = h.Str[string]
+	tp = topic.New[int]()
+)
+
+type P struct {
+	L via.List[int]
+	C C
+	T topic.Topic[int]
+	N int
+}
+
+type C struct{}
+
+func (C) View() h.H                  { return nil }
+func (p *P) View() h.H               { return nil }
+func (p *P) Inc(*via.Ctx)            {}
+func (p *P) Pick(*via.Ctx, *int)     {}
+func (p *P) recv(*via.Ctx, int)      {}
+func (p *P) row(int) h.H             { return nil }
+func (p *P) body() h.H               { return nil }
+func (p *P) stop()                   {}
+`
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{"closure to via.When", header + `
+func (p *P) V() h.H { return via.When(true, func() h.H { return nil }) }`,
+			[]string{"closure passed to via.When: pass a named method value"}},
+		{"closure through an aliased import", `package p
+
+import (
+	v "github.com/go-via/via"
+	"github.com/go-via/via/h"
+)
+
+func V(xs []int) h.H { return v.Each[int](xs, func(int) h.H { return nil }) }`,
+			[]string{"closure passed to via.Each: pass a named method value"}},
+		{"closure to on.Click", header + `
+func (p *P) V() h.H { return h.Button(on.Click(func(*via.Ctx) {})) }`,
+			[]string{"closure passed to via/on.Click: pass a named method value"}},
+		{"closure to Ctx.Listen and Ctx.OnDispose", header + `
+func (p *P) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(tp, func(*via.Ctx, int) {})
+	ctx.OnDispose(func() {})
+	return nil
+}`,
+			[]string{
+				"closure passed to via.Ctx.Listen: pass a named method value",
+				"closure passed to via.Ctx.OnDispose: pass a named method value",
+			}},
+		{"closure to List.Each", header + `
+func (p *P) V() h.H { return p.L.Each(func(int) h.H { return nil }) }`,
+			[]string{"closure passed to via.List.Each: pass a named method value"}},
+		{"address-of to on.WithArg", header + `
+func (p *P) V() h.H { return h.Button(on.Click(on.WithArg(p.Pick, &p.N))) }`,
+			[]string{"'&' passed to via/on.WithArg: via takes compositions by value"}},
+		{"literal to via.Child", header + `
+func (p *P) V() h.H { return via.Child(C{}) }`,
+			[]string{"composite literal passed to via.Child: pass the parent's field (p.Chat)"}},
+		{"named method values pass", header + `
+func (p *P) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(&p.T, p.recv)
+	ctx.OnDispose(p.stop)
+	return nil
+}
+
+func (p *P) V() h.H {
+	return h.Div(h.Button(on.Click(p.Inc)), p.L.Each(p.row), via.When(true, p.body), via.Child(p.C))
+}`, nil},
+		{"stdlib package imported as via", `package p
+
+import via "strings"
+
+var _ = via.Map(func(r rune) rune { return r }, "x")`, nil},
+		{"local value named on", `package p
+
+type fake struct{}
+
+func (fake) Click(func()) {}
+
+var on fake
+
+func V() { on.Click(func() {}) }`, nil},
+		{"Listen on a non-Ctx type", `package p
+
+type bus struct{}
+
+func (bus) Listen(func()) {}
+
+func V() { bus{}.Listen(func() {}) }`, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			fset := token.NewFileSet()
-			f, err := parser.ParseFile(fset, file, nil, 0)
+			f, err := parser.ParseFile(fset, "p.go", tt.src, 0)
 			require.NoError(t, err)
-
-			ast.Inspect(f, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok || !isViaCall(call) {
-					return true
-				}
-				for _, arg := range call.Args {
-					switch a := arg.(type) {
-					case *ast.FuncLit:
-						assert.Failf(t, "closure at via call site",
-							"%s: pass a named method value, not a func literal", fset.Position(a.Pos()))
-					case *ast.UnaryExpr:
-						if a.Op == token.AND {
-							assert.Failf(t, "address-of at via call site",
-								"%s: via takes compositions by value — drop the '&'", fset.Position(a.Pos()))
-						}
-					case *ast.CompositeLit:
-						// via.Child(p.Chat) embeds the parent's field; a literal
-						// would re-seed a fresh child on every render.
-						if isViaCallNamed(call, "Child") {
-							assert.Failf(t, "composite literal at via.Child call site",
-								"%s: pass the parent's field (p.Chat), not a literal", fset.Position(a.Pos()))
-						}
-					}
-				}
-				return true
-			})
+			info, err := typeCheck(fset, exportImporter(fset, listed), "p", []*ast.File{f})
+			require.NoError(t, err)
+			var got []string
+			for _, v := range callSiteViolations(fset, []*ast.File{f}, info) {
+				got = append(got, v.msg)
+			}
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
 
-func isViaCall(call *ast.CallExpr) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "via" && viaCallNames[sel.Sel.Name]
+type violation struct {
+	pos token.Position
+	msg string
 }
 
-func isViaCallNamed(call *ast.CallExpr, name string) bool {
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return false
+func callSiteViolations(fset *token.FileSet, files []*ast.File, info *types.Info) []violation {
+	var out []violation
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			key, noAddr, ok := handlerSite(info, call)
+			if !ok {
+				return true
+			}
+			name := strings.TrimPrefix(key, "github.com/go-via/")
+			for _, arg := range call.Args {
+				switch a := ast.Unparen(arg).(type) {
+				case *ast.FuncLit:
+					out = append(out, violation{fset.Position(a.Pos()),
+						"closure passed to " + name + ": pass a named method value"})
+				case *ast.UnaryExpr:
+					if a.Op == token.AND && noAddr {
+						out = append(out, violation{fset.Position(a.Pos()),
+							"'&' passed to " + name + ": via takes compositions by value"})
+					}
+				case *ast.CompositeLit:
+					// via.Child(p.Chat) embeds the parent's field; a literal
+					// would re-seed a fresh child on every render.
+					if key == viaPkg+".Child" {
+						out = append(out, violation{fset.Position(a.Pos()),
+							"composite literal passed to via.Child: pass the parent's field (p.Chat)"})
+					}
+				}
+			}
+			return true
+		})
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "via" && sel.Sel.Name == name
+	return out
+}
+
+func handlerSite(info *types.Info, call *ast.CallExpr) (key string, noAddr, ok bool) {
+	fun := ast.Unparen(call.Fun)
+	switch ix := fun.(type) {
+	case *ast.IndexExpr:
+		fun = ast.Unparen(ix.X)
+	case *ast.IndexListExpr:
+		fun = ast.Unparen(ix.X)
+	}
+	var id *ast.Ident
+	switch f := fun.(type) {
+	case *ast.Ident:
+		id = f
+	case *ast.SelectorExpr:
+		id = f.Sel
+	default:
+		return "", false, false
+	}
+	fn, isFunc := info.Uses[id].(*types.Func)
+	if !isFunc || fn.Pkg() == nil {
+		return "", false, false
+	}
+	fn = fn.Origin()
+	key = fn.Pkg().Path() + "."
+	if recv := fn.Signature().Recv(); recv != nil {
+		rt := recv.Type()
+		if p, isPtr := rt.(*types.Pointer); isPtr {
+			rt = p.Elem()
+		}
+		named, isNamed := rt.(*types.Named)
+		if !isNamed {
+			return "", false, false
+		}
+		key += named.Origin().Obj().Name() + "."
+	}
+	key += fn.Name()
+	if fn.Pkg().Path() == viaPkg+"/on" {
+		return key, true, true
+	}
+	noAddr, ok = handlerSites[key]
+	return key, noAddr, ok
+}
+
+type listedPackage struct {
+	ImportPath, Dir, Export string
+	GoFiles                 []string
+	DepOnly                 bool
+}
+
+// -export builds each package's export data, so the lint type-checks only the
+// packages it scans and reads every dependency the way the compiler built it.
+func listPackages(t *testing.T, dir string, patterns ...string) []listedPackage {
+	t.Helper()
+	args := append([]string{"list", "-export", "-deps", "-json=ImportPath,Dir,Export,GoFiles,DepOnly"}, patterns...)
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	require.NoError(t, err, "go list in %s: %s", dir, stderr.String())
+	var pkgs []listedPackage
+	for dec := json.NewDecoder(bytes.NewReader(out)); dec.More(); {
+		var p listedPackage
+		require.NoError(t, dec.Decode(&p))
+		pkgs = append(pkgs, p)
+	}
+	return pkgs
+}
+
+func exportImporter(fset *token.FileSet, pkgs []listedPackage) types.Importer {
+	export := map[string]string{}
+	for _, p := range pkgs {
+		export[p.ImportPath] = p.Export
+	}
+	return importer.ForCompiler(fset, "gc", func(path string) (io.ReadCloser, error) {
+		if export[path] == "" {
+			return nil, fmt.Errorf("no export data for %s", path)
+		}
+		return os.Open(export[path])
+	})
+}
+
+func typeCheck(fset *token.FileSet, imp types.Importer, path string, files []*ast.File) (*types.Info, error) {
+	info := &types.Info{Uses: map[*ast.Ident]types.Object{}}
+	_, err := (&types.Config{Importer: imp}).Check(path, fset, files, info)
+	return info, err
 }
 
 func TestCore_importsNoReflectPackage(t *testing.T) {
@@ -167,29 +414,6 @@ func coreGoFiles(t *testing.T) []string {
 	return files
 }
 
-func exampleGoFiles(t *testing.T) []string {
-	t.Helper()
-	var files []string
-	// The site's demos are held to the same rule: each one is shown verbatim
-	// as documentation of the call-site shape.
-	for _, root := range []string{
-		filepath.Join("internal", "example"),
-		filepath.Join("internal", "site", "demos"),
-	} {
-		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() && strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
-				files = append(files, p)
-			}
-			return nil
-		})
-		require.NoError(t, err)
-	}
-	return files
-}
-
 func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
 	t.Parallel()
 	banned := map[string]bool{
@@ -222,4 +446,100 @@ func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
 				"h package must not export %q — it belongs to internal/hcore", name)
 		}
 	}
+}
+
+// The walk starts at the repo root rather than per go.mod, so internal/site
+// and vtbrowser are covered by the same pass as the root module.
+func TestTests_areBlackBox(t *testing.T) {
+	t.Parallel()
+	got, err := whiteBoxTests(".")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestWhiteBoxLint_flagsInPackageAndMainTests(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"white/p.go":         "package p",
+		"white/p_test.go":    "package p",
+		"black/p.go":         "package p",
+		"black/p_test.go":    "package p_test",
+		"tagged/p.go":        "//go:build linux\n\npackage p",
+		"tagged/p_test.go":   "package p_test",
+		"testonly/x_test.go": "package whatever",
+		"cmd/main.go":        "package main",
+		"cmd/main_test.go":   "package main_test",
+		".hidden/p.go":       "package p",
+		".hidden/p_test.go":  "package p",
+		"_skip/p.go":         "package p",
+		"_skip/p_test.go":    "package p",
+		"testdata/p.go":      "package p",
+		"testdata/p_test.go": "package p",
+		"vendor/v/p.go":      "package p",
+		"vendor/v/p_test.go": "package p",
+	} {
+		path := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(src+"\n"), 0o644))
+	}
+	got, err := whiteBoxTests(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		filepath.Join("cmd", "main_test.go") + ": tests package main, which no test can import: move the logic to an importable package",
+		filepath.Join("white", "p_test.go") + ": package p, want p_test",
+	}, got)
+}
+
+func whiteBoxTests(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
+		}
+		if n := d.Name(); path != root && (strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_") || n == "vendor" || n == "testdata") {
+			return filepath.SkipDir
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return err
+		}
+		pkgs := map[string]bool{}
+		tests := map[string]string{}
+		fset := token.NewFileSet()
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+				continue
+			}
+			f, err := parser.ParseFile(fset, filepath.Join(path, e.Name()), nil, parser.PackageClauseOnly)
+			if err != nil {
+				return err
+			}
+			if strings.HasSuffix(e.Name(), "_test.go") {
+				tests[e.Name()] = f.Name.Name
+			} else {
+				pkgs[f.Name.Name] = true
+			}
+		}
+		// A test-only directory has no package to be inside of.
+		if len(pkgs) == 0 {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		for _, name := range slices.Sorted(maps.Keys(tests)) {
+			file := filepath.Join(rel, name)
+			switch pkg := tests[name]; {
+			case pkgs["main"]:
+				out = append(out, file+": tests package main, which no test can import: move the logic to an importable package")
+			case !pkgs[strings.TrimSuffix(pkg, "_test")] || !strings.HasSuffix(pkg, "_test"):
+				want := slices.Sorted(maps.Keys(pkgs))[0] + "_test"
+				out = append(out, file+": package "+pkg+", want "+want)
+			}
+		}
+		return nil
+	})
+	return out, err
 }

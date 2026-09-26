@@ -150,7 +150,7 @@ func TestSite_refusesACrossOriginActionWhenTheOriginIsSet(t *testing.T) {
 
 	resp = postAction(t, siteServer(t, site.Options{}), "https://evil.example")
 	assert.Equal(t, http.StatusGone, resp.StatusCode,
-		"without a trusted origin the origin is not checked; the per-tab id is the CSRF token, and no render bound this action for it")
+		"without a trusted origin the origin is not checked; the 410 comes from dispatch, not an origin refusal")
 }
 
 var signInForm = regexp.MustCompile(`<form[^>]*action="([^"]+)"`)

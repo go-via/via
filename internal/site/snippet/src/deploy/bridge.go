@@ -62,12 +62,16 @@ type Chat struct {
 }
 
 func (c *Chat) OnInit(ctx *via.Ctx) error {
-	ctx.Listen(c.Room.Local, func(_ *via.Ctx, m Message) { c.Log.Append(m) })
+	ctx.Listen(c.Room.Local, c.onMessage)
 	return nil
 }
+
+func (c *Chat) onMessage(ctx *via.Ctx, m Message) { c.Log.Append(m) }
 
 // snippet:end
 
 func (c *Chat) View() h.H {
-	return h.Ul(c.Log.Each(func(m Message) h.H { return h.Li(h.Str(m.Who + ": " + m.Text)) }))
+	return h.Ul(c.Log.Each(c.row))
 }
+
+func (c *Chat) row(m Message) h.H { return h.Li(h.Str(m.Who + ": " + m.Text)) }

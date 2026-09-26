@@ -1,4 +1,4 @@
-package main
+package apigen_test
 
 import (
 	"html"
@@ -11,21 +11,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go-via.dev/site/content/gen/apigen"
 	"go-via.dev/site/site"
 )
 
-func loadAll(t *testing.T) []symbol {
+func loadAll(t *testing.T) []apigen.Symbol {
 	t.Helper()
-	syms, err := load(viaRoot())
+	syms, err := apigen.Load(apigen.Root())
 	require.NoError(t, err)
 	return syms
 }
 
-func TestGenerate_matchesCommittedFile(t *testing.T) {
+func TestRender_matchesCommittedFile(t *testing.T) {
 	t.Parallel()
-	src, err := render(loadAll(t))
+	src, err := apigen.Render(loadAll(t))
 	require.NoError(t, err)
-	committed, err := os.ReadFile(out())
+	committed, err := os.ReadFile(apigen.Out())
 	require.NoError(t, err)
 	stale, fresh := lineDiff(string(committed), string(src))
 	assert.Empty(t, stale, "api_gen.go lines the source no longer produces: run go generate ./content")
@@ -53,7 +54,7 @@ func lineDiff(a, b string) (onlyA, onlyB []string) {
 
 func TestLoad_describesEachKind(t *testing.T) {
 	t.Parallel()
-	byID := map[string]symbol{}
+	byID := map[string]apigen.Symbol{}
 	for _, s := range loadAll(t) {
 		byID[s.Pkg+"."+s.Name] = s
 	}

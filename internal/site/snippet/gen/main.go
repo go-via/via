@@ -8,22 +8,12 @@ package main
 import (
 	"log"
 	"os"
-	"path/filepath"
-	"runtime"
+
+	"go-via.dev/site/snippet/gen/chromagen"
 )
 
-// out is resolved from this file's own path, not the working directory, so
-// `go generate` and a hand-run from anywhere write the same file.
-func out() string {
-	_, self, _, ok := runtime.Caller(0)
-	if !ok {
-		log.Fatal("gen: no caller information")
-	}
-	return filepath.Join(filepath.Dir(self), "..", "..", "static", "chroma.css")
-}
-
 func main() {
-	if err := os.WriteFile(out(), []byte(chromaCSS()), 0o644); err != nil {
+	if err := os.WriteFile(chromagen.Out(), []byte(chromagen.CSS()), 0o644); err != nil {
 		log.Fatal(err)
 	}
 }

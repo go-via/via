@@ -716,7 +716,7 @@ func (c *Ctx) collectSlots(dst map[string]bool) {
 // Bind and a Display of one signal) only refresh the value. hcore.Binder.
 func (c *Ctx) declareSignal(slot string, initial any) {
 	if slot == tabSignal {
-		// A user signal landing on this name would overwrite the CSRF token
+		// A user signal landing on this name would overwrite the tab id
 		// the next action routes by (see tabSignal). Loud at the first render,
 		// never a silent mid-session 410 storm.
 		panic(hcore.Miswired("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field"))

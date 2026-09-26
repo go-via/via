@@ -595,8 +595,8 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	hdr.Set("Content-Security-Policy", m.csp.withNonce(nonce))
 	switch {
 	case hasLive:
-		// The tab id is the page's CSRF token: a cached copy would hand one
-		// viewer's tab to the next, whose pre-connect click then runs on it.
+		// The HTML carries the tab id: a cached copy would hand one viewer's
+		// tab to the next, whose pre-connect click then runs on it.
 		noStore(w)
 	case hdr.Get("Cache-Control") == "":
 		// Revalidated per view so the nonce stays per document. An app's own

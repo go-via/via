@@ -42,9 +42,11 @@ func (p *Ping) OnInit(ctx *via.Ctx) error {
 	p.sid = ctx.Session().ID()
 	p.gone = make(chan struct{})
 	ctx.Listen(pingTopic, p.recv)
-	ctx.OnDispose(func() { close(p.gone) })
+	ctx.OnDispose(p.closeGone)
 	return nil
 }
+
+func (p *Ping) closeGone() { close(p.gone) }
 
 func (p *Ping) recv(ctx *via.Ctx, e pingEvent) {
 	if e.To != p.sid {
@@ -83,6 +85,8 @@ func (p *Ping) View() h.H {
 			h.Button(on.Click(p.Send), h.Str("ping me in 3s")),
 			h.Span(h.Class("note"), p.Notice.Display()),
 		),
-		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Pings received"), p.Msgs.Each(func(m string) h.H { return h.Li(h.Str(m)) })),
+		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Pings received"), p.Msgs.Each(p.row)),
 	)
 }
+
+func (p *Ping) row(m string) h.H { return h.Li(h.Str(m)) }

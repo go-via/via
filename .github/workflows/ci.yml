@@ -13,45 +13,16 @@ permissions:
 
 jobs:
   build-test:
-    # Note: this job always runs and reports, even for docs-only changes — only
-    # its heavy steps are skipped (see the "Detect" step). Keeping the job (and
-    # its "Build and Test" name) unconditional is deliberate: it is a required
-    # status check, and a `paths`/`paths-ignore` trigger filter would make the
-    # workflow not run on a docs-only PR, leaving the required check pending
-    # forever and blocking the merge.
+    # Tests read README.md and other docs, so no docs-only skip, and no
+    # `paths`/`paths-ignore` trigger filter: that would leave this required
+    # check pending forever on a docs-only PR.
     name: Build and Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # need history to diff against the base for the docs-only check
-
-      - name: Detect code (non-docs) changes
-        id: changes
-        run: |
-          base="${{ github.event.pull_request.base.sha }}"
-          [ -n "$base" ] || base="${{ github.event.before }}"
-          zero="0000000000000000000000000000000000000000"
-          # Unknown/zero/unreachable base (first push, force-push, new branch) →
-          # run the full pipeline (fail safe; never skip CI on uncertainty).
-          if [ -z "$base" ] || [ "$base" = "$zero" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            # Changed files that are not markdown / not under docs/. A non-empty
-            # check (not `grep -q`'s exit code) stays correct across grep
-            # implementations; `|| true` guards the no-match exit.
-            nondoc="$(git diff --name-only "$base" "${{ github.sha }}" | grep -vE '(\.md$|^docs/)' || true)"
-            if [ -n "$nondoc" ]; then
-              echo "code=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "code=false" >> "$GITHUB_OUTPUT"
-              echo "Only markdown/docs changed — skipping the Go CI pipeline."
-            fi
-          fi
 
       - name: Setup Go
-        if: steps.changes.outputs.code == 'true'
         uses: actions/setup-go@v5
         with:
           # Build/scan with the latest stable toolchain; go.mod keeps the
@@ -61,13 +32,11 @@ jobs:
           cache: true
 
       - name: Run CI checks
-        if: steps.changes.outputs.code == 'true'
         # --no-browser because the tier has its own job below; hosted runners
         # ship Chrome, so ci.sh would otherwise run it a second time uncached.
         run: bash ./ci.sh --no-browser
 
       - name: govulncheck
-        if: steps.changes.outputs.code == 'true'
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
@@ -75,39 +44,13 @@ jobs:
           (cd internal/site && govulncheck ./...)
 
   browser-test:
-    # Same shape as build-test: the job always runs and reports, only its heavy
-    # steps are gated. The detection is duplicated rather than hoisted into a
-    # shared job on purpose — a `needs:` dependency would skip this job when the
-    # detector fails, leaving a required check pending forever, which is exactly
-    # the trap documented above.
     name: Browser Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # need history to diff against the base
-
-      - name: Detect code (non-docs) changes
-        id: changes
-        run: |
-          base="${{ github.event.pull_request.base.sha }}"
-          [ -n "$base" ] || base="${{ github.event.before }}"
-          zero="0000000000000000000000000000000000000000"
-          if [ -z "$base" ] || [ "$base" = "$zero" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            nondoc="$(git diff --name-only "$base" "${{ github.sha }}" | grep -vE '(\.md$|^docs/)' || true)"
-            if [ -n "$nondoc" ]; then
-              echo "code=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "code=false" >> "$GITHUB_OUTPUT"
-              echo "Only markdown/docs changed — skipping the browser tier."
-            fi
-          fi
 
       - name: Setup Go
-        if: steps.changes.outputs.code == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: stable
@@ -115,7 +58,6 @@ jobs:
           cache-dependency-path: vtbrowser/go.sum
 
       - name: Install Chromium
-        if: steps.changes.outputs.code == 'true'
         # ubuntu-latest runners ship Google Chrome preinstalled; install
         # Chromium only when no browser is present so the job stays fast
         # on hosted runners but still works on bare self-hosted ones.
@@ -130,5 +72,4 @@ jobs:
           command -v google-chrome || command -v chromium || command -v chromium-browser
 
       - name: Run browser tier (vtbrowser, -tags browser)
-        if: steps.changes.outputs.code == 'true'
         run: cd vtbrowser && go test -race -tags browser ./...

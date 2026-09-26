@@ -96,6 +96,8 @@ func (l *HookLog) View() h.H {
 	return h.Div(
 		h.Button(on.Click(l.Act), h.Str("run an action")),
 		h.Ul(h.Class("loglist"), h.TabIndex(0), h.Role("log"), h.Aria("label", "Hook calls"),
-			l.Log.Each(func(s string) h.H { return h.Li(h.Str(s)) })),
+			l.Log.Each(l.row)),
 	)
 }
+
+func (l *HookLog) row(s string) h.H { return h.Li(h.Str(s)) }

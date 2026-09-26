@@ -15,12 +15,12 @@ type Todo struct {
 	Title string
 }
 
-type Todos struct{ items []Todo }
+type Todos struct{ Items []Todo }
 
 func (l *Todos) Delete(ctx *via.Ctx, id int) {
-	for i, t := range l.items {
+	for i, t := range l.Items {
 		if t.ID == id {
-			l.items = append(l.items[:i], l.items[i+1:]...)
+			l.Items = append(l.Items[:i], l.Items[i+1:]...)
 			return
 		}
 	}
@@ -35,6 +35,6 @@ func (l *Todos) row(t Todo) h.H {
 	)
 }
 
-func (l *Todos) View() h.H { return h.Ul(via.Each(l.items, l.row)) }
+func (l *Todos) View() h.H { return h.Ul(via.Each(l.Items, l.row)) }
 
 // snippet:end

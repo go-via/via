@@ -161,9 +161,11 @@ func bareOrigin(origin string) string {
 }
 
 // WithSessionTTL sets how long a session may sit idle before it expires
-// (default 24h). Each access slides the window; once less than half of it is
-// left, the access re-saves the session and re-sends the cookie so the
-// browser's expiry moves with it. It panics on a value of 0 or less.
+// (default 24h). The window slides at one write per half-TTL: once less than
+// half of it is left, an access re-saves the session and re-sends the cookie
+// so the browser's expiry moves with it. A session can therefore expire as
+// little as half the TTL after its last request. It panics on a value of 0 or
+// less.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) {
 		if d <= 0 {
