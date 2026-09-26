@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# CI gate for the via module: formatting, vet, build, and the race-enabled
-# test suite (which includes the no-&/no-closure guarantee lint and the CSP
-# no-eval / dead-dash regression guards). Run from the module root.
+# CI gate for the repo, run from its root. It checks and never rewrites files:
+# gofmt over every module; vet, staticcheck, build and race tests for via and
+# the site module (internal/site); vet and staticcheck for vtbrowser; then
+# vtbrowser's real-browser tier.
 set -euo pipefail
 
 GO="${GO:-go}"
@@ -32,10 +33,11 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
+# gofmt, not go fmt: go fmt rewrites in place and stops at nested modules.
 echo "== gofmt =="
-unformatted="$($GO fmt ./... )"
+unformatted="$(gofmt -l .)"
 if [ -n "$unformatted" ]; then
-	echo "gofmt rewrote files (commit them):"
+	echo "gofmt would reformat (run gofmt -w on them):"
 	echo "$unformatted"
 	exit 1
 fi
@@ -54,7 +56,11 @@ $GO test -race ./...
 
 # Separate module: it pulls chroma, which via's own go.mod must not see.
 echo "== site module (internal/site) =="
-( cd internal/site && $GO build ./... && $GO vet ./... && $GO tool staticcheck ./... && $GO test ./... )
+( cd internal/site && $GO build ./... && $GO vet ./... && $GO tool staticcheck ./... && $GO test -race ./... )
+
+# The tests need a browser; vet and staticcheck don't, so they run regardless.
+echo "== vtbrowser module (vet, staticcheck) =="
+( cd vtbrowser && $GO vet -tags browser ./... && $GO tool staticcheck -tags browser ./... )
 
 # Real-browser tier (separate module, chromedp). A missing binary skips loudly
 # rather than silently: vtbrowser's own t.Skip is invisible in CI output, so an
@@ -64,7 +70,9 @@ if [ -n "$chrome" ] && ! [ -x "$chrome" ]; then
 	exit 1
 fi
 if [ -z "$chrome" ] && [ "$browser" != "off" ]; then
-	for c in chromium chromium-browser google-chrome google-chrome-stable /bin/chromium; do
+	# Same names as vtbrowser's browserNames, so ci.sh never skips a tier
+	# vtbrowser would have run.
+	for c in chromium chromium-browser chrome google-chrome google-chrome-stable headless-shell /bin/chromium; do
 		if command -v "$c" >/dev/null 2>&1; then chrome="$(command -v "$c")"; break; fi
 	done
 fi

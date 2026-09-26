@@ -175,7 +175,7 @@ func (p *Testing) View() h.H {
 		snippet.Text("", "cd vtbrowser && VIA_CHROME=/usr/bin/chromium go test -race -tags browser ./...\n"+
 			"./ci.sh --browser    # fail if no browser is found\n"+
 			"./ci.sh --chrome=/path/to/chromium"),
-		h.P(API("vtbrowser.Open"), h.Str(" looks for chromium, chromium-browser, chrome, google-chrome or headless-shell on "),
+		h.P(API("vtbrowser.Open"), h.Str(" looks for chromium, chromium-browser, chrome, google-chrome, google-chrome-stable or headless-shell on "),
 			Code("PATH"), h.Str(", or uses "), Code("VIA_CHROME"), h.Str(", and skips the test when it finds none. "+
 				"In the via repo the browser tests carry "), Code("//go:build browser"), h.Str(", so plain "),
 			Code("go test ./..."), h.Str(" never starts Chromium; "), Code("ci.sh"),
