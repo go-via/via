@@ -8,12 +8,12 @@ package main
 
 import (
 	"cmp"
-	"encoding/base64"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -136,10 +136,11 @@ func (p *Profile) SaveName(ctx *via.Ctx) {
 	ctx.Redirect("/profile")
 }
 
-// SaveAvatar reads the uploaded file with stdlib and stores it inline as a
-// data: URL - storage is entirely app-land.
+// SaveAvatar reads the uploaded file with stdlib and keeps it in the store -
+// storage is entirely app-land. The profile points at /avatar/{id} because
+// h.Src admits only http(s) and relative URLs; a data: URL renders as "#".
 func (p *Profile) SaveAvatar(ctx *via.Ctx) {
-	f, hdr, err := ctx.Request().FormFile("avatar")
+	f, _, err := ctx.Request().FormFile("avatar")
 	if err != nil {
 		ctx.Redirect("/profile")
 		return
@@ -150,13 +151,38 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx) {
 		ctx.Redirect("/profile")
 		return
 	}
-	// Demo simplification: the client-declared Content-Type is trusted as-is. A
-	// data: URL in an <img src> is not script-executable, but a real app should
-	// sniff the bytes and constrain the type before storing/serving it.
-	p.user.Avatar = "data:" + hdr.Header.Get("Content-Type") + ";base64," + base64.StdEncoding.EncodeToString(data)
+	// The bytes are sniffed instead of trusting the client's Content-Type, and
+	// DetectContentType never answers image/svg+xml, so no scriptable image is
+	// stored.
+	typ := http.DetectContentType(data)
+	if !strings.HasPrefix(typ, "image/") {
+		ctx.Redirect("/profile")
+		return
+	}
+	p.store.setAvatar(p.user.ID, typ, data)
+	p.user.Avatar = "/avatar/" + strconv.Itoa(p.user.ID)
 	p.store.save(p.user)
 	ctx.Session().Put(p.user)
 	ctx.Redirect("/profile")
+}
+
+// serveAvatar answers GET /avatar/{user} with the stored upload.
+func (s *Store) serveAvatar(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("user"))
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	typ, data, ok := s.avatar(id)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", typ)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	// The URL stays the same across uploads.
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Write(data)
 }
 
 func (p *Profile) avatarImg() h.H { return h.Img(h.Src(p.user.Avatar), h.Width(96)) }
@@ -317,6 +343,7 @@ func main() {
 	http.HandleFunc("/{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/forum", http.StatusSeeOther)
 	})
+	http.HandleFunc("GET /avatar/{user}", store.serveAvatar)
 	http.Handle("/", app)
 
 	log.Fatal(http.ListenAndServe(cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), nil))
