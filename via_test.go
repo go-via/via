@@ -329,6 +329,21 @@ func TestOn_submitWiresAPostAction(t *testing.T) {
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
+func TestOn_panicsOnAnEventNameThatBreaksOutOfTheAttribute(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", `click" onmouseover="x`, "click onload", "click=x", "click>", "Click", "click__", "click__once x", `click__debounce.1'`} {
+		assert.Panics(t, func() { via.On(name, (&noopComp{}).Ping) }, name)
+		assert.Panics(t, func() { via.OnArg(name, func(*via.Ctx, int) {}, 1) }, name)
+	}
+}
+
+func TestOn_acceptsDatastarModifiers(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"click", "via:patch", "keydown__window", "input__debounce.500ms", "input__debounce.1.5ms__prevent", "scroll__throttle.1s__once__stop__outside"} {
+		assert.NotPanics(t, func() { via.On(name, (&noopComp{}).Ping) }, name)
+	}
+}
+
 // reqEchoer is a plain component whose action copies a header off the
 // triggering request into a rendered field.
 type reqEchoer struct{ echo string }

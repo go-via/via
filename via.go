@@ -91,6 +91,7 @@ import (
 	"log/slog"
 	"maps"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -863,9 +864,12 @@ func (c *Ctx) RedirectExternal(target string) {
 // action. fn is a named method value (e.g. c.Inc) — pointer-bound to the
 // via-owned instance, so no '&' at the call site. Datastar auto-prevents a
 // wired form's default submit, so no prevent modifier is needed for "submit".
+// It panics on an event name package on would refuse; Datastar modifiers
+// ("click__debounce.500ms") are allowed.
 //
 // Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
 func On(event string, fn func(*Ctx)) h.Attr {
+	mustActionEvent("On", event)
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
@@ -907,8 +911,11 @@ func On(event string, fn func(*Ctx)) h.Attr {
 // in flight 410s. Read changing state from the composition in an argless On
 // handler instead.
 //
+// It panics on an event name On would refuse.
+//
 // Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
 func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
+	mustActionEvent("OnArg", event)
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
@@ -948,6 +955,18 @@ func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 	})
 }
 
+// actionEvent is package on's event-name grammar followed by Datastar
+// modifiers. writeActionAttr splices the name into an attribute name raw, so a
+// quote, space or '=' would open an attribute of the caller's choosing.
+var actionEvent = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[:.-][a-z0-9]+)*(?:__[a-z]+(?:\.[a-z0-9]+)*)*$`)
+
+func mustActionEvent(fn, event string) {
+	if !actionEvent.MatchString(event) {
+		panic("via: " + fn + " event name " + strconv.Quote(event) +
+			` must be lower-case letters and digits, optionally joined by ':', '.' or '-', then Datastar modifiers (such as "click" or "input__debounce.250ms")`)
+	}
+}
+
 // badActionArg is the sentinel a value-carrying slot panics with when ?a=
 // fails to decode into T. The honest answer is 400, not silently handing the
 // handler a zero value it might act on (deleting row 0).
@@ -975,8 +994,9 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // writeActionAttr writes the data-on:<event>="@post('PATH')" binding for a
 // claimed action slot. Written raw, not via h.Data: the value is a Datastar
 // expression whose single quotes must survive verbatim, and every byte of it is
-// via-generated (fixed template, via-controlled event name, hashed id,
-// url-encoded arg), so no user input reaches it. The colon spelling is
+// via-generated or checked (fixed template, an event name On and OnArg held to
+// actionEvent, hashed id, url-encoded arg), so no attribute-breaking byte
+// reaches it. The colon spelling is
 // mandatory — see h.Data.
 //
 // The query (?u= for a child, ?a= for an arg) goes in a data-via-q-<event>
