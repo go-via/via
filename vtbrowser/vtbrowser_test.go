@@ -48,7 +48,7 @@ type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
 func (c *clicker) View() h.H {
-	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(on.Click(c.Bump), h.Str("+")))
 }
 
 // form is a plain page with one bound input — the vehicle for Type and Value.
@@ -99,7 +99,7 @@ func (c *chat) View() h.H {
 	return h.Div(
 		h.H1(h.Str("online: "), c.Online.Display()),
 		h.Ul(via.Each(c.Log.Get(), c.line)),
-		h.Form(via.On("submit", c.Send),
+		h.Form(on.Submit(c.Send),
 			h.Input(c.Draft.Bind(), h.RawAttr("placeholder", "msg")),
 			h.Button(h.Str("send")),
 		),
@@ -118,7 +118,7 @@ type bCounter struct{ n via.State[int] }
 
 func (c *bCounter) Inc(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *bCounter) View() h.H {
-	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
+	return h.Div(h.P(h.Str("clicks "), c.n.Display()), h.Button(on.Click(c.Inc), h.Str("+")))
 }
 
 type bDash struct {
@@ -158,7 +158,7 @@ func (p *pRoot) Hit(ctx *via.Ctx) { p.hits++ }
 func (p *pRoot) View() h.H {
 	return h.Div(
 		h.P(h.Str("hits "), h.Str(p.hits)),
-		h.Button(via.On("click", p.Hit), h.Str("hit")),
+		h.Button(on.Click(p.Hit), h.Str("hit")),
 		via.Child(p.Counter),
 	)
 }
@@ -362,7 +362,7 @@ type redirectViaScript struct{}
 
 func (p *redirectViaScript) Go(ctx *via.Ctx) { ctx.Redirect("/done") }
 func (p *redirectViaScript) View() h.H {
-	return h.Div(h.Button(h.RawAttr("id", "go"), via.On("click", p.Go), h.Str("go")))
+	return h.Div(h.Button(h.RawAttr("id", "go"), on.Click(p.Go), h.Str("go")))
 }
 
 func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
@@ -670,7 +670,7 @@ type grower struct {
 func (g *grower) Grow(ctx *via.Ctx)        { g.n.Set(g.n.Get() + 1) }
 func (g *grower) Pick(ctx *via.Ctx, i int) { g.last.Set(i) }
 func (g *grower) item(i int) h.H {
-	return h.Button(h.ID("pick"+strconv.Itoa(i)), via.OnArg("click", g.Pick, i))
+	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.WithArg(g.Pick, i)))
 }
 func (g *grower) upTo() []int {
 	out := make([]int, g.n.Get())
@@ -682,7 +682,7 @@ func (g *grower) upTo() []int {
 func (g *grower) View() h.H {
 	return h.Div(
 		h.P(h.Str("last "), g.last.Display()),
-		h.Button(h.ID("grow"), via.On("click", g.Grow), h.Str("grow")),
+		h.Button(h.ID("grow"), on.Click(g.Grow), h.Str("grow")),
 		via.Each(g.upTo(), g.item),
 	)
 }
@@ -761,8 +761,8 @@ func (c *crasher) Crash(ctx *via.Ctx) { panic("crasher: boom") }
 func (c *crasher) View() h.H {
 	return h.Div(
 		h.P(h.Str("count: "), c.count.Display()),
-		h.Button(h.ID("bump"), via.On("click", c.Bump), h.Str("+")),
-		h.Button(h.ID("crash"), via.On("click", c.Crash), h.Str("crash")),
+		h.Button(h.ID("bump"), on.Click(c.Bump), h.Str("+")),
+		h.Button(h.ID("crash"), on.Click(c.Crash), h.Str("crash")),
 	)
 }
 
@@ -880,7 +880,7 @@ func (c *bSeedChild) View() h.H {
 		h.Span(h.ID("n"), h.Str("-")),
 		h.Div(h.DataEffect(expr.Rawf(`document.getElementById('n').textContent = String(%s.length)`,
 			c.Load.Ref()))),
-		h.Button(h.ID("fill"), via.On("click", c.Fill), h.Str("fill")),
+		h.Button(h.ID("fill"), on.Click(c.Fill), h.Str("fill")),
 	)
 }
 
@@ -961,7 +961,7 @@ func (r *bTickRoot) Hit(ctx *via.Ctx) { r.hits++ }
 func (r *bTickRoot) View() h.H {
 	return h.Div(
 		h.P(h.ID("hits"), h.Str("hits "), h.Str(r.hits)),
-		h.Button(h.ID("hit"), via.On("click", r.Hit), h.Str("hit")),
+		h.Button(h.ID("hit"), on.Click(r.Hit), h.Str("hit")),
 		via.Child(r.Ticks),
 	)
 }
@@ -991,7 +991,7 @@ type tracked struct {
 
 func (c *tracked) Inc(ctx *via.Ctx) { c.room.Publish(c.n.Add(1)) }
 func (c *tracked) View() h.H {
-	return h.Div(h.P(h.Str("hits: "), c.Hits.Display()), h.Button(via.On("click", c.Inc), h.Str("+")))
+	return h.Div(h.P(h.Str("hits: "), c.Hits.Display()), h.Button(on.Click(c.Inc), h.Str("+")))
 }
 
 func TestTrack_keepsEveryTabOnTheSharedValue(t *testing.T) {
@@ -1069,7 +1069,7 @@ type bAtPlain struct{ Msg via.Signal[string] }
 
 func (p *bAtPlain) Send(ctx *via.Ctx) { p.Msg.Set(atLiteral) }
 func (p *bAtPlain) View() h.H {
-	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), via.On("click", p.Send), h.Str("send")))
+	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), on.Click(p.Send), h.Str("send")))
 }
 
 func TestSignal_atSignInPlainActionPatchReachesTheStoreIntact(t *testing.T) {
@@ -1090,7 +1090,7 @@ func (p *bAtLive) OnInit(ctx *via.Ctx) error {
 }
 func (p *bAtLive) Send(ctx *via.Ctx) { p.Msg.Set(atLiteral) }
 func (p *bAtLive) View() h.H {
-	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), via.On("click", p.Send), h.Str("send")))
+	return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref())), h.Button(h.ID("send"), on.Click(p.Send), h.Str("send")))
 }
 
 func TestSignal_atSignInLivePatchSignalsReachesTheStoreIntact(t *testing.T) {
