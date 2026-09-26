@@ -10,13 +10,14 @@ files you install by hand. Nothing here assumes a distribution.
 - `/etc/go-via.env` — `VIA_SESSION_KEY=<64 hex chars>`, mode 0600, owned by
   the service user. Minted once; rotating it logs every session out.
 - `/etc/caddy/Caddyfile` — below.
-- A system user `go-via`, no shell, no home. The service runs as it.
-- Caddy from the distribution's package, pinned so an upgrade cannot move
-  the proxy under the site.
+- A system user `go-via`, no shell, no home directory on disk. The service
+  runs as it.
+- Caddy from the distribution's package, unpinned: rerun
+  [3. Check](#3-check) after a system upgrade.
 
 The binary listens on `VIA_ADDR` (`127.0.0.1:8080`), Caddy terminates TLS
-and proxies to it. Port 80 stays closed at the firewall: certificates come
-over TLS-ALPN, and there is no plain-HTTP redirect to serve.
+and proxies to it. Certificates come over TLS-ALPN; port 80 is open only to
+redirect plain HTTP to HTTPS.
 
 ## 1. Build
 
@@ -29,17 +30,19 @@ go vet ./... && go test ./...
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go build -trimpath -ldflags "-s -w -X main.version=$(git describe --tags)" \
   -o .build/site-amd64 .
-scp .build/site-amd64 user@host:stage/
+ssh user@host 'cat > stage/site-amd64' < .build/site-amd64
 ```
 
-Use `GOARCH=arm64` for an arm host. `.build/` is gitignored.
+Use `GOARCH=arm64` for an arm host. `.build/` is gitignored. Compare
+`sha256sum` on both ends. The pipe works on hosts without an SFTP
+subsystem, where `scp` fails.
 
 ## 2. First install
 
 As root on the host.
 
 ```sh
-# Caddy from the distribution (apt, apk, dnf, pacman ...). Pin it.
+# Caddy from the distribution (apt, apk, dnf, pacman ...).
 # busybox: adduser -S -D -H -s /sbin/nologin go-via
 useradd -r -M -s /sbin/nologin go-via
 install -m 0755 stage/site-amd64 /usr/local/bin/go-via-site
@@ -111,8 +114,10 @@ WantedBy=multi-user.target
 ```
 
 OpenRC: an `/etc/init.d/go-via` script with `supervisor=supervise-daemon`,
-`respawn_delay=2`, `respawn_max=0`, `command_user=go-via:go-via`, and a
-`start_pre` that sources `/etc/go-via.env` and exports the three variables.
+`respawn_delay=2`, `respawn_max=0`, `retry="TERM/15/KILL/5"`,
+`command_user=go-via:go-via`, and a `start_pre` that sources
+`/etc/go-via.env` and exports the three variables. `retry` is what gives
+the 15 s to stop.
 
 Install the Caddyfile, validate it, enable both services, start the site
 first and Caddy second.
@@ -215,11 +220,6 @@ below.
 ## Caddyfile
 
 ```caddyfile
-{
-	# Port 80 is closed at the host firewall: TLS-ALPN only, no HTTP redirect.
-	auto_https disable_redirects
-}
-
 go-via.dev {
 	tls {
 		issuer acme {
@@ -241,7 +241,6 @@ go-via.dev {
 	}
 
 	# text/* would also compress, and so buffer, text/event-stream.
-	# .geojson's type comes from the host's mime table.
 	encode zstd gzip {
 		match {
 			header Content-Type text/html*
@@ -250,7 +249,6 @@ go-via.dev {
 			header Content-Type text/javascript*
 			header Content-Type application/javascript*
 			header Content-Type application/json*
-			header Content-Type application/geo+json*
 			header Content-Type image/svg+xml*
 		}
 	}
@@ -276,5 +274,12 @@ www.go-via.dev {
 	# the www host never gets one.
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 	redir https://go-via.dev{uri} permanent
+}
+
+# Caddy's implicit HTTP redirect ignores `header`; dropping Server there
+# needs this block.
+http://go-via.dev, http://www.go-via.dev {
+	header -Server
+	redir https://go-via.dev{uri} 308
 }
 ```
