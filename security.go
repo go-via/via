@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/go-via/via/internal/hcore"
 )
@@ -61,6 +62,7 @@ func originAllowed(req *http.Request, cfg *config) bool {
 type routerPolicy struct {
 	trustedOrigins map[string]bool
 	log            *slog.Logger
+	tickWarn       sync.Once
 }
 
 // redirectTo is a queued Redirect. Its verdict is taken when it is queued,

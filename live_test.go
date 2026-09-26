@@ -1277,3 +1277,30 @@ func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
 	assert.Contains(t, buf.String(), "Tick called after OnInit returned",
 		"a Tick call from a plain action handler must log loudly")
 }
+
+type zeroTicker struct{ beats via.State[int] }
+
+func (z *zeroTicker) OnInit(ctx *via.Ctx) error { ctx.Tick(0, z.beat); return nil }
+
+func (z *zeroTicker) beat(*via.Ctx) { z.beats.Set(z.beats.Get() + 1) }
+
+func (z *zeroTicker) View() h.H { return h.Div(h.Str("beats: "), z.beats.Display()) }
+
+func TestTick_runsANonPositiveIntervalEverySecondAndWarnsOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		srv := liveServer(t, via.Handler(zeroTicker{}, logTo(&out)))
+
+		l1, c1 := openStream(t, srv)
+		defer c1()
+		l2, c2 := openStream(t, srv)
+		defer c2()
+
+		start := time.Now()
+		awaitLine(t, l1, "beats: ")
+		awaitLine(t, l2, "beats: ")
+		assert.GreaterOrEqual(t, time.Since(start), time.Second, "a zero interval must not spin")
+		assert.Equal(t, 1, strings.Count(out.String(), "via: Tick interval <= 0, running every 1s instead"),
+			"the clamp warns once per Router, not per OnInit")
+	})
+}
