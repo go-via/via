@@ -6,6 +6,23 @@ import (
 	"go-via.dev/site/snippet"
 )
 
+const testingAwaitFailure = `--- FAIL: TestBoard_pushesOverTheStream (2.00s)
+    board_test.go:27: vt.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
+          #1 datastar-patch-signals: signals {"viatab":"eVelnHi8QTPIgFoyF8h8lwM3keTgszM2nqGXa7d_ee4w"}
+          #2 datastar-patch-elements: elements <div id="root"><div><p>msg: hello</p><button data-on:click="@post('/_via/a/r/n4Ip3BxF')">post</button></div></div>`
+
+const testingWire = `B=http://localhost:3000
+H=(-H 'Sec-Fetch-Site: same-origin')
+
+curl -sN -X POST "$B/_via/sse" "${H[@]}" -d '{}' > tab.sse &
+sleep 0.2
+TAB=$(grep -o '"viatab":"[^"]*"' tab.sse | cut -d'"' -f4)
+
+ADD=$(curl -s "$B/" | grep -o "/_via/a/r/[^']*" | head -1)
+curl -s -X POST "$B$ADD" "${H[@]}" -H 'Datastar-Request: true' \
+  -H 'Content-Type: application/json' -d "{\"draft\":\"milk\",\"viatab\":\"$TAB\"}"
+cat tab.sse`
+
 type Testing struct{ page }
 
 func NewTesting(env Env) Testing { return Testing{page: newPage("/testing", env)} }
@@ -25,10 +42,14 @@ func (p *Testing) View() h.H {
 
 		d.H2("Test a page without a browser"),
 		snippet.Region("testing/plain.go", "counter", snippet.Title("counter.go")),
-		snippet.Region("testing/plain.go", "test", snippet.Title("counter_test.go"), snippet.Mark("vt.Serve", "Action(1)")),
+		snippet.Region("testing/plain.go", "test", snippet.Title("counter_test.go"), snippet.Mark("vt.Serve", "vt.Logger", "Action(1)")),
 		h.P(API("vt.Serve"), h.Str(" mounts any "), Code("http.Handler"), h.Str(" on an in-memory "), Code("httptest"),
 			h.Str(" server and closes it when the test ends. "), API("vt.App.Get"), h.Str(" returns the status and body; a render "+
 				"that panics comes back as a 500, not a transport error.")),
+		h.P(API("vt.Logger"), h.Str(", passed to "), API("via.WithLogger"),
+			h.Str(", sends via's warnings to the test's own log, which go test prints only when the test fails or runs "+
+				"with -v. Without it they reach stderr on every run, the "), API("via.WithTrustedOrigin"),
+			h.Str(" warning once per router.")),
 		h.P(API("vt.App.Action"), h.Str(" addresses an action by position: "), Code("Action(n)"),
 			h.Str(" is the n-th action the root renders, in document order. vt reads the action's URL off the rendered page "+
 				"when the action fires, because the wire id is a hash of the handler and cannot be built by hand. "),
@@ -68,6 +89,10 @@ func (p *Testing) View() h.H {
 				"the re-render arrives on the stream, where "), API("vt.Conn.Await"),
 			h.Str(" waits up to 2s for a frame line containing the text and returns it. For a page mounted below the root, "+
 				"open the stream with "), API("vt.App.ConnectAt"), h.Str(".")),
+		h.P(h.Str("Each line is read once, so a line an earlier Await matched or skipped is gone. When Await gives up it "+
+			"reports what did arrive: the frames on the stream, how many this wait read, and the last few. A wait that "+
+			"read none means the frame it wanted, if it came, went to an earlier Await.")),
+		snippet.Text("go test", testingAwaitFailure),
 		snippet.Region("testing/live.go", "clock", snippet.Title("clock_test.go"), snippet.Mark("synctest.Test", "Peek()")),
 		h.P(API("vt.Serve"), h.Str(" uses an in-memory network, so a live test runs inside "), Code("synctest.Test"),
 			h.Str(" and a minute of Tick costs no wall time. "), API("vt.Conn.Peek"),
@@ -89,6 +114,44 @@ func (p *Testing) View() h.H {
 				Code("http.Client"), h.Str(" with a cookie jar and the transport of "), API("vt.App.Client"),
 				h.Str(", or use "), API("vtbrowser.Session.NewTab"), h.Str(".")),
 		),
+
+		d.H2("The wire protocol"),
+		h.P(h.Str("vt sends the same HTTP a browser does, and so can curl or a client in another language. "+
+			"Paths below are under the page's mount, so a page at "), Code("/thread/{id}"), h.Str(" streams from "),
+			Code("/thread/7/_via/sse"), h.Str(".")),
+		h.Ul(
+			h.Li(h.Strong(h.Str("GET the page. ")), h.Str("Action URLs are in its markup: "),
+				Code("@post('/_via/a/<child>/<id>')"), h.Str(" in a "), Code("data-on:"), h.Str(" attribute, or a "),
+				API("via.PostForm"), h.Str("'s "), Code("action"), h.Str(". The id is a hash of the handler, so read it off "+
+					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and a child's instance as "), Code("?u="),
+				h.Str(". A binding with a query carries it in a "), Code("data-via-q-<event>"),
+				h.Str(" attribute on the same element, and the expression appends it to the path: "),
+				Code(`data-via-q-click="?a=2" data-on:click="@post('/_via/a/r/<id>' + (el.getAttribute('data-via-q-click') ?? ''))"`),
+				h.Str(" posts to "), Code("/_via/a/r/<id>?a=2"), h.Str(".")),
+			h.Li(h.Strong(h.Str("POST /_via/sse to open the stream. ")),
+				h.Str("The body is the page's signals as JSON; "), Code("{}"), h.Str(" or an empty body will do. The answer is a "),
+				Code("text/event-stream"), h.Str(" that stays open: "), Code("datastar-patch-signals"), h.Str(" and "),
+				Code("datastar-patch-elements"), h.Str(" events, and a keepalive comment every 25 seconds. A page with no "+
+					"live unit answers 404.")),
+			h.Li(h.Strong(h.Str("POST an action. ")), h.Str("With "), Code("Datastar-Request: true"),
+				h.Str(" the body is JSON: the signals keyed by wire name, as Datastar posts its store. Without that header "+
+					"the body is read as a native form, "), Code("multipart/form-data"), h.Str(" with the tab id in a "),
+				Code("_viatab"), h.Str(" field, as PostForm sends it; a JSON body without the header answers 400 and names "+
+					"the header. A plain unit answers 200 with the patched HTML, or 204 when nothing changed. A live action "+
+					"answers 204 and its render arrives on the stream.")),
+		),
+		h.P(h.Str("A live page carries its tab id in the document, "), Code(`<body data-signals='{"viatab":"<id>"}'>`),
+			h.Str(". Send it in the connect body and the stream adopts it; with none, as in the sample below, or one this process "+
+				"did not issue to this cookie, the stream mints a fresh one. Either way its first event is a "),
+			Code("datastar-patch-signals"), h.Str(" frame carrying the id it answers to, "), Code(`signals {"viatab":"<id>"}`),
+			h.Str(". Echo it as the "), Code("viatab"),
+			h.Str(" signal in every action body and the action routes to that stream. A live page's action without it answers 410, "+
+				"and so does one whose stream has closed and not come back; see "),
+			h.A(h.Href(d.Href("/live")+"#connection-lifecycle"), h.Str("Connection lifecycle")), h.Str(".")),
+		h.P(h.Str("Every POST passes the origin check first; a browser's same-origin fetch sends "),
+			Code("Sec-Fetch-Site: same-origin"), h.Str(", so send it too. See "),
+			h.A(h.Href(d.Href("/security")+"#origin-checks-and-csrf"), h.Str("Origin checks and CSRF")), h.Str(".")),
+		snippet.Text("shell", testingWire),
 
 		d.H2("Real browser tests"),
 		h.P(API("vtbrowser.Open"), h.Str(" starts an "), Code("httptest"), h.Str(" server for your handler, launches headless "+
@@ -149,5 +212,10 @@ func (p *Testing) View() h.H {
 			h.Str(" test manages its own time and does not. Give each test its own store and "), API("topic.Topic"),
 			h.Str(" in the root literal, as the samples above do, so parallel tests never share state. Prefer real or stub "+
 				"implementations of interfaces you own over mocks; keep mocks for true system boundaries.")),
+		h.P(h.Str("A "), Code("package main"), h.Str(" cannot be imported, so there is no "), Code("main_test"),
+			h.Str(" package to test it from. Either write the tests in "), Code("package main"),
+			h.Str(" and still enter only through the handler, as vt does, or move the compositions into a package of "+
+				"their own and keep "), Code("main"), h.Str(" to the router and the server. The second makes "),
+			Code("package foo_test"), h.Str(" possible, and there the compiler stops a test from reaching an unexported field.")),
 	)
 }

@@ -59,15 +59,13 @@ import (
 func Child[C any](child C) h.H {
 	v, isView := any(&child).(viewer)
 	if !isView {
-		panic("via: via.Child(child) requires child to have a View() method")
+		panic(hcore.Miswired("via: via.Child(child) requires child to have a View() method"))
 	}
 	// &child, not the parent's field: the copy is what the child's View binds
 	// against for the life of this render (and, for a live child, for the life
 	// of the connection), so its address is the base its signals offset from.
 	typ := reflect.TypeOf(child)
 	checkViewReceiver(typ)
-	// slog.Default(): no Router in scope.
-	checkHooks(slog.Default(), typ, &childHookWarned, false)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	var site childSite
 	runtime.Callers(2, site[:])
@@ -151,6 +149,14 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 	if parent == nil {
 		return
 	}
+	if parent.policy == bootPolicy {
+		// A throwaway dedupe map: the boot render must not use up the warning
+		// the first real render of this child owes the app.
+		checkHooks(bootPolicy.log, inst.typ, &sync.Map{}, false)
+	} else {
+		// slog.Default(): no Router in scope.
+		checkHooks(slog.Default(), inst.typ, &childHookWarned, false)
+	}
 
 	key := parent.keyOf(len(parent.children))
 	// The key is positional, so a When that closes ahead of a child moves a
@@ -227,6 +233,7 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 	child.declareSeen = parent.declareSeen
 	child.req = parent.req
 	child.sessions = parent.sessions
+	child.policy = parent.policy
 	child.sessW = parent.sessW
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	parent.children = append(parent.children, child)
@@ -269,7 +276,7 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 // turns it back into the answer OnInit asked for (see recoverToHTTP).
 type initOutcome struct {
 	err      error
-	redirect string
+	redirect redirectTo
 }
 
 // initChild runs an embedded child's OnInit before its View. A paramMiss panic
@@ -286,7 +293,7 @@ func initChild(child *Ctx, v any) {
 	if err != nil {
 		panic(initOutcome{err: err})
 	}
-	if child.redirect != "" {
+	if child.redirect.url != "" {
 		panic(initOutcome{redirect: child.redirect})
 	}
 }

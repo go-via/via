@@ -404,11 +404,18 @@ func openStream(t *testing.T, srv *httptest.Server) (<-chan string, context.Canc
 // parametrised mount's stream lives at its concrete base, not "/_via/sse".
 func openStreamAt(t *testing.T, srv *httptest.Server, path string) (<-chan string, context.CancelFunc) {
 	t.Helper()
+	return openStreamWithBody(t, srv, srv.Client(), path, "")
+}
+
+// openStreamWithBody opens the stream on c with a connect body, as the
+// browser's @post does once it holds the page's signals.
+func openStreamWithBody(t *testing.T, srv *httptest.Server, c *http.Client, path, body string) (<-chan string, context.CancelFunc) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+path, strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin") // mimic a same-origin browser SSE fetch past the origin floor
-	resp, err := srv.Client().Do(req)
+	resp, err := c.Do(req)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -979,4 +986,87 @@ func TestLive_connectIsRefusedWhenTheWriterCannotStream(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 		"a connect on a writer that cannot stream must be refused, not half-opened")
 	assert.Contains(t, string(b), "streaming unsupported")
+}
+
+type tickPanicker struct{ n via.State[int] }
+
+func (p *tickPanicker) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(100*time.Millisecond, p.tick)
+	return nil
+}
+func (p *tickPanicker) tick(*via.Ctx) { panic("tick boom") }
+func (p *tickPanicker) View() h.H     { return h.Div(p.n.Display()) }
+
+type viewPanicker struct{ n via.State[int] }
+
+func (p *viewPanicker) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(100*time.Millisecond, p.tick)
+	return nil
+}
+func (p *viewPanicker) tick(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *viewPanicker) View() h.H {
+	if p.n.Get() > 0 {
+		panic("view boom")
+	}
+	return h.Div(p.n.Display())
+}
+
+func TestLive_aRepeatingPanicLogsOneStackThenBoundedSummaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+	}{
+		{"tick handler", func(r *via.Router) { via.Mount(r, "/", tickPanicker{}) }},
+		{"view", func(r *via.Router) { via.Mount(r, "/", viewPanicker{}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var out lockedBuf
+				r := via.NewRouter(logTo(&out))
+				tt.mount(r)
+				app := vt.Serve(t, r)
+				app.Connect()
+
+				time.Sleep(3 * time.Minute) // ~1800 panics
+				synctest.Wait()
+
+				log := out.String()
+				assert.Equal(t, 1, strings.Count(log, "stack="), "only the first panic at a site carries a stack")
+				assert.Contains(t, log, "repeated")
+				assert.LessOrEqual(t, strings.Count(log, "level=ERROR"), 5, "repeats are summarised, not logged one by one")
+			})
+		})
+	}
+}
+
+func TestSSE_streamIgnoresAMiddlewaresCacheControl(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		h    http.Handler
+		want string
+	}{
+		{"anonymous stream", via.Handler(pulse{}), "no-cache"},
+		{"session-bearing stream", via.Handler(liveSessStream{}, testSessionKey), "private, no-store"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(publicCache(tt.h))
+			t.Cleanup(srv.Close)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
+			require.NoError(t, err)
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+			assert.Equal(t, tt.want, resp.Header.Get("Cache-Control"))
+		})
+	}
 }

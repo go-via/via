@@ -27,12 +27,12 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // The load-bearing fact, read off the bundled datastar.js: the fetch driver
 // defaults to retry:"auto", and under "auto" the only path that reaches its
 // retry helper is the network-error catch. A response that ends — a clean
-// close on a graceful deploy, or Router.Close returning from the stream — takes
-// the `u?.(),h==="always"&&!mt` test, fails it, and falls through to `q(),n()`:
-// it fires `finished` and never `retrying`/`retries-failed`. A non-200 status
-// likewise falls straight to `q(),n()` under "auto". So `retries-failed` covers
-// network drops only, and a clean close would otherwise leave a page that looks
-// alive while every click 410s.
+// close on a graceful deploy, or Router.Close returning from the stream —
+// reaches the `retry === "always" && !redirect` test after the body is read,
+// fails it, and resolves: it fires `finished` and never
+// `retrying`/`retries-failed`. A non-200 status likewise resolves at once
+// under "auto". So `retries-failed` covers network drops only, and a clean
+// close would otherwise leave a page that looks alive while every click 410s.
 //
 // Hence: `finished` whose detail.el is <body> is the stream ending — the SSE
 // @post is the only fetch mounted on <body> (router.go's data-init) — and it is
@@ -41,10 +41,21 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // ten times with backoff before giving up, and it still reports the give-up
 // through the same handler, so it buys nothing this does not already do.
 //
+// Only the stream's own events (detail.el is <body>) speak for the connection.
+// An action's request can fail while the stream is healthy — a handler panic
+// answers 500, a pinned goroutine 503, a session mismatch 403 — and its
+// started/finished say nothing about the stream either, so none of them touch
+// the banner or the connection state.
+//
 // `error` is dispatched from the driver's onopen for any status >= 400, with
-// the code as a string in detail.argsRaw.status. A 410 means the tab is stale
-// (its stream is gone, or the render no longer binds the action) — reload. A
-// 403/5xx is a server-side condition a reload will not fix — banner only.
+// the code as a string in detail.argsRaw.status, and the same request's
+// `finished` follows it within milliseconds. A 410 from any request means the
+// tab is stale (its stream is gone, or the render no longer binds the action):
+// it latches the manager into its reload, so neither that `finished` nor a
+// patch arriving meanwhile can cancel it. A 403 on the stream is final —
+// banner only, since the server would answer the same again — so its
+// `finished` is not read as a drop. Any other failed connect (a 503 at
+// capacity, a store outage) is read as one, probed and retried.
 //
 // It also publishes status as a data-via-connection attribute on <html> —
 // "online"/"connecting"/"offline" — so an app can style its own connection UI in
@@ -65,7 +76,7 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // that clears the reload cap (a person clicking is not a reload loop) and
 // probes without waiting out the backoff.
 var reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
-	`var K='__via_rc_reloads',b,bt,btn,gen=0,fails=0,nosh;` +
+	`var K='__via_rc_reloads',b,bt,btn,gen=0,fails=0,nosh,stale=0,sst=0;` +
 	// A constructed sheet: CSP's style-src gates <style> and style attributes,
 	// not the CSSOM. strconv.Quote, because a quote in the CSS would be a JS
 	// syntax error that kills the IIFE while its hash still matches. Without
@@ -73,7 +84,7 @@ var reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	// an inline style: visible, not restyleable.
 	`try{var sh=new CSSStyleSheet();sh.replaceSync(` + strconv.Quote(reconnectCSS) + `);` +
 	`document.adoptedStyleSheets=[...document.adoptedStyleSheets,sh]}catch(_){nosh=1}` +
-	`function conn(s){document.documentElement.setAttribute('data-via-connection',s)}` +
+	`function conn(s){var h=document.documentElement;if(h.getAttribute('data-via-connection')!==s)h.setAttribute('data-via-connection',s)}` +
 	`conn('online');` +
 	`function show(m,wb){if(!b){b=document.createElement('div');b.id='via-reconnect-banner';` +
 	`b.setAttribute('role','status');b.setAttribute('aria-live','polite');` +
@@ -112,14 +123,14 @@ var reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	// never dispatches document-level 'datastar-patch-*' events — so those kinds
 	// must be matched here or the banner sticks forever and its full-width
 	// overlay swallows clicks.
-	`document.addEventListener('datastar-fetch',function(e){var d=e.detail||{},t=d.type;` +
+	`document.addEventListener('datastar-fetch',function(e){var d=e.detail||{},t=d.type,st=d.el===document.body,s;` +
+	`if(stale)return;` +
+	`if(t==='error'){s=+((d.argsRaw||{}).status||0);` +
+	`if(s===410){stale=1;lost('Page is out of date - reloading…');return}` +
+	`if(st){sst=s;if(s===403)stop('Disconnected.')}return}` +
+	`if(!st)return;` +
 	`if(t==='retrying'){conn('connecting');show('Reconnecting…',0)}` +
-	`else if(t==='error'){var s=+((d.argsRaw||{}).status||0);` +
-	`if(s===410){lost('Page is out of date - reloading…')}` +
-	`else if(s===403||s>=500){stop('Disconnected.')}}` +
-	// detail.el is <body> only for the SSE @post in data-init; an action POST
-	// finishing on some button must still clear the banner.
-	`else if(t==='finished'){if(d.el===document.body){lost('Disconnected.')}else{ok()}}` +
+	`else if(t==='finished'){if(sst!==403)lost('Disconnected.');sst=0}` +
 	`else if(t==='started'||t==='datastar-patch-elements'||t==='datastar-patch-signals'){ok()}` +
 	`else if(t==='retries-failed'){lost('Disconnected.')}});` +
 	`addEventListener('load',function(){setTimeout(function(){try{sessionStorage.removeItem(K)}catch(_){}},5000)})})()`

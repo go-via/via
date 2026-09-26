@@ -37,6 +37,7 @@ func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
 // without framing them, so a later push ships only what actually changed.
 func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) (baseline func()) {
 	lc.replace(unit)
+	unit.guard = lc.guard
 	if unit.isChild {
 		unit.push, baseline = childPush(unit.childKey, unit.unitV, base, stream, lc, unit)
 	} else {
@@ -302,17 +303,16 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// context chain: req.Context() is net/http's, and http.Server.Shutdown does
 	// not cancel it, so nothing else would ever end this goroutine, its Tick
 	// timers or its Listen subscriptions.
-	if m.routerCtx != nil {
-		defer context.AfterFunc(m.routerCtx, cancel)()
-	}
 	stream := &stream{
 		w:       w,
 		rc:      http.NewResponseController(w),
 		timeout: sseWriteTimeout,
 		cancel:  cancel,
 	}
+	if m.routerCtx != nil {
+		defer context.AfterFunc(m.routerCtx, stream.end)()
+	}
 	keepalive := func() { stream.frame(writeKeepaliveFrame) }
-	id := randomToken() // per-connection tab id (echoed as the viatab signal on actions)
 	pushq := make(chan func())
 
 	// The credential dispatch requires a match against, so that a leaked tab id
@@ -330,6 +330,18 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "session store unavailable", http.StatusServiceUnavailable)
 		return
 	}
+
+	// The page's own id when this app issued it to this credential and no
+	// other stream holds it; a fresh one otherwise, sent in the first frame
+	// either way. Claimed before OnInit so an action already parked on the id
+	// waits for this stream instead of timing out behind it.
+	id := m.claimTab(connectSig, sessID)
+	registered := false
+	defer func() {
+		if !registered {
+			m.reg.del(id, m.tombFor(stream))
+		}
+	}()
 
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
@@ -349,9 +361,9 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// OnInit gets the load above rather than a second one: when that load slid
 	// the idle window, only its handle knows to re-send the cookie, and a
 	// reconnect may be the only request an open tab ever makes.
-	bind.req, bind.sessions, bind.sessW = req, m.sessions, w
+	bind.req, bind.sessions, bind.policy, bind.sessW = req, m.sessions, m.policy, w
 	bind.adoptSession(sessID, sessDat, nil)
-	if runOnInit(pv.v, bind, w, req, m.sessions, true) != nil {
+	if runOnInit(pv.v, bind, w, req, m.sessions, m.policy, true) != nil {
 		return
 	}
 	renderRootWith(bind, pv.v)
@@ -362,7 +374,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	streamLabel := fmt.Sprintf(" [tab=%s unit=%T]", id, pv.v)
+	guard := newPushGuard(fmt.Sprintf(" [tab=%s unit=%T]", id, pv.v))
 
 	var connSID string
 	if sessDat != nil {
@@ -381,9 +393,12 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		units:           map[string]*Ctx{},
 		sess:            connSID,
 		handlers:        units,
-		client:          connectSig,
+		client:          connectClient(bind, connectSig),
 		rev:             rev,
 		badDecodeLogged: logFlag,
+		end:             stream.end,
+		wire:            stream,
+		guard:           guard,
 	}
 
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn
@@ -398,7 +413,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 		for _, u := range units {
 			for _, d := range u.disposers {
-				runPushItem(m.cfg.log, streamLabel, d)
+				runRecovered(m.cfg.log, guard, d)
 			}
 		}
 	}()
@@ -443,7 +458,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	m.reg.put(id, lc) // a live action POST routes to this connection by tab id
-	defer m.reg.del(id)
+	registered = true
+	defer func() { m.reg.del(id, m.tombFor(stream)) }()
 
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
@@ -465,17 +481,26 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Whatever an OnConnect published is drained first, so the connect's own
 	// frame carries it rather than a pre-handler render the next sweep would
 	// immediately correct.
-	sweepListeners(m.cfg.log, streamLabel, listeners)
+	guard.watchPin(m.cfg.pinnedDeadline, func() { lc.warnPinned(&lc.pinTimerLogged) })
+	sweepListeners(m.cfg.log, guard, listeners)
 
 	// A Set inside an OnConnect fn has no push to ride — runStream does no
 	// initial push — so it must be pushed explicitly here. It ships a frame
 	// only if the render moved off the baseline taken before the fns ran.
 	for _, u := range units {
 		if len(u.onConnect) > 0 {
-			runPushItem(m.cfg.log, streamLabel, u.push)
+			runPushItem(m.cfg.log, guard, u.push)
 		}
 	}
 
+	// Watched only from here: no action or push runs on this connection
+	// before runStream does, and a Rotate elsewhere in the gap is caught by
+	// the first beat's revalidate.
+	lc.watchSession(bind.session)
+	defer lc.unwatchSession()
 	streaming = true
-	runStream(m.cfg.log, streamCtx, streamLabel, units, listeners, wake, pushq, keepalive, sseHeartbeat)
+	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, pushq, func() {
+		keepalive()
+		lc.revalidate()
+	}, sseHeartbeat)
 }

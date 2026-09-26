@@ -532,8 +532,9 @@ func (p *stalePage) View() h.H {
 }
 
 func TestSignal_parentBindingAChildsSignalPanicsNamingViaChild(t *testing.T) {
-	assertSlotPanic(t, via.Handler(stalePage{}),
-		"a child composition must be rendered through via.Child, not by calling its View")
+	t.Parallel()
+	assertSlotPanic(t, "a child composition must be rendered through via.Child, not by calling its View",
+		func() { via.Handler(stalePage{}) })
 }
 
 type unmarshalable struct{}
@@ -689,7 +690,7 @@ func TestSignalRef_panicsOnASignalWithNoWireName(t *testing.T) {
 	t.Parallel()
 	r := &refHolder{Sig: &via.Signal[int]{}}
 
-	assert.PanicsWithValue(t, "via: Signal.Ref on a signal with no wire name — a Signal must be a plain "+
+	assert.PanicsWithError(t, "via: Signal.Ref on a signal with no wire name — a Signal must be a plain "+
 		"field of the composition (through plain nested structs if you like), not one reached through a "+
 		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
 		func() { r.Sig.Ref() })
@@ -783,7 +784,7 @@ func TestSignalCSRef_panicsOnASignalWithNoWireName(t *testing.T) {
 	t.Parallel()
 	b := &boxedCS{S: &via.SignalCS[int]{}}
 
-	assert.PanicsWithValue(t, "via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain "+
+	assert.PanicsWithError(t, "via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain "+
 		"field of the composition (through plain nested structs if you like), not one reached through a "+
 		"pointer, slice, array or map field; \"$\" alone is not a Datastar expression",
 		func() { b.S.Ref() })

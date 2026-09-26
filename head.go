@@ -341,11 +341,17 @@ func (a Assets) render(b *strings.Builder) {
 	}
 }
 
-func (hd Head) htmlOpen() string {
-	if hd.Lang == "" {
-		return "<html>"
+// htmlOpen renders <html>, carrying nonce for Datastar to compile expressions
+// under when the document runs Datastar ("" for one that does not).
+func (hd Head) htmlOpen(nonce string) string {
+	open := "<html"
+	if hd.Lang != "" {
+		open += ` lang="` + html.EscapeString(hd.Lang) + `"`
 	}
-	return `<html lang="` + html.EscapeString(hd.Lang) + `">`
+	if nonce != "" {
+		open += ` data-nonce="` + nonce + `"`
+	}
+	return open + ">"
 }
 
 // isLangTag is a syntax gate on BCP 47 shape, not a registry lookup: the point

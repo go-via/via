@@ -172,7 +172,7 @@ func routerOptions(s *shell.Site, idx *search.Index) []via.Option {
 	if s.Origin != "" {
 		opts = append(opts, via.WithTrustedOrigin(s.Origin), via.WithSecureCookies())
 	} else {
-		log.Print("VIA_ORIGIN unset: every origin is accepted and cookies are not Secure")
+		log.Print("VIA_ORIGIN unset: every origin is accepted and cookies are Secure only over TLS or X-Forwarded-Proto: https")
 	}
 	return opts
 }

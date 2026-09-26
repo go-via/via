@@ -39,7 +39,11 @@ const deployCaddyfile = `example.com {
 	}
 }`
 
-const deployNginx = `server {
+const deployNginx = `# In the http block: open requests per client address, each open stream
+# included. Clients behind one NAT share an address, so leave headroom.
+limit_conn_zone $binary_remote_addr zone=perclient:10m;
+
+server {
 	listen 443 ssl;
 	http2 on;
 	server_name example.com;
@@ -47,10 +51,12 @@ const deployNginx = `server {
 	ssl_certificate_key /etc/ssl/example.com/privkey.pem;
 
 	location / {
+		limit_conn perclient 50;
 		proxy_pass http://127.0.0.1:8080;
 		proxy_http_version 1.1;
 		proxy_set_header Connection "";
 		proxy_set_header Host $host;
+		proxy_set_header X-Forwarded-Proto $scheme;
 		# SSE: pass each frame on as it arrives.
 		proxy_buffering off;
 		# Must exceed via's fixed 25 s keepalive.
@@ -130,10 +136,12 @@ func (p *Deploy) View() h.H {
 				h.Str("Fails open: actions accept requests from every origin, including ones that carry no " +
 					"origin signal at all. via logs one warning at startup.")},
 			[]h.H{h.Str("Secure cookies"), API("via.WithSecureCookies"),
-				h.Str("Secure is set only when the request itself came over TLS. Behind a proxy that " +
-					"terminates TLS, never.")},
+				h.Str("Secure follows TLS or the proxy's X-Forwarded-Proto. Unneeded behind Caddy, or nginx " +
+					"configured as below.")},
 			[]h.H{h.Str("Stream cap"), API("via.WithMaxSSEConn"),
 				h.Str("10000 streams per router; the next connect answers 503.")},
+			[]h.H{h.Str("Per-client limits"), h.Str("The proxy, below"),
+				h.Str("One client can open streams until the router-wide cap refuses everyone.")},
 			[]h.H{h.Str("Idle timeouts"), h.Span(h.Str("Proxy and balancer, above 25 s; "), API("via.WithPinnedDeadline"),
 				h.Str(" below the balancer's request timeout")),
 				h.Str("The proxy cuts idle streams, or answers a stuck action before via can.")},
@@ -158,8 +166,18 @@ func (p *Deploy) View() h.H {
 		h.P(h.Str("A tab's stream is one long "), Code("text/event-stream"), h.Str(" response to a POST. A proxy "+
 			"that buffers or compresses it holds every patch back, and the page never updates while clicks "+
 			"still POST. Do not strip a path prefix: action and stream URLs sit under each mount, so the "+
-			"upstream has to see the path the browser used. With nginx, forward "), Code("Host"), h.Str(": without a trusted "+
-			"origin match, via's same-origin check compares the browser's Origin with it.")),
+			"upstream has to see the path the browser used. With nginx, forward "), Code("Host"), h.Str(" and "),
+			Code("X-Forwarded-Proto"), h.Str(": without a trusted origin match, via's same-origin check compares the "+
+				"browser's Origin with Host, and the proto decides whether the session cookie is Secure. Caddy sends both "+
+				"as is.")),
+
+		d.H2("Limits and dead peers"),
+		h.P(h.Str("Limit connections and request rates per client at the proxy: via sees only the proxy's address. nginx does it with "),
+			Code("limit_conn"), h.Str(" (above) and "), Code("limit_req"), h.Str(". Stock Caddy has neither; build in the "),
+			Code("rate_limit"), h.Str(" module with "), Code("xcaddy"), h.Str(", or limit at the balancer or firewall in front.")),
+		h.P(h.Str("Behind a proxy, via's 25 s keepalive detects a dead proxy, not a dead browser. A browser that vanishes "+
+			"without closing its connection is the proxy's to notice, through a failed write or TCP keepalive (Caddy's "),
+			Code("keepalive_interval"), h.Str("). The proxy then closes the upstream request, and via ends the tab's stream.")),
 
 		d.H2("Timeouts"),
 		snippet.Region("deploy/main.go", "server", snippet.Title("main.go"), snippet.Mark("WriteTimeout")),
@@ -170,13 +188,14 @@ func (p *Deploy) View() h.H {
 			[]h.H{h.Str("Frame write"), h.Str("10 s, fixed"),
 				h.Str("A peer that stops reading loses its stream after this.")},
 			[]h.H{h.Str("Pinned deadline"), h.Span(h.Str("5 s, "), API("via.WithPinnedDeadline")),
-				h.Str("How long an action waits for its tab's goroutine before answering 503. Keep it under " +
-					"the balancer's request timeout so the answer is via's.")},
+				h.Str("How long an action waits, in all, for a stream still connecting (410 if it never comes) and for " +
+					"its tab's goroutine to pick it up (503). Keep it under the balancer's request timeout so the answer is via's.")},
 			[]h.H{h.Code(h.Str("http.Server.WriteTimeout")), h.Str("0"),
 				h.Str("It bounds the whole response, and a stream is one response for the life of the tab.")},
 		),
 		h.P(h.Str("The keepalive is the only way via notices a peer that vanished without closing the "+
-			"connection, which is why it cannot be turned off or slowed down.")),
+			"connection, which is why it cannot be turned off or slowed down. Behind a proxy that peer is the "+
+			"proxy; see "), h.A(h.Href("#limits-and-dead-peers"), h.Str("Limits and dead peers")), h.Str(".")),
 
 		d.H2("Health and readiness"),
 		snippet.Region("deploy/main.go", "health", snippet.Title("main.go")),
@@ -186,22 +205,27 @@ func (p *Deploy) View() h.H {
 			"front of the router so a probe never touches sessions.")),
 
 		d.H2("Shutdown order"),
-		snippet.Region("deploy/main.go", "shutdown", snippet.Title("main.go"), snippet.Mark("r.Close()")),
+		snippet.Region("deploy/main.go", "shutdown", snippet.Title("main.go"), snippet.Mark("r.Shutdown(shut)")),
 		Steps(
 			Step("Fail readiness, then wait",
 				h.P(h.Str("Long enough for the balancer to mark the pod down: probe interval times failure "+
 					"threshold."))),
-			Step("Close the router",
-				h.P(API("via.Router.Close"), h.Str(" ends every stream the way a closed tab ends, with a clean "+
+			Step("Shut the router down",
+				h.P(API("via.Router.Shutdown"), h.Str(" ends every stream the way a closed tab ends, with a clean "+
 					"end of response, and runs each "), API("via.Ctx.OnDispose"), h.Str(". It returns once the "+
-					"last stream goroutine is gone. An action in flight answers normally or 410; a connect "+
-					"after Close answers 503. Calling it twice is fine."))),
+					"last stream goroutine is gone. An action in flight answers normally or 410; one still waiting "+
+					"for its stream, and a connect after it, answer 503. Calling it twice is fine.")),
+				h.P(h.Str("A handler blocked in your code cannot be stopped from outside, so its stream ends only "+
+					"when the handler returns. If the deadline comes first, Shutdown returns the context's error "+
+					"and logs the tabs still blocked. "),
+					API("via.Router.Close"), h.Str(" is Shutdown with no deadline."))),
 			Step("Shut the server down",
-				h.P(h.Code(h.Str("http.Server.Shutdown")), h.Str(" drains the plain requests. It does not "+
-					"cancel the router's streams: called first, it waits on tabs that never end."))),
+				h.P(h.Code(h.Str("http.Server.Shutdown")), h.Str(" drains the plain requests, under the same "+
+					"deadline. It does not cancel the router's streams: called first, it waits on tabs that "+
+					"never end."))),
 		),
-		h.P(h.Str("Five seconds of drain and five of Shutdown fit inside the 15 s the systemd unit below gives "+
-			"the process to stop ("), Code("TimeoutStopSec"), h.Str(").")),
+		h.P(h.Str("Five seconds of drain and five shared by both Shutdowns fit inside the 15 s the systemd unit "+
+			"below gives the process to stop ("), Code("TimeoutStopSec"), h.Str(").")),
 
 		d.H2("Service unit"),
 		snippet.Text("/etc/systemd/system/myapp.service", deploySystemd),
@@ -238,7 +262,7 @@ func (p *Deploy) View() h.H {
 		Callout(Warning, "A connect refused 503 does not retry",
 			h.P(h.Str("A tab whose stream connect lands on a closed router, or one past "), API("via.WithMaxSSEConn"),
 				h.Str(", stops on the banner with a Reconnect button and waits for the user. Fail readiness "+
-					"before "), API("via.Router.Close"), h.Str(" so reloading tabs land on a pod that is "+
+					"before "), API("via.Router.Shutdown"), h.Str(" so reloading tabs land on a pod that is "+
 					"staying up."))),
 		h.P(h.Str("Roll one pod at a time. Unsent client edits and any action in flight on the closing pod are "+
 			"lost; there is no replay.")),

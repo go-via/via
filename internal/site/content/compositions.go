@@ -90,7 +90,7 @@ func (p *Compositions) View() h.H {
 		d.H2("Lifecycle hooks"),
 		h.P(h.Str("A hook is a method with a fixed name and signature; via calls it if the type has it. "+
 			"OnInit and OnReload take a *via.Ctx and return an error; View and PageMeta take nothing. "+
-			"A hook name with the wrong signature panics at "), API("via.Mount"), h.Str(", or at a child's first render. Which hooks run depends on the request:")),
+			"A hook name with the wrong signature panics at "), API("via.Mount"), h.Str(", or, on a child the empty page does not render, at its first render. Which hooks run depends on the request:")),
 		table([]string{"Request", "Runs", "On instance"},
 			[]h.H{h.Str("GET of the page"), h.Span(Code("OnInit"), h.Str(" on every unit, each right before its "), Code("View"),
 				h.Str(", so a parent's runs before its children's. The root's "), Code("PageMeta"), h.Str(" names the document.")),
@@ -163,7 +163,7 @@ func (p *Compositions) View() h.H {
 			h.Str(" counts, so the shell names the page; a PageMeta on the body is ignored and logged.")),
 		snippet.Region("compositions/layout.go", "slots"),
 		h.P(h.Str("More slots are more type parameters. "), Code("C any"), h.Str(" does not require a View, so a body type "+
-			"without one compiles and panics on its first render.")),
+			"without one compiles and panics at Mount, when via renders the page once.")),
 
 		d.H2("Coming from React, Vue or Svelte"),
 		h.P(h.Str("Each pattern below is a JS framework idiom on the left and the via version on the right. "+

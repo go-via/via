@@ -16,7 +16,7 @@ go run .
 - `VIA_SESSION_KEY` — cookie signing key, read by via. Under 16 bytes panics.
   The default session store is in-memory, so a restart forgets every session
   either way; a fixed key only matters once a persistent store is configured.
-- `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also turns on
+- `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also forces
   Secure cookies, so set it only behind HTTPS. Unset, actions accept any origin
   and via logs a warning at startup; set it in production.
 - `VIA_BASE` — path prefix this build serves under, empty for the latest. See

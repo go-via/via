@@ -9,10 +9,13 @@
 package vtbrowser_test
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,31 +243,26 @@ func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
 	b.RequireCleanConsole()
 }
 
+// reconnecting is true while the manager shows its drop banner.
+const reconnecting = `document.documentElement.getAttribute('data-via-connection')==='connecting' && ` +
+	`(document.getElementById('via-reconnect-banner')||{textContent:''}).textContent.includes('Reconnecting')`
+
 func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
-	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
+	g := &streamGate{app: via.Handler(liveTicker{})}
+	s := vtbrowser.Open(t, g)
 
 	var booted bool
 	s.Eval(`window.__viaRC===1 && document.documentElement.getAttribute('data-via-connection')==='online'`, &booted)
 	require.True(t, booted, "reconnect manager did not boot online — the nonce'd IIFE was dropped by the CSP or failed to run")
+	s.WaitLiveConnected()
 
-	// liveTicker's 80ms tick can legitimately clear the banner between two
-	// round-trips, so dispatch and read the banner in one Eval.
-	var got struct {
-		Status string
-		Banner string
-	}
-	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
-		`({status:document.documentElement.getAttribute('data-via-connection'),`+
-		`banner:document.getElementById('via-reconnect-banner').textContent})`, &got)
-	assert.Equal(t, "connecting", got.Status, "a dropped stream did not flip the status to connecting")
-	assert.Contains(t, got.Banner, "Reconnecting", "a dropped stream did not surface the reconnect banner")
+	g.dropStreams(3 * time.Second)
+	s.WaitEvalTrue(reconnecting, "a dropped stream flips the status to connecting and shows the banner")
 
-	// The resume is not faked like the drop above: a synthetic patch event makes
-	// Datastar apply a payload-less patch and throw, so this rides the ticker's
-	// next real server push.
 	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='online' && `+
 		`document.getElementById('via-reconnect-banner')===null`,
-		"a real server-push patch cleared the banner and restored online")
+		"the resumed stream's first patch clears the banner and restores online")
+	assert.Equal(t, int32(1), g.pages.Load(), "a network drop resumes in place, without a reload")
 	s.RequireCleanConsole()
 }
 
@@ -272,47 +270,54 @@ func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
 	app := via.Handler(liveTicker{}, via.WithHead(via.Head{
 		Assets: via.Assets{Styles: []via.Style{{Inline: "#via-reconnect-banner{background:rgb(1, 2, 3)}"}}},
 	}))
-	s := vtbrowser.Open(t, app)
+	g := &streamGate{app: app}
+	s := vtbrowser.Open(t, g)
 	s.WaitLiveConnected()
 
-	var got struct {
-		Status string
-		Bg     string
-	}
-	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retrying'}}));`+
-		`({status:document.documentElement.getAttribute('data-via-connection'),`+
-		`bg:getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor})`, &got)
-	assert.Equal(t, "connecting", got.Status, "a dropped stream did not flip the status to connecting")
-	assert.Equal(t, "rgb(1, 2, 3)", got.Bg, "a plain app rule must beat via's zero-specificity banner styling")
+	// Held well past the checks below, so the banner is still up when read.
+	g.dropStreams(time.Minute)
+	s.WaitEvalTrue(reconnecting, "a dropped stream flips the status to connecting and shows the banner")
+
+	var bg string
+	s.Eval(`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &bg)
+	assert.Equal(t, "rgb(1, 2, 3)", bg, "a plain app rule must beat via's zero-specificity banner styling")
 	s.RequireCleanConsole()
 }
 
 func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
-	s := vtbrowser.Open(t, via.Handler(clicker{}))
-	// Pre-armed at the reload cap so the give-up below stays put instead of probing.
-	var armed bool
-	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
-
-	bg := func(event string) string {
+	g := &streamGate{app: via.Handler(clicker{})}
+	s := vtbrowser.Open(t, g)
+	s.WaitLiveConnected()
+	bg := func() string {
 		var got string
-		s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'`+event+`'}}));`+
-			`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &got)
+		s.Eval(`getComputedStyle(document.getElementById('via-reconnect-banner')).backgroundColor`, &got)
 		return got
 	}
-	assert.Equal(t, "rgb(245, 158, 11)", bg("retrying"), "reconnecting banner is not the amber state colour")
-	assert.Equal(t, "rgb(220, 38, 38)", bg("retries-failed"), "disconnected banner is not the red state colour")
+
+	g.dropStreams(2 * time.Second)
+	s.WaitEvalTrue(reconnecting, "a dropped stream flips the status to connecting and shows the banner")
+	assert.Equal(t, "rgb(245, 158, 11)", bg(), "reconnecting banner is not the amber state colour")
+
+	// The retry is refused, which the manager treats as final: no probe, no reload.
+	g.deny.Store(true)
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
+		"a refused reconnect marks the connection offline")
+	assert.Equal(t, "rgb(220, 38, 38)", bg(), "disconnected banner is not the red state colour")
 	s.RequireCleanConsole()
 }
 
 func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
+	// The connect's first frame proves the stream alive and would clear the
+	// give-up banner below before the click could reach it.
+	s.WaitLiveConnected()
 
 	// Pre-armed at the reload cap so the terminal branch runs without a real reload.
 	var armed bool
 	s.Eval(`sessionStorage.setItem('__via_rc_reloads','3'); true`, &armed)
 
 	var status string
-	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed'}}));`+
+	s.Eval(`document.dispatchEvent(new CustomEvent('datastar-fetch',{detail:{type:'retries-failed',el:document.body}}));`+
 		`document.documentElement.getAttribute('data-via-connection')`, &status)
 	assert.Equal(t, "offline", status, "a give-up did not flip the status to offline")
 	assert.Contains(t, s.Text("#via-reconnect-banner"), "Disconnected",
@@ -481,27 +486,324 @@ func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
 		"a clean stream close must put a visible banner on screen")
 }
 
-func TestReconnect_staleTabReloadsOn410ButNotOn403(t *testing.T) {
-	s := vtbrowser.Open(t, via.Handler(clicker{}))
+// streamGate stands between the browser and the app's stream route. It stubs
+// the network, not via: every request still reaches the real handler, so the
+// statuses the browser sees are the ones via answers.
+type streamGate struct {
+	app     http.Handler
+	delay   time.Duration // how long a connect is held before it reaches the app
+	deny    atomic.Bool   // answer 403 to every connect
+	hold    atomic.Int64  // replaces delay for connects after dropStreams, in nanoseconds
+	pages   atomic.Int32  // document loads, so a reload is countable
+	streams atomic.Int32  // connects that reached the app
+
+	mu   sync.Mutex
+	open []*gatedStream
+}
+
+type gatedStream struct {
+	end  context.CancelFunc
+	done chan struct{}
+	cut  atomic.Bool // abort the browser's side too, as a network drop does
+}
+
+func (g *streamGate) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.Header.Get("Sec-Fetch-Dest") == "document" {
+		g.pages.Add(1)
+	}
+	if !strings.HasSuffix(req.URL.Path, "/_via/sse") {
+		g.app.ServeHTTP(w, req)
+		return
+	}
+	if g.deny.Load() {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	delay := g.delay
+	if h := g.hold.Load(); h > 0 {
+		delay = time.Duration(h)
+	}
+	select {
+	case <-time.After(delay):
+	case <-req.Context().Done():
+		return
+	}
+	ctx, end := context.WithCancel(req.Context())
+	gs := &gatedStream{end: end, done: make(chan struct{})}
+	g.mu.Lock()
+	g.open = append(g.open, gs)
+	g.mu.Unlock()
+	g.streams.Add(1)
+	g.app.ServeHTTP(w, req.WithContext(ctx))
+	close(gs.done)
+	if gs.cut.Load() {
+		// net/http closes the connection mid-body, so the browser's fetch
+		// fails with a network error rather than seeing the response end.
+		panic(http.ErrAbortHandler)
+	}
+	// The browser's side stays open after via's returns, so the page never
+	// sees its stream finish: the tab is stale and nothing on it knows.
+	<-req.Context().Done()
+}
+
+// endStreams ends via's side of every open stream and returns once via has
+// dropped them, so the next action finds no stream for its tab.
+func (g *streamGate) endStreams() { g.closeAll(false) }
+
+// dropStreams cuts every open stream on both sides, as a network drop does,
+// and holds each later connect for hold so the gap can be observed.
+func (g *streamGate) dropStreams(hold time.Duration) {
+	g.hold.Store(int64(hold))
+	g.closeAll(true)
+}
+
+func (g *streamGate) closeAll(cut bool) {
+	g.mu.Lock()
+	open := g.open
+	g.open = nil
+	g.mu.Unlock()
+	for _, s := range open {
+		s.cut.Store(cut)
+		s.end()
+		<-s.done
+	}
+}
+
+// connectionWatch records every state the reconnect manager publishes and
+// every banner it inserts, so a flash inside one task still counts.
+const connectionWatch = `(()=>{window.__states=[];window.__banner=0;` +
+	`new MutationObserver(function(ms){for(const m of ms){` +
+	`if(m.type==='attributes')__states.push(document.documentElement.getAttribute('data-via-connection'));` +
+	`for(const n of m.addedNodes||[])if(n.id==='via-reconnect-banner')__banner++}})` +
+	`.observe(document.documentElement,{attributes:true,attributeFilter:['data-via-connection'],childList:true,subtree:true});` +
+	`return true})()`
+
+func TestReconnect_clickOnAStaleTabReloadsOnce(t *testing.T) {
+	// Short: a click on a gone tab waits this long for its stream to come back
+	// before it answers 410.
+	g := &streamGate{app: via.Handler(clicker{}, via.WithPinnedDeadline(time.Second))}
+	s := vtbrowser.Open(t, g)
 	s.WaitLiveConnected()
-
-	// Dispatched directly: a real 410 and a real 403 on one page would confound
-	// the manager's branch table with the stream close.
-	const fire = `(function(s){document.dispatchEvent(new CustomEvent('datastar-fetch',` +
-		`{detail:{type:'error',el:document.body,argsRaw:{status:s}}}));return true})`
-
 	var ok bool
-	s.Eval(`(function(){window.__probe=1;return true})()`, &ok)
-	s.Eval(fire+`('403')`, &ok)
-	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
-		"a 403 must be surfaced as a lost connection")
-	s.Sleep(2500 * time.Millisecond) // longer than the manager's 500-2000ms reload jitter
-	var probe int
-	s.Eval(`window.__probe||0`, &probe)
-	assert.Equal(t, 1, probe, "a 403 must not reload: the server would answer the same way again")
+	s.Eval(`(()=>{window.__stale=1;return true})()`, &ok)
 
-	s.Eval(fire+`('410')`, &ok)
-	s.WaitEvalTrue(`window.__probe===undefined`, "a 410 means the page is stale and must reload")
+	g.endStreams()
+	s.Click("button")
+
+	s.WaitEvalTrue(`window.__stale===undefined`, "a 410 on a real click must reload the stale tab")
+	s.WaitLiveConnected()
+	s.Sleep(3 * time.Second) // past the manager's probe backoff, so a second reload would have landed
+	assert.Equal(t, int32(2), g.pages.Load(), "the stale tab must reload exactly once")
+
+	s.Click("button")
+	s.WaitTextContains("p", "count: 1")
+	s.RequireCleanConsole()
+}
+
+func TestClick_beforeTheStreamConnectsIsApplied(t *testing.T) {
+	g := &streamGate{app: via.Handler(clicker{}), delay: 1500 * time.Millisecond}
+	s := vtbrowser.Open(t, g)
+	// A data-json-signals element renders only once Datastar has bound the page.
+	s.WaitEvalTrue(`(()=>{let p=document.getElementById('__bound');if(!p){p=document.createElement('pre');`+
+		`p.id='__bound';p.setAttribute('data-json-signals','');document.body.appendChild(p)}`+
+		`return p.textContent.includes('viatab')})()`, "Datastar to bind the page")
+	require.Zero(t, g.streams.Load(), "precondition: the click must land before the stream connects")
+
+	s.Click("button")
+	s.WaitTextContains("p", "count: 1")
+	assert.Equal(t, int32(1), g.pages.Load(), "the early click must be applied, not answered with a reload")
+	s.RequireCleanConsole()
+}
+
+// evalProbe is a page script that compiles code from a string through eval
+// and through the Function constructor, the calls a library that needs
+// 'unsafe-eval' makes, next to a Datastar expression.
+type evalProbe struct{}
+
+func (evalProbe) PageMeta() via.Meta {
+	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{
+		Inline: `try{eval('1');window.__eval='ran'}catch(_){window.__eval='blocked'}` +
+			`try{Function('window.__fn="ran"')()}catch(_){window.__fn='blocked'}`,
+	}}}}
+}
+
+func (evalProbe) View() h.H {
+	return h.Div(h.Span(h.ID("out"), h.DataText(expr.Rawf(`'datastar ' + 'ran'`))))
+}
+
+func TestCSP_evalIsBlockedWhileDatastarExpressionsRun(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(evalProbe{}))
+	s.WaitTextContains("#out", "datastar ran")
+	var got string
+	s.Eval(`window.__eval||''`, &got)
+	assert.Equal(t, "blocked", got, "the policy must forbid eval to every script but Datastar's nonce'd compiles")
+	s.RequireCleanConsole()
+}
+
+func TestWithUnsafeEval_letsAPageScriptCompileFromAString(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		opts []via.Option
+		want string
+	}{
+		{"default", nil, "blocked"},
+		{"WithUnsafeEval", []via.Option{via.WithUnsafeEval()}, "ran"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := vtbrowser.Open(t, via.Handler(evalProbe{}, tt.opts...))
+			s.WaitTextContains("#out", "datastar ran")
+			var got string
+			s.Eval(`window.__fn||''`, &got)
+			assert.Equal(t, tt.want, got)
+			s.RequireCleanConsole()
+		})
+	}
+}
+
+// grower pushes a button per click. The first render has none, so the
+// first push brings an expression Datastar has never compiled.
+type grower struct {
+	n    via.State[int]
+	last via.State[int]
+}
+
+func (g *grower) Grow(ctx *via.Ctx)        { g.n.Set(g.n.Get() + 1) }
+func (g *grower) Pick(ctx *via.Ctx, i int) { g.last.Set(i) }
+func (g *grower) item(i int) h.H {
+	return h.Button(h.ID("pick"+strconv.Itoa(i)), via.OnArg("click", g.Pick, i))
+}
+func (g *grower) upTo() []int {
+	out := make([]int, g.n.Get())
+	for i := range out {
+		out[i] = i + 1
+	}
+	return out
+}
+func (g *grower) View() h.H {
+	return h.Div(
+		h.P(h.Str("last "), g.last.Display()),
+		h.Button(h.ID("grow"), via.On("click", g.Grow), h.Str("grow")),
+		via.Each(g.upTo(), g.item),
+	)
+}
+
+func TestCSP_expressionArrivingInAStreamPatchCompilesUnderTheDocumentNonce(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(grower{}))
+	s.WaitLiveConnected()
+	s.Click("#grow")
+	s.Click("#grow")
+	s.WaitEvalTrue(`!!document.getElementById('pick2')`, "the stream to push the second pick button")
+	s.Click("#pick2")
+	s.WaitTextContains("p", "last 2")
+	s.RequireCleanConsole()
+}
+
+// picker binds one handler per row, and two events and a debounced click
+// on single elements, each with its own arg.
+type picker struct {
+	last via.State[int]
+	hits via.State[int]
+}
+
+func (p *picker) Pick(ctx *via.Ctx, i int) {
+	p.last.Set(i)
+	p.hits.Set(p.hits.Get() + 1)
+}
+
+func (p *picker) row(i int) h.H {
+	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.WithArg(p.Pick, i)))
+}
+
+func (p *picker) View() h.H {
+	return h.Div(
+		h.P(h.ID("last"), h.Str("last "), p.last.Display()),
+		h.P(h.ID("hits"), h.Str("hits "), p.hits.Display()),
+		via.Each([]int{1, 2, 3}, p.row),
+		h.Input(h.ID("both"), on.Click(on.WithArg(p.Pick, 10)), on.Change(on.WithArg(p.Pick, 20))),
+		h.Button(h.ID("slow"), on.Click(on.WithArg(p.Pick, 30), on.Debounce(200*time.Millisecond))),
+	)
+}
+
+func TestActionArg_eachElementDispatchesItsOwnArgFromOneSharedExpression(t *testing.T) {
+	s := vtbrowser.Open(t, via.Handler(picker{}))
+	var same bool
+	s.Eval(`(()=>{const a=[1,2,3].map(i=>document.getElementById('pick'+i).getAttribute('data-on:click'));`+
+		`return a[0]===a[1]&&a[1]===a[2]})()`, &same)
+	require.True(t, same, "the rows must share one expression")
+
+	s.Click("#pick2")
+	s.WaitTextContains("#last", "last 2")
+	s.Click("#pick3")
+	s.WaitTextContains("#last", "last 3")
+	s.Click("#pick1")
+	s.WaitTextContains("#last", "last 1")
+
+	s.Click("#both")
+	s.WaitTextContains("#last", "last 10")
+	var ok bool
+	s.Eval(`document.getElementById('both').dispatchEvent(new Event('change')),true`, &ok)
+	s.WaitTextContains("#last", "last 20")
+	s.WaitTextContains("#hits", "hits 5")
+
+	for range 3 {
+		s.Click("#slow")
+	}
+	s.WaitTextContains("#last", "last 30")
+	s.Sleep(400 * time.Millisecond)
+	assert.Equal(t, "hits 6", s.Text("#hits"), "the debounce still folds three clicks into one POST")
+	s.RequireCleanConsole()
+}
+
+type crasher struct{ count via.State[int] }
+
+func (c *crasher) Bump(ctx *via.Ctx)  { c.count.Set(c.count.Get() + 1) }
+func (c *crasher) Crash(ctx *via.Ctx) { panic("crasher: boom") }
+func (c *crasher) View() h.H {
+	return h.Div(
+		h.P(h.Str("count: "), c.count.Display()),
+		h.Button(h.ID("bump"), via.On("click", c.Bump), h.Str("+")),
+		h.Button(h.ID("crash"), via.On("click", c.Crash), h.Str("crash")),
+	)
+}
+
+func TestReconnect_failedActionLeavesTheConnectionOnline(t *testing.T) {
+	g := &streamGate{app: via.Handler(crasher{})}
+	s := vtbrowser.Open(t, g)
+	s.WaitLiveConnected()
+	var ok bool
+	s.Eval(connectionWatch, &ok)
+	s.Eval(`(()=>{document.addEventListener('datastar-fetch',function(e){`+
+		`if(e.detail.type==='finished'&&e.detail.el.id==='crash')window.__crashed=1});return true})()`, &ok)
+
+	s.Click("#crash")
+	s.WaitEvalTrue(`window.__crashed===1`, "the panicking action's request to finish")
+	s.Sleep(time.Second) // past the probe's first delay, so a reload would have begun
+
+	var got struct {
+		States []string
+		Banner int
+	}
+	s.Eval(`({states:window.__states,banner:window.__banner})`, &got)
+	assert.Empty(t, got.States, "a 500 from an action must not change the connection state")
+	assert.Zero(t, got.Banner, "a 500 from an action must not put the banner up, even for a moment")
+	assert.Equal(t, int32(1), g.pages.Load(), "a 500 from an action must not reload the page")
+
+	s.Click("#bump")
+	s.WaitTextContains("p", "count: 1")
+	s.RequireCleanConsole()
+}
+
+func TestReconnect_forbiddenStreamStaysDisconnectedWithoutReloading(t *testing.T) {
+	g := &streamGate{app: via.Handler(clicker{})}
+	g.deny.Store(true)
+	s := vtbrowser.Open(t, g)
+
+	s.WaitEvalTrue(`document.documentElement.getAttribute('data-via-connection')==='offline'`,
+		"a 403 on the stream must mark the connection offline")
+	assert.Contains(t, s.Text("#via-reconnect-banner"), "Disconnected")
+	s.Sleep(2500 * time.Millisecond) // past the manager's first probe and its jitter
+	assert.Equal(t, int32(1), g.pages.Load(),
+		"a 403 on the stream must not reload: the server would answer the same way again")
 }
 
 func TestReconnect_recoversAcrossADeployGap(t *testing.T) {

@@ -2,6 +2,7 @@ package troubleshooting
 
 import (
 	"bytes"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,7 +38,17 @@ func (s *syncBuf) String() string {
 
 func logTo(buf *syncBuf) via.Option { return via.WithLogger(slog.New(slog.NewTextHandler(buf, nil))) }
 
-var postRe = regexp.MustCompile(`@post\('([^']+)'\)`)
+// postRe reads an action URL: a binding with a query ships it in the
+// data-via-q-<event> attribute before its data-on, appended to the path.
+var postRe = regexp.MustCompile(`(?:data-via-q-[^=\s]+="([^"]*)" data-on:[^=\s]+=")?@post\('([^']+)'`)
+
+func postURLs(page string) []string {
+	var out []string
+	for _, m := range postRe.FindAllStringSubmatch(page, -1) {
+		out = append(out, html.UnescapeString(m[2]+m[1]))
+	}
+	return out
+}
 
 type Gated struct {
 	Open bool
@@ -53,17 +64,17 @@ func TestGone_answersEachStaleCase(t *testing.T) {
 	seed := Todos{items: []Todo{{1, "a"}}}
 	open := vt.Serve(t, via.Handler(Gated{Open: true, todo: seed}))
 	_, page := open.Get("/")
-	urls := postRe.FindAllStringSubmatch(page, -1)
+	urls := postURLs(page)
 	require.Len(t, urls, 2)
 
 	buf := &syncBuf{}
 	closed := vt.Serve(t, via.Handler(Gated{todo: seed}, logTo(buf)))
 
-	status, body := closed.Action(0).Raw(urls[1][1]).Fire()
+	status, body := closed.Action(0).Raw(urls[1]).Fire()
 	assert.Equal(t, 410, status)
 	assert.Contains(t, body, "; this render does not bind it")
 
-	status, body = closed.Action(0).Raw(strings.Replace(urls[0][1], "a=1", "a=2", 1)).Fire()
+	status, body = closed.Action(0).Raw(strings.Replace(urls[0], "a=1", "a=2", 1)).Fire()
 	assert.Equal(t, 410, status)
 	assert.Equal(t, "this render does not bind that action for that argument\n", body)
 
@@ -158,8 +169,6 @@ func TestRenderFailed_logsTheCompositionMistake(t *testing.T) {
 	}{
 		{"live under live", func(o via.Option) http.Handler { return via.Handler(LiveParent{}, o) },
 			"via: via.Child: a live unit cannot sit inside another live unit — embed it directly from a plain ancestor instead"},
-		{"pointer to Child", func(o via.Option) http.Handler { return via.Handler(PtrParent{}, o) },
-			"via: via.Child(child) requires child to have a View() method"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,7 +226,9 @@ func TestHooks_leftoverMethodsNeverRun(t *testing.T) {
 	t.Parallel()
 	buf := &syncBuf{}
 	vt.Serve(t, via.Handler(V07{}, logTo(buf))).Get("/")
-	assert.NotContains(t, buf.String(), "V07.On", "a leftover beside a real OnInit is silent")
+	assert.Contains(t, buf.String(), "via: troubleshooting.V07.OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
+		"Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and ctx.Tick or ctx.Listen makes the unit live.")
+	assert.NotContains(t, buf.String(), "V07.OnDispose", "a v0.7 OnDispose has an action's shape, so it is silent")
 
 	buf = &syncBuf{}
 	vt.Serve(t, via.Handler(Misnamed{}, logTo(buf))).Get("/")
@@ -236,11 +247,14 @@ func (n *NoErrInit) View() h.H           { return h.P() }
 
 func TestMount_panicsAtStartup(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithValue(t, "via: troubleshooting.NoErrInit.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run",
+	assert.PanicsWithError(t, "via: troubleshooting.NoErrInit.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run",
 		func() { via.Handler(NoErrInit{}) })
-	assert.PanicsWithValue(t, "via: troubleshooting.ValueView.View has a VALUE receiver and the composition holds Signals — "+
+	assert.PanicsWithError(t, "via: troubleshooting.ValueView.View has a VALUE receiver and the composition holds Signals — "+
 		"View must take a POINTER receiver (func (p *ValueView) View() h.H), or every rendered Signal binds against a discarded copy",
 		func() { via.Handler(ValueView{}) })
 	assert.PanicsWithValue(t, `via: Mount path "/files/{path...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`,
 		func() { via.Mount(via.NewRouter(), "/files/{path...}", NoErrInit{}) })
+	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting.PtrParent as mounted: "+
+		"via: via.Child(child) requires child to have a View() method",
+		func() { via.Handler(PtrParent{}) })
 }

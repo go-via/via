@@ -6,7 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"runtime/debug"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,6 +84,36 @@ type stream struct {
 	timeout time.Duration
 	cancel  context.CancelFunc
 	failed  bool
+	// busy says what the goroutine is waiting on outside user code, for the
+	// pinned warning: read from the pin timer's goroutine, hence atomic.
+	busy atomic.Int32
+	// serverEnded is set when via itself ends the stream (Rotate, a revoked
+	// session, Router.Close, an aborted push), as opposed to the client
+	// hanging up or a write failing, whose clients retry under the same id.
+	serverEnded atomic.Bool
+}
+
+// end closes the stream from via's side, from any goroutine.
+func (s *stream) end() {
+	s.serverEnded.Store(true)
+	s.cancel()
+}
+
+const (
+	busyNone int32 = iota
+	busyWrite
+	busyStore
+)
+
+// blockedOn names what a pinned stream goroutine is stuck in.
+func (s *stream) blockedOn() string {
+	switch s.busy.Load() {
+	case busyWrite:
+		return "writing a frame to a client that is not reading"
+	case busyStore:
+		return "waiting on the session store"
+	}
+	return "inside a Tick, Listen, OnConnect, OnDispose or action handler"
 }
 
 // frame emits one SSE event and flushes it, cancelling the stream on any
@@ -89,6 +123,8 @@ func (s *stream) frame(write func(io.Writer)) {
 	if s.failed {
 		return
 	}
+	s.busy.Store(busyWrite)
+	defer s.busy.Store(busyNone)
 	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
 	ew := &errWriter{w: s.w}
 	write(ew)
@@ -106,7 +142,7 @@ func (s *stream) frame(write func(io.Writer)) {
 // that cannot succeed has, since a push carries no response to answer with.
 func (s *stream) abort() {
 	s.failed = true
-	s.cancel()
+	s.end()
 }
 
 // runStream drives one or more live units on a single goroutine: every unit's
@@ -117,15 +153,14 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(log *slog.Logger, reqCtx context.Context, label string, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
+func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
 	defer func() {
 		for _, child := range children {
 			for _, d := range child.disposers {
-				// runPushItem, not a bare call: a disposer is user code, and one
-				// panicking must not skip the rest and leak what they release.
-				runPushItem(log, label, d)
+				runRecovered(log, g, d)
 			}
 		}
+		g.close(log)
 	}()
 	for _, child := range children {
 		for _, t := range child.ticks {
@@ -139,11 +174,11 @@ func runStream(log *slog.Logger, reqCtx context.Context, label string, children 
 		case <-reqCtx.Done():
 			return
 		case fn := <-pushq:
-			runPushItem(log, label, fn)
+			runPushItem(log, g, fn)
 		case <-wake:
-			sweepListeners(log, label, listeners)
+			sweepListeners(log, g, listeners)
 		case <-beat.C:
-			runPushItem(log, label, keepalive)
+			runPushItem(log, g, keepalive)
 		}
 	}
 }
@@ -151,10 +186,10 @@ func runStream(log *slog.Logger, reqCtx context.Context, label string, children 
 // sweepListeners drains every listener once, in registration order, so two
 // Listens fire deterministically instead of racing two reader goroutines;
 // one wake token may stand for any number of pending subscriptions.
-func sweepListeners(log *slog.Logger, label string, listeners []listener) {
+func sweepListeners(log *slog.Logger, g *pushGuard, listeners []listener) {
 	for _, l := range listeners {
 		if work := l.poll(); work != nil {
-			runPushItem(log, label, work)
+			runPushItem(log, g, work)
 		}
 	}
 }
@@ -162,16 +197,130 @@ func sweepListeners(log *slog.Logger, label string, listeners []listener) {
 // runPushItem recovers per item, so one bad render logs and drops that item
 // instead of unwinding runStream: an action's result is already sent to the
 // waiting POST by the time pushWork runs, so without this the stream would die
-// silently after a 204 the client already saw as success. label carries the
-// connection's identity, so a busy deploy's stacks group by tab and unit
-// instead of being read one by one.
-func runPushItem(log *slog.Logger, label string, fn func()) {
+// silently after a 204 the client already saw as success.
+//
+// A panic does not end the stream: via cannot tell a one-off from one every
+// beat repeats, and ending it would trade a unit that stopped updating for a
+// reload loop that ends in a "Disconnected." banner over units that still
+// work. pushGuard keeps the log to one stack per site.
+func runPushItem(log *slog.Logger, g *pushGuard, fn func()) {
+	g.arm()
+	defer g.disarm()
+	runRecovered(log, g, fn)
+}
+
+// runRecovered is runPushItem without the pin timer, for OnDispose: the tab is
+// closing, so no action is left to answer 503 and a slow teardown is not a
+// pinned tab. Still recovered, since a disposer is user code and one panicking
+// must not skip the rest and leak what they release.
+func runRecovered(log *slog.Logger, g *pushGuard, fn func()) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Error("via: live push panic", "label", label, "err", rec, "stack", string(debug.Stack()))
+			g.panicked(log, rec)
 		}
 	}()
 	fn()
+}
+
+// panicSummaryEvery bounds how often a panic that repeats at one site is
+// reported after its first stack, so a Tick that panics every beat does not
+// log a stack per beat.
+const panicSummaryEvery = time.Minute
+
+// pushGuard is one stream's watch over its own push items. It carries the
+// connection's identity into every log line, keeps a panic that repeats at one
+// site to its first stack plus a periodic count, and reports an item that runs
+// past the pinned deadline even when no action is waiting to notice. All but
+// the pin timer's callback run on the stream goroutine.
+type pushGuard struct {
+	label  string
+	panics map[string]*panicTally
+	pin    *time.Timer
+	pinFor time.Duration
+}
+
+type panicTally struct {
+	repeats int
+	since   time.Time
+	last    any
+}
+
+func newPushGuard(label string) *pushGuard { return &pushGuard{label: label} }
+
+// watchPin makes an item still running after d call pinned, from the timer's
+// own goroutine, since the stream goroutine is the one that is stuck.
+func (g *pushGuard) watchPin(d time.Duration, pinned func()) {
+	g.pinFor = d
+	g.pin = time.AfterFunc(d, pinned)
+	g.pin.Stop()
+}
+
+func (g *pushGuard) arm() {
+	if g.pin != nil {
+		g.pin.Reset(g.pinFor)
+	}
+}
+
+func (g *pushGuard) disarm() {
+	if g.pin != nil {
+		g.pin.Stop()
+	}
+}
+
+func (g *pushGuard) panicked(log *slog.Logger, rec any) {
+	site := panicSite()
+	t := g.panics[site]
+	if t == nil {
+		if g.panics == nil {
+			g.panics = map[string]*panicTally{}
+		}
+		g.panics[site] = &panicTally{since: time.Now()}
+		log.Error("via: live push panic", "label", g.label, "err", rec, "stack", string(debug.Stack()))
+		return
+	}
+	t.repeats++
+	t.last = rec
+	if time.Since(t.since) >= panicSummaryEvery {
+		g.report(log, site, t)
+	}
+}
+
+func (g *pushGuard) report(log *slog.Logger, site string, t *panicTally) {
+	log.Error("via: live push panic repeated", "label", g.label, "site", site, "count", t.repeats,
+		"over", time.Since(t.since).Round(time.Second), "err", t.last)
+	t.repeats, t.since = 0, time.Now()
+}
+
+// close reports what repeated since the last summary, so a stream that ends
+// between two summaries still accounts for every panic.
+func (g *pushGuard) close(log *slog.Logger) {
+	g.disarm()
+	for site, t := range g.panics {
+		if t.repeats > 0 {
+			g.report(log, site, t)
+		}
+	}
+}
+
+// panicSite is the file:line the recovered panic started at. A deferred
+// recover that re-panics (rootPush's) sits between, so it is the frame past
+// the deepest runtime.gopanic, not the nearest.
+func panicSite() string {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	site, past := "unknown", false
+	for {
+		f, more := frames.Next()
+		switch {
+		case f.Function == "runtime.gopanic":
+			past = true
+		case past && !strings.HasPrefix(f.Function, "runtime."):
+			site, past = f.File+":"+strconv.Itoa(f.Line), false
+		}
+		if !more {
+			return site
+		}
+	}
 }
 
 // writeSignalsFrame writes one Datastar patch-signals SSE event — via uses it
@@ -184,11 +333,15 @@ func writeSignalsFrame(w io.Writer, signalsJSON string) {
 }
 
 // writeSSEHeaders sets the event-stream headers; Cache-Control keeps proxies
-// and the browser from buffering frames.
+// and the browser from buffering frames. A session's stricter no-store (see
+// noStore) is kept; anything else, such as a middleware's public max-age, is
+// replaced.
 func writeSSEHeaders(w http.ResponseWriter) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/event-stream")
-	hdr.Set("Cache-Control", "no-cache")
+	if hdr.Get("Cache-Control") != noStoreValue {
+		hdr.Set("Cache-Control", "no-cache")
+	}
 	hdr.Set("X-Content-Type-Options", "nosniff")
 }
 

@@ -1,5 +1,250 @@
 # Changelog
 
+## Unreleased
+
+### Security defaults changed
+
+- **The session cookie is Secure when a proxy reports https**:
+  `X-Forwarded-Proto: https` (first hop) or `Forwarded: proto=https`, as
+  well as direct TLS. A forged header only makes the sender's own cookie
+  Secure. Keep `WithSecureCookies` for a proxy that sends neither.
+
+- **Under `WithTrustedOrigin`, an http `Origin` is refused when a proxy
+  reports https**, as it already was over direct TLS.
+
+- **Responses tied to a session, and every live page, are `Cache-Control:
+  private, no-store`**, so a shared cache or the back button never serves
+  one user's page to another. That is a page, action or stream connect that
+  resolved a session or sets its cookie, and any live page, session or not:
+  its HTML carries the tab id, so a cached copy would share one tab between
+  viewers. It replaces a `Cache-Control` set by middleware. A plain page
+  with none gets `no-cache`, so each view gets its own CSP nonce; one the
+  app set is kept. A sessionless action response gets no `Cache-Control`
+  from via, and the SSE connect is always at least `no-cache`.
+
+- **`Ctx.Redirect` stays on the site.** An absolute URL is followed only
+  when its host is the request's `Host` or a `WithTrustedOrigin` origin.
+  Any other host is dropped and logged like a `javascript:` target: an
+  action falls back to its render, an `OnInit` answers 500. The host is
+  read as the browser reads it, so `https://evil.example\@app.example`
+  names `evil.example`. Leave the site with `Ctx.RedirectExternal`.
+
+### New
+
+- **`WithUnsafeEval()`** puts `'unsafe-eval'` back in every mount's
+  `script-src`, next to the nonce and hashes, for a library that compiles
+  code from strings. `NewRouter` warns while it is set.
+
+- **`Ctx.RedirectExternal(url)`** follows any http(s) URL, for OAuth and
+  payment hand-offs. Other schemes are still dropped.
+
+- `vt.Logger(t)` returns a `*slog.Logger` that writes to `t.Log`. Pass it
+  with `via.WithLogger` and via's warnings, the startup ones included,
+  print under the test that caused them, only on failure or with `-v`.
+
+- `vt.Action.Header(k, v)` sets a request header on an action, such as
+  `X-Forwarded-Proto`.
+
+- **`Router.Shutdown(ctx)`** is `Close` with a deadline, shaped like
+  `http.Server.Shutdown`: `Close` waits forever on a handler blocked in
+  user code. At the deadline it returns `ctx.Err()` and logs the tabs still
+  running, each with its unit type and what it is blocked on (the first 20
+  by name, then a total). Call it before `srv.Shutdown`, with the same
+  deadline.
+
+### Changed
+
+- **An action's query moved out of its Datastar expression.** `?a=`
+  (`on.WithArg`) and `?u=` (a child) sit in a `data-via-q-<event>`
+  attribute that the expression appends, so each action and event compiles
+  one expression instead of one per row; Datastar never evicts its compile
+  cache. The URL posted is unchanged. A test that scrapes `@post('…')` from
+  the HTML must join the two; `vt` does.
+
+- **`Mount` renders the page once at boot**, from its zero value, children
+  included, without running `OnInit`. It panics on a wiring mistake that
+  render reaches instead of answering 500 on the first request: two actions
+  sharing an id, a method taken through an interface field or an ambiguous
+  value receiver, `h.El("script")`, a Signal with no slot, a child without
+  a `View`, a value-receiver `View` or wrong hook signature on a child, a
+  signal named `viatab`. The message starts `via: found at Mount`. Any
+  other panic in that render is ignored, and the render has no side
+  effects: no session, Tick, Listen, log line or action id. A mistake
+  behind a branch the zero value skips still panics at the first render
+  that takes it. At render, these checks now panic with an `error`, not a
+  `string`.
+
+- The startup warning without `WithTrustedOrigin` says what the open default
+  exposes: any site can fire an action that needs no session, and a page on
+  a sibling subdomain, or the same host over http, can fire one as the
+  signed-in user.
+
+- `vt.Conn.Await`, a stream that closes early and a `Connect` that never
+  sees its tab id report what did arrive: the frame count, how many the
+  failing wait read, and the last three frames, truncated.
+
+- The near-miss hook check warns on a hook name one typing slip away (a
+  letter added, dropped or changed, two adjacent letters swapped, or the
+  wrong case), so `OnRelaod` and `OnInti` warn. The aliases (`Reload`,
+  `Init`, `Metadata`, …) match exactly, in any case, so `Preload`,
+  `Initialized` and `OnInitialized` no longer warn. `OnRelay`, `OnInput`
+  and `OnEdit` are two slips away and stay quiet.
+
+- A v0.7 `OnConnect(ctx *via.Ctx) error` warns at `Mount` even next to an
+  `OnInit`, and the warning names its replacements: `ctx.OnConnect(fn)` for
+  work on stream open, `ctx.Tick` or `ctx.Listen` for a live feed.
+
+- An action POST without `Datastar-Request: true` that is not
+  `multipart/form-data` answers 400 with the reason instead of
+  `malformed form`; for a JSON body, the reason is the missing header.
+
+- The "two different actions share the action id" panic names both fixes:
+  for a func literal bound once per row (in `Each` or a loop), bind a method
+  with `on.WithArg`; for receivers behind a pointer, slice or map field,
+  hold each as a direct struct field, a child through its own `via.Child`.
+
+- `Session.Rotate` ends the stream of every other open tab on the session,
+  so each reloads under the new cookie. The tab a live action rotated from
+  keeps its stream. Rotate on auth changes only: rotating on every request
+  reloads every tab each time.
+
+- The pinned-tab warning reads `via: tab pinned — …` rather than
+  `via: live action queue not drained — …`.
+
+- `WithTrustedOrigin` compares origins as the browser serializes them, on
+  both the option and the request's `Origin`: the host is lower-cased and a
+  default port dropped, so `https://Auth.example:443` matches. A trailing
+  `/` on the option is dropped. It panics on a value that is not a bare
+  http(s) origin (a path, query, fragment or userinfo), which matched
+  nothing before.
+
+- **The CSP no longer carries `'unsafe-eval'`.** Each document gets a fresh
+  128-bit nonce, in `script-src` and on `<html data-nonce>`, and Datastar
+  compiles its expressions under it instead of through `Function`. A script
+  of the app's that calls `eval`, `new Function` or a string `setTimeout`
+  throws `EvalError`; `WithUnsafeEval` allows it again. The policy's shape
+  is still fixed per mount, and via's own inline scripts stay admitted by
+  hash. A second CSP from a proxy or middleware must carry the nonce; see
+  MIGRATION.md, "The CSP forbids eval".
+
+- **`h.El("script", …)` panics**, in any letter case: Datastar gives a
+  script patched in by a live push the page's nonce, so it would run.
+  Declare scripts in `via.Meta.Assets` or `via.Head`.
+
+- Datastar v1.0.4, from v1.0.2, for its CSP mode. The `datastar-fetch`
+  event names and `detail` shape via reads are unchanged.
+
+- `vtbrowser.Session.WaitLiveConnected` waits for the stream's first frame,
+  since `viatab` is now set before the stream connects.
+
+### Fixed
+
+- POSTs to unknown action ids no longer grow the server's memory: the set
+  of ids already warned about kept every one for the life of the process.
+  An id that is not the 8-character shape via mints answers 410 with no log
+  line, and the body no longer echoes it. The set holds at most 1024 ids
+  and is cleared hourly, so made-up ids silence the "no such action"
+  warning for an hour at most; one line says when the cap is hit.
+
+- A handler taken through an interface field, or one with a value receiver,
+  no longer runs another field's handler. Two interface fields holding one
+  concrete type, or two equal values, got one action id. A value receiver
+  whose type the unit holds at exactly one path (the unit itself, or one
+  field) is now keyed by that path and dispatches as before. The ambiguous
+  shapes panic at `Mount`, or at the first render that reaches them, naming
+  the fields: any method taken through an interface field, and a value
+  receiver whose type sits at two or more paths or at none (a slice row, a
+  local). Two instantiations of one generic type (`A G[int]; B G[string]`)
+  count as two paths, since via cannot tell their methods apart. The fix is
+  a pointer receiver, with the concrete type in the field.
+
+- Action ids survive a field reorder: they hash the receiver's field path
+  (`A`, `Stats.A`, `Rows[1]`), not its byte offset, so swapping two fields
+  of one type no longer makes a stale tab's button run the other's handler.
+  A renamed field answers 410. Pointer-receiver methods of the unit itself
+  keep their ids. Methods on a field, methods promoted from an embedded
+  struct and value-receiver methods of the unit get new ones, so a tab open
+  across the upgrade 410s its first click on such a button, then reloads.
+
+- A write to the session reaches the `Tick` and `Listen` handlers of every
+  open tab on it, so a logout in one tab stops per-user pushes in the
+  others: at once in this process, on the next keepalive (25s) from another
+  process sharing the store. A tab whose session another process rotated
+  away, deleted or let expire ends its stream on that keepalive and
+  reloads. For this, each open stream bound to a session calls
+  `SessionStore.Load` once per keepalive, without sliding the idle TTL;
+  size a database store for open streams / 25 queries a second.
+
+- The SSE connect body is no longer held for the connection's life. A
+  stream keeps only the values for its units' signal fields that decode, so
+  a large body of unknown keys no longer costs memory or slows every push.
+
+- A live action that panics, or whose `OnReload` fails, still pushes what it
+  changed, instead of leaving the DOM on the state from before the action.
+
+- A tab whose stream goroutine is stuck is logged as pinned even when no
+  action arrives: when one handler, or one frame write, runs past
+  `WithPinnedDeadline`. The line says which, so a client that stopped
+  reading is no longer reported as a blocked handler. `OnDispose` is not
+  timed. The stream's report and the first 503 each log once per
+  connection, so a Tick that once ran long does not silence the line for a
+  tab that is later truly pinned.
+
+- A panic that repeats at one site on a stream logs its stack once, then a
+  count at most once a minute and when the stream ends. The stream stays
+  open.
+
+- A 410 reloads the tab again. The request's `finished` event, or a stream
+  patch arriving first, cancelled the reload, so a click on a gone tab did
+  nothing.
+
+- **A click before the stream connects is applied.** A live page's tab id
+  is minted at render and carried in the document, and its stream adopts
+  it; before, an action posted ahead of the first frame had an empty id and
+  answered 410. An action whose stream has not connected yet, or is
+  reconnecting, waits and runs in arrival order: up to 2s for the stream to
+  arrive (then 410), and up to `WithPinnedDeadline` (5s default) in all for
+  it to pick the action up (then 503). It answers 410 at once for an id
+  whose stream via ended (a Rotate, a revoked session, an aborted push)
+  within the last deadline, and 503 at once when the router is closing or
+  already holds its cap of parked actions (`WithMaxSSEConn`, at most 1024).
+  The tab id is 44 characters: 128 random bits plus a per-process MAC over
+  the mount and the session cookie id. A stream adopts it only if this
+  process issued it to the same cookie and no other stream holds it, and
+  mints a fresh one otherwise. Once the cookie id changes mid-page (a
+  Rotate, or a live action or connect that mints the session), a click in
+  the gap answers 410 and the tab reloads.
+
+- A failed action (a handler panic's 500, a 503, a 403) no longer marks the
+  connection offline and shows "Disconnected.". Only the stream's own
+  requests change `data-via-connection`; a failed action surfaces as
+  Datastar's `datastar-fetch` error event on the element that made it.
+
+- A 403 on the stream shows "Disconnected." and stays, instead of first
+  reloading the tab twice.
+
+### Documented (behaviour unchanged)
+
+- `/testing` describes the wire protocol for a client without vt (action
+  URLs, the `POST <mount>/_via/sse` stream, the `viatab` signal, JSON
+  versus form bodies) and how to test a `package main`.
+
+- `/live` has a Frame size section: a push resends the unit's whole HTML,
+  uncompressed, so one change in a 1000-row live `List` sends about 168 KB
+  per tab, and a counter in its own live `Child` next to the same plain
+  rows about 100 bytes. It also shows `List.Track`, promoted from the
+  embedded `State`.
+
+- `PostForm` with bound Signals: a native submit posts form fields, so
+  `Get` returns the initial value; name each input, read it with
+  `FormValue` and `Set` the Signal. In a live unit the answer is a fresh
+  page and those values are lost. Covered on `PostForm`, `Signal.Get` and
+  `/actions`; `PostForm`'s godoc points at `on.Submit`, not the deprecated
+  `On("submit", …)`.
+
+- `/signals` said a Signal behind a pointer panics at render or `Ref`;
+  `Mount` panics on it. Only one behind an interface panics at render.
+
 ## v0.8.3 — stale clicks, sliding cookies (2026-09-25)
 
 ### Fixed

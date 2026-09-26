@@ -81,8 +81,8 @@ func (p *Why) View() h.H {
 			h.Li(h.Strong(h.Str("One SSE connection per live tab. ")),
 				h.Str("Proxies must pass long-lived streams without buffering, and each stream holds a file descriptor. "+
 					"Push is SSE only; there is no WebSocket transport.")),
-			h.Li(h.Strong(Code("'unsafe-eval'"), h.Str(" in the CSP. ")),
-				h.Str("Datastar compiles its expressions at run time, so the policy must allow eval; "),
+			h.Li(h.Strong(h.Str("A "), Code("data-*"), h.Str(" attribute is script. ")),
+				h.Str("Datastar compiles every expression in the page under its nonce, so the CSP cannot stop an injected one; "),
 				link("/security#content-security-policy", "Sessions & security"), h.Str(" says what that costs.")),
 			h.Li(h.Strong(h.Str("One process unless you bridge. ")),
 				h.Str("A tab lives on the process that opened its stream, and a topic fans out inside one process. "+

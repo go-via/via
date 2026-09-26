@@ -28,7 +28,7 @@ func (b *stubBinder) SignalInit(slot string) (any, bool) {
 	return v, ok
 }
 
-func (b *stubBinder) Hydrator(string, func(json.RawMessage)) {}
+func (b *stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	t.Parallel()

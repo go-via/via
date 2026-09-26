@@ -1,9 +1,12 @@
 package via
 
 import (
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/go-via/via/internal/hcore"
 )
 
 // maxActionBody bounds an action body against memory exhaustion; 1 MiB is far
@@ -16,18 +19,22 @@ const maxActionBody = 1 << 20
 const maxUploadBytes = 8 << 20
 
 // originAllowed is the "origin floor": the check that a state-changing request
-// comes from a host the app trusts, read off Origin/Sec-Fetch-Site. By
-// default every origin is admitted (the per-tab id is the CSRF token).
+// comes from a host the app trusts, read off Origin/Sec-Fetch-Site. Every
+// action and the SSE connect pass through it. By default every origin is
+// admitted (the per-tab id is the CSRF token), since a strict default refuses
+// every localhost dev setup on a second port or behind a dev proxy.
 // WithTrustedOrigin turns enforcement on, in this order: the allowlist (which
 // wins over the browser's site label, so cross-origin embedding works), then
-// Sec-Fetch-Site, then an Origin whose host matches the request Host. Under
-// enforcement a request that proves nothing about its source fails closed.
+// Sec-Fetch-Site, then an Origin whose host matches the request Host. A
+// sibling subdomain fails it too, which is the point: SameSite=Lax counts one
+// as the same site and sends it the cookie. Under enforcement a request that
+// proves nothing about its source fails closed.
 func originAllowed(req *http.Request, cfg *config) bool {
 	if len(cfg.trustedOrigins) == 0 {
 		return true
 	}
 	origin := req.Header.Get("Origin")
-	if origin != "" && cfg.trustedOrigins[origin] {
+	if norm, ok := hcore.URLOrigin(origin); ok && norm != "" && cfg.trustedOrigins[norm] {
 		return true
 	}
 	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
@@ -40,13 +47,61 @@ func originAllowed(req *http.Request, cfg *config) bool {
 	if err != nil {
 		return false
 	}
-	// Over TLS, an http Origin is a scheme downgrade. When req.TLS is nil the
-	// real scheme is unknown (a TLS-terminating proxy is common), so scheme is
-	// not enforced.
-	if req.TLS != nil && u.Scheme != "https" {
+	// Over https, an http Origin is a scheme downgrade. A forged
+	// X-Forwarded-Proto can only make this stricter. With no TLS and no proxy
+	// header the real scheme is unknown, so scheme is not enforced.
+	if servedOverHTTPS(req) && u.Scheme != "https" {
 		return false
 	}
 	return sameOriginHost(u, req.Host)
+}
+
+// routerPolicy is the router-wide configuration a Ctx reads outside the
+// session: Redirect's trusted origins and the logger.
+type routerPolicy struct {
+	trustedOrigins map[string]bool
+	log            *slog.Logger
+}
+
+// redirectTo is a queued Redirect. Its verdict is taken when it is queued,
+// where the request is at hand, and answered by whichever transport ends the
+// request: a refused target is logged and dropped.
+type redirectTo struct {
+	url     string
+	refused string
+}
+
+func (r redirectTo) LogValue() slog.Value { return slog.StringValue(r.url) }
+
+// refusal re-runs the scheme gate at the sink, so a redirectTo built without
+// Redirect or RedirectExternal still cannot navigate to javascript: or data:.
+func (r redirectTo) refusal() string {
+	if r.refused == "" && !hcore.SafeURL(r.url) {
+		return notHTTP
+	}
+	return r.refused
+}
+
+const notHTTP = "not http(s) or relative"
+
+// offSite is Redirect's host gate: "" for a relative target, one on the
+// request's host, or one on a WithTrustedOrigin origin; otherwise the reason
+// it is refused.
+func (c *Ctx) offSite(target string) string {
+	origin, ok := hcore.URLOrigin(target)
+	switch {
+	case !ok:
+		return notHTTP
+	case origin == "":
+		return ""
+	case c.policy != nil && c.policy.trustedOrigins[origin]:
+		return ""
+	case c.req != nil:
+		if u, err := url.Parse(origin); err == nil && sameOriginHost(u, c.req.Host) {
+			return ""
+		}
+	}
+	return "another host; RedirectExternal leaves the site"
 }
 
 // sameOriginHost compares authorities case-insensitively, treating a scheme's

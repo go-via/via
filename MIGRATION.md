@@ -107,17 +107,20 @@ catch two of the three ways to get this wrong:
   not `func(*via.Ctx) error`, or one named `PageMeta` that is not
   `func() via.Meta`.
 - **Warns**: a near-miss name that carries the exact hook signature while
-  the correctly-named method is absent. The names it knows are `Init`,
-  `Initialize`, `Initialise`, `OnInitialize`, `OnInitialise`, `OnStart`,
-  `Connect` and `OnConnect` for `OnInit`, and `Reload`, `OnReloaded`,
+  the correctly-named method is absent. A near miss is a hook name one typing
+  slip away (a letter added, dropped or changed, two adjacent letters swapped,
+  or the wrong case: `OnRelaod`, `Oninit`), or one of these aliases in any
+  case: `Init`, `Initialize`, `Initialise`, `OnInitialize`, `OnInitialise`,
+  `OnStart` and `Connect` for `OnInit`, and `Reload`, `OnReloaded`,
   `Refresh`, `OnRefresh`, `Reinit`, `OnReInit` for `OnReload`, and `Meta`,
   `Metadata`, `PageMetadata`, `GetPageMeta`, `DocumentMeta`, `PageInfo` for
-  `PageMeta`. So a v0.7 `OnConnect(ctx *via.Ctx) error` on a type with no
-  `OnInit` is warned about, on stderr, once per type.
-- **Silent**: everything else. A v0.7 `OnConnect` next to an `OnInit`, or a
-  v0.7 `OnDispose(ctx *via.Ctx)`, is now an ordinary method nothing calls, and
-  the type walk says nothing. A `Signal` behind an interface field is likewise
-  invisible to the walk and only panics on the first render that binds it.
+  `PageMeta`. A v0.7 `OnConnect(ctx *via.Ctx) error` is warned about with or
+  without an `OnInit` next to it, and the warning names what replaced it.
+  Each warning is logged once per type.
+- **Silent**: everything else. A v0.7 `OnDispose(ctx *via.Ctx)` has an
+  action's shape, so it is an ordinary method nothing calls, and the type walk
+  says nothing. A `Signal` behind an interface field is likewise invisible to
+  the walk and only panics on the first render that binds it.
 
 `OnInit` runs per request: on the GET, on every
 action, and on the SSE connect. Pair a connection-scoped acquire with
@@ -187,10 +190,10 @@ pushed, still belongs in the typed session.
 `ctx.Redirect` navigates from anywhere: `OnInit`, `OnReload`, a native form
 submit (303 before the View ever renders) and a Datastar `@post` action alike.
 A `@post` answers with a one-line `location.assign` script, which Datastar
-v1.0.2 executes through its `text/javascript` response branch; the target rides
-in the `datastar-script-attributes` header, so the script bytes are constant
-and the strict CSP admits them by SHA-256 with no per-response nonce. An unsafe
-target is still dropped loudly and never reaches the client.
+executes through its `text/javascript` response branch; the target rides in the
+`datastar-script-attributes` header, so the script bytes are constant and the
+strict CSP admits them by SHA-256. An unsafe target is still dropped loudly and
+never reaches the client.
 
 ## Mapping
 
@@ -240,7 +243,7 @@ nothing.
 | `StateSess[T]` | a topic per `ctx.Session().ID()`, followed with `State.Track` in `OnInit` | compiler |
 | `StateApp[T]` | your own store, injected; a `topic.Topic[T]` and `via.StateTrack` to push its changes | compiler |
 | `app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal` | `topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit` | compiler |
-| `OnConnect(ctx) error` | `ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open | warning at Mount, or silent |
+| `OnConnect(ctx) error` | `ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open | warning at Mount |
 | `OnDispose(ctx)` | `ctx.OnDispose(fn)`, registered in `OnInit` | silent |
 | `via.Stream(ctx, d, fn)` | `ctx.Tick(d, fn)` in `OnInit` | compiler |
 | `ctx.Notify`, `ctx.ExecScript`, `ctx.Reload`, `ctx.SyncNow`, `ctx.Patch` | gone | compiler |
@@ -252,7 +255,7 @@ nothing.
 | `WithLang`, `app.AppendToHead`, `app.AppendToFoot` | `via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in `Assets` | compiler |
 | `WithPlugins(picocss.…)` | your own CSS in `Head.Assets.Styles` | compiler |
 | `WithPlugins(echarts.…)`, `maplibre` | an island: `h.DataIgnoreMorph` and `h.DataEffect` around a script of yours | compiler |
-| a Secure session cookie unless `WithInsecureCookies` | Secure only when the request came over TLS; behind a TLS-terminating proxy set `WithSecureCookies` | silent |
+| a Secure session cookie unless `WithInsecureCookies` | Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies` | silent |
 | `app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic` | your own `http.ServeMux` and middleware around the `*via.Router` | compiler |
 | `WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize` | `WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload` | compiler |
 | `WithNotFound` | `WithErrorPage` | compiler |
@@ -268,10 +271,12 @@ These compile and start; the first sign is behaviour:
 - `h.Title(s)`, the `<title>` element → `PageMeta()` returning `via.Meta{Title: s}`; `h.Title` is now the `title` attribute
 - one session value per type → one value per session: a second `Put` replaces the first, so put one struct
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`
-- a Secure session cookie unless `WithInsecureCookies` → Secure only when the request came over TLS; behind a TLS-terminating proxy set `WithSecureCookies`
+- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies`
+- `ctx.Redirect("https://other.example/…")` → dropped and logged; leave the site with `ctx.RedirectExternal`
 
-A leftover `OnConnect(ctx) error` is warned about at `Mount` only when the type
-has no `OnInit`; next to an `OnInit` it is dead code nothing reports.
+A leftover `OnConnect(ctx) error` is warned about at `Mount`, with or without
+an `OnInit` next to it. A leftover `OnDispose(ctx)` has an action's shape, so
+nothing reports it.
 
 ## Names deprecated inside v0.8
 
@@ -390,13 +395,16 @@ store and let the re-render read it.
 
 ## Security defaults moved
 
-Two defaults changed, and they are the entries most likely to matter in
-production. The CHANGELOG has the full reasoning; the short form:
+These are the entries most likely to matter in production. The CHANGELOG has
+the full reasoning; the short form:
 
-- **The session cookie is no longer Secure by default.** v0.7 set `Secure`
-  unless `WithInsecureCookies` cleared it. v0.8 sets it only when the request
-  arrived over TLS (`req.TLS != nil`). Behind a TLS-terminating proxy that is
-  never true, so set `WithSecureCookies` there. `WithInsecureCookies` is gone.
+- **The session cookie is Secure only when via can tell the browser is on
+  https.** v0.7 set `Secure` unless `WithInsecureCookies` cleared it. v0.8
+  sets it when the request arrived over TLS (`req.TLS != nil`) or a proxy
+  says `X-Forwarded-Proto: https` or `Forwarded: proto=https`. Caddy sends
+  `X-Forwarded-Proto` by default; nginx needs `proxy_set_header
+  X-Forwarded-Proto $scheme`. Behind a proxy that sends neither, set
+  `WithSecureCookies`. `WithInsecureCookies` is gone.
 - **The origin check is new, and off until you configure it.** v0.7 had no
   origin check; its CSRF defence was the per-tab `via_tab` token. v0.8 adds an
   origin floor, read off `Origin`/`Sec-Fetch-Site`, but accepts every action
@@ -406,6 +414,19 @@ production. The CHANGELOG has the full reasoning; the short form:
   only: a plain action carries an empty `viatab`/`_viatab`, so with the floor
   open a cross-origin `PostForm` submit is accepted. Set `WithTrustedOrigin`
   in production. via logs a warning at startup while none is set.
+- **`Ctx.Redirect` follows only on-site targets.** A relative path, or an
+  absolute URL on the request's host or a `WithTrustedOrigin` origin. v0.7 and
+  v0.8.3 followed any http(s) URL. A redirect to an OAuth provider or a
+  payment page now needs `ctx.RedirectExternal(url)`; left as `Redirect`, it
+  is dropped and logged, and an `OnInit` answers 500.
+- **A response tied to a session is `Cache-Control: private, no-store`**:
+  any page, action or stream connect that resolved a session or set the
+  cookie, and any live page, which carries its tab id. A `Cache-Control`
+  your middleware sets before calling the router is replaced on those
+  responses. A plain page with none gets `no-cache`; one you set is kept,
+  though a cached copy shares its CSP nonce with every viewer. Action
+  responses with no session are left alone; the SSE connect is always
+  `no-cache` at least.
 - **Sessions are always on** and mint a random per-process key if you configure
   none, warning once. The key signs the cookie; the data lives in a
   `SessionStore` whose default is this process's memory, so surviving a restart
@@ -417,6 +438,31 @@ production. The CHANGELOG has the full reasoning; the short form:
   reads it — so a session expires only after a full TTL with no request at
   all, rather than after a TTL with no `Get`/`Put`.
 
+## The CSP forbids eval
+
+via's `Content-Security-Policy` no longer carries `'unsafe-eval'`. Each
+document gets a fresh nonce, in `script-src` and on `<html data-nonce>`, and
+the bundled Datastar (v1.0.4) compiles its expressions under it. Three things
+can break:
+
+- **A script of yours that evaluates strings**: `eval`, `new Function`,
+  `setTimeout("…")`, or a library that does (some template engines and
+  older chart builds). It now throws `EvalError: Refused to evaluate a
+  string as JavaScript`. Use a build of the library that does not, or move
+  the code off strings. If neither is possible, `via.WithUnsafeEval()` puts
+  `'unsafe-eval'` back on every page, next to the nonce; via warns at
+  startup while it is set.
+- **A second policy from middleware or a proxy** (nginx `add_header`, Caddy
+  `header`). Browsers enforce every policy they receive, and one without
+  the page's nonce blocks every Datastar expression: the console shows
+  `Error: Blocked by CSP.` and no binding works. Remove the second
+  `script-src`, or build it from via's header so it carries the same nonce.
+  Adding `'unsafe-eval'` to it does not help: with `data-nonce` present,
+  Datastar never calls `Function`.
+- **A `trusted-types` directive** that does not list `datastar`. Datastar
+  creates a Trusted Types policy of that name and fails to start if the
+  browser refuses it. Add `datastar` to the allowed names.
+
 ## Wire break: action URLs
 
 v0.7 posted every action to `POST /_action/{id}`. v0.8's action endpoint is
@@ -424,7 +470,9 @@ v0.7 posted every action to `POST /_action/{id}`. v0.8's action endpoint is
 for the page root, or the acting child's key: its ordinal among its parent's
 `Child` calls, composed onto the parent's, so the second `Child` inside the
 first is `0-1`. `id` is a hash of the handler method's own Go name
-(`main.(*Poll).Vote-fm`), stable across renders, instances and rebuilds.
+(`main.(*Poll).Vote-fm`) and, for a method of a struct field, that field's
+path (`Stats.A`), stable across renders, instances, rebuilds and field
+reorders.
 
 Nothing in your code calls this URL, so there is nothing to port. But a tab
 left open across the upgrade still posts to `/_action/…`, which v0.8 does not
@@ -432,13 +480,13 @@ route: its first click answers 404, and the page comes back correct on reload.
 
 ## Wire break: the tab id signal
 
-The per-connection tab id — the CSRF token in via's threat model — was the
-signal `via_tab` in v0.7 and is `viatab` now. Datastar sends the whole signal
-store with every `@post`, filtering only names matching `/(^|\.)_/`, and the
-server reads the id out of the inbound signals. `PostForm` is the one
-exception: a native browser form submit carries neither Datastar's signals nor
-its headers, so it carries a hidden `_viatab` field, bound to `$viatab`, under
-the same per-mount ownership check.
+The tab id — the CSRF token in via's threat model, minted with the page and
+adopted by its stream — was the signal `via_tab` in v0.7 and is `viatab` now.
+Datastar sends the whole signal store with every `@post`, filtering only names
+matching `/(^|\.)_/`, and the server reads the id out of the inbound signals.
+`PostForm` is the one exception: a native browser form submit carries neither
+Datastar's signals nor its headers, so it carries a hidden `_viatab` field,
+bound to `$viatab`, under the same per-mount ownership check.
 
 Nothing in your code touches either, so there is nothing to port. A tab open
 across the upgrade posts the old name to the old URL and fails as above.
@@ -500,6 +548,14 @@ an upgrade in code that compiled fine before.
   underscore (`a_b`) and collides with a sibling field `A_b`; an embedded field
   `A`'s own signal `B` joins with two (`a__b`) and collides with a sibling
   `A__b`. Rename one of them.
+- `Mount` renders the mounted value once, without running `OnInit`, and
+  panics on a wiring mistake that render reaches: a func literal bound once
+  per row, a method taken through an interface field or an ambiguous value
+  receiver, `h.El("script")`, a Signal with no slot, a child without a
+  `View` or with a wrong hook signature. The message starts `via: found at
+  Mount`. Any other panic there (a nil dereference of data `OnInit` would
+  load) is ignored. The check is best-effort: a mistake behind a branch the
+  empty value does not take still panics at the first render that takes it.
 - A `Mount` path with a `{name...}` or `{$}` wildcard panics, since a page's
   action and stream routes live under its path, and so does one naming a
   wildcard `{child}` or `{act}`, which the action route reserves. Mounting
@@ -717,3 +773,44 @@ If a build breaks and nothing above explains it, the fastest path is `git log
 --oneline -- <file>` on the identifier the compiler names — this branch's
 history is one rename per commit, so the commit message usually says the new
 spelling outright.
+
+## Upgrading from v0.8.3
+
+- **Under `WithTrustedOrigin`, an http `Origin` answers 403 when a proxy
+  reports https** (`X-Forwarded-Proto` or `Forwarded`), as over direct TLS.
+  An http page of yours that posts to the https host must move to https.
+- **`WithTrustedOrigin` panics on a value that is not a bare origin** (a
+  path, query, fragment or userinfo; a trailing `/` is fine). Pass
+  `https://host[:port]`; such a value never matched an `Origin` anyway.
+- **`Ctx.Redirect` to another host is dropped and logged.** Use
+  `ctx.RedirectExternal(url)` for OAuth and payment hand-offs. See
+  "Security defaults moved".
+- **Session-bearing responses and live pages are `Cache-Control: private,
+  no-store`**, replacing what your middleware set. See "Security defaults
+  moved".
+- **A live tab idle past the session's idle TTL reloads at its next
+  keepalive**, since an open tab does not slide the window. Raise
+  `WithSessionTTL` if tabs stay open longer.
+- **A method taken through an interface field, or a value receiver whose
+  type the unit holds at two or more fields or at none, panics**: a click
+  could run another field's handler. Use a pointer receiver with the
+  concrete type in the field. See "New startup panics".
+- **Action ids of methods on fields, promoted methods and value-receiver
+  methods changed.** A tab open across the upgrade 410s its first click on
+  one and reloads; there is nothing to port.
+- **`Session.Rotate` reloads the session's other open tabs.** Rotate on
+  login, logout and privilege changes, not on every request.
+- **`r.Close()` waits without a deadline**, so one blocked handler holds the
+  process. Shut down with `errors.Join(r.Shutdown(ctx), srv.Shutdown(ctx))`.
+- **A custom `SessionStore` sees one `Load` per open stream every 25s.** Size
+  a database store's pool for open streams / 25 queries a second.
+- **The pinned-tab log line reads `via: tab pinned`**, not `via: live action
+  queue not drained`. Update alerts that match the old text.
+- **The CSP forbids eval, and `h.El("script", …)` panics.** See "The CSP
+  forbids eval" for what breaks; declare scripts in `Meta.Assets`.
+- **An action's query sits in a `data-via-q-<event>` attribute**, not in its
+  `@post('…')`. A test that scrapes action URLs from the HTML must join the
+  two; `vt` does.
+- **`viatab` is set before the stream connects**, in `<body
+  data-signals='{"viatab":…}'>`. A client that expected `""` until the first
+  frame must read the document; a click before connect waits up to 2s.

@@ -159,8 +159,10 @@ func (s *State[T]) Display() h.H {
 }
 
 // List is server-authoritative slice state — a chat log, a feed, a todo list.
-// It children State[[]E], so Get and Set remain the general door
+// It embeds State[[]E], so Get and Set remain the general door
 // (l.Set(slices.Insert(...))) and Append/Remove/Each spell the common cases.
+// Track is promoted too: l.Track(ctx, t, load) in OnInit keeps the list equal
+// to a store whose topic carries the whole []E.
 // Rows morph by position unless each carries a stable id, so give the row an
 // h.ID(…) when the order can change. Like State, rendering one makes its unit
 // live, and like State it reads a `via:"init=<json>"` field tag —

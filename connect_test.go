@@ -3,6 +3,10 @@ package via_test
 import (
 	"bytes"
 	"log"
+	"net/http"
+	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -82,4 +86,49 @@ func TestConnectUnit_tickSessionWriteWarnsEvenAfterOnInitReadTheSession(t *testi
 
 	assert.Contains(t, buf.String(), "no cookie can be set",
 		"OnInit's own read must not leave the cached handle's writer pointed at the flushed connect response")
+}
+
+// boundInt binds one int signal; nothing else a connect body carries names a
+// slot of it.
+type boundInt struct {
+	Q via.Signal[int]
+	n via.State[int]
+}
+
+func (p *boundInt) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, p.tick)
+	return nil
+}
+func (p *boundInt) tick(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *boundInt) View() h.H     { return h.Div(h.Input(p.Q.Bind()), p.n.Display()) }
+
+func heapInUse() int64 {
+	runtime.GC()
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return int64(ms.HeapAlloc)
+}
+
+func TestConnect_keepsNoConnectBodyValueTheUnitCannotUse(t *testing.T) {
+	// Sequential: it measures the heap. A real socket, not vt's in-memory one,
+	// which buffers what the client wrote and would hide what via keeps.
+	srv := httptest.NewServer(via.Handler(boundInt{}))
+	t.Cleanup(srv.Close)
+	tr := &http.Transport{MaxIdleConnsPerHost: 32}
+	t.Cleanup(tr.CloseIdleConnections)
+	c := &http.Client{Transport: tr}
+	pad := strings.Repeat("x", 480<<10)
+	// An unknown key, and a known int slot holding a string that cannot decode.
+	body := `{"junk":"` + pad + `","q":"` + pad + `"}`
+
+	before := heapInUse()
+	for range 20 {
+		lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", body)
+		t.Cleanup(cancel)
+		awaitTabID(t, lines)
+	}
+	grown := heapInUse() - before
+
+	assert.Less(t, grown, int64(4<<20),
+		"20 open streams must not each retain the ~1MiB connect body no unit can use")
 }

@@ -31,7 +31,7 @@ func (b *stubBinder) SignalInit(slot string) (any, bool) {
 	return v, ok
 }
 
-func (b *stubBinder) Hydrator(string, func(json.RawMessage)) {}
+func (b *stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func render(t *testing.T, node h.H) string {
 	t.Helper()
@@ -256,4 +256,25 @@ func TestEl_rendersANilChildAsNothing(t *testing.T) {
 func TestEl_rendersANilFromAHelperAsNothing(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "<div><span>shown</span></div>", render(t, h.Div(maybe(true), maybe(false))))
+}
+
+func TestEl_panicsOnAScriptTagInAnyCase(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		tag  string
+	}{
+		{"lower case", "script"},
+		{"upper case", "SCRIPT"},
+		{"mixed case", "Script"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.PanicsWithError(t,
+				`h: El("`+tt.tag+`") is refused: Datastar gives a patched-in <script> the page's nonce, `+
+					"so it would run; declare scripts in via.Meta.Assets",
+				func() { h.El(tt.tag, h.Str("alert(1)")) })
+		})
+	}
 }

@@ -3,15 +3,19 @@ package site_test
 import (
 	"bytes"
 	"cmp"
+	"encoding/json"
 	"html"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/go-via/via"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go-via.dev/site/shell"
@@ -118,7 +122,7 @@ func TestSite_namesItsCanonicalURLOnlyWhenTheOriginIsKnown(t *testing.T) {
 	assert.NotContains(t, body, `rel="canonical"`)
 }
 
-var voteAction = regexp.MustCompile(`@post\('([^'?]+)\?a=0'\)">vote<`)
+var voteAction = regexp.MustCompile(`data-via-q-click="([^"]*a=0)" data-on:click="@post\('([^']+)'[^"]*">vote<`)
 
 // postAction fires the vote demo's Cast: action names are hashed per render,
 // so the URL is read off the page rather than spelled.
@@ -127,7 +131,7 @@ func postAction(t *testing.T, srv *httptest.Server, origin string) *http.Respons
 	_, body := get(t, srv, "/actions", nil)
 	m := voteAction.FindStringSubmatch(body)
 	require.NotNil(t, m, "no vote button on /actions")
-	req, err := http.NewRequest(http.MethodPost, srv.URL+m[1], strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+html.UnescapeString(m[2]+m[1]), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Datastar-Request", "true")
@@ -259,7 +263,7 @@ func TestSite_prefixesLinksAndMountsWithTheBase(t *testing.T) {
 
 var (
 	searchSlot = regexp.MustCompile(`data-bind="([^"]+)"`)
-	searchPost = regexp.MustCompile(`data-on:input__debounce\.250ms="@post\('([^']+)'\)"`)
+	searchPost = regexp.MustCompile(`data-via-q-input__debounce\.250ms="([^"]*)" data-on:input__debounce\.250ms="@post\('([^']+)'`)
 )
 
 func TestSite_searchReturnsAnchoredHits(t *testing.T) {
@@ -272,7 +276,7 @@ func TestSite_searchReturnsAnchoredHits(t *testing.T) {
 	require.NotNil(t, slot, "no bound search input on /deploy")
 	require.NotNil(t, post, "no search action on /deploy")
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+post[1],
+	req, err := http.NewRequest(http.MethodPost, srv.URL+html.UnescapeString(post[2]+post[1]),
 		strings.NewReader(`{"viatab":"","`+slot[1]+`":"shutdown order"}`))
 	require.NoError(t, err)
 	req.Header.Set("Datastar-Request", "true")
@@ -326,4 +330,42 @@ func TestSite_keepsASearchInTheTopBarOfTheNotFoundPage(t *testing.T) {
 	tools := strings.Index(body, `class="top-tools"`)
 	require.GreaterOrEqual(t, tools, 0)
 	assert.Contains(t, body[tools:strings.Index(body, `class="side"`)], `name="q"`)
+}
+
+func TestSite_quotesTheOriginNoticeViaLogsVerbatim(t *testing.T) {
+	t.Parallel()
+	var logged bytes.Buffer
+	via.NewRouter(via.WithLogger(slog.New(slog.NewJSONHandler(&logged, nil))))
+	var rec struct{ Msg string }
+	require.NoError(t, json.Unmarshal(logged.Bytes(), &rec))
+	require.Contains(t, rec.Msg, "WithTrustedOrigin", "precondition: the startup warning is the one line logged")
+
+	srv := siteServer(t, site.Options{})
+	_, body := get(t, srv, "/security", nil)
+	assert.Contains(t, html.UnescapeString(body), rec.Msg)
+}
+
+func TestSite_servesEveryPageAndAnchorTheReadmeLinks(t *testing.T) {
+	t.Parallel()
+	readme, err := os.ReadFile("../../../README.md")
+	require.NoError(t, err)
+	links := regexp.MustCompile(`https://go-via\.dev(/[^)#\s]*)(?:#([^)\s]+))?`).FindAllStringSubmatch(string(readme), -1)
+	require.NotEmpty(t, links, "the README links no go-via.dev page")
+	srv := siteServer(t, site.Options{})
+
+	seen := map[string]bool{}
+	for _, l := range links {
+		if seen[l[0]] {
+			continue
+		}
+		seen[l[0]] = true
+		t.Run(l[0], func(t *testing.T) {
+			t.Parallel()
+			resp, body := get(t, srv, l[1], nil)
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			if l[2] != "" {
+				assert.True(t, strings.Contains(body, `id="`+l[2]+`"`), "%s has no #%s anchor", l[1], l[2])
+			}
+		})
+	}
 }

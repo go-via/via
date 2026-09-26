@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"runtime/debug"
 	"sort"
@@ -15,8 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/go-via/via/internal/hcore"
 )
 
 // actionMode is decided by the request, not the route: the bundled Datastar
@@ -30,9 +29,10 @@ const (
 	modeNative
 )
 
-// tabSignal is the wire name of the per-connection tab id — the CSRF token in
-// this project's threat model, and the canonical home of the no-underscore
-// rule that writeSignalsFrame and writeHTMLPage defer to.
+// tabSignal is the wire name of the tab id — the CSRF token in this project's
+// threat model, and the canonical home of the no-underscore rule that
+// writeSignalsFrame and writeHTMLPage defer to. A live page renders it, and
+// its stream adopts it (see newTabID).
 //
 // THE NAME MUST NOT START WITH "_". Datastar's default signal filter excludes
 // /(^|\.)_/, so an underscored name is never posted back — and every action
@@ -97,11 +97,24 @@ func (m *mount) warnAtCapacity(open int64) {
 		"open", open, "cap", m.maxLive)
 }
 
+// warnParkedFull is warnAtCapacity for parked actions: the cap is router-wide
+// and a single client can fill it, so the operator is told once a minute.
+func (m *mount) warnParkedFull() {
+	now := time.Now().UnixNano()
+	last := m.reg.parkWarn.Load()
+	if now-last < int64(time.Minute) || !m.reg.parkWarn.CompareAndSwap(last, now) {
+		return
+	}
+	m.cfg.log.Warn("via: refusing an action with 503: the router already holds its cap of actions parked "+
+		"for a tab whose stream has not connected. There is no per-IP share of that cap. The cap follows "+
+		"WithMaxSSEConn, up to "+strconv.Itoa(parkedCap)+".", "cap", m.reg.maxParked)
+}
+
 // actionResult is what running an action produced. On the live path it all
 // happens on the connection's own goroutine, so every outcome has to be
 // carried back across the channel rather than answered where it occurred.
 type actionResult struct {
-	redirect  string
+	redirect  redirectTo
 	panicked  bool
 	badArg    error  // ?a= failed to decode (badActionArg) — 400, not 500
 	pushWork  func() // live only: the dirty-signals + element push, run by tabStream.run right after acking
@@ -120,13 +133,15 @@ type actionResult struct {
 type mount struct {
 	cfg         *config
 	sessions    *sessionManager
+	policy      *routerPolicy
 	reg         *registry
 	newInst     func() instance
 	patternBase string
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
 	maxLive     int
-	noChange    *sync.Map     // the Router's dead-click warning dedupe (see warnNoChange, unknownAction)
+	noChange    *sync.Map     // the Router's dead-click warning dedupe (see warnNoChange)
+	unknownActs *idDedupe     // the Router's unknown-action warning dedupe (see unknownAction)
 	capWarn     *atomic.Int64 // unix nanos of the last at-capacity log, router-wide (see warnAtCapacity)
 	// routerCtx bounds every stream this mount opens, so Router.Close can end
 	// them; live counts the streams still running, so Close can wait.
@@ -137,7 +152,7 @@ type mount struct {
 	// router-wide assets plus the root's own PageMeta().Assets; assetsFP is the
 	// fingerprint of the latter, re-checked on every document render so a
 	// data-dependent Assets cannot silently outrun the policy.
-	csp      string
+	csp      cspPolicy
 	assetsFP string
 }
 
@@ -198,6 +213,24 @@ func liveAncestor(bind *Ctx, child string) bool {
 // is always a '-'-joined path of ordinals.
 const rootAddr = "r"
 
+// validAddr reports whether child has the shape unitAddr produces.
+func validAddr(child string) bool {
+	if child == rootAddr {
+		return true
+	}
+	for seg := range strings.SplitSeq(child, "-") {
+		if seg == "" {
+			return false
+		}
+		for i := range len(seg) {
+			if seg[i] < '0' || seg[i] > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func unitAddr(c *Ctx) string {
 	if c != nil && c.isChild {
 		return c.childKey
@@ -243,8 +276,33 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// to the plain path — the same graceful answer a stale id gets.
 		_ = json.Unmarshal(raw, &tab)
 	}
-	if lc, ok := m.reg.get(tab); ok {
+	// The tab id rides in the body, so the body is read before anything can
+	// park: a parked action holds its decoded signals. parkedCap bounds that.
+	deadline := time.Now().Add(m.cfg.pinnedDeadline)
+	// A click that beat its stream's connect, or landed in a reconnect gap,
+	// may park: the id is one this app issued to this browser, so a stream
+	// for it is on its way, and the plain path could only 410 a live unit.
+	// An address via never renders is not worth a slot.
+	park := tab != "" && validAddr(child) && isActionID(act) && m.issuedTab(tab, tabCredential(m.sessions, req))
+	lc, leave, out := m.reg.enter(req.Context(), m.routerCtx, tab, deadline, park)
+	switch out {
+	case enterGone:
+		noteErr(w, ErrStaleTab)
+		http.Error(w, "stream closed", http.StatusGone)
+		return
+	case enterAbandoned:
+		http.Error(w, "request abandoned", http.StatusGone)
+		return
+	case enterClosed:
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	case enterFull:
+		m.warnParkedFull()
+		http.Error(w, "too many actions waiting for their stream", http.StatusServiceUnavailable)
+		return
+	case enterReady:
 		if lc.mount != m {
+			leave()
 			// The registry is router-wide, and a tab id from another mount is
 			// otherwise structurally valid here (same field, same action-id
 			// space), so nothing else would fail first.
@@ -257,9 +315,10 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// is safe off the child goroutine, unlike the staleness lookup
 		// dispatchOverStream still does there.
 		if lc.unit(child) != nil {
-			m.dispatchOverStream(w, req, mode, lc, child, act, in, base)
+			m.dispatchOverStream(w, req, mode, lc, deadline, leave, child, act, in, base)
 			return
 		}
+		leave()
 	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
@@ -284,7 +343,7 @@ func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode act
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return nil, false
 			}
-			http.Error(w, "malformed form", http.StatusBadRequest)
+			http.Error(w, formError(req, err), http.StatusBadRequest)
 			return nil, false
 		}
 		return nil, true
@@ -307,6 +366,21 @@ func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode act
 	return in, true
 }
 
+// formError says why a request without Datastar-Request: true was refused.
+// The header alone picks the decoder, so a hand-rolled client that forgets it
+// gets its JSON parsed as a form; naming the header points at the fix.
+func formError(req *http.Request, err error) string {
+	if !errors.Is(err, http.ErrNotMultipart) {
+		return "malformed form"
+	}
+	if mt, _, _ := mime.ParseMediaType(req.Header.Get("Content-Type")); mt == "application/json" {
+		return "JSON action body without a Datastar-Request: true header; " +
+			"without it the POST is read as a native multipart/form-data form submit"
+	}
+	return "no Datastar-Request: true header, and the body is not multipart/form-data: " +
+		"an action is a Datastar @post (JSON signals) or a native form submit"
+}
+
 // dispatchOverStream runs act against a connected live unit on its
 // connection's serialized goroutine and waits for the result — synchronous,
 // unlike the old fire-and-forget child dispatch, so a Redirect, the session
@@ -314,8 +388,8 @@ func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode act
 // wait for the goroutine to pick the action up is bounded by req.Context(), the
 // connection closing and the pinned deadline; an action already running is
 // waited for, since it writes this response.
-func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, child string, act string, in map[string]json.RawMessage, base string) {
-	res, outcome := lc.run(req.Context(), func() actionResult {
+func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, picked func(), child string, act string, in map[string]json.RawMessage, base string) {
+	res, outcome := lc.run(req.Context(), deadline, picked, func() actionResult {
 		// The client hung up between the handoff and now: applying the action
 		// would double-apply on its retry, and nobody reads this answer.
 		if req.Context().Err() != nil {
@@ -355,7 +429,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		if !ok {
 			return actionResult{gone: m.unknownAction(u, act)}
 		}
-		return liveRunAction(w, req, m.sessions, sessID, sess, lc, u, in, a)
+		return liveRunAction(w, req, m.sessions, m.policy, sessID, sess, lc, u, in, a)
 	})
 	switch outcome {
 	case runPinned:
@@ -427,7 +501,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 // delays only the next push item, never this response. A detached goroutine
 // doing the enqueue used to race other actions' goroutines and reorder their
 // pushes; returning it as data keeps everything on the one goroutine, in order.
-func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
+func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			if bad, ok := rec.(badActionArg); ok {
@@ -442,12 +516,12 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 			// the URL names something that does not exist, which is a 404, not
 			// a server fault worth a stack dump.
 			if _, ok := rec.(paramMiss); ok {
-				res = actionResult{paramMiss: true}
+				res = actionResult{paramMiss: true, pushWork: unit.push}
 				return
 			}
 			lc.mount.cfg.log.Error("via: live action panic", "tab", lc.id,
 				"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-			res = actionResult{panicked: true}
+			res = actionResult{panicked: true, pushWork: unit.push}
 		}
 	}()
 	// Registered before the hydrate loop so every exit unwinds it, not just the
@@ -474,7 +548,10 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
-			hydrate(raw)
+			if !hydrate(raw) {
+				delete(lc.client, slot)
+				continue
+			}
 			// Remembered so the next push's display render still shows what the
 			// client is holding: livePush reverts the instance to its
 			// server-authored values before the authority render, and without
@@ -487,8 +564,9 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{req: req, sessions: sessions, sessW: w}
+	rc := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w}
 	rc.adoptSession(sessID, beforeSession, nil)
+	rc.session.stream = lc
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
 	// push) is the only place that owns clearing it. Resetting unconditionally
 	// on every dispatch dropped an earlier action's Set the moment it panicked
@@ -500,10 +578,10 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// state this unit's OnInit had already read, and the push render below
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
 	// the tab is navigating away from this render. See reloader.
-	if rc.redirect == "" {
-		rl := &Ctx{req: req, sessions: sessions, sessW: w, session: rc.Session(), base: unit.base}
+	if rc.redirect.url == "" {
+		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{initErr: err}
+			return actionResult{initErr: err, pushWork: unit.push}
 		}
 		rc.redirect = rl.redirect
 	}
@@ -531,20 +609,71 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // UI state the View branches on. The bound list goes to the log only: it is a
 // map of the render's Go type and method names.
 //
-// Deduped per unknown id per process, like warnNoChange: the line dumps the
+// Deduped per unknown id per Router, like warnNoChange: the line dumps the
 // whole action table, so an unauthenticated POST loop over garbage ids would
 // otherwise print the render's method names at line rate — a log-flood
-// amplifier and a disclosure channel in one.
+// amplifier and a disclosure channel in one. The id comes off the URL, so one
+// of a shape via never mints is answered without touching the dedupe set, and
+// the set itself is capped and reset hourly (see idDedupe).
 func (m *mount) unknownAction(u *Ctx, act string) string {
-	if _, dup := m.noChange.LoadOrStore("unknownAction\x00"+act, struct{}{}); !dup {
+	if !isActionID(act) {
+		return "no such action; this render does not bind it"
+	}
+	switch fresh, filled := m.unknownActs.add(act); {
+	case fresh:
 		have := make([]string, 0, len(u.actions))
 		for id, a := range u.actions {
 			have = append(have, id+" ("+a.name+")")
 		}
 		sort.Strings(have)
 		m.cfg.log.Warn("via: no such action; this render binds others", "act", act, "binds", strings.Join(have, ", "))
+	case filled:
+		m.cfg.log.Warn("via: "+strconv.Itoa(unknownActionCap)+" distinct unknown action ids logged this hour; "+
+			"further unknown action ids still answer 410 but are not logged until the hour is up", "act", act)
 	}
 	return "no such action " + act + "; this render does not bind it"
+}
+
+// unknownActionCap bounds idDedupe. A deploy that drops handlers leaves open
+// tabs posting a few dozen stale ids at most; anything past this is a client
+// making ids up.
+const unknownActionCap = 1024
+
+// unknownActionReset is how often idDedupe forgets what it logged, so made-up
+// ids that fill the cap cannot silence for good the stale-id warnings a deploy
+// that dropped a handler needs.
+const unknownActionReset = time.Hour
+
+// idDedupe remembers which request-supplied ids were already logged. The ids
+// come from the client, so it stops admitting keys at unknownActionCap until
+// the next reset rather than grow under a loop of made-up ones.
+type idDedupe struct {
+	mu    sync.Mutex
+	seen  map[string]struct{}
+	full  bool
+	since time.Time
+}
+
+// add reports whether key is new and admitted, and, separately, whether this
+// call is the first one the cap turned away in this interval.
+func (d *idDedupe) add(key string) (fresh, filled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if now := time.Now(); now.Sub(d.since) >= unknownActionReset {
+		d.seen, d.full, d.since = nil, false, now
+	}
+	if _, ok := d.seen[key]; ok {
+		return false, false
+	}
+	if len(d.seen) >= unknownActionCap {
+		filled, d.full = !d.full, true
+		return false, filled
+	}
+	if d.seen == nil {
+		d.seen = map[string]struct{}{}
+	}
+	d.seen[key] = struct{}{}
+	return true, false
 }
 
 // noStream explains a live unit's action arriving on the plain path. The ways
@@ -577,7 +706,11 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	if ctx == nil {
 		return
 	}
-	writeHTMLPage(w, m, body, base, len(liveUnits(ctx)) > 0, inst.v)
+	tab := ""
+	if len(liveUnits(ctx)) > 0 {
+		tab = m.newTabID(pageTabCredential(ctx, m.sessions, req))
+	}
+	writeHTMLPage(w, m, body, base, tab, inst.v)
 }
 
 func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
@@ -589,7 +722,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 	// Before OnInit, not just before the View: seeding an island with Set is
 	// what OnInit is for, and a Set with no slot and no pass goes nowhere.
 	prebindSignals(ctx, inst)
-	if runOnInit(inst.v, ctx, w, req, m.sessions, false) != nil {
+	if runOnInit(inst.v, ctx, w, req, m.sessions, m.policy, false) != nil {
 		return nil, nil
 	}
 	return ctx, renderRootWith(ctx, inst.v)
@@ -614,7 +747,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	auth.passUnits = map[string]*Ctx{}
 	prebindSignals(auth, inst)
-	if runOnInit(inst.v, auth, w, req, m.sessions, false) != nil {
+	if runOnInit(inst.v, auth, w, req, m.sessions, m.policy, false) != nil {
 		return
 	}
 	rootBefore := renderRootWith(auth, inst.v)
@@ -700,6 +833,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	}
 	u.req = req
 	u.sessions = m.sessions
+	u.policy = m.policy
 	u.sessW = w
 	a.fn(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
@@ -707,8 +841,8 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// the response render below would frame the pre-action data — a 204 and a
 	// silently unchanged UI. Skipped behind a Redirect: nothing from this
 	// instance gets rendered. See reloader.
-	if u.redirect == "" {
-		rl := &Ctx{req: req, sessions: m.sessions, sessW: w, session: auth.session, base: base}
+	if u.redirect.url == "" {
+		rl := &Ctx{req: req, sessions: m.sessions, policy: m.policy, sessW: w, session: auth.session, base: base}
 		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
 			answerReloadFailure(m.cfg.log, w, err)
 			return
@@ -769,11 +903,11 @@ func rebindFrom(auth *Ctx) *Ctx {
 	c := *auth
 	c.order, c.initial = nil, map[string]any{}
 	c.actions = map[string]action{}
-	c.hydrators = map[string]func(json.RawMessage){}
+	c.hydrators = map[string]func(json.RawMessage) bool{}
 	c.dirty = map[string]any{}
 	c.children = nil
 	c.rendered, c.push = nil, nil
-	c.redirect = ""
+	c.redirect = redirectTo{}
 	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
 	return &c
 }
@@ -796,7 +930,11 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 		if !ok {
 			continue
 		}
-		hydrate(raw)
+		if !hydrate(raw) {
+			// Gone, so a live connection does not re-decode it on every push.
+			delete(in, slot)
+			continue
+		}
 		if !done[slot] {
 			done[slot] = true
 			fresh = true
@@ -808,6 +946,35 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 		}
 	}
 	return fresh
+}
+
+// connectClient is the part of a connect body a live connection keeps as
+// lc.client for its life and walks on every push: values for the non-CS signal
+// fields of the units bind rendered, minus those this render binds that do not
+// decode.
+//
+// Fields, not this render's hydrators: a Bind() inside a branch the client's
+// own value opens has no hydrator until a push's display render sees that
+// value, and its slot must survive until then.
+func connectClient(bind *Ctx, in map[string]json.RawMessage) map[string]json.RawMessage {
+	keep := map[string]json.RawMessage{}
+	var walk func(c *Ctx)
+	walk = func(c *Ctx) {
+		if c.unitV.sig != nil {
+			for _, f := range c.unitV.sig.fields {
+				if raw, ok := in[f.wire(c.scopePrefix())]; ok && !f.cs {
+					keep[f.wire(c.scopePrefix())] = raw
+				}
+			}
+		}
+		for _, child := range c.children {
+			walk(child)
+		}
+	}
+	walk(bind)
+	hydrateTree(bind, keep, map[string]bool{}) // drops what does not decode
+	bind.rev.restore()
+	return keep
 }
 
 // maxHydratePasses bounds dispatchPlain's discovery loop. The loop cannot
@@ -929,14 +1096,15 @@ func assertRenderInvariantLiveness(nowLive bool) {
 
 // redirectInit navigates the tab from a Datastar @post action's response.
 //
-// Datastar v1.0.2 answers a text/javascript response by building a <script>,
+// Datastar v1.0.4 answers a text/javascript response by building a <script>,
 // copying the datastar-script-attributes header's JSON onto it as attributes,
-// setting its textContent to the body and appending it to document.head (see
-// the client's Content-Type switch, next to its text/html and application/json
+// setting its text to the body and appending it to document.head (see the
+// client's Content-Type switch, next to its text/html and application/json
 // branches). So the TARGET rides in an attribute and THESE BYTES NEVER CHANGE —
 // which is what lets the strict CSP admit the script by SHA-256, exactly like
-// reconnectInit, with no per-response nonce to mint or leak. Edit this string
-// and buildCSP re-derives the hash, but the two must stay byte-identical or the
+// reconnectInit. Datastar also stamps the document's nonce on it; the hash
+// keeps the redirect working without relying on that. Edit this string and
+// buildCSP re-derives the hash, but the two must stay byte-identical or the
 // browser drops the script and the redirect is silently dead again.
 const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
 	`var u=s.getAttribute('data-via-to');s.remove();if(u)location.assign(u)})()`
@@ -944,7 +1112,8 @@ const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
 // writeRedirectScript answers a @post with the navigation script. The target is
 // JSON-encoded into a header and reaches the DOM through setAttribute, never
 // through the HTML parser, and respond has already cleared it through
-// hcore.SafeURL — so no javascript: target and no attribute escape.
+// hcore.SafeURL (see redirectTo) — so no javascript: target and no attribute
+// escape.
 func writeRedirectScript(w http.ResponseWriter, target string) {
 	attrs, err := json.Marshal(map[string]string{"data-via-to": target})
 	if err != nil {
@@ -961,20 +1130,20 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 // respond is dispatch's one response policy for every action POST — root,
 // child, live, or native form. A queued Redirect wins: a native submit gets a
 // 303, a Datastar @post gets the navigation script above. Either way the target
-// must clear hcore.SafeURL first — the same URL policy runOnInit and rendered
-// href/src URLs use — and an unsafe one is dropped, not followed. Otherwise
-// renderNative or renderPatch (nil for "unchanged" / "the live push already
-// carried it") decides the body.
-func (m *mount) respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect string, renderNative func(), renderPatch func() []byte) {
-	if redirect != "" {
-		switch {
-		case !hcore.SafeURL(redirect):
-			m.cfg.log.Warn("via: unsafe Redirect target dropped", "redirect", redirect)
+// must clear Redirect's host check and hcore.SafeURL, the same URL policy
+// runOnInit and rendered href/src URLs use; a refused one is dropped, not
+// followed. Otherwise renderNative or renderPatch (nil for
+// "unchanged" / "the live push already carried it") decides the body.
+func (m *mount) respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect redirectTo, renderNative func(), renderPatch func() []byte) {
+	if redirect.url != "" {
+		switch refused := redirect.refusal(); {
+		case refused != "":
+			m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
 		case mode == modeNative:
-			http.Redirect(w, req, redirect, http.StatusSeeOther)
+			http.Redirect(w, req, redirect.url, http.StatusSeeOther)
 			return
 		default:
-			writeRedirectScript(w, redirect)
+			writeRedirectScript(w, redirect.url)
 			return
 		}
 	}

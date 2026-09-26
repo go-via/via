@@ -2,6 +2,7 @@ package via_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,13 +97,13 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 
 	c := &http.Client{}
 	csp1 := cspOf(t, c, srv.URL+"/x")
-	assert.Equal(t, csp1, cspOf(t, c, srv.URL+"/x"),
+	assert.Equal(t, withoutNonce(csp1), withoutNonce(cspOf(t, c, srv.URL+"/x")),
 		"the policy must be stable across requests without any session")
 
 	r2 := via.NewRouter(via.WithSessionKey([]byte("a-different-key-also-32-bytes-ok")))
 	via.Mount(r2, "/x", redirectPage{})
 	srv2 := serve(t, r2)
-	assert.Equal(t, csp1, cspOf(t, c, srv2.URL+"/x"),
+	assert.Equal(t, withoutNonce(csp1), withoutNonce(cspOf(t, c, srv2.URL+"/x")),
 		"a hash-based policy needs no shared key: pods with different keys agree")
 }
 
@@ -906,7 +908,7 @@ func (l *legacyTitle) View() h.H     { return h.Div(l.N.Display()) }
 
 func TestMount_panicsOnAPageMetaCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithValue(t,
+	assert.PanicsWithError(t,
 		"via: via_test.badMetaSig.PageMeta has signature func(string) via.Meta, not func() via.Meta — "+
 			"so the hook will never run",
 		func() { via.Mount(via.NewRouter(), "/", badMetaSig{}) })
@@ -930,7 +932,7 @@ func TestMount_warnsOnALeftoverTitleMethod(t *testing.T) {
 
 func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithValue(t,
+	assert.PanicsWithError(t,
 		"via: via_test.badInitSig.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — "+
 			"so the hook will never run",
 		func() { via.Mount(via.NewRouter(), "/", badInitSig{}) })
@@ -1470,7 +1472,7 @@ func TestMount_warnsOnAMiscasedHookName(t *testing.T) {
 
 func TestMount_warnsOnAHookNameOneLetterOff(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", droppedLetterConnect{}) })
-	assert.Contains(t, logged, "droppedLetterConnect.OnConect looks like a mis-named OnInit")
+	assert.Contains(t, logged, "droppedLetterConnect.OnConect is shaped like the v0.7 OnConnect hook")
 }
 
 // The near-miss check must not fire for an ordinary method that merely shares a
@@ -1484,6 +1486,154 @@ func (u *unrelatedHookShapedMethod) View() h.H               { return h.Div(u.N.
 func TestMount_staysQuietForUnrelatedMethodsWithAHookSignature(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", unrelatedHookShapedMethod{}) })
 	assert.NotContains(t, logged, "mis-named")
+}
+
+type (
+	hookOnRelaod       struct{}
+	hookOnInti         struct{}
+	hookPgaeMeta       struct{}
+	hookOnReloda       struct{}
+	hookOnRelod        struct{}
+	hookOnInitt        struct{}
+	hookOnReluad       struct{}
+	hookONINIT         struct{}
+	hookOnRelay        struct{}
+	hookOnInput        struct{}
+	hookOnEdit         struct{}
+	hookOnExit         struct{}
+	hookOnLoad         struct{}
+	hookPreload        struct{}
+	hookOnUnload       struct{}
+	hookOnline         struct{}
+	hookOnInitialized  struct{}
+	hookInitialized    struct{}
+	hookOnReloadAll    struct{}
+	hookPageMetaFor    struct{}
+	v07ConnectWithInit struct{}
+	v07ConnectAlone    struct{}
+	connectAction      struct{}
+)
+
+func (hookOnRelaod) View() h.H                          { return h.Div() }
+func (*hookOnRelaod) OnRelaod(*via.Ctx) error           { return nil }
+func (hookOnInti) View() h.H                            { return h.Div() }
+func (*hookOnInti) OnInti(*via.Ctx) error               { return nil }
+func (hookPgaeMeta) View() h.H                          { return h.Div() }
+func (*hookPgaeMeta) PgaeMeta() via.Meta                { return via.Meta{} }
+func (hookOnReloda) View() h.H                          { return h.Div() }
+func (*hookOnReloda) OnReloda(*via.Ctx) error           { return nil }
+func (hookOnRelod) View() h.H                           { return h.Div() }
+func (*hookOnRelod) OnRelod(*via.Ctx) error             { return nil }
+func (hookOnInitt) View() h.H                           { return h.Div() }
+func (*hookOnInitt) OnInitt(*via.Ctx) error             { return nil }
+func (hookOnReluad) View() h.H                          { return h.Div() }
+func (*hookOnReluad) OnReluad(*via.Ctx) error           { return nil }
+func (hookONINIT) View() h.H                            { return h.Div() }
+func (*hookONINIT) ONINIT(*via.Ctx) error               { return nil }
+func (hookOnRelay) View() h.H                           { return h.Div() }
+func (*hookOnRelay) OnRelay(*via.Ctx) error             { return nil }
+func (hookOnInput) View() h.H                           { return h.Div() }
+func (*hookOnInput) OnInput(*via.Ctx) error             { return nil }
+func (hookOnEdit) View() h.H                            { return h.Div() }
+func (*hookOnEdit) OnEdit(*via.Ctx) error               { return nil }
+func (hookOnExit) View() h.H                            { return h.Div() }
+func (*hookOnExit) OnExit(*via.Ctx) error               { return nil }
+func (hookOnLoad) View() h.H                            { return h.Div() }
+func (*hookOnLoad) OnLoad(*via.Ctx) error               { return nil }
+func (hookPreload) View() h.H                           { return h.Div() }
+func (*hookPreload) Preload(*via.Ctx) error             { return nil }
+func (hookOnUnload) View() h.H                          { return h.Div() }
+func (*hookOnUnload) OnUnload(*via.Ctx) error           { return nil }
+func (hookOnline) View() h.H                            { return h.Div() }
+func (*hookOnline) Online(*via.Ctx) error               { return nil }
+func (hookOnInitialized) View() h.H                     { return h.Div() }
+func (*hookOnInitialized) OnInitialized(*via.Ctx) error { return nil }
+func (hookInitialized) View() h.H                       { return h.Div() }
+func (*hookInitialized) Initialized(*via.Ctx) error     { return nil }
+func (hookOnReloadAll) View() h.H                       { return h.Div() }
+func (*hookOnReloadAll) OnReloadAll(*via.Ctx) error     { return nil }
+func (hookPageMetaFor) View() h.H                       { return h.Div() }
+func (*hookPageMetaFor) PageMetaFor() via.Meta          { return via.Meta{} }
+
+func TestMount_warnsOnHookNamesOneEditAwayAndNoFurther(t *testing.T) {
+	t.Parallel()
+	// Each quiet case is a method name a real app could hold with the hook's
+	// exact signature. Most sit two edits from a hook name, which is why the
+	// threshold is one edit, with a swap of two adjacent letters counted as one.
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+		want  string
+	}{
+		{"swapped letters in OnReload", func(r *via.Router) { via.Mount(r, "/", hookOnRelaod{}) }, "hookOnRelaod.OnRelaod looks like a mis-named OnReload"},
+		{"swapped letters in OnInit", func(r *via.Router) { via.Mount(r, "/", hookOnInti{}) }, "hookOnInti.OnInti looks like a mis-named OnInit"},
+		{"swapped letters in PageMeta", func(r *via.Router) { via.Mount(r, "/", hookPgaeMeta{}) }, "hookPgaeMeta.PgaeMeta looks like a mis-named PageMeta"},
+		{"swapped last letters", func(r *via.Router) { via.Mount(r, "/", hookOnReloda{}) }, "hookOnReloda.OnReloda looks like a mis-named OnReload"},
+		{"dropped letter", func(r *via.Router) { via.Mount(r, "/", hookOnRelod{}) }, "hookOnRelod.OnRelod looks like a mis-named OnReload"},
+		{"doubled letter", func(r *via.Router) { via.Mount(r, "/", hookOnInitt{}) }, "hookOnInitt.OnInitt looks like a mis-named OnInit"},
+		{"wrong letter", func(r *via.Router) { via.Mount(r, "/", hookOnReluad{}) }, "hookOnReluad.OnReluad looks like a mis-named OnReload"},
+		{"wrong case", func(r *via.Router) { via.Mount(r, "/", hookONINIT{}) }, "hookONINIT.ONINIT looks like a mis-named OnInit"},
+		{"OnRelay, two edits from OnReload", func(r *via.Router) { via.Mount(r, "/", hookOnRelay{}) }, ""},
+		{"OnInput, two edits from OnInit", func(r *via.Router) { via.Mount(r, "/", hookOnInput{}) }, ""},
+		{"OnEdit, two edits from OnInit", func(r *via.Router) { via.Mount(r, "/", hookOnEdit{}) }, ""},
+		{"OnExit, two edits from OnInit", func(r *via.Router) { via.Mount(r, "/", hookOnExit{}) }, ""},
+		{"OnLoad, two edits from OnReload", func(r *via.Router) { via.Mount(r, "/", hookOnLoad{}) }, ""},
+		{"Preload, two edits from OnReload", func(r *via.Router) { via.Mount(r, "/", hookPreload{}) }, ""},
+		{"OnUnload, two edits from OnReload", func(r *via.Router) { via.Mount(r, "/", hookOnUnload{}) }, ""},
+		{"Online", func(r *via.Router) { via.Mount(r, "/", hookOnline{}) }, ""},
+		{"OnInitialized, OnInit plus a suffix", func(r *via.Router) { via.Mount(r, "/", hookOnInitialized{}) }, ""},
+		{"Initialized, one edit from the Initialize alias", func(r *via.Router) { via.Mount(r, "/", hookInitialized{}) }, ""},
+		{"OnReloadAll, OnReload plus a suffix", func(r *via.Router) { via.Mount(r, "/", hookOnReloadAll{}) }, ""},
+		{"PageMetaFor, PageMeta plus a suffix", func(r *via.Router) { via.Mount(r, "/", hookPageMetaFor{}) }, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf lockedBuf
+			tt.mount(via.NewRouter(logTo(&buf)))
+			if tt.want == "" {
+				assert.NotContains(t, buf.String(), "mis-named")
+				return
+			}
+			assert.Contains(t, buf.String(), tt.want)
+		})
+	}
+}
+
+func (v07ConnectWithInit) View() h.H                 { return h.Div() }
+func (*v07ConnectWithInit) OnInit(*via.Ctx) error    { return nil }
+func (*v07ConnectWithInit) OnConnect(*via.Ctx) error { return nil }
+func (v07ConnectAlone) View() h.H                    { return h.Div() }
+func (*v07ConnectAlone) OnConnect(*via.Ctx) error    { return nil }
+func (connectAction) View() h.H                      { return h.Div() }
+func (*connectAction) OnConnect(*via.Ctx)            {}
+
+func TestMount_warnsOnAV07OnConnectEvenNextToOnInit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+	}{
+		{"next to OnInit", func(r *via.Router) { via.Mount(r, "/", v07ConnectWithInit{}) }},
+		{"alone", func(r *via.Router) { via.Mount(r, "/", v07ConnectAlone{}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var buf lockedBuf
+			tt.mount(via.NewRouter(logTo(&buf)))
+			assert.Contains(t, buf.String(), ".OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls")
+			assert.Contains(t, buf.String(), "ctx.OnConnect(fn)", "the warning must name what replaced the hook")
+			assert.NotContains(t, buf.String(), "Rename it to OnInit", "OnInit runs per request, so a rename is the wrong port")
+		})
+	}
+}
+
+func TestMount_staysQuietForAnActionNamedOnConnect(t *testing.T) {
+	t.Parallel()
+	var buf lockedBuf
+	via.Mount(via.NewRouter(logTo(&buf)), "/", connectAction{})
+	assert.NotContains(t, buf.String(), "OnConnect")
 }
 
 // Close's drain is complete when it returns: every stream it let in has run its
@@ -1533,4 +1683,256 @@ func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 		<-done
 		srv.Close()
 	}
+}
+
+// blockedTick parks its Tick handler until released, the way a handler stuck
+// on a slow call does.
+type blockedTick struct {
+	n       via.State[int]
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (p *blockedTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Second, p.tick)
+	return nil
+}
+
+func (p *blockedTick) tick(*via.Ctx) {
+	select {
+	case p.entered <- struct{}{}:
+	default:
+	}
+	<-p.release
+}
+
+func (p *blockedTick) Bump(*via.Ctx) {}
+
+func (p *blockedTick) View() h.H {
+	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump)))
+}
+
+func newBlockedTick() blockedTick {
+	return blockedTick{entered: make(chan struct{}, 1), release: make(chan struct{})}
+}
+
+func TestRouterShutdown_returnsTheDeadlineErrorNamingAHandlerStillBlocked(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := newBlockedTick()
+		r := via.NewRouter(logTo(&out))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		app.Connect()
+		<-p.entered
+
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		start := time.Now()
+		err := r.Shutdown(ctx)
+
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.Equal(t, 3*time.Second, time.Since(start), "Shutdown returns at its deadline, not when the handler does")
+		assert.Contains(t, out.String(), "blockedTick", "the log names the unit whose handler is still running")
+		close(p.release)
+		r.Close()
+	})
+}
+
+func TestRouterShutdown_returnsNilOnceEveryStreamHasEnded(t *testing.T) {
+	t.Parallel()
+	r, p := closableRouter(t)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	conn.Await("datastar-patch-elements")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	require.NoError(t, r.Shutdown(ctx))
+
+	assert.NoError(t, conn.AwaitClose(), "Shutdown must end the stream cleanly")
+	select {
+	case <-p.gone:
+	default:
+		assert.Fail(t, "Shutdown returned before the unit's OnDispose ran")
+	}
+}
+
+func TestRouterShutdown_returnsNilWithADoneContextOnceDrained(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(logTo(&out))
+	r.Close()
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 200 {
+		require.NoError(t, r.Shutdown(done))
+	}
+	assert.NotContains(t, out.String(), "returned before every stream ended")
+}
+
+func publicCache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=600")
+		next.ServeHTTP(w, req)
+	})
+}
+
+func TestPage_cacheControlFollowsWhatTheDocumentCarries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		h    http.Handler
+		want string
+	}{
+		{"live page", via.Handler(clicker{}), "private, no-store"},
+		{"live page under a public middleware", publicCache(via.Handler(clicker{})), "private, no-store"},
+		{"plain page", via.Handler(noopComp{}), "no-cache"},
+		{"plain page under a public middleware", publicCache(via.Handler(noopComp{})), "public, max-age=600"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resp, _ := do(t, serve(t, tt.h), http.MethodGet, "/", "")
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			assert.Equal(t, tt.want, resp.Header.Get("Cache-Control"))
+		})
+	}
+}
+
+type bootSharedID struct{ hits [2]int }
+
+func (p *bootSharedID) View() h.H {
+	var kids []h.H
+	for i := range p.hits {
+		kids = append(kids, h.Button(on.Click(func(ctx *via.Ctx) { p.hits[i]++ })))
+	}
+	return h.Div(kids...)
+}
+
+type bootIface struct{ A ifaceIncer }
+
+func (p *bootIface) View() h.H { return h.Div(h.Button(on.Click(p.A.Inc))) }
+
+type bootScript struct{}
+
+func (p *bootScript) View() h.H { return h.Div(h.El("script", h.Str("1"))) }
+
+type bootLocalSignal struct{}
+
+func (p *bootLocalSignal) View() h.H {
+	var s via.Signal[int]
+	return h.Div(s.Display())
+}
+
+type bootKid struct{}
+
+func (k *bootKid) View() h.H { return h.Div() }
+
+type bootPtrChild struct{ Kid bootKid }
+
+func (p *bootPtrChild) View() h.H { return h.Div(via.Child(&p.Kid)) }
+
+type bootValKid struct{ S via.Signal[int] }
+
+func (k bootValKid) View() h.H { return h.Div() }
+
+type bootValViewChild struct{ Kid bootValKid }
+
+func (p *bootValViewChild) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+type bootHookKid struct{}
+
+func (k *bootHookKid) OnInit()   {}
+func (k *bootHookKid) View() h.H { return h.Div() }
+
+type bootBadHookChild struct{ Kid bootHookKid }
+
+func (p *bootBadHookChild) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+type bootTabSignal struct{ Viatab via.Signal[string] }
+
+func (p *bootTabSignal) View() h.H { return h.Div(p.Viatab.Display()) }
+
+func TestMount_panicsOnAViewWiredWrongInItsZeroValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+		want  string
+	}{
+		{"shared action id", func(r *via.Router) { via.Mount(r, "/", bootSharedID{}) }, "share the action id"},
+		{"ambiguous value receiver", func(r *via.Router) { via.Mount(r, "/", genMixed{}) }, "fields A, B"},
+		{"interface method value", func(r *via.Router) { via.Mount(r, "/", bootIface{A: &ifaceCounter{}}) }, "interface"},
+		{"El script", func(r *via.Router) { via.Mount(r, "/", bootScript{}) }, `El("script") is refused`},
+		{"unreachable signal", func(r *via.Router) { via.Mount(r, "/", bootLocalSignal{}) }, "has no slot in its unit"},
+		{"Child without a View", func(r *via.Router) { via.Mount(r, "/", bootPtrChild{}) }, "requires child to have a View() method"},
+		{"child with a value View and signals", func(r *via.Router) { via.Mount(r, "/", bootValViewChild{}) }, "VALUE receiver"},
+		{"child hook with the wrong signature", func(r *via.Router) { via.Mount(r, "/", bootBadHookChild{}) }, "OnInit has signature"},
+		{"signal named like the tab id", func(r *via.Router) { via.Mount(r, "/", bootTabSignal{}) }, "collides with via's own tab-id signal"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msg := panicMsg(func() { tt.mount(via.NewRouter(logTo(io.Discard))) })
+			assert.Contains(t, msg, "found at Mount", "the panic must say it came from the boot render")
+			assert.Contains(t, msg, tt.want)
+		})
+	}
+}
+
+type bootNilDeref struct{ user *struct{ Name string } }
+
+func (p *bootNilDeref) View() h.H { return h.P(h.Str(p.user.Name)) }
+
+type bootUserPanic struct{}
+
+func (p *bootUserPanic) View() h.H { panic("bootUserPanic: no data") }
+
+func TestMount_ignoresAPanicFromTheZeroValueThatIsNotVias(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+	}{
+		{"nil deref", func(r *via.Router) { via.Mount(r, "/", bootNilDeref{}) }},
+		{"user panic", func(r *via.Router) { via.Mount(r, "/", bootUserPanic{}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out lockedBuf
+			r := via.NewRouter(logTo(&out),
+				via.WithTrustedOrigin("https://example.com"))
+			assert.NotPanics(t, func() { tt.mount(r) })
+			assert.Empty(t, out.String(), "the boot render is silent")
+		})
+	}
+}
+
+// bootBranch binds a func literal per row only once rows exist, which the
+// zero value never has.
+type bootBranch struct{ rows []int }
+
+func (p *bootBranch) OnInit(ctx *via.Ctx) error {
+	p.rows = []int{1, 2}
+	return nil
+}
+
+func (p *bootBranch) View() h.H {
+	var kids []h.H
+	for i := range p.rows {
+		kids = append(kids, h.Button(on.Click(func(ctx *via.Ctx) { p.rows[i]++ })))
+	}
+	return h.Div(kids...)
+}
+
+func TestMount_bootRenderIsBestEffortAndARenderStillPanics(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(logTo(&out))
+	require.NotPanics(t, func() { via.Mount(r, "/", bootBranch{}) })
+	resp, _ := do(t, serve(t, r), http.MethodGet, "/", "")
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Contains(t, out.String(), "share the action id")
 }

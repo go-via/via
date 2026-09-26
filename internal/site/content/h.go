@@ -74,8 +74,8 @@ func (p *Helpers) View() h.H {
 			h.Str(" or attribute value. Attribute and tag names are validated instead, and an invalid one panics: a name is written by you, not read from a request.")),
 		h.P(h.Str("Markup you already hold as a string, such as rendered Markdown, has no way into a view. Build it with h calls instead.")),
 		Callout(Warning, "Escaping stops HTML, not JavaScript",
-			h.P(h.Str("The "), h.A(h.Href(d.Href("/security")+"#content-security-policy"), h.Str("CSP")), h.Str(" carries "),
-				Code("'unsafe-eval'"), h.Str(" for Datastar, so it does not stop an expression. A value the user controls in "), API("h.Data"), h.Str(", "),
+			h.P(h.Str("The "), h.A(h.Href(d.Href("/security")+"#content-security-policy"), h.Str("CSP")), h.Str(" admits Datastar's "+
+				"expressions by the page's nonce, so it does not stop an expression. A value the user controls in "), API("h.Data"), h.Str(", "),
 				API("h.DataOn"), h.Str(", "), API("h.RawAttr"), h.Str(" on a "), Code("data-*"), h.Str(" name, "), API("expr.Raw"),
 				h.Str(" or the format of "), API("expr.Rawf"), h.Str(" runs as script. Pass user values through "), API("expr.Val"),
 				h.Str(", which encodes them as a JavaScript literal.")),
@@ -91,7 +91,7 @@ func (p *Helpers) View() h.H {
 			h.Str(", with a warning in the log; the page still renders. Tabs and newlines are stripped and leading spaces and case ignored first, "+
 				"as a browser would, so a padded "), Code("JavaScript:"), h.Str(" is refused too. "),
 			API("h.RawAttr"), h.Str(" runs the same check on URL-bearing names, and "), API("via.Ctx.Redirect"),
-			h.Str(" shares the policy.")),
+			h.Str(" shares the policy, then also refuses another host.")),
 		Callout(Caveat, "mailto: and tel: are for links only",
 			h.P(h.Str("They pass on an href, typed or through "), API("h.RawAttr"), h.Str(", and nowhere else: "),
 				API("h.Src"), h.Str(", "), API("h.Action"), h.Str(" and "), API("via.Ctx.Redirect"),
@@ -151,9 +151,9 @@ func (p *Helpers) View() h.H {
 			h.Str(". Declare scripts and styles in "), API("via.Assets"), h.Str(", and the title and description in "), API("via.Meta"), h.Str(".")),
 		h.P(API("via.Head"), h.Str("'s Raw field takes other head markup, such as icons or a viewport meta, and panics at startup if it contains "),
 			Code("<script"), h.Str(" or "), Code("<style"), h.Str(": via never parses Raw, so the CSP could not admit them and the browser would block them silently.")),
-		Callout(Caveat, "El does not refuse script",
-			h.P(Code(`h.El("script", …)`), h.Str(" renders. An inline body is blocked by the CSP, which admits only via's own inline scripts by hash; "+
-				"a same-origin src passes 'self'. Neither is a supported path: put scripts in Assets.")),
+		Callout(Caveat, "El refuses script",
+			h.P(Code(`h.El("script", …)`), h.Str(" panics, in any letter case. Datastar gives a script that arrives in a live patch the "+
+				"page's nonce, so it would run where the same element in the first document is blocked. Put scripts in Assets.")),
 		),
 	)
 }

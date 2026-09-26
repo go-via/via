@@ -59,9 +59,10 @@ var errRedirected = errors.New("via: redirected")
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
 // fetch follows a 303 and would deliver the target page's HTML as the stream
 // body, so a redirect there answers a plain 403 instead.
-func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, sse bool) (err error) {
+func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sse bool) (err error) {
 	ctx.req = req
 	ctx.sessions = sessions
+	ctx.policy = pol
 	ctx.sessW = w
 	ctx.doInit = true // every embedded child's OnInit runs too, inside Child
 	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
@@ -91,15 +92,15 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 			err = ErrNotFound
 			return
 		}
-		if err == nil && ctx.redirect != "" {
-			switch {
+		if err == nil && ctx.redirect.url != "" {
+			switch refused := ctx.redirect.refusal(); {
 			case sse:
 				http.Error(w, "forbidden", http.StatusForbidden)
-			case !hcore.SafeURL(ctx.redirect):
-				ctx.logger().Warn("via: unsafe OnInit redirect dropped", "redirect", ctx.redirect)
+			case refused != "":
+				ctx.logger().Warn("via: OnInit redirect dropped", "redirect", ctx.redirect, "reason", refused)
 				http.Error(w, "init failed", http.StatusInternalServerError)
 			default:
-				http.Redirect(w, req, ctx.redirect, http.StatusSeeOther)
+				http.Redirect(w, req, ctx.redirect.url, http.StatusSeeOther)
 			}
 			err = errRedirected
 		}
@@ -177,9 +178,9 @@ func checkViewReceiver(t reflect.Type) {
 		return
 	}
 	if t != nil && t.Implements(viewerType) && len(signalsOf(t).fields) > 0 {
-		panic("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
+		panic(hcore.Miswired("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
 			"View must take a POINTER receiver (func (p *" + t.Name() + ") View() h.H), or every " +
-			"rendered Signal binds against a discarded copy")
+			"rendered Signal binds against a discarded copy"))
 	}
 	valueReceiverChecked.Store(t, true)
 }
@@ -222,13 +223,13 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 // the root's gets in runOnInit.
 func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome) {
 	switch {
-	case ci.redirect != "":
-		if !hcore.SafeURL(ci.redirect) {
-			log.Warn("via: unsafe OnInit redirect dropped", "redirect", ci.redirect)
+	case ci.redirect.url != "":
+		if refused := ci.redirect.refusal(); refused != "" {
+			log.Warn("via: OnInit redirect dropped", "redirect", ci.redirect, "reason", refused)
 			http.Error(w, "init failed", http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, req, ci.redirect, http.StatusSeeOther)
+		http.Redirect(w, req, ci.redirect.url, http.StatusSeeOther)
 	case errors.Is(ci.err, ErrNotFound):
 		noteErr(w, ci.err)
 		http.Error(w, "not found", http.StatusNotFound)
@@ -245,7 +246,7 @@ func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Reques
 // mount path, so two pages can declare the same action without colliding.
 //
 // A Router owns goroutines (one per live tab, plus its tickers), so shut it
-// down with [Router.Close] — http.Server.Shutdown alone will not, and will
+// down with [Router.Shutdown] — http.Server.Shutdown alone will not, and will
 // block on every open SSE stream until its own deadline.
 //
 // The zero Router is usable and configures itself on first use, like
@@ -255,6 +256,7 @@ type Router struct {
 	mux       *http.ServeMux
 	cfg       *config
 	sessions  *sessionManager
+	policy    *routerPolicy
 	reg       *registry // tab id → stream goroutine, app-wide
 	liveCount *atomic.Int64
 	maxLive   int
@@ -269,10 +271,16 @@ type Router struct {
 	// connect that has passed the ctx.Done check can Add while Close is parked
 	// in Wait, which is a WaitGroup misuse throw.
 	liveMu sync.RWMutex
+	// drained closes once live has drained. One waiter for every Shutdown, so
+	// a call that gives up at its deadline leaves one goroutine behind, not one
+	// per call.
+	drainOnce sync.Once
+	drained   chan struct{}
 	// noChange dedupes the dead-click warning per action (see warnNoChange).
 	// Per Router, not per process, so a second app in the same binary — or a
 	// second test — still gets told.
-	noChange sync.Map
+	noChange    sync.Map
+	unknownActs idDedupe // see mount.unknownAction
 	// hookWarned dedupes the near-miss hook warning, per Router for the same
 	// reason noChange is.
 	hookWarned sync.Map
@@ -283,7 +291,7 @@ type Router struct {
 }
 
 // NewRouter builds an empty router. Mount pages onto it, then serve it, and
-// [Router.Close] it when the server is shutting down. Options (WithSessionKey,
+// [Router.Shutdown] it when the server is shutting down. Options (WithSessionKey,
 // WithTrustedOrigin, …) configure the whole app.
 func NewRouter(opts ...Option) *Router {
 	r := &Router{}
@@ -297,12 +305,13 @@ func (r *Router) init(opts []Option) {
 	r.once.Do(func() {
 		r.cfg = newConfig(opts)
 		r.sessions = newSessionManager(r.cfg)
+		r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log}
 		r.mux = http.NewServeMux()
-		r.reg = newRegistry()
+		r.reg = newRegistry(r.cfg.maxSSEConn)
 		r.liveCount = &atomic.Int64{}
 		r.maxLive = r.cfg.maxSSEConn
 		r.ctx, r.cancel = context.WithCancel(context.Background())
-		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{})
+		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
 		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Content-Type", "text/javascript")
 			w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -330,29 +339,36 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ew.finish()
 }
 
-// Close shuts the router's live half down and returns once it is quiet. Call it
-// before http.Server.Shutdown: a stream's goroutine, its Tick timers and its
-// Listen subscriptions hang off a context of the router's own, which Shutdown
-// does not cancel — so without this Shutdown blocks on every open tab until its
-// own deadline expires and then kills them mid-frame.
+// Shutdown shuts the router's live half down the way http.Server.Shutdown
+// shuts its listeners: it refuses new streams (a connect answers 503), ends
+// every open one and waits for their goroutines to return. Call it before
+// srv.Shutdown, with the same deadline: a stream's goroutine, its Tick timers
+// and its Listen subscriptions hang off a context of the router's own, which
+// http.Server.Shutdown does not cancel, so without this srv.Shutdown blocks on
+// every open tab until its deadline and then kills them mid-frame.
 //
-//	srv := &http.Server{Handler: r}
-//	…
 //	<-stop
-//	r.Close()
+//	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+//	defer cancel()
+//	r.Shutdown(ctx)
 //	srv.Shutdown(ctx)
 //
 // Every open stream ends the way a closed tab ends: the handler returns
 // normally, so the response terminates cleanly rather than truncating, and
 // each unit's OnDispose runs. An action POST in flight against a closing tab
 // resolves either as its normal response or as 410 Gone, the same answer it
-// gets against a tab that has just disconnected — never silently dropped. A
-// connect arriving after Close is refused 503.
+// gets against a tab that has just disconnected — never silently dropped.
 //
-// Close does not stop serving plain pages; that is http.Server.Shutdown's job.
-// It is safe to call more than once and from any goroutine, and every call
-// waits for the same drain.
-func (r *Router) Close() {
+// A goroutine cannot be stopped from outside, so a stream whose Tick, Listen
+// or action handler is blocked ends only when that handler returns. If ctx
+// ends first, Shutdown logs such tabs with their unit type and what each is
+// blocked on (the first 20 by name, then one line with the total), and returns
+// ctx.Err(); the goroutines finish on their own.
+// Handlers that watch [Ctx.Context] return as soon as Shutdown starts.
+//
+// Shutdown does not stop serving plain pages; that is http.Server.Shutdown's
+// job. It is safe to call more than once and from any goroutine.
+func (r *Router) Shutdown(ctx context.Context) error {
 	r.init(nil)
 	r.cancel()
 	// Bracket the connect-side Add: once this returns, every Add that raced
@@ -363,7 +379,50 @@ func (r *Router) Close() {
 	r.liveMu.Lock()
 	//lint:ignore SA2001 see above
 	r.liveMu.Unlock()
-	r.live.Wait()
+	r.drainOnce.Do(func() {
+		r.drained = make(chan struct{})
+		go func() {
+			r.live.Wait()
+			close(r.drained)
+		}()
+	})
+	// select picks at random when both are ready; a drained router with a
+	// done ctx must still answer nil.
+	select {
+	case <-r.drained:
+		return nil
+	default:
+	}
+	select {
+	case <-r.drained:
+		return nil
+	case <-ctx.Done():
+		r.logUndrained()
+		return ctx.Err()
+	}
+}
+
+// maxUndrainedNamed caps the per-tab lines a Shutdown that timed out writes;
+// ten thousand stuck tabs are one bug, not ten thousand.
+const maxUndrainedNamed = 20
+
+func (r *Router) logUndrained() {
+	named := 0
+	r.reg.each(func(c *tabStream) {
+		named++
+		if named <= maxUndrainedNamed {
+			r.cfg.log.Error("via: Router.Shutdown deadline passed with this tab's stream still running",
+				"tab", c.id, "unit", c.unitType(), "blocked", c.wire.blockedOn())
+		}
+	})
+	r.cfg.log.Error("via: Router.Shutdown returned before every stream ended; each ends when its handler returns",
+		"open", r.liveCount.Load(), "named", min(named, maxUndrainedNamed))
+}
+
+// Close is [Router.Shutdown] with no deadline: it returns only once every
+// stream has ended, however long a blocked handler takes.
+func (r *Router) Close() {
+	_ = r.Shutdown(context.Background())
 }
 
 // Mount registers a page composition at path, in http.ServeMux pattern syntax.
@@ -377,6 +436,14 @@ func (r *Router) Close() {
 // of the two can be mounted. {name} wildcards are allowed; {name...} and {$}
 // are not, since the page's action and stream routes live under its path, and
 // {child} and {act} are reserved for the action route. Mount panics on either.
+//
+// Mount renders root's View once, as mounted and without OnInit, and panics
+// on a wiring mistake that render reaches (two actions sharing an id, an
+// interface or ambiguous value-receiver method, h.El("script"), a Signal with
+// no slot, a child without a View), rather than answering 500 on the first
+// request. Any other panic in that render is ignored. The check is
+// best-effort: a mistake behind a branch the zero value skips still panics on
+// the first render that takes it.
 func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
 	verifyMethodTrampoline()
@@ -402,9 +469,9 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 			typ: rootType, sig: signalsOf(rootType)}
 	}
 	m := &mount{
-		cfg: r.cfg, sessions: r.sessions, reg: r.reg, newInst: newInst,
+		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, newInst: newInst,
 		patternBase: patternBase, names: names,
-		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, capWarn: &r.capWarn,
+		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, unknownActs: &r.unknownActs, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
 	// The CSP is derived from the root's declaration once, here, off the
@@ -413,7 +480,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	lit := root
 	assets := pageMetaOf(PT(&lit)).Assets
 	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
-	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets), assets.fingerprint()
+	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets, r.cfg.unsafeEval), assets.fingerprint()
 	// …and proved constant here, not on the first GET. A second reading off a
 	// probe copy — the same literal with its zero fields filled in, which is
 	// what OnInit does — must produce the same assets. A page that fails this
@@ -435,6 +502,10 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 			"synthetic values, standing in for what OnInit would load — and got two " +
 			"different answers. Move the asset into the mounted literal, declare it " +
 			"router-wide with WithHead, or hold it in a package-level var.")
+	}
+
+	if msg := bootRender(newInst()); msg != "" {
+		panic("via: found at Mount, rendering " + reflect.PointerTo(rootType).String() + " as mounted: " + msg)
 	}
 
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
@@ -501,9 +572,10 @@ func concreteBase(patternBase string, req *http.Request, names []string) string 
 
 // writeHTMLPage writes a page's full HTML document — the datastar module under
 // the strict CSP, then the rendered body. A streaming page also gets the SSE
-// bootstrap and the reconnect manager. via's inline scripts are admitted by
-// hash, so no per-response token is threaded through here.
-func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, hasLive bool, root any) {
+// bootstrap and the reconnect manager. tab is the id that stream will adopt,
+// "" for a page with no live unit.
+func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, tab string, root any) {
+	hasLive := tab != ""
 	meta := pageMetaOf(root)
 	if fp := meta.Assets.fingerprint(); fp != m.assetsFP {
 		panic("via: PageMeta().Assets of " + typeName(root) +
@@ -512,20 +584,38 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ha
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")
-	hdr.Set("Content-Security-Policy", m.csp)
+	// Fresh per document, never per mount: a nonce shared across responses is
+	// a token an injection could learn from one page and replay in the next.
+	nonce := randomToken()
+	hdr.Set("Content-Security-Policy", m.csp.withNonce(nonce))
+	switch {
+	case hasLive:
+		// The tab id is the page's CSRF token: a cached copy would hand one
+		// viewer's tab to the next, whose pre-connect click then runs on it.
+		noStore(w)
+	case hdr.Get("Cache-Control") == "":
+		// Revalidated per view so the nonce stays per document. An app's own
+		// value is kept: the security page says what caching a document costs.
+		hdr.Set("Cache-Control", "no-cache")
+	}
 	// Pre-declared on every page so the tab id is always defined and always
 	// sent (see tabSignal for why the name must stay underscore-free). On a
-	// plain page it stays "" and dispatch falls through to the plain path; a
-	// click before the stream connects sends an empty id and gets a graceful
-	// 410.
-	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":""}'>`
+	// plain page it stays "" and dispatch falls through to the plain path. A
+	// live page carries its id from the first byte, so a click before the
+	// stream connects already names the tab it will reach. tab is base64url:
+	// nothing in it needs JSON or attribute escaping.
+	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}'>`
 	if hasLive {
-		// Attribute-escaped here, path-escaped in concreteBase — both layers
-		// are needed; see concreteBase.
-		bodyOpen = `</head><body data-init="@post('` + hcore.EscapeString(base+"/_via/sse") + `')" data-signals='{"` + tabSignal + `":""}'>`
+		// data-signals first: Datastar applies an element's attributes in
+		// document order, and a data-init ahead of it would post the connect
+		// body before the id is in the store. Attribute-escaped here,
+		// path-escaped in concreteBase — both layers are needed; see
+		// concreteBase.
+		bodyOpen = `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}' data-init="@post('` +
+			hcore.EscapeString(base+"/_via/sse") + `')">`
 	}
 	var head strings.Builder
-	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
+	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce) + `<head><meta charset="utf-8">`)
 	meta.render(&head)
 	head.WriteString(m.cfg.head.Raw)
 	m.cfg.head.Assets.render(&head)
@@ -567,52 +657,45 @@ var hookAliases = map[string]string{
 	"OnRefresh": "OnReload", "Reinit": "OnReload", "OnReInit": "OnReload",
 	"Meta": "PageMeta", "Metadata": "PageMeta", "PageMetadata": "PageMeta",
 	"GetPageMeta": "PageMeta", "DocumentMeta": "PageMeta", "PageInfo": "PageMeta",
-	"Connect": "OnInit", "OnConnect": "OnInit",
+	"Connect": "OnInit",
 }
 
-// aliasFor resolves a method name to the hook it was surely meant to be. The
-// match is case-insensitive and tolerates one edit, because the typos that
-// actually happen in the wild ("Oninit", "OnConect") are exactly the ones an
-// exact table misses. Only names of 5 characters or more are fuzzy-matched, and
-// only methods that already have a hook's signature ever reach here, so an
-// unrelated method has to be a single keystroke off a hook name to trip it.
+// aliasFor resolves a method name to the hook it was surely meant to be. An
+// alias matches case-insensitively; a hook name also matches one slip away
+// ("OnRelaod", "Oninit"). The slip tolerance is not extended to the aliases:
+// their one-edit neighbours include real names ("Preload" next to "Reload",
+// "OnInitialized" next to "OnInitialize").
 func aliasFor(method string) (string, bool) {
-	if hook, ok := hookAliases[method]; ok {
-		return hook, true
-	}
 	lower := strings.ToLower(method)
-	for cand, hook := range aliasCandidates {
-		if lower == cand {
+	for alias, hook := range hookAliases {
+		if lower == strings.ToLower(alias) {
 			return hook, true
 		}
 	}
-	if len(lower) < 5 {
-		return "", false
-	}
-	for cand, hook := range aliasCandidates {
-		if withinOneEdit(lower, cand) {
-			return hook, true
+	for _, h := range hookSpecs {
+		if oneSlip(lower, strings.ToLower(h.name)) {
+			return h.name, true
 		}
 	}
 	return "", false
 }
 
-// aliasCandidates is hookAliases plus the hook names themselves, lowercased.
-// A correctly-spelled-but-mis-cased hook ("Oninit") is a typo like any other.
-var aliasCandidates = func() map[string]string {
-	m := make(map[string]string, len(hookAliases)+len(hookSpecs))
-	for alias, hook := range hookAliases {
-		m[strings.ToLower(alias)] = hook
-	}
-	for _, h := range hookSpecs {
-		m[strings.ToLower(h.name)] = h.name
-	}
-	return m
-}()
+// v07OnConnect reports whether a method name is the v0.7 OnConnect hook or a
+// slip of it. It is checked apart from the aliases because it warns even next
+// to an OnInit: v0.7 code had both, and v0.8 calls neither the method nor
+// anything in its place.
+func v07OnConnect(method string) bool {
+	return oneSlip(strings.ToLower(method), "onconnect")
+}
 
-// withinOneEdit reports whether a and b are one insertion, deletion or
-// substitution apart (Levenshtein distance <= 1).
-func withinOneEdit(a, b string) bool {
+// oneSlip reports whether a is b or one typing slip from it: an insertion, a
+// deletion, a substitution, or two adjacent letters swapped (optimal string
+// alignment distance <= 1). Two slips are too many: "OnRelay", "OnInput" and
+// "Preload" are two from a hook name and are ordinary methods.
+func oneSlip(a, b string) bool {
+	if a == b {
+		return true
+	}
 	if len(a) < len(b) {
 		a, b = b, a
 	}
@@ -623,10 +706,13 @@ func withinOneEdit(a, b string) bool {
 		if a[i] == b[i] {
 			continue
 		}
-		if len(a) == len(b) {
-			return a[i+1:] == b[i+1:]
+		if len(a) != len(b) {
+			return a[i+1:] == b[i:]
 		}
-		return a[i+1:] == b[i:]
+		if a[i+1:] == b[i+1:] {
+			return true
+		}
+		return i+1 < len(a) && a[i] == b[i+1] && a[i+1] == b[i] && a[i+2:] == b[i+2:]
 	}
 	return true
 }
@@ -672,9 +758,9 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	if _, done := hookSigChecked.Load(t); !done {
 		for _, hook := range hookSpecs {
 			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
-				panic("via: " + t.String() + "." + hook.name + " has signature " +
+				panic(hcore.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
 					withoutReceiver(m.Type) + ", not " + hook.want +
-					" — so the hook will never run")
+					" — so the hook will never run"))
 			}
 		}
 		hookSigChecked.Store(t, true)
@@ -700,6 +786,12 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	}
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
+		if v07OnConnect(m.Name) && ctxErrShaped(m.Type) {
+			log.Warn(fmt.Sprintf("via: %s.%s is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
+				"Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and "+
+				"ctx.Tick or ctx.Listen makes the unit live.", t.String(), m.Name))
+			continue
+		}
 		name, aliased := aliasFor(m.Name)
 		if !aliased {
 			continue

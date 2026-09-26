@@ -36,32 +36,47 @@ func sha256Source(src string) string {
 
 // cspHeader is the strict Content-Security-Policy an element-patch response
 // carries. A patch is a fragment, not a document: it loads no assets of its
-// own, so it gets the floor policy and not any mount's widened one.
+// own, so it gets the floor policy and not any mount's widened one, and no
+// nonce — the document's nonce governs whatever the patch brings in.
 //
-// via admits its own inline scripts by hash, not by nonce. A hash authorises
-// exactly the bytes via ships, so publishing it costs nothing and leaves no
-// token for an injected <script nonce="…"> to borrow; it is also identical
-// across pods and restarts with no shared signing key, which is what an
-// action's injected redirect script needs when another pod served the document.
+// via admits its own inline scripts by hash. A hash authorises exactly the
+// bytes via ships and is identical across pods and restarts with no shared
+// key, which is what an action's injected redirect script needs when another
+// pod served the document.
 //
-// 'unsafe-eval' is required, not optional: the bundled Datastar client compiles
-// every data-* expression with the Function constructor, which CSP gates behind
-// it. Drop it and every action binding is silently dead in the browser while
-// every server-side test passes.
+// Datastar's expressions are admitted by the document's nonce instead of by
+// 'unsafe-eval'. With data-nonce on <html>, Datastar compiles each data-*
+// expression by appending a <script> carrying that nonce, never through the
+// Function constructor, so the policy forbids eval for every other script on
+// the page. The nonce is fresh per document response and stays valid for the
+// document's life, which is what lets expressions arriving later in SSE or
+// action patches compile too. It does not stop an injected data-* attribute:
+// Datastar compiles whatever the DOM holds, which is why every value via
+// writes into one is escaped.
 //
 // style-src carries no inline allowance by default: via emits no <style>
 // element and no style attribute (the reconnect banner's rules go through a
 // constructed stylesheet, which CSP does not gate). A declared inline Style
 // adds its own hash.
-var cspHeader = buildCSP(Assets{}, Assets{})
+var cspHeader = buildCSP(Assets{}, Assets{}, false).bare()
+
+// cspPolicy is a policy split at the slot a document's nonce fills. The
+// shape is fixed per mount; only the token changes per response.
+type cspPolicy struct{ head, tail string }
+
+func (p cspPolicy) bare() string { return p.head + p.tail }
+
+func (p cspPolicy) withNonce(nonce string) string {
+	return p.head + " 'nonce-" + nonce + "'" + p.tail
+}
 
 // buildCSP derives a mount's policy from the router-wide assets plus that
 // mount's own, so it is exactly as wide as the app declared and stays a pure
-// function of the declaration — every pod serving that config serves
-// byte-identical bytes. Called once per mount, never per request.
-func buildCSP(global, page Assets) string {
+// function of the declaration — every pod serving that config serves the same
+// policy around its nonce. Called once per mount, never per request.
+func buildCSP(global, page Assets, unsafeEval bool) cspPolicy {
 	script := &srcSet{}
-	script.add("'self'", "'unsafe-eval'", sha256Source(eventsInit), sha256Source(reconnectInit), sha256Source(redirectInit))
+	script.add(sha256Source(eventsInit), sha256Source(reconnectInit), sha256Source(redirectInit))
 	style := &srcSet{}
 	style.add("'self'")
 	font, img := &srcSet{}, &srcSet{}
@@ -99,14 +114,19 @@ func buildCSP(global, page Assets) string {
 		}
 	}
 
-	csp := "default-src 'self'; script-src " + script.join() + "; style-src " + style.join() + "; "
+	tail := " " + script.join() + "; style-src " + style.join() + "; "
 	if len(font.src) > base[2] {
-		csp += "font-src " + font.join() + "; "
+		tail += "font-src " + font.join() + "; "
 	}
 	if len(img.src) > base[3] {
-		csp += "img-src " + img.join() + "; "
+		tail += "img-src " + img.join() + "; "
 	}
-	return csp + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+	tail += "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+	head := "default-src 'self'; script-src 'self'"
+	if unsafeEval {
+		head += " 'unsafe-eval'"
+	}
+	return cspPolicy{head: head, tail: tail}
 }
 
 // srcSet accumulates one directive's sources in declaration order, without

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -57,6 +58,13 @@ const (
 // Implement [VersionedSessionStore] as well if the backend can do a conditional
 // write; without it, two requests writing the same session at the same instant
 // can still lose one.
+//
+// Every open stream bound to a session calls Load once per keepalive (every
+// 25s), so a Rotate, logout or expiry on another process reaches its tabs:
+// open streams / 25 Loads a second. Against a database each is a query, so
+// size the pool for them or put a cache in front. The Load runs on the tab's
+// own goroutine, so a slow one delays that tab's next push; a failed Load
+// keeps the stream up and asks again on the next beat.
 type SessionStore interface {
 	// Load returns the blob stored under id. ok is false when id is unknown or
 	// expired. err is for backend failures only.
@@ -255,7 +263,7 @@ type sessionManager struct {
 	key          []byte
 	cookie       string
 	ttl          time.Duration
-	forceSecure  bool // WithSecureCookies: set Secure even when req.TLS is nil
+	forceSecure  bool // WithSecureCookies: set Secure even when neither TLS nor a proxy header says https
 	randomKey    bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
 	memoryStore  bool // no WithSessionStore: sessions die with the process
 	storeTimeout time.Duration
@@ -263,6 +271,111 @@ type sessionManager struct {
 	keyWarnOnce  sync.Once    // warn about the random key at the first session mint, not at boot
 	storeWarn    sync.Once    // warn about the process-local store at the first session mint
 	mismatchOnce sync.Once    // warn once about signature-mismatch cookies (the two-apps clobber)
+
+	// streams indexes every open stream by the sid its handlers act as, so a
+	// write or a Rotate through one request reaches every other tab of that
+	// session in this process without a store round-trip. Another process's
+	// writes arrive through the keepalive beat instead (tabStream.revalidate).
+	streamsMu sync.Mutex
+	streams   map[string]map[*tabStream]struct{}
+}
+
+func (m *sessionManager) watch(sid string, c *tabStream) {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+	if m.streams == nil {
+		m.streams = map[string]map[*tabStream]struct{}{}
+	}
+	if m.streams[sid] == nil {
+		m.streams[sid] = map[*tabStream]struct{}{}
+	}
+	m.streams[sid][c] = struct{}{}
+}
+
+func (m *sessionManager) unwatch(sid string, c *tabStream) {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+	delete(m.streams[sid], c)
+	if len(m.streams[sid]) == 0 {
+		delete(m.streams, sid)
+	}
+}
+
+func (m *sessionManager) watchers(sid string) []*tabStream {
+	m.streamsMu.Lock()
+	defer m.streamsMu.Unlock()
+	out := make([]*tabStream, 0, len(m.streams[sid]))
+	for c := range m.streams[sid] {
+		out = append(out, c)
+	}
+	return out
+}
+
+// fanout hands a write that just landed to every open stream's copy of the
+// same session. Each copy is a separate decode (see Session); without this a
+// Tick handler reads the connect-time value, and a logout in one tab leaves
+// every tab's handlers acting as the user for the connection's life.
+func (m *sessionManager) fanout(src *sessionData, vals map[string]json.RawMessage, exp time.Time) {
+	for _, c := range m.watchers(src.sid) {
+		if d := c.watchedData(); d != nil && d != src {
+			d.refresh(vals, exp)
+		}
+	}
+}
+
+// rotated ends every stream still holding oldID: what it rendered was decided
+// under the auth state the Rotate marks as over, and the id it holds no longer
+// resolves. The reconnect reloads the page under the new cookie. keep, when
+// set, is the stream whose own live action rotated: that tab is the one the
+// user is acting in, and its handlers move to newID instead. keep's goroutine
+// is the one running this call, so it may touch its handler Ctxs.
+func (m *sessionManager) rotated(sid, oldID, newID string, keep *tabStream) {
+	for _, c := range m.watchers(sid) {
+		if c == keep {
+			c.moveSession(oldID, newID)
+			continue
+		}
+		if id, _ := c.watched(); id == oldID {
+			c.end()
+		}
+	}
+}
+
+// peek reads id's blob for a stream checking that the session it acts as
+// still exists. Unlike get it neither slides the idle window nor deletes an
+// expired blob: an open tab is not activity, so it must not keep a session
+// alive on its own.
+func (m *sessionManager) peek(id, sid string) (map[string]json.RawMessage, time.Time, bool, error) {
+	ctx, cancel := m.bounded(context.Background())
+	defer cancel()
+	raw, ok, err := m.store.Load(ctx, id)
+	if err != nil || !ok {
+		return nil, time.Time{}, false, err
+	}
+	var b sessionBlob
+	if json.Unmarshal(raw, &b) != nil || b.SID != sid {
+		return nil, time.Time{}, false, nil
+	}
+	exp := time.Unix(0, b.Exp)
+	if b.Exp > 0 && time.Now().After(exp) {
+		return nil, time.Time{}, false, nil
+	}
+	return b.Vals, exp, true, nil
+}
+
+// refresh replaces d's values with a newer write's. exp orders the writes: it
+// is stamped just before each save, so a write finishing late cannot put back
+// what a later one replaced.
+func (d *sessionData) refresh(vals map[string]json.RawMessage, exp time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if exp.Before(d.exp) {
+		return
+	}
+	d.vals, d.exp = maps.Clone(vals), exp
+	if d.vals == nil {
+		d.vals = map[string]json.RawMessage{}
+	}
 }
 
 // newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
@@ -549,6 +662,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		// values another request has since replaced.
 		d.vals, d.exp = vals, exp
 		d.mu.Unlock()
+		m.fanout(d, vals, exp)
 		return true
 	}
 }
@@ -606,7 +720,46 @@ func (m *sessionManager) verify(value string) (string, bool) {
 	return id, true
 }
 
+// servedOverHTTPS reports whether the browser reached us over https: TLS here,
+// or a proxy's X-Forwarded-Proto / Forwarded proto (the first hop, the one the
+// browser spoke to). The header is trusted unauthenticated because all it can
+// do is mark the sender's own cookie Secure: a client that forges it only loses
+// its own session over plain http, and cannot touch anyone else's cookie.
+func servedOverHTTPS(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.TLS != nil {
+		return true
+	}
+	if v := req.Header.Get("X-Forwarded-Proto"); v != "" {
+		first, _, _ := strings.Cut(v, ",")
+		return strings.EqualFold(strings.TrimSpace(first), "https")
+	}
+	first, _, _ := strings.Cut(req.Header.Get("Forwarded"), ",")
+	for pair := range strings.SplitSeq(first, ";") {
+		k, v, _ := strings.Cut(strings.TrimSpace(pair), "=")
+		if strings.EqualFold(k, "proto") {
+			return strings.EqualFold(strings.Trim(v, `"`), "https")
+		}
+	}
+	return false
+}
+
+const noStoreValue = "private, no-store"
+
+// noStore marks a response that belongs to one session or one tab: it
+// resolved a live session, sets the cookie, or carries a tab id. A shared
+// cache must not hand it to anyone else, and bfcache must not restore it after
+// a logout. Every OnInit resolves the session eagerly, so "called Session()"
+// would mark every page; a plain document with no session behind it is left
+// to writeHTMLPage's default.
+func noStore(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", noStoreValue)
+}
+
 func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool) {
+	noStore(w)
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cookie,
 		Value:    id + "." + m.sign(id),
@@ -634,9 +787,16 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 // slides as the session is used.
 //
 // Each request decodes its own copy, so a write is visible to the next request,
-// not to a request already in flight. A live unit's Tick or Listen handler sees
-// the snapshot taken when its stream connected — and refreshed by its own next
-// write.
+// not to a request already in flight. A live unit's Tick and Listen handlers
+// are the exception: every write to the session, from any request, reaches
+// every open tab's handlers — at once in this process, and on the tab's next
+// keepalive (every 25s) when it lands on another process sharing the store.
+//
+// A Rotate ends the stream of every other open tab on the session, so each
+// reloads under the new cookie instead of keeping what it rendered under the
+// old auth state; the tab whose live action rotated keeps its stream. On the
+// same keepalive a tab whose session another process rotated away, deleted or
+// let expire also ends its stream and reloads.
 //
 // Writes from two in-flight requests on one session resolve last-writer-wins:
 // each write re-reads the stored blob and overlays its own value onto it.
@@ -670,6 +830,9 @@ type Session struct {
 	// session is then neither present nor absent, and writes are dropped
 	// rather than minting a replacement over the user's real cookie.
 	down bool
+	// stream is the connection a live action runs over, so a Rotate there
+	// keeps that tab open under the new id (see sessionManager.rotated).
+	stream *tabStream
 }
 
 func (s *Session) storeCtx() context.Context {
@@ -771,6 +934,12 @@ func (s *Session) Ensure() string {
 // elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""
 // when no response is open to carry the cookie; rotate from a plain action or
 // OnInit.
+//
+// Every other open tab on the session reloads: its stream ends, since what it
+// rendered was decided under the old auth state. The tab a live action
+// rotated from keeps its stream; an action on a plain child of a live page is
+// not a live action, so that tab reloads too. Rotate on auth changes, not on
+// every request, or every tab of the session reloads each time.
 func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {
 		return ""
@@ -800,8 +969,10 @@ func (s *Session) Rotate() string {
 			"another request; the cookie the browser now holds is left untouched")
 		return ""
 	}
+	old := s.id
 	s.id = s.mgr.reID(s.storeCtx(), s.id, s.data)
 	s.mgr.setCookie(s.w, s.id, s.secure)
+	s.mgr.rotated(s.data.sid, old, s.id, s.stream)
 	return s.id
 }
 
@@ -842,14 +1013,17 @@ func (c *Ctx) adoptSession(id string, d *sessionData, err error) *Session {
 		s.mgr = c.sessions
 		s.w = c.sessW
 		s.errPage = c.errPage
-		s.secure = c.sessions.forceSecure || (c.req != nil && c.req.TLS != nil)
+		s.secure = c.sessions.forceSecure || servedOverHTTPS(c.req)
 		switch {
 		case err != nil:
 			s.down = true
 		case d != nil:
 			s.id, s.data = id, d
-			if d.slid && s.w != nil {
-				s.mgr.setCookie(s.w, id, s.secure)
+			if s.w != nil {
+				noStore(s.w)
+				if d.slid {
+					s.mgr.setCookie(s.w, id, s.secure)
+				}
 			}
 		}
 	}
@@ -901,7 +1075,10 @@ func (s *Session) Get[T any]() (T, bool) {
 // Delete clears the stored value; the session id and cookie survive, so a
 // later Set on this same session starts from nothing rather than minting a
 // new id. Any other handle sharing this request's session sees the value gone
-// too — they share the same underlying data.
+// too — they share the same underlying data — and so do the Tick and Listen
+// handlers of the session's open tabs (see [Session]). A unit that copied the
+// value into a field in OnInit keeps it until it reloads; logging out should
+// also [Session.Rotate], which reloads those tabs.
 func (s *Session) Delete() {
 	s.clear()
 }

@@ -27,7 +27,7 @@ func TestReconnect_livePageShipsConnectionManager(t *testing.T) {
 		"'error'",                       // datastar-fetch error carries the HTTP status
 		"argsRaw",                       // ...in detail.argsRaw.status, per the bundled datastar.js
 		"s===410",                       // a stale tab reloads once
-		"s===403||s>=500",               // a server-side refusal is a banner, never a reload loop
+		"s===403)stop",                  // a refused stream is a banner, never a reload loop
 		"adoptedStyleSheets",            // the banner's styling is a constructed sheet, not inline
 		":where(#via-reconnect-banner)", // ...whose rules carry zero specificity
 		"[data-via-connection=offline]", // ...and colour the banner by state

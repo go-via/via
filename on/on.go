@@ -7,6 +7,16 @@
 //	h.Button(on.Click(c.Inc), h.Str("+1"))
 //	h.Input(on.Input(c.Search, on.Debounce(250*time.Millisecond)))
 //	h.Button(on.ClickCS(open.Ref().Toggle()), h.Str("menu"))
+//
+// An action is a pointer-receiver method of the composition or of one of its
+// struct fields (c.Inc, c.Stats.Reset). Its id is the method's name plus that
+// field's path, so it survives a rebuild and a field reorder. A value-receiver
+// method has no address, so it works only where its type sits at one path: on
+// the composition itself, or on a type exactly one field holds. Bound where
+// the type sits at several fields or at none, or taken through an interface
+// field, it panics at Mount, or on the first render if the zero value does not
+// reach it, since via could not tell the buttons apart. A func literal bound
+// once per row does the same; bind a method with [WithArg] instead.
 package on
 
 import (

@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -59,7 +58,42 @@ func newTodoList() *todoBox {
 func TestActionArg_buttonCarriesTheRowValue(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(todoList{box: newTodoList()})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+\?a=2'`, body, "the bravo row's button must carry its id (2) as the action arg")
+	assert.Contains(t, body, `data-via-q-click="?a=2"`, "the bravo row's button must carry its id (2) as the action arg")
+}
+
+func TestActionArg_rowsShareOneExpressionAndCarryTheirArgInAnAttribute(t *testing.T) {
+	t.Parallel()
+	_, body := do(t, serve(t, via.Handler(todoList{box: newTodoList()})), http.MethodGet, "/", "")
+	var exprs, args []string
+	for _, m := range regexp.MustCompile(`data-on:click="([^"]*)"`).FindAllStringSubmatch(body, -1) {
+		exprs = append(exprs, m[1])
+	}
+	for _, m := range regexp.MustCompile(`data-via-q-click="([^"]*)"`).FindAllStringSubmatch(body, -1) {
+		args = append(args, m[1])
+	}
+	require.Len(t, exprs, 3)
+	assert.Equal(t, exprs[0], exprs[1], "Datastar compiles one expression for every row")
+	assert.Equal(t, exprs[0], exprs[2])
+	assert.NotContains(t, exprs[0], "?a=")
+	assert.Equal(t, []string{"?a=1", "?a=2", "?a=3"}, args)
+}
+
+type twoEvents struct{ got *store }
+
+func (p *twoEvents) Add(ctx *via.Ctx, n int) { p.got.Add(n) }
+func (p *twoEvents) View() h.H {
+	return h.Div(h.P(h.Str("got "+strconv.Itoa(p.got.Value()))),
+		h.Input(on.Click(on.WithArg(p.Add, 1)), on.Change(on.WithArg(p.Add, 2))))
+}
+
+func TestActionArg_twoEventsOnOneElementEachDispatchTheirOwnArg(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(twoEvents{got: &store{}}))
+	for n, want := range []string{"got 1", "got 3"} {
+		status, body := app.Action(n).Fire()
+		require.Equal(t, http.StatusOK, status)
+		assert.Contains(t, body, want)
+	}
 }
 
 func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
@@ -156,9 +190,14 @@ func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 
 func rowActionURL(t *testing.T, html string, id int) string {
 	t.Helper()
-	m := regexp.MustCompile(`@post\('([^']*_via/a/r/[A-Za-z0-9_-]+\?a=` + strconv.Itoa(id) + `(?:&[^']*)?)'`).FindStringSubmatch(html)
-	require.NotEmptyf(t, m, "no row action for id %d in:\n%s", id, html)
-	return m[1]
+	re := regexp.MustCompile(`[?&]a=` + strconv.Itoa(id) + `(?:&|$)`)
+	for _, u := range actionURLsOf(html, "r") {
+		if re.MatchString(u) {
+			return u
+		}
+	}
+	require.Failf(t, "no row action", "for id %d in:\n%s", id, html)
+	return ""
 }
 
 func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
@@ -320,16 +359,252 @@ func (p *idClosurePair) View() h.H {
 	return h.Div(kids...)
 }
 
-func TestActionID_indistinguishableHandlersPanic(t *testing.T) {
-	// Sequential: it captures the global log output.
-	app := via.Handler(idClosurePair{})
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
+type ptrCell struct{ hits int }
+
+func (c *ptrCell) Hit(ctx *via.Ctx) { c.hits++ }
+
+type ptrCells struct{ A, B *ptrCell }
+
+func (p *ptrCells) OnInit(ctx *via.Ctx) error {
+	p.A, p.B = &ptrCell{}, &ptrCell{}
+	return nil
+}
+
+func (p *ptrCells) View() h.H {
+	return h.Div(h.Button(on.Click(p.A.Hit)), h.Button(on.Click(p.B.Hit)))
+}
+
+// failLog mounts a page and GETs it, and says where it failed, "Mount" or
+// "render", with the panic or what via logged.
+func failLog(t *testing.T, mount func(*via.Router)) (where, text string) {
+	t.Helper()
+	var out lockedBuf
+	r := via.NewRouter(logTo(&out))
+	if msg := panicMsg(func() { mount(r) }); msg != "" {
+		return "Mount", msg
+	}
 	rec := httptest.NewRecorder()
-	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, logs.String(), "share the action id")
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		return "nowhere", out.String()
+	}
+	return "render", out.String()
+}
+
+func TestActionID_indistinguishableHandlersPanicNamingTheFix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+		where string
+		fix   []string
+	}{
+		{"func literal per row", func(r *via.Router) { via.Mount(r, "/", idClosurePair{}) },
+			"Mount", []string{"func literal", "on.WithArg"}},
+		{"receivers behind pointer fields", func(r *via.Router) { via.Mount(r, "/", ptrCells{}) },
+			"render", []string{"pointer", "via.Child"}},
+		{"value copies keyed to the one field of their type", func(r *via.Router) { via.Mount(r, "/", valHeldOnce{}) },
+			"render", []string{"slice", "on.WithArg"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			where, text := failLog(t, tt.mount)
+			require.Equal(t, tt.where, where)
+			assert.Contains(t, text, "share the action id")
+			for _, want := range tt.fix {
+				assert.Contains(t, text, want)
+			}
+		})
+	}
+}
+
+type ifaceIncer interface{ Inc(*via.Ctx) }
+
+type ifaceCounter struct{ n int }
+
+func (c *ifaceCounter) Inc(ctx *via.Ctx) { c.n++ }
+
+type ifaceFields struct{ A, B ifaceIncer }
+
+func (p *ifaceFields) OnInit(ctx *via.Ctx) error {
+	p.A, p.B = &ifaceCounter{}, &ifaceCounter{}
+	return nil
+}
+
+func (p *ifaceFields) View() h.H {
+	return h.Div(h.Button(on.Click(p.A.Inc)), h.Button(on.Click(p.B.Inc)))
+}
+
+type ifaceField struct{ A ifaceIncer }
+
+func (p *ifaceField) OnInit(ctx *via.Ctx) error {
+	p.A = &ifaceCounter{}
+	return nil
+}
+
+func (p *ifaceField) View() h.H { return h.Div(h.Button(on.Click(p.A.Inc))) }
+
+type valHit struct {
+	label string
+	n     int
+}
+
+func (v valHit) Hit(ctx *via.Ctx) {}
+
+// X and Y share their first word (the label's data pointer), which is the
+// shape that used to collapse both buttons onto Y's handler.
+type valFieldsAlike struct{ X, Y valHit }
+
+func (p *valFieldsAlike) OnInit(ctx *via.Ctx) error {
+	p.X, p.Y = valHit{"same", 1}, valHit{"same", 2}
+	return nil
+}
+
+func (p *valFieldsAlike) View() h.H {
+	return h.Div(h.Button(on.Click(p.X.Hit)), h.Button(on.Click(p.Y.Hit)))
+}
+
+type valRows struct{ rows []valHit }
+
+func (p *valRows) OnInit(ctx *via.Ctx) error {
+	p.rows = []valHit{{"a", 1}, {"b", 2}}
+	return nil
+}
+
+func (p *valRows) row(v valHit) h.H { return h.Button(on.Click(v.Hit)) }
+func (p *valRows) View() h.H        { return h.Div(via.Each(p.rows, p.row)) }
+
+// valHeldOnce holds valHit at one path, X, so X.Hit has an id; the rows bind
+// copies of the same type that are not X, and must not borrow X's id.
+type valHeldOnce struct {
+	X    valHit
+	rows []valHit
+}
+
+func (p *valHeldOnce) OnInit(ctx *via.Ctx) error {
+	p.X, p.rows = valHit{"x", 0}, []valHit{{"a", 1}, {"b", 2}}
+	return nil
+}
+
+func (p *valHeldOnce) row(v valHit) h.H { return h.Button(on.Click(v.Hit)) }
+func (p *valHeldOnce) View() h.H {
+	return h.Div(h.Button(on.Click(p.X.Hit)), via.Each(p.rows, p.row))
+}
+
+type gv[T any] struct{ v T }
+
+func (g gv[T]) Hit(ctx *via.Ctx) { _ = g.v }
+
+type genMixed struct {
+	A gv[int]
+	B gv[string]
+}
+
+func (p *genMixed) View() h.H { return h.Div(h.Button(on.Click(p.A.Hit))) }
+
+// *int and *string share one GC shape, so the two instantiations run the same
+// compiled body.
+type genPtrShaped struct {
+	A gv[*int]
+	B gv[*string]
+}
+
+func (p *genPtrShaped) View() h.H { return h.Div(h.Button(on.Click(p.B.Hit))) }
+
+func TestActionID_methodValueWithoutAReceiverAddressPanicsNamingTheField(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		mount func(*via.Router)
+		where string
+		want  []string
+	}{
+		{"two interface fields", func(r *via.Router) { via.Mount(r, "/", ifaceFields{}) },
+			"render", []string{"interface", "fields A, B", "pointer receiver"}},
+		{"one interface field", func(r *via.Router) { via.Mount(r, "/", ifaceField{}) },
+			"render", []string{"interface", "field A", "pointer receiver"}},
+		{"two value receivers alike", func(r *via.Router) { via.Mount(r, "/", valFieldsAlike{}) },
+			"Mount", []string{"value receiver", "fields X, Y", "func (*valHit) Hit"}},
+		{"value receiver off a slice row", func(r *via.Router) { via.Mount(r, "/", valRows{}) },
+			"render", []string{"value receiver", "not a field", "func (*valHit) Hit"}},
+		{"generic value receiver, int and string", func(r *via.Router) { via.Mount(r, "/", genMixed{}) },
+			"Mount", []string{"generic", "fields A, B", "func (*gv[T]) Hit"}},
+		{"generic value receiver, two pointer shapes", func(r *via.Router) { via.Mount(r, "/", genPtrShaped{}) },
+			"Mount", []string{"generic", "fields A, B", "func (*gv[T]) Hit"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			where, text := failLog(t, tt.mount)
+			require.Equal(t, tt.where, where, "a click could run another field's handler")
+			for _, want := range tt.want {
+				assert.Contains(t, text, want)
+			}
+		})
+	}
+}
+
+// reorderAB and reorderBA are one type before and after a deploy that swapped
+// two same-type fields; both render A's button first.
+type reorderAB struct{ A, B idTwin }
+
+func (p *reorderAB) View() h.H { return h.Div(p.A.row(), p.B.row()) }
+
+type reorderBA struct{ B, A idTwin }
+
+func (p *reorderBA) View() h.H { return h.Div(p.A.row(), p.B.row()) }
+
+type renamedAB struct{ A2, B idTwin }
+
+func (p *renamedAB) View() h.H { return h.Div(p.A2.row(), p.B.row()) }
+
+func postAction(t *testing.T, app http.Handler, url string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(`{}`))
+	req.Header.Set("Datastar-Request", "true")
+	app.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestActionID_fieldReorderKeepsEachButtonOnItsField(t *testing.T) {
+	t.Parallel()
+	before := actionURLs(t, via.Handler(reorderAB{}))
+	after := via.Handler(reorderBA{})
+	require.Len(t, before, 2)
+	assert.Equal(t, before, actionURLs(t, after), "a reorder must not move an id")
+
+	rec := postAction(t, after, before[0])
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), `"a_n":1`, "the stale A button must still run A")
+	assert.NotContains(t, rec.Body.String(), `"b_n":1`, "not B, which now sits where A was")
+}
+
+func TestActionID_renamedFieldAnswers410(t *testing.T) {
+	t.Parallel()
+	before := actionURLs(t, via.Handler(reorderAB{}))
+	require.Len(t, before, 2)
+	rec := postAction(t, via.Handler(renamedAB{}), before[0])
+	assert.Equal(t, http.StatusGone, rec.Code, "A is gone; its click must not land on A2 at the same offset")
+}
+
+type arrCells struct{ Rows [2]ptrCell }
+
+func (p *arrCells) View() h.H {
+	return h.Div(h.P(h.Str(fmt.Sprint(p.Rows[0].hits, p.Rows[1].hits))),
+		h.Button(on.Click(p.Rows[0].Hit)), h.Button(on.Click(p.Rows[1].Hit)))
+}
+
+func TestActionID_arrayElementsDispatchToTheirOwnElement(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(arrCells{})
+	urls := actionURLs(t, app)
+	require.Len(t, urls, 2)
+	require.NotEqual(t, urls[0], urls[1])
+	rec := postAction(t, app, urls[1])
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "0 1")
 }
 
 // gridBench binds one handler a thousand times, which is the shape actionID's
@@ -662,4 +937,48 @@ func TestOnArg_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testin
 	assert.Less(t, status, 300, "row c moved but still exists")
 
 	assert.Equal(t, []string{"a", "a", "c"}, store.picks())
+}
+
+type valRoot struct{ count *store }
+
+func (v valRoot) Inc(ctx *via.Ctx) { v.count.Add(1) }
+func (v *valRoot) View() h.H {
+	return h.Div(h.H1(h.Str(v.count.Value())), h.Button(on.Click(v.Inc)))
+}
+
+type valCounter struct{ count *store }
+
+func (c valCounter) Inc(ctx *via.Ctx) { c.count.Add(1) }
+
+type valHolder struct {
+	N int
+	X valCounter
+}
+
+func (p *valHolder) View() h.H {
+	return h.Div(h.H1(h.Str(p.X.count.Value())), h.Button(on.Click(p.X.Inc)))
+}
+
+func TestActionID_valueReceiverHeldAtOnePathDispatches(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		handler func(*store) http.Handler
+	}{
+		{"on the unit itself", func(s *store) http.Handler { return via.Handler(valRoot{count: s}) }},
+		{"on a type held by exactly one field", func(s *store) http.Handler {
+			return via.Handler(valHolder{X: valCounter{count: s}})
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			app := tt.handler(&store{})
+			urls := actionURLs(t, app)
+			require.Len(t, urls, 1)
+			rec := postAction(t, app, urls[0])
+			require.Equal(t, http.StatusOK, rec.Code)
+			assert.Contains(t, rec.Body.String(), "<h1>1</h1>")
+		})
+	}
 }

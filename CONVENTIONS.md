@@ -232,6 +232,32 @@ error via missed.
 - ❌ Accept `FontOrigins: {"https://fonts.example/css"}` and let the browser
   ignore the source because it has a path.
 
+## Defaults Favour the Developer
+
+Reasoning: A default that refuses what a developer does on their own machine
+(a second port, a dev proxy, plain http on localhost) breaks every user's
+first hour to close a risk that exists only once the app is deployed. A
+warning at startup reaches the person who decides, when it matters, without
+breaking the loop they are in.
+
+Rule: A default never gets in the way of local development. Where a stricter
+setting would, it is opt-in through a `With*` option, and while it is off,
+`NewRouter` logs one WARN that says what the open default exposes and which
+option closes it. Tightening applies only inside an option the user chose.
+An audit or review finding against such a default is answered with a clearer
+warning or docs, never a strict default: that is the maintainer's design
+call, not a fix.
+
+- ✅ No `WithTrustedOrigin`: every origin is admitted, and startup warns that
+  any site can fire an action and a same-site page can fire one as the
+  signed-in user.
+- ✅ Normalizing `WithTrustedOrigin` values, or refusing an http Origin
+  behind TLS once it is set: stricter only where the user asked for it.
+- ❌ Refusing `Sec-Fetch-Site: same-site` by default: every dev proxy and
+  second localhost port answers 403.
+- ❌ Answering a CSRF finding by enforcing the origin check without
+  configuration.
+
 ## Browser-Parity Gates
 
 Reasoning: A URL, origin or inline-asset check protects what the browser
@@ -459,11 +485,18 @@ describes it: the doc comment always, the unreleased `CHANGELOG.md` entry,
 covers it. A test that pins a known defect names it as a defect in its
 comment, and the fix flips or deletes that test in the same commit.
 
-- ✅ Changing the `WithTrustedOrigin` default touches its doc comment,
-  CHANGELOG "Security defaults changed", MIGRATION "Security defaults moved"
-  and the site reference row.
+- ✅ Changing the `WithMaxBody` default touches its doc comment, the
+  CHANGELOG entry, MIGRATION's upgrade notes and the site reference row.
 - ❌ Update the doc comment and leave `MIGRATION.md` describing the old
   default.
+
+Rule: `README.md` describes no behaviour on its own. It holds the compiled
+program, claims that hold across releases, and links to the page that owns
+each detail. Tests pin its program to the snippet, its Go version to
+`go.mod`, and each go-via.dev link and anchor to a page the site serves.
+
+- ✅ "A page is plain HTTP until it renders live state", linking to /live.
+- ❌ "The current release is v0.8.3", or a copy of /why's list of costs.
 
 ## Markdown
 

@@ -4,14 +4,22 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
+	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/topic"
+	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -662,4 +670,737 @@ func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing
 	defer okResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
 		"the rotated session must still own its child-scoped connection")
+}
+
+// sessionTicker reads the session in a Tick, the way a per-user push does,
+// and renders what it read.
+type sessionTicker struct{ who via.State[string] }
+
+func (p *sessionTicker) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Second, p.tick)
+	return nil
+}
+func (p *sessionTicker) tick(ctx *via.Ctx) {
+	m, _ := ctx.Session().Get[member]()
+	p.who.Set(m.Name)
+}
+func (p *sessionTicker) Login(ctx *via.Ctx)  { ctx.Session().Put(member{Name: "alice"}) }
+func (p *sessionTicker) Logout(ctx *via.Ctx) { ctx.Session().Delete() }
+func (p *sessionTicker) Rotate(ctx *via.Ctx) { ctx.Session().Rotate() }
+func (p *sessionTicker) Rename(ctx *via.Ctx) { ctx.Session().Put(member{Name: "bob"}) }
+func (p *sessionTicker) View() h.H {
+	return h.Div(h.P(h.Str("who:"+p.who.Get())),
+		h.Button(via.On("click", p.Login)),
+		h.Button(via.On("click", p.Logout)),
+		h.Button(via.On("click", p.Rotate)),
+		h.Button(via.On("click", p.Rename)))
+}
+
+// servedWithJar is vt.Serve whose client keeps cookies, so every Connect and
+// Fire carries the session the last response set, as a browser's tabs do.
+func servedWithJar(t *testing.T, h http.Handler) *vt.App {
+	t.Helper()
+	app := vt.Serve(t, h)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+	return app
+}
+
+func sessionCookieID(t *testing.T, app *vt.App) string {
+	t.Helper()
+	u, err := url.Parse(app.URL())
+	require.NoError(t, err)
+	for _, ck := range app.Client().Jar.Cookies(u) {
+		if ck.Name == "via_session" {
+			id, _, _ := strings.Cut(ck.Value, ".")
+			return id
+		}
+	}
+	require.Fail(t, "no session cookie")
+	return ""
+}
+
+func TestLive_aSessionWriteOnOneTabReachesEveryTabsTickHandler(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey))
+		a := app.Connect()
+		code, _ := app.Action(0).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		b := app.Connect()
+		b.Await("who:alice")
+
+		code, _ = app.Action(1).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+
+		b.Await("who:</p>")
+		a.Await("who:</p>")
+	})
+}
+
+func TestLive_rotateClosesTheSessionsOtherTabsAndKeepsItsOwn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey))
+		a := app.Connect()
+		code, _ := app.Action(0).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		b := app.Connect()
+		b.Await("who:alice")
+
+		code, _ = app.Action(2).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+
+		assert.NoError(t, b.AwaitClose(), "a tab rendered under the old id must end cleanly so it reloads")
+		time.Sleep(26 * time.Second) // past a keepalive beat, which re-reads the session under the id the tab holds
+		code, _ = app.Action(3).Over(a).Fire()
+		assert.Equal(t, http.StatusNoContent, code, "the tab that rotated keeps its stream, under the new id")
+		a.Await("who:bob")
+	})
+}
+
+func TestLive_aSessionRevokedByAnotherProcessClosesTheStreamOnTheNextBeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := via.NewMemorySessionStore()
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		a := app.Connect()
+		code, _ := app.Action(0).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		a.Await("who:alice")
+
+		// Straight at the store: this process's own session manager never hears of it.
+		require.NoError(t, store.Delete(context.Background(), sessionCookieID(t, app)))
+		time.Sleep(25 * time.Second)
+
+		assert.NoError(t, a.AwaitClose(), "a stream whose session is gone from the store must end on its next beat")
+	})
+}
+
+func TestLive_aSessionWriteInAnotherProcessReachesTickHandlersOnTheNextBeat(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := via.NewMemorySessionStore()
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		other := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		a := app.Connect()
+		code, _ := app.Action(0).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		a.Await("who:alice")
+
+		from, err := url.Parse(app.URL())
+		require.NoError(t, err)
+		to, err := url.Parse(other.URL())
+		require.NoError(t, err)
+		other.Client().Jar.SetCookies(to, app.Client().Jar.Cookies(from))
+		o := other.Connect()
+		code, _ = other.Action(3).Over(o).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+
+		time.Sleep(25 * time.Second)
+		a.Await("who:bob")
+	})
+}
+
+func TestLive_aHandlerBlockedPastThePinnedDeadlineIsLoggedWithNoActionPosted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := newBlockedTick()
+		r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		app.Connect()
+		<-p.entered
+
+		time.Sleep(3 * time.Second)
+
+		assert.Contains(t, out.String(), "tab pinned", "a pinned tab must be reported even when no action arrives")
+		assert.Contains(t, out.String(), "blockedTick")
+		close(p.release)
+	})
+}
+
+// bigFrames pushes a changing ~256KiB element patch every 10ms, enough to
+// fill a socket whose reader has stopped.
+type bigFrames struct{ n via.State[int] }
+
+func (p *bigFrames) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, p.tick)
+	return nil
+}
+func (p *bigFrames) tick(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
+func (p *bigFrames) Bump(*via.Ctx) {}
+func (p *bigFrames) View() h.H {
+	return h.Div(h.P(h.Str(strings.Repeat("x", 256<<10)), p.n.Display()), h.Button(via.On("click", p.Bump)))
+}
+
+func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(300*time.Millisecond))
+	via.Mount(r, "/", bigFrames{})
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	require.NoError(t, conn.(*net.TCPConn).SetReadBuffer(4096))
+	_, err = io.WriteString(conn, "POST /_via/sse HTTP/1.1\r\nHost: "+srv.Listener.Addr().String()+
+		"\r\nSec-Fetch-Site: same-origin\r\nContent-Length: 2\r\n\r\n{}")
+	require.NoError(t, err)
+	br := bufio.NewReader(conn)
+	tab := ""
+	for tab == "" {
+		line, err := br.ReadString('\n')
+		require.NoError(t, err)
+		if m := tabRe.FindStringSubmatch(line); m != nil {
+			tab = m[1]
+		}
+	}
+	// From here nothing reads: the stream fills the socket and blocks in a write.
+
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "tab pinned") }, 5*time.Second, 20*time.Millisecond)
+	resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
+		"Sec-Fetch-Site": "same-origin", "Datastar-Request": "true",
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.Contains(t, out.String(), "not reading", "the warning must say the stream is stuck writing to its client")
+	assert.NotContains(t, out.String(), "inside a Tick", "a stalled write is not a blocked handler")
+}
+
+// slowDispose is live (its State) and takes longer than the pinned deadline to
+// release what it holds, the way a teardown doing I/O does.
+type slowDispose struct {
+	n    via.State[int]
+	gone chan struct{}
+}
+
+func (p *slowDispose) OnInit(ctx *via.Ctx) error {
+	ctx.OnDispose(func() {
+		time.Sleep(10 * time.Second)
+		close(p.gone)
+	})
+	return nil
+}
+
+func (p *slowDispose) View() h.H { return h.Div(p.n.Display()) }
+
+func TestLive_aSlowOnDisposeIsNotReportedAsPinned(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := slowDispose{gone: make(chan struct{})}
+		r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		app.Connect().Close()
+		<-p.gone
+
+		assert.NotContains(t, out.String(), "tab pinned", "a closed tab has no actions left to answer 503")
+	})
+}
+
+func TestLive_aPinLoggedByTheStreamDoesNotSilenceTheActionThatHitsIt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := newBlockedTick()
+		r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		conn := app.Connect()
+		<-p.entered
+		time.Sleep(3 * time.Second)
+		require.Equal(t, 1, strings.Count(out.String(), "tab pinned"), "precondition: the stream's own timer logged")
+
+		status, _ := app.Action(0).Over(conn).Fire()
+
+		assert.Equal(t, http.StatusServiceUnavailable, status)
+		assert.Equal(t, 2, strings.Count(out.String(), "tab pinned"))
+		close(p.release)
+	})
+}
+
+var pageTabRe = regexp.MustCompile(`<body[^>]*data-signals='\{"viatab":"([^"]*)"\}'`)
+
+func pageTab(t *testing.T, page string) string {
+	t.Helper()
+	m := pageTabRe.FindStringSubmatch(page)
+	require.NotNil(t, m, "the page declares no viatab signal on <body>")
+	return m[1]
+}
+
+func pageBody(t *testing.T, srv *httptest.Server, c *http.Client, path string) string {
+	t.Helper()
+	resp, err := c.Get(srv.URL + path)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func TestTab_livePageCarriesTheIDItsStreamAdopts(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(clicker{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	id := pageTab(t, page)
+	require.NotEmpty(t, id, "a live page must hand out its tab id with the document, before any stream")
+
+	lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+	defer cancel()
+	assert.Equal(t, id, awaitTabID(t, lines), "the stream must adopt the id its page rendered")
+}
+
+func TestTab_eachRenderMintsItsOwnID(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(clicker{}))
+	_, a := do(t, srv, http.MethodGet, "/", "")
+	_, b := do(t, srv, http.MethodGet, "/", "")
+	assert.NotEqual(t, pageTab(t, a), pageTab(t, b))
+}
+
+func TestTab_plainPageCarriesNoID(t *testing.T) {
+	t.Parallel()
+	_, page := do(t, newCounter(t), http.MethodGet, "/", "")
+	assert.Empty(t, pageTab(t, page), "a page with no stream has no tab to name")
+}
+
+func TestTab_streamRefusesAnIDItDidNotIssue(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(clicker{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	forged := strings.Repeat("A", len(pageTab(t, page)))
+
+	lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(forged, "{}"))
+	defer cancel()
+	got := awaitTabID(t, lines)
+	assert.NotEqual(t, forged, got, "a client-chosen id would let a cross-site page name the tab it then drives")
+	assert.NotEmpty(t, got)
+}
+
+func TestTab_streamRefusesAnIDIssuedToAnotherSession(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(testSessionKey)
+	via.Mount(r, "/login", loginComp{})
+	via.Mount(r, "/live", sessionLive{})
+	srv := serve(t, r)
+	owner := jarClient(t)
+	signIn(t, srv, owner, "/login")
+	id := pageTab(t, pageBody(t, srv, owner, "/live"))
+
+	lines, cancel := openStreamWithBody(t, srv, jarClient(t), "/live/_via/sse", withTab(id, "{}"))
+	defer cancel()
+	assert.NotEqual(t, id, awaitTabID(t, lines),
+		"a leaked id must not let another browser claim the owner's tab before the owner connects")
+
+	own, cancelOwn := openStreamWithBody(t, srv, owner, "/live/_via/sse", withTab(id, "{}"))
+	defer cancelOwn()
+	assert.Equal(t, id, awaitTabID(t, own), "the owner's own stream still adopts it")
+}
+
+func TestTab_streamRefusesAnIDAnotherStreamHolds(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(clicker{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	id := pageTab(t, page)
+
+	first, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+	defer cancel()
+	require.Equal(t, id, awaitTabID(t, first))
+
+	// A duplicated browser tab restores the same document and so the same id.
+	second, cancel2 := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+	defer cancel2()
+	assert.NotEqual(t, id, awaitTabID(t, second), "two streams must never share one tab id")
+}
+
+func TestTab_reconnectAfterTheStreamClosedAdoptsTheSameID(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(clicker{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	id := pageTab(t, page)
+
+	lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+	require.Equal(t, id, awaitTabID(t, lines))
+	cancel()
+
+	// The server notices the hang-up asynchronously; until it has, the id is
+	// still held and a reconnect is handed a fresh one.
+	var got string
+	for deadline := time.Now().Add(2 * time.Second); got != id && time.Now().Before(deadline); {
+		again, stop := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+		got = awaitTabID(t, again)
+		stop()
+	}
+	assert.Equal(t, id, got, "a network-drop retry resends the page's id and must get its tab back")
+}
+
+func TestDispatch_actionBeforeItsStreamConnectsRunsOnceTheStreamOpens(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(clicker{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		id := pageTab(t, page)
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+		synctest.Wait()
+		select {
+		case a := <-got:
+			require.Failf(t, "answered before its stream connected", "status %d", a.status)
+		default:
+		}
+
+		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+		defer cancel()
+		require.Equal(t, id, awaitTabID(t, lines))
+		assert.Equal(t, http.StatusNoContent, (<-got).status, "the click made before the stream connected must run, not 410")
+		awaitLine(t, lines, "count: 1")
+	})
+}
+
+func TestDispatch_actionOnATabWhoseStreamNeverConnectsAnswers410AfterTwoSecondsAtMost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		deadline time.Duration
+		want     time.Duration
+	}{
+		{"deadline past the cap", 10 * time.Second, 2 * time.Second},
+		{"deadline under the cap", time.Second, time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				srv := liveServer(t, via.Handler(clicker{}, via.WithPinnedDeadline(tt.deadline)))
+				_, page := do(t, srv, http.MethodGet, "/", "")
+				start := time.Now()
+				assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, pageTab(t, page), "r", 0)))
+				assert.Equal(t, tt.want, time.Since(start), "the wait for a stream is min(2s, the pinned deadline)")
+			})
+		})
+	}
+}
+
+func TestDispatch_actionWhoseStreamConnectsInsideTwoSecondsRuns(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(clicker{}, via.WithPinnedDeadline(10*time.Second)))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		id := pageTab(t, page)
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+
+		time.Sleep(1500 * time.Millisecond)
+		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+		defer cancel()
+		require.Equal(t, id, awaitTabID(t, lines))
+		assert.Equal(t, http.StatusNoContent, (<-got).status)
+		awaitLine(t, lines, "count: 1")
+	})
+}
+
+func TestDispatch_actionCarryingAnotherProcesssIDDoesNotWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		podA := liveServer(t, via.Handler(clicker{}, testSessionKey))
+		podB := liveServer(t, via.Handler(clicker{}, testSessionKey))
+		_, page := do(t, podA, http.MethodGet, "/", "")
+		start := time.Now()
+		assert.Equal(t, http.StatusGone, fireNow(t, podB, liveActionRequest(t, podB, page, pageTab(t, page), "r", 0)))
+		assert.Zero(t, time.Since(start), "a stream for another pod's tab never connects here, so waiting only delays the reload")
+	})
+}
+
+func TestDispatch_actionCarryingAnIDNoRenderIssuedDoesNotWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(clicker{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		forged := strings.Repeat("A", len(pageTab(t, page)))
+		start := time.Now()
+		assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, forged, "r", 0)))
+		assert.Zero(t, time.Since(start), "only an id this server issued is worth waiting for")
+	})
+}
+
+type answer struct {
+	status int
+	at     time.Time
+}
+
+// fireAsync sends req in the background and reports its status and when it
+// came back, for a test that has to act while the request is parked.
+func fireAsync(srv *httptest.Server, req *http.Request) <-chan answer {
+	ch := make(chan answer, 1)
+	go func() {
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			ch <- answer{at: time.Now()}
+			return
+		}
+		resp.Body.Close()
+		ch <- answer{resp.StatusCode, time.Now()}
+	}()
+	return ch
+}
+
+func fireNow(t *testing.T, srv *httptest.Server, req *http.Request) int {
+	t.Helper()
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestDispatch_actionWithAMalformedAddressDoesNotWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(clicker{}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		id := pageTab(t, page)
+		good := liveActionRequest(t, srv, page, id, "r", 0)
+		act := good.URL.Path[strings.LastIndex(good.URL.Path, "/")+1:]
+		for _, path := range []string{"/_via/a/r/nope", "/_via/a/r-1/" + act, "/_via/a/0-/" + act} {
+			req := liveActionRequest(t, srv, page, id, "r", 0)
+			req.URL.Path = path
+			start := time.Now()
+			assert.Equal(t, http.StatusGone, fireNow(t, srv, req), path)
+			assert.Zero(t, time.Since(start), "%s names no action via could have rendered, so no stream will run it", path)
+		}
+	})
+}
+
+func TestDispatch_parkedActionsPastTheRouterCapAnswer503AtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		srv := liveServer(t, via.Handler(clicker{}, via.WithMaxSSEConn(2),
+			logTo(&out)))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		id := pageTab(t, page)
+		parked := []<-chan answer{
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+		}
+		synctest.Wait()
+
+		start := time.Now()
+		for range 2 {
+			assert.Equal(t, http.StatusServiceUnavailable, fireNow(t, srv, liveActionRequest(t, srv, page, id, "r", 0)))
+		}
+		assert.Zero(t, time.Since(start), "a request past the cap is refused, not parked")
+		assert.Equal(t, 1, strings.Count(out.String(), "actions parked"), "the refusal is logged once per interval")
+
+		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+		defer cancel()
+		require.Equal(t, id, awaitTabID(t, lines))
+		for _, p := range parked {
+			assert.Equal(t, http.StatusNoContent, (<-p).status, "the actions under the cap still run")
+		}
+	})
+}
+
+func TestDispatch_parkedActionAnswers503WhenTheRouterCloses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		r := via.NewRouter()
+		via.Mount(r, "/", clicker{})
+		srv := liveServer(t, r)
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		got := fireAsync(srv, liveActionRequest(t, srv, page, pageTab(t, page), "r", 0))
+		synctest.Wait()
+
+		start := time.Now()
+		r.Close()
+		a := <-got
+
+		assert.Equal(t, http.StatusServiceUnavailable, a.status)
+		assert.Equal(t, start, a.at, "no stream opens on a closed router, so the wait ends with it")
+	})
+}
+
+// slowJoin's OnConnect publishes to its own topic, so its stream goroutine is
+// inside recv right after the stream registers and cannot pick up an action.
+type slowJoin struct {
+	n    via.State[int]
+	room *topic.Topic[int]
+}
+
+func (p *slowJoin) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.room, p.recv)
+	ctx.OnConnect(p.join)
+	return nil
+}
+
+func (p *slowJoin) join()              { p.room.Publish(1) }
+func (p *slowJoin) recv(*via.Ctx, int) { time.Sleep(5 * time.Second) }
+func (p *slowJoin) Bump(ctx *via.Ctx)  { p.n.Set(p.n.Get() + 1) }
+func (p *slowJoin) View() h.H          { return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump))) }
+
+func TestDispatch_aParkedActionsWholeWaitIsBoundedByThePinnedDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		srv := liveServer(t, via.Handler(slowJoin{room: topic.New[int]()}, via.WithPinnedDeadline(3*time.Second),
+			logTo(io.Discard)))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		id := pageTab(t, page)
+		start := time.Now()
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+
+		time.Sleep(1500 * time.Millisecond)
+		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+		defer cancel()
+		require.Equal(t, id, awaitTabID(t, lines))
+		a := <-got
+
+		assert.Equal(t, http.StatusServiceUnavailable, a.status)
+		assert.Equal(t, 3*time.Second, a.at.Sub(start), "parking and pickup share one deadline")
+	})
+}
+
+type orderLog struct {
+	mu  sync.Mutex
+	got []string
+}
+
+func (l *orderLog) add(s string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.got = append(l.got, s)
+}
+
+func (l *orderLog) list() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.got...)
+}
+
+type ordered struct {
+	n   via.State[int]
+	log *orderLog
+}
+
+func (o *ordered) A(*via.Ctx) { o.log.add("A") }
+func (o *ordered) B(*via.Ctx) { o.log.add("B") }
+func (o *ordered) C(*via.Ctx) { o.log.add("C") }
+
+func (o *ordered) View() h.H {
+	return h.Div(o.n.Display(),
+		h.Button(via.On("click", o.A)), h.Button(via.On("click", o.B)), h.Button(via.On("click", o.C)))
+}
+
+func TestDispatch_parkedActionsRunInArrivalOrder(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		for range 50 {
+			log := &orderLog{}
+			srv := liveServer(t, via.Handler(ordered{log: log}))
+			_, page := do(t, srv, http.MethodGet, "/", "")
+			id := pageTab(t, page)
+			a := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+			synctest.Wait()
+			b := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 1))
+			synctest.Wait()
+
+			connected := make(chan context.CancelFunc, 1)
+			go func() {
+				lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
+				awaitTabID(t, lines)
+				connected <- cancel
+			}()
+			c := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 2))
+			for _, ch := range []<-chan answer{a, b, c} {
+				require.Equal(t, http.StatusNoContent, (<-ch).status)
+			}
+			(<-connected)()
+			require.Equal(t, []string{"A", "B", "C"}, log.list())
+		}
+	})
+}
+
+func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := via.NewMemorySessionStore()
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		a := app.Connect()
+		code, _ := app.Action(0).Over(a).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		// Connected after the login, so its id is bound to the cookie a click still carries.
+		b := app.Connect()
+		b.Await("who:alice")
+		require.NoError(t, store.Delete(context.Background(), sessionCookieID(t, app)))
+		time.Sleep(25 * time.Second)
+		require.NoError(t, b.AwaitClose())
+
+		start := time.Now()
+		code, _ = app.Action(3).Over(b).Fire()
+
+		assert.Equal(t, http.StatusGone, code)
+		assert.Zero(t, time.Since(start), "a stream the server ended is not coming back under this id")
+	})
+}
+
+func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(clicker{}))
+		conn := app.Connect()
+		id := conn.TabID()
+		conn.Close()
+		synctest.Wait()
+
+		got := make(chan int, 1)
+		go func() {
+			code, _ := app.Action(0).Tab(id).Fire()
+			got <- code
+		}()
+		synctest.Wait()
+		select {
+		case code := <-got:
+			require.Failf(t, "answered before the reconnect", "status %d", code)
+		default:
+		}
+
+		again := app.ConnectWith(`{"viatab":"` + id + `"}`)
+		require.Equal(t, id, again.TabID())
+		assert.Equal(t, http.StatusNoContent, <-got, "a network drop's retry reconnects under the same id")
+		again.Await("count: 1")
+	})
+}
+
+func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := newBlockedTick()
+		r := via.NewRouter(testSessionKey, via.WithPinnedDeadline(10*time.Second),
+			logTo(io.Discard))
+		via.Mount(r, "/login", loginComp{})
+		via.Mount(r, "/live", p)
+		srv := liveServer(t, r)
+		c := srv.Client()
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		c.Jar = jar
+		signIn(t, srv, c, "/login")
+		page := pageBody(t, srv, c, "/live")
+		id := pageTab(t, page)
+		lines, cancel := openStreamWithBody(t, srv, c, "/live/_via/sse", withTab(id, "{}"))
+		defer cancel()
+		require.Equal(t, id, awaitTabID(t, lines))
+		// The stream goroutine is inside the Tick, so no action on the tab is picked up.
+		<-p.entered
+		waiting := []<-chan answer{
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+		}
+		synctest.Wait()
+		for _, w := range waiting {
+			select {
+			case a := <-w:
+				require.Failf(t, "answered while the stream was busy", "status %d", a.status)
+			default:
+			}
+		}
+
+		start := time.Now()
+		login := pageBody(t, srv, c, "/login")
+		rotate, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, login, "r", 3), strings.NewReader("{}"))
+		require.NoError(t, err)
+		rotate.Header.Set("Sec-Fetch-Site", "same-origin")
+		rotate.Header.Set("Datastar-Request", "true")
+		require.Equal(t, http.StatusNoContent, fireNow(t, srv, rotate))
+
+		for _, w := range waiting {
+			a := <-w
+			assert.Equal(t, http.StatusGone, a.status)
+			assert.Equal(t, start, a.at, "a Rotate ended the stream, so nothing is worth waiting for")
+		}
+		close(p.release)
+	})
 }

@@ -18,6 +18,14 @@ import (
 	"strings"
 )
 
+// Miswired is the panic value of a check that fails on how a tree is wired
+// (its types, fields and bindings) rather than on its data. via's boot render
+// at Mount re-raises only this type, so a View that panics on its zero value
+// for any other reason still mounts.
+type Miswired string
+
+func (m Miswired) Error() string { return string(m) }
+
 // H is the single sealed tree type. The render method is unexported, so only
 // types defined in this module can satisfy H — the tree is closed.
 type H interface{ render(*Renderer) }
@@ -38,8 +46,9 @@ type Binder interface {
 	// within a render.
 	DeclareSignal(slot string, initial any)
 	// Hydrator records slot's update function, kept across renders so a live
-	// action can update the underlying value in place without a re-render.
-	Hydrator(slot string, fn func(json.RawMessage))
+	// action can update the underlying value in place without a re-render. fn
+	// reports whether the value decoded.
+	Hydrator(slot string, fn func(json.RawMessage) bool)
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
@@ -173,9 +182,17 @@ func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 // [A-Za-z][A-Za-z0-9-]* — an invalid tag panics, since it is a
 // programming-time construction and an unvalidated one (e.g. "div
 // onclick=alert(1)") would graft a live attribute into the opening tag.
+//
+// script panics in any case. Datastar v1.0.4 stamps the document nonce on
+// every <script> a patch inserts, so one rendered in a live push would run
+// even though the same element in the first document is blocked.
 func El(tag string, kids ...H) H {
 	if !validTagName(tag) {
 		panic(fmt.Sprintf("h: invalid tag name %q (must match [A-Za-z][A-Za-z0-9-]*)", tag))
+	}
+	if strings.EqualFold(tag, "script") {
+		panic(Miswired(`h: El("` + tag + `") is refused: Datastar gives a patched-in <script> the page's nonce, ` +
+			"so it would run; declare scripts in via.Meta.Assets"))
 	}
 	return element{tag: tag, kids: kids}
 }

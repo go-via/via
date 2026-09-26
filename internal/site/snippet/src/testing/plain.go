@@ -34,7 +34,7 @@ func (c *Counter) View() h.H {
 // snippet:start test
 func TestCounter(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Counter{n: new(atomic.Int64)}))
+	app := vt.Serve(t, via.Handler(Counter{n: new(atomic.Int64)}, via.WithLogger(vt.Logger(t))))
 
 	status, body := app.Get("/")
 	require.Equal(t, 200, status)
