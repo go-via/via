@@ -18,7 +18,7 @@ go run .
   either way; a fixed key only matters once a persistent store is configured.
 - `VIA_ORIGIN` — the site's origin (`https://go-via.dev`). Also forces
   Secure cookies, so set it only behind HTTPS. Unset, actions accept any origin
-  and via logs a warning at startup; set it in production.
+  and via and the site each log that at startup; set it in production.
 - `VIA_BASE` — path prefix this build serves under, empty for the latest. See
   [`DEPLOY.md`](./DEPLOY.md#versions).
 - `VIA_VERSIONS` — `label=base` pairs for the version picker, latest first.
@@ -47,15 +47,18 @@ host.
   share.
 - `demos/` — one demo per file, embedded verbatim for its card's Source.
   `shared_contract.go` holds what the demos use without declaring.
-- `demo/` — the card, chroma highlighting, rate limits and resets. `demo/gen`
-  generates `static/chroma.css`, keeping chroma's styles out of the binary.
+- `demo/` — the card, rate limits and resets.
+- `snippet/` — code blocks and chroma highlighting. `snippet/src/` is the Go
+  the pages show, compiled and tested. `snippet/gen` generates `static/chroma.css`,
+  keeping chroma's styles out of the binary.
+- `icon/` — the inline SVG icons.
 - `static/` — `site.css`, `chroma.css`, `islands.css`, the inspector and
   island scripts, `brand/`, `fonts/`, `vendor/` (MapLibre) and `data/` (the
   island's GeoJSON), served from `embed`.
 
 This is a nested module (`go-via.dev/site`, `replace ../..`) so chroma stays
 out of via's `go.mod`; the root `go build ./...` does not see it. No Node, no
-asset pipeline. `static/chroma.css` is generated: `go generate ./demo`, and a
+asset pipeline. `static/chroma.css` is generated: `go generate ./snippet`, and a
 test pins it.
 
 ## Adding a demo
@@ -71,10 +74,14 @@ own `New*` constructor from a limiter the page owns, and checks
 
 ## Public-state bounds
 
-- `demos.ResetAll` runs every 15 minutes. The shared counter's reset is
-  published, so open tabs redraw; the vote tallies have no topic, so a tab
-  redraws them on its next vote or reload.
+- `demos.ResetAll` runs every 15 minutes. It zeroes the shared counter on
+  `/live`, the counter on `/start`, the front page's counter and the vote
+  tallies. The first two are published, so open tabs redraw; the others have
+  no topic, so a tab redraws them on its next click or reload.
 - Per-tab lists cap at `keepRows` (50) and are never reset.
-- Mutating actions spend a per-client token, keyed on the client IP: 20/min
-  each for the feed, the shared counter and the pings on `/live`, 30/min for
-  the vote on `/actions`. Dropping the session cookie buys no fresh budget.
+- Mutating actions spend a per-client token, keyed on the client IP. Dropping
+  the session cookie buys no fresh budget.
+  - 20/min: the feed, shared counter and pings on `/live`; the tutorial chat.
+  - 30/min: the vote on `/actions`; the counter on `/start`.
+  - 10/min: the upload on `/actions`.
+  - None: the front page's counter.
