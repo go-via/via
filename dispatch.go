@@ -245,7 +245,7 @@ func unitAddr(c *Ctx) string {
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			recoverToHTTP(m.cfg.log, w, req, rec, "action")
+			recoverToHTTP(m.cfg.log, w, req, rec, "action", false)
 		}
 	}()
 	if !originAllowed(req, m.cfg) {

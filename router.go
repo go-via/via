@@ -192,14 +192,14 @@ var logLineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 
 // recoverToHTTP answers a recovered panic on a request transport: each via
 // sentinel gets the status it means, anything else is a server fault — logged
-// with its stack, answered 500.
-func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, rec any, what string) {
+// with its stack, answered 500. sse is runOnInit's flag of the same name.
+func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, rec any, what string, sse bool) {
 	if _, ok := rec.(paramMiss); ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
 	if ci, ok := rec.(initOutcome); ok {
-		answerInitFailure(log, w, req, ci)
+		answerInitFailure(log, w, req, ci, sse)
 		return
 	}
 	if bad, ok := rec.(badActionArg); ok {
@@ -221,8 +221,10 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 
 // answerInitFailure gives an embedded child's failed OnInit the same answers
 // the root's gets in runOnInit.
-func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome) {
+func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome, sse bool) {
 	switch {
+	case ci.redirect.url != "" && sse:
+		http.Error(w, "forbidden", http.StatusForbidden)
 	case ci.redirect.url != "":
 		if refused := ci.redirect.refusal(); refused != "" {
 			log.Warn("via: OnInit redirect dropped", "redirect", ci.redirect, "reason", refused)
@@ -233,6 +235,9 @@ func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Reques
 	case errors.Is(ci.err, ErrNotFound):
 		noteErr(w, ci.err)
 		http.Error(w, "not found", http.StatusNotFound)
+	case errors.Is(ci.err, ErrForbidden):
+		noteErr(w, ci.err)
+		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
 		noteErr(w, ci.err)
 		log.Error("via: OnInit failed", "err", ci.err)
@@ -511,7 +516,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				recoverToHTTP(r.cfg.log, w, req, rec, "render")
+				recoverToHTTP(r.cfg.log, w, req, rec, "render", false)
 			}
 		}()
 		// concreteBase, not patternBase: a page at /job/{id} must advertise

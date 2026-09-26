@@ -926,6 +926,34 @@ func TestChild_childOnInitRedirectGatesThePage(t *testing.T) {
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
 
+func TestChild_childOnInitRedirectOnTheSSEConnectAnswers403(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(redirectHost{}))
+
+	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}),
+		"fetch would follow a 303 and read the target page as the stream, so a child's redirect is 403 like the root's")
+}
+
+type forbiddenChild struct{}
+
+func (c *forbiddenChild) OnInit(ctx *via.Ctx) error { return via.ErrForbidden }
+func (c *forbiddenChild) View() h.H                 { return h.Div(h.Str("never")) }
+
+type forbiddenHost struct{ Kid forbiddenChild }
+
+func (p *forbiddenHost) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_childOnInitForbiddenAnswers403(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	resp, body := do(t, serve(t, via.Handler(forbiddenHost{}, logTo(&out))), http.MethodGet, "/", "")
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"ErrForbidden from an embedded child's OnInit is a 403, exactly as it is from the root's")
+	assert.NotContains(t, body, "never")
+	assert.NotContains(t, out.String(), "level=ERROR", "a refusal is an answer, not a server fault")
+}
+
 // plainKid is a plain child of a live root: it holds no State and never
 // ticks, so its action is a plain in-place re-render even though the page
 // around it is streaming.

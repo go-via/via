@@ -290,7 +290,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 			// connect succeeded. Once headers are sent this can't help, so a
 			// mid-stream panic is caught per push item (runPushItem) instead.
 			if !headersSent {
-				recoverToHTTP(m.cfg.log, w, req, rec, "stream")
+				recoverToHTTP(m.cfg.log, w, req, rec, "stream", true)
 			}
 		}
 	}()
