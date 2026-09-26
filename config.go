@@ -3,6 +3,7 @@ package via
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -71,12 +72,6 @@ func newConfig(opts []Option) *config {
 	}
 	for _, opt := range opts {
 		opt(c)
-	}
-	if c.maxSSEConn <= 0 {
-		c.maxSSEConn = defaultMaxSSEConn
-	}
-	if c.pinnedDeadline <= 0 {
-		c.pinnedDeadline = defaultPinnedDeadline
 	}
 	if c.log == nil {
 		c.log = slog.Default()
@@ -168,18 +163,25 @@ func bareOrigin(origin string) string {
 // WithSessionTTL sets how long a session may sit idle before it expires
 // (default 24h). Each access slides the window; once less than half of it is
 // left, the access re-saves the session and re-sends the cookie so the
-// browser's expiry moves with it.
+// browser's expiry moves with it. It panics on a value of 0 or less.
 func WithSessionTTL(d time.Duration) Option {
 	return func(c *config) {
+		if d <= 0 {
+			panic("via: WithSessionTTL must be positive")
+		}
 		c.sessionTTL = d
 	}
 }
 
 // WithSessionCookieName overrides the session cookie name (default
 // "via_session"). Set a distinct name per app when two via apps share a host,
-// or their session cookies clobber each other.
+// or their session cookies clobber each other. It panics on a name net/http
+// would drop from Set-Cookie: empty, or with a byte outside an HTTP token.
 func WithSessionCookieName(name string) Option {
 	return func(c *config) {
+		if err := (&http.Cookie{Name: name, Value: "x"}).Valid(); err != nil {
+			panic(fmt.Sprintf("via: WithSessionCookieName(%q) is not a valid cookie name: %v", name, err))
+		}
 		c.sessionCookie = name
 	}
 }
@@ -220,23 +222,31 @@ func WithSecureCookies() Option {
 //	}
 //
 //	via.NewRouter(via.WithSessionKey(key), via.WithSessionStore(redisSessions{c}))
+//
+// It panics on nil and on a second WithSessionStore.
 func WithSessionStore(s SessionStore) Option {
 	return func(c *config) {
 		if s == nil {
 			panic("via: WithSessionStore(nil)")
+		}
+		if c.sessionStore != nil {
+			panic("via: conflicting WithSessionStore options; pass one store")
 		}
 		c.sessionStore = s
 	}
 }
 
 // WithSessionStoreTimeout caps how long one session store round-trip may take
-// (default 5s; a value of 0 or less restores the default). Without it a hung
+// (default 5s). It panics on a value of 0 or less. Without it a hung
 // backend pins the request goroutine for as long as it hangs — session calls
 // deliberately survive client cancellation, so the request's own context is no
 // escape. A read-modify-write with retries (see [Session]) is bounded as a
 // whole, not per attempt.
 func WithSessionStoreTimeout(d time.Duration) Option {
 	return func(c *config) {
+		if d <= 0 {
+			panic("via: WithSessionStoreTimeout must be positive")
+		}
 		c.sessionTimeout = d
 	}
 }
@@ -247,8 +257,18 @@ func WithSessionStoreTimeout(d time.Duration) Option {
 // a second process, so set a stable key in production. It keeps the cookie
 // valid only; the data behind it lives in the SessionStore, so a stable key
 // without WithSessionStore still logs everyone out on restart.
+//
+// It panics on an empty key (an unset env var read into it fails at boot
+// instead of falling back to a random key), on one shorter than 16 bytes, and
+// on a second WithSessionKey.
 func WithSessionKey(key []byte) Option {
 	return func(c *config) {
+		if len(key) == 0 {
+			panic("via: WithSessionKey needs a key; omit the option to fall back to VIA_SESSION_KEY or a random per-process key")
+		}
+		if c.sessionKey != nil {
+			panic("via: conflicting WithSessionKey options; pass one key")
+		}
 		c.sessionKey = key
 	}
 }
@@ -259,10 +279,15 @@ func WithSessionKey(key []byte) Option {
 // is the one the box has memory for — raise it with the memory to back it, and
 // lower it when a single pod should shed load to its siblings rather than swap.
 // The same number, up to 1024, caps the actions parked router-wide waiting
-// for a tab's stream to connect; past it an action answers 503 at once. A
-// value of 0 or less restores the default.
+// for a tab's stream to connect; past it an action answers 503 at once. It
+// panics on a value of 0 or less.
 func WithMaxSSEConn(n int) Option {
-	return func(c *config) { c.maxSSEConn = n }
+	return func(c *config) {
+		if n <= 0 {
+			panic("via: WithMaxSSEConn must be positive")
+		}
+		c.maxSSEConn = n
+	}
 }
 
 // WithPinnedDeadline sets how long an action POST waits for the tab's stream
@@ -281,14 +306,19 @@ func WithMaxSSEConn(n int) Option {
 // by d.
 // When via itself ended the stream (a Rotate, a revoked session, an aborted
 // push, Router.Close), the id answers 410 at once for d instead of waiting.
-// Set it below the load balancer's own timeout so via answers first. A value
-// of 0 or less restores the default.
+// Set it below the load balancer's own timeout so via answers first. It
+// panics on a value of 0 or less.
 //
 // The tab is logged as pinned too when any one handler, or one frame write to
 // a client that stopped reading, runs past d with no action waiting, so a tab
 // nobody clicks on is still reported. The line says which of the two it is.
 func WithPinnedDeadline(d time.Duration) Option {
-	return func(c *config) { c.pinnedDeadline = d }
+	return func(c *config) {
+		if d <= 0 {
+			panic("via: WithPinnedDeadline must be positive")
+		}
+		c.pinnedDeadline = d
+	}
 }
 
 // WithMaxBody caps an action POST body in bytes, and how much of a native form

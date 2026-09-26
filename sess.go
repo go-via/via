@@ -411,7 +411,7 @@ func newSessionManager(cfg *config) *sessionManager {
 		panic(fmt.Sprintf("via: session key must be at least %d bytes (got %d)", minSessionKeyLen, len(key)))
 	}
 	ttl := cfg.sessionTTL
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = defaultSessionTTL
 	}
 	name := cfg.sessionCookie
@@ -419,7 +419,7 @@ func newSessionManager(cfg *config) *sessionManager {
 		name = defaultSessionCookie
 	}
 	timeout := cfg.sessionTimeout
-	if timeout <= 0 {
+	if timeout == 0 {
 		timeout = defaultSessionStoreTimeout
 	}
 	store, inMemory := cfg.sessionStore, false

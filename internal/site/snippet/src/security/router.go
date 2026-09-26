@@ -2,6 +2,7 @@
 package security
 
 import (
+	"log"
 	"os"
 	"strconv"
 	"time"
@@ -12,10 +13,14 @@ import (
 
 // snippet:start router
 func newRouter() *via.Router {
+	key := os.Getenv("SESSION_KEY")
+	if key == "" {
+		log.Fatal("SESSION_KEY is unset: export 32+ random bytes")
+	}
 	return via.NewRouter(
 		via.WithTrustedOrigin("https://example.com"),
 		via.WithSecureCookies(), // the proxy sends no X-Forwarded-Proto
-		via.WithSessionKey([]byte(os.Getenv("SESSION_KEY"))),
+		via.WithSessionKey([]byte(key)),
 		via.WithSessionTTL(8*time.Hour),
 	)
 }
