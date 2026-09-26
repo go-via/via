@@ -166,7 +166,6 @@ func (p *Profile) SaveAvatar(ctx *via.Ctx) {
 	ctx.Redirect("/profile")
 }
 
-// serveAvatar answers GET /avatar/{user} with the stored upload.
 func (s *Store) serveAvatar(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("user"))
 	if err != nil {
@@ -180,7 +179,7 @@ func (s *Store) serveAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", typ)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	// The URL stays the same across uploads.
+	// The URL stays the same across uploads, so the browser must revalidate.
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Write(data)
 }

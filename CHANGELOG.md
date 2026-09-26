@@ -137,13 +137,15 @@
 - `vtbrowser.Session.WaitLiveConnected` waits for the stream's first frame,
   since `viatab` is now set before the stream connects.
 
-- **Options with no sensible zero value panic at `NewRouter`**:
-  `WithMaxSSEConn`, `WithPinnedDeadline`, `WithSessionStoreTimeout` and
-  `WithSessionTTL` on 0 or less, which used to restore the default,
-  `WithSessionCookieName` on "" or a name net/http would drop from
-  `Set-Cookie`, and `WithSessionKey` on an empty key, which used to fall
-  back to `VIA_SESSION_KEY` or a random key. Omit the option for the
-  default.
+- **Options with no usable zero value panic at `NewRouter`** instead of
+  falling back to a default:
+  - `WithMaxSSEConn`, `WithPinnedDeadline`, `WithSessionStoreTimeout`,
+    `WithSessionTTL` on 0 or less.
+  - `WithSessionCookieName` on a name net/http would drop from `Set-Cookie`.
+  - `WithSessionKey` on an empty key, which fell back to `VIA_SESSION_KEY`
+    or a random key.
+
+  Omit the option for the default.
 
 - **A second `WithSessionStore` or `WithSessionKey` panics** as a
   conflicting option instead of the last one winning. Other options stay
@@ -241,8 +243,7 @@
   reloading the tab twice.
 
 - `Ctx.Tick` with an interval of 0 or less runs every second and logs one
-  warning per Router. It used to panic in a goroutine with no recover and
-  take the process down on the first connect.
+  warning per Router. It used to crash the process on the first connect.
 
 - An embedded child's `OnInit` returning `ErrForbidden` answers 403, as the
   root's does, instead of 500 with an error log.
