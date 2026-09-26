@@ -1259,6 +1259,17 @@ func TestSession_clearSurvivesMerge(t *testing.T) {
 	assert.Contains(t, body, "V=-", "the Delete was undone by the other request's interleaved write")
 }
 
+func TestSession_setsNoCookieWhenTheStoreRefusesTheFirstSave(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	fs.set(&fs.saveErr, errors.New("redis down"))
+	base, acts := auditServer(t, via.WithSessionStore(fs))
+
+	resp, _ := auditPost(t, jarClient(t), base, acts[audPut1])
+
+	assert.Empty(t, resp.Header.Values("Set-Cookie"), "a cookie for a session the store never saved names nothing")
+}
+
 func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()

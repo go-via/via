@@ -877,6 +877,10 @@ func (s *Session) ensure() *sessionData {
 	}
 	id, d := s.mgr.create(s.storeCtx())
 	s.id, s.data = id, d
+	if d.mintFailed {
+		// save logged the refusal; a cookie would name an id the store never took.
+		return d
+	}
 	if s.w != nil {
 		s.mgr.setCookie(s.w, id, s.secure)
 	} else if s.errPage {
