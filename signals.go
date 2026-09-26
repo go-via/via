@@ -193,21 +193,24 @@ func jsonSeed[T any](raw string) (any, error) {
 //
 // A Signal must be a plain field of the composition, through plain nested
 // structs if you like; that is what names it before the View runs, so Ref reads
-// the same name wherever it is called. One reached through a pointer, slice,
-// array or map field has no field name, and Ref on it panics — the same
-// verdict rendering it gives, moved to the call that would otherwise have
+// the same name wherever it is called. Mount already panics on a type holding
+// one through a pointer, slice, array or map field. Ref panics on any other
+// signal with no name (one behind an interface, or a local variable) — the
+// same verdict rendering it gives, moved to the call that would otherwise have
 // produced a bare "$" and a silently dead Datastar expression.
 func (s *Signal[T]) Ref() expr.Expr {
 	if s.slot == "" {
-		panic("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
+		panic(hcore.Miswired("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
-			"slice, array or map field; \"$\" alone is not a Datastar expression")
+			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
 	return expr.Expr("$" + s.slot)
 }
 
 // Get returns the server-side value: what the last Set wrote, or what the
-// client posted back for a Bind()ed signal on this request.
+// client posted back for a Bind()ed signal on this request. A native
+// [PostForm] submit posts form fields, not signals, so there Get returns the
+// initial value; read the field with ctx.Request().FormValue instead.
 func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and declares the slot, which is what carries the change
@@ -265,7 +268,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 		// server-authored between renders. A second path that wrote s.val
 		// straight from the request would silently re-open the escalation
 		// livePush closes.
-		b.Hydrator(s.slot, func(raw json.RawMessage) {
+		b.Hydrator(s.slot, func(raw json.RawMessage) bool {
 			var v T
 			if err := json.Unmarshal(raw, &v); err != nil {
 				// s.bound may be nil outside a live render; Ctx.logger nil-guards.
@@ -284,13 +287,14 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 					s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
 						"slot", s.slot, "type", fmt.Sprintf("%T", v))
 				}
-				return
+				return false
 			}
 			if c := s.bound; c != nil {
 				prev := s.val
 				c.rev.note(s.slot, func() { s.val = prev })
 			}
 			s.val = v
+			return true
 		})
 	}
 	b.DeclareSignal(s.slot, s.val)
@@ -354,9 +358,9 @@ func (*SignalCS[T]) seedApplier(any) func(unsafe.Pointer) any { return nil }
 // array or map field, which has no field name to be named by.
 func (s *SignalCS[T]) Ref() expr.Expr {
 	if s.slot == "" {
-		panic("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
+		panic(hcore.Miswired("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
-			"slice, array or map field; \"$\" alone is not a Datastar expression")
+			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
 	return expr.Expr("$" + s.slot)
 }

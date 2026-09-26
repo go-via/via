@@ -404,18 +404,13 @@ func TestSession_shortSessionKeyPanicsAtConstruction(t *testing.T) {
 	}, "a session key under the minimum length must panic at construction")
 }
 
+var testSessionKey = via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))
+
 // firstActionSessionCookie fires action 0 on a raw (non-jar) request so the
 // caller can read the Set-Cookie attributes the jar hides.
-func firstActionSessionCookie(t *testing.T, base string) *http.Cookie {
+func firstActionSessionCookie(t *testing.T, base string, headers ...map[string]string) *http.Cookie {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 0), strings.NewReader("{}"))
-	require.NoError(t, err)
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Datastar-Request", "true")
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	resp.Body.Close()
-	for _, ck := range resp.Cookies() {
+	for _, ck := range sessionActionResponse(t, http.DefaultClient, base, 0, headers...).Cookies() {
 		if ck.Name == "via_session" {
 			return ck
 		}
@@ -468,6 +463,35 @@ func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	ck := firstActionSessionCookie(t, srv.URL)
 	require.NotNil(t, ck)
 	assert.False(t, ck.Secure, "a plain-HTTP cookie must not be Secure by default (dev ergonomics)")
+}
+
+func TestSession_cookieFollowsTheSchemeAProxyReports(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		headers map[string]string
+		secure  bool
+	}{
+		{"X-Forwarded-Proto https", map[string]string{"X-Forwarded-Proto": "https"}, true},
+		{"X-Forwarded-Proto case-folded", map[string]string{"X-Forwarded-Proto": "HTTPS"}, true},
+		{"X-Forwarded-Proto chain, client hop first", map[string]string{"X-Forwarded-Proto": "https, http"}, true},
+		{"Forwarded proto=https", map[string]string{"Forwarded": "for=192.0.2.60;proto=https;by=203.0.113.43"}, true},
+		{"Forwarded quoted, first element", map[string]string{"Forwarded": `proto="https", proto=http`}, true},
+		{"X-Forwarded-Proto http", map[string]string{"X-Forwarded-Proto": "http"}, false},
+		{"Forwarded proto=http", map[string]string{"Forwarded": "proto=http"}, false},
+		{"Forwarded without proto", map[string]string{"Forwarded": "for=192.0.2.60"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(via.Handler(loginComp{}, testSessionKey))
+			t.Cleanup(srv.Close)
+
+			ck := firstActionSessionCookie(t, srv.URL, c.headers)
+			require.NotNil(t, ck, "no session cookie was issued")
+			assert.Equal(t, c.secure, ck.Secure)
+		})
+	}
 }
 
 // liveSess is a live child that establishes its session in OnInit, so
@@ -1731,8 +1755,8 @@ func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
 		"Ensure has nothing to store, so it must not mint a session the browser never learns of")
 }
 
-// namePutter writes the session from a Listen handler, whose Session is the
-// snapshot its stream connected with.
+// namePutter writes the session from a Listen handler, through the handle its
+// stream connected with.
 type namePutter struct {
 	Names *topic.Topic[string]
 	done  via.State[string]
@@ -1771,7 +1795,7 @@ func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *t
 
 	fireAction(t, c, app.URL(), 3) // Rotate
 	names.Publish("mallory")
-	conn.Await("put mallory")
+	require.NoError(t, conn.AwaitClose(), "a Rotate elsewhere ends the stream holding the old id")
 
 	stale := jarClient(t)
 	stale.Transport = c.Transport
@@ -1780,4 +1804,57 @@ func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *t
 	assert.NotContains(t, body, "hi ", "the rotated-away id must not resolve again")
 	_, body = fireAction(t, c, app.URL(), 1)
 	assert.Contains(t, body, "hi alice", "the rotated session keeps its own value")
+}
+
+func TestSession_responsesThatCarryASessionAreNotStored(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(loginComp{}, testSessionKey))
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	anon := getPage(t, c, srv.URL)
+	anon.Body.Close()
+	assert.Equal(t, "no-cache", anon.Header.Get("Cache-Control"), "a plain page served without a session is shareable but revalidated")
+
+	signIn := sessionActionResponse(t, c, srv.URL, 0)
+	assert.Equal(t, "private, no-store", signIn.Header.Get("Cache-Control"), "the response that sets the cookie")
+
+	page := getPage(t, c, srv.URL)
+	page.Body.Close()
+	assert.Equal(t, "private, no-store", page.Header.Get("Cache-Control"), "a page rendered for a session")
+
+	greet := sessionActionResponse(t, c, srv.URL, 1)
+	assert.Equal(t, "private, no-store", greet.Header.Get("Cache-Control"), "an action run for a session")
+}
+
+func TestSession_streamThatSetsTheCookieIsNotStored(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(liveSessStream{}, testSessionKey))
+	t.Cleanup(srv.Close)
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+	assert.Equal(t, "private, no-store", resp.Header.Get("Cache-Control"))
+}
+
+func sessionActionResponse(t *testing.T, c *http.Client, base string, n int, headers ...map[string]string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	for _, hs := range headers {
+		for k, v := range hs {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return resp
 }

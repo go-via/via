@@ -1,14 +1,11 @@
 package via_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -125,10 +122,22 @@ func sameOrigin() map[string]string { return map[string]string{"Sec-Fetch-Site":
 // shipped rather than a hand-built path.
 func actionURL(t *testing.T, html string, child string, n int) string {
 	t.Helper()
-	pat := `(?:@post\('|action=")([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`
-	m := regexp.MustCompile(pat).FindAllStringSubmatch(html, -1)
-	require.Greaterf(t, len(m), n, "action %s/%d not found on rendered page:\n%s", child, n, html)
-	return m[n][1]
+	urls := actionURLsOf(html, child)
+	require.Greaterf(t, len(urls), n, "action %s/%d not found on rendered page:\n%s", child, n, html)
+	return urls[n]
+}
+
+// actionURLsOf reads child's action URLs off a page in document order. A
+// binding with a query carries it in the data-via-q-<event> attribute right
+// before its data-on, and the expression appends it to the path.
+func actionURLsOf(page, child string) []string {
+	re := regexp.MustCompile(`(?:data-via-q-[^=\s]+="([^"]*)" data-on:[^=\s]+="@post\('|@post\('|action=")` +
+		`([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+	var out []string
+	for _, m := range re.FindAllStringSubmatch(page, -1) {
+		out = append(out, m[2]+m[1])
+	}
+	return out
 }
 
 func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
@@ -416,15 +425,22 @@ type childCollidePage struct {
 
 func (p *childCollidePage) View() h.H { return h.Div(via.Child(p.A), p.A__b.Bind()) }
 
-func assertSlotPanic(t *testing.T, app http.Handler, want string) {
+// panicMsg runs fn and returns what it panicked with, or "" if it returned.
+func panicMsg(fn func()) (msg string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			msg = fmt.Sprint(rec)
+		}
+	}()
+	fn()
+	return ""
+}
+
+func assertSlotPanic(t *testing.T, want string, mount func()) {
 	t.Helper()
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
-	rec := httptest.NewRecorder()
-	app.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Contains(t, logs.String(), want)
+	msg := panicMsg(mount)
+	assert.Contains(t, msg, "found at Mount", "the boot render must catch it, not a request")
+	assert.Contains(t, msg, want)
 }
 
 // assertMountPanic drives the fail-at-boot claim: a composition whose signals
@@ -432,13 +448,9 @@ func assertSlotPanic(t *testing.T, app http.Handler, want string) {
 // for the life of the process.
 func assertMountPanic(t *testing.T, want string, mount func()) {
 	t.Helper()
-	var rec any
-	func() {
-		defer func() { rec = recover() }()
-		mount()
-	}()
-	require.NotNil(t, rec, "expected a panic at Mount containing %q", want)
-	assert.Contains(t, fmt.Sprint(rec), want)
+	msg := panicMsg(mount)
+	require.NotEmpty(t, msg, "expected a panic at Mount containing %q", want)
+	assert.Contains(t, msg, want)
 }
 
 func TestSignal_duplicateSlotNamePanicsAtMount(t *testing.T) {
@@ -554,19 +566,14 @@ func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 	assertMountPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverView{}) })
 }
 
-func TestSignal_valueReceiverChildPanicsAtRender(t *testing.T) {
-	// Not Parallel: it captures the process-global log, which every other test writes to.
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	defer log.SetOutput(os.Stderr)
-	rec := httptest.NewRecorder()
-	via.Handler(valueReceiverChildParent{}).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Contains(t, logs.String(), "View has a VALUE receiver")
+func TestSignal_valueReceiverChildPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertSlotPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverChildParent{}) })
 }
 
 func TestSignal_slotCollidingWithAChildPrefixPanics(t *testing.T) {
-	assertSlotPanic(t, via.Handler(childCollidePage{}), "collides with the child prefix of field a")
+	t.Parallel()
+	assertSlotPanic(t, "collides with the child prefix of field a", func() { via.Handler(childCollidePage{}) })
 }
 
 type phantomChild struct {
@@ -615,6 +622,7 @@ type bareChildParent struct{ Sub bareChildSub }
 func (p *bareChildParent) View() h.H { return h.Div(p.Sub.View()) }
 
 func TestChild_renderedWithoutChildPanicsNamingViaChild(t *testing.T) {
-	assertSlotPanic(t, via.Handler(bareChildParent{}),
-		"a child composition must be rendered through via.Child, not by calling its View")
+	t.Parallel()
+	assertSlotPanic(t, "a child composition must be rendered through via.Child, not by calling its View",
+		func() { via.Handler(bareChildParent{}) })
 }

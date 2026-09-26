@@ -1,9 +1,11 @@
 package via_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,6 +65,14 @@ func TestSSE_defaultAllowsCrossSite(t *testing.T) {
 	srv := serve(t, via.Handler(quietChild{}))
 	assert.Equal(t, http.StatusOK,
 		sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "cross-site"}))
+}
+
+func TestSSE_defaultAllowsSameOriginAndHeaderlessRequests(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(quietChild{}))
+	assert.Equal(t, http.StatusOK, sseStatus(t, srv, sameOrigin()))
+	assert.Equal(t, http.StatusOK, sseStatus(t, srv, map[string]string{"Origin": srv.URL}))
+	assert.Equal(t, http.StatusOK, sseStatus(t, srv, nil), "no browser sent this, so there is no cookie to ride")
 }
 
 func TestSSE_allowsTrustedCrossOrigin(t *testing.T) {
@@ -148,6 +158,31 @@ type csrfForm struct{ hits *atomic.Int64 }
 func (p *csrfForm) Save(ctx *via.Ctx) { p.hits.Add(1) }
 func (p *csrfForm) View() h.H         { return via.PostForm(p.Save, h.Button(h.Str("save"))) }
 
+func postCSRFForm(t *testing.T, srv *httptest.Server, withFile bool, headers map[string]string) int {
+	t.Helper()
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	require.NoError(t, mw.WriteField("title", "x"))
+	if withFile {
+		fw, err := mw.CreateFormFile("avatar", "a.png")
+		require.NoError(t, err)
+		_, err = fw.Write([]byte("png"))
+		require.NoError(t, err)
+	}
+	require.NoError(t, mw.Close())
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), &buf)
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
 func TestAction_plainFormWithoutTrustedOriginAdmitsCrossSite(t *testing.T) {
 	t.Parallel()
 	hits := &atomic.Int64{}
@@ -165,6 +200,16 @@ func TestAction_plainFormWithoutTrustedOriginAdmitsCrossSite(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int64(1), hits.Load())
+}
+
+func TestAction_plainFormWithoutTrustedOriginAdmitsSameOriginAndHeaderlessSubmits(t *testing.T) {
+	t.Parallel()
+	hits := &atomic.Int64{}
+	srv := serve(t, via.Handler(csrfForm{hits: hits}))
+	assert.Equal(t, http.StatusOK, postCSRFForm(t, srv, false, map[string]string{"Origin": srv.URL}))
+	assert.Equal(t, http.StatusOK, postCSRFForm(t, srv, true, sameOrigin()))
+	assert.Equal(t, http.StatusOK, postCSRFForm(t, srv, false, nil))
+	assert.Equal(t, int64(3), hits.Load())
 }
 
 func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
@@ -219,6 +264,35 @@ func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).NoOrigin().Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
+}
+
+func TestAction_defaultAdmitsEveryOrigin(t *testing.T) {
+	t.Parallel()
+	cases := []struct{ name, origin, secFetch string }{
+		{"localhost on another port", "http://localhost:5173", "same-site"},
+		{"cross-site", "https://evil.example", "cross-site"},
+		{"no origin signal", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			headers := map[string]string{}
+			a := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1)
+			if c.origin == "" {
+				a.NoOrigin()
+			} else {
+				a.Origin(c.origin).SecFetch(c.secFetch)
+				headers["Origin"] = c.origin
+				headers["Sec-Fetch-Site"] = c.secFetch
+			}
+			status, body := a.Fire()
+			assert.Equal(t, http.StatusOK, status, "action")
+			assert.Contains(t, body, "<h1>1</h1>")
+
+			srv := serve(t, via.Handler(quietChild{}))
+			assert.Equal(t, http.StatusOK, sseStatus(t, srv, headers), "SSE connect")
+		})
+	}
 }
 
 func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {
@@ -409,6 +483,118 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
 		assert.Empty(t, resp.Header.Get("Location"))
+	})
+}
+
+// hop redirects to a fixed target from an action, a native form submit or
+// OnInit, so one table drives the redirect gate on every transport.
+type hop struct {
+	to       string
+	external bool
+	n        int
+}
+
+func (p *hop) queue(ctx *via.Ctx) {
+	if p.external {
+		ctx.RedirectExternal(p.to)
+		return
+	}
+	ctx.Redirect(p.to)
+}
+func (p *hop) Go(ctx *via.Ctx) { p.n++; p.queue(ctx) }
+func (p *hop) View() h.H       { return h.Div(h.Str(p.n), h.Button(via.On("click", p.Go))) }
+
+type hopForm struct{ hop }
+
+func (p *hopForm) View() h.H { return via.PostForm(p.Go, h.Button(h.Str("go"))) }
+
+type hopInit struct{ hop }
+
+func (p *hopInit) OnInit(ctx *via.Ctx) error { p.queue(ctx); return nil }
+func (p *hopInit) View() h.H                 { return h.P(h.Str("stayed")) }
+
+func TestRedirect_followsOnlyOnSiteTargets(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		to       string
+		external bool
+		opts     []via.Option
+		followed bool
+	}{
+		{"relative path", "/next", false, nil, true},
+		{"absolute, own origin", "https://app.example/next", false, nil, true},
+		{"absolute, own host over http", "http://app.example/next", false, nil, true},
+		{"trusted origin", "https://partner.example/x", false, []via.Option{via.WithTrustedOrigin("https://partner.example")}, true},
+		{"foreign host", "https://evil.example/", false, nil, false},
+		{"own host as userinfo", "https://app.example@evil.example/", false, nil, false},
+		{"backslash authority", `https://evil.example\@app.example/`, false, nil, false},
+		{"own host as a subdomain label", "https://app.example.evil.example/", false, nil, false},
+		{"external, foreign host", "https://pay.example/checkout", true, nil, true},
+		{"external, script scheme", "javascript:alert(1)", true, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			app := vt.Serve(t, via.Handler(hop{to: c.to, external: c.external}, c.opts...))
+			status, body := app.Action(0).Host("app.example").Fire()
+			require.Equal(t, http.StatusOK, status)
+			if c.followed {
+				assert.Contains(t, body, "location.assign", "the navigation script")
+				return
+			}
+			assert.NotContains(t, body, "location.assign")
+			assert.Contains(t, body, ">1<", "a dropped redirect falls back to the render")
+		})
+	}
+}
+
+func TestRedirect_dropsAnOffSiteTargetOnEveryTransport(t *testing.T) {
+	t.Parallel()
+	client := &http.Client{CheckRedirect: noFollow}
+
+	t.Run("native form", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(hopForm{hop{to: "https://evil.example/"}}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp := postForm(client, t, srv.URL+actionURL(t, page, "r", 0), "x", "y")
+		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode)
+		assert.Empty(t, resp.Header.Get("Location"))
+	})
+
+	t.Run("OnInit", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(hopInit{hop{to: "https://evil.example/"}}))
+		resp, err := client.Get(srv.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode, "answered like an unsafe scheme")
+		assert.Empty(t, resp.Header.Get("Location"))
+	})
+}
+
+func TestRedirectExternal_leavesTheSiteOnEveryTransport(t *testing.T) {
+	t.Parallel()
+	const target = "https://pay.example/checkout?o=1"
+	client := &http.Client{CheckRedirect: noFollow}
+
+	t.Run("native form", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(hopForm{hop{to: target, external: true}}))
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		resp := postForm(client, t, srv.URL+actionURL(t, page, "r", 0), "x", "y")
+		assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+		assert.Equal(t, target, resp.Header.Get("Location"))
+	})
+
+	t.Run("OnInit", func(t *testing.T) {
+		t.Parallel()
+		srv := serve(t, via.Handler(hopInit{hop{to: target, external: true}}))
+		resp, err := client.Get(srv.URL + "/")
+		require.NoError(t, err)
+		resp.Body.Close()
+		assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+		assert.Equal(t, target, resp.Header.Get("Location"))
 	})
 }
 
@@ -708,4 +894,57 @@ func TestWithMaxBody_panicsOnANonPositiveCap(t *testing.T) {
 func TestWithMaxUpload_panicsOnANonPositiveCap(t *testing.T) {
 	t.Parallel()
 	assert.Panics(t, func() { via.NewRouter(via.WithMaxUpload(-1)) })
+}
+
+func TestOriginFloor_enforcesSchemeBehindATLSProxy(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
+
+	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Header("X-Forwarded-Proto", "https").Fire()
+	assert.Equal(t, http.StatusForbidden, down, "an http Origin when the browser spoke https to the proxy is a downgrade")
+
+	ok, body := app.Action(1).Host("app.example").Origin("https://app.example").Header("X-Forwarded-Proto", "https").Fire()
+	assert.Equal(t, http.StatusOK, ok)
+	assert.Contains(t, body, "<h1>1</h1>")
+}
+
+func TestWithTrustedOrigin_matchesTheNormalizedOrigin(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, trusted, origin string }{
+		{"upper-case host", "https://Auth.example", "https://auth.example"},
+		{"explicit default port", "https://auth.example:443", "https://auth.example"},
+		{"request carries the default port", "https://auth.example", "https://AUTH.example:443"},
+		{"trailing slash", "https://auth.example/", "https://auth.example"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin(tt.trusted)))
+			status, body := app.Action(1).Origin(tt.origin).SecFetch("cross-site").Fire()
+			assert.Equal(t, http.StatusOK, status)
+			assert.Contains(t, body, "<h1>1</h1>")
+		})
+	}
+}
+
+func TestWithTrustedOrigin_panicsOnAValueThatIsNotABareOrigin(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ name, origin, want string }{
+		{"path", "https://auth.example/login", "path"},
+		{"query", "https://auth.example?x=1", "query"},
+		{"empty query", "https://auth.example?", "query"},
+		{"fragment", "https://auth.example#top", "fragment"},
+		{"userinfo", "https://user@auth.example", "userinfo"},
+		{"non-http scheme", "ftp://auth.example", "scheme"},
+		{"no scheme", "auth.example", "scheme"},
+		{"no host", "https://", "host"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			msg := panicMsg(func() { via.NewRouter(via.WithTrustedOrigin(tt.origin)) })
+			assert.Contains(t, msg, "WithTrustedOrigin")
+			assert.Contains(t, msg, tt.want)
+		})
+	}
 }

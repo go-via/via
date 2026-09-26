@@ -62,10 +62,13 @@ func (p *Actions) View() h.H {
 			[]h.H{Code("func (t *T) M(ctx *via.Ctx)"), h.Span(h.Str("Bind with "), Code("on.Click(t.M)"), h.Str("."))},
 			[]h.H{Code("func (t *T) M(ctx *via.Ctx, v V)"), h.Span(h.Str("Bind with "), Code("on.Click(on.WithArg(t.M, v))"), h.Str("; see Arguments below."))},
 			[]h.H{h.Str("A return value, no Ctx, a second argument without WithArg"), h.Span(h.Str("Does not compile: the binders accept "), Code("func(*via.Ctx)"), h.Str(" or an "), API("on.Bound"), h.Str(" only."))},
-			[]h.H{h.Str("A func literal in a loop or an Each row"), h.Str("Compiles, then the first render answers 500: every copy has the same Go name, so via cannot tell them apart and panics. Use a method and WithArg.")},
+			[]h.H{h.Str("A func literal in a loop or an Each row"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value has no rows: every copy has the same Go name, so via cannot tell them apart. Use a method and WithArg.")},
+			[]h.H{h.Str("A method taken through an interface field, or a value receiver whose type sits at two fields or at none"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value does not reach it: via cannot tell which value the method belongs to. Give the method a pointer receiver and hold the concrete type in the field; a value receiver on the page, or on a type only one field holds, works.")},
 		),
 		h.P(h.Str("An action returns nothing. Report a failure the user can fix by setting state, such as an error Signal; a panic is a 500. "+
-			"Mount checks the lifecycle hooks' signatures, not actions': the collision above is the only action check, and it fires at render.")),
+			"Mount checks the lifecycle hooks' signatures, not actions': the two rows above are the only action checks, and a render has to reach the binding to run them.")),
+		h.P(h.Str("An action's id is the method's Go name plus the path of the field it was called on, such as "), Code("Stats.A"),
+			h.Str(". A deploy that reorders fields keeps every button's id; one that renames a field answers 410 to a tab still holding the old name.")),
 
 		d.H2("What an action body can do"),
 		snippet.Region("actions/body.go", "body", snippet.Mark("ctx.Session()", "ctx.Redirect", "ctx.Param", "ctx.Context()")),
@@ -74,7 +77,8 @@ func (p *Actions) View() h.H {
 			[]h.H{API("via.Ctx.Session"), h.Span(h.Str("The browser session: "), API("via.Session.Get"), h.Str(", "), API("via.Session.Put"), h.Str(", and "), API("via.Session.Rotate"), h.Str(" after a login."))},
 			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. The query string is empty on every action.")},
 			[]h.H{API("via.Ctx.Context"), h.Str("A context to pass to slow calls. On a live unit it is cancelled when the tab disconnects.")},
-			[]h.H{API("via.Ctx.Redirect"), h.Str("Navigate once the handler returns. The answer skips OnReload and the render.")},
+			[]h.H{API("via.Ctx.Redirect"), h.Str("Navigate once the handler returns, on this site only. The answer skips OnReload and the render.")},
+			[]h.H{API("via.Ctx.RedirectExternal"), h.Str("The same, to another site: an OAuth provider, a payment page.")},
 		),
 		h.P(h.Str("The rest is your composition: "), API("via.Signal.Set"), h.Str(", "), API("via.State.Set"), h.Str(", "),
 			API("via.List.Append"), h.Str(", or a plain field, and the render that answers the action shows it. "+
@@ -131,6 +135,19 @@ func (p *Actions) View() h.H {
 		),
 		h.P(h.Str("Use on.Submit for anything that stays on the page. Use PostForm for sign-in, uploads, and flows that end in a redirect.")),
 
+		d.H3("PostForm with bound Signals"),
+		snippet.Region("actions/formsignals.go", "formsignals", snippet.Title("profile.go"), snippet.Mark("h.Name(", "FormValue", "Set(")),
+		h.P(h.Str("A form can keep Signals on its inputs, so an "), API("on.Change"),
+			h.Str(" reshapes it before the submit: here the country picks the region list. The submit is native: "+
+				"it posts fields by name, not the signal store, so in the handler "), API("via.Signal.Get"),
+			h.Str(" returns the initial value. Give each bound input an "), API("h.Name"),
+			h.Str(", read it with "), Code("FormValue"), h.Str(", and "), API("via.Signal.Set"),
+			h.Str(" the Signal from it. The answer renders those values, with the error beside them.")),
+		Callout(Caveat, "Plain units only",
+			h.P(h.Str("In a plain unit the submit answers with the instance the handler changed. "+
+				"In a live unit it answers with a fresh page, as a reconnect would, and what the handler set is gone. "+
+				"Keep the form in a plain unit, or end the handler with a Redirect."))),
+
 		d.H2("File uploads"),
 		demo.Card(d.H3("Inspect a file"),
 			h.P(h.Str("PostForm always sends "), Code("multipart/form-data"), h.Str(", so "), Code("ctx.Request().FormFile"),
@@ -183,13 +200,13 @@ func (p *Actions) View() h.H {
 
 		d.H2("Errors and panics"),
 		table([]string{"Status", "When"},
-			[]h.H{h.Str("400"), h.Str("The ?a= argument does not decode into the handler's type, or the body is malformed.")},
+			[]h.H{h.Str("400"), h.Str("The ?a= argument does not decode into the handler's type, or the body is malformed. A JSON body without Datastar-Request: true is read as a form, and the 400 names the header.")},
 			[]h.H{h.Str("403"), h.Span(h.Str("The Origin is not trusted (see "), API("via.WithTrustedOrigin"), h.Str("), or the tab's stream is bound to another session."))},
 			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
 			[]h.H{h.Str("410"), h.Str("The render does not bind this action, or not with this argument, or the tab's stream is gone.")},
 			[]h.H{h.Str("413"), h.Str("The body is over WithMaxBody, or a native submit is over WithMaxUpload.")},
 			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
-			[]h.H{h.Str("503"), h.Str("The session store did not answer, or a live tab's goroutine did not pick the action up in time.")},
+			[]h.H{h.Str("503"), h.Str("The session store did not answer, a live tab's goroutine did not pick the action up in time, too many actions are already waiting for their streams, or the router is shutting down.")},
 		),
 		h.P(h.Str("An action posted by Datastar leaves the page as it was. On a page with a live unit, via's reconnect script reacts: "+
 			"a 410 shows \"Page is out of date\" and reloads, and a 403 or 5xx shows \"Disconnected.\" with a Reconnect button. "+

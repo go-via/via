@@ -16,7 +16,10 @@
 // The hooks are duck-typed: opt in by having the method, so a rename or
 // signature change silently opts a unit back out. [Mount] and [Child] catch
 // two slips — a hook-named method with the wrong signature panics at boot,
-// and a near-miss name carrying a hook's exact signature is logged once.
+// and a near-miss name carrying a hook's exact signature is logged once. A
+// near miss is a known alias ("Reload", "Init") or a hook name one typing slip
+// away ("OnRelaod", "Oninit"). A leftover v0.7 OnConnect(*via.Ctx) error is
+// logged too, even next to an OnInit.
 //
 //	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any
 //	                         // embedded child
@@ -476,8 +479,8 @@ func childFieldName(parent, child reflect.Type) string {
 		// two different fields.
 		for own := range signalsOf(parent).names {
 			if strings.HasPrefix(own, name+"__") {
-				panic("via: signal slot " + own + " on " + parent.String() +
-					" collides with the child prefix of field " + name + " — rename the field")
+				panic(hcore.Miswired("via: signal slot " + own + " on " + parent.String() +
+					" collides with the child prefix of field " + name + " — rename the field"))
 			}
 		}
 	}
@@ -502,10 +505,10 @@ type ptrViewer[T any] = interface {
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
 type Ctx struct {
-	order       []string                         // slots in assignment order
-	initial     map[string]any                   // per-slot value seen at render time
-	actions     map[string]action                // content-addressed action table, keyed by handler identity
-	hydrators   map[string]func(json.RawMessage) // per-slot updater, kept from the last render so a live action hydrates without re-rendering
+	order       []string                              // slots in assignment order
+	initial     map[string]any                        // per-slot value seen at render time
+	actions     map[string]action                     // content-addressed action table, keyed by handler identity
+	hydrators   map[string]func(json.RawMessage) bool // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	ticks       []tickReg
 	subs        []subStarter
 	onConnect   []func() // run once when the stream opens
@@ -516,6 +519,7 @@ type Ctx struct {
 	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
 	req         *http.Request
 	sessions    *sessionManager
+	policy      *routerPolicy
 	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I2)
 	session     *Session
 	children    []*Ctx // embedded children, in positional order (parent binder only)
@@ -526,7 +530,7 @@ type Ctx struct {
 	push        func() // re-render this child and frame it on the stream
 	declare     bool   // this render declares page-level data-signals
 	base        string // mount path prefix for action POSTs
-	redirect    string
+	redirect    redirectTo
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
@@ -541,6 +545,7 @@ type Ctx struct {
 	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
 	streamCtx context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
+	guard     *pushGuard      // live only: the connection's panic dedupe, which a Listen handler's recover reports to
 
 	// badDecodeLogged dedupes the hydrator's decode-failure warning for the
 	// whole tree this Ctx belongs to: a shared pointer, allocated once per
@@ -570,7 +575,7 @@ type Ctx struct {
 func (c *Ctx) Request() *http.Request { return c.req }
 
 // Context returns the context that bounds this unit's work. On a live unit it
-// is the stream context — cancelled when the tab disconnects or [Router.Close]
+// is the stream context — cancelled when the tab disconnects or [Router.Shutdown]
 // runs — which is the one a Tick or Listen handler can watch to abandon a slow
 // call instead of finishing it against a dead socket:
 //
@@ -595,14 +600,13 @@ func (c *Ctx) Context() context.Context {
 	return context.Background()
 }
 
-// logger is the Router's logger, reached through sessions — the router-scoped
-// struct every request-scoped Ctx already carries. A bare render has neither,
-// so it falls back to the package default.
+// logger is the Router's logger. A bare render has no router policy, so it
+// falls back to the package default.
 func (c *Ctx) logger() *slog.Logger {
-	if c == nil {
+	if c == nil || c.policy == nil {
 		return slog.Default()
 	}
-	return c.sessions.logger()
+	return c.policy.log
 }
 
 func newCtx() *Ctx {
@@ -610,7 +614,7 @@ func newCtx() *Ctx {
 		initial:   map[string]any{},
 		actions:   map[string]action{},
 		dirty:     map[string]any{},
-		hydrators: map[string]func(json.RawMessage){},
+		hydrators: map[string]func(json.RawMessage) bool{},
 	}
 }
 
@@ -633,8 +637,8 @@ func (c *Ctx) dirtyAll() map[string]any {
 // Ctx's public surface.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) DeclareSignal(slot string, initial any)         { b.c.declareSignal(slot, initial) }
-func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage)) { b.c.hydrator(slot, fn) }
+func (b binderCtx) DeclareSignal(slot string, initial any)              { b.c.declareSignal(slot, initial) }
+func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage) bool) { b.c.hydrator(slot, fn) }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
 // via's own (a bare h render).
@@ -662,10 +666,10 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 			}
 		}
 	}
-	panic("via: a rendered Signal has no slot in its unit — a child composition must be rendered " +
+	panic(hcore.Miswired("via: a rendered Signal has no slot in its unit — a child composition must be rendered " +
 		"through via.Child, not by calling its View; and View needs a POINTER receiver with every " +
 		"Signal (and every child) held as a plain struct field, not behind a pointer, slice, array, " +
-		"map or interface")
+		"map or interface"))
 }
 
 // csSeed returns field's declared start value — T's zero, or the JSON in a
@@ -714,7 +718,7 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 		// A user signal landing on this name would overwrite the CSRF token
 		// the next action routes by (see tabSignal). Loud at the first render,
 		// never a silent mid-session 410 storm.
-		panic("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field")
+		panic(hcore.Miswired("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field"))
 	}
 	if _, seen := c.initial[slot]; !seen {
 		c.order = append(c.order, slot)
@@ -725,16 +729,24 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 // hydrator records slot's update function. A live unit keeps the table from
 // its last render (every push is a render), so a live action hydrates in place
 // without re-rendering. hcore.Binder.
-func (c *Ctx) hydrator(slot string, fn func(json.RawMessage)) {
+func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
 	c.hydrators[slot] = fn
 }
 
 // PostForm renders a native <form method="post"> whose submit runs handler on
 // the server — the flow for sign-up/in, file uploads, and anything ending in a
-// Redirect. Unlike On("submit", …), which element-patches in place, this is a
-// real browser navigation: handler reads fields via ctx.Request().FormValue
-// and may Redirect. The form is always multipart, so ctx.Request().FormFile
-// works. handler is a named method value; children are the form contents.
+// Redirect. Unlike on.Submit, which element-patches in place, this is a real
+// browser navigation: handler reads fields via ctx.Request().FormValue and may
+// Redirect. The form is always multipart, so ctx.Request().FormFile works.
+// handler is a named method value; children are the form contents.
+//
+// A native submit posts form fields, not the signal store, so in handler a
+// Signal's Get returns its initial value, not what the input shows. To keep
+// Signals on the form's inputs (for an on.Change that reshapes it, say), give
+// each bound input an h.Name, read it with FormValue, and Set the Signal from
+// it; the page the submit answers with renders those values. That page is
+// rendered from the acted-on instance only for a plain unit: in a live unit
+// the submit answers with a fresh page, and what handler set is gone.
 //
 // It carries a hidden _viatab field synced to the $viatab signal: a native
 // submit carries neither Datastar's signal store nor its headers, so dispatch
@@ -821,15 +833,30 @@ func decodeSegment[T any](seg string, name string) T {
 // Redirect navigates the browser to path after the current handler returns,
 // from anywhere: OnInit (before the View ever renders), OnReload, a PostForm
 // submit, and a Datastar @post action — plain, embedded, or live. path must be
-// http/https or a same-origin relative path; any other scheme is dropped and
-// logged, never followed.
+// relative or an absolute http(s) URL on this site: the request's own host, or
+// an origin passed to WithTrustedOrigin. Anything else (another host, a
+// javascript: or any other scheme) is dropped and logged, never followed, so a
+// target read from the request cannot send the user off-site. Leave the site
+// with RedirectExternal.
 //
 // The transport differs, the meaning does not: a full-page request answers 303,
 // a @post answers the one-line navigation script Datastar executes (see
 // redirectInit). A Redirect skips the unit's OnReload and the response render —
 // nothing from this render is going to be shown.
 func (c *Ctx) Redirect(path string) {
-	c.redirect = path
+	c.redirect = redirectTo{url: path, refused: c.offSite(path)}
+}
+
+// RedirectExternal is Redirect to any http(s) URL, for a hand-off that has to
+// leave the site (an OAuth provider, a payment page). The scheme gate still
+// applies. Passing it a target read from the request unchecked is the open
+// redirect Redirect refuses.
+func (c *Ctx) RedirectExternal(target string) {
+	r := redirectTo{url: target}
+	if !hcore.SafeURL(target) {
+		r.refused = notHTTP
+	}
+	c.redirect = r
 }
 
 // On wires a named DOM event (e.g. "click", "submit", "change") to a POST
@@ -917,7 +944,7 @@ func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
 			}
 			fn(rc, v)
 		}, string(data))
-		writeActionAttr(r, ctx, event, idx, "?a="+url.QueryEscape(string(data)))
+		writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 	})
 }
 
@@ -945,12 +972,19 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 	return "this render does not bind that action for that argument"
 }
 
-// writeActionAttr writes the data-on:<event>="@post('PATH?query')" binding for
-// a claimed action slot. Written raw, not via h.Data: the value is a Datastar
+// writeActionAttr writes the data-on:<event>="@post('PATH')" binding for a
+// claimed action slot. Written raw, not via h.Data: the value is a Datastar
 // expression whose single quotes must survive verbatim, and every byte of it is
 // via-generated (fixed template, via-controlled event name, hashed id,
 // url-encoded arg), so no user input reaches it. The colon spelling is
 // mandatory — see h.Data.
+//
+// The query (?u= for a child, ?a= for an arg) goes in a data-via-q-<event>
+// attribute the expression reads off el, so the expression text is one per
+// action and event. Datastar in nonce mode compiles each distinct expression
+// into a script it never evicts, so a query inline would leave one per row for
+// the document's life. Datastar ignores data-* names with no plugin, and the
+// event suffix keeps two bindings on one element apart.
 //
 // id addresses the handler itself, so a list that grew or shrank since the
 // client's copy was rendered still routes every already-shipped URL. The tab
@@ -958,15 +992,23 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // than in a header, because Datastar builds headers per call (Object.assign
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
-func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
+func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, arg string) {
 	path := "/_via/a/" + rootAddr + "/" + idx
 	if ctx != nil {
 		path = actionPath(ctx, idx) // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
 	}
-	if query != "" && strings.Contains(path, "?") {
-		query = "&" + query[1:]
+	path, query, _ := strings.Cut(path, "?")
+	if arg != "" && query != "" {
+		query += "&"
 	}
-	r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path+query) + `')"`)
+	query += arg
+	if query == "" {
+		r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path) + `')"`)
+		return
+	}
+	qAttr := "data-via-q-" + event
+	r.WriteString(` ` + qAttr + `="` + hcore.EscapeString("?"+query) + `" data-on:` + event + `="@post('` +
+		hcore.EscapeString(path) + `' + (el.getAttribute('` + qAttr + `') ?? ''))"`)
 }
 
 // Handler builds a single-page app: a [Router] with root mounted at "/". root
@@ -976,8 +1018,12 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, query string) {
 // error rather than a first-request 500; Handler(Counter{}) still infers both
 // parameters.
 //
+// Like Mount, it renders root once and panics on a wiring mistake that render
+// reaches.
+//
 // It returns the *Router rather than an http.Handler so the live half is
-// reachable: a via app owns goroutines, and [Router.Close] is what drains them.
+// reachable: a via app owns goroutines, and [Router.Shutdown] (or
+// [Router.Close], with no deadline) is what drains them.
 //
 //	r := via.Handler(Counter{})
 //	defer r.Close()

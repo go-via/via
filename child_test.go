@@ -236,7 +236,7 @@ func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 func TestMux_liveChildActionBindingCarriesChildID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+(\?u=[A-Za-z0-9_-]+)?'\)`, body,
+	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body,
 		"a live child action must carry its child id")
 	assert.NotContains(t, body, "X-Via-Tab", "the tab id is a signal now, not a per-action header")
 }
@@ -406,7 +406,7 @@ func TestChild_projectsLiveChild(t *testing.T) {
 
 func TestChild_panicsWithoutView(t *testing.T) {
 	t.Parallel()
-	require.PanicsWithValue(t,
+	require.PanicsWithError(t,
 		"via: via.Child(child) requires child to have a View() method",
 		func() { via.Child(struct{ X int }{}) },
 	)

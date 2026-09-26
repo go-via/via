@@ -20,9 +20,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"html"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -30,6 +32,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // App wraps a via handler under an httptest server, registered for cleanup.
@@ -45,8 +48,12 @@ type App struct {
 // rendered markup. The action id is content-addressed from the handler's own
 // func name, so a test cannot construct the URL — it reads the one the page
 // actually shipped, which is also what makes the ?a= row datum travel with it.
+// A binding with a query ships it in the data-via-q-<event> attribute just
+// before its data-on, which the expression appends to the path (group 1);
+// the path is group 2.
 func actionURLRe(child string) *regexp.Regexp {
-	return regexp.MustCompile(`(?:@post\('|action=")([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
+	return regexp.MustCompile(`(?:data-via-q-[^=\s]+="([^"]*)" data-on:[^=\s]+="@post\('|@post\('|action=")` +
+		`([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
 }
 
 // nthActionURL returns the n-th action URL for child in document order
@@ -57,9 +64,9 @@ func nthActionURL(markup []byte, child string, n int) (string, bool) {
 	if n < 0 || n >= len(m) {
 		return "", false
 	}
-	// The URL sits in an attribute, so it is entity-escaped there: the
+	// The URL sits in attributes, so it is entity-escaped there: the
 	// browser posts the decoded text ("&amp;" joins two query params as "&").
-	return html.UnescapeString(string(m[n][1])), true
+	return html.UnescapeString(string(m[n][2]) + string(m[n][1])), true
 }
 
 // Serve mounts handler on an in-memory httptest server (req.TLS is nil), so
@@ -88,6 +95,50 @@ func ServeTLS(t testing.TB, handler http.Handler) *App {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	return &App{t: t, srv: srv}
+}
+
+// Logger returns a logger that writes each record to t.Log, so via's
+// diagnostics land in the test's own output. Pass it to via.WithLogger:
+//
+//	app := vt.Serve(t, via.Handler(Page{}, via.WithLogger(vt.Logger(t))))
+//
+// go test then prints them under the test that caused them, only when it
+// fails or runs with -v. A record logged after the test has finished (a
+// stream winding down) is dropped, since t.Log would panic.
+func Logger(t testing.TB) *slog.Logger {
+	w := &testLog{t: t}
+	t.Cleanup(w.end)
+	// The time is dropped: under synctest it is the fake clock's, and go test
+	// already orders the lines under their test.
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+			if len(groups) == 0 && a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}))
+}
+
+type testLog struct {
+	mu    sync.Mutex
+	t     testing.TB
+	ended bool
+}
+
+func (w *testLog) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.ended {
+		w.t.Log(strings.TrimSuffix(string(p), "\n"))
+	}
+	return len(p), nil
+}
+
+func (w *testLog) end() {
+	w.mu.Lock()
+	w.ended = true
+	w.mu.Unlock()
 }
 
 // URL is the server's base URL — the origin a test hand-rolls a request
@@ -191,6 +242,10 @@ func (a *Action) SecFetch(s string) *Action {
 	return a
 }
 
+// Header sets any other request header, such as the X-Forwarded-Proto a
+// TLS-terminating proxy adds.
+func (a *Action) Header(k, v string) *Action { a.headers[k] = v; return a }
+
 // Tab sets the viatab signal in the POST body, routing a live action to a
 // connection's child — the same channel the real client uses, since Datastar
 // ships the whole (underscore-filtered) signal store with every @post.
@@ -206,7 +261,8 @@ func (a *Action) Over(c *Conn) *Action {
 	return a.Tab(c.tabID)
 }
 
-// NoOrigin sends no origin signal at all, exercising the fail-closed branch.
+// NoOrigin sends no origin signal at all, as a non-browser client does: the
+// origin check admits it by default and refuses it under WithTrustedOrigin.
 func (a *Action) NoOrigin() *Action { a.noOrigin = true; return a }
 
 // Body sets the raw JSON signal body (defaults to "{}").
@@ -288,6 +344,74 @@ type Conn struct {
 	readErr  error         // what ended it; nil for a clean end-of-response
 	mu       sync.Mutex
 	elements [][]byte // one entry per datastar-patch-elements frame, in arrival order
+	events   int      // SSE events read so far
+	recent   []string // the last few of them, one line each, for failure messages
+	pending  []string // the event being read: its name, then its data lines
+}
+
+// recentKept is how many events a failed Await prints. Enough to show the
+// push before the one that was expected, few enough to read.
+const recentKept = 3
+
+// frameHead and frameTail cap each printed event. A patch carries the unit's
+// whole HTML, so a long list would push everything else off the screen; the
+// head names the element and the tail is where a list's last row lands.
+const (
+	frameHead = 240
+	frameTail = 120
+)
+
+// endEvent files the event read so far; called under c.mu at the blank line
+// that ends it.
+func (c *Conn) endEvent() {
+	if len(c.pending) == 0 {
+		return
+	}
+	c.events++
+	line := strings.Join(c.pending, " | ")
+	if len(c.pending) > 1 {
+		line = c.pending[0] + ": " + strings.Join(c.pending[1:], " | ")
+	}
+	c.recent = append(c.recent, clip(line))
+	if len(c.recent) > recentKept {
+		c.recent = c.recent[1:]
+	}
+	c.pending = c.pending[:0]
+}
+
+func clip(s string) string {
+	if len(s) <= frameHead+frameTail+40 {
+		return s
+	}
+	head, tail := frameHead, len(s)-frameTail
+	for head > 0 && !utf8.RuneStart(s[head]) {
+		head--
+	}
+	for tail < len(s) && !utf8.RuneStart(s[tail]) {
+		tail++
+	}
+	return s[:head] + fmt.Sprintf(" …(%d bytes cut)… ", tail-head) + s[tail:]
+}
+
+// arrived describes what the stream carried, for a failure message. read is
+// how many frames the failing wait itself consumed: 0 means the frame it wanted,
+// if it came at all, was taken by an earlier Await.
+func (c *Conn) arrived(read int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.events == 0 {
+		return "no frames arrived on this stream"
+	}
+	var b strings.Builder
+	noun := "frames"
+	if c.events == 1 {
+		noun = "frame"
+	}
+	fmt.Fprintf(&b, "%d %s on this stream, %d read by this wait; the last %d:", c.events, noun, read, len(c.recent))
+	for i, f := range c.recent {
+		fmt.Fprintf(&b, "\n  #%d %s", c.events-len(c.recent)+i+1, f)
+	}
+	return b.String()
 }
 
 // tabSignal mirrors via's own wire name for the per-connection tab id.
@@ -342,12 +466,20 @@ func (a *App) ConnectAt(path, body string) *Conn {
 		defer func() {
 			c.mu.Lock()
 			c.readErr = sc.Err()
+			c.endEvent()
 			c.mu.Unlock()
 			close(c.closed)
 		}()
 		inElements := false
 		for sc.Scan() {
 			line := sc.Text()
+			c.mu.Lock()
+			if line == "" {
+				c.endEvent()
+			} else {
+				c.pending = append(c.pending, strings.TrimPrefix(strings.TrimPrefix(line, "event: "), "data: "))
+			}
+			c.mu.Unlock()
 			switch {
 			case strings.HasPrefix(line, "event:"):
 				inElements = strings.Contains(line, "datastar-patch-elements")
@@ -422,16 +554,24 @@ func (c *Conn) Peek() (string, bool) {
 // line, failing the test after 2s otherwise. The returned line lets a caller
 // assert further on what rode in alongside the needle (e.g. that a raw,
 // unescaped form is absent).
+//
+// Each line is read once: a line an earlier Await skipped past or matched is
+// gone. A failure prints how many frames the stream carried, how many this
+// Await read, and the last three, each cut to a few hundred bytes.
 func (c *Conn) Await(needle string) string {
 	c.t.Helper()
 	deadline := time.After(2 * time.Second)
+	read := 0
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatalf("vt.Await: timed out waiting for %q", needle)
+			c.t.Fatalf("vt.Await: timed out after 2s waiting for %q. %s", needle, c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatalf("vt.Await: stream closed before %q arrived", needle)
+				c.t.Fatalf("vt.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
+			}
+			if strings.HasPrefix(line, "event:") {
+				read++
 			}
 			if strings.Contains(line, needle) {
 				return line
@@ -462,13 +602,17 @@ func (c *Conn) Close() { c.cancel() }
 func (c *Conn) awaitTab() string {
 	c.t.Helper()
 	deadline := time.After(2 * time.Second)
+	read := 0
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatal("vt.Connect: no viatab frame arrived")
+			c.t.Fatal("vt.Connect: no viatab frame arrived. " + c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatal("vt.Connect: stream closed before the tab-id frame")
+				c.t.Fatal("vt.Connect: stream closed before the tab-id frame. " + c.arrived(read))
+			}
+			if strings.HasPrefix(line, "event:") {
+				read++
 			}
 			if m := tabRE.FindStringSubmatch(line); m != nil {
 				return m[1]

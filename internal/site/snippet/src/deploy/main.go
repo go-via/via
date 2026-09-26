@@ -23,7 +23,7 @@ type Home struct{}
 
 func (p *Home) View() h.H { return h.P(h.Str("hello")) }
 
-// drainDelay is how long /readyz fails before the router closes. Set it to
+// drainDelay is how long /readyz fails before the router shuts down. Set it to
 // what your balancer needs to mark the pod down: probe interval times the
 // failure threshold.
 const drainDelay = 5 * time.Second
@@ -97,9 +97,8 @@ func Run() error {
 
 	ready.Store(false)
 	time.Sleep(drainDelay)
-	r.Close()
 	shut, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return srv.Shutdown(shut)
+	return errors.Join(r.Shutdown(shut), srv.Shutdown(shut))
 	// snippet:end
 }

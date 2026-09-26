@@ -58,7 +58,8 @@ func (p *Signals) View() h.H {
 			h.Str(" by hand; renaming the field renames the signal.")),
 		Callout(Caveat, "Plain fields only",
 			h.P(h.Str("A signal is named by its field, so it must be a plain field, through plain structs if you like. "+
-				"One reached through a pointer, slice, map or interface has no name, and rendering it or calling Ref panics. "+
+				"One reached through a pointer, slice, array or map has no name, and Mount panics on it. "+
+				"One behind an interface panics only when it renders or Ref is called. "+
 				"Two child fields of the same type are told apart by position instead, with an "), Code("i<n>__"), h.Str(" prefix.")),
 		),
 

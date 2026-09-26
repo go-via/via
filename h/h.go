@@ -100,8 +100,10 @@ type Attr = hcore.Attr
 
 // El builds an element with an arbitrary tag, for the handful of tags h has no
 // named constructor for (a custom element, an SVG child). The tag is validated
-// and an invalid one panics. Prefer the named constructors: they know which
-// tags are void and must not emit a closing tag.
+// and an invalid one panics, as does script in any case: Datastar gives a
+// <script> that arrives in a live patch the page's nonce, so it would run.
+// Declare scripts in via.Meta.Assets. Prefer the named constructors: they
+// know which tags are void and must not emit a closing tag.
 func El(tag string, kids ...H) H { return hcore.El(tag, kids...) }
 
 // Stringish is what [Str] accepts: ~string plus every built-in integer and

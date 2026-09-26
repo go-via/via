@@ -2,6 +2,7 @@ package via
 
 import (
 	"bytes"
+	"log/slog"
 	"maps"
 	"slices"
 	"sync/atomic"
@@ -42,6 +43,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 	ctx.doInit = true
 	ctx.req = from.req
 	ctx.sessions = from.sessions
+	ctx.policy = from.policy
 	ctx.sessW = from.sessW
 	// The resolved handle, not just the manager: a session minted this request
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
@@ -157,6 +159,29 @@ func checkLiveUnderLive(c *Ctx, underLive bool) {
 	for _, ch := range c.children {
 		checkLiveUnderLive(ch, underLive || c.live)
 	}
+}
+
+// bootPolicy marks a boot render and discards what it would log. Children
+// inherit their parent's policy, so the whole tree sees it.
+var bootPolicy = &routerPolicy{log: slog.New(slog.DiscardHandler)}
+
+// bootRender renders inst, a copy of the mounted literal, the way a live push
+// does: no OnInit anywhere in the tree, and a Ctx of its own, so it has no
+// side effects. It returns the message of a Miswired panic and swallows every
+// other: a View that dereferences data OnInit would have loaded is not a bug.
+func bootRender(inst instance) (miswired string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			if m, ok := rec.(hcore.Miswired); ok {
+				miswired = string(m)
+			}
+		}
+	}()
+	ctx := newRootCtx(false, "", nil)
+	ctx.unitV = inst
+	ctx.policy = bootPolicy
+	renderRootWith(ctx, inst.v)
+	return ""
 }
 
 // liveNestingViolation is checkLiveUnderLive's panic value. Unlike a render

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CI gate for the via module: formatting, vet, build, and the race-enabled
 # test suite (which includes the no-&/no-closure guarantee lint and the CSP
-# unsafe-eval / dead-dash regression guards). Run from the module root.
+# no-eval / dead-dash regression guards). Run from the module root.
 set -euo pipefail
 
 GO="${GO:-go}"

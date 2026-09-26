@@ -1,6 +1,9 @@
 package hcore
 
-import "strings"
+import (
+	"net/url"
+	"strings"
+)
 
 // SafeURL admits http, https and relative URLs and rejects everything else —
 // javascript:, data:, vbscript:, mailto:, and the protocol-relative // and \\
@@ -29,6 +32,46 @@ func SafeHref(u string) bool {
 	scheme, ok := urlScheme(u)
 	return ok && (scheme == "" || scheme == "http" || scheme == "https" ||
 		scheme == "mailto" || scheme == "tel")
+}
+
+// URLOrigin returns the origin (scheme://host[:port], lower-cased, default port
+// dropped) that a browser navigates to for u, or "" for a relative URL. ok is
+// false for whatever [SafeURL] refuses, and for an absolute URL whose host Go
+// cannot read the way the browser does ("https:evil.example", which a browser
+// completes to https://evil.example/), so a caller comparing hosts fails closed.
+//
+// A backslash reads as a slash in an http(s) URL, so "https://evil\@app"
+// names evil, not app; it is mapped before parsing.
+func URLOrigin(u string) (origin string, ok bool) {
+	scheme, ok := urlScheme(u)
+	if !ok || scheme != "" && scheme != "http" && scheme != "https" {
+		return "", false
+	}
+	if scheme == "" {
+		return "", true
+	}
+	u = strings.Map(func(r rune) rune {
+		switch r {
+		case '\t', '\r', '\n':
+			return -1
+		case '\\':
+			return '/'
+		}
+		return r
+	}, u)
+	u = strings.TrimFunc(u, func(r rune) bool { return r <= ' ' })
+	p, err := url.Parse(u)
+	if err != nil || p.Host == "" {
+		return "", false
+	}
+	host := strings.ToLower(p.Host)
+	switch scheme {
+	case "http":
+		host = strings.TrimSuffix(host, ":80")
+	case "https":
+		host = strings.TrimSuffix(host, ":443")
+	}
+	return scheme + "://" + host, true
 }
 
 // urlScheme returns u's lower-cased scheme as the browser would read it, ""

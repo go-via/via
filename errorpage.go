@@ -281,7 +281,7 @@ func (r *Router) writeErrorPage(w http.ResponseWriter, req *http.Request, pe Pag
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("Content-Security-Policy", r.errCSP)
 	var head strings.Builder
-	head.WriteString(`<!doctype html>` + r.cfg.head.htmlOpen() + `<head><meta charset="utf-8">`)
+	head.WriteString(`<!doctype html>` + r.cfg.head.htmlOpen("") + `<head><meta charset="utf-8">`)
 	head.WriteString(`<title>` + html.EscapeString(strconv.Itoa(pe.Status)+" "+http.StatusText(pe.Status)) + `</title>`)
 	head.WriteString(r.cfg.head.Raw)
 	r.cfg.head.Assets.render(&head)
@@ -308,6 +308,7 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 	ctx.errPage = true
 	ctx.req = req
 	ctx.sessions = r.sessions
+	ctx.policy = r.policy
 	node := r.cfg.errorPage(ctx, pe)
 	if node == nil {
 		r.errPageWarn.Do(func() {

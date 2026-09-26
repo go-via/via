@@ -19,12 +19,12 @@ func NewSecurity(env Env) Security { return Security{page: newPage("/security", 
 
 func (p *Security) PageMeta() via.Meta {
 	m := p.meta("Sessions and Rotate, the origin check and CSRF, the session cookie's flags, " +
-		"the Content-Security-Policy and its 'unsafe-eval', request limits, and middleware around the Router.")
+		"redirects, the Content-Security-Policy and its per-document nonce, request limits, and middleware around the Router.")
 	m.Assets = demo.Assets(p.site.Asset)
 	return m
 }
 
-const originWarning = "via: no WithTrustedOrigin set, so actions accept requests from any origin; set WithTrustedOrigin in production"
+const originNotice = "via: no WithTrustedOrigin set, so actions accept requests from any origin: any site can fire an action that needs no session, and a page on a sibling subdomain, or this host over http, can fire one as the signed-in user. Set WithTrustedOrigin in production"
 
 const crossOriginPOST = `# without WithTrustedOrigin: the cross-origin sign-in runs
 $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://evil.example' \
@@ -46,7 +46,7 @@ Content-Length: 0`
 const cspTranscript = `$ curl -sI https://example.com/security \
     | grep -i '^content-security-policy' | tr ';' '\n'
 Content-Security-Policy: default-src 'self'
- script-src 'self' 'unsafe-eval' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-w1BxZv52Hq0b9bKtw6PbfGN6HkmnMl6I3uT+H7Bwjsk=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
+ script-src 'self' 'nonce-KSfGODYz22EjHLF6Vse7nw' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-LqIkD2ynqYz8zKSe58JjW3qRObZHPM+TRdfHp4SBKu4=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
  style-src 'self'
  object-src 'none'
  base-uri 'self'
@@ -67,25 +67,31 @@ func (p *Security) View() h.H {
 			"attaches on its own. It is the CSRF token: an action on a live tab runs only with that tab's id, and only under the "+
 			"session the tab connected with. A request carrying another session's cookie answers 403 "), Code("session mismatch"),
 			h.Str(", even with the right id.")),
-		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, in this order: an "),
+		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, form submit and stream "+
+			"connect, in this order: an "),
 			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header must be "),
 			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; otherwise the "), Code("Origin"),
-			h.Str(" host must equal the request's "), Code("Host"), h.Str(". A request with neither header fails. "+
-				"Behind a proxy, list the public origin: the allowlist is checked first, so a rewritten Host does not matter.")),
+			h.Str(" host must equal the request's "), Code("Host"),
+			h.Str(", and be https when the request arrived over TLS or the proxy says "), Code("X-Forwarded-Proto: https"),
+			h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
+				"Behind a proxy, list the public origin: the allowlist is checked first, so a rewritten Host does not matter. "+
+				"A listed origin is compared as the browser sends it: host case, a default port and a trailing \"/\" do not "+
+				"matter, and a value with a path, query, fragment or userinfo panics at startup.")),
 		snippet.Text("shell", crossOriginPOST),
 		Callout(Warning, "Without it, every origin is accepted",
 			h.P(h.Str("A plain action (on a page with nothing live) has no tab id to check, so any site can post to it. "+
 				"The session cookie is "), Code("SameSite=Lax"), h.Str(", so the browser leaves it off a cross-site POST and the "+
 				"handler runs signed out, but a sibling subdomain counts as the same site. Look for this line at startup:")),
-			snippet.Text("", originWarning),
+			snippet.Text("", originNotice),
 		),
 
 		d.H2("The session cookie"),
 		table([]string{"Property", "Value", "Change it with"},
 			[]h.H{h.Str("HttpOnly"), h.Str("Always."), h.Str("Nothing.")},
 			[]h.H{h.Str("SameSite"), h.Str("Lax."), h.Str("Nothing.")},
-			[]h.H{h.Str("Secure"), h.Str("Only when the request arrived over TLS (req.TLS is set)."),
-				h.Span(API("via.WithSecureCookies"), h.Str(" behind a TLS-terminating proxy, where req.TLS is always nil."))},
+			[]h.H{h.Str("Secure"), h.Span(h.Str("When the request arrived over TLS, or the proxy says "),
+				Code("X-Forwarded-Proto: https"), h.Str(" or "), Code("Forwarded: proto=https"), h.Str(".")),
+				h.Span(API("via.WithSecureCookies"), h.Str(" behind a TLS-terminating proxy that sends neither."))},
 			[]h.H{h.Str("Name"), Code("via_session"),
 				h.Span(API("via.WithSessionCookieName"), h.Str(": give each app its own when two share a host."))},
 			[]h.H{h.Str("Lifetime"), h.Str("24h idle, sliding on the server. The cookie's Max-Age is the TTL, set when the cookie is issued or rotated and not refreshed by use."), API("via.WithSessionTTL")},
@@ -94,6 +100,24 @@ func (p *Security) View() h.H {
 		),
 		h.P(h.Str("With no key set, via generates one per process and warns on the first session: cookies then die on every "+
 			"restart and are invalid on a second process. The cookie holds only a signed id, never data.")),
+		h.P(h.Str("The proxy header is trusted as sent: a client that forges it only marks its own cookie Secure.")),
+		h.P(h.Str("A response that resolved a session or sets the cookie is sent "), Code("Cache-Control: private, no-store"),
+			h.Str(", so no shared cache hands one user's page to another and the back button does not show a signed-in "+
+				"page after logout. A live page gets the same, session or not, over any Cache-Control a middleware set, "+
+				"since its HTML carries the tab id. A plain page with no Cache-Control gets "), Code("no-cache"),
+			h.Str("; one the app set is kept. The SSE connect gets at least "), Code("no-cache"),
+			h.Str(", over any a middleware set. An action response with no session behind it gets none from via.")),
+
+		d.H2("Redirects"),
+		snippet.Region("security/router.go", "redirect", snippet.Mark("ctx.Redirect", "ctx.RedirectExternal")),
+		h.P(API("via.Ctx.Redirect"), h.Str(" follows a relative path, or an absolute URL whose host is the request's "),
+			Code("Host"), h.Str(" or whose origin is listed with "), API("via.WithTrustedOrigin"),
+			h.Str(". Any other target is dropped and logged, like a "), Code("javascript:"),
+			h.Str(" one: the action answers with its render, and an OnInit answers 500. The host is read the way a "+
+				"browser reads it, so "), Code(`https://app.example@evil.example`), h.Str(" and "),
+			Code(`https://evil.example\@app.example`), h.Str(" both name evil.example. "), API("via.Ctx.RedirectExternal"),
+			h.Str(" leaves the site, for an OAuth provider or a payment page; it still refuses any scheme but http and "+
+				"https. Build its target yourself rather than passing one from the request.")),
 
 		d.H2("Sessions and Rotate"),
 		demo.Card(d.H3("Sign in, sign out"),
@@ -112,7 +136,7 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.Session.Put"), h.Str("Stores the value, replacing the last one. Does not rotate.")},
 			[]h.H{API("via.Session.Get"), h.Str("Reads the value as T; false if none or if it no longer decodes.")},
 			[]h.H{API("via.Session.Delete"), h.Str("Clears the value. The id and the cookie stay.")},
-			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new id.")},
+			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new id. Every other open tab on the session reloads under the new cookie.")},
 			[]h.H{API("via.Session.Ensure"), h.Str("Issues the cookie with no value, to key per-user state before there is any.")},
 			[]h.H{API("via.Session.ID"), h.Str("A stable id that survives Rotate. Key your own data by it; it grants nothing.")},
 		),
@@ -138,7 +162,9 @@ func (p *Security) View() h.H {
 		snippet.Text("shell", cspTranscript),
 		table([]string{"Directive", "Why"},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("default-src 'self'")), h.Str("Nothing loads from another origin unless a directive below widens it.")},
-			[]h.H{h.Code(h.Class("csp-has"), h.Str("script-src 'self' 'unsafe-eval'")), h.Str("Plus a sha256 hash for each of via's inline scripts. No nonce, so nothing an injected tag could borrow.")},
+			[]h.H{h.Code(h.Class("csp-has"), h.Str("script-src 'self' 'nonce-")), h.Str("A nonce fresh per document, which Datastar compiles expressions under, plus a sha256 hash for each of via's inline scripts.")},
+			[]h.H{h.Code(h.Class("csp-absent"), h.Str("'unsafe-eval'")), h.Span(h.Str("No script on the page may evaluate a string. "),
+				API("via.WithUnsafeEval"), h.Str(" adds it, for a library that needs it."))},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("style-src 'self'")), h.Str("via emits no style element and no style attribute.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("object-src 'none'")), h.Str("Fixed.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("base-uri 'self'")), h.Str("Fixed.")},
@@ -148,12 +174,26 @@ func (p *Security) View() h.H {
 		),
 		h.P(h.Str("The policy is built once per mount from the router's "), API("via.WithHead"), h.Str(" assets plus the page's "),
 			APIText("via.Meta", "PageMeta().Assets"), h.Str(": a script or stylesheet origin you declare joins its directive, "+
-				"an inline body joins by hash. It never varies per request, which is why Assets must be a constant of the type.")),
-		h.P(Code("'unsafe-eval'"), h.Str(" is required: the bundled Datastar client compiles every "), Code("data-*"),
-			h.Str(" expression with the Function constructor. Without it every binding is dead in the browser while every "+
-				"server-side test passes.")),
+				"an inline body joins by hash. Its shape never varies per request, which is why Assets must be a constant of the type; "+
+				"only the nonce changes, once per document.")),
+		h.P(h.Str("Datastar compiles each "), Code("data-*"), h.Str(" expression as a script carrying the nonce, never through "),
+			Code("Function"), h.Str(". The nonce holds for the document's life, so expressions that arrive later in a patch "+
+				"compile too. A second policy, from middleware or a proxy, that lacks the nonce blocks all of them.")),
+		h.P(h.Str("A library that compiles code from strings ("), Code("eval"), h.Str(", "), Code("new Function"), h.Str(", "),
+			Code(`setTimeout("…")`), h.Str(") needs "), Code("'unsafe-eval'"), h.Str(". "), API("via.WithUnsafeEval"),
+			h.Str(" adds it to every page's "), Code("script-src"), h.Str(" and keeps the nonce and hashes. A string that reaches "+
+				"one of those calls then runs as script, so via warns at startup while it is set. Prefer a build of the library "+
+				"that does not evaluate strings.")),
+		h.P(h.Str("Datastar also stamps that nonce on every "), Code("<script>"), h.Str(" a patch inserts, and on a "),
+			Code("text/javascript"), h.Str(" response, so a script that arrives in a live push runs even though the same "+
+				"element in the first document is blocked. That is why "), Code(`h.El("script", …)`),
+			h.Str(" panics: scripts belong in "), APIText("via.Meta", "Meta.Assets"), h.Str(", where the policy names them.")),
+		h.P(h.Str("The nonce is only as fresh as the document. A plain page is sent "), Code("Cache-Control: no-cache"),
+			h.Str(" so each view is refetched with its own; an app that sets a longer-lived Cache-Control on a page shares "+
+				"that page's nonce with every viewer the cache serves, and an injection that reads it once can reuse it.")),
 		Callout(Warning, "A data-* attribute is code",
-			h.P(h.Str("The cost of 'unsafe-eval' is that the CSP does not stop an expression, so anyone who controls a "),
+			h.P(h.Str("Datastar compiles every expression the DOM holds under the page's nonce, so the CSP does not stop an injected "+
+				"one: anyone who controls a "),
 				Code("data-on:*"), h.Str(" or other Datastar attribute value runs script. The defence is the "), Code("h"),
 				h.Str(" package: text and attribute values are escaped, and "), API("expr.Val"),
 				h.Str(" encodes a Go value as a JavaScript literal. Passing user input to "), API("h.Data"), h.Str(", "),
@@ -165,11 +205,12 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.WithMaxBody"), h.Str("1 MiB"), h.Span(h.Str("An action POST body, and how much of a form submit stays in memory. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxUpload"), h.Str("8 MiB"), h.Span(h.Str("A PostForm submit's whole multipart body; the part past WithMaxBody spills to a temp file. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxSSEConn"), h.Str("10000"), h.Span(h.Str("Open live streams across the Router. "), Code("503 stream capacity reached"), h.Str("."))},
-			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up. "), Code("503 stream busy"), h.Str("."))},
+			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, "), Code("410"), h.Str("."))},
 		),
 		h.P(h.Str("The stream cap is router-wide, with no per-client share: one client can hold all of it. Set it to what the "+
 			"machine has memory for, since each stream holds a goroutine and a composition tree for the tab's life. A per-client "+
-			"limit is middleware.")),
+			"limit belongs at the proxy, which sees the client's address; see "),
+			h.A(h.Href(d.Href("/deploy")+"#limits-and-dead-peers"), h.Str("Limits and dead peers")), h.Str(".")),
 
 		d.H2("Middleware"),
 		snippet.Region("security/middleware.go", "middleware", snippet.Mark("Unwrap()", "accessLog(securityHeaders(app))")),

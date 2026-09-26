@@ -94,14 +94,17 @@ func (c *Ctx) OnDispose(fn func()) {
 // will ever Stop. It happens before any OnConnect fn runs, so a unit that
 // publishes on connect observes its own publish.
 //
-// handler's ctx.Session() is the session the stream connected with. A tab that
-// connected before its session existed sees none until an action posted with
-// its tab id carries a session cookie: that binds the tab to the session, and
-// handler sees it from then on (a reconnect with the cookie does the same). A
-// session minted by another tab does not reach it by itself, because only a
-// request naming this tab can bind it. Read the id from ctx.Session() in
-// handler rather than caching it in OnInit, and mint the session in OnInit if
-// every tab must be addressable by session from its first frame.
+// handler's ctx.Session() is the session the stream connected with, and a
+// write to it from any request reaches handler: a logout in another tab is
+// seen at once in this process, and on the next keepalive when it happened on
+// another process (see [Session]). A tab that connected before its session
+// existed sees none until an action posted with its tab id carries a session
+// cookie: that binds the tab to the session, and handler sees it from then on
+// (a reconnect with the cookie does the same). A session minted by another tab
+// does not reach it by itself, because only a request naming this tab can bind
+// it. Read the id from ctx.Session() in handler rather than caching it in
+// OnInit, and mint the session in OnInit if every tab must be addressable by
+// session from its first frame.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if c.reinit {
 		return // see Tick
@@ -147,6 +150,10 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
 	defer func() {
 		if r := recover(); r != nil {
+			if c.guard != nil {
+				c.guard.panicked(c.logger(), r)
+				return
+			}
 			c.logger().Error("via: panic in a Listen handler",
 				"unit", fmt.Sprintf("%T", c.unitV.v), "err", r, "stack", string(debug.Stack()))
 		}

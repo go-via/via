@@ -1,10 +1,14 @@
 package via
 
 import (
+	"fmt"
 	"log/slog"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/hcore"
 )
 
 // config holds Handler's optional settings. The zero set is the dev-friendly
@@ -25,6 +29,7 @@ type config struct {
 	pinnedDeadline time.Duration
 	maxBody        int64
 	maxUpload      int64
+	unsafeEval     bool
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
@@ -78,16 +83,24 @@ func newConfig(opts []Option) *config {
 	}
 	c.head.validate()
 	if len(c.trustedOrigins) == 0 {
-		c.log.Warn(originWarning)
+		c.log.Warn(originNotice)
+	}
+	if c.unsafeEval {
+		c.log.Warn(unsafeEvalNotice)
 	}
 	return c
 }
 
-// originWarning is logged once per Router when no trusted origin is set. The
+// originNotice is logged once per Router when no trusted origin is set. The
 // floor is open by default, so the quiet state is the permissive one, and an
 // app that never calls WithTrustedOrigin looks configured rather than open —
 // this line is what tells you which mode you are in.
-const originWarning = "via: no WithTrustedOrigin set, so actions accept requests from any origin; set WithTrustedOrigin in production"
+const originNotice = "via: no WithTrustedOrigin set, so actions accept requests from any origin: any site can fire an action that needs no session, and a page on a sibling subdomain, or this host over http, can fire one as the signed-in user. Set WithTrustedOrigin in production"
+
+// unsafeEvalNotice is logged once per Router while WithUnsafeEval is set: the
+// option is one line in a list of options, and this is what keeps the loss of
+// the CSP's eval guard from reading as configuration.
+const unsafeEvalNotice = "via: WithUnsafeEval set, so every page's CSP allows 'unsafe-eval': a string an attacker gets into eval, Function or setTimeout(string) now runs as script. Set it only for a library that needs it"
 
 // WithLogger routes via's own diagnostics to l. Default is slog.Default(). It
 // panics on nil.
@@ -104,13 +117,52 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
-// allowlists an exact origin (scheme://host[:port], as the browser sends it).
-// With at least one set, only same-origin requests and listed origins are
-// admitted. WITHOUT ANY, EVERY ORIGIN IS ACCEPTED, including requests that
-// carry no origin signal, and the Router logs a warning at startup — fine for
-// development, set this in production.
+// the SSE connect, and allowlists an origin (scheme://host[:port]). With at
+// least one set, only same-origin requests and listed origins are admitted,
+// and a request that carries no origin signal is refused. WITHOUT ANY, EVERY
+// ORIGIN IS ACCEPTED, including requests that carry no origin signal, and the
+// Router logs a warning at startup — fine for development, set this in
+// production. Ctx.Redirect also follows absolute URLs on a listed origin.
+//
+// The origin is compared the way the browser serializes it: the host is
+// lower-cased and a default port dropped, so "https://Auth.example:443"
+// matches an Origin of "https://auth.example", and a trailing "/" is
+// dropped. It panics on a value that is not a bare http(s) origin: one with a
+// path, a query, a fragment or userinfo.
 func WithTrustedOrigin(origin string) Option {
-	return func(c *config) { c.trustedOrigins[origin] = true }
+	return func(c *config) { c.trustedOrigins[bareOrigin(origin)] = true }
+}
+
+// bareOrigin normalizes a WithTrustedOrigin value the way the browser
+// serializes an Origin header, and panics on anything that is more than an
+// origin: the browser never sends a path or query, so such an entry would
+// silently match nothing.
+func bareOrigin(origin string) string {
+	bad := func(part string) {
+		panic(fmt.Sprintf("via: WithTrustedOrigin(%q): %s; want a bare origin, scheme://host[:port]", origin, part))
+	}
+	u, err := url.Parse(origin)
+	switch {
+	case err != nil:
+		bad("does not parse: " + err.Error())
+	case u.Scheme != "http" && u.Scheme != "https":
+		bad("scheme is not http or https")
+	case u.User != nil:
+		bad("has userinfo")
+	case u.Host == "":
+		bad("has no host")
+	case u.Path != "" && u.Path != "/" || u.RawPath != "":
+		bad("has a path")
+	case u.RawQuery != "" || u.ForceQuery:
+		bad("has a query")
+	case u.Fragment != "" || strings.Contains(origin, "#"):
+		bad("has a fragment")
+	}
+	norm, ok := hcore.URLOrigin(origin)
+	if !ok || norm == "" {
+		bad("is not an origin")
+	}
+	return norm
 }
 
 // WithSessionTTL sets how long a session may sit idle before it expires
@@ -132,10 +184,11 @@ func WithSessionCookieName(name string) Option {
 	}
 }
 
-// WithSecureCookies forces Secure on the session cookie even when via can't see
-// TLS. By default Secure is set only when req.TLS != nil, which keeps plain
-// http://localhost dev working — but behind a TLS-terminating proxy req.TLS is
-// nil even though the user is on https, so set this there.
+// WithSecureCookies forces Secure on the session cookie even when via can't
+// tell the browser is on https. By default Secure is set when the request came
+// over TLS or a proxy says https in X-Forwarded-Proto or Forwarded (proto=),
+// which keeps plain http://localhost dev working. Set this behind a
+// TLS-terminating proxy that sends neither header.
 func WithSecureCookies() Option {
 	return func(c *config) {
 		c.sessionSecure = true
@@ -205,7 +258,9 @@ func WithSessionKey(key []byte) Option {
 // goroutine plus a composition tree held for the tab's life, so the right value
 // is the one the box has memory for — raise it with the memory to back it, and
 // lower it when a single pod should shed load to its siblings rather than swap.
-// A value of 0 or less restores the default.
+// The same number, up to 1024, caps the actions parked router-wide waiting
+// for a tab's stream to connect; past it an action answers 503 at once. A
+// value of 0 or less restores the default.
 func WithMaxSSEConn(n int) Option {
 	return func(c *config) { c.maxSSEConn = n }
 }
@@ -216,8 +271,22 @@ func WithMaxSSEConn(n int) Option {
 // action on that tab, so one handler that blocks stalls the rest; this deadline
 // is what turns that into a diagnosable 503 instead of a hang. It bounds only
 // the wait to be picked up: an action that has started running is waited for,
-// because it writes the POST's own response. Set it below the load balancer's
-// own timeout so via answers first. A value of 0 or less restores the default.
+// because it writes the POST's own response.
+//
+// It also bounds how long an action carrying a tab id this process issued
+// waits for that tab's stream to connect; one deadline covers both waits. A
+// click made before the stream opens, or during a reconnect, runs once it
+// does, in arrival order. It answers 410 if the stream has not come by 2s or
+// d, whichever is sooner, and 503 if it came but did not pick the action up
+// by d.
+// When via itself ended the stream (a Rotate, a revoked session, an aborted
+// push, Router.Close), the id answers 410 at once for d instead of waiting.
+// Set it below the load balancer's own timeout so via answers first. A value
+// of 0 or less restores the default.
+//
+// The tab is logged as pinned too when any one handler, or one frame write to
+// a client that stopped reading, runs past d with no action waiting, so a tab
+// nobody clicks on is still reported. The line says which of the two it is.
 func WithPinnedDeadline(d time.Duration) Option {
 	return func(c *config) { c.pinnedDeadline = d }
 }
@@ -244,4 +313,13 @@ func WithMaxUpload(bytes int64) Option {
 		}
 		c.maxUpload = bytes
 	}
+}
+
+// WithUnsafeEval adds 'unsafe-eval' to every mount's script-src, for a
+// library that compiles code from strings (eval, Function, setTimeout with a
+// string). The nonce and hashes stay. Without it the policy forbids eval,
+// which Datastar does not need. While it is set, the Router logs a warning at
+// startup.
+func WithUnsafeEval() Option {
+	return func(c *config) { c.unsafeEval = true }
 }

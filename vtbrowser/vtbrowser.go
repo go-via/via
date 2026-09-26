@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
@@ -91,6 +92,7 @@ func Open(t testing.TB, handler http.Handler) *Session {
 
 	s := &Session{t: t, ctx: browse, srv: srv, browse: browse}
 	chromedp.ListenTarget(browse, s.collectConsole)
+	s.watchStream()
 	s.navigate()
 	return s
 }
@@ -112,8 +114,24 @@ func (s *Session) NewTab() *Session {
 	}
 	n := &Session{t: s.t, ctx: ctx, srv: s.srv, browse: s.browse}
 	chromedp.ListenTarget(ctx, n.collectConsole)
+	n.watchStream()
 	n.navigate()
 	return n
+}
+
+// streamWatch counts the frames the page's stream has delivered. It is
+// installed ahead of every document, so the connect's own first frame (the
+// tab-id signals patch via sends on every connect) is never missed.
+const streamWatch = `document.addEventListener('datastar-fetch',function(e){var d=e.detail||{};` +
+	`if(d.el===document.body&&(d.type==='datastar-patch-signals'||d.type==='datastar-patch-elements'))` +
+	`window.__vtStream=(window.__vtStream||0)+1})`
+
+func (s *Session) watchStream() {
+	s.t.Helper()
+	s.run("install the stream watch", chromedp.ActionFunc(func(ctx context.Context) error {
+		_, err := page.AddScriptToEvaluateOnNewDocument(streamWatch).Do(ctx)
+		return err
+	}))
 }
 
 func (s *Session) navigate() {
@@ -278,14 +296,13 @@ const signalProbe = `(()=>{let p=document.getElementById('__via_probe');` +
 	`p.setAttribute('data-json-signals','');document.body.appendChild(p);return null}` +
 	`try{return JSON.parse(p.textContent||'null')}catch(_){return null}})()`
 
-// WaitLiveConnected blocks until this tab's SSE stream has delivered its
-// per-connection tab id. Nothing in the rendered DOM changes on connect, yet an
-// action fired before the id lands posts an empty $viatab and is refused — so
-// the signal itself is the only honest gate for "the tab is live now".
+// WaitLiveConnected blocks until this tab's SSE stream has delivered its first
+// frame. The page carries its tab id from the first byte and an early action
+// waits for the stream, so nothing in the DOM or the signal store changes on
+// connect; the frame itself is the only honest gate for "the tab is live now".
 func (s *Session) WaitLiveConnected() {
 	s.t.Helper()
-	s.WaitEvalTrue(`(()=>{const g=`+signalProbe+`;return !!(g&&g.viatab)})()`,
-		"the SSE stream to deliver this tab's id ($viatab)")
+	s.WaitEvalTrue(`(window.__vtStream||0)>0`, "the SSE stream to deliver its first frame")
 }
 
 // WaitBoundSignal blocks until the Datastar signal bound to selector (the slot

@@ -33,7 +33,7 @@ func main() {
 const (
 	byCompiler = "compiler"
 	byPanic    = "panic at Mount"
-	byWarn     = "warning at Mount, or silent"
+	byWarn     = "warning at Mount"
 	bySilent   = "silent"
 )
 
@@ -95,7 +95,8 @@ var changes = []change{
 	{"`WithLang`, `app.AppendToHead`, `app.AppendToFoot`", "`via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in `Assets`", byCompiler},
 	{"`WithPlugins(picocss.…)`", "your own CSS in `Head.Assets.Styles`", byCompiler},
 	{"`WithPlugins(echarts.…)`, `maplibre`", "an island: `h.DataIgnoreMorph` and `h.DataEffect` around a script of yours", byCompiler},
-	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only when the request came over TLS; behind a TLS-terminating proxy set `WithSecureCookies`", bySilent},
+	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies`", bySilent},
+	{"`ctx.Redirect(\"https://other.example/…\")`", "dropped and logged; leave the site with `ctx.RedirectExternal`", bySilent},
 	{"`app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic`", "your own `http.ServeMux` and middleware around the `*via.Router`", byCompiler},
 	{"`WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize`", "`WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload`", byCompiler},
 	{"`WithNotFound`", "`WithErrorPage`", byCompiler},
@@ -168,8 +169,8 @@ func (p *Migrate) View() h.H {
 		d.H2("What the compiler won't catch"),
 		h.P(h.Str("These compile and start. The first sign is behaviour:")),
 		h.Ul(silentRows()...),
-		h.P(inline("A leftover `OnConnect(ctx) error` is warned about at `Mount` only when the type has no `OnInit`; "+
-			"next to an `OnInit` it is dead code nothing reports.")...),
+		h.P(inline("A leftover `OnConnect(ctx) error` is warned about at `Mount`, with or without an `OnInit` next to it. "+
+			"A leftover `OnDispose(ctx)` has an action's shape, so nothing reports it.")...),
 
 		d.H2("Removed outright"),
 		h.Ul(
@@ -191,7 +192,7 @@ func (p *Migrate) View() h.H {
 			"upgrade fails once and comes back correct on reload.")),
 		h.Ul(
 			h.Li(inline("Actions moved from `/_action/{id}` to `{path}/_via/a/{child}/{id}`, where id is a hash of "+
-				"the handler's Go name. A stale tab's click answers 404.")...),
+				"the handler's Go name and the field it was called on. A stale tab's click answers 404.")...),
 			h.Li(inline("The tab id signal is `viatab`, not `via_tab`.")...),
 			h.Li(inline("A signal's wire name is its field path, first letter lower-cased: `count`, and "+
 				"`chat__draft` inside an embedded `Chat`. The `via:\"name\"` override is gone.")...),
@@ -203,6 +204,10 @@ func (p *Migrate) View() h.H {
 			h.Li(inline("A `Signal` that is not a plain field of its composition, reached through a pointer, "+
 				"slice, array or map, or held by a type whose `View` has a value receiver, panics at `Mount` or `Child`.")...),
 			h.Li(inline("Two fields that mint the same slot name panic: a nested `A.B` (`a_b`) next to a field `A_b`.")...),
+			h.Li(inline("`Mount` renders the mounted value once, without `OnInit`, and panics on a wiring mistake it "+
+				"reaches: a func literal bound per row, an interface or ambiguous value-receiver method, "+
+				"`h.El(\"script\")`, a Signal with no slot, a child without a `View`. One behind a branch the "+
+				"empty value skips panics at the first render that takes it.")...),
 			h.Li(inline("A `Mount` path with a `{name...}` or `{$}` wildcard, or one named `{child}` or `{act}`, "+
 				"panics, and so does mounting both `/docs` and `/docs/`.")...),
 		),

@@ -1190,6 +1190,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		views := &atomic.Int64{}
 		srv := liveServer(t, via.Handler(renderCounter{views: views}))
+		views.Store(0) // Mount's boot render is not a request's
 
 		lines, cancel := openStream(t, srv)
 		defer cancel()
@@ -2141,15 +2142,13 @@ func (p *pinnedLive) View() h.H {
 	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump), h.Str("+")))
 }
 
-func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
-
+func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOncePerPath(t *testing.T) {
+	t.Parallel()
+	var logs lockedBuf
 	p := pinnedLive{block: make(chan struct{}), pinned: make(chan struct{}, 1)}
 	defer close(p.block)
-	app := vt.Serve(t, via.Handler(p, via.WithPinnedDeadline(150*time.Millisecond)))
+	app := vt.Serve(t, via.Handler(p, via.WithPinnedDeadline(150*time.Millisecond),
+		logTo(&logs)))
 	conn := app.Connect()
 	defer conn.Close()
 	select {
@@ -2166,12 +2165,12 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOnce(t *testing.T) {
 	}
 
 	out := logs.String()
-	assert.Contains(t, out, "queue not drained",
+	assert.Contains(t, out, "tab pinned",
 		"a pinned connection must be named in the log — nothing else reports it")
 	assert.Contains(t, out, "tab="+conn.TabID())
 	assert.Contains(t, out, "via_test.pinnedLive", "the log must name the unit type to go read")
-	assert.Equal(t, 1, strings.Count(out, "queue not drained"),
-		"a pinned goroutine stays pinned; one line per connection, not one per click")
+	assert.Equal(t, 2, strings.Count(out, "tab pinned"),
+		"one line from the stream's own timer and one from the first click, not one per click")
 }
 
 // slowActionLive pins the connection goroutine from inside the ACTION handler
@@ -2371,6 +2370,84 @@ func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
 		"the dedupe is per id, so a genuinely new mistake is still reported")
 }
 
+func TestDispatch_unknownActionSkipsTheLogForAnIDViaNeverMints(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		act  string
+	}{
+		{"too long", strings.Repeat("A", 64)},
+		{"too short", "nope"},
+		{"outside the alphabet", "zzzz.zzz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var out lockedBuf
+			r := via.NewRouter(logTo(&out))
+			via.Mount(r, "/", counter{count: &store{}})
+			srv := serve(t, r)
+			_, page := do(t, srv, http.MethodGet, "/", "")
+
+			resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), tt.act), "{}")
+			assert.Equal(t, http.StatusGone, resp.StatusCode)
+			assert.NotContains(t, body, tt.act, "the body must not echo an id no render could have shipped")
+			assert.NotContains(t, out.String(), "no such action", "an id of the wrong shape is noise, not a stale tab")
+		})
+	}
+}
+
+func TestDispatch_unknownActionLogStopsAtACapOfDistinctIDs(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	r := via.NewRouter(logTo(&out))
+	via.Mount(r, "/", counter{count: &store{}})
+	srv := serve(t, r)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, "r", 0)
+
+	const sent = 1100
+	for i := range sent {
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, fmt.Sprintf("zz%06d", i)), "{}")
+		require.Equal(t, http.StatusGone, resp.StatusCode)
+	}
+
+	logged := out.String()
+	assert.Contains(t, logged, "act=zz000000", "the first unknown ids are still reported")
+	assert.Less(t, strings.Count(logged, "no such action; this render binds others"), sent,
+		"every distinct id is remembered for dedupe, so the set must stop growing somewhere")
+	assert.Equal(t, 1, strings.Count(logged, "further unknown action ids"),
+		"reaching the cap is said once")
+}
+
+func TestDispatch_unknownActionLogResumesAfterAnHour(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		r := via.NewRouter(logTo(&out))
+		via.Mount(r, "/", counter{count: &store{}})
+		app := vt.Serve(t, r)
+		_, page := app.Get("/")
+		url := actionURL(t, page, "r", 0)
+		flood := func(prefix string) {
+			for i := range 1030 {
+				status, _ := app.Action(0).Raw(swapActionID(t, url, fmt.Sprintf("%s%06d", prefix, i))).Fire()
+				require.Equal(t, http.StatusGone, status)
+			}
+		}
+		flood("zz")
+		require.Equal(t, 1, strings.Count(out.String(), "further unknown action ids"))
+
+		time.Sleep(time.Hour)
+		status, _ := app.Action(0).Raw(swapActionID(t, url, "yy000000")).Fire()
+		require.Equal(t, http.StatusGone, status)
+		assert.Contains(t, out.String(), "act=yy000000", "a stale id after the interval is reported again")
+
+		flood("xx")
+		assert.Equal(t, 2, strings.Count(out.String(), "further unknown action ids"),
+			"the cap line fires at most once per interval")
+	})
+}
+
 // bumpLive is the minimal live, session-free unit with one action.
 type bumpLive struct{ n via.State[int] }
 
@@ -2490,4 +2567,101 @@ func TestDispatch_listenHandlerSeesTheSessionALaterActionOnItsTabCarried(t *test
 	tp.Publish(sid)
 	early.Await("got " + sid)
 	other.Await("got " + sid)
+}
+
+func TestDispatch_explainsA400ForABodyWithoutTheDatastarHeader(t *testing.T) {
+	t.Parallel()
+	srv := newCounter(t)
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	url := actionURL(t, page, "r", 1)
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		want        string
+	}{
+		{"JSON body", "application/json", `{"n":1}`,
+			"JSON action body without a Datastar-Request: true header"},
+		{"JSON body with a charset", "application/json; charset=utf-8", `{"n":1}`,
+			"JSON action body without a Datastar-Request: true header"},
+		{"url-encoded body", "application/x-www-form-urlencoded", "n=1",
+			"no Datastar-Request: true header, and the body is not multipart/form-data"},
+		{"no content type", "", `{"n":1}`,
+			"no Datastar-Request: true header, and the body is not multipart/form-data"},
+		{"multipart body with a bad boundary", "multipart/form-data; boundary=x", "garbage",
+			"malformed form"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(tt.body))
+			require.NoError(t, err)
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			resp, err := srv.Client().Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+			assert.Contains(t, string(body), tt.want)
+		})
+	}
+}
+
+// failingBump changes its state and then fails, by a panic or from OnReload,
+// the two ways a live action ends without a result.
+type failingBump struct {
+	room   *topic.Topic[int]
+	reload bool
+	n      via.State[int]
+}
+
+func (p *failingBump) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.room, func(*via.Ctx, int) {})
+	return nil
+}
+
+func (p *failingBump) OnReload(*via.Ctx) error {
+	if p.reload && p.n.Get() > 0 {
+		return fmt.Errorf("reload failed")
+	}
+	return nil
+}
+
+func (p *failingBump) Bump(*via.Ctx) {
+	p.n.Set(p.n.Get() + 1)
+	if !p.reload {
+		panic("bump failed")
+	}
+}
+
+func (p *failingBump) View() h.H {
+	return h.Div(h.P(h.Str(fmt.Sprint("n=", p.n.Get()))), h.Button(via.On("click", p.Bump)))
+}
+
+func TestLiveAction_aFailedActionStillPushesWhatItChanged(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		reload bool
+	}{
+		{"handler panic", false},
+		{"OnReload error", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				app := vt.Serve(t, via.Handler(failingBump{room: topic.New[int](), reload: tt.reload}))
+				conn := app.Connect()
+
+				code, _ := app.Action(0).Over(conn).Fire()
+
+				assert.Equal(t, http.StatusInternalServerError, code)
+				conn.Await("n=1")
+			})
+		})
+	}
 }

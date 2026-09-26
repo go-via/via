@@ -37,7 +37,7 @@ func TestDocumentHead_rendersTheDeclaredShell(t *testing.T) {
 		Raw:  `<meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="/favicon.png">`,
 	})
 	for _, want := range []string{
-		`<html lang="pt-PT">`,
+		`<html lang="pt-PT" data-nonce="`,
 		`<meta name="viewport" content="width=device-width, initial-scale=1">`,
 		`<link rel="icon" href="/favicon.png">`,
 	} {
@@ -49,8 +49,8 @@ func TestDocumentHead_zeroValueChangesNothing(t *testing.T) {
 	t.Parallel()
 	_, with := headResp(t, via.Head{})
 	_, without := do(t, headSrv(t), http.MethodGet, "/", "")
-	assert.Equal(t, without, with)
-	assert.Contains(t, with, "<html><head>")
+	assert.Equal(t, withoutNonce(without), withoutNonce(with))
+	assert.Contains(t, withoutNonce(with), "<html <nonce>><head>")
 	assert.NotContains(t, with, "<title>")
 }
 
@@ -91,7 +91,8 @@ func TestDocumentHead_preloadWidensTheDirectiveItsAsNames(t *testing.T) {
 	}})
 	csp := resp.Header.Get("Content-Security-Policy")
 	assert.Contains(t, csp, "img-src 'self' https://cdn.example.com;")
-	assert.NotContains(t, csp, "script-src 'self' 'unsafe-eval' https://cdn.example.com")
+	script, _, _ := strings.Cut(csp[strings.Index(csp, "script-src"):], ";")
+	assert.NotContains(t, script, "https://cdn.example.com", "an image preload must not widen script-src")
 	assert.Contains(t, body, `<link rel="preload" href="https://cdn.example.com/hero.avif" as="image">`)
 }
 
@@ -172,7 +173,7 @@ func TestDocumentHead_cspStaysAPureFunctionOfTheConfig(t *testing.T) {
 	r1, _ := headResp(t, head)
 	r2, _ := headResp(t, head)
 	require.NotEmpty(t, r1.Header.Get("Content-Security-Policy"))
-	assert.Equal(t, r1.Header.Get("Content-Security-Policy"), r2.Header.Get("Content-Security-Policy"))
+	assert.Equal(t, withoutNonce(r1.Header.Get("Content-Security-Policy")), withoutNonce(r2.Header.Get("Content-Security-Policy")))
 }
 
 func TestDocumentHead_fontOriginEntersThePolicyNormalized(t *testing.T) {
@@ -313,7 +314,8 @@ func TestPageMeta_inertFieldsDoNotTouchTheCSP(t *testing.T) {
 	plain, _ := metaBody(t, metaPage{})
 	titled, _ := metaBody(t, metaPage{title: "x"})
 
-	assert.Equal(t, plain.Header.Get("Content-Security-Policy"), titled.Header.Get("Content-Security-Policy"))
+	assert.Equal(t, withoutNonce(plain.Header.Get("Content-Security-Policy")),
+		withoutNonce(titled.Header.Get("Content-Security-Policy")))
 }
 
 type assetPage struct{}

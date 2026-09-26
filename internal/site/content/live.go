@@ -127,6 +127,9 @@ func (p *Live) View() h.H {
 			via.Child(p.Shared), "shared.go",
 			demo.Try(secondTab("shared-counter"),
 				h.Str("Click +1 in one tab and watch the other follow."))),
+		h.P(APIText("via.State.Track", "Track"), h.Str(" works on a "), API("via.List"),
+			h.Str(" too. The store publishes a copy of the whole slice on every change, and each tab's list follows it:")),
+		snippet.Region("live/track.go", "track", snippet.Title("wall.go"), snippet.Mark("Track(", "Publish(")),
 
 		d.H2("Per-session delivery"),
 		demo.Card(d.H3("Ping me"),
@@ -156,14 +159,42 @@ func (p *Live) View() h.H {
 			demo.Try(secondTab("tabs-connected"),
 				h.Str("Close that tab: the count drops as soon as its stream ends."))),
 
+		d.H2("Frame size"),
+		h.P(h.Str("A push sends the unit's whole HTML: via re-renders the unit that changed, with no diff, and Datastar "+
+			"morphs it into the page. A render identical to the last sends nothing. A change costs the size of its unit, "+
+			"once for every tab that shows it.")),
+		h.P(h.Str("Measured on a table of 1000 rows, four cells each, about 168 bytes a row:")),
+		table([]string{"Layout", "Sent per tab, per change"},
+			[]h.H{h.Span(h.Str("The rows in a live "), API("via.List"), h.Str("; one row's status changes")), h.Str("168 KB")},
+			[]h.H{h.Span(h.Str("The rows plain, in a root that also renders a "), API("via.State"), h.Str(" counter; the counter changes")), h.Str("168 KB")},
+			[]h.H{h.Span(h.Str("The rows plain in the root; the counter in its own live "), API("via.Child"), h.Str("; the counter changes")), h.Str("about 100 bytes")},
+		),
+		h.P(h.Str("A live State anywhere in a unit makes the whole unit the patch. At 1000 open tabs, one change is 168 MB "+
+			"against 100 KB. When a small part changes often, keep the large part plain and move the small part into its "+
+			"own live Child. A live List sends every row on every change, so cap or page one that can grow.")),
+		h.P(h.Str("Patches are not compressed. The "), h.A(h.Href(d.Href("/deploy")+"#reverse-proxy"), h.Str("Caddyfile")),
+			h.Str(" on the deploy page leaves "), Code("text/event-stream"), h.Str(" out of "), Code("encode"),
+			h.Str(", because a compressing proxy holds patches back. Size the unit instead.")),
+
 		d.H2("Connection lifecycle"),
 		table([]string{"Event", "What happens"},
 			[]h.H{h.Str("Idle stream"), h.Str("A keepalive frame every 25 seconds, fixed. A failed write is how the server notices a peer that vanished without closing, and the stream then runs its disposers.")},
-			[]h.H{h.Str("Stalled peer"), h.Str("A frame write gives up after 10 seconds and the stream closes.")},
-			[]h.H{h.Str("Network drop"), h.Str("The browser retries the stream and shows a Reconnecting banner.")},
-			[]h.H{h.Str("Stream ends"), h.Str("A clean close, from a deploy or r.Close(), shows a Disconnected banner, then probes the page URL with backoff from 0.5 to 8 seconds and reloads once the server answers.")},
-			[]h.H{h.Str("Action on a gone tab"), h.Str("Answers 410 and the tab reloads.")},
-			[]h.H{h.Str("Too many streams"), h.Span(h.Str("A connect past "), API("via.WithMaxSSEConn"), h.Str(" (10,000 by default) answers 503."))},
+			[]h.H{h.Str("Stalled peer"), h.Span(h.Str("A frame write gives up after 10 seconds and the stream closes. Past "),
+				API("via.WithPinnedDeadline"), h.Str(" (5 s) the tab is logged as pinned, blocked writing to a client that is not reading, and its actions answer 503."))},
+			[]h.H{h.Str("Blocked handler"), h.Span(h.Str("A Tick, Listen or action handler running past "),
+				API("via.WithPinnedDeadline"), h.Str(" is logged with its tab and unit type. Everything else on the tab waits behind it, keepalives included, and its actions answer 503."))},
+			[]h.H{h.Str("Click before the stream connects"), h.Str("The action waits up to 2 seconds for the stream, then runs; several run in click order. Past 2 seconds it answers 410 and the tab reloads.")},
+			[]h.H{h.Str("Session written elsewhere"), h.Str("A Put or Delete from any request reaches the Tick and Listen handlers of every open tab on the session: at once in this process, on the next keepalive from another process.")},
+			[]h.H{h.Str("Session rotated"), h.Str("Every other open tab on the session ends its stream and reloads under the new cookie. The tab whose action rotated keeps its stream.")},
+			[]h.H{h.Str("Session gone"), h.Str("On the keepalive, a stream whose session another process rotated away, deleted or let expire closes, and the tab reloads.")},
+			[]h.H{h.Str("Network drop"), h.Str("The browser retries the stream under the same tab id and shows a Reconnecting banner; a click in the gap waits up to 2 seconds for it, then answers 410 and the tab reloads. " +
+				"If the session cookie changed since the page loaded (a Rotate, or a session minted after the load), the retry gets a fresh id and a click in the gap answers 410.")},
+			[]h.H{h.Str("Stream ends"), h.Str("A clean close, from a deploy or r.Shutdown(ctx), shows a Disconnected banner, then probes the page URL with backoff from 0.5 to 8 seconds and reloads once the server answers.")},
+			[]h.H{h.Str("Action on a gone tab"), h.Span(h.Str("Waits up to 2 seconds, or "), API("via.WithPinnedDeadline"), h.Str(" if that is shorter, for the stream to come back, then answers 410 and the tab reloads once. "+
+				"When via ended the stream itself (Rotate, a session gone, an aborted push), the 410 comes at once."))},
+			[]h.H{h.Str("Failed action"), h.Str("A 500 from a handler panic, a 503 or a 403 leaves the banner alone: the stream is fine. Datastar fires a datastar-fetch error event on the element that made the request.")},
+			[]h.H{h.Str("Too many streams"), h.Span(h.Str("A connect past "), API("via.WithMaxSSEConn"), h.Str(" (10,000 by default) answers 503. "+
+				"So does an action once as many actions, at most 1024, are already waiting for their streams."))},
 		),
 		h.P(h.Str("A reconnect is a new connection: OnInit runs again and State starts from what it sets. After a "+
 			"server restart nothing of the old process remains, so a tab gets back whatever your stores and the "+
