@@ -814,3 +814,17 @@ spelling outright.
 - **`viatab` is set before the stream connects**, in `<body
   data-signals='{"viatab":…}'>`. A client that expected `""` until the first
   frame must read the document; a click before connect waits up to 2s.
+- **`WithMaxSSEConn`, `WithPinnedDeadline`, `WithSessionStoreTimeout` and
+  `WithSessionTTL` panic on 0 or less**, which used to mean the default.
+  Drop the option instead of passing 0.
+- **`WithSessionCookieName` panics on "" or a name that is not an HTTP
+  token** (a space, `;`, `=`, a quote, non-ASCII). net/http dropped such a
+  cookie, so sessions never stuck.
+- **`WithSessionKey` panics on an empty key.** Reading an unset variable
+  into it used to fall back to a random per-process key; check the variable
+  first, or drop the option and set `VIA_SESSION_KEY`.
+- **A second `WithSessionStore` or `WithSessionKey` panics.** Pass each
+  once; a helper that appends its own must not also receive the caller's.
+- **`via.On` and `via.OnArg` panic on an event name outside package `on`'s
+  grammar** (lower-case letters and digits joined by `:`, `.` or `-`, then
+  Datastar modifiers). Package `on` already refuses such names; move to it.
