@@ -49,8 +49,8 @@ host.
   `shared_contract.go` holds what the demos use without declaring.
 - `demo/` — the card, rate limits and resets.
 - `snippet/` — code blocks and chroma highlighting. `snippet/src/` is the Go
-  the pages show, compiled and tested. `snippet/gen` generates `static/chroma.css`,
-  keeping chroma's styles out of the binary.
+  the pages show, compiled and tested. `snippet/gen` generates
+  `static/chroma.css`, keeping chroma's styles out of the binary.
 - `icon/` — the inline SVG icons.
 - `static/` — `site.css`, `chroma.css`, `islands.css`, the inspector and
   island scripts, `brand/`, `fonts/`, `vendor/` (MapLibre) and `data/` (the
