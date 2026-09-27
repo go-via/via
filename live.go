@@ -23,9 +23,10 @@ type subStarter func(wake chan struct{}) listener
 type listener struct{ poll func() func() }
 
 // Tick schedules fn to run every d for the life of the unit's connection, and
-// is one of the two things that make a unit live (rendering a State or List is
-// the other). After each run via re-renders the unit and pushes an
-// element-patch. Valid only inside OnInit: ticks and subs are snapshotted
+// is one of three things that make a unit live (Listen and rendering a State or
+// List are the others). After each run via re-renders the unit and pushes an
+// element-patch. A d of 0 or less runs every second instead, and the Router
+// logs one warning. Valid only inside OnInit: ticks and subs are snapshotted
 // there, so a later call registers nothing and logs loudly.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 	if c.reinit {
@@ -35,8 +36,23 @@ func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 		c.logger().Warn("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
 		return
 	}
+	if d <= 0 {
+		d = time.Second
+		c.warnTickClamp()
+	}
 	c.live = true
 	c.ticks = append(c.ticks, tickReg{d: d, fn: fn})
+}
+
+// warnTickClamp logs once per Router: OnInit runs on every GET and connect, so
+// a per-call warning would repeat for every visitor.
+func (c *Ctx) warnTickClamp() {
+	msg := "via: Tick interval <= 0, running every 1s instead"
+	if c.policy == nil {
+		c.logger().Warn(msg)
+		return
+	}
+	c.policy.tickWarn.Do(func() { c.policy.log.Warn(msg) })
 }
 
 // OnConnect registers fn to run once when this unit's stream opens — the

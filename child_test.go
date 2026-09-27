@@ -36,8 +36,8 @@ func (b *beater) View() h.H {
 	return h.Div(h.P(h.Str(b.label+"="), b.n.Display()))
 }
 
-// duo children two live beaters; it does not itself implement OnInit — it is a
-// multiplex parent whose live children share one SSE stream.
+// duo children two live beaters; it is itself plain (no State, Tick or Listen)
+// — a multiplex parent whose live children share one SSE stream.
 type duo struct{ A, B beater }
 
 func (d *duo) View() h.H { return h.Div(via.Child(d.A), via.Child(d.B)) }
@@ -387,10 +387,10 @@ func TestChild_projectsChildInPlace(t *testing.T) {
 		"content is embedded in place, after the frame heading")
 }
 
-// liveShell is a plain layout (no OnInit) whose Body field holds a live
-// child. The page must bootstrap its SSE stream and the embedded live child
-// must push its own container and render its server State — proving plain
-// struct-field composition rides the live multiplex machinery.
+// liveShell is a plain layout (no State, Tick or Listen) whose Body field
+// holds a live child. The page must bootstrap its SSE stream and the embedded
+// live child must push its own container and render its server State —
+// proving plain struct-field composition rides the live multiplex machinery.
 type liveShell struct{ Body beater }
 
 func (s *liveShell) View() h.H { return h.Div(h.H1(h.Str("APP")), via.Child(s.Body)) }
@@ -422,7 +422,7 @@ type nestPage struct{ Host nestHost }
 
 func (p *nestPage) View() h.H { return h.Div(via.Child(p.Host)) }
 
-func TestChild_liveChildInsideLiveChildAtDepthTwo(t *testing.T) {
+func TestChild_liveChildInsidePlainChildStreamsUnderAComposedKey(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
@@ -450,8 +450,8 @@ func TestChild_allowsNestedPlainChild(t *testing.T) {
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
 
-// livePage is a live root (implements OnInit) whose View embeds a live
-// child — nested live composition, refused at render.
+// livePage is a live root (rendering its State makes it live) whose View
+// embeds a live child — nested live composition, refused at render.
 type livePage struct {
 	Inner beater
 	n     via.State[int]
@@ -924,6 +924,34 @@ func TestChild_childOnInitRedirectGatesThePage(t *testing.T) {
 
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+func TestChild_childOnInitRedirectOnTheSSEConnectAnswers403(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(redirectHost{}))
+
+	assert.Equal(t, http.StatusForbidden, sseStatus(t, srv, map[string]string{"Sec-Fetch-Site": "same-origin"}),
+		"fetch would follow a 303 and read the target page as the stream, so a child's redirect is 403 like the root's")
+}
+
+type forbiddenChild struct{}
+
+func (c *forbiddenChild) OnInit(ctx *via.Ctx) error { return via.ErrForbidden }
+func (c *forbiddenChild) View() h.H                 { return h.Div(h.Str("never")) }
+
+type forbiddenHost struct{ Kid forbiddenChild }
+
+func (p *forbiddenHost) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_childOnInitForbiddenAnswers403(t *testing.T) {
+	t.Parallel()
+	var out lockedBuf
+	resp, body := do(t, serve(t, via.Handler(forbiddenHost{}, logTo(&out))), http.MethodGet, "/", "")
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"ErrForbidden from an embedded child's OnInit is a 403, exactly as it is from the root's")
+	assert.NotContains(t, body, "never")
+	assert.NotContains(t, out.String(), "level=ERROR", "a refusal is an answer, not a server fault")
 }
 
 // plainKid is a plain child of a live root: it holds no State and never

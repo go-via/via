@@ -39,7 +39,7 @@ const defaultTimeout = 20 * time.Second
 
 const pollInterval = 50 * time.Millisecond
 
-var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "headless-shell"}
+var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "google-chrome-stable", "headless-shell"}
 
 // Session is a live headless-browser tab bound to an httptest server running the
 // handler. Every helper fails the test on error; browser and server shutdown are

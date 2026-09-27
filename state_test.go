@@ -389,7 +389,7 @@ func TestState_trackFollowsAPublishFromAnotherGoroutine(t *testing.T) {
 	defer conn.Close()
 
 	room.Publish(n.Add(3))
-	assert.Contains(t, conn.Await("count: 3"), "count: 3",
+	assert.Contains(t, conn.Await("count: "), "count: 3",
 		"a publish from outside the unit must reach the tracking connection")
 }
 
@@ -438,7 +438,7 @@ func TestState_trackSeesTheUnitsOwnOnConnectPublish(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	assert.Contains(t, conn.Await("count: 1"), "count: 1",
+	assert.Contains(t, conn.Await("count: "), "count: 1",
 		"Track's own connect re-read must not shadow the unit's OnConnect publish")
 }
 
@@ -560,7 +560,7 @@ func TestStateTrack_followsAPublish(t *testing.T) {
 	defer conn.Close()
 
 	room.Publish(n.Add(3))
-	assert.Contains(t, conn.Await("count: 3"), "count: 3",
+	assert.Contains(t, conn.Await("count: "), "count: 3",
 		"a publish from outside the unit must reach a literal-tracked State")
 }
 
@@ -633,7 +633,7 @@ func TestStateTrack_worksOnAnEmbeddedChild(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 	room.Publish(n.Add(1))
-	assert.Contains(t, conn.Await("kid: 5"), "kid: 5",
+	assert.Contains(t, conn.Await("kid: "), "kid: 5",
 		"an embedded child's literal must follow its topic")
 }
 

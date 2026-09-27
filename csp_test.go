@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
@@ -91,19 +92,32 @@ func TestPage_cspForbidsEval(t *testing.T) {
 
 func TestPage_everyInlineScriptIsAdmittedByItsHash(t *testing.T) {
 	t.Parallel()
-	// newCounter is plain and ships no inline script at all — a streaming page
-	// is required so the loop below actually has bytes to check.
-	resp, body := do(t, newPulse(t), http.MethodGet, "/", "")
-	csp := resp.Header.Get("Content-Security-Policy")
-	scripts := inlineScripts(t, body)
-	require.NotEmpty(t, scripts, "a streaming page must ship at least one inline script (the reconnect manager)")
-	for _, js := range scripts {
-		assert.Contains(t, csp, hashSource(js),
-			"an inline script the page served is not admitted by its own policy")
+	tests := []struct {
+		name string
+		srv  func(*testing.T) *httptest.Server
+	}{
+		{"plain page", newCounter},
+		{"streaming page", newPulse},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			resp, body := do(t, tt.srv(t), http.MethodGet, "/", "")
+			csp := resp.Header.Get("Content-Security-Policy")
+			scripts := inlineScripts(t, body)
+			require.NotEmpty(t, scripts, "every page ships the event bridge as an inline script")
+			for _, js := range scripts {
+				assert.Contains(t, csp, hashSource(js),
+					"an inline script the page served is not admitted by its own policy")
+			}
+		})
 	}
 }
 
-var htmlNonceRe = regexp.MustCompile(`<html[^>]* data-nonce="([^"]+)"`)
+var (
+	htmlNonceRe   = regexp.MustCompile(`<html[^>]* data-nonce="([^"]+)"`)
+	scriptNonceRe = regexp.MustCompile(`<script\b[^>]*\snonce=`)
+)
 
 func TestPage_everyDocumentCarriesAFreshNonceItsPolicyAdmits(t *testing.T) {
 	t.Parallel()
@@ -118,7 +132,7 @@ func TestPage_everyDocumentCarriesAFreshNonceItsPolicyAdmits(t *testing.T) {
 		assert.GreaterOrEqual(t, len(m[1]), 22, "a nonce is 128 bits or more")
 		assert.False(t, seen[m[1]], "a nonce reused across documents is a token an injection can learn once and replay")
 		seen[m[1]] = true
-		assert.NotContains(t, body, "<script nonce=", "via's own inline scripts stay hash-admitted")
+		assert.NotRegexp(t, scriptNonceRe, body, "via's own inline scripts stay hash-admitted")
 	}
 }
 

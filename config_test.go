@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -100,4 +101,64 @@ func TestNewRouter_warnsAtStartupOnlyWithUnsafeEval(t *testing.T) {
 	assert.Contains(t, on.String(), "WithUnsafeEval")
 	assert.Contains(t, on.String(), "eval, Function or setTimeout(string)", "the warning must name what the CSP stops stopping")
 	assert.Empty(t, off.String())
+}
+
+func TestWithMaxSSEConn_panicsOnANonPositiveCap(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{0, -1} {
+		assert.PanicsWithValue(t, "via: WithMaxSSEConn must be positive", func() { via.NewRouter(via.WithMaxSSEConn(n)) })
+	}
+}
+
+func TestWithPinnedDeadline_panicsOnANonPositiveDeadline(t *testing.T) {
+	t.Parallel()
+	for _, d := range []time.Duration{0, -time.Second} {
+		assert.PanicsWithValue(t, "via: WithPinnedDeadline must be positive", func() { via.NewRouter(via.WithPinnedDeadline(d)) })
+	}
+}
+
+func TestWithSessionStoreTimeout_panicsOnANonPositiveTimeout(t *testing.T) {
+	t.Parallel()
+	for _, d := range []time.Duration{0, -time.Second} {
+		assert.PanicsWithValue(t, "via: WithSessionStoreTimeout must be positive", func() { via.NewRouter(via.WithSessionStoreTimeout(d)) })
+	}
+}
+
+func TestWithSessionTTL_panicsOnANonPositiveTTL(t *testing.T) {
+	t.Parallel()
+	for _, d := range []time.Duration{0, -time.Hour} {
+		assert.PanicsWithValue(t, "via: WithSessionTTL must be positive", func() { via.NewRouter(via.WithSessionTTL(d)) })
+	}
+}
+
+func TestWithSessionCookieName_panicsOnANameNetHTTPWouldDrop(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", "my sid", "sid;x", `sid"`, "sid=x", "sid,x", "sïd"} {
+		assert.Panics(t, func() { via.NewRouter(via.WithSessionCookieName(name)) }, name)
+	}
+	for _, name := range []string{"myapp_sid", "via_session_v0_8", "__Host-sid"} {
+		assert.NotPanics(t, func() { via.NewRouter(via.WithSessionCookieName(name)) }, name)
+	}
+}
+
+func TestWithSessionStore_panicsWhenGivenTwice(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t, "via: conflicting WithSessionStore options; pass one store", func() {
+		via.NewRouter(via.WithSessionStore(via.NewMemorySessionStore()), via.WithSessionStore(via.NewMemorySessionStore()))
+	})
+}
+
+func TestWithSessionKey_panicsWhenGivenTwice(t *testing.T) {
+	t.Parallel()
+	key := []byte("a-test-signing-key-32-bytes-long")
+	assert.PanicsWithValue(t, "via: conflicting WithSessionKey options; pass one key", func() {
+		via.NewRouter(via.WithSessionKey(key), via.WithSessionKey(key))
+	})
+}
+
+func TestWithSessionKey_panicsOnAnEmptyKey(t *testing.T) {
+	t.Parallel()
+	for _, key := range [][]byte{nil, {}} {
+		assert.Panics(t, func() { via.NewRouter(via.WithSessionKey(key)) })
+	}
 }

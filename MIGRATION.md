@@ -410,10 +410,11 @@ the full reasoning; the short form:
   origin floor, read off `Origin`/`Sec-Fetch-Site`, but accepts every action
   and the SSE connect from any origin, including a request with no origin
   signal, until `WithTrustedOrigin` names one, which switches enforcement on
-  for the whole endpoint. The per-tab id is the CSRF token on a live page
-  only: a plain action carries an empty `viatab`/`_viatab`, so with the floor
-  open a cross-origin `PostForm` submit is accepted. Set `WithTrustedOrigin`
-  in production. via logs a warning at startup while none is set.
+  for the whole endpoint. The per-tab id guards only an action on a live
+  unit: a plain action never checks `viatab`/`_viatab`, even on a live page,
+  so with the floor open a cross-origin `PostForm` submit is accepted. Set
+  `WithTrustedOrigin` in production. via logs a warning at startup while none
+  is set.
 - **`Ctx.Redirect` follows only on-site targets.** A relative path, or an
   absolute URL on the request's host or a `WithTrustedOrigin` origin. v0.7 and
   v0.8.3 followed any http(s) URL. A redirect to an OAuth provider or a
@@ -433,10 +434,11 @@ the full reasoning; the short form:
   or spanning pods takes both `WithSessionKey` (or `VIA_SESSION_KEY`) and
   `WithSessionStore`. Session values are now stored as JSON, one value per
   session, so a `Session.Put` value must round-trip through `encoding/json`.
-  The idle TTL slides on **every** request that carries a valid session
-  cookie — `OnInit` resolves the session eagerly whether or not the page
-  reads it — so a session expires only after a full TTL with no request at
-  all, rather than after a TTL with no `Get`/`Put`.
+  Any request that carries a valid session cookie can slide the idle TTL —
+  `OnInit` resolves the session eagerly whether or not the page reads it —
+  but only once less than half the TTL is left does it re-save the session
+  and re-send the cookie. That is one write per half-TTL, so idle expiry
+  lands between half the TTL and the full TTL after the last request.
 
 ## The CSP forbids eval
 
@@ -480,8 +482,8 @@ route: its first click answers 404, and the page comes back correct on reload.
 
 ## Wire break: the tab id signal
 
-The tab id — the CSRF token in via's threat model, minted with the page and
-adopted by its stream — was the signal `via_tab` in v0.7 and is `viatab` now.
+The tab id, which an action on a live unit must carry, is minted with the page
+and adopted by its stream. Its signal was `via_tab` in v0.7 and is `viatab` now.
 Datastar sends the whole signal store with every `@post`, filtering only names
 matching `/(^|\.)_/`, and the server reads the id out of the inbound signals.
 `PostForm` is the one exception: a native browser form submit carries neither
@@ -814,3 +816,17 @@ spelling outright.
 - **`viatab` is set before the stream connects**, in `<body
   data-signals='{"viatab":…}'>`. A client that expected `""` until the first
   frame must read the document; a click before connect waits up to 2s.
+- **`WithMaxSSEConn`, `WithPinnedDeadline`, `WithSessionStoreTimeout` and
+  `WithSessionTTL` panic on 0 or less**, which used to mean the default.
+  Drop the option instead of passing 0.
+- **`WithSessionCookieName` panics on "" or a name that is not an HTTP
+  token** (a space, `;`, `=`, a quote, non-ASCII). net/http dropped such a
+  cookie, so sessions never stuck.
+- **`WithSessionKey` panics on an empty key.** Reading an unset variable
+  into it used to fall back to a random per-process key; check the variable
+  first, or drop the option and set `VIA_SESSION_KEY`.
+- **A second `WithSessionStore` or `WithSessionKey` panics.** Pass each
+  once; a helper that appends its own must not also receive the caller's.
+- **`via.On` and `via.OnArg` panic on an event name outside package `on`'s
+  grammar** (lower-case letters and digits joined by `:`, `.` or `-`, then
+  Datastar modifiers). Package `on` already refuses such names; move to it.

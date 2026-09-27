@@ -214,7 +214,8 @@ func TestAction_plainFormWithoutTrustedOriginAdmitsSameOriginAndHeaderlessSubmit
 
 func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(counter{count: &store{}}))
+	// Without WithTrustedOrigin every origin is admitted before the host compare runs.
+	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 	status, body := app.Action(1).Origin(app.URL()).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
@@ -350,8 +351,8 @@ func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
-// liveSessStream is a live child (its State makes the root a live unit) that
-// establishes its session in OnInit, so the connect response carries the cookie.
+// liveSessStream renders its State, so it is a live root; it establishes its
+// session in OnInit, so the connect response carries the cookie.
 type liveSessStream struct{ n via.State[int] }
 
 func (c *liveSessStream) OnInit(ctx *via.Ctx) error {

@@ -137,6 +137,25 @@
 - `vtbrowser.Session.WaitLiveConnected` waits for the stream's first frame,
   since `viatab` is now set before the stream connects.
 
+- **Options with no usable zero value panic at `NewRouter`** instead of
+  falling back to a default:
+  - `WithMaxSSEConn`, `WithPinnedDeadline`, `WithSessionStoreTimeout`,
+    `WithSessionTTL` on 0 or less.
+  - `WithSessionCookieName` on a name net/http would drop from `Set-Cookie`.
+  - `WithSessionKey` on an empty key, which fell back to `VIA_SESSION_KEY`
+    or a random key.
+
+  Omit the option for the default.
+
+- **A second `WithSessionStore` or `WithSessionKey` panics** as a
+  conflicting option instead of the last one winning. Other options stay
+  last-wins.
+
+- **`via.On` and `via.OnArg` panic on an event name package `on` would
+  refuse.** The name was written raw into the attribute name, so
+  `On("click\" onmouseover=\"x", …)` added an attribute. Datastar modifiers
+  (`input__debounce.250ms`) are still accepted.
+
 ### Fixed
 
 - POSTs to unknown action ids no longer grow the server's memory: the set
@@ -222,6 +241,19 @@
 
 - A 403 on the stream shows "Disconnected." and stays, instead of first
   reloading the tab twice.
+
+- `Ctx.Tick` with an interval of 0 or less runs every second and logs one
+  warning per Router. It used to crash the process on the first connect.
+
+- An embedded child's `OnInit` returning `ErrForbidden` answers 403, as the
+  root's does, instead of 500 with an error log.
+
+- An embedded child's `OnInit` `Redirect` on the stream connect answers
+  403, as the root's does. It answered 303, which fetch follows, reading
+  the target page as the stream body.
+
+- A session whose first save the store refuses sets no cookie. The cookie
+  named an id the store never took.
 
 ### Documented (behaviour unchanged)
 

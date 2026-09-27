@@ -9,7 +9,7 @@ import (
 type User struct {
 	ID          int
 	Email, Name string
-	Avatar      string // a data: URL, set on upload
+	Avatar      string // the /avatar/{id} path, set on upload
 }
 
 type Thread struct {
@@ -19,6 +19,11 @@ type Thread struct {
 
 type Post struct{ Author, Body string }
 
+type avatar struct {
+	typ  string
+	data []byte
+}
+
 // Store is the whole app's mutable state behind one mutex. Stdlib only; no
 // database, no framework types.
 type Store struct {
@@ -27,12 +32,13 @@ type Store struct {
 	byID    map[int]*User
 	threads []Thread
 	posts   map[int][]Post
+	avatars map[int]avatar
 	seqU    int
 	seqT    int
 }
 
 func newStore() *Store {
-	return &Store{byEmail: map[string]*User{}, byID: map[int]*User{}, posts: map[int][]Post{}}
+	return &Store{byEmail: map[string]*User{}, byID: map[int]*User{}, posts: map[int][]Post{}, avatars: map[int]avatar{}}
 }
 
 // createUser registers an identity by email alone. via ships with no
@@ -110,4 +116,17 @@ func (s *Store) reply(id int, author, body string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.posts[id] = append(s.posts[id], Post{Author: author, Body: body})
+}
+
+func (s *Store) setAvatar(id int, typ string, data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.avatars[id] = avatar{typ: typ, data: data}
+}
+
+func (s *Store) avatar(id int) (typ string, data []byte, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.avatars[id]
+	return a.typ, a.data, ok
 }

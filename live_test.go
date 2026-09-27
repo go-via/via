@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"runtime"
 	"strconv"
 	"strings"
@@ -482,37 +485,71 @@ func (r *racyTicker) View() h.H {
 
 func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	t.Parallel()
-	// Real time, not synctest: -race (or a concurrent-map panic) is the only
-	// assertion — the test claims nothing about outcomes.
+	// Real time, not synctest: -race (or a concurrent-map panic) catches the
+	// race; the statuses and frame count prove both sides of it ran.
 	srv := liveServer(t, via.Handler(racyTicker{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
 	tab := awaitTabID(t, lines)
+	frames := tallyEvents(lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "r", 0)
 
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 200 {
-				req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
-				if err != nil {
-					continue
-				}
-				req.Header.Set("Datastar-Request", "true")
-				req.Header.Set("Sec-Fetch-Site", "same-origin")
-				resp, err := srv.Client().Do(req)
-				if err == nil {
-					resp.Body.Close()
-				}
+	before := frames.Load()
+	statuses := postConcurrently(srv, func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+url, strings.NewReader(withTab(tab, "{}")))
+		if err == nil {
+			req.Header.Set("Datastar-Request", "true")
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+		}
+		return req, err
+	})
+	assert.Equal(t, map[int]int{http.StatusNoContent: 8 * 200}, statuses)
+	assert.Greater(t, frames.Load(), before, "the tick must push while the POSTs run")
+}
+
+// tallyEvents drains lines, so the stream never stalls on an unread client,
+// and counts the SSE events it carried.
+func tallyEvents(lines <-chan string) *atomic.Int64 {
+	var n atomic.Int64
+	go func() {
+		for line := range lines {
+			if strings.HasPrefix(line, "event:") {
+				n.Add(1)
 			}
-		}()
+		}
+	}()
+	return &n
+}
+
+// postConcurrently tallies statuses by code; a transport error counts as 0.
+func postConcurrently(srv *httptest.Server, build func() (*http.Request, error)) map[int]int {
+	var (
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		statuses = map[int]int{}
+	)
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
+				code := 0
+				if req, err := build(); err == nil {
+					if resp, err := srv.Client().Do(req); err == nil {
+						_, _ = io.Copy(io.Discard, resp.Body)
+						resp.Body.Close()
+						code = resp.StatusCode
+					}
+				}
+				mu.Lock()
+				statuses[code]++
+				mu.Unlock()
+			}
+		})
 	}
 	wg.Wait()
+	return statuses
 }
 
 // racyNativeForm ticks as fast as time.Ticker allows so its OnInit-scheduled
@@ -536,38 +573,32 @@ func (r *racyNativeForm) View() h.H {
 
 func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	t.Parallel()
-	// Real time, not synctest: -race is the only assertion — the test claims
-	// nothing about outcomes.
+	// Real time, not synctest: -race catches the race; the statuses and frame
+	// count prove both sides of it ran.
 	srv := liveServer(t, via.Handler(racyNativeForm{}))
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
 	tab := awaitTabID(t, lines)
+	frames := tallyEvents(lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	url := actionURL(t, page, "r", 0)
+	form, ctype := multipartForm(t, map[string]string{"_viatab": tab})
+	body, err := io.ReadAll(form)
+	require.NoError(t, err)
 
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for range 200 {
-				body, ctype := multipartForm(t, map[string]string{"_viatab": tab})
-				req, err := http.NewRequest(http.MethodPost, srv.URL+url, body)
-				if err != nil {
-					continue
-				}
-				req.Header.Set("Content-Type", ctype)
-				req.Header.Set("Sec-Fetch-Site", "same-origin")
-				resp, err := srv.Client().Do(req)
-				if err == nil {
-					resp.Body.Close()
-				}
-			}
-		}()
-	}
-	wg.Wait()
+	before := frames.Load()
+	statuses := postConcurrently(srv, func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodPost, srv.URL+url, bytes.NewReader(body))
+		if err == nil {
+			req.Header.Set("Content-Type", ctype)
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+		}
+		return req, err
+	})
+	assert.Equal(t, map[int]int{http.StatusOK: 8 * 200}, statuses)
+	assert.Greater(t, frames.Load(), before, "the tick must push while the POSTs run")
 }
 
 // paramInTick calls ctx.Param from a Tick handler to prove the connection's
@@ -790,11 +821,57 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 		"a unit publishing to the topic it listens to wedged its own stream (%d/%d handler calls)", got.Load(), 2*seeds)
 }
 
+// stallUnit pads the first connection's frames well past what the socket
+// buffers hold, so a client that never reads pins its stream mid-write on the
+// first frame instead of being absorbed by the kernel.
+type stallUnit struct {
+	bus     *topic.Topic[int]
+	claimed *atomic.Bool
+	pad     bool
+	sum     via.State[int]
+}
+
+var stallPad = strings.Repeat("x", 1<<20)
+
+func (u *stallUnit) OnInit(ctx *via.Ctx) error {
+	if u.claimed.CompareAndSwap(false, true) {
+		u.pad = true
+	}
+	ctx.Listen(u.bus, u.recv)
+	return nil
+}
+
+func (u *stallUnit) recv(ctx *via.Ctx, v int) { u.sum.Set(u.sum.Get() + v) }
+
+func (u *stallUnit) View() h.H {
+	pad := ""
+	if u.pad {
+		pad = stallPad
+	}
+	return h.Div(h.Str("sum="), u.sum.Display(), h.Str(pad))
+}
+
+// Loopback autotunes a send buffer to megabytes; capping it keeps the pad
+// far larger than anything the kernel will hold for a client.
+type smallSendBuffer struct{ net.Listener }
+
+func (l smallSendBuffer) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if tc, ok := c.(*net.TCPConn); ok {
+		_ = tc.SetWriteBuffer(4 << 10)
+	}
+	return c, err
+}
+
 func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
-	var got, renders atomic.Int64
-	srv := serve(t, via.Handler(burstUnit{bus: bus, got: &got, renders: &renders}))
+	var out lockedBuf
+	srv := httptest.NewUnstartedServer(via.Handler(stallUnit{bus: bus, claimed: &atomic.Bool{}},
+		via.WithPinnedDeadline(300*time.Millisecond), logTo(&out)))
+	srv.Listener = smallSendBuffer{srv.Listener}
+	srv.Start()
+	t.Cleanup(srv.Close)
 
 	ctx, stall := context.WithCancel(context.Background())
 	defer stall()
@@ -809,12 +886,19 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	defer cancel()
 	require.Eventually(t, func() bool { return bus.NumSubs() == 2 }, 2*time.Second, 5*time.Millisecond)
 
-	for range 500 {
-		bus.Publish(1)
-	}
-	awaitLine(t, lines, "sum=")
-	require.Eventually(t, func() bool { return got.Load() >= 500 }, 5*time.Second, 5*time.Millisecond,
-		"a healthy client's deliveries were held up by a client that never reads")
+	bus.Publish(1)
+	awaitLine(t, lines, "sum=1")
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "blocked writing a frame") },
+		2*time.Second, 5*time.Millisecond, "the non-reading client's stream must be pinned mid-write first")
+
+	// Off the test goroutine: a Publish that waits on the pinned subscriber
+	// must fail the await below, not hang the test.
+	go func() {
+		for range 499 {
+			bus.Publish(1)
+		}
+	}()
+	awaitLine(t, lines, "sum=500")
 }
 
 // BenchmarkListen_burstFrames quantifies the coalescing half of the fix:
@@ -1276,4 +1360,31 @@ func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
 		"a Tick registered from a plain action handler must never fire")
 	assert.Contains(t, buf.String(), "Tick called after OnInit returned",
 		"a Tick call from a plain action handler must log loudly")
+}
+
+type zeroTicker struct{ beats via.State[int] }
+
+func (z *zeroTicker) OnInit(ctx *via.Ctx) error { ctx.Tick(0, z.beat); return nil }
+
+func (z *zeroTicker) beat(*via.Ctx) { z.beats.Set(z.beats.Get() + 1) }
+
+func (z *zeroTicker) View() h.H { return h.Div(h.Str("beats: "), z.beats.Display()) }
+
+func TestTick_runsANonPositiveIntervalEverySecondAndWarnsOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		srv := liveServer(t, via.Handler(zeroTicker{}, logTo(&out)))
+
+		l1, c1 := openStream(t, srv)
+		defer c1()
+		l2, c2 := openStream(t, srv)
+		defer c2()
+
+		start := time.Now()
+		awaitLine(t, l1, "beats: ")
+		awaitLine(t, l2, "beats: ")
+		assert.GreaterOrEqual(t, time.Since(start), time.Second, "a zero interval must not spin")
+		assert.Equal(t, 1, strings.Count(out.String(), "via: Tick interval <= 0, running every 1s instead"),
+			"the clamp warns once per Router, not per OnInit")
+	})
 }

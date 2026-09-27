@@ -411,7 +411,7 @@ func newSessionManager(cfg *config) *sessionManager {
 		panic(fmt.Sprintf("via: session key must be at least %d bytes (got %d)", minSessionKeyLen, len(key)))
 	}
 	ttl := cfg.sessionTTL
-	if ttl <= 0 {
+	if ttl == 0 {
 		ttl = defaultSessionTTL
 	}
 	name := cfg.sessionCookie
@@ -419,7 +419,7 @@ func newSessionManager(cfg *config) *sessionManager {
 		name = defaultSessionCookie
 	}
 	timeout := cfg.sessionTimeout
-	if timeout <= 0 {
+	if timeout == 0 {
 		timeout = defaultSessionStoreTimeout
 	}
 	store, inMemory := cfg.sessionStore, false
@@ -877,6 +877,10 @@ func (s *Session) ensure() *sessionData {
 	}
 	id, d := s.mgr.create(s.storeCtx())
 	s.id, s.data = id, d
+	if d.mintFailed {
+		// save logged the refusal; a cookie would name an id the store never took.
+		return d
+	}
 	if s.w != nil {
 		s.mgr.setCookie(s.w, id, s.secure)
 	} else if s.errPage {

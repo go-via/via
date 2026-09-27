@@ -112,6 +112,45 @@ func TestCS_emitsTheEventAndModifiers(t *testing.T) {
 	}
 }
 
+type modPage struct {
+	event string
+	opts  []on.Option
+}
+
+func (p *modPage) Hit(ctx *via.Ctx) {}
+func (p *modPage) View() h.H        { return h.Div(on.Event(p.event, p.Hit, p.opts...)) }
+
+func TestEvent_rendersEveryModifierOnTheServerAction(t *testing.T) {
+	t.Parallel()
+	all := []on.Option{on.Debounce(1500 * time.Microsecond), on.Throttle(time.Second), on.Once(), on.Prevent(), on.Stop(), on.Outside(), on.Window()}
+	tests := []struct {
+		name  string
+		event string
+		opts  []on.Option
+		want  string
+	}{
+		{"debounce", "input", []on.Option{on.Debounce(500 * time.Millisecond)}, `data-on:input__debounce.500ms=`},
+		{"debounce sub-ms", "input", []on.Option{on.Debounce(1500 * time.Microsecond)}, `data-on:input__debounce.1.5ms=`},
+		{"throttle", "scroll", []on.Option{on.Throttle(time.Second)}, `data-on:scroll__throttle.1000ms=`},
+		{"once", "click", []on.Option{on.Once()}, `data-on:click__once=`},
+		{"prevent", "submit", []on.Option{on.Prevent()}, `data-on:submit__prevent=`},
+		{"stop", "click", []on.Option{on.Stop()}, `data-on:click__stop=`},
+		{"outside", "click", []on.Option{on.Outside()}, `data-on:click__outside=`},
+		{"window", "keydown", []on.Option{on.Window()}, `data-on:keydown__window=`},
+		{"all on a namespaced event", "via:patch", all, `data-on:via:patch__debounce.1.5ms__throttle.1000ms__once__prevent__stop__outside__window=`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var page string
+			require.NotPanics(t, func() {
+				_, page = vt.Serve(t, via.Handler(modPage{event: tt.event, opts: tt.opts})).Get("/")
+			})
+			assert.Contains(t, page, tt.want)
+		})
+	}
+}
+
 func TestDebounce_panicsOnANonPositiveDuration(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithValue(t, "on: Debounce needs a positive duration, got 0s", func() { on.Debounce(0) })

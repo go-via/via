@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/go-via/via/internal/hcore"
 )
@@ -21,8 +22,10 @@ const maxUploadBytes = 8 << 20
 // originAllowed is the "origin floor": the check that a state-changing request
 // comes from a host the app trusts, read off Origin/Sec-Fetch-Site. Every
 // action and the SSE connect pass through it. By default every origin is
-// admitted (the per-tab id is the CSRF token), since a strict default refuses
-// every localhost dev setup on a second port or behind a dev proxy.
+// admitted, since a strict default refuses every localhost dev setup on a
+// second port or behind a dev proxy. Left open, only an action on a live unit
+// is guarded, by its tab id; a plain action is not, so any site can fire it
+// (see originNotice).
 // WithTrustedOrigin turns enforcement on, in this order: the allowlist (which
 // wins over the browser's site label, so cross-origin embedding works), then
 // Sec-Fetch-Site, then an Origin whose host matches the request Host. A
@@ -61,6 +64,7 @@ func originAllowed(req *http.Request, cfg *config) bool {
 type routerPolicy struct {
 	trustedOrigins map[string]bool
 	log            *slog.Logger
+	tickWarn       sync.Once
 }
 
 // redirectTo is a queued Redirect. Its verdict is taken when it is queued,

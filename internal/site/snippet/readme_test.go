@@ -1,4 +1,4 @@
-package snippet
+package snippet_test
 
 import (
 	"os"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go-via.dev/site/snippet"
 )
 
 func readRepoFile(t *testing.T, name string) string {
@@ -24,7 +25,7 @@ func TestReadme_showsTheCompiledLiveCounter(t *testing.T) {
 	block, _, ok := strings.Cut(rest, "\n```\n")
 	require.True(t, ok, "README's ```go block is not closed")
 
-	assert.Equal(t, strings.Join(lookup("start/main.go").lines, "\n"), block)
+	assert.Equal(t, text(t, render(t, snippet.Show("start/main.go"))), block+"\n")
 }
 
 func TestReadme_statesTheGoVersionGoModRequires(t *testing.T) {

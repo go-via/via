@@ -29,10 +29,11 @@ const (
 	modeNative
 )
 
-// tabSignal is the wire name of the tab id — the CSRF token in this project's
-// threat model, and the canonical home of the no-underscore rule that
-// writeSignalsFrame and writeHTMLPage defer to. A live page renders it, and
-// its stream adopts it (see newTabID).
+// tabSignal is the wire name of the tab id, which an action on a live unit
+// must carry to reach its instance; a plain action never checks it, so only
+// the origin floor guards those. It is also the canonical home of the
+// no-underscore rule that writeSignalsFrame and writeHTMLPage defer to. A live
+// page renders it, and its stream adopts it (see newTabID).
 //
 // THE NAME MUST NOT START WITH "_". Datastar's default signal filter excludes
 // /(^|\.)_/, so an underscored name is never posted back — and every action
@@ -40,9 +41,9 @@ const (
 // ships; the ordinary name is the mechanism.
 //
 // As a signal it sits in the request body, is set by same-origin JS, and is
-// never auto-attached by the browser — a synchronizer token, which is what a
-// CSRF token must be. A user signal may not take this name (declareSignal
-// panics).
+// never auto-attached by the browser, so a cross-site page cannot supply it
+// the way the browser supplies a cookie. A user signal may not take this name
+// (declareSignal panics).
 const tabSignal = "viatab"
 
 // tabFormField carries the tab id for a native <form> submit, which ships
@@ -245,7 +246,7 @@ func unitAddr(c *Ctx) string {
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			recoverToHTTP(m.cfg.log, w, req, rec, "action")
+			recoverToHTTP(m.cfg.log, w, req, rec, "action", false)
 		}
 	}()
 	if !originAllowed(req, m.cfg) {

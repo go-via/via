@@ -63,10 +63,11 @@ func (p *Security) View() h.H {
 
 		d.H2("Origin checks and CSRF"),
 		snippet.Region("security/router.go", "router", snippet.Mark("WithTrustedOrigin")),
-		h.P(h.Str("Every action POST carries the tab's id in its body, a value same-origin script sets and the browser never "+
-			"attaches on its own. It is the CSRF token: an action on a live tab runs only with that tab's id, and only under the "+
-			"session the tab connected with. A request carrying another session's cookie answers 403 "), Code("session mismatch"),
-			h.Str(", even with the right id.")),
+		h.P(h.Str("An action POST carries the tab's id in its body, a value same-origin script sets and the browser never "+
+			"attaches on its own. An action on a live unit runs only with that tab's id, and only under the session the tab "+
+			"connected with. A request carrying another session's cookie answers 403 "), Code("session mismatch"),
+			h.Str(", even with the right id. A plain action runs on a fresh instance and never checks the id, so for it the "+
+				"origin check below is the only CSRF defence.")),
 		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, form submit and stream "+
 			"connect, in this order: an "),
 			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header must be "),
@@ -79,7 +80,7 @@ func (p *Security) View() h.H {
 				"matter, and a value with a path, query, fragment or userinfo panics at startup.")),
 		snippet.Text("shell", crossOriginPOST),
 		Callout(Warning, "Without it, every origin is accepted",
-			h.P(h.Str("A plain action (on a page with nothing live) has no tab id to check, so any site can post to it. "+
+			h.P(h.Str("A plain action never checks the tab id, even on a page with live parts, so any site can post to it. "+
 				"The session cookie is "), Code("SameSite=Lax"), h.Str(", so the browser leaves it off a cross-site POST and the "+
 				"handler runs signed out, but a sibling subdomain counts as the same site. Look for this line at startup:")),
 			snippet.Text("", originNotice),
@@ -94,7 +95,9 @@ func (p *Security) View() h.H {
 				h.Span(API("via.WithSecureCookies"), h.Str(" behind a TLS-terminating proxy that sends neither."))},
 			[]h.H{h.Str("Name"), Code("via_session"),
 				h.Span(API("via.WithSessionCookieName"), h.Str(": give each app its own when two share a host."))},
-			[]h.H{h.Str("Lifetime"), h.Str("24h idle, sliding on the server. The cookie's Max-Age is the TTL, set when the cookie is issued or rotated and not refreshed by use."), API("via.WithSessionTTL")},
+			[]h.H{h.Str("Lifetime"), h.Str("24h idle. Once less than half the TTL is left, a request re-saves the session and re-sends the cookie " +
+				"with a fresh Max-Age: one write per half-TTL, so a session can expire as little as half the TTL after its " +
+				"last request."), API("via.WithSessionTTL")},
 			[]h.H{h.Str("Signature"), h.Str("HMAC-SHA256 over the id. A key shorter than 16 bytes panics at startup."),
 				h.Span(API("via.WithSessionKey"), h.Str(", or the "), Code("VIA_SESSION_KEY"), h.Str(" environment variable."))},
 		),

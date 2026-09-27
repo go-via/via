@@ -449,23 +449,37 @@ tests. A pure-wiring or trivial-helper file (e.g. `config.go`, `sprint.go`)
 may have no `_test.go` — it is verified by build/vet and by the behavioral
 tests that drive it, not by a unit test of its own.
 
-Tests are black-box (`package <x>_test`) — there are no `_internal_test.go`
-white-box files. Behavior that the plain HTTP idiom can't reach cleanly (a
-controlled request Host, a TLS request, the per-connection tab handshake, a
-live render) is still exercised as a black box through the `vt` harness rather
-than by reaching into unexported state. If a behavior genuinely cannot be
-observed through the public surface even with `vt`, that is a design signal —
-change the surface, not the test boundary. Test-only modules (`vt/` the
-harness, `vtbrowser/` the chromedp tier) are exempt from pairing: they support
-the system rather than a single source file.
+Tests are black-box: a `_test.go` beside package `<x>` is in
+`package <x>_test`. `TestTests_areBlackBox` in `sourcelint_test.go` enforces
+this across all three modules; a directory holding only tests has no package
+to reach into, so it is skipped. Behavior that the plain HTTP idiom can't reach
+cleanly (a controlled request Host, a TLS request, the per-connection tab
+handshake, a live render) is still exercised as a black box through the `vt`
+harness rather than by reaching into unexported state. If a behavior genuinely
+cannot be observed through the public surface even with `vt`, that is a design
+signal — change the surface, not the test boundary.
 
-One further exemption: `sourcelint_test.go`. It holds the source-TEXT lints
-(the reflect allowlist, the no-`&`/no-closure guard over the examples, and the
-guard that keeps `h`'s binder plumbing off the public surface) — they
-parse the tree and assert on what is written in it, so they pair with every
-source file and therefore with none. They are named and isolated so a failure
-there reads as "the source drifted from a design rule", never as a behavioral
-regression.
+Pairing has one exemption: `sourcelint_test.go`. It holds the source-TEXT
+lints (the reflect allowlist, the no-`&`/no-closure guard over the examples,
+the guard that keeps hcore's binder plumbing off every public package, and the
+black-box test lint) — they parse the tree and assert on what is written in
+it, so they pair with every source file and therefore with none. They are
+named and isolated so a failure there reads as "the source drifted from a
+design rule", never as a behavioral regression.
+
+### No tests of package main
+
+Reasoning: package main cannot be imported, so a test of it has to sit inside
+it, which is a white-box test by another name.
+
+Rule: Keep `main` to wiring: flags, environment, calling into a package. The
+logic goes in an importable package with its own `package <x>_test` tests.
+`TestTests_areBlackBox` fails on any `_test.go` beside a package main. A
+test-only directory that builds or compares displayed mains without
+importing them (`snippet/src/tutorial`) is not beside one, so it passes.
+
+- ✅ `content/gen/main.go` calls `apigen`, and `apigen_test.go` tests it.
+- ❌ The generator's logic in `content/gen`, tested from `package main`.
 
 ### Internal Packages
 

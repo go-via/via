@@ -40,6 +40,8 @@ func (n *Note) View() h.H {
 			h.Button(h.Type("submit"), h.Str("Add")),
 		),
 		h.Small(h.Class("err"), n.Err.Display()),
-		h.Ul(n.Notes.Each(func(s string) h.H { return h.Li(h.Str(s)) })),
+		h.Ul(n.Notes.Each(n.row)),
 	)
 }
+
+func (n *Note) row(s string) h.H { return h.Li(h.Str(s)) }

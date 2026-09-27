@@ -73,7 +73,7 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 	return lines, cancel
 }
 
-// sessionLive is a live root — a Live-implementing root's own actions only
+// sessionLive renders its State, so it is a live root whose own actions only
 // ever route through the tab handshake (dispatchPlain refuses them, see
 // dispatch.go), so establishing the session ahead of connecting needs a
 // separate, plain mount (loginComp, from sess_test.go) sharing the same
@@ -241,10 +241,8 @@ func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.
 
 	atkResp, err := attacker.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
 	require.NoError(t, err)
-	atkBody, _ := io.ReadAll(atkResp.Body)
 	atkResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, atkResp.StatusCode, "the leaked id still drives the anonymous tab")
-	assert.NotContains(t, string(atkBody), "vicky")
 
 	vicResp, err := victim.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
 	require.NoError(t, err)
@@ -300,7 +298,7 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 	assert.Equal(t, http.StatusNoContent, againResp.StatusCode, "the binding session still dispatches")
 }
 
-func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
+func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
@@ -319,13 +317,15 @@ func TestDispatch_liveReadOnlySessionTouchByTheOwnerDoesNotBind(t *testing.T) {
 	peekResp, err := http.DefaultClient.Do(peekReq)
 	require.NoError(t, err)
 	peekResp.Body.Close()
+	require.Equal(t, http.StatusNoContent, peekResp.StatusCode, "Peek must run")
+	assert.Empty(t, peekResp.Header.Values("Set-Cookie"), "a Session().Get with no session must not mint one")
 
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, still no cookie
 	bumpResp, err := http.DefaultClient.Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, bumpResp.StatusCode,
-		"a read-only Session().Get by the connection's own owner must not bind it")
+		"a Session().Get on a request with no session must not bind the connection")
 }
 
 // liveLoginer is a live root that starts every connection anonymous — Login
@@ -541,18 +541,20 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 
 	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
 	loginDone := make(chan *http.Response, 1)
+	loginErr := make(chan error, 1)
 	go func() {
 		resp, err := http.DefaultClient.Do(loginReq)
-		require.NoError(t, err)
+		loginErr <- err
 		loginDone <- resp
 	}()
 	<-root.started // Login now holds the stream goroutine, unbound so far
 
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
 	bumpDone := make(chan *http.Response, 1)
+	bumpErr := make(chan error, 1)
 	go func() {
 		resp, err := http.DefaultClient.Do(bumpReq)
-		require.NoError(t, err)
+		bumpErr <- err
 		bumpDone <- resp
 	}()
 	// Give the cookieless dispatch time to reach its own check/enqueue point
@@ -564,8 +566,11 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	time.Sleep(50 * time.Millisecond)
 	close(root.proceed) // let Login finish and bind
 
+	require.NoError(t, <-loginErr)
 	loginResp := <-loginDone
 	loginResp.Body.Close()
+	require.Equal(t, http.StatusNoContent, loginResp.StatusCode, "the login must land and bind")
+	require.NoError(t, <-bumpErr)
 	bumpResp := <-bumpDone
 	defer bumpResp.Body.Close()
 

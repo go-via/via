@@ -1,4 +1,4 @@
-package troubleshooting
+package troubleshooting_test
 
 import (
 	"bytes"
@@ -17,6 +17,7 @@ import (
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go-via.dev/site/snippet/src/troubleshooting"
 )
 
 type syncBuf struct {
@@ -52,7 +53,7 @@ func postURLs(page string) []string {
 
 type Gated struct {
 	Open bool
-	todo Todos
+	todo troubleshooting.Todos
 }
 
 func (g *Gated) Hi(ctx *via.Ctx) {}
@@ -61,7 +62,7 @@ func (g *Gated) View() h.H       { return h.Div(g.todo.View(), via.When(g.Open, 
 
 func TestGone_answersEachStaleCase(t *testing.T) {
 	t.Parallel()
-	seed := Todos{items: []Todo{{1, "a"}}}
+	seed := troubleshooting.Todos{Items: []troubleshooting.Todo{{ID: 1, Title: "a"}}}
 	open := vt.Serve(t, via.Handler(Gated{Open: true, todo: seed}))
 	_, page := open.Get("/")
 	urls := postURLs(page)
@@ -121,7 +122,7 @@ func TestForbidden_originOffTheAllowlist(t *testing.T) {
 
 func TestTooLarge_overMaxBody(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Todos{items: []Todo{{1, "a"}}}, via.WithMaxBody(64)))
+	app := vt.Serve(t, via.Handler(troubleshooting.Todos{Items: []troubleshooting.Todo{{ID: 1, Title: "a"}}}, via.WithMaxBody(64)))
 
 	status, body := app.Action(0).Body(`{"x":"` + strings.Repeat("a", 100) + `"}`).Fire()
 	assert.Equal(t, 413, status)
@@ -151,12 +152,12 @@ func TestUnavailable_pastMaxSSEConn(t *testing.T) {
 
 type LiveParent struct {
 	N     via.State[int]
-	Clock Clock
+	Clock troubleshooting.Clock
 }
 
 func (p *LiveParent) View() h.H { return h.Div(p.N.Display(), via.Child(p.Clock)) }
 
-type PtrParent struct{ Chat Chat }
+type PtrParent struct{ Chat troubleshooting.Chat }
 
 func (p *PtrParent) View() h.H { return h.Div(via.Child(&p.Chat)) }
 
@@ -185,7 +186,7 @@ func TestRenderFailed_logsTheCompositionMistake(t *testing.T) {
 
 func TestSiblings_liveChildrenUnderAPlainRoot(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Dashboard{}))
+	app := vt.Serve(t, via.Handler(troubleshooting.Dashboard{}))
 	status, _ := app.Get("/")
 	assert.Equal(t, 200, status)
 }
@@ -226,14 +227,14 @@ func TestHooks_leftoverMethodsNeverRun(t *testing.T) {
 	t.Parallel()
 	buf := &syncBuf{}
 	vt.Serve(t, via.Handler(V07{}, logTo(buf))).Get("/")
-	assert.Contains(t, buf.String(), "via: troubleshooting.V07.OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
+	assert.Contains(t, buf.String(), "via: troubleshooting_test.V07.OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
 		"Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and ctx.Tick or ctx.Listen makes the unit live.")
 	assert.NotContains(t, buf.String(), "V07.OnDispose", "a v0.7 OnDispose has an action's shape, so it is silent")
 
 	buf = &syncBuf{}
 	vt.Serve(t, via.Handler(Misnamed{}, logTo(buf))).Get("/")
-	assert.Contains(t, buf.String(), "via: troubleshooting.Misnamed.Oninit looks like a mis-named OnInit — it has the hook's "+
-		"exact signature but troubleshooting.Misnamed has no OnInit func(*via.Ctx) error, so nothing will ever call it. Rename it to OnInit.")
+	assert.Contains(t, buf.String(), "via: troubleshooting_test.Misnamed.Oninit looks like a mis-named OnInit — it has the hook's "+
+		"exact signature but troubleshooting_test.Misnamed has no OnInit func(*via.Ctx) error, so nothing will ever call it. Rename it to OnInit.")
 }
 
 type ValueView struct{ Q via.Signal[string] }
@@ -247,14 +248,14 @@ func (n *NoErrInit) View() h.H           { return h.P() }
 
 func TestMount_panicsAtStartup(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithError(t, "via: troubleshooting.NoErrInit.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run",
+	assert.PanicsWithError(t, "via: troubleshooting_test.NoErrInit.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run",
 		func() { via.Handler(NoErrInit{}) })
-	assert.PanicsWithError(t, "via: troubleshooting.ValueView.View has a VALUE receiver and the composition holds Signals — "+
+	assert.PanicsWithError(t, "via: troubleshooting_test.ValueView.View has a VALUE receiver and the composition holds Signals — "+
 		"View must take a POINTER receiver (func (p *ValueView) View() h.H), or every rendered Signal binds against a discarded copy",
 		func() { via.Handler(ValueView{}) })
 	assert.PanicsWithValue(t, `via: Mount path "/files/{path...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`,
 		func() { via.Mount(via.NewRouter(), "/files/{path...}", NoErrInit{}) })
-	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting.PtrParent as mounted: "+
+	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting_test.PtrParent as mounted: "+
 		"via: via.Child(child) requires child to have a View() method",
 		func() { via.Handler(PtrParent{}) })
 }
