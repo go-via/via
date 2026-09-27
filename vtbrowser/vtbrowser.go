@@ -204,7 +204,7 @@ func (s *Session) Text(selector string) string {
 func (s *Session) Value(selector string) string {
 	s.t.Helper()
 	var v string
-	s.eval(fmt.Sprintf(`(document.querySelector(%q)||{}).value||""`, selector), &v)
+	s.eval(valueJS(selector), &v)
 	return v
 }
 
@@ -216,20 +216,23 @@ func (s *Session) WaitTextContains(selector, want string) {
 		fmt.Sprintf("text to contain %q", want))
 }
 
-// WaitValue polls until the first input matching selector has value want.
+// WaitValue polls until the first input matching selector has value want. A
+// poll that fails to evaluate, as during a reload, counts as not yet.
 func (s *Session) WaitValue(selector, want string) {
 	s.t.Helper()
 	deadline := time.After(defaultTimeout)
 	var last string
+	var lastErr error
 	for {
-		last = s.Value(selector)
-		if last == want {
+		if err := s.tryEval(valueJS(selector), &last); err != nil {
+			lastErr = err
+		} else if last == want {
 			return
 		}
 		select {
 		case <-deadline:
-			s.t.Fatalf("vtbrowser: %q value never became %q within %v; last: %q",
-				selector, want, defaultTimeout, last)
+			s.t.Fatalf("vtbrowser: %q value never became %q within %v; last: %q (last error: %v)",
+				selector, want, defaultTimeout, last, lastErr)
 			return
 		case <-time.After(pollInterval):
 		}
@@ -238,20 +241,24 @@ func (s *Session) WaitValue(selector, want string) {
 
 // WaitFor polls the trimmed textContent of selector until ok reports true,
 // failing after defaultTimeout with the last observed text. desc names what was
-// awaited, for the failure message.
+// awaited, for the failure message. A poll that fails to evaluate, as during a
+// reload, counts as not yet.
 func (s *Session) WaitFor(selector string, ok func(text string) bool, desc string) {
 	s.t.Helper()
 	deadline := time.After(defaultTimeout)
 	var last string
+	var lastErr error
 	for {
-		last = strings.TrimSpace(s.text(selector))
-		if ok(last) {
+		var txt string
+		if err := s.tryEval(textJS(selector), &txt); err != nil {
+			lastErr = err
+		} else if last = strings.TrimSpace(txt); ok(last) {
 			return
 		}
 		select {
 		case <-deadline:
-			s.t.Fatalf("vtbrowser: %q never satisfied %s within %v; last text: %q",
-				selector, desc, defaultTimeout, last)
+			s.t.Fatalf("vtbrowser: %q never satisfied %s within %v; last text: %q (last error: %v)",
+				selector, desc, defaultTimeout, last, lastErr)
 			return
 		case <-time.After(pollInterval):
 		}
@@ -268,18 +275,22 @@ func (s *Session) Eval(js string, out any) {
 // WaitEvalTrue polls a JavaScript boolean expression until it evaluates true,
 // failing after defaultTimeout. For DOM facts the textContent-based Wait*
 // helpers can't express — an attribute's value, an element's display style.
+// A poll that fails to evaluate, as during a reload, counts as not yet.
 func (s *Session) WaitEvalTrue(js, desc string) {
 	s.t.Helper()
 	deadline := time.After(defaultTimeout)
+	var lastErr error
 	for {
 		var ok bool
-		s.eval(js, &ok)
-		if ok {
+		if err := s.tryEval(js, &ok); err != nil {
+			lastErr = err
+		} else if ok {
 			return
 		}
 		select {
 		case <-deadline:
-			s.t.Fatalf("vtbrowser: expr never became true (%s) within %v: %s", desc, defaultTimeout, js)
+			s.t.Fatalf("vtbrowser: expr never became true (%s) within %v: %s (last error: %v)",
+				desc, defaultTimeout, js, lastErr)
 			return
 		case <-time.After(pollInterval):
 		}
@@ -354,10 +365,24 @@ func (s *Session) RequireCleanConsole() {
 	}
 }
 
+func valueJS(selector string) string {
+	return fmt.Sprintf(`(document.querySelector(%q)||{}).value||""`, selector)
+}
+
+func textJS(selector string) string {
+	return fmt.Sprintf(`(document.querySelector(%q)||{}).textContent||""`, selector)
+}
+
 func (s *Session) text(selector string) string {
 	var txt string
-	s.eval(fmt.Sprintf(`(document.querySelector(%q)||{}).textContent||""`, selector), &txt)
+	s.eval(textJS(selector), &txt)
 	return txt
+}
+
+func (s *Session) tryEval(js string, out any) error {
+	ctx, cancel := context.WithTimeout(s.ctx, defaultTimeout)
+	defer cancel()
+	return chromedp.Run(ctx, chromedp.Evaluate(js, out))
 }
 
 func (s *Session) eval(js string, out any) {

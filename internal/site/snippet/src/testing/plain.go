@@ -32,7 +32,7 @@ func (c *Counter) View() h.H {
 // snippet:end
 
 // snippet:start test
-func TestCounter(t *testing.T) {
+func TestCounter_incrementsOnClick(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Counter{n: new(atomic.Int64)}, via.WithLogger(vt.Logger(t))))
 

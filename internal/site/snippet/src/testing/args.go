@@ -78,7 +78,7 @@ type Layout struct{ Search Search }
 
 func (l *Layout) View() h.H { return h.Main(via.Child(l.Search)) }
 
-func TestLayout_searchChild(t *testing.T) {
+func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Layout{}))
 

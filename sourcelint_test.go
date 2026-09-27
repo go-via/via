@@ -528,10 +528,10 @@ func recvName(e ast.Expr) string {
 	return "?"
 }
 
-// The walk starts at the repo root rather than per go.mod, so internal/site
-// and vtbrowser are covered by the same pass as the root module.
 func TestTests_areBlackBox(t *testing.T) {
 	t.Parallel()
+	// The walk starts at the repo root rather than per go.mod, so internal/site
+	// and vtbrowser are covered by the same pass as the root module.
 	got, err := whiteBoxTests(".")
 	require.NoError(t, err)
 	assert.Empty(t, got)

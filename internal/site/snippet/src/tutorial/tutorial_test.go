@@ -31,8 +31,6 @@ func TestSteps_build(t *testing.T) {
 	}
 }
 
-// The page tells readers the last step is the repo's chat example minus its
-// comments; this keeps that true when either file changes.
 func TestLastStep_matchesTheChatExampleWithoutComments(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, code(t, "../../../../example/chat/main.go"), code(t, steps[len(steps)-1]+"/main.go"))
