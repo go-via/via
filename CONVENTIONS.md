@@ -300,8 +300,10 @@ Rule: Use `github.com/stretchr/testify/assert` for all assertions.
   want to see all of, even when one fails.
 - Use `assert.JSONEq` for JSON comparison — it is order-insensitive.
 - Use `assert.Contains` for partial string/slice membership.
-- Do not use raw `t.Error`, `t.Fatal`, or `t.Log` for assertion failures —
-  use testify.
+- Do not use raw `t.Error`, `t.Fatal`, or `t.Log` for assertion failures in
+  `_test.go` files — use testify. The importable helpers (`vt`, `vtbrowser`)
+  fail through `testing.TB` instead, so importing them doesn't pull testify
+  into a user's build.
 
 ## Comments
 

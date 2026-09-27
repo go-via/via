@@ -69,7 +69,7 @@ func TestRoomPost_reachesTheLocalTopicOfEveryPod(t *testing.T) {
 		select {
 		case <-sub.Ready():
 		case <-time.After(time.Second):
-			t.Fatalf("pod %d never heard the post", i)
+			require.FailNowf(t, "timed out", "pod %d never heard the post", i)
 		}
 		got, _ := sub.Drain()
 		assert.Equal(t, []deploy.Message{{Who: "ann", Text: "hi"}}, got)

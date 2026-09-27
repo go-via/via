@@ -2233,7 +2233,7 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOncePerPath(t *testing.T
 	select {
 	case <-p.pinned:
 	case <-time.After(3 * time.Second):
-		t.Fatal("precondition: the tick handler never took the connection goroutine")
+		require.FailNow(t, "precondition: the tick handler never took the connection goroutine")
 	}
 
 	for range 3 {

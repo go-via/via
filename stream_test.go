@@ -861,7 +861,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("only %d/%d signal patches arrived before the deadline", n, total)
+			require.FailNowf(t, "timed out", "only %d/%d signal patches arrived before the deadline", n, total)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -890,10 +890,10 @@ func firstElementsFrame(t *testing.T, lines <-chan string) string {
 	for {
 		select {
 		case <-deadline:
-			t.Fatal("timed out waiting for an element patch")
+			require.FailNow(t, "timed out waiting for an element patch")
 		case line, ok := <-lines:
 			if !ok {
-				t.Fatal("stream closed before an element patch")
+				require.FailNow(t, "stream closed before an element patch")
 			}
 			switch {
 			case strings.HasPrefix(line, "event:"):

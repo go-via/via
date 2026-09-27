@@ -897,7 +897,7 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	select {
 	case <-stall.blocked:
 	case <-time.After(2 * time.Second):
-		t.Fatal("the non-reading client's stream must be pinned mid-write first")
+		require.FailNow(t, "the non-reading client's stream must be pinned mid-write first")
 	}
 
 	// Off the test goroutine: a Publish that waits on the pinned subscriber
