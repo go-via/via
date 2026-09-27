@@ -1011,7 +1011,7 @@ func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 }
 
 // onInitLive loads a field in OnInit, before the connect render ever runs —
-// a live child's ticks fire on the connection's own goroutine, so its first
+// a live root's ticks fire on the connection's own goroutine, so its first
 // pushed frame is the proof OnInit's field reached the persistent instance.
 type onInitLive struct{ label string }
 
@@ -1082,7 +1082,7 @@ type paramParent struct{ I paramChild }
 
 func (p *paramParent) View() h.H { return h.Div(via.Child(p.I)) }
 
-func TestDispatch_pushUnderParamMountRendersConcreteBase(t *testing.T) {
+func TestDispatch_actionResponseUnderParamMountRendersConcreteBase(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
 	via.Mount(r, "/thread/{id}", paramParent{})
@@ -1453,8 +1453,9 @@ func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {
 	assert.Contains(t, body, "hi ")
 }
 
-// An exact-case alias table misses the typos that actually happen. Case and a
-// single dropped letter are the two, so both must warn.
+// An exact-case alias table misses the typos that actually happen: a miscased
+// hook name, and a slip of the v0.7 OnConnect, which is checked apart from
+// the hook aliases.
 type miscasedInit struct{ N via.Signal[int] }
 
 func (m *miscasedInit) Oninit(*via.Ctx) error { return nil }
@@ -1470,7 +1471,7 @@ func TestMount_warnsOnAMiscasedHookName(t *testing.T) {
 	assert.Contains(t, logged, "miscasedInit.Oninit looks like a mis-named OnInit")
 }
 
-func TestMount_warnsOnAHookNameOneLetterOff(t *testing.T) {
+func TestMount_warnsOnAOneLetterSlipOfTheV07OnConnect(t *testing.T) {
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", droppedLetterConnect{}) })
 	assert.Contains(t, logged, "droppedLetterConnect.OnConect is shaped like the v0.7 OnConnect hook")
 }
@@ -1656,33 +1657,46 @@ func (c *closePage) View() h.H     { return h.Div(c.n.Display()) }
 
 func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 	t.Parallel()
+	admitted := 0
 	for range 50 {
 		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
 		r := via.NewRouter()
 		via.Mount(r, "/", closePage{opened: opened, disposed: disposed})
 		srv := httptest.NewServer(r)
-		done := make(chan struct{})
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		status := make(chan int, 1)
 		go func() {
-			defer close(done)
-			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
-			req.Header.Set("Content-Type", "application/json")
 			resp, err := srv.Client().Do(req)
-			if err == nil {
-				io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
+			if err != nil {
+				status <- 0
+				return
 			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			status <- resp.StatusCode
 		}()
 		// Long enough for the connect to clear the shutting-down check, short
-		// enough that it is still setting the stream up.
+		// enough that it is still setting the stream up. The window between
+		// that check and the WaitGroup join is internal, so a sleep is the
+		// only way to aim at it from outside.
 		time.Sleep(300 * time.Microsecond)
 		r.Close()
-		// OnInit runs before the WaitGroup would be joined by a racing connect,
-		// so an un-drained one shows up here as an opened stream with no
+		// The connect joins the WaitGroup before it runs OnInit, so an admitted
+		// stream Close did not drain shows up here as an opened stream with no
 		// disposal — Close having returned over a live goroutine.
-		require.Equal(t, opened.Load(), disposed.Load(), "Close returned before a stream it admitted was drained")
-		<-done
+		o := opened.Load()
+		require.Equal(t, o, disposed.Load(), "Close returned before a stream it admitted was drained")
+		code := <-status
+		require.Contains(t, []int{http.StatusOK, http.StatusServiceUnavailable}, code,
+			"a connect racing Close is either streamed and ended, or refused")
+		if o > 0 {
+			admitted++
+		}
 		srv.Close()
 	}
+	assert.Positive(t, admitted, "no connect was admitted before Close, so nothing was drained")
 }
 
 // blockedTick parks its Tick handler until released, the way a handler stuck

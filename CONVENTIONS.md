@@ -461,7 +461,7 @@ signal — change the surface, not the test boundary.
 
 Pairing has one exemption: `sourcelint_test.go`. It holds the source-TEXT
 lints (the reflect allowlist, the no-`&`/no-closure guard over the examples,
-the guard that keeps `h`'s binder plumbing off the public surface, and the
+the guard that keeps hcore's binder plumbing off every public package, and the
 black-box test lint) — they parse the tree and assert on what is written in
 it, so they pair with every source file and therefore with none. They are
 named and isolated so a failure there reads as "the source drifted from a

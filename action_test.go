@@ -120,17 +120,26 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	assert.Contains(t, body, "alpha")
 }
 
+// newTodoListWithZero adds a row whose id is int's zero value, the row a
+// handler run on an undecodable arg would delete.
+func newTodoListWithZero() *todoBox {
+	return &todoBox{items: []todoItem{{0, "zero"}, {1, "alpha"}, {2, "bravo"}}}
+}
+
 func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+	srv := serve(t, via.Handler(todoList{box: newTodoListWithZero()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=%22abc%22", 1)
-	resp, body := do(t, srv, http.MethodPost, url, "{}")
+	url := strings.Replace(actionURL(t, page, "r", 1), "a=1", "a=%22abc%22", 1)
+	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a malformed arg")
+	_, after := do(t, srv, http.MethodGet, "/", "")
+	assert.Contains(t, after, "zero", "a malformed arg must not run the handler with the zero value")
+	assert.Contains(t, after, "alpha")
 }
 
 func TestActionArg_missingArgAnswers400(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		a    string
@@ -141,12 +150,14 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			srv := serve(t, via.Handler(todoList{box: newTodoList()}))
+			srv := serve(t, via.Handler(todoList{box: newTodoListWithZero()}))
 			_, page := do(t, srv, http.MethodGet, "/", "")
-			url := strings.Replace(actionURL(t, page, "r", 0), "a=1", tt.a, 1)
-			resp, body := do(t, srv, http.MethodPost, url, "{}")
+			url := strings.Replace(actionURL(t, page, "r", 1), "a=1", tt.a, 1)
+			resp, _ := do(t, srv, http.MethodPost, url, "{}")
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-			assert.NotContains(t, body, "alpha", "the row must not be rendered as deleted by a missing arg")
+			_, after := do(t, srv, http.MethodGet, "/", "")
+			assert.Contains(t, after, "zero", "a missing arg must not run the handler with the zero value")
+			assert.Contains(t, after, "alpha")
 		})
 	}
 }
@@ -307,11 +318,17 @@ func TestActionID_twoInstancesOfOneTypeGetDistinctIDs(t *testing.T) {
 		"two instances of one type must not share an action id — A's click would run B")
 }
 
-func TestActionID_embeddedSiblingsGetDistinctIDs(t *testing.T) {
+func TestActionID_embeddedSiblingsRouteToTheirOwnChild(t *testing.T) {
 	t.Parallel()
-	urls := actionURLs(t, via.Handler(idPair{}))
-	require.Len(t, urls, 2)
-	require.NotEqual(t, urls[0], urls[1])
+	srv := serve(t, via.Handler(idPair{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	a, b := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
+	require.NotEqual(t, a, b)
+
+	resp, body := do(t, srv, http.MethodPost, b, "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, `"i1__n":1`, "B's click must move B")
+	assert.NotContains(t, body, "i0__n", "B's click must not reach A")
 }
 
 func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
@@ -628,7 +645,7 @@ func BenchmarkRender_thousandActionBindings(b *testing.B) {
 }
 
 func TestActionID_memoIsStableAcrossRenders(t *testing.T) {
-	// Not Parallel: it captures the process-global log, which every other test writes to.
+	t.Parallel()
 	handler := via.Handler(idTwins{})
 	first := actionURLs(t, handler)
 	second := actionURLs(t, handler)

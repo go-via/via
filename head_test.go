@@ -98,41 +98,63 @@ func TestDocumentHead_preloadWidensTheDirectiveItsAsNames(t *testing.T) {
 
 func TestDocumentHead_rejectsMalformedHeadsAtStartup(t *testing.T) {
 	t.Parallel()
+	const (
+		notURL    = `is not a relative URL or an absolute http(s) one`
+		notOrigin = `is not an absolute http(s) origin (scheme://host[:port], no path)`
+		protoRel  = `is protocol-relative; write it as https://… so its origin can join the CSP`
+	)
 	tests := []struct {
 		name string
 		head via.Head
+		want string
 	}{
-		{"bad lang", via.Head{Lang: `en" onload="x`}},
-		{"relative font origin", via.Head{Assets: via.Assets{FontOrigins: []string{"/fonts"}}}},
-		{"unsafe scheme as src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}}},
-		{"data url as href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "data:text/css,body{}"}}}}},
+		{"bad lang", via.Head{Lang: `en" onload="x`}, `Lang "en" onload="x" is not a language tag`},
+		{"relative font origin", via.Head{Assets: via.Assets{FontOrigins: []string{"/fonts"}}},
+			`FontOrigin "/fonts" ` + notOrigin},
+		{"unsafe scheme as src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}},
+			`Script.Src "javascript:alert(1)" ` + notURL},
+		{"data url as href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "data:text/css,body{}"}}}},
+			`Style.Href "data:text/css,body{}" ` + notURL},
 		{"script with src and inline", via.Head{Assets: via.Assets{
-			Scripts: []via.Script{{Src: "/a.js", Inline: "x()"}}}}},
-		{"script with neither", via.Head{Assets: via.Assets{Scripts: []via.Script{{}}}}},
-		{"style with neither", via.Head{Assets: via.Assets{Styles: []via.Style{{}}}}},
+			Scripts: []via.Script{{Src: "/a.js", Inline: "x()"}}}}, "Script must set exactly one of Src and Inline"},
+		{"script with neither", via.Head{Assets: via.Assets{Scripts: []via.Script{{}}}},
+			"Script must set exactly one of Src and Inline"},
+		{"style with neither", via.Head{Assets: via.Assets{Styles: []via.Style{{}}}},
+			"Style must set exactly one of Href and Inline"},
 		{"script breakout", via.Head{Assets: via.Assets{
-			Scripts: []via.Script{{Inline: "x()</script><script>y()"}}}}},
+			Scripts: []via.Script{{Inline: "x()</script><script>y()"}}}}, `Script.Inline contains "</script"`},
 		{"style breakout", via.Head{Assets: via.Assets{
-			Styles: []via.Style{{Inline: "a{}</style><script>x</script>"}}}}},
-		{"unknown preload as", via.Head{Assets: via.Assets{Preload: []via.Preload{{Href: "/a.wasm", As: "wasm"}}}}},
-		{"protocol-relative script src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "//cdn.example/a.js"}}}}},
-		{"protocol-relative style href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "//cdn.example/a.css"}}}}},
+			Styles: []via.Style{{Inline: "a{}</style><script>x</script>"}}}}, `Style.Inline contains "</style"`},
+		{"unknown preload as", via.Head{Assets: via.Assets{Preload: []via.Preload{{Href: "/a.wasm", As: "wasm"}}}},
+			`Preload.As "wasm" is not one of script, style, font, image`},
+		{"protocol-relative script src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "//cdn.example/a.js"}}}},
+			`Script.Src "//cdn.example/a.js" ` + protoRel},
+		{"protocol-relative style href", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "//cdn.example/a.css"}}}},
+			`Style.Href "//cdn.example/a.css" ` + protoRel},
 		{"protocol-relative preload href", via.Head{Assets: via.Assets{
-			Preload: []via.Preload{{Href: "//cdn.example/a.woff2", As: "font"}}}}},
-		{"backslash protocol-relative src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: `/\cdn.example/a.js`}}}}},
-		{"font origin with a path", via.Head{Assets: via.Assets{FontOrigins: []string{"https://fonts.example/css"}}}},
+			Preload: []via.Preload{{Href: "//cdn.example/a.woff2", As: "font"}}}},
+			`Preload.Href "//cdn.example/a.woff2" ` + protoRel},
+		{"backslash protocol-relative src", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: `/\cdn.example/a.js`}}}},
+			`Script.Src "/\cdn.example/a.js" ` + protoRel},
+		{"font origin with a path", via.Head{Assets: via.Assets{FontOrigins: []string{"https://fonts.example/css"}}},
+			`FontOrigin "https://fonts.example/css" ` + notOrigin},
 		{"font origin smuggling a directive", via.Head{Assets: via.Assets{
-			FontOrigins: []string{"https://fonts.example;script-src"}}}},
-		{"font origin with a comma", via.Head{Assets: via.Assets{FontOrigins: []string{"https://a.example,https://b.example"}}}},
-		{"script src smuggling a directive", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "https://a;sandbox/x.js"}}}}},
-		{"style href with a comma host", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "https://a,b/x.css"}}}}},
+			FontOrigins: []string{"https://fonts.example;script-src"}}},
+			`FontOrigin "https://fonts.example;script-src" ` + notOrigin},
+		{"font origin with a comma", via.Head{Assets: via.Assets{FontOrigins: []string{"https://a.example,https://b.example"}}},
+			`FontOrigin "https://a.example,https://b.example" ` + notOrigin},
+		{"script src smuggling a directive", via.Head{Assets: via.Assets{Scripts: []via.Script{{Src: "https://a;sandbox/x.js"}}}},
+			`Script.Src "https://a;sandbox/x.js" ` + notURL},
+		{"style href with a comma host", via.Head{Assets: via.Assets{Styles: []via.Style{{Href: "https://a,b/x.css"}}}},
+			`Style.Href "https://a,b/x.css" ` + notURL},
 		{"preload href smuggling a directive", via.Head{Assets: via.Assets{
-			Preload: []via.Preload{{Href: "https://a;sandbox/x.avif", As: "image"}}}}},
+			Preload: []via.Preload{{Href: "https://a;sandbox/x.avif", As: "image"}}}},
+			`Preload.Href "https://a;sandbox/x.avif" ` + notURL},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Panics(t, func() { via.Handler(headPage{}, via.WithHead(tt.head)) })
+			assertMountPanic(t, tt.want, func() { via.Handler(headPage{}, via.WithHead(tt.head)) })
 		})
 	}
 }
@@ -351,15 +373,34 @@ func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 	assert.Contains(t, body, `<script type="module" src="https://cdn.charts.example/c.js"></script>`)
 }
 
-func TestPageMeta_patchResponsesCarryTheGlobalCSP(t *testing.T) {
-	t.Parallel()
-	srv := newCounter(t)
-	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+type assetCounter struct{ n int }
 
+func (*assetCounter) PageMeta() via.Meta { return assetPage{}.PageMeta() }
+func (c *assetCounter) Inc(*via.Ctx)     { c.n++ }
+func (c *assetCounter) View() h.H {
+	return h.Div(h.Str(c.n), h.Button(via.On("click", c.Inc), h.Str("+")))
+}
+
+func TestPageMeta_patchResponsesCarryTheFloorCSPNotTheDocuments(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(assetCounter{}, via.WithHead(via.Head{Assets: via.Assets{
+		FontOrigins: []string{"https://fonts.gstatic.com"},
+	}})))
+	t.Cleanup(srv.Close)
+	doc, page := do(t, srv, http.MethodGet, "/", "")
+	docCSP := doc.Header.Get("Content-Security-Policy")
+	require.Contains(t, docCSP, "https://cdn.charts.example")
+	require.Contains(t, docCSP, "https://fonts.gstatic.com")
+
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
 	csp := resp.Header.Get("Content-Security-Policy")
 	assert.Contains(t, csp, "style-src 'self';")
 	assert.Contains(t, csp, "frame-ancestors 'self'")
+	assert.NotContains(t, csp, "https://cdn.charts.example", "a patch loads no mount asset")
+	assert.NotContains(t, csp, hashSource("svg{display:block}"))
+	assert.NotContains(t, csp, "https://fonts.gstatic.com", "a patch loads no router-wide asset")
+	assert.NotContains(t, csp, "'nonce-", "the document's nonce governs what a patch brings in")
 }
 
 type varyingAssetPage struct{ n int }

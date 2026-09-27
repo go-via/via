@@ -41,9 +41,8 @@ func fetchPage(t *testing.T, app *vt.App, path string) string {
 	return string(b)
 }
 
-// liveRedirector is a live root whose action queues a Redirect — which a
-// @post action can no longer act on; the action must still answer normally
-// rather than hang or crash.
+// liveRedirector is a live root whose action queues a Redirect, which the
+// action's own response carries back as a script that navigates the tab.
 type liveRedirector struct{ n via.State[int] }
 
 func (c *liveRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
@@ -460,6 +459,7 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 
 		assert.Equal(t, http.StatusGone, resp.StatusCode, "a /c tab must not drive /a's form")
 		assert.Zero(t, aCalls, "the /a handler must not have run")
+		assert.Zero(t, cCalls, "the /c handler must not have run on /a's action id")
 	})
 }
 
@@ -1140,7 +1140,7 @@ func actionID(t *testing.T, body string) string {
 	return m[1]
 }
 
-// liveReqEchoer is a live child whose action copies a header off the request
+// liveReqEchoer is a live root whose action copies a header off the request
 // that triggered it into State.
 type liveReqEchoer struct{ echo via.State[string] }
 
@@ -1227,7 +1227,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 	})
 }
 
-// liveArg is a live child with one value-carrying action, so a malformed
+// liveArg is a live root with one value-carrying action, so a malformed
 // ?a= can be exercised on the live dispatch path too (dispatchPlain has
 // its own via_test coverage).
 type liveArg struct{ last via.State[int] }
@@ -1328,9 +1328,8 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 }
 
 // abandonedAction is dispatched with a request context already canceled
-// before ServeHTTP is called, isolating tabStream.run's first select
-// (pulse-send vs. reqCtx.Done, both ready at once) from real round-trip
-// timing noise.
+// before ServeHTTP is called, so the stream's pickup and the canceled context
+// are both ready at once with no round-trip timing noise.
 type abandonedAction struct {
 	applied *atomic.Int32 // shared across Handler's per-connection copy and the test's own handle
 	n       via.State[int]
@@ -1357,22 +1356,102 @@ func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T)
 
 	const n = 3000
 	var wg sync.WaitGroup
-	for range n {
+	codes := make([]int, n)
+	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel() // abandoned before the request is even dispatched
-			req := httptest.NewRequest(http.MethodPost, actURL, strings.NewReader(withTab(tab, "{}"))).WithContext(ctx)
-			req.Header.Set("Datastar-Request", "true")
-			req.Header.Set("Sec-Fetch-Site", "same-origin")
-			handler.ServeHTTP(httptest.NewRecorder(), req)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, abandonedPost(actURL, tab))
+			codes[i] = rec.Code
 		}()
 	}
 	wg.Wait()
 
 	assert.Equal(t, int32(0), root.applied.Load(),
 		"an action dispatched with an already-canceled request context must never apply")
+	for i, code := range codes {
+		if !assert.Equalf(t, http.StatusGone, code, "abandoned request %d", i) {
+			break
+		}
+	}
+}
+
+func abandonedPost(url, tab string) *http.Request {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(withTab(tab, "{}"))).WithContext(ctx)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	return req
+}
+
+// busyStream's Hold parks the connection's goroutine until release closes, so
+// an action posted meanwhile cannot be picked up and only its own request
+// context can end the wait.
+type busyStream struct {
+	release <-chan struct{}
+	applied *atomic.Int32
+	n       via.State[int]
+}
+
+func (b *busyStream) Hold(*via.Ctx) { <-b.release }
+
+func (b *busyStream) Act(*via.Ctx) { b.applied.Add(1) }
+
+func (b *busyStream) View() h.H {
+	return h.Div(b.n.Display(), h.Button(via.On("click", b.Hold)), h.Button(via.On("click", b.Act)))
+}
+
+func TestLiveAction_abandonedRequestAnswersWhileTheStreamIsBusy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+		applied := new(atomic.Int32)
+		handler := via.Handler(busyStream{release: release, applied: applied})
+		srv := liveServer(t, handler)
+
+		lines, cancel := openStream(t, srv)
+		defer cancel()
+		tab := awaitTabID(t, lines)
+		_, page := do(t, srv, http.MethodGet, "/", "")
+		holdReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), strings.NewReader(withTab(tab, "{}")))
+		require.NoError(t, err)
+		holdReq.Header.Set("Datastar-Request", "true")
+		holdReq.Header.Set("Sec-Fetch-Site", "same-origin")
+		actReq := abandonedPost(actionURL(t, page, "r", 1), tab)
+
+		holdStatus := make(chan int, 1)
+		go func() {
+			resp, err := srv.Client().Do(holdReq)
+			if err != nil {
+				holdStatus <- 0
+				return
+			}
+			resp.Body.Close()
+			holdStatus <- resp.StatusCode
+		}()
+		synctest.Wait()
+
+		rec := httptest.NewRecorder()
+		answered := make(chan struct{})
+		go func() {
+			handler.ServeHTTP(rec, actReq)
+			close(answered)
+		}()
+		synctest.Wait()
+		select {
+		case <-answered:
+		default:
+			assert.Fail(t, "an abandoned action waited on a busy stream instead of answering")
+		}
+		close(release)
+		<-answered
+		assert.Equal(t, http.StatusNoContent, <-holdStatus)
+		synctest.Wait()
+
+		assert.Equal(t, http.StatusGone, rec.Code)
+		assert.Zero(t, applied.Load(), "the abandoned action must not apply once the stream frees up")
+	})
 }
 
 // withTab splices the tab id into a JSON signal body. The tab id is an

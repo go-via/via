@@ -274,19 +274,39 @@ func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 	id := cookieValue(t, c, srv.URL, "via_session")
 	require.NotEmpty(t, id)
 
+	// Resolved up front: fireAction's require would call FailNow off the test
+	// goroutine. Every render carries the same action set.
+	bump := srv.URL + actionPath(t, c, srv.URL, "r", 0)
 	const n = 16
+	statuses := make([]int, n)
 	var wg sync.WaitGroup
-	for range n {
+	for i := range n {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			fireAction(t, c, srv.URL, 0) // Bump, same cookie
+			req, err := http.NewRequest(http.MethodPost, bump, strings.NewReader("{}"))
+			if !assert.NoError(t, err) {
+				return
+			}
+			req.Header.Set("Sec-Fetch-Site", "same-origin")
+			req.Header.Set("Datastar-Request", "true")
+			resp, err := c.Do(req)
+			if !assert.NoError(t, err) {
+				return
+			}
+			resp.Body.Close()
+			statuses[i] = resp.StatusCode
 		}()
 	}
 	wg.Wait()
 
+	for _, st := range statuses {
+		assert.Equal(t, http.StatusNoContent, st, "every concurrent Bump must run; Bump renders nothing new")
+	}
 	assert.Equal(t, id, cookieValue(t, c, srv.URL, "via_session"),
 		"concurrent writes on one cookie must not rotate/fork the session id")
+	_, body := fireAction(t, c, srv.URL, 1)
+	assert.Regexp(t, `n=[1-9]`, body, "the kept id must still name the session the Bumps wrote")
 }
 
 func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
@@ -323,11 +343,34 @@ func TestSession_expiresAfterIdleTTL(t *testing.T) {
 		require.NoError(t, err)
 		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
 
-		fireAction(t, c, srv.URL, 0)            // SignIn
-		time.Sleep(24*time.Hour + time.Second)  // sit idle past the default TTL
-		_, body := fireAction(t, c, srv.URL, 1) // Greet
+		fireAction(t, c, srv.URL, 0) // SignIn
+		id := cookieValue(t, c, srv.URL, "via_session")
+		require.NotEmpty(t, id)
+		time.Sleep(24*time.Hour + time.Second) // sit idle past the default TTL
+		// The jar drops the cookie at its Max-Age, which equals the TTL, so only
+		// a replayed cookie reaches the server's own expiry check.
+		bare := &http.Client{Transport: srv.Client().Transport}
+		status, body := fireWithCookie(t, bare, srv.URL, 1, "via_session", id) // Greet
+		assert.Equal(t, http.StatusNoContent, status, "Greet on no session changes nothing")
 		assert.NotContains(t, body, "hi alice", "an idle session past its TTL must not resolve")
 	})
+}
+
+// fireWithCookie sends over c's transport: a synctest server is not reachable
+// on the default one.
+func fireWithCookie(t *testing.T, c *http.Client, base string, n int, name, value string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Cookie", name+"="+value)
+	resp, err := c.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	b, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, string(b)
 }
 
 func TestSession_activeSessionOutlivesTheTTLCountedFromSignIn(t *testing.T) {
@@ -494,29 +537,20 @@ func TestSession_cookieFollowsTheSchemeAProxyReports(t *testing.T) {
 	}
 }
 
-// liveSess is a live child that establishes its session in OnInit, so
-// the cookie rides the SSE connect response itself rather than a later
-// action's.
-type liveSess struct{}
-
-func (c *liveSess) OnInit(ctx *via.Ctx) error {
-	ctx.Session().Put(member{Name: "bob"})
-	return nil
-}
-func (c *liveSess) View() h.H { return h.Div(h.Str("live")) }
-
-func TestSession_onConnectEstablishesTheCookie(t *testing.T) {
+func TestSession_onInitPutEstablishesTheCookieOnTheStreamConnect(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveSess{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveSessStream{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
 	t.Cleanup(srv.Close)
 
 	ctx := t.Context() // close the stream so the child tears down
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "the connect must open a stream, not answer 404 with the cookie")
+	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
 
 	var names []string
 	for _, ck := range resp.Cookies() {
@@ -1236,8 +1270,14 @@ func TestSession_concurrentRequestsLastWriterWins(t *testing.T) {
 	sid := cookieValue(t, c, base, "via_session")
 	require.NotEmpty(t, sid)
 
-	store.armLoad(1, func() { auditPostAs(t, base, acts[audPut9], sid) })
+	interleaved := 0
+	store.armLoad(1, func() {
+		resp, _ := auditPostAs(t, base, acts[audPut9], sid)
+		interleaved = resp.StatusCode
+	})
 	auditPost(t, c, base, acts[audPut2])
+	require.NotZero(t, interleaved, "the other write never landed inside this request's read-modify-write window")
+	require.Less(t, interleaved, 300, "the interleaved write failed")
 
 	_, body := auditPost(t, c, base, acts[audShow])
 	assert.Contains(t, body, "V=2", "the later save did not win over the interleaved write")
@@ -1348,7 +1388,7 @@ func TestSession_anonymousRotateIssuesNoCookieWhenTheMintCannotBeWritten(t *test
 	assert.Empty(t, sessionCookieOf(t, resp), "Rotate issued a cookie for an id with no blob behind it")
 }
 
-func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
+func TestSession_storeOutageAnswers503WithoutMintingOverTheCookie(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()
 	base, acts := auditServer(t, via.WithSessionStore(fs))
@@ -1360,8 +1400,10 @@ func TestSession_storeOutageDoesNotMintOverExistingCookie(t *testing.T) {
 
 	fs.set(&fs.loadErr, errors.New("redis down"))
 	resp, _ := auditPostAs(t, base, acts[audPut9], id) // a flash written during the outage
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "a store that could not answer is not an anonymous request")
 	assert.Empty(t, sessionCookieOf(t, resp), "a replacement session was minted during the outage")
 	resp, _ = auditPostAs(t, base, acts[audRot], id)
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode, "Rotate ran against a store that could not answer")
 	assert.Empty(t, sessionCookieOf(t, resp), "Rotate minted a session during the outage")
 	fs.set(&fs.loadErr, nil)
 
@@ -1767,30 +1809,37 @@ func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
 }
 
 // namePutter writes the session from a Listen handler, through the handle its
-// stream connected with.
+// stream connected with. The handler parks on hold so a test can Rotate while
+// it is running: a Rotate elsewhere ends the stream, so a value published
+// after it never reaches the handler at all.
 type namePutter struct {
 	Names *topic.Topic[string]
-	done  via.State[string]
+	held  chan struct{}
+	hold  chan struct{}
+	put   chan struct{}
 }
 
 func (p *namePutter) OnInit(ctx *via.Ctx) error {
-	ctx.Listen(p.Names, p.put)
+	ctx.Listen(p.Names, p.onName)
 	return nil
 }
 
-func (p *namePutter) put(ctx *via.Ctx, name string) {
+func (p *namePutter) onName(ctx *via.Ctx, name string) {
+	close(p.held)
+	<-p.hold
 	ctx.Session().Put(member{Name: name})
-	p.done.Set("put " + name)
+	close(p.put)
 }
 
-func (p *namePutter) View() h.H { return h.Div(p.done.Display()) }
+func (p *namePutter) View() h.H { return h.Div(h.Str("names")) }
 
 func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *testing.T) {
 	t.Parallel()
 	names := topic.New[string]()
+	np := namePutter{Names: names, held: make(chan struct{}), hold: make(chan struct{}), put: make(chan struct{})}
 	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	via.Mount(r, "/", loginComp{})
-	via.Mount(r, "/live", namePutter{Names: names})
+	via.Mount(r, "/live", np)
 	app := vt.Serve(t, r)
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
@@ -1804,8 +1853,15 @@ func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *t
 	require.NotEmpty(t, old)
 	conn := app.ConnectAt("/live", "{}")
 
-	fireAction(t, c, app.URL(), 3) // Rotate
 	names.Publish("mallory")
+	<-np.held
+	fireAction(t, c, app.URL(), 3) // Rotate, while the handler holds the pre-rotation handle
+	close(np.hold)
+	select {
+	case <-np.put:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "the Listen handler never finished its Put")
+	}
 	require.NoError(t, conn.AwaitClose(), "a Rotate elsewhere ends the stream holding the old id")
 
 	stale := jarClient(t)

@@ -364,34 +364,32 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	assert.Contains(t, body, "hello-from-header", "the action must see the triggering request via ctx.Request()")
 }
 
-// digestEchoer renders a bound signal's raw value straight into the page, so a
-// test can post hostile text through the signal channel (a header can't carry
-// a literal NUL byte; a JSON body can).
-type digestEchoer struct {
+// nulEchoer renders a bound signal's raw value straight into the page, so a
+// test can post a NUL through the signal channel (a header can't carry a
+// literal NUL byte; a JSON body can).
+type nulEchoer struct {
 	q    via.Signal[string]
 	echo string
 }
 
-func (c *digestEchoer) Grab(ctx *via.Ctx) { c.echo = c.q.Get() }
-func (c *digestEchoer) View() h.H {
+func (c *nulEchoer) Grab(ctx *via.Ctx) { c.echo = c.q.Get() }
+func (c *nulEchoer) View() h.H {
 	return h.Div(h.Input(c.q.Bind()), h.Button(via.On("click", c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
 }
 
-func TestAction_digestPlaceholderCannotBeForgedByUserText(t *testing.T) {
+func TestAction_nulInUserTextRendersAsTheReplacementCharacter(t *testing.T) {
 	t.Parallel()
-	srv := serve(t, via.Handler(digestEchoer{}))
+	srv := serve(t, via.Handler(nulEchoer{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	slot := attrValue(t, page, "data-bind")
 	nul := string(byte(0))
-	hostile := nul + "vD0" + nul
-	reqBody, err := json.Marshal(map[string]string{slot: hostile})
+	reqBody, err := json.Marshal(map[string]string{slot: "a" + nul + "b" + nul})
 	require.NoError(t, err)
-	url := actionURL(t, page, "r", 0)
-	digest := url[strings.Index(url, "v=")+2:]
-	_, body := post(t, srv, url, string(reqBody), sameOrigin())
+	_, body := post(t, srv, actionURL(t, page, "r", 0), string(reqBody), sameOrigin())
 	p := regexp.MustCompile(`<p>(.*?)</p>`).FindStringSubmatch(body)
 	require.Len(t, p, 2, "rendered paragraph not found:\n%s", body)
-	assert.NotContains(t, p[1], digest, "hostile text carrying the raw digest-placeholder token got the real shape digest spliced into it")
+	assert.Equal(t, "a&#65533;b&#65533;", p[1], "a NUL must render as the U+FFFD the HTML parser would build")
+	assert.NotContains(t, body, nul, "a raw NUL reached the response")
 }
 
 // changePicker exercises On("change", ...): a select whose commit posts an action,

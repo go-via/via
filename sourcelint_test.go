@@ -12,6 +12,7 @@ package via_test
 // Each one guards a promise made in the README and the docs:
 //   - reflection-free wiring (the reflect allowlist)
 //   - no '&' and no closures where via takes a handler (the example lint)
+//   - no binder plumbing on any public package (it stays in internal/hcore)
 //   - black-box tests, and none of package main (CONVENTIONS.md)
 
 import (
@@ -346,7 +347,7 @@ func typeCheck(fset *token.FileSet, imp types.Importer, path string, files []*as
 	return info, err
 }
 
-func TestCore_importsNoReflectPackage(t *testing.T) {
+func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 	t.Parallel()
 	// reflect is admitted in exactly three files and only on type-setup paths
 	// that run once per composition type (Mount/Child) and are memoized: the
@@ -414,38 +415,116 @@ func coreGoFiles(t *testing.T) []string {
 	return files
 }
 
-func TestCtx_doesNotExposeBinderPlumbing(t *testing.T) {
+func TestPublicAPI_exportsNoBinderPlumbing(t *testing.T) {
 	t.Parallel()
+	got, err := binderPlumbingExports(".")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestBinderPlumbingLint_flagsEveryExportedDeclOutsideInternal(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"p.go":                "package via\n\ntype Ctx struct{}\n\nfunc (*Ctx) Bind() {}",
+		"h/p.go":              "package h\n\ntype (\n\tRenderer int\n\tFine int\n)",
+		"h/p_test.go":         "package h_test\n\ntype Binder int",
+		"on/p.go":             "package on\n\nvar (\n\tDyn, fine = 1, 2\n)\n\nconst DynAttr = 0",
+		"vt/p.go":             "package vt\n\ntype T struct{}\n\nfunc (T) Binder() {}\n\nfunc NewRenderer() {}",
+		"internal/hcore/p.go": "package hcore\n\ntype Binder interface{}",
+		"cmd/main.go":         "package main\n\nvar Renderer = 1",
+		".hidden/p.go":        "package p\n\ntype Binder int",
+		"testdata/p.go":       "package p\n\ntype Binder int",
+	} {
+		path := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(src+"\n"), 0o644))
+	}
+	got, err := binderPlumbingExports(root)
+	require.NoError(t, err)
+	const why = " — binder plumbing belongs to internal/hcore"
+	assert.Equal(t, []string{
+		filepath.Join("h", "p.go") + ": exports Renderer" + why,
+		filepath.Join("on", "p.go") + ": exports Dyn" + why,
+		filepath.Join("on", "p.go") + ": exports DynAttr" + why,
+		filepath.Join("vt", "p.go") + ": exports T.Binder" + why,
+		filepath.Join("vt", "p.go") + ": exports NewRenderer" + why,
+	}, got)
+}
+
+// Every importable package is public surface; internal/hcore is where the
+// plumbing lives, and package main exports nothing anyone can import.
+func binderPlumbingExports(root string) ([]string, error) {
 	banned := map[string]bool{
 		"Dyn": true, "DynAttr": true, "NewRenderer": true, "Renderer": true, "Binder": true,
 	}
-	fset := token.NewFileSet()
-	entries, err := os.ReadDir("h")
-	require.NoError(t, err)
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
-			continue
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
-		f, err := parser.ParseFile(fset, filepath.Join("h", e.Name()), nil, 0)
-		require.NoError(t, err)
+		n := d.Name()
+		if d.IsDir() {
+			if path != root && (strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_") ||
+				n == "internal" || n == "vendor" || n == "testdata") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(n, ".go") || strings.HasSuffix(n, "_test.go") {
+			return nil
+		}
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
+		if err != nil || f.Name.Name == "main" {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		flag := func(qual, name string) {
+			if banned[name] {
+				out = append(out, rel+": exports "+qual+name+" — binder plumbing belongs to internal/hcore")
+			}
+		}
 		for _, decl := range f.Decls {
-			var name string
 			switch d := decl.(type) {
 			case *ast.FuncDecl:
-				if d.Recv == nil {
-					name = d.Name.Name
+				qual := ""
+				if d.Recv != nil {
+					qual = recvName(d.Recv.List[0].Type) + "."
 				}
+				flag(qual, d.Name.Name)
 			case *ast.GenDecl:
 				for _, spec := range d.Specs {
-					if ts, ok := spec.(*ast.TypeSpec); ok {
-						name = ts.Name.Name
+					switch s := spec.(type) {
+					case *ast.TypeSpec:
+						flag("", s.Name.Name)
+					case *ast.ValueSpec:
+						for _, id := range s.Names {
+							flag("", id.Name)
+						}
 					}
 				}
 			}
-			assert.Falsef(t, name != "" && banned[name],
-				"h package must not export %q — it belongs to internal/hcore", name)
 		}
+		return nil
+	})
+	return out, err
+}
+
+func recvName(e ast.Expr) string {
+	switch t := e.(type) {
+	case *ast.StarExpr:
+		return recvName(t.X)
+	case *ast.IndexExpr:
+		return recvName(t.X)
+	case *ast.IndexListExpr:
+		return recvName(t.X)
+	case *ast.Ident:
+		return t.Name
 	}
+	return "?"
 }
 
 // The walk starts at the repo root rather than per go.mod, so internal/site

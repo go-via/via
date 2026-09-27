@@ -756,6 +756,7 @@ func (g *csGated) View() h.H {
 	return h.Div(
 		h.P(h.ID("note"), h.Str(g.note)),
 		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
+		g.Open.Display(),
 		h.Button(via.On("click", g.Bump), h.Str("bump")),
 	)
 }
@@ -766,6 +767,7 @@ func TestSignalCS_postedValueIsIgnoredWithoutError(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
+	assert.Contains(t, frag, `<span data-text="$_open">false</span>`, "the re-render shows the seed, not the posted value")
 	assert.NotContains(t, frag, `"_open":true`, "nothing on the server ever holds the posted value")
 }
 
@@ -861,6 +863,7 @@ func (g *csSeedGated) View() h.H {
 	return h.Div(
 		h.P(h.ID("note"), h.Str(g.note)),
 		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
+		g.Open.Display(),
 		h.Button(via.On("click", g.Bump), h.Str("bump")),
 	)
 }
@@ -871,6 +874,7 @@ func TestSignalCS_seededSlotIsStillNeverPosted(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
+	assert.Contains(t, frag, `<span data-text="$_open">true</span>`, "the re-render shows the seed, not the posted value")
 	assert.NotContains(t, frag, `"_open":false`, "nothing on the server ever holds the posted value")
 }
 

@@ -36,8 +36,8 @@ func (b *beater) View() h.H {
 	return h.Div(h.P(h.Str(b.label+"="), b.n.Display()))
 }
 
-// duo children two live beaters; it does not itself implement OnInit — it is a
-// multiplex parent whose live children share one SSE stream.
+// duo children two live beaters; it is itself plain (no State, Tick or Listen)
+// — a multiplex parent whose live children share one SSE stream.
 type duo struct{ A, B beater }
 
 func (d *duo) View() h.H { return h.Div(via.Child(d.A), via.Child(d.B)) }
@@ -387,10 +387,10 @@ func TestChild_projectsChildInPlace(t *testing.T) {
 		"content is embedded in place, after the frame heading")
 }
 
-// liveShell is a plain layout (no OnInit) whose Body field holds a live
-// child. The page must bootstrap its SSE stream and the embedded live child
-// must push its own container and render its server State — proving plain
-// struct-field composition rides the live multiplex machinery.
+// liveShell is a plain layout (no State, Tick or Listen) whose Body field
+// holds a live child. The page must bootstrap its SSE stream and the embedded
+// live child must push its own container and render its server State —
+// proving plain struct-field composition rides the live multiplex machinery.
 type liveShell struct{ Body beater }
 
 func (s *liveShell) View() h.H { return h.Div(h.H1(h.Str("APP")), via.Child(s.Body)) }
@@ -422,7 +422,7 @@ type nestPage struct{ Host nestHost }
 
 func (p *nestPage) View() h.H { return h.Div(via.Child(p.Host)) }
 
-func TestChild_liveChildInsideLiveChildAtDepthTwo(t *testing.T) {
+func TestChild_liveChildInsidePlainChildStreamsUnderAComposedKey(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(nestPage{Host: nestHost{Inner: beater{label: "hb"}}}))
 	conn := app.Connect()
@@ -450,8 +450,8 @@ func TestChild_allowsNestedPlainChild(t *testing.T) {
 	assert.Contains(t, body, "BANNER", "the nested plain child renders in place")
 }
 
-// livePage is a live root (implements OnInit) whose View embeds a live
-// child — nested live composition, refused at render.
+// livePage is a live root (rendering its State makes it live) whose View
+// embeds a live child — nested live composition, refused at render.
 type livePage struct {
 	Inner beater
 	n     via.State[int]

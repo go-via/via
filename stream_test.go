@@ -284,7 +284,7 @@ func TestLive_failedStreamWriteTearsDownTheChildSoItDoesNotLeak(t *testing.T) {
 	})
 }
 
-// pulse is a live child: implementing OnInit opts it into a server-push SSE
+// pulse is a live root: its OnInit's Tick opts it into a server-push SSE
 // stream. A server-side ticker increments a beat count; via re-renders and
 // pushes the fragment, so the browser updates with no client code.
 type pulse struct{ beats via.State[int] }
@@ -315,7 +315,7 @@ func newPulse(t *testing.T) *httptest.Server {
 	return liveServer(t, via.Handler(pulse{}))
 }
 
-// multiline is a live child whose rendered content contains a newline. The SSE
+// multiline is a live root whose rendered content contains a newline. The SSE
 // framing must survive it.
 type multiline struct{ s string }
 
@@ -590,17 +590,25 @@ func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
 
 // notFoundConnect's OnInit returns via.ErrNotFound — the live analogue of a
 // page whose data vanished. The connect must answer 404, not 500: the world
-// changed, the request is honest. Fails if the sentinel stops mapping to 404.
-type notFoundConnect struct{}
+// changed, the request is honest. Its State keeps it live, because a plain
+// page's connect answers 404 whatever OnInit returns.
+type notFoundConnect struct{ n via.State[int] }
 
 func (f *notFoundConnect) OnInit(ctx *via.Ctx) error { return via.ErrNotFound }
 
-func (f *notFoundConnect) View() h.H { return h.Div(h.Str("x")) }
+func (f *notFoundConnect) View() h.H { return h.Div(f.n.Display()) }
 
-func TestLive_onConnectErrNotFoundIs404(t *testing.T) {
+func TestLive_onInitErrNotFoundAtConnectIs404(t *testing.T) {
 	t.Parallel()
-	resp, _ := do(t, serve(t, via.Handler(notFoundConnect{})), http.MethodPost, "/_via/sse", "")
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	srv := serve(t, via.Handler(notFoundConnect{}))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Equal(t, "not found\n", readAll(t, resp), "the 404 must come from OnInit's ErrNotFound")
 }
 
 func TestOpenStreamAt_closesLinesOnClientCancel(t *testing.T) {
@@ -648,10 +656,10 @@ func TestOpenStreamAt_closesLinesOnServerClose(t *testing.T) {
 	}
 }
 
-// clicker is a live child whose action mutates its own server State. The proof
+// clicker is a live root whose action mutates its own server State. The proof
 // of correct routing: after the POST, the patch must arrive over this
 // connection's SSE (not as the POST body), which only happens if the action ran
-// against this connection's child instance — not a throwaway per-request copy.
+// against this connection's instance — not a throwaway per-request copy.
 type clicker struct{ count via.State[int] }
 
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
