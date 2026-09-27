@@ -57,12 +57,12 @@ func requireLinked(t *testing.T, at map[string]string) {
 	}
 }
 
-// Test files are skipped: they pass API a variable, and nothing in them is
-// shown on the site.
 func TestAPI_callsNameExistingSymbols(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
 	at := map[string]string{}
+	// Test files are skipped: they pass API a variable, and nothing in them is
+	// shown on the site.
 	err := filepath.WalkDir("..", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return err

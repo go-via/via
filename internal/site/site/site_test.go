@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -290,16 +291,14 @@ func TestSite_searchReturnsAnchoredHits(t *testing.T) {
 	assert.Contains(t, string(out), `href="/deploy#shutdown-order"`)
 }
 
-// Under 50rem a table row stacks and its header row is hidden, so each cell of
-// a three-column table carries its head; a two-column one needs none.
 func TestSite_labelsTheCellsOfWideTables(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, site.Options{})
 
 	_, body := get(t, srv, "/migrate", nil)
-	assert.Contains(t, body, `<td data-label="Caught by">`)
+	assert.Contains(t, body, `<td data-label="Caught by">`, "under 50rem a row stacks and hides its header row")
 	_, body = get(t, srv, "/start", nil)
-	assert.NotContains(t, body, `data-label="What via does"`)
+	assert.NotContains(t, body, `data-label="What via does"`, "a two-column table needs no labels")
 }
 
 func TestSite_foldsTheContentsListAfterTheLead(t *testing.T) {
@@ -368,4 +367,221 @@ func TestSite_servesEveryPageAndAnchorTheReadmeLinks(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSite_pagerLinksTheNeighboursOutsideMain(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	written := shell.Pages()
+	for i, p := range written {
+		t.Run(p.Path, func(t *testing.T) {
+			t.Parallel()
+			_, body := get(t, srv, p.Path, nil)
+			pager := strings.Index(body, `<nav class="pager"`)
+			require.NotEqual(t, -1, pager, "no pager")
+			assert.Greater(t, pager, strings.Index(body, "</main>"), "the pager sits outside <main>, where search does not read")
+			if i > 0 {
+				assert.Contains(t, body, `<a class="pager-prev" href="`+written[i-1].Path+`" rel="prev">`)
+			}
+			if p.Path == "/" {
+				assert.Contains(t, body, `<a class="pager-next" href="/why" rel="next">`, "the front page leads to Why via")
+				return
+			}
+			if i+1 < len(written) {
+				assert.Contains(t, body, `<a class="pager-next" href="`+written[i+1].Path+`" rel="next">`)
+				assert.Contains(t, body, html.EscapeString(written[i+1].Title))
+			} else {
+				assert.NotContains(t, body, `class="pager-next"`)
+			}
+		})
+	}
+}
+
+func TestSite_listsContentsFromTwoHeadings(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/signals", nil)
+	assert.Contains(t, body, `<nav class="toc toc-rail" aria-label="On this page">`)
+	assert.Contains(t, body, `<details class="toc toc-inline">`)
+	assert.Contains(t, body, `<a href="#greeting">Greeting</a>`, "a demo card's heading is an h3 entry")
+	assert.Contains(t, body, `<a href="#top" class="to-top">`)
+
+	_, body = get(t, srv, "/actions", nil)
+	if strings.Count(body, `<h2 id=`)+strings.Count(body, `<h3 id=`) < 2 {
+		assert.NotContains(t, body, `class="toc`)
+	}
+}
+
+func TestSite_linksEachPageToItsSource(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	const src = "https://github.com/go-via/via/blob/main/internal/site/content/"
+	_, body := get(t, srv, "/signals", nil)
+	assert.Contains(t, body, `href="`+src+`signals.go"`)
+	_, body = get(t, srv, "/", nil)
+	assert.Contains(t, body, `href="`+src+`landing.go"`)
+}
+
+func TestSite_redirectsATrailingSlashToTheCanonicalPath(t *testing.T) {
+	t.Parallel()
+
+	resp, _ := get(t, siteServer(t, site.Options{}), "/reference/?x=1", nil)
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "/reference?x=1", resp.Header.Get("Location"))
+
+	resp, _ = get(t, siteServer(t, site.Options{}), "/no-such-page/", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, _ = get(t, siteServer(t, site.Options{
+		Base:     "/v0.8",
+		Versions: []shell.Version{{Label: "v0.9", Base: ""}, {Label: "v0.8", Base: "/v0.8"}},
+	}), "/v0.8/actions/", nil)
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "/v0.8/actions", resp.Header.Get("Location"))
+}
+
+func TestSite_notFoundSuggestsAPageAndSearches(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, body := get(t, srv, "/refrence", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Contains(t, body, `Did you mean <a href="/reference">`)
+	assert.Contains(t, body, `name="q"`)
+
+	_, body = get(t, srv, "/nothing-here?q=shutdown+order", nil)
+	assert.Contains(t, body, `href="/deploy#shutdown-order"`)
+}
+
+func TestSite_writesSocialMetaOffTheOrigin(t *testing.T) {
+	t.Parallel()
+
+	_, body := get(t, siteServer(t, site.Options{Origin: "https://go-via.dev"}), "/signals", nil)
+	assert.Contains(t, body, `<meta property="og:image" content="https://go-via.dev/static/brand/punch-dark.png">`)
+	assert.Contains(t, body, `<meta property="og:url" content="https://go-via.dev/signals">`)
+	assert.Contains(t, body, `<meta name="twitter:card" content="summary_large_image">`)
+	assert.Contains(t, body, `<meta name="theme-color" content="#1b1e24">`)
+	assert.Contains(t, body, `rel="apple-touch-icon"`)
+
+	_, body = get(t, siteServer(t, site.Options{}), "/signals", nil)
+	assert.NotContains(t, body, `og:image`, "og:image must be absolute, so no origin is no image")
+	assert.NotContains(t, body, `og:url`)
+}
+
+func TestSite_servesASitemapOfEveryPage(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{Origin: "https://go-via.dev"})
+
+	resp, body := get(t, srv, "/sitemap.xml", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "application/xml")
+	assert.Contains(t, body, "<loc>https://go-via.dev/signals</loc>")
+	assert.Contains(t, body, "<loc>https://go-via.dev/</loc>")
+	for _, p := range shell.Pages() {
+		assert.Contains(t, body, "<loc>https://go-via.dev"+p.Path+"</loc>")
+	}
+
+	_, body = get(t, srv, "/robots.txt", nil)
+	assert.Contains(t, body, "Sitemap: https://go-via.dev/sitemap.xml\n")
+
+	resp, _ = get(t, siteServer(t, site.Options{}), "/sitemap.xml", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, "a sitemap needs absolute URLs")
+}
+
+func TestSite_tablesHaveAHeaderRow(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/reference", nil)
+	assert.Contains(t, body, `<thead><tr><th scope="col">`)
+	assert.Contains(t, body, `<tbody>`)
+}
+
+var (
+	hrefAttr = regexp.MustCompile(`\shref="([^"]*)"`)
+	idAttr   = regexp.MustCompile(`\sid="([^"]*)"`)
+)
+
+func TestSite_everyInternalLinkResolvesToAPageAndAnchor(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	paths := []string{"/_ui"}
+	for _, p := range shell.Pages() {
+		paths = append(paths, p.Path)
+	}
+	bodies := map[string]string{}
+	ids := map[string]map[string]bool{}
+	for _, p := range paths {
+		_, body := get(t, srv, p, nil)
+		bodies[p] = body
+		ids[p] = map[string]bool{}
+		for _, m := range idAttr.FindAllStringSubmatch(body, -1) {
+			ids[p][html.UnescapeString(m[1])] = true
+		}
+	}
+
+	static := map[string]int{}
+	for _, from := range paths {
+		base := &url.URL{Path: from}
+		for _, m := range hrefAttr.FindAllStringSubmatch(bodies[from], -1) {
+			raw := html.UnescapeString(m[1])
+			u, err := url.Parse(raw)
+			if !assert.NoError(t, err, "%s: href %q", from, raw) {
+				continue
+			}
+			if u.Scheme != "" || u.Host != "" {
+				continue
+			}
+			to := base.ResolveReference(u)
+			if strings.HasPrefix(to.Path, "/static/") {
+				if _, seen := static[to.Path]; !seen {
+					resp, _ := get(t, srv, to.Path, nil)
+					static[to.Path] = resp.StatusCode
+				}
+				assert.Equal(t, http.StatusOK, static[to.Path], "%s: href %q", from, raw)
+				continue
+			}
+			target, ok := ids[to.Path]
+			if !assert.True(t, ok, "%s: href %q is not a page", from, raw) {
+				continue
+			}
+			// "#top" scrolls to the top of any document (HTML spec), no id needed.
+			if to.Fragment != "" && to.Fragment != "top" {
+				assert.True(t, target[to.Fragment], "%s: href %q has no #%s on %s", from, raw, to.Fragment, to.Path)
+			}
+		}
+	}
+}
+
+var cspCode = regexp.MustCompile(`<code class="(csp-has|csp-absent)">([^<]*)</code>`)
+
+func TestSecurity_printsTheDirectivesItsResponseCarries(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, body := get(t, srv, "/security", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	policy := resp.Header.Get("Content-Security-Policy")
+	require.NotEmpty(t, policy)
+
+	matches := cspCode.FindAllStringSubmatch(body, -1)
+	require.NotEmpty(t, matches, "the page rendered no tagged directives")
+
+	var present, absent int
+	for _, m := range matches {
+		directive := html.UnescapeString(m[2])
+		if m[1] == "csp-absent" {
+			absent++
+			assert.NotContains(t, policy, directive, "the page says %q is absent", directive)
+			continue
+		}
+		present++
+		assert.Contains(t, policy, directive)
+	}
+	assert.NotZero(t, present, "the page listed no directive the header carries")
+	assert.NotZero(t, absent, "the page listed no directive the header omits")
 }

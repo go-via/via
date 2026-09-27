@@ -2,6 +2,7 @@ package site_test
 
 import (
 	"net/http"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -94,4 +95,29 @@ func TestStatic_doesNotServeAnAssetToAPOST(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 		"the assets are bound to GET, and the router behind the mux's catch-all answers what falls through")
+}
+
+var hashedCSS = regexp.MustCompile(`href="(/static/[0-9a-f]{8}/site\.css)"`)
+
+func TestStatic_servesFingerprintedURLsImmutably(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/signals", nil)
+	m := hashedCSS.FindStringSubmatch(body)
+	require.NotNil(t, m, "the stylesheet is linked by its fingerprinted URL")
+
+	resp, css := get(t, srv, m[1], nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "public, max-age=31536000, immutable", resp.Header.Get("Cache-Control"))
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/css")
+	_, plain := get(t, srv, "/static/site.css", nil)
+	assert.Equal(t, plain, css)
+
+	resp, _ = get(t, srv, "/static/00000000/site.css", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "a stale fingerprint still gets the file")
+	assert.Equal(t, "public, max-age=3600, must-revalidate", resp.Header.Get("Cache-Control"))
+
+	resp, _ = get(t, srv, "/static/00000000/no-such.css", nil)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

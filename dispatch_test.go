@@ -1254,6 +1254,7 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 }
 
 func TestLive_missingActionArgAnswers400(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		a    string

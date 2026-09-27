@@ -56,18 +56,14 @@ func TestGlossary_listsTermsAlphabetically(t *testing.T) {
 	}), names)
 }
 
-// Other pages link /glossary#<slug>, so two terms sharing a slug would leave
-// one of those links pointing at the wrong entry. The page suffixes a repeat
-// with "-2", which the id check catches.
 func TestGlossary_givesEveryTermItsOwnAnchor(t *testing.T) {
 	t.Parallel()
 	for _, e := range glossaryEntries(t) {
-		assert.Equal(t, shell.Slug(e.name), e.id, e.name)
+		assert.Equal(t, shell.Slug(e.name), e.id, "%s: a repeated slug gets a -2 suffix", e.name)
 		assert.NotEmpty(t, e.see, e.name)
 	}
 }
 
-// A bare page link makes the reader hunt for the section that teaches the term.
 func TestGlossary_pointsEverySeeLinkAtASection(t *testing.T) {
 	t.Parallel()
 	for _, e := range glossaryEntries(t) {

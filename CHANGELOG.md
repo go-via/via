@@ -264,6 +264,12 @@
 - A session whose first save the store refuses sets no cookie. The cookie
   named an id the store never took.
 
+- `vtbrowser`'s polling helpers (`WaitFor`, `WaitTextContains`,
+  `WaitValue`, `WaitEvalTrue` and the waits built on them) treat a failed
+  evaluation as "not yet" and keep polling. A poll that landed while the
+  page reloaded failed the test at once. A timeout now also prints the last
+  error.
+
 ### Documented (behaviour unchanged)
 
 - `/testing` describes the wire protocol for a client without vt (action

@@ -129,6 +129,7 @@ type bDash struct {
 func (d *bDash) View() h.H { return h.Div(via.Child(d.Clock), via.Child(d.Counter)) }
 
 func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bDash{}))
 
 	// Clock child ticks on its own (no interaction) → server-push morphs #via-i0.
@@ -164,6 +165,7 @@ func (p *pRoot) View() h.H {
 }
 
 func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
 	s.WaitLiveConnected()
@@ -187,6 +189,7 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 }
 
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	assert.Contains(t, s.Text("p"), "count: 0", "Open did not serve the rendered skeleton")
@@ -197,6 +200,7 @@ func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 }
 
 func TestWaitFor_observesServerPushMorph(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(liveTicker{}))
 
 	s.WaitFor("p", func(text string) bool {
@@ -208,6 +212,7 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 }
 
 func TestClick_roundTripsLiveActionThroughTabSignal(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	s.WaitTextContains("p", "count: 0")
@@ -218,6 +223,7 @@ func TestClick_roundTripsLiveActionThroughTabSignal(t *testing.T) {
 }
 
 func TestTypeAndValue_driveABoundInput(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(form{}))
 
 	s.Type("input", "alice")
@@ -226,6 +232,7 @@ func TestTypeAndValue_driveABoundInput(t *testing.T) {
 }
 
 func TestNewTab_fansOutAndClearsComposerAcrossTabs(t *testing.T) {
+	t.Parallel()
 	r := newRoom()
 	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
 	b := a.NewTab()
@@ -248,6 +255,7 @@ const reconnecting = `document.documentElement.getAttribute('data-via-connection
 	`(document.getElementById('via-reconnect-banner')||{textContent:''}).textContent.includes('Reconnecting')`
 
 func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
+	t.Parallel()
 	g := &streamGate{app: via.Handler(liveTicker{})}
 	s := vtbrowser.Open(t, g)
 
@@ -267,6 +275,7 @@ func TestReconnect_bannerSurfacesOnDropAndClearsOnResume(t *testing.T) {
 }
 
 func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
+	t.Parallel()
 	app := via.Handler(liveTicker{}, via.WithHead(via.Head{
 		Assets: via.Assets{Styles: []via.Style{{Inline: "#via-reconnect-banner{background:rgb(1, 2, 3)}"}}},
 	}))
@@ -285,6 +294,7 @@ func TestReconnect_bannerIsRestyledByAnAppRule(t *testing.T) {
 }
 
 func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
+	t.Parallel()
 	g := &streamGate{app: via.Handler(clicker{})}
 	s := vtbrowser.Open(t, g)
 	s.WaitLiveConnected()
@@ -307,6 +317,7 @@ func TestReconnect_bannerColorFollowsConnectionState(t *testing.T) {
 }
 
 func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 	// The connect's first frame proves the stream alive and would clear the
 	// give-up banner below before the click could reach it.
@@ -336,6 +347,7 @@ func TestReconnect_giveUpGoesOfflineAndCapsTheReloadLoop(t *testing.T) {
 }
 
 func TestNewTab_fanOutDoesNotClobberInProgressTyping(t *testing.T) {
+	t.Parallel()
 	r := newRoom()
 	a := vtbrowser.Open(t, via.Handler(chat{room: r}))
 	b := a.NewTab()
@@ -366,6 +378,7 @@ func (p *redirectViaScript) View() h.H {
 }
 
 func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
+	t.Parallel()
 	app := via.Handler(redirectViaScript{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	s := vtbrowser.Open(t, app)
 	s.Click("#go")
@@ -402,6 +415,7 @@ func (f *liveFormBrowser) View() h.H {
 }
 
 func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	s := vtbrowser.Open(t, via.Handler(liveFormBrowser{calls: &calls}))
 
@@ -442,6 +456,7 @@ func cdn(t testing.TB, css string) string {
 const styledIsRed = `getComputedStyle(document.querySelector("#styled")).color === "rgb(255, 0, 0)"`
 
 func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
+	t.Parallel()
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
 		Assets: via.Assets{Styles: []via.Style{{Href: origin + "/app.css"}}},
@@ -452,6 +467,7 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 }
 
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
+	t.Parallel()
 	origin := cdn(t, "#styled{color:red}")
 	app := via.Handler(styledPage{}, via.WithHead(via.Head{
 		Assets: via.Assets{Styles: []via.Style{{Inline: `@import url("` + origin + `/app.css");`}}},
@@ -471,6 +487,7 @@ func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
 }
 
 func TestReconnect_cleanStreamCloseIsReportedToTheUser(t *testing.T) {
+	t.Parallel()
 	r := via.NewRouter()
 	via.Mount(r, "/", liveTicker{})
 	s := vtbrowser.Open(t, r)
@@ -579,6 +596,7 @@ const connectionWatch = `(()=>{window.__states=[];window.__banner=0;` +
 	`return true})()`
 
 func TestReconnect_clickOnAStaleTabReloadsOnce(t *testing.T) {
+	t.Parallel()
 	// Short: a click on a gone tab waits this long for its stream to come back
 	// before it answers 410.
 	g := &streamGate{app: via.Handler(clicker{}, via.WithPinnedDeadline(time.Second))}
@@ -601,6 +619,7 @@ func TestReconnect_clickOnAStaleTabReloadsOnce(t *testing.T) {
 }
 
 func TestClick_beforeTheStreamConnectsIsApplied(t *testing.T) {
+	t.Parallel()
 	g := &streamGate{app: via.Handler(clicker{}), delay: 1500 * time.Millisecond}
 	s := vtbrowser.Open(t, g)
 	// A data-json-signals element renders only once Datastar has bound the page.
@@ -632,6 +651,7 @@ func (evalProbe) View() h.H {
 }
 
 func TestCSP_evalIsBlockedWhileDatastarExpressionsRun(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(evalProbe{}))
 	s.WaitTextContains("#out", "datastar ran")
 	var got string
@@ -641,6 +661,7 @@ func TestCSP_evalIsBlockedWhileDatastarExpressionsRun(t *testing.T) {
 }
 
 func TestWithUnsafeEval_letsAPageScriptCompileFromAString(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name string
 		opts []via.Option
@@ -650,6 +671,7 @@ func TestWithUnsafeEval_letsAPageScriptCompileFromAString(t *testing.T) {
 		{"WithUnsafeEval", []via.Option{via.WithUnsafeEval()}, "ran"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			s := vtbrowser.Open(t, via.Handler(evalProbe{}, tt.opts...))
 			s.WaitTextContains("#out", "datastar ran")
 			var got string
@@ -688,6 +710,7 @@ func (g *grower) View() h.H {
 }
 
 func TestCSP_expressionArrivingInAStreamPatchCompilesUnderTheDocumentNonce(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(grower{}))
 	s.WaitLiveConnected()
 	s.Click("#grow")
@@ -725,6 +748,7 @@ func (p *picker) View() h.H {
 }
 
 func TestActionArg_eachElementDispatchesItsOwnArgFromOneSharedExpression(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(picker{}))
 	var same bool
 	s.Eval(`(()=>{const a=[1,2,3].map(i=>document.getElementById('pick'+i).getAttribute('data-on:click'));`+
@@ -767,6 +791,7 @@ func (c *crasher) View() h.H {
 }
 
 func TestReconnect_failedActionLeavesTheConnectionOnline(t *testing.T) {
+	t.Parallel()
 	g := &streamGate{app: via.Handler(crasher{})}
 	s := vtbrowser.Open(t, g)
 	s.WaitLiveConnected()
@@ -794,6 +819,7 @@ func TestReconnect_failedActionLeavesTheConnectionOnline(t *testing.T) {
 }
 
 func TestReconnect_forbiddenStreamStaysDisconnectedWithoutReloading(t *testing.T) {
+	t.Parallel()
 	g := &streamGate{app: via.Handler(clicker{})}
 	g.deny.Store(true)
 	s := vtbrowser.Open(t, g)
@@ -807,6 +833,7 @@ func TestReconnect_forbiddenStreamStaysDisconnectedWithoutReloading(t *testing.T
 }
 
 func TestReconnect_recoversAcrossADeployGap(t *testing.T) {
+	t.Parallel()
 	r := via.NewRouter()
 	via.Mount(r, "/", liveTicker{})
 	s := vtbrowser.Open(t, r)
@@ -857,6 +884,7 @@ func (p *scriptPage) PageMeta() via.Meta {
 func (p *scriptPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
 
 func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
+	t.Parallel()
 	origin := jsCDN(t, `window.__external = true`)
 	r := via.NewRouter()
 	via.Mount(r, "/", scriptPage{Src: origin})
@@ -889,6 +917,7 @@ type bSeedRoot struct{ Uptime bSeedChild }
 func (r *bSeedRoot) View() h.H { return h.Div(via.Child(r.Uptime)) }
 
 func TestChild_seededChildSignalReachesTheIslandWithoutRootPhantom(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bSeedRoot{}))
 
 	s.WaitTextContains("#n", "0")
@@ -922,6 +951,7 @@ func (r *bToggleRoot) View() h.H {
 const panelHidden = `(document.getElementById('panel')||{style:{}}).style.display==='none'`
 
 func TestChild_clientOnlyToggleSeededOpenSurvivesChildPushes(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bToggleRoot{}))
 
 	s.WaitEvalTrue(`!(`+panelHidden+`)`, "the seeded client-only toggle to show the panel at first paint")
@@ -967,6 +997,7 @@ func (r *bTickRoot) View() h.H {
 }
 
 func TestChild_childSetAfterRootRenderBindsToTheChildUnit(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bTickRoot{}))
 
 	s.WaitLiveConnected()
@@ -995,6 +1026,7 @@ func (c *tracked) View() h.H {
 }
 
 func TestTrack_keepsEveryTabOnTheSharedValue(t *testing.T) {
+	t.Parallel()
 	n, room := new(atomic.Int64), topic.New[int64]()
 	a := vtbrowser.Open(t, via.Handler(tracked{n: n, room: room, Hits: via.StateTrack(room, n.Load)}))
 	b := a.NewTab()
@@ -1038,6 +1070,7 @@ func (bAtLiteral) View() h.H {
 }
 
 func TestVal_atSignInStringSurvivesDatastarRewrite(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bAtLiteral{}))
 	s.WaitLoaded()
 
@@ -1057,6 +1090,7 @@ type bAtSeed struct {
 func (p *bAtSeed) View() h.H { return h.Div(h.Span(h.ID("out"), h.DataText(p.Msg.Ref()))) }
 
 func TestSignal_atSignInSeededValueReachesTheStoreIntact(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bAtSeed{}))
 	s.WaitLoaded()
 
@@ -1073,6 +1107,7 @@ func (p *bAtPlain) View() h.H {
 }
 
 func TestSignal_atSignInPlainActionPatchReachesTheStoreIntact(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bAtPlain{}))
 	s.WaitLoaded()
 
@@ -1094,6 +1129,7 @@ func (p *bAtLive) View() h.H {
 }
 
 func TestSignal_atSignInLivePatchSignalsReachesTheStoreIntact(t *testing.T) {
+	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bAtLive{}))
 	s.WaitLiveConnected()
 

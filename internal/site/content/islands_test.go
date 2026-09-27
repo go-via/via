@@ -23,8 +23,6 @@ func islandsBlocks(t *testing.T, label string) []string {
 	return out
 }
 
-// The blocks are cut from the served file, so an edit to islands.js that
-// drops what the prose points at must fail here, not on the page.
 func TestIslandsJS_cutsWhatTheProseNames(t *testing.T) {
 	t.Parallel()
 	blocks := islandsBlocks(t, "static/islands.js")

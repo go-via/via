@@ -600,6 +600,7 @@ func TestRedirectExternal_leavesTheSiteOnEveryTransport(t *testing.T) {
 }
 
 func TestDispatch_forgedActionIDIsGone(t *testing.T) {
+	t.Parallel()
 	t.Run("plain", func(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(counter{count: &store{}}))
