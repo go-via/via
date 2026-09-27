@@ -4,18 +4,27 @@
 
 # via
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/go-via/via.svg)](https://pkg.go.dev/github.com/go-via/via)
-[![CI](https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/go-via/via/actions/workflows/codeql.yml/badge.svg)](https://github.com/go-via/via/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Reference][godoc-badge]][godoc]
+[![CI][ci-badge]][ci]
+[![CodeQL][codeql-badge]][codeql]
+[![License: MIT][license-badge]](LICENSE)
 
-Live web UI in Go. A page is a struct, a click is a method call, and every
-open tab sees the change. No JavaScript to write, no build step.
+[godoc-badge]: https://pkg.go.dev/badge/github.com/go-via/via.svg
+[godoc]: https://pkg.go.dev/github.com/go-via/via
+[ci-badge]: https://github.com/go-via/via/actions/workflows/ci.yml/badge.svg
+[ci]: https://github.com/go-via/via/actions/workflows/ci.yml
+[codeql-badge]:
+  https://github.com/go-via/via/actions/workflows/codeql.yml/badge.svg
+[codeql]: https://github.com/go-via/via/actions/workflows/codeql.yml
+[license-badge]: https://img.shields.io/badge/License-MIT-blue.svg
+
+Live web UI in Go. A page is a struct, a click is a method call, and the
+server can push the change to every open tab. No JavaScript to write, no
+build step.
 
 ## A counter every tab shares
 
-via needs Go 1.27 or newer; an older toolchain reports its generic methods as
-syntax errors, not as a version mismatch.
+via needs Go 1.27 or newer.
 
 ```bash
 go mod init example.com/counter
@@ -72,9 +81,7 @@ func (c *Counter) View() h.H {
 
 func main() {
 	r := via.Handler(Counter{N: via.StateTrack(moved, load)})
-	err := http.ListenAndServe(":8080", r)
-	r.Close()
-	log.Fatal(err)
+	log.Fatal(http.ListenAndServe(":8080", r))
 }
 ```
 
@@ -83,14 +90,17 @@ go run .
 ```
 
 Open http://localhost:8080 in two tabs and click + in one. Both update.
-[Getting started](https://go-via.dev/start) walks through every line.
+At startup via warns that no `WithTrustedOrigin` is set;
+[Security](https://go-via.dev/security) covers what to set before you
+deploy. [Getting started](https://go-via.dev/start) builds up to this
+program.
 
 ## Why via
 
-- **Handlers are methods.** `on.Click(c.Inc)` takes a method value, so a
-  misspelled handler is a compile error, not a dead button.
-- **Live only where it needs to be.** A page is plain HTTP until it renders
-  live state; then its tab holds one stream.
+- **Actions are methods.** `on.Click(c.Inc)` takes a method value, so a
+  misspelled action is a compile error, not a dead button.
+- **Live only where it needs to be.** A page is plain HTTP until something
+  on it goes live; then its tab holds one stream.
   [Live state](https://go-via.dev/live)
 - **Nothing to build.** The browser client ships inside the module, and the
   markup is Go.
@@ -99,9 +109,8 @@ Open http://localhost:8080 in two tabs and click + in one. Both update.
 
 ## What it costs
 
-Live state lives on the server: each live tab holds memory and a goroutine,
-and state stays in one process unless you bridge it across replicas.
-[What it costs](https://go-via.dev/why#what-it-costs) has the full list.
+Live state is held on the server.
+[What it costs](https://go-via.dev/why#what-it-costs) lists the tradeoffs.
 
 ## Documentation
 
@@ -112,8 +121,9 @@ and state stays in one process unless you bridge it across replicas.
 - [API reference](https://go-via.dev/reference), and
   [pkg.go.dev](https://pkg.go.dev/github.com/go-via/via)
 - [Deploy](https://go-via.dev/deploy)
-- [Migrating](https://go-via.dev/migrate), with the full text in
-  [`MIGRATION.md`](MIGRATION.md)
+- [Security](https://go-via.dev/security)
+- [`MIGRATION.md`](MIGRATION.md) for upgrading between releases, and
+  [Migrating](https://go-via.dev/migrate) for v0.7 to v0.8
 
 ## Status
 

@@ -30,7 +30,7 @@ type NavGroup struct {
 var Nav = []NavGroup{
 	{Items: []NavItem{
 		{Title: "Home", Path: "/", Heading: "Web UI in Go that stays live", File: "landing.go"},
-		{Title: "Why Via", Path: "/why"},
+		{Title: "Why via", Path: "/why"},
 		{Title: "Examples", Path: "/examples"},
 	}},
 	{Title: "Learn", Items: []NavItem{

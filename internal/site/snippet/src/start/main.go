@@ -45,7 +45,5 @@ func (c *Counter) View() h.H {
 
 func main() {
 	r := via.Handler(Counter{N: via.StateTrack(moved, load)})
-	err := http.ListenAndServe(":8080", r)
-	r.Close()
-	log.Fatal(err)
+	log.Fatal(http.ListenAndServe(":8080", r))
 }

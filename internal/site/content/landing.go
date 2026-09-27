@@ -54,7 +54,7 @@ func (p *Landing) View() h.H {
 			"server code that reads a "), API("via.SignalCS"), h.Str(" does not build, and a "), API("via.State"),
 			h.Str(" has no "), Code("Ref"), h.Str(" for a client expression to reach. The full table is "),
 			h.A(h.Href(d.Href("/signals")+"#where-state-lives"), h.Str("Where state lives")), h.Str(", and "),
-			h.A(h.Href(d.Href("/why")), h.Str("Why Via")), h.Str(" makes the longer case.")),
+			h.A(h.Href(d.Href("/why")), h.Str("Why via")), h.Str(" makes the longer case.")),
 
 		d.H2("Read next"),
 		CardGrid(
