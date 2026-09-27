@@ -33,9 +33,7 @@ func (p *Start) View() h.H {
 		Steps(
 			Step("Check your Go version",
 				snippet.Text("", "go version"),
-				h.P(h.Str("via needs Go 1.27 or newer. Its API uses generic methods ("),
-					APIText("via.Ctx.Param", `ctx.Param[int]("id")`), h.Str("); an older toolchain reports those as "+
-						"syntax errors, not as a version mismatch.")),
+				h.P(h.Str("via needs Go 1.27 or newer.")),
 			),
 			Step("Create a module",
 				snippet.Text("", "go mod init example.com/counter\ngo get github.com/go-via/via"),
@@ -60,7 +58,7 @@ func (p *Start) View() h.H {
 				h.Str(" is a struct. "), Code("Counter"), h.Str(" holds a pointer to the count, so every request's copy shares it.")),
 			h.Li(h.Str("Its "), Code("View"), h.Str(" is a pure, ctx-free method that returns the markup.")),
 			h.Li(h.Str("An action is a method taking "), API("via.Ctx"), h.Str(". "), API("on.Click"),
-				h.Str(" takes the method value "), Code("c.Inc"), h.Str(", so a misspelled handler does not compile.")),
+				h.Str(" takes the method value "), Code("c.Inc"), h.Str(", so a misspelled action does not compile.")),
 			h.Li(API("via.Handler"), h.Str(" and "), API("via.Mount"),
 				h.Str(" take the composition by value: no "), Code("&"), h.Str(" at the call site, and a missing or mistyped "),
 				Code("View"), h.Str(" is a compile error.")),
@@ -76,6 +74,9 @@ func (p *Start) View() h.H {
 		h.P(Code("add"), h.Str(" holds the mutex across the change and the "), API("topic.Topic.Publish"),
 			h.Str(", so values go out in the order the count moved. "), API("via.StateTrack"),
 			h.Str(" keeps the State equal to the store, and "), API("via.State.Display"), h.Str(" renders it.")),
+		h.P(Code("load"), h.Str(" is StateTrack's reader: it runs at each init of the unit, so a new tab renders the current count. "),
+			Code("Dec"), h.Str(" is "), Code("Inc"), h.Str(" with -1. "), API("via.Handler"), h.Str(" mounts "), Code("Counter"),
+			h.Str(" at "), Code("/"), h.Str(" and returns the Router, which "), Code("http.ListenAndServe"), h.Str(" serves on :8080.")),
 
 		demo.Card(d.H3("Two tabs, one count"),
 			h.P(h.Str("The program above, running. Open this page in a second tab and click there: "+

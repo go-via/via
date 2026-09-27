@@ -113,7 +113,7 @@ func (d *Doc) Page(body ...h.H) h.H {
 }
 
 // Landing is Page with a hero on top: art, heading, pitch, the Get started,
-// Why Via? and GitHub links, then the body.
+// Why via? and GitHub links, then the body.
 func (d *Doc) Landing(art h.H, pitch string, body ...h.H) h.H {
 	why := NavFor("/why")
 	hero := h.Section(h.Class("hero"), art,
@@ -121,7 +121,7 @@ func (d *Doc) Landing(art h.H, pitch string, body ...h.H) h.H {
 		h.P(h.Class("pitch"), h.Str(pitch)),
 		h.Div(h.Class("hero-actions"),
 			h.A(h.Class("btn btn-primary"), h.Href(d.Href("/start")), h.Str("Get started")),
-			h.A(h.Class("btn"), h.Href(d.Href(why.Path)), h.Str("Why Via?")),
+			h.A(h.Class("btn"), h.Href(d.Href(why.Path)), h.Str("Why via?")),
 			ExtLink(repo, h.Class("btn"), h.Str("View on GitHub")),
 		),
 	)

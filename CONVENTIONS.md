@@ -509,7 +509,8 @@ program, claims that hold across releases, and links to the page that owns
 each detail. Tests pin its program to the snippet, its Go version to
 `go.mod`, and each go-via.dev link and anchor to a page the site serves.
 
-- ✅ "A page is plain HTTP until it renders live state", linking to /live.
+- ✅ "A page is plain HTTP until something on it goes live; then its tab
+  holds one stream", linking to /live.
 - ❌ "The current release is v0.8.3", or a copy of /why's list of costs.
 
 ## Markdown

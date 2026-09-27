@@ -29,7 +29,7 @@ func TestSite_pagerLinksTheNeighboursOutsideMain(t *testing.T) {
 				assert.Contains(t, body, `<a class="pager-prev" href="`+written[i-1].Path+`" rel="prev">`)
 			}
 			if p.Path == "/" {
-				assert.Contains(t, body, `<a class="pager-next" href="/why" rel="next">`, "the front page leads to Why Via")
+				assert.Contains(t, body, `<a class="pager-next" href="/why" rel="next">`, "the front page leads to Why via")
 				return
 			}
 			if i+1 < len(written) {
