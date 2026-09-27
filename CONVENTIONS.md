@@ -8,9 +8,9 @@ each test verifies.
 Rule: Use `Test` + PascalCase subject + underscore + camelCase behavior
 (present tense verb). The underscore separates *what* from *does what*.
 
-- ✅ `TestSignal_returnAsString`
-- ✅ `TestPage_panicsOnNoView`
-- ✅ `TestMount_panicsOnReservedWildcard`
+- ✅ `TestSignal_panicsAtMountOnAMalformedSeedTag`
+- ✅ `TestPage_setsContentTypeAndNosniff`
+- ✅ `TestMount_panicsOnAnUnknownTagKey`
 - ❌ `TestSignal` (vague — what about it?)
 - ❌ `Test_signal_return_as_string` (wrong casing)
 
@@ -143,20 +143,21 @@ Rule:
 Reasoning: Callers should work with behavior, not struct internals.
 Composition handles like `Signal[T]` / `State[T]` are *exported* because
 users declare them as struct fields (`Step via.Signal[int]`), but their
-wire identity is assigned by the runtime at render time — the `Binder`
-hands each handle a stable wire name on first render, which becomes the
-handle's identity. Exposing fields would let a caller desync that name
-from the stored value, or forge one.
+wire identity comes from the runtime: before `OnInit` and the `View` run,
+via stamps each handle with a wire name derived from its field path.
+Exposing fields would let a caller desync that name from the stored value,
+or forge one.
 
 Rule: For handle types whose binding is established by the runtime
 (`Signal`, `SignalCS`, `State`, `List`), keep all stored state in unexported
-fields. The type name is exported; the contents aren't.
+fields. The type name is exported; the contents aren't. `List[E]` embeds
+`State[[]E]`, so `l.State` is reachable, but its fields stay unexported.
 
 ```go
-// ✅ Exported type, unexported fields — runtime assigns the wire name at render
+// ✅ Exported type, unexported fields — the runtime stamps the wire name
 type Signal[T any] struct {
-    slot string // stable wire name, assigned lazily on first render
-    val  T
+    slotID // wire name, derived from the field path
+    val    T
 }
 
 // ❌ Exported fields — caller can desync the wire name from the value
@@ -198,7 +199,8 @@ unexported because the option set is closed: users compose the provided
 `WithX` constructors, they never author an option by hand.
 
 - ✅ `type Option func(*config)` — `config` unexported, same package
-- ✅ `type HSTSOption func(*hstsConfig)`, `type ChartOption func(*Chart)`
+- ✅ `type MountOption func(*mountConfig)` — no constructors yet; it keeps
+  `Mount`'s signature stable for when one lands
 - ❌ `func Debounce(d string) spec.Option` (leaks `internal/spec` — a
   downstream module can't name the return type)
 
@@ -216,8 +218,9 @@ Rule: Validation that runs once at registration time (inside `Mount`,
 `WithHead`, etc.) panics on invalid input. Do not return errors from
 registration functions.
 
-- ✅ Panic if `View` is never set, if conflicting options are passed, if
-  required arguments are zero values.
+- ✅ Panic on conflicting options (two `WithSessionStore`) or a zero
+  required argument (`WithMaxSSEConn(0)`). A root with no `View` never gets
+  this far: `Mount`'s type constraint makes it a compile error.
 - ❌ Return `error` from `Mount` and let callers ignore it.
 
 Rule: Input that would otherwise fail later and somewhere else is checked at
@@ -242,11 +245,12 @@ breaking the loop they are in.
 
 Rule: A default never gets in the way of local development. Where a stricter
 setting would, it is opt-in through a `With*` option, and while it is off,
-`NewRouter` logs one WARN that says what the open default exposes and which
-option closes it. Tightening applies only inside an option the user chose.
-An audit or review finding against such a default is answered with a clearer
-warning or docs, never a strict default: that is the maintainer's design
-call, not a fix.
+via logs one WARN that says what the open default exposes and which option
+closes it: from `NewRouter`, or on first use for a default only some apps
+reach (the session key and store WARN on the first session minted).
+Tightening applies only inside an option the user chose. An audit or review
+finding against such a default is answered with a clearer warning or docs,
+never a strict default: that is the maintainer's design call, not a fix.
 
 - ✅ No `WithTrustedOrigin`: every origin is admitted, and startup warns that
   any site can fire an action and a same-site page can fire one as the
@@ -266,13 +270,17 @@ in a URL, read `\` as `/`, and normalize CRLF and NUL before hashing an
 inline script. A gate that checks the raw string passes values the browser
 then treats as something else.
 
-Rule: Each gate lives once, in `internal/hcore`, and every caller uses that
-copy. It normalizes input the way the browser's parser does before deciding.
-Its test is a table of inputs that differ only after browser normalization.
+Rule: Each gate that admits a value into a page, a redirect or a request
+lives once, in `internal/hcore`, and every caller uses that copy. It
+normalizes input the way the browser's parser does before deciding. Its test
+is a table of inputs that differ only after browser normalization. A
+boot-time check that can only refuse more, like `head.go` parsing
+`Meta.Assets` URLs with `url.Parse`, may sit with its caller.
 
 - ✅ `SafeURL` strips `\t\r\n` first, so `"/\t/evil.com"` reads as
   protocol-relative and is refused.
-- ❌ A second URL check in `head.go` that trims only leading whitespace.
+- ❌ A second URL check that trims only leading whitespace and admits what
+  `SafeURL` refuses.
 
 ## Response Ownership
 
@@ -345,8 +353,9 @@ otherwise require the reader to reconstruct non-obvious reasoning:
 
 ```go
 // ✅ Non-obvious invariant
-// underscore ⇒ Datastar keeps it client-only (never POSTs an _-prefixed signal).
-l.slot = "_" + b.SignalName()
+// Datastar's fetch filter excludes /(^|\.)_/, so only a leading underscore
+// keeps a nested or child-scoped signal off the POST.
+return "_" + prefix + f.name
 
 // ❌ Obvious from context
 // increment the counter
@@ -447,9 +456,9 @@ actually exercises. A behavioral claim about `live.go`'s runtime lives in
 `live_test.go`; it does not get its own `chat_test.go`.
 
 Parity is one-directional: tests pair to source, source need not pair to
-tests. A pure-wiring or trivial-helper file (e.g. `config.go`, `sprint.go`)
-may have no `_test.go` — it is verified by build/vet and by the behavioral
-tests that drive it, not by a unit test of its own.
+tests. A pure-wiring or trivial-helper file may have no `_test.go` — it is
+verified by build/vet and by the behavioral tests that drive it, not by a
+unit test of its own.
 
 Tests are black-box: a `_test.go` beside package `<x>` is in
 `package <x>_test`. `TestTests_areBlackBox` in `sourcelint_test.go` enforces

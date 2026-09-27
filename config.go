@@ -59,7 +59,8 @@ type Option func(*config)
 type mountConfig struct{}
 
 // MountOption configures a single Mount call, as opposed to Option which
-// configures the whole Router.
+// configures the whole Router. None exist yet; the type keeps Mount's
+// signature stable for when one does.
 type MountOption func(*mountConfig)
 
 func newConfig(opts []Option) *config {

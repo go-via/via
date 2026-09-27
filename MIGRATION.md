@@ -201,78 +201,148 @@ Ordered by how early a port hits each change. "Caught by" says what tells you:
 the compiler, a panic or a warning when `Mount` walks the type at startup, or
 nothing.
 
-| v0.7 | v0.8 | Caught by |
-| --- | --- | --- |
-| `h.Text(s)`, `h.T(s)`, `h.Textf(f, …)` | `h.Str(s)`, `h.Str(fmt.Sprintf(f, …))` | compiler |
-| `View(ctx *via.CtxR) h.H` | `View() h.H`; load what it reads into fields in `OnInit` | compiler |
-| `via.New()`, `via.Mount[Page](app, "/")` | `via.Handler(Page{})`, or `via.NewRouter()` and `via.Mount(r, "/", Page{})` | compiler |
-| `app.Start()`, `app.Run()`, `WithAddr`, the timeout options | `http.ListenAndServe(addr, r)`, or your own `http.Server` | compiler |
-| `StateTab[T]` and its `Num`, `Str`, `Bool`, `Slice`, `Map` shapes | `State[T]`; rendering one makes the unit live | compiler |
-| `.Read(ctx)`, `.Write(ctx, v)`, `.Update(ctx, fn)` | `.Get()`, `.Set(v)` | compiler |
-| `.Op(ctx).Inc()`, `.Add(n)`, `.Toggle()`, … | Go on the value: `s.Set(s.Get() + n)` | compiler |
-| `s.Text(ctx)`, `sig.Text()`, `sig.TextSpan()` | `s.Display()` | compiler |
-| `SignalNum[T]` and the other `Signal` shapes | `Signal[T]` | compiler |
-| `via:"name,init=v"` field tag | `via:"init=<json>"`; the wire name is the field name, and a string seed is JSON: `init="all"` | panic at Mount |
-| a child rendered by hand: `p.A.View(ctx, …)` | `via.Child(p.A)`; what the child's `View` took as arguments becomes its fields | compiler |
-| an action `func(*via.Ctx) error`, `WithActionErrorHandler` | `func(*via.Ctx)`; handle the error inside | compiler |
-| an `OnInit` error, logged while the page renders anyway | an `OnInit` error aborts: `via.ErrNotFound` answers 404, any other 500 | silent |
-| `path:"id"` field tag | `ctx.Param[T]("id")` in `OnInit`, stored in a field | silent |
-| `query:"q"` field tag | `ctx.Request().URL.Query()` in `OnInit`; it is empty on actions, so list state belongs in the path or the session | silent |
-| `h.If(cond, node)` | `via.When(cond, p.part)`: the node becomes a method returning `h.H`, called only when cond holds | compiler |
-| `h.When(cond, fn)` | `via.When(cond, fn)` | compiler |
-| `h.IfElse`, `h.WhenElse`, `h.Switch`, `h.Maybe` | a Go `if` or `switch` in a method returning `h.H` | compiler |
-| `h.Each(items, fn)`, `h.EachIndexed`, `h.EachSeq` | `via.Each(items, p.row)`, or a loop | compiler |
-| `h.Fragment(…)` | pass the nodes to the parent element, or collect a `[]h.H` and spread it | compiler |
-| `on.Debounce("250ms")`, `on.Throttle("1s")` | a `time.Duration`: `on.Debounce(250*time.Millisecond)` | compiler |
-| `on.Key("Enter", fn)` | `on.Keydown(fn)`, which has no key filter | compiler |
-| `on.Indicator(sig)`, `on.Confirm`, `on.SetSignal` | `h.DataIndicator(sig.Ref())`; `Confirm` and `SetSignal` are gone | compiler |
-| `sig.Show()`, `sig.ShowUnless()` | `h.DataShow(sig.Ref())`, `h.DataShow(sig.Ref().Not())` | compiler |
-| `sig.Class(n)`, `sig.Style(p)`, `sig.Attr(n)` | `h.DataClass(n, sig.Ref())`, `h.DataStyle(p, sig.Ref())`, `h.DataAttr(n, sig.Ref())`; `expr.Class` in a `CS` handler when no signal is needed | compiler |
-| `h.DataShow(f, args…)`, `h.DataClass(n, f, args…)`, `h.DataOnClick(f, …)` | an `expr.Expr`: `h.DataShow(e)`, `h.DataClass(n, e)`, `on.ClickCS(e)` | compiler |
-| `via.Local("name")` | a `via.SignalCS[T]` field; `Toggle()` is `on.ClickCS(s.Ref().Toggle())` | compiler |
-| `via.Computed(k, e)`, `via.Effect(e)` | `h.DataComputed(k, e)`, `h.DataEffect(e)` | compiler |
-| `h.Attr(n, v)`, `h.AttrNum(n, v)` | `h.RawAttr(n, v)` | compiler |
-| `h.Checked()`, `h.Disabled()`, `h.Required()`, `h.Selected()` | a bool argument: `h.Checked(true)` | compiler |
-| `h.ColSpan("2")`, `h.TabIndex("0")`, `h.MinNum(n)`, `h.ValueNum(n)` | `h.ColSpan(2)`, `h.TabIndex(0)`, and the generic `h.Min(n)`, `h.Value(n)` | compiler |
-| `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` | `h.Class(names…)` and `h.Style(css)`, with the names worked out in Go | compiler |
-| `h.Tag`, `h.NewTag`, `h.VoidTag` | `h.El(tag, …)` | compiler |
-| `h.Raw(html)`, `h.Static`, `h.With` | gone; there is no unescaped HTML node | compiler |
-| `h.Title(s)`, the `<title>` element | `PageMeta()` returning `via.Meta{Title: s}`; `h.Title` is now the `title` attribute | silent |
-| `sess.Put(ctx, v)`, `sess.Get[T](ctx)`, `sess.Clear[T](ctx)`, `sess.Rotate(ctx)` | `ctx.Session().Put(v)`, `.Get[T]()`, `.Delete()`, `.Rotate()` | compiler |
-| one session value per type | one value per session: a second `Put` replaces the first, so put one struct | silent |
-| `StateSess[T]` | a topic per `ctx.Session().ID()`, followed with `State.Track` in `OnInit` | compiler |
-| `StateApp[T]` | your own store, injected; a `topic.Topic[T]` and `via.StateTrack` to push its changes | compiler |
-| `app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal` | `topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit` | compiler |
-| `OnConnect(ctx) error` | `ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open | warning at Mount |
-| `OnDispose(ctx)` | `ctx.OnDispose(fn)`, registered in `OnInit` | silent |
-| `via.Stream(ctx, d, fn)` | `ctx.Tick(d, fn)` in `OnInit` | compiler |
-| `ctx.Notify`, `ctx.ExecScript`, `ctx.Reload`, `ctx.SyncNow`, `ctx.Patch` | gone | compiler |
-| `ctx.Cookie`, `ctx.SetCookie`, `ctx.Writer()` | `ctx.Request().Cookie(name)`; there is no response access, so keep the value in the session | compiler |
-| `ctx.Done()` | `ctx.Context().Done()` | compiler |
-| `via.File` and `via.Files` fields, `ctx.MultipartReader()` | `via.PostForm` and `ctx.Request().FormFile(name)` | compiler |
-| `via.DecodeForm(ctx, &dst)` | a bound `Signal` per field, read with `Get()`; or `via.PostForm` and `ctx.Request().FormValue` | compiler |
-| `WithTitle`, `WithDescription` | `PageMeta() via.Meta` on the mounted page | compiler |
-| `WithLang`, `app.AppendToHead`, `app.AppendToFoot` | `via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in `Assets` | compiler |
-| `WithPlugins(picocss.…)` | your own CSS in `Head.Assets.Styles` | compiler |
-| `WithPlugins(echarts.…)`, `maplibre` | an island: `h.DataIgnoreMorph` and `h.DataEffect` around a script of yours | compiler |
-| a Secure session cookie unless `WithInsecureCookies` | Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies` | silent |
-| `app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic` | your own `http.ServeMux` and middleware around the `*via.Router` | compiler |
-| `WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize` | `WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload` | compiler |
-| `WithNotFound` | `WithErrorPage` | compiler |
-| `WithBackplane`, `StateAppEvents`, `vianats` | gone; state lives in one process | compiler |
+- `h.Text(s)`, `h.T(s)`, `h.Textf(f, …)` → `h.Str(s)`,
+  `h.Str(fmt.Sprintf(f, …))`. Caught by: compiler.
+- `View(ctx *via.CtxR) h.H` → `View() h.H`; load what it reads into fields in
+  `OnInit`. Caught by: compiler.
+- `via.New()`, `via.Mount[Page](app, "/")` → `via.Handler(Page{})`, or
+  `via.NewRouter()` and `via.Mount(r, "/", Page{})`. Caught by: compiler.
+- `app.Start()`, `app.Run()`, `WithAddr`, the timeout options →
+  `http.ListenAndServe(addr, r)`, or your own `http.Server`. Caught by:
+  compiler.
+- `StateTab[T]` and its `Num`, `Str`, `Bool`, `Slice`, `Map` shapes →
+  `State[T]`; rendering one makes the unit live. Caught by: compiler.
+- `.Read(ctx)`, `.Write(ctx, v)`, `.Update(ctx, fn)` → `.Get()`, `.Set(v)`.
+  Caught by: compiler.
+- `.Op(ctx).Inc()`, `.Add(n)`, `.Toggle()`, … → Go on the value:
+  `s.Set(s.Get() + n)`. Caught by: compiler.
+- `s.Text(ctx)`, `sig.Text()`, `sig.TextSpan()` → `s.Display()`. Caught by:
+  compiler.
+- `SignalNum[T]` and the other `Signal` shapes → `Signal[T]`. Caught by:
+  compiler.
+- `via:"name,init=v"` field tag → `via:"init=<json>"`; the wire name is the
+  field name, and a string seed is JSON: `init="all"`. Caught by: panic at
+  Mount.
+- a child rendered by hand: `p.A.View(ctx, …)` → `via.Child(p.A)`; what the
+  child's `View` took as arguments becomes its fields. Caught by: compiler.
+- an action `func(*via.Ctx) error`, `WithActionErrorHandler` → `func(*via.Ctx)`;
+  handle the error inside. Caught by: compiler.
+- an `OnInit` error, logged while the page renders anyway → an `OnInit` error
+  aborts: `via.ErrNotFound` answers 404, any other 500. Caught by: silent.
+- `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field.
+  Caught by: silent.
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
+  on actions, so list state belongs in the path or the session. Caught by:
+  silent.
+- `h.If(cond, node)` → `via.When(cond, p.part)`: the node becomes a method
+  returning `h.H`, called only when cond holds. Caught by: compiler.
+- `h.When(cond, fn)` → `via.When(cond, fn)`. Caught by: compiler.
+- `h.IfElse`, `h.WhenElse`, `h.Switch`, `h.Maybe` → a Go `if` or `switch` in a
+  method returning `h.H`. Caught by: compiler.
+- `h.Each(items, fn)`, `h.EachIndexed`, `h.EachSeq` → `via.Each(items, p.row)`,
+  or a loop. Caught by: compiler.
+- `h.Fragment(…)` → pass the nodes to the parent element, or collect a `[]h.H`
+  and spread it. Caught by: compiler.
+- `on.Debounce("250ms")`, `on.Throttle("1s")` → a `time.Duration`:
+  `on.Debounce(250*time.Millisecond)`. Caught by: compiler.
+- `on.Key("Enter", fn)` → `on.Keydown(fn)`, which has no key filter. Caught by:
+  compiler.
+- `on.Indicator(sig)`, `on.Confirm`, `on.SetSignal` →
+  `h.DataIndicator(sig.Ref())`; `Confirm` and `SetSignal` are gone. Caught by:
+  compiler.
+- `sig.Show()`, `sig.ShowUnless()` → `h.DataShow(sig.Ref())`,
+  `h.DataShow(sig.Ref().Not())`. Caught by: compiler.
+- `sig.Class(n)`, `sig.Style(p)`, `sig.Attr(n)` → `h.DataClass(n, sig.Ref())`,
+  `h.DataStyle(p, sig.Ref())`, `h.DataAttr(n, sig.Ref())`; `expr.Class` in a
+  `CS` handler when no signal is needed. Caught by: compiler.
+- `h.DataShow(f, args…)`, `h.DataClass(n, f, args…)`, `h.DataOnClick(f, …)` → an
+  `expr.Expr`: `h.DataShow(e)`, `h.DataClass(n, e)`, `on.ClickCS(e)`. Caught by:
+  compiler.
+- `via.Local("name")` → a `via.SignalCS[T]` field; `Toggle()` is
+  `on.ClickCS(s.Ref().Toggle())`. Caught by: compiler.
+- `via.Computed(k, e)`, `via.Effect(e)` → `h.DataComputed(k, e)`,
+  `h.DataEffect(e)`. Caught by: compiler.
+- `h.Attr(n, v)`, `h.AttrNum(n, v)` → `h.RawAttr(n, v)`. Caught by: compiler.
+- `h.Checked()`, `h.Disabled()`, `h.Required()`, `h.Selected()` → a bool
+  argument: `h.Checked(true)`. Caught by: compiler.
+- `h.ColSpan("2")`, `h.TabIndex("0")`, `h.MinNum(n)`, `h.ValueNum(n)` →
+  `h.ColSpan(2)`, `h.TabIndex(0)`, and the generic `h.Min(n)`, `h.Value(n)`.
+  Caught by: compiler.
+- `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` → `h.Class(names…)` and
+  `h.Style(css)`, with the names worked out in Go. Caught by: compiler.
+- `h.Tag`, `h.NewTag`, `h.VoidTag` → `h.El(tag, …)`. Caught by: compiler.
+- `h.Raw(html)`, `h.Static`, `h.With` → gone; there is no unescaped HTML node.
+  Caught by: compiler.
+- `h.Title(s)`, the `<title>` element → `PageMeta()` returning
+  `via.Meta{Title: s}`; `h.Title` is now the `title` attribute. Caught by:
+  silent.
+- `sess.Put(ctx, v)`, `sess.Get[T](ctx)`, `sess.Clear[T](ctx)`,
+  `sess.Rotate(ctx)` → `ctx.Session().Put(v)`, `.Get[T]()`, `.Delete()`,
+  `.Rotate()`. Caught by: compiler.
+- one session value per type → one value per session: a second `Put` replaces
+  the first, so put one struct. Caught by: silent.
+- `StateSess[T]` → a topic per `ctx.Session().ID()`, followed with `State.Track`
+  in `OnInit`. Caught by: compiler.
+- `StateApp[T]` → your own store, injected; a `topic.Topic[T]` and
+  `via.StateTrack` to push its changes. Caught by: compiler.
+- `app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal`
+  → `topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit`. Caught by:
+  compiler.
+- `OnConnect(ctx) error` → `ctx.Tick` or `ctx.Listen` in `OnInit`;
+  `ctx.OnConnect(fn)` for work on stream open. Caught by: warning at Mount.
+- `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`. Caught by:
+  silent.
+- `via.Stream(ctx, d, fn)` → `ctx.Tick(d, fn)` in `OnInit`. Caught by: compiler.
+- `ctx.Notify`, `ctx.ExecScript`, `ctx.Reload`, `ctx.SyncNow`, `ctx.Patch` →
+  gone. Caught by: compiler.
+- `ctx.Cookie`, `ctx.SetCookie`, `ctx.Writer()` → `ctx.Request().Cookie(name)`;
+  there is no response access, so keep the value in the session. Caught by:
+  compiler.
+- `ctx.Done()` → `ctx.Context().Done()`. Caught by: compiler.
+- `via.File` and `via.Files` fields, `ctx.MultipartReader()` → `via.PostForm`
+  and `ctx.Request().FormFile(name)`. Caught by: compiler.
+- `via.DecodeForm(ctx, &dst)` → a bound `Signal` per field, read with `Get()`;
+  or `via.PostForm` and `ctx.Request().FormValue`. Caught by: compiler.
+- `WithTitle`, `WithDescription` → `PageMeta() via.Meta` on the mounted page.
+  Caught by: compiler.
+- `WithLang`, `app.AppendToHead`, `app.AppendToFoot` →
+  `via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in
+  `Assets`. Caught by: compiler.
+- `WithPlugins(picocss.…)` → your own CSS in `Head.Assets.Styles`. Caught by:
+  compiler.
+- `WithPlugins(echarts.…)`, `maplibre` → an island: `h.DataIgnoreMorph` and
+  `h.DataEffect` around a script of yours. Caught by: compiler.
+- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
+  `X-Forwarded-Proto: https`; behind a proxy that sends neither set
+  `WithSecureCookies`. Caught by: silent.
+- `app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic` → your own
+  `http.ServeMux` and middleware around the `*via.Router`. Caught by: compiler.
+- `WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize` →
+  `WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload`. Caught by:
+  compiler.
+- `WithNotFound` → `WithErrorPage`. Caught by: compiler.
+- `WithBackplane`, `StateAppEvents`, `vianats` → gone; state lives in one
+  process. Caught by: compiler.
 
 ## What the compiler won't catch
 
 These compile and start; the first sign is behaviour:
 
-- an `OnInit` error, logged while the page renders anyway → an `OnInit` error aborts: `via.ErrNotFound` answers 404, any other 500
+- an `OnInit` error, logged while the page renders anyway → an `OnInit` error
+  aborts: `via.ErrNotFound` answers 404, any other 500
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field
-- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty on actions, so list state belongs in the path or the session
-- `h.Title(s)`, the `<title>` element → `PageMeta()` returning `via.Meta{Title: s}`; `h.Title` is now the `title` attribute
-- one session value per type → one value per session: a second `Put` replaces the first, so put one struct
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
+  on actions, so list state belongs in the path or the session
+- `h.Title(s)`, the `<title>` element → `PageMeta()` returning
+  `via.Meta{Title: s}`; `h.Title` is now the `title` attribute
+- one session value per type → one value per session: a second `Put` replaces
+  the first, so put one struct
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`
-- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies`
-- `ctx.Redirect("https://other.example/…")` → dropped and logged; leave the site with `ctx.RedirectExternal`
+- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
+  `X-Forwarded-Proto: https`; behind a proxy that sends neither set
+  `WithSecureCookies`
+- `ctx.Redirect("https://other.example/…")` → dropped and logged; leave the site
+  with `ctx.RedirectExternal`
 
 A leftover `OnConnect(ctx) error` is warned about at `Mount`, with or without
 an `OnInit` next to it. A leftover `OnDispose(ctx)` has an action's shape, so

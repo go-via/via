@@ -38,7 +38,7 @@ const (
 )
 
 // change is one row of the mapping. Backticks mark code, so MIGRATION.md's
-// table is these rows verbatim.
+// Mapping list is these rows verbatim.
 type change struct{ v07, v08, caught string }
 
 // Ordered by how early a port hits them, not by package.
