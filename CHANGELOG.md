@@ -29,6 +29,11 @@
   read as the browser reads it, so `https://evil.example\@app.example`
   names `evil.example`. Leave the site with `Ctx.RedirectExternal`.
 
+- **`h.RawAttr` checks every URL in a `srcset` or `ping` list**, not only
+  the first, so `"/a.png 1x, javascript:x 2x"` renders as `"#"`. One
+  refused URL neutralizes the whole value. A `srcset` URL that contains a
+  comma may now be refused.
+
 ### New
 
 - **`WithUnsafeEval()`** puts `'unsafe-eval'` back in every mount's
@@ -157,6 +162,10 @@
   (`input__debounce.250ms`) are still accepted.
 
 ### Fixed
+
+- `ctx.Tick`, `ctx.Listen` and `ctx.OnConnect` called from `OnReload` now
+  log a warning, as `State.Track` already did. They still register nothing:
+  whether a unit is live is decided at the GET and the connect.
 
 - POSTs to unknown action ids no longer grow the server's memory: the set
   of ids already warned about kept every one for the life of the process.

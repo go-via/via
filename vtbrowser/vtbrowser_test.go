@@ -207,7 +207,7 @@ func TestWaitFor_observesServerPushMorph(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
-func TestClick_roundTripsLiveActionThroughTabHeader(t *testing.T) {
+func TestClick_roundTripsLiveActionThroughTabSignal(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(clicker{}))
 
 	s.WaitTextContains("p", "count: 0")

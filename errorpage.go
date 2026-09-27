@@ -28,7 +28,7 @@ const (
 	ReasonGone             Reason = "gone"               // 410 — the render that would bind this action is gone
 	ReasonTooLarge         Reason = "too_large"          // 413 — body over the cap
 	ReasonInternal         Reason = "internal"           // 500 — a hook or render failed
-	ReasonUnavailable      Reason = "unavailable"        // 503 — the session store could not answer
+	ReasonUnavailable      Reason = "unavailable"        // 503 — the session store could not answer, or a live tab could not take the action
 )
 
 // The errors via reports through [PageError].Err for the failures an app can
@@ -38,7 +38,10 @@ const (
 //
 // There is deliberately no sentinel for the 503s the SSE connect raises (at
 // capacity, shutting down): that route is client-consumed and never renders an
-// error page, so a sentinel for it would be unreachable API. Nor for an unknown
+// error page, so a sentinel for it would be unreachable API. A native form
+// submit to a live tab can also answer 503 (too many actions parked, the
+// stream pinned, the server shutting down); that one is error-paged, with
+// Reason unavailable and Err nil. Nor is there a sentinel for an unknown
 // action or a cross-mount child id — both are programming mistakes with the
 // same answer, "something went wrong", not a distinct page.
 var (

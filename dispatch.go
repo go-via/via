@@ -60,7 +60,7 @@ const tabFormField = "_viatab"
 // Narrowed to the exact shape that produces the defect — a unit that loads in
 // OnInit and never re-reads — so an idempotent action on a unit with no OnInit,
 // or on one that already declares OnReload, stays silent. Deduped per action per
-// process: a legitimately idempotent click is a dead click every time it is
+// Router: a legitimately idempotent click is a dead click every time it is
 // made, and one line per click buries the log instead of reading it.
 func (m *mount) warnNoChange(act, name string, v any) {
 	if _, isReloader := v.(reloader); isReloader {
@@ -588,8 +588,8 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 
 	// A session this action minted: bind it now so the tab id stops being a
-	// bearer credential the instant this action logs it in (H1; bindSession is
-	// a no-op once bound).
+	// bearer credential the instant this action logs it in (bindSession is a
+	// no-op once bound).
 	if beforeSession == nil && rc.session.data != nil {
 		lc.bindSession(rc.session.sid())
 	}

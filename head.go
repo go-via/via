@@ -235,8 +235,8 @@ func isBareOrigin(o string) bool {
 }
 
 // fingerprint is the Assets identity the constancy check compares. It is a
-// string and not reflect.DeepEqual because via's core stays reflection-free
-// off the memoized type-setup path (see
+// string and not reflect.DeepEqual because the check runs on every document
+// render, where via's reflect use is limited to memo-key reads (see
 // TestCore_reflectUseMatchesTheAllowlist), and because a string is comparable
 // in one op against the one stored at Mount.
 func (a Assets) fingerprint() string {

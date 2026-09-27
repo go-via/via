@@ -3,13 +3,14 @@
 // server-authoritative State/List/Signal, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
-// reflection in the public API surface (one reflect call on the action path, in
-// action.go, reads a handler's own func name to address its action), no
-// closures in it either, no any in element/child signatures. The library is
-// stdlib-only. Identifier strings do appear at the edges the caller controls
-// directly — ctx.Param[T]("id"), FormFile("avatar"), Mount("/thread/{id}") —
-// but never as an internal wire-name a caller could desync (see the
-// Field-Embeddable Types convention).
+// reflection in the public API surface (inside, reflect walks each composition
+// type once and memoizes; a render does no walk, only the reads that key those
+// memos: a bound handler's code pointer and a Child's type), no closures in it
+// either, no any in element/child signatures. The library is stdlib-only.
+// Identifier strings do appear at the edges the caller controls directly —
+// ctx.Param[T]("id"), FormFile("avatar"), Mount("/thread/{id}") — but never
+// as an internal wire-name a caller could desync (see the Field-Embeddable
+// Types convention).
 //
 // # Lifecycle hooks
 //
@@ -42,9 +43,10 @@
 // session, registers Tick/Listen, and may Redirect or return [ErrNotFound],
 // all wrong to repeat once a handler has committed a mutation. It runs on
 // the plain path and the live path alike, once per action, and is skipped
-// when the handler queued a Redirect. Tick and Listen are no-ops inside it:
-// liveness is the GET/connect verdict. A non-nil error is answered like
-// OnInit's — ErrNotFound is 404, anything else 500.
+// when the handler queued a Redirect. Tick, Listen, OnConnect and Track
+// called inside it register nothing and log a warning: liveness is the
+// GET/connect verdict. A non-nil error is answered like OnInit's —
+// ErrNotFound is 404, ErrForbidden 403, anything else 500.
 //
 // PageMeta names the document — title, description, social cards, assets —
 // and is read after OnInit and OnReload, so the data is already loaded.
@@ -541,7 +543,7 @@ type Ctx struct {
 	// child's hydrated values survive into the next pass the way a root's do.
 	passUnits map[string]*Ctx
 	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
-	reinit    bool            // this Ctx is the post-action re-run of OnInit: load again, register nothing (I5)
+	reinit    bool            // this Ctx is OnReload's: load again, register nothing
 	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
 	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
@@ -888,7 +890,7 @@ func On(event string, fn func(*Ctx)) h.Attr {
 // plain data (e.g. todo.ID), not an identifier string.
 //
 // DISPATCHABLE-IFF-RENDERED (this is the canonical statement of the property;
-// via.When, Signal.bind and hydrateTree all defer to it). Dispatch identity is
+// Signal.bind and hydrateTree defer to it). Dispatch identity is
 // the (handler, arg) pair. The render that precedes every dispatch — the
 // discovery render on a plain page, the last push on a live one — rebuilds the
 // set of args it binds for fn, and a POST whose ?a= is not in that set is 410'd

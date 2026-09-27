@@ -378,10 +378,6 @@ func (d *sessionData) refresh(vals map[string]json.RawMessage, exp time.Time) {
 	}
 }
 
-// newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
-// → a random per-process key. The random fallback warns on first use; a stable
-// key is what makes the cookie survive restarts and span pods, and a shared
-// SessionStore is what makes the data behind it do the same.
 // logger tolerates a nil manager so a Session handle built without one (a bare
 // render) still logs somewhere.
 func (m *sessionManager) logger() *slog.Logger {
@@ -391,6 +387,10 @@ func (m *sessionManager) logger() *slog.Logger {
 	return m.log
 }
 
+// newSessionManager resolves the signing key: WithSessionKey → VIA_SESSION_KEY
+// → a random per-process key. The random fallback warns on first use; a stable
+// key is what makes the cookie survive restarts and span pods, and a shared
+// SessionStore is what makes the data behind it do the same.
 func newSessionManager(cfg *config) *sessionManager {
 	key := cfg.sessionKey
 	if len(key) == 0 {
@@ -1077,7 +1077,7 @@ func (s *Session) Get[T any]() (T, bool) {
 }
 
 // Delete clears the stored value; the session id and cookie survive, so a
-// later Set on this same session starts from nothing rather than minting a
+// later Put on this same session starts from nothing rather than minting a
 // new id. Any other handle sharing this request's session sees the value gone
 // too — they share the same underlying data — and so do the Tick and Listen
 // handlers of the session's open tabs (see [Session]). A unit that copied the

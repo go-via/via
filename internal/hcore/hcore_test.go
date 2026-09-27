@@ -2,7 +2,6 @@ package hcore_test
 
 import (
 	"encoding/json"
-	"strconv"
 	"testing"
 
 	"github.com/go-via/via/internal/hcore"
@@ -10,25 +9,11 @@ import (
 )
 
 // stubBinder is a minimal Binder for exercising the renderer without via or h.
-type stubBinder struct {
-	nextSig int
-	init    map[string]any
-}
+type stubBinder struct{}
 
-func (b *stubBinder) SignalName() string {
-	s := "s" + strconv.Itoa(b.nextSig)
-	b.nextSig++
-	return s
-}
+func (*stubBinder) DeclareSignal(string, any) {}
 
-func (b *stubBinder) DeclareSignal(string, any) {}
-
-func (b *stubBinder) SignalInit(slot string) (any, bool) {
-	v, ok := b.init[slot]
-	return v, ok
-}
-
-func (b *stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
+func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	t.Parallel()

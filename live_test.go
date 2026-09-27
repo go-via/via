@@ -184,7 +184,7 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	})
 
 	// The stream goroutine runs on a real httptest listener, outside the
-	// bubble (see I4): synctest.Wait() only settles bubble goroutines, so the
+	// bubble: synctest.Wait() only settles bubble goroutines, so the
 	// OS delivering the close can still be in flight after it returns. This
 	// wait runs after the bubble, in real wall-clock time.
 	select {
@@ -312,7 +312,7 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 }
 
 // pathTicker's Tick reads ctx.Request().URL.Path — a live action's own POST
-// must never be visible from there. Before S8, dispatch wrote req/sessW/
+// must never be visible from there. dispatch once wrote req/sessW/
 // redirect directly onto the render-time Ctx a Tick holds for the life of
 // the connection, so firing an action left every later tick reading the
 // action's request instead of the connect one.
@@ -553,9 +553,9 @@ func postConcurrently(srv *httptest.Server, build func() (*http.Request, error))
 }
 
 // racyNativeForm ticks as fast as time.Ticker allows so its OnInit-scheduled
-// push races dispatchOverStream's native-form re-render, which (before the fix) ran
-// renderRootBase against lc.pageRoot on the POST's own goroutine instead of
-// the stream goroutine.
+// push races dispatchOverStream's native-form re-render, which must not run
+// renderRootBase against the connection's root unit on the POST's own
+// goroutine instead of the stream goroutine.
 type racyNativeForm struct{ n via.State[int] }
 
 func (r *racyNativeForm) OnInit(ctx *via.Ctx) error {
@@ -1387,4 +1387,63 @@ func TestTick_runsANonPositiveIntervalEverySecondAndWarnsOnce(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(out.String(), "via: Tick interval <= 0, running every 1s instead"),
 			"the clamp warns once per Router, not per OnInit")
 	})
+}
+
+// reloadRegistrar calls one registration from OnReload, the way a load helper
+// shared with OnInit would.
+type reloadRegistrar struct {
+	hook string
+	room *topic.Topic[int]
+	n    int
+}
+
+func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
+	switch r.hook {
+	case "Tick":
+		ctx.Tick(time.Second, r.beat)
+	case "Listen":
+		ctx.Listen(r.room, r.recv)
+	case "OnConnect":
+		ctx.OnConnect(r.stop)
+	}
+	return nil
+}
+
+func (r *reloadRegistrar) beat(*via.Ctx)      {}
+func (r *reloadRegistrar) recv(*via.Ctx, int) {}
+func (r *reloadRegistrar) stop()              {}
+func (r *reloadRegistrar) Bump(*via.Ctx)      { r.n++ }
+
+func (r *reloadRegistrar) View() h.H {
+	return h.Div(h.P(h.Str(r.n)), h.Button(via.On("click", r.Bump)))
+}
+
+func fireReloadRegistrar(t *testing.T, hook string) string {
+	t.Helper()
+	var out lockedBuf
+	app := vt.Serve(t, via.Handler(reloadRegistrar{hook: hook, room: topic.New[int]()}, logTo(&out)))
+	_, page := app.Get("/")
+	require.NotContains(t, page, "data-init", "the page must be served plain")
+	code, body := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, code)
+	require.Contains(t, body, "<p>1</p>")
+	return out.String()
+}
+
+func TestTick_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Tick"), "via: Tick called from OnReload — ignored",
+		"a Tick from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestListen_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Listen"), "via: Listen called from OnReload — ignored",
+		"a Listen from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestOnConnect_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "OnConnect"), "via: OnConnect called from OnReload — ignored",
+		"an OnConnect from OnReload registers nothing, and must say so like a late Track does")
 }

@@ -28,11 +28,11 @@ func Each[T any](items []T, row func(T) h.H) h.H {
 // value present only when logged in) is never evaluated on the false path.
 // build is a named method value, never a closure at the call site.
 //
-// cond decides what is dispatchable, not just what is drawn: a handler or OnArg
-// value inside a closed branch is not bound and answers 410 (see OnArg for the
-// full property). So gate on session or database state — a Bind()ed Signal is
-// whatever the client last set it to, which makes it a fine switch for a
-// disclosure the user controls and never an authorization check.
+// cond decides what is dispatchable, not just what is drawn: a handler or
+// on.WithArg arg inside a closed branch is not bound, so a POST for it answers
+// 410 before the handler runs. So gate on session or database state — a
+// Bind()ed Signal is whatever the client last set it to, which makes it a fine
+// switch for a disclosure the user controls and never an authorization check.
 //
 // A Bind()ed signal as cond has one limit on a plain (streamless) page: the
 // render that decides dispatchability runs before the POST body is applied, so

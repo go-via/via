@@ -413,7 +413,7 @@ func TestChild_panicsWithoutView(t *testing.T) {
 }
 
 // nestHost is a plain child (itself embedded by a page) whose own View
-// embeds a live child — the two-deep composition B1 makes work.
+// embeds a live child — a legal two-deep composition.
 type nestHost struct{ Inner beater }
 
 func (n *nestHost) View() h.H { return h.Div(via.Child(n.Inner)) }
@@ -468,7 +468,7 @@ func TestChild_liveChildInsideLivePageIsRefused(t *testing.T) {
 }
 
 // nestedLiveChild is itself a live child (embedded from a plain root) whose
-// own View calls Child again — the other nested-composition shape A1 cuts:
+// own View calls Child again, which Child's liveness rule forbids:
 // an embedded live unit's own independent re-render never re-walks a parent,
 // so it has nothing to keep a further Child's addressing stable against.
 type nestedLiveChild struct {
@@ -1071,7 +1071,7 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	assert.Contains(t, conn.Await("n="), "5", "and drive it")
 }
 
-// threeDeepLeafHost/Mid nest a live leaf under two plain children, so its key is
+// threeDeepOuter/Mid nest a live leaf under two plain children, so its key is
 // a three-segment path — the depth at which a single composition step is no
 // longer enough to keep the numbering consistent.
 type threeDeepMid struct{ Kid deepCounter }

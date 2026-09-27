@@ -107,7 +107,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"OnReload",
-			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick and Listen are no-ops inside it.")},
+			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick, Listen and OnConnect called inside it register nothing and log a warning.")},
 			[]seeLink{{"What an action body can do", "/actions#what-an-action-body-can-do"}, {"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"PageMeta",

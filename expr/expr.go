@@ -222,7 +222,7 @@ func Rawf(format string, args ...Expr) Expr {
 		case 's':
 			if i == len(args) {
 				panic(fmt.Sprintf("expr: Rawf has %d %%s verbs and %d arguments",
-					strings.Count(format, "%s"), len(args)))
+					rawfVerbs(format), len(args)))
 			}
 			b.WriteString(string(args[i]))
 			i++
@@ -236,9 +236,15 @@ func Rawf(format string, args ...Expr) Expr {
 	}
 	if i != len(args) {
 		panic(fmt.Sprintf("expr: Rawf has %d %%s verbs and %d arguments",
-			strings.Count(format, "%s"), len(args)))
+			rawfVerbs(format), len(args)))
 	}
 	return Expr(b.String())
+}
+
+// rawfVerbs counts the %s verbs Rawf's scan sees: "%%" pairs off first, so
+// the s in "%%s" is literal text, not a verb.
+func rawfVerbs(format string) int {
+	return strings.Count(strings.ReplaceAll(format, "%%", ""), "%s")
 }
 
 func sources(es []Expr) []string {

@@ -16,7 +16,6 @@ var urlBearingAttrs = map[string]bool{
 	"action":     true,
 	"href":       true,
 	"src":        true,
-	"xlink:href": true,
 	"poster":     true,
 	"data":       true, // the <object> "data" attribute, not h.Data
 	"cite":       true,
@@ -27,6 +26,42 @@ var urlBearingAttrs = map[string]bool{
 }
 
 func isURLBearingAttr(name string) bool { return urlBearingAttrs[strings.ToLower(name)] }
+
+// gateURLAttr is safeURL for a RawAttr value. srcset and ping hold a list, and
+// the scheme of a list's first URL says nothing about the rest, so each URL is
+// gated and one refusal neutralizes the whole value.
+func gateURLAttr(name, val string) string {
+	var urls []string
+	switch strings.ToLower(name) {
+	case "srcset":
+		urls = srcsetURLs(val)
+	case "ping":
+		urls = strings.Fields(val)
+	}
+	if len(urls) == 0 {
+		return safeURL(val, name)
+	}
+	for _, u := range urls {
+		if safeURL(u, name) == "#" {
+			return "#"
+		}
+	}
+	return val
+}
+
+// srcsetURLs splits on every comma, where the browser splits only on one that
+// ends a candidate. Each piece's first field is then a URL the browser reads,
+// a comma-cut prefix of one (same scheme), or descriptor text, so a URL with a
+// comma in it can be refused but a hostile one is never admitted.
+func srcsetURLs(v string) []string {
+	var urls []string
+	for piece := range strings.SplitSeq(v, ",") {
+		if f := strings.Fields(piece); len(f) > 0 {
+			urls = append(urls, f[0])
+		}
+	}
+	return urls
+}
 
 // safeURL admits what hcore.SafeURL admits (hcore.SafeHref for an href);
 // everything else — javascript:, data:, vbscript:, protocol-relative // and \\

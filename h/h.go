@@ -35,9 +35,9 @@
 // Text and attribute values are HTML-escaped at render time, always, with no
 // opt-out: there is no raw-HTML constructor anywhere in this package, and H is
 // sealed so no other package can add one. URL-bearing attributes (h.Href,
-// h.Src, h.Action, and a via Redirect target) are additionally scheme-checked,
-// so a javascript: or data: URL arriving from user data is dropped rather than
-// rendered. Attribute names are not escaped — they are validated against an
+// h.Src, h.Action) are additionally scheme-checked, so a javascript: or data:
+// URL arriving from user data renders as "#"; a via Redirect to one is
+// refused. Attribute names are not escaped — they are validated against an
 // allowlist and an invalid one panics, on the reasoning that a name is written
 // by the programmer and never taken from a request.
 //
@@ -133,26 +133,27 @@ func Str[T Stringish](v T) H { return hcore.Str(v) }
 // onclick client-side through Datastar's attr plugin — that is Datastar's own
 // vocabulary, not an injection, and this gate does not and cannot police it.
 //
-// A URL-bearing name (formaction, action, href, src, xlink:href, poster, the
-// <object> data attribute, cite, background, ping, manifest, srcset) is run
-// through the same policy as Href/Src/Action (mailto: and tel: pass on href
-// only), so h.RawAttr("formaction", …) cannot smuggle a javascript: scheme
-// past the typed constructors. srcdoc is
-// rejected outright: a browser entity-decodes it and parses the result as a
-// same-origin document, so single-escaping it is not a safe render.
+// A URL-bearing name (formaction, action, href, src, poster, the <object> data
+// attribute, cite, background, ping, manifest, srcset) is run through the same
+// policy as Href/Src/Action (mailto: and tel: pass on href only), so
+// h.RawAttr("formaction", …) cannot smuggle a javascript: scheme past the
+// typed constructors. Every URL in a srcset or ping list is checked, and one
+// refused URL turns the whole value into "#". srcdoc is rejected outright: a
+// browser entity-decodes it and parses the result as a same-origin document,
+// so single-escaping it is not a safe render.
 func RawAttr(name, val string) Attr {
 	if strings.EqualFold(name, "srcdoc") {
 		panic(fmt.Sprintf("h: %q is not permitted via RawAttr — an inline document can carry same-origin script", name))
 	}
 	if isURLBearingAttr(name) {
-		val = safeURL(val, name)
+		val = gateURLAttr(name, val)
 	}
 	return hcore.RawAttr(name, val)
 }
 
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. It
 // is the escape hatch to Datastar's full vocabulary: the suffix may carry the
-// plugin syntax, as in h.Data("on:click", "@post(\'/x\')"),
+// plugin syntax, as in h.Data("on:click", "@post('/x')"),
 // h.Data("on:keydown__debounce.300ms", ...), h.Data("class:active", "$on"),
 // h.Data("attr:disabled", "$busy") or h.Data("show", "$open").
 //

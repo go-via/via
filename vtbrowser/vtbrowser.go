@@ -328,8 +328,9 @@ func (s *Session) WaitLoaded() {
 
 // Sleep settles for d. Prefer the Wait* helpers, which poll the DOM and so
 // absorb latency without a fixed delay; reach for Sleep only when there is no
-// observable signal to wait on — e.g. letting the SSE stream connect before a
-// first action, where nothing visible changes on connect.
+// observable signal to wait on — e.g. waiting out the reconnect manager's
+// probe backoff to show a reload did not happen. For the SSE connect, use
+// [Session.WaitLiveConnected].
 func (s *Session) Sleep(d time.Duration) {
 	s.t.Helper()
 	s.run(fmt.Sprintf("sleep %v", d), chromedp.Sleep(d))
