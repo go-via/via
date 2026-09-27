@@ -184,7 +184,7 @@ func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	})
 
 	// The stream goroutine runs on a real httptest listener, outside the
-	// bubble (see I4): synctest.Wait() only settles bubble goroutines, so the
+	// bubble: synctest.Wait() only settles bubble goroutines, so the
 	// OS delivering the close can still be in flight after it returns. This
 	// wait runs after the bubble, in real wall-clock time.
 	select {
@@ -312,7 +312,7 @@ func TestTick_seesTheConnectRequest(t *testing.T) {
 }
 
 // pathTicker's Tick reads ctx.Request().URL.Path — a live action's own POST
-// must never be visible from there. Before S8, dispatch wrote req/sessW/
+// must never be visible from there. dispatch once wrote req/sessW/
 // redirect directly onto the render-time Ctx a Tick holds for the life of
 // the connection, so firing an action left every later tick reading the
 // action's request instead of the connect one.
@@ -553,9 +553,9 @@ func postConcurrently(srv *httptest.Server, build func() (*http.Request, error))
 }
 
 // racyNativeForm ticks as fast as time.Ticker allows so its OnInit-scheduled
-// push races dispatchOverStream's native-form re-render, which (before the fix) ran
-// renderRootBase against lc.pageRoot on the POST's own goroutine instead of
-// the stream goroutine.
+// push races dispatchOverStream's native-form re-render, which must not run
+// renderRootBase against the connection's root unit on the POST's own
+// goroutine instead of the stream goroutine.
 type racyNativeForm struct{ n via.State[int] }
 
 func (r *racyNativeForm) OnInit(ctx *via.Ctx) error {
@@ -821,66 +821,72 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 		"a unit publishing to the topic it listens to wedged its own stream (%d/%d handler calls)", got.Load(), 2*seeds)
 }
 
-// stallUnit pads the first connection's frames well past what the socket
-// buffers hold, so a client that never reads pins its stream mid-write on the
-// first frame instead of being absorbed by the kernel.
-type stallUnit struct {
-	bus     *topic.Topic[int]
-	claimed *atomic.Bool
-	pad     bool
-	sum     via.State[int]
+type sumUnit struct {
+	bus *topic.Topic[int]
+	sum via.State[int]
 }
 
-var stallPad = strings.Repeat("x", 1<<20)
+func (u *sumUnit) OnInit(ctx *via.Ctx) error { ctx.Listen(u.bus, u.recv); return nil }
 
-func (u *stallUnit) OnInit(ctx *via.Ctx) error {
-	if u.claimed.CompareAndSwap(false, true) {
-		u.pad = true
-	}
-	ctx.Listen(u.bus, u.recv)
-	return nil
+func (u *sumUnit) recv(ctx *via.Ctx, v int) { u.sum.Set(u.sum.Get() + v) }
+
+func (u *sumUnit) View() h.H { return h.Div(h.Str("sum="), u.sum.Display()) }
+
+// stallFirst is a client that never reads, without the socket buffers that
+// would absorb frames first: once armed, the first accepted conn's writes block
+// until release. Padding frames past the kernel buffers instead races the pad's
+// render against the pinned deadline, which a loaded -race runner loses.
+type stallFirst struct {
+	net.Listener
+	claimed atomic.Bool
+	armed   atomic.Bool
+	once    sync.Once
+	blocked chan struct{}
+	release chan struct{}
 }
 
-func (u *stallUnit) recv(ctx *via.Ctx, v int) { u.sum.Set(u.sum.Get() + v) }
-
-func (u *stallUnit) View() h.H {
-	pad := ""
-	if u.pad {
-		pad = stallPad
-	}
-	return h.Div(h.Str("sum="), u.sum.Display(), h.Str(pad))
-}
-
-// Loopback autotunes a send buffer to megabytes; capping it keeps the pad
-// far larger than anything the kernel will hold for a client.
-type smallSendBuffer struct{ net.Listener }
-
-func (l smallSendBuffer) Accept() (net.Conn, error) {
+func (l *stallFirst) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetWriteBuffer(4 << 10)
+	if err == nil && l.claimed.CompareAndSwap(false, true) {
+		return stalledConn{c, l}, nil
 	}
 	return c, err
+}
+
+type stalledConn struct {
+	net.Conn
+	l *stallFirst
+}
+
+func (c stalledConn) Write(p []byte) (int, error) {
+	if !c.l.armed.Load() {
+		return c.Conn.Write(p)
+	}
+	c.l.once.Do(func() { close(c.l.blocked) })
+	<-c.l.release
+	return 0, net.ErrClosed
 }
 
 func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
-	var out lockedBuf
-	srv := httptest.NewUnstartedServer(via.Handler(stallUnit{bus: bus, claimed: &atomic.Bool{}},
-		via.WithPinnedDeadline(300*time.Millisecond), logTo(&out)))
-	srv.Listener = smallSendBuffer{srv.Listener}
+	srv := httptest.NewUnstartedServer(via.Handler(sumUnit{bus: bus}))
+	stall := &stallFirst{Listener: srv.Listener, blocked: make(chan struct{}), release: make(chan struct{})}
+	srv.Listener = stall
 	srv.Start()
 	t.Cleanup(srv.Close)
+	// Runs before srv.Close, which would otherwise wait on the blocked handler.
+	t.Cleanup(func() { close(stall.release) })
 
-	ctx, stall := context.WithCancel(context.Background())
-	defer stall()
+	ctx, hangUp := context.WithCancel(context.Background())
+	defer hangUp()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	stuck, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer stuck.Body.Close()
+	stall.armed.Store(true)
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -888,8 +894,11 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 
 	bus.Publish(1)
 	awaitLine(t, lines, "sum=1")
-	require.Eventually(t, func() bool { return strings.Contains(out.String(), "blocked writing a frame") },
-		2*time.Second, 5*time.Millisecond, "the non-reading client's stream must be pinned mid-write first")
+	select {
+	case <-stall.blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the non-reading client's stream must be pinned mid-write first")
+	}
 
 	// Off the test goroutine: a Publish that waits on the pinned subscriber
 	// must fail the await below, not hang the test.
@@ -1387,4 +1396,63 @@ func TestTick_runsANonPositiveIntervalEverySecondAndWarnsOnce(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(out.String(), "via: Tick interval <= 0, running every 1s instead"),
 			"the clamp warns once per Router, not per OnInit")
 	})
+}
+
+// reloadRegistrar calls one registration from OnReload, the way a load helper
+// shared with OnInit would.
+type reloadRegistrar struct {
+	hook string
+	room *topic.Topic[int]
+	n    int
+}
+
+func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
+	switch r.hook {
+	case "Tick":
+		ctx.Tick(time.Second, r.beat)
+	case "Listen":
+		ctx.Listen(r.room, r.recv)
+	case "OnConnect":
+		ctx.OnConnect(r.stop)
+	}
+	return nil
+}
+
+func (r *reloadRegistrar) beat(*via.Ctx)      {}
+func (r *reloadRegistrar) recv(*via.Ctx, int) {}
+func (r *reloadRegistrar) stop()              {}
+func (r *reloadRegistrar) Bump(*via.Ctx)      { r.n++ }
+
+func (r *reloadRegistrar) View() h.H {
+	return h.Div(h.P(h.Str(r.n)), h.Button(via.On("click", r.Bump)))
+}
+
+func fireReloadRegistrar(t *testing.T, hook string) string {
+	t.Helper()
+	var out lockedBuf
+	app := vt.Serve(t, via.Handler(reloadRegistrar{hook: hook, room: topic.New[int]()}, logTo(&out)))
+	_, page := app.Get("/")
+	require.NotContains(t, page, "data-init", "the page must be served plain")
+	code, body := app.Action(0).Fire()
+	require.Equal(t, http.StatusOK, code)
+	require.Contains(t, body, "<p>1</p>")
+	return out.String()
+}
+
+func TestTick_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Tick"), "via: Tick called from OnReload — ignored",
+		"a Tick from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestListen_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Listen"), "via: Listen called from OnReload — ignored",
+		"a Listen from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestOnConnect_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "OnConnect"), "via: OnConnect called from OnReload — ignored",
+		"an OnConnect from OnReload registers nothing, and must say so like a late Track does")
 }

@@ -158,3 +158,13 @@ func TestRawf_panicsOnAnArgumentCountMismatch(t *testing.T) {
 	assert.Panics(t, func() { expr.Rawf("%s %s", expr.Expr("$a")) })
 	assert.Panics(t, func() { expr.Rawf("%s", expr.Expr("$a"), expr.Expr("$b")) })
 }
+
+func TestRawf_countsOnlyRealVerbsInTheMismatchPanic(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t, "expr: Rawf has 1 %s verbs and 2 arguments", func() {
+		expr.Rawf("100%%s of %s", expr.Expr("$a"), expr.Expr("$b"))
+	})
+	assert.PanicsWithValue(t, "expr: Rawf has 2 %s verbs and 1 arguments", func() {
+		expr.Rawf("%%%s %s", expr.Expr("$a"))
+	})
+}

@@ -46,16 +46,6 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) (baselin
 	return baseline
 }
 
-// rootPush renders inst fresh and pushes the whole-page element-patch. The
-// fresh bind Ctx replaces lc's entry, so a live action needs no render of its
-// own — the previous push already built its actions/hydrators table.
-//
-// from is what makes a live root's plain children survive a push: Child re-copies
-// each child from the root's field every render, so a child whose fields OnInit
-// filled comes back zero-valued unless that OnInit runs again. Cost: a plain
-// child of a live root runs its OnInit once per pushed frame — keep it cheap,
-// or hold the data on the live root. A live child may not Child at all
-// (checkLiveNesting), so childPush needs none of this.
 // livePush renders one live unit under the same two-phase rule dispatchPlain
 // has always used (I1/I2) and the live path had no version of at all: the
 // authority render is the one the client's posted signals did not touch, and it
@@ -113,6 +103,17 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	return bind, body
 }
 
+// rootPush renders inst fresh and pushes the whole-page element-patch. The
+// fresh bind Ctx replaces lc's entry, so a live action needs no render of its
+// own — the previous push already built its actions/hydrators table.
+//
+// from is what makes a live root's plain children survive a push: Child re-copies
+// each child from the root's field every render, so a child whose fields OnInit
+// filled comes back zero-valued unless that OnInit runs again. Cost: a plain
+// child of a live root runs its OnInit once per pushed frame — keep it cheap,
+// or hold the data on the live root. A live child may not Child at all
+// (checkLiveNesting), so childPush needs none of this.
+//
 // Unchanged frames are dropped (the canonical statement; both push closures
 // and the tests refer here as "skipUnchanged").
 //
@@ -453,7 +454,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 		// OnInit may have minted a session where the connect cookie left
 		// lc.sess empty — bind it now so the connection isn't left as a
-		// bare-tab-id credential (H1).
+		// bare-tab-id credential.
 		lc.bindSession(u.session.sid())
 	}
 

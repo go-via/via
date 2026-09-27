@@ -78,7 +78,7 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string) (*http.Re
 }
 
 // The raw-httptest helpers below back the tests that assert on response headers
-// or SSE frame structure (csp, theme, live, and via's own Content-Type checks),
+// or SSE frame structure (csp, live, and via's own Content-Type checks),
 // which the vt harness deliberately does not expose; the behavior-only tests
 // (signals, compose, security, state) drive vt instead.
 func serve(t testing.TB, handler http.Handler) *httptest.Server {
@@ -408,10 +408,10 @@ func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(changePicker{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `data-on:change`, "OnChange must bind the change event")
+	assert.Contains(t, page, `data-on:change`, `On("change", ...) must bind the change event`)
 
 	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
-	assert.Contains(t, body, "picked", "OnChange's handler did not run")
+	assert.Contains(t, body, "picked", "the change handler did not run")
 }
 
 // collidePage mints "a_b" twice: once for the nested A.B (nested struct names

@@ -162,7 +162,7 @@ func (p *threadPage) OnInit(ctx *via.Ctx) error { p.id = ctx.Param[int]("id"); r
 func (p *threadPage) View() h.H                 { return h.Div(h.P(h.Str("thread "), h.Str(p.id))) }
 
 // echoPage proves a path param is readable inside an action (not just OnInit) on
-// a param'd mount — the action POST URL carries the {id} segment (/e/7/_via/a/r/0).
+// a param'd mount — the action POST URL carries the {id} segment (/e/7/_via/a/r/{act}).
 type echoPage struct{ echoed int }
 
 func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = ctx.Param[int]("id") }
@@ -638,7 +638,7 @@ func TestRouter_mountAtRootHasNoPrefix(t *testing.T) {
 	srv := serve(t, r)
 
 	_, body := do(t, srv, http.MethodGet, "/", "")
-	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+'`, body, "root mount must post to /_via/a/{act} with no prefix")
+	assert.Regexp(t, `@post\('/_via/a/r/[A-Za-z0-9_-]+'`, body, "root mount must post to /_via/a/{child}/{act} with no prefix")
 	resp, after := do(t, srv, http.MethodPost, actionURL(t, body, "r", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, after, `<h1>1</h1>`)
@@ -1266,7 +1266,7 @@ func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code, "a Tick in OnReload must be ignored, not fail the action")
 	assert.Contains(t, body, "<p>1</p>")
 	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
-		"OnReload is not a late OnInit — registering from it is expected and silently ignored")
+		"OnReload is not a late OnInit, so the after-OnInit warning must not fire")
 }
 
 // reloadedChild proves the reload targets the acted unit: a child's action

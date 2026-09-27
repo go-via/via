@@ -349,12 +349,13 @@ func typeCheck(fset *token.FileSet, imp types.Importer, path string, files []*as
 
 func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 	t.Parallel()
-	// reflect is admitted in exactly three files and only on type-setup paths
-	// that run once per composition type (Mount/Child) and are memoized: the
-	// action-id func name and receiver field path, the field-name signal table
-	// (including a SignalCS field's zero value), the child's parent field
-	// lookup, and the hook-shape check. Nothing here may run per render — that
-	// is the invariant this whitelist exists to keep honest.
+	// reflect is admitted in these four files. Its walks run once per
+	// composition type and are memoized: the action-id func name and receiver
+	// field path, the field-name signal table (including a SignalCS field's
+	// zero value), the child's parent field lookup, the hook-shape check, and
+	// Mount's Assets probe. A render may only read the memo keys — a bound
+	// handler's code pointer (actionID) and a Child's type — and never walk;
+	// that is the invariant this allowlist exists to keep honest.
 	allowed := map[string][]string{
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.New", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",

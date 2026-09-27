@@ -2,7 +2,6 @@ package h_test
 
 import (
 	"encoding/json"
-	"strconv"
 	"testing"
 
 	"github.com/go-via/via/h"
@@ -12,26 +11,12 @@ import (
 )
 
 // stubBinder is a minimal Binder for exercising the renderer without the via
-// package. It is a genuine in-package double for the I/O-free slot allocator.
-type stubBinder struct {
-	nextSig int
-	init    map[string]any
-}
+// package.
+type stubBinder struct{}
 
-func (b *stubBinder) SignalName() string {
-	s := "s" + strconv.Itoa(b.nextSig)
-	b.nextSig++
-	return s
-}
+func (*stubBinder) DeclareSignal(string, any) {}
 
-func (b *stubBinder) DeclareSignal(string, any) {}
-
-func (b *stubBinder) SignalInit(slot string) (any, bool) {
-	v, ok := b.init[slot]
-	return v, ok
-}
-
-func (b *stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
+func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func render(t *testing.T, node h.H) string {
 	t.Helper()
@@ -97,7 +82,7 @@ func TestNonVoidElements_alwaysEmitClosingTag(t *testing.T) {
 		{"h1", h.H1(), "<h1></h1>"},
 		{"button", h.Button(), "<button></button>"},
 		{"main", h.Main(), "<main></main>"},
-		{"custom element", h.El("section"), "<section></section>"},
+		{"custom element", h.El("my-widget"), "<my-widget></my-widget>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

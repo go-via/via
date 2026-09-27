@@ -270,14 +270,14 @@ func TestDispatch_liveActionAfterShapeChangeNeedsThePushedURL(t *testing.T) {
 
 		// The pushed element-patch carrying Extra's URL is read off the real
 		// SSE socket by a goroutine synctest.Wait() can't settle (blocking
-		// network I/O is not "durably blocked" — see I4); Await blocks for it
+		// network I/O is not "durably blocked"); Await blocks for it
 		// instead of racing the reader, which is what made this test flaky
 		// under -cpu 1.
 		conn.Await("extra")
 
 		status, _ = app.Action(1).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status,
-			"Extra's URL only exists in what this connection pushed — vt.Action.Live must read it from there")
+			"Extra's URL only exists in what this connection pushed — vt.Action.Over must read it from there")
 
 		// A plain GET is a fresh, unrelated instance (shown resets to
 		// false) — it can never carry this connection's action 1, proving
@@ -1019,7 +1019,7 @@ func TestConnect_postedSignalCannotWidenALiveActionsArgSet(t *testing.T) {
 
 // shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
 // both mint the same content-addressed action id (the id hashes the Go func
-// name plus the receiver's offset, and here both are identical). That is the
+// name plus the receiver's field path, "shiftBase" in both). That is the
 // only arrangement in which a child key denoting different types in the auth
 // and the bind render gets past the action lookup at all.
 type shiftBase struct{ hit bool }
@@ -2073,8 +2073,8 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.
 // same id an unprivileged connection would have to call, since an action id is
 // content-addressed on its handler. Scraped rather than pushed because a When
 // that a posted signal opens around a Child never reaches the client frame at
-// all (see TestDispatchLive_anChildOpenedByAPostedSignalIsNeverPushed), so the
-// realistic attacker here is one replaying a URL he saw while privileged.
+// all, so the realistic attacker here is one replaying a URL they saw while
+// privileged.
 func gatedURL(t *testing.T, app *vt.App, child string, n int) string {
 	t.Helper()
 	_, privileged := app.Get("/?admin=1")

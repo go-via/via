@@ -390,8 +390,8 @@ type funcMeta struct {
 var funcNames sync.Map // uintptr (code pointer) -> funcMeta
 
 // funcName resolves a code pointer's Go name once per process:
-// runtime.FuncForPC walks the module's pclntab (~190ns with the sha256 below),
-// which at a thousand bindings is a measurable slice of every render.
+// runtime.FuncForPC walks the module's pclntab, which at a thousand bindings
+// is a measurable slice of every render.
 func funcName(pc uintptr) funcMeta {
 	if v, ok := funcNames.Load(pc); ok {
 		return v.(funcMeta)

@@ -314,7 +314,7 @@ func (s *Signal[T]) Display() h.H {
 // Bind returns a two-way data-bind="<slot>" attribute for an input, sharing the
 // signal's name with Display regardless of source order. Bind is what puts the
 // slot under client control: its value is thereafter whatever the client last
-// set, so never gate an authorization decision on a Bind()ed signal (see OnArg).
+// set, so never gate an authorization decision on a Bind()ed signal.
 func (s *Signal[T]) Bind() h.Attr {
 	return hcore.DynAttr(func(r *hcore.Renderer) {
 		s.bind(r, true)

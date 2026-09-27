@@ -19,11 +19,11 @@ import (
 	"github.com/go-via/via/internal/hcore"
 )
 
-// initer is via's one lifecycle hook, on a page or any embedded child: OnInit
-// runs with a Ctx before the (ctx-free) View, so a unit can load request or
-// session data into its fields and register the timers and subscriptions that
-// make it live — ctx.Tick and ctx.Listen are valid only here. Detected by
-// interface assertion, never reflection.
+// initer is the lifecycle hook that runs first, on a page or any embedded
+// child: OnInit runs with a Ctx before the (ctx-free) View, so a unit can load
+// request or session data into its fields and register the timers and
+// subscriptions that make it live — ctx.Tick, ctx.Listen and ctx.OnConnect
+// are valid only here. Detected by interface assertion, never reflection.
 //
 // Duck-typed and unexported: opting in is having the method, and checkHooks is
 // the safety net for the two ways a unit misses one it meant to have. The
@@ -480,7 +480,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
 	// The CSP is derived from the root's declaration once, here, off the
-	// zero-data literal: one string per mount, none per request. renderPage
+	// zero-data literal: one string per mount, none per request. writeHTMLPage
 	// re-reads it and panics if the request-time value disagrees.
 	lit := root
 	assets := pageMetaOf(PT(&lit)).Assets
@@ -744,14 +744,15 @@ var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
 var childHookWarned sync.Map
 
 // checkHooks catches the ways a composition can miss a hook it meant to
-// implement. A method literally named OnInit/OnReload/Title/Description with
-// the wrong signature is unambiguous, so it panics here at Mount/Child rather
-// than serving forever with the hook dead. A near-miss name is a heuristic, so
-// it only warns — but only when the method carries the exact hook signature and
+// implement. A method literally named OnInit/OnReload/PageMeta with the wrong
+// signature is unambiguous, so it panics here at Mount/Child rather than
+// serving forever with the hook dead. A near-miss name is a heuristic, so it
+// only warns — but only when the method carries the exact hook signature and
 // the real interface is unsatisfied, which is a shape nothing but the mistake
-// produces.
+// produces. A leftover string-returning Title, the hook PageMeta replaced,
+// also only warns.
 //
-// root says whether t is being mounted. Only the root's Title is read, so a
+// root says whether t is being mounted. Only the root's PageMeta is read, so a
 // correctly-shaped one on an embedded child is reported: it is a warning and
 // not a panic because the very same type may legitimately be a mounted page
 // elsewhere in the app, and panicking would outlaw that.

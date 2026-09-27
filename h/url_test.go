@@ -86,10 +86,9 @@ func TestURLPolicy_coversEveryTypedAttribute(t *testing.T) {
 
 func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 	t.Parallel()
-	// xlink:href is deliberately excluded: RawAttr's name allowlist already
-	// rejects any colon outside a data-* prefix (see
-	// TestNonDataNamesStillRejectPluginPunctuation), so it is unreachable via
-	// RawAttr regardless of the URL gate — nothing to wire here.
+	// xlink:href is absent: RawAttr's name allowlist rejects any colon outside
+	// a data-* prefix (see TestRawAttr_rejectsPluginPunctuationOutsideDataAttrs),
+	// so it never reaches the URL gate.
 	for _, name := range []string{
 		"formaction", "FormAction", "action", "href", "src",
 		"poster", "data", "cite", "background", "ping", "manifest",
@@ -105,6 +104,31 @@ func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 		"a legitimate relative URL on a gated name must render untouched")
 	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`,
 		"a legitimate relative URL on a gated name must render untouched")
+}
+
+func TestRawAttr_gatesEveryURLInAListValuedAttribute(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, val string }{
+		{"srcset", "/a.png 1x, javascript:alert(1) 2x"},
+		{"srcset", "/a.png 1x,javascript:alert(1)"},
+		{"srcset", "/a.png 480w, //evil.example/b.png 800w"},
+		{"SRCSET", "/a.png, data:image/svg+xml,x 2x"},
+		{"ping", "/track javascript:alert(1)"},
+		{"ping", "/track\t//evil.example/beacon"},
+		{"Ping", "https://ok.example/p data:text/plain,x"},
+	} {
+		got := render(t, h.El("img", h.RawAttr(c.name, c.val)))
+		assert.Containsf(t, got, `="#"`, "h.RawAttr(%q, %q) must neutralize: every URL in the list is gated, got %s",
+			c.name, c.val, got)
+	}
+	for _, c := range []struct{ name, val string }{
+		{"srcset", "/a.png 1x, /b.png 2x"},
+		{"srcset", "https://cdn.example/a.png?w=1,2 480w, /b.png 800w"},
+		{"ping", "/track https://ok.example/p"},
+	} {
+		got := render(t, h.El("img", h.RawAttr(c.name, c.val)))
+		assert.Containsf(t, got, `="`+c.val+`"`, "h.RawAttr(%q, %q) must render untouched, got %s", c.name, c.val, got)
+	}
 }
 
 func TestURLPolicy_mailtoAndTelPassInHrefOnly(t *testing.T) {

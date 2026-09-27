@@ -53,9 +53,9 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 		"a Tick-minted session must warn instead of silently orphaning")
 }
 
-// tickSessionWriterOnConnectRead is tickSessionWriter with a read in OnInit,
-// the README's recommended pattern: the handle cached there must not keep the
-// connect writer live past the flush.
+// tickSessionWriterOnConnectRead is tickSessionWriter with a read in OnInit:
+// the handle cached there must not keep the connect writer live past the
+// flush.
 type tickSessionWriterOnConnectRead struct{ n via.State[int] }
 
 func (t *tickSessionWriterOnConnectRead) OnInit(ctx *via.Ctx) error {

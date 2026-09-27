@@ -254,8 +254,9 @@ func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 // Over routes this action over c's stream: its viatab signal is set to c's
 // tab id, and — unless Raw overrides it — Fire reads the action's URL off c's own
 // pushed markup (see Conn.ActionURL) instead of a separate plain GET's
-// render, which can carry a different shape digest than what this connection
-// actually has on screen.
+// render. That GET renders a fresh tab, so once c's actions have changed what
+// is on screen (a row added, a branch toggled), its n-th action can be a
+// different handler.
 func (a *Action) Over(c *Conn) *Action {
 	a.conn = c
 	return a.Tab(c.tabID)
@@ -291,8 +292,10 @@ func (a *Action) signalBody() string {
 // Fire issues the POST and returns the status code and the response body. On a
 // plain page the body is the Datastar patch; on a live one the patch goes to
 // the open Conn instead and the body is empty, so assert on the Conn there. A
-// refused dispatch answers 410 (nothing binds that action id in the current
-// render) or 403 (origin or tab-id check), with a bodyless message.
+// refused dispatch answers with its reason as a one-line text body: 410 when
+// the target is gone (no such action id in the current render, no such child,
+// the stream closed), 403 for the origin or tab-id check, and 400, 413 or 503
+// for a malformed body, an oversized one, or a busy or closing server.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
 	path := a.raw
@@ -537,10 +540,11 @@ func (c *Conn) ActionURL(child string, n int) string {
 	return ""
 }
 
-// Peek returns the next buffered frame without blocking, so a test can assert
-// something has not happened yet without letting time advance further to find
-// out — under synctest, a blocking Await would wait for whatever eventually
-// arrives, defeating a "not yet" claim at a specific instant.
+// Peek takes the next buffered frame without blocking. Like Await it consumes
+// the frame: a later Await never sees a line Peek returned. It lets a test
+// assert something has not happened yet without letting time advance further
+// to find out — under synctest, a blocking Await would wait for whatever
+// eventually arrives, defeating a "not yet" claim at a specific instant.
 func (c *Conn) Peek() (string, bool) {
 	select {
 	case line, ok := <-c.frames:

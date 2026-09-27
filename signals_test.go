@@ -68,7 +68,7 @@ func (c *nameComp) View() h.H {
 func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	t.Parallel()
 	// Echo the breakout payload back as the signal's own slot; the request shape
-	// (one slot, at field offset 0) matches what the GET page declares, so
+	// (one slot, "name") matches what the GET page declares, so
 	// dispatch proceeds.
 	payload := `{"name":"' data-on-load='alert(document.cookie)"}`
 	_, body := vt.Serve(t, via.Handler(nameComp{})).Action(0).Body(payload).Fire()

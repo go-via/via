@@ -36,10 +36,11 @@ type Attr interface {
 	isAttr()
 }
 
-// Binder bridges h into the via package without an import cycle. Dynamic slots
-// (signals, actions) claim positional ids and read hydrated values through it
-// during a render pass. The via package supplies the implementation; h only
-// depends on this interface.
+// Binder bridges h into the via package without an import cycle. A rendered
+// signal declares its slot and registers its hydrator through it. via names
+// the slots itself (a signal's field path, an action's handler-name hash), so
+// the Binder allocates nothing. The via package supplies the implementation;
+// h only depends on this interface.
 type Binder interface {
 	// DeclareSignal records that slot participates in this render with the given
 	// initial value, for the page-level data-signals declaration. Idempotent
@@ -52,7 +53,7 @@ type Binder interface {
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
-// (defined in via) can claim slots and read hydrated values.
+// (defined in via) can reach the render pass's Ctx.
 type Renderer struct {
 	buf *bytes.Buffer
 	ctx Binder
@@ -63,8 +64,8 @@ func NewRenderer(b Binder) *Renderer {
 	return &Renderer{buf: &bytes.Buffer{}, ctx: b}
 }
 
-// Binder returns the Binder that names this render pass's signal and action
-// slots; nil outside a via render.
+// Binder returns the Binder this render pass was built with; nil outside a via
+// render.
 func (r *Renderer) Binder() Binder { return r.ctx }
 
 // Render appends node's markup to the buffer. A nil node renders as nothing.
@@ -87,8 +88,7 @@ func (r *Renderer) WriteEscaped(s string) { writeEscaped(r.buf, s) }
 // writeEscaped escapes the HTML-significant characters. It mirrors the
 // stdlib html template escaping for text and quoted-attribute contexts: <, >,
 // &, ", ' are all neutralised so neither body text nor a double-quoted
-// attribute value can break out of its context. NUL is neutralised too, so
-// hostile input can't forge via's internal digest-placeholder token.
+// attribute value can break out of its context.
 func writeEscaped(buf *bytes.Buffer, s string) {
 	for i := range len(s) {
 		switch s[i] {
@@ -157,9 +157,9 @@ func (e element) render(r *Renderer) {
 }
 
 // dynNode wraps a render function into a sealed H. It is the bridge the via
-// package uses to define dynamic body nodes (signals) that claim positional
-// ids from the Binder during the render pass, without breaking the seal or
-// exposing render itself. Users never construct one directly.
+// package uses to define dynamic body nodes (signals, children) that read the
+// Binder during the render pass, without breaking the seal or exposing render
+// itself. Users never construct one directly.
 type dynNode struct{ fn func(*Renderer) }
 
 func (d dynNode) render(r *Renderer) { d.fn(r) }
@@ -175,7 +175,7 @@ func (d dynAttr) render(r *Renderer) { d.fn(r) }
 func (d dynAttr) isAttr()            {}
 
 // DynAttr wraps fn as a dynamic attribute. via uses this for event bindings
-// (On) that must claim an action id from the Binder at render time.
+// (On) and Signal.Bind, which register with the render pass's Ctx.
 func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 
 // El builds a generic element with the given tag and children. tag must match

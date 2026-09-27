@@ -8,8 +8,8 @@ import "github.com/go-via/via/internal/hcore"
 // scripts) or footguns (template/slot collide with composition, data with
 // Datastar). Exotic or future tags go through El("tag", …).
 //
-// Mechanically uniform on purpose — every constructor is element{tag, kids} —
-// so the whole file reads as a table, not code.
+// Mechanically uniform on purpose — every constructor is hcore.El(tag, kids…)
+// — so the whole file reads as a table, not code.
 
 func A(kids ...H) H          { return hcore.El("a", kids...) }
 func Abbr(kids ...H) H       { return hcore.El("abbr", kids...) }

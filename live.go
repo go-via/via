@@ -30,7 +30,9 @@ type listener struct{ poll func() func() }
 // there, so a later call registers nothing and logs loudly.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
 	if c.reinit {
-		return // the post-action re-run; this unit's ticks were snapshotted at GET/connect (I5)
+		// Liveness is the GET/connect verdict, so a reload may not raise it.
+		c.logger().Warn("via: Tick called from OnReload — ignored; Tick is valid only inside OnInit")
+		return
 	}
 	if !c.inInit {
 		c.logger().Warn("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
@@ -67,7 +69,8 @@ func (c *Ctx) warnTickClamp() {
 // mirrors — a publish before the subscribe else reaches no handler.
 func (c *Ctx) OnConnect(fn func()) {
 	if c.reinit {
-		return // see Tick
+		c.logger().Warn("via: OnConnect called from OnReload — ignored; OnConnect is valid only inside OnInit")
+		return
 	}
 	if !c.inInit {
 		c.logger().Warn("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
@@ -123,7 +126,8 @@ func (c *Ctx) OnDispose(fn func()) {
 // session from its first frame.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if c.reinit {
-		return // see Tick
+		c.logger().Warn("via: Listen called from OnReload — ignored; Listen is valid only inside OnInit")
+		return
 	}
 	if !c.inInit {
 		c.logger().Warn("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")

@@ -328,8 +328,8 @@ func (c *tabStream) warnPinned(once *atomic.Bool) {
 	}
 }
 
-// registry maps a per-connection tab id to its live child. A local of each
-// Handler call, never global.
+// registry maps a per-connection tab id to its live child. One per Router,
+// never global.
 //
 // A slot exists while a stream holds its id, an action is parked on it, or
 // the server ended its stream less than a pinned deadline ago, so its size is

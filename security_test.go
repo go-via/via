@@ -223,7 +223,7 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
-	big := `{"f0":"` + strings.Repeat("a", 2<<20) + `"}`
+	big := `{"pad":"` + strings.Repeat("a", 2<<20) + `"}`
 	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body(big).Fire()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }

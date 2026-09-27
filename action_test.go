@@ -112,7 +112,7 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
-	// value (2) while keeping alpha's slot and shape digest.
+	// value (2) while keeping alpha's action id.
 	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=2", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}") // slot 0 (alpha), but arg=2 (bravo)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -277,8 +277,8 @@ func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
 // idTwins holds two instances of one type as plain fields (no Child), so both
 // bind into the same action table. runtime.FuncForPC drops the receiver, so
-// without the offset in the id both buttons would render the same action URL
-// and A's click would run B's handler.
+// without the field path in the id both buttons would render the same action
+// URL and A's click would run B's handler.
 //
 // It renders through a plain method: a field with its own View is a child
 // composition, and only via.Child may render one.
@@ -625,9 +625,9 @@ func TestActionID_arrayElementsDispatchToTheirOwnElement(t *testing.T) {
 }
 
 // gridBench binds one handler a thousand times, which is the shape actionID's
-// cost shows up in: the id is a pure function of (code pointer, receiver
-// offset), so resolving the Go name and hashing it per binding per render was
-// pure waste.
+// cost shows up in: the id is a pure function of (unit type, code pointer,
+// receiver offset), so resolving the Go name and hashing it per binding per
+// render would be wasted work.
 type gridBench struct{ rows []int }
 
 func (g *gridBench) Hit(ctx *via.Ctx) {}

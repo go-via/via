@@ -330,7 +330,8 @@ func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 
 // liveLoginer is a live root that starts every connection anonymous — Login
 // and Rotate are both live actions, so the only way its session gets
-// established is on the connection's own goroutine, after connect (see H1).
+// established is on the connection's own goroutine, after connect (see
+// tabStream.bindSession).
 type liveLoginer struct {
 	n via.State[int]
 }
@@ -377,8 +378,8 @@ func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispat
 		"the tab id must stop being a bearer credential the instant it logs in")
 }
 
-// onConnectLoginer establishes its session in OnInit — the pattern the
-// README recommends — rather than through a later action.
+// onConnectLoginer establishes its session in OnInit rather than through a
+// later action.
 type onConnectLoginer struct{ n via.State[int] }
 
 func (o *onConnectLoginer) OnInit(ctx *via.Ctx) error {

@@ -238,9 +238,9 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	parent.children = append(parent.children, child)
 
-	// Only a request-scoped render inits: a live push re-renders the whole tree
-	// every tick, and re-running a child's OnInit there would reload its data —
-	// and re-register its Tick/Listen — once per beat.
+	// Only a request-scoped render inits. A live root's push inherits the
+	// connect's scope, so a plain child's OnInit runs on every pushed frame;
+	// rootPush says why.
 	if parent.doInit {
 		child.doInit = true
 		if !acted && prior == nil {

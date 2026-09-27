@@ -182,16 +182,16 @@ func TestSession_storedValueIsReadableOnALaterRequest(t *testing.T) {
 		"a value stored in the session was not readable on a later request")
 }
 
-func TestSession_clearRemovesAStoredValue(t *testing.T) {
+func TestSession_deleteRemovesAStoredValue(t *testing.T) {
 	t.Parallel()
 	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn
-	fireAction(t, c, base, 2) // SignOut → Clear
+	fireAction(t, c, base, 2) // SignOut → Delete
 
 	_, body := fireAction(t, c, base, 1) // Greet
-	assert.NotContains(t, body, "hi alice", "Clear did not remove the stored session value")
+	assert.NotContains(t, body, "hi alice", "Delete did not remove the stored session value")
 }
 
 func TestSession_isolatesValuesPerSession(t *testing.T) {
