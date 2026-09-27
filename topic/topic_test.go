@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-via/via/topic"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTopic_publishReachesEverySubscriber(t *testing.T) {
@@ -37,7 +38,7 @@ func TestTopic_slowSubscriberDoesNotBlockThePublisher(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("publisher blocked on a slow subscriber")
+		require.FailNow(t, "publisher blocked on a slow subscriber")
 	}
 }
 
@@ -83,13 +84,9 @@ func TestTopic_burstIsLosslessForEverySubscriber(t *testing.T) {
 	}
 	for i, s := range ss {
 		got, _ := s.Drain()
-		if !assert.Len(t, got, msgs, "subscriber %d lost values", i) {
-			t.FailNow()
-		}
+		require.Len(t, got, msgs, "subscriber %d lost values", i)
 		for j, v := range got {
-			if v != j {
-				t.Fatalf("subscriber %d out of order at %d: got %d", i, j, v)
-			}
+			require.Equal(t, j, v, "subscriber %d out of order at %d", i, j)
 		}
 	}
 }
