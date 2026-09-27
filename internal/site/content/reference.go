@@ -154,7 +154,7 @@ var refPackages = []refPackage{
 		return h.P(h.Str("The router, the pages mounted on it, the state handles a page renders, "),
 			API("via.Ctx"), h.Str(", sessions and the error surface. Router options are policy passed to "),
 			API("via.NewRouter"), h.Str(" or "), API("via.Handler"),
-			h.Str(": a page cannot widen its own, which is why none of them is a method on a composition. "+
+			h.Str(": a page cannot change them, which is why none of them is a method on a composition. "+
 				"Match a sentinel error with errors.Is and switch on "), APIText("via.PageError", "PageError.Reason"),
 			h.Str(" with a default: a status via does not emit today maps to ReasonInternal or ReasonBadRequest."))
 	}, extra: func(d *shell.Doc) h.H {

@@ -27,13 +27,18 @@ Measured against the same rule and deliberately left imperative:
 - `ctx.Tick` / `ctx.Listen` — per-unit registrations with no shared slot to
   clobber, and they are side effects, not queries (fails 1 and 2).
 - `ctx.Redirect` — conditional, and not read once per render (fails 1 and 3).
-- The `With*` options — router-wide policy. A page must not be able to widen
-  its own CSP, cookie policy or body caps, so these stay outside the
-  composition entirely.
+- The `With*` options — router-wide policy: cookie policy, body caps and the
+  CSP floor every mount shares. A page must not be able to change them, so
+  they stay outside the composition entirely. A page widens its own CSP only
+  through `Meta.Assets`.
 
 There is deliberately no `Description` or `Assets` sibling: `PageMeta` is the
 one document-query hook and every new head slot is a field on `via.Meta`, not a
-fifth method. `Meta.Assets` is the exception to rule 3 — it is read at `Mount`
-as well, because it decides the mount's CSP, and via panics if the two readings
-disagree. Anything CSP-relevant must follow that shape: declared once, off the
-mounted literal, never derived from a request.
+fifth method. `Meta.Assets` is the exception to rule 3: it decides the mount's
+CSP, so via reads it three times — at `Mount` off the mounted literal, at
+`Mount` off a probe copy with its zero fields filled in, and on every document
+render — and panics if any two disagree. If `PageMeta` panics on the probe's
+synthetic data, via logs a WARN and skips the probe, leaving the render-time
+check to catch drift on the first request. Anything CSP-relevant must follow
+that shape: declared once, off the mounted literal, never derived from a
+request.
