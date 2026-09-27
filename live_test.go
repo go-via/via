@@ -821,66 +821,72 @@ func TestListen_unitPublishingToItsOwnTopicDoesNotDeadlock(t *testing.T) {
 		"a unit publishing to the topic it listens to wedged its own stream (%d/%d handler calls)", got.Load(), 2*seeds)
 }
 
-// stallUnit pads the first connection's frames well past what the socket
-// buffers hold, so a client that never reads pins its stream mid-write on the
-// first frame instead of being absorbed by the kernel.
-type stallUnit struct {
-	bus     *topic.Topic[int]
-	claimed *atomic.Bool
-	pad     bool
-	sum     via.State[int]
+type sumUnit struct {
+	bus *topic.Topic[int]
+	sum via.State[int]
 }
 
-var stallPad = strings.Repeat("x", 1<<20)
+func (u *sumUnit) OnInit(ctx *via.Ctx) error { ctx.Listen(u.bus, u.recv); return nil }
 
-func (u *stallUnit) OnInit(ctx *via.Ctx) error {
-	if u.claimed.CompareAndSwap(false, true) {
-		u.pad = true
-	}
-	ctx.Listen(u.bus, u.recv)
-	return nil
+func (u *sumUnit) recv(ctx *via.Ctx, v int) { u.sum.Set(u.sum.Get() + v) }
+
+func (u *sumUnit) View() h.H { return h.Div(h.Str("sum="), u.sum.Display()) }
+
+// stallFirst is a client that never reads, without the socket buffers that
+// would absorb frames first: once armed, the first accepted conn's writes block
+// until release. Padding frames past the kernel buffers instead races the pad's
+// render against the pinned deadline, which a loaded -race runner loses.
+type stallFirst struct {
+	net.Listener
+	claimed atomic.Bool
+	armed   atomic.Bool
+	once    sync.Once
+	blocked chan struct{}
+	release chan struct{}
 }
 
-func (u *stallUnit) recv(ctx *via.Ctx, v int) { u.sum.Set(u.sum.Get() + v) }
-
-func (u *stallUnit) View() h.H {
-	pad := ""
-	if u.pad {
-		pad = stallPad
-	}
-	return h.Div(h.Str("sum="), u.sum.Display(), h.Str(pad))
-}
-
-// Loopback autotunes a send buffer to megabytes; capping it keeps the pad
-// far larger than anything the kernel will hold for a client.
-type smallSendBuffer struct{ net.Listener }
-
-func (l smallSendBuffer) Accept() (net.Conn, error) {
+func (l *stallFirst) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
-	if tc, ok := c.(*net.TCPConn); ok {
-		_ = tc.SetWriteBuffer(4 << 10)
+	if err == nil && l.claimed.CompareAndSwap(false, true) {
+		return stalledConn{c, l}, nil
 	}
 	return c, err
+}
+
+type stalledConn struct {
+	net.Conn
+	l *stallFirst
+}
+
+func (c stalledConn) Write(p []byte) (int, error) {
+	if !c.l.armed.Load() {
+		return c.Conn.Write(p)
+	}
+	c.l.once.Do(func() { close(c.l.blocked) })
+	<-c.l.release
+	return 0, net.ErrClosed
 }
 
 func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 	t.Parallel()
 	bus := topic.New[int]()
-	var out lockedBuf
-	srv := httptest.NewUnstartedServer(via.Handler(stallUnit{bus: bus, claimed: &atomic.Bool{}},
-		via.WithPinnedDeadline(300*time.Millisecond), logTo(&out)))
-	srv.Listener = smallSendBuffer{srv.Listener}
+	srv := httptest.NewUnstartedServer(via.Handler(sumUnit{bus: bus}))
+	stall := &stallFirst{Listener: srv.Listener, blocked: make(chan struct{}), release: make(chan struct{})}
+	srv.Listener = stall
 	srv.Start()
 	t.Cleanup(srv.Close)
+	// Runs before srv.Close, which would otherwise wait on the blocked handler.
+	t.Cleanup(func() { close(stall.release) })
 
-	ctx, stall := context.WithCancel(context.Background())
-	defer stall()
+	ctx, hangUp := context.WithCancel(context.Background())
+	defer hangUp()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	stuck, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer stuck.Body.Close()
+	stall.armed.Store(true)
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
@@ -888,8 +894,11 @@ func TestListen_aClientThatNeverReadsDoesNotBlockOthers(t *testing.T) {
 
 	bus.Publish(1)
 	awaitLine(t, lines, "sum=1")
-	require.Eventually(t, func() bool { return strings.Contains(out.String(), "blocked writing a frame") },
-		2*time.Second, 5*time.Millisecond, "the non-reading client's stream must be pinned mid-write first")
+	select {
+	case <-stall.blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the non-reading client's stream must be pinned mid-write first")
+	}
 
 	// Off the test goroutine: a Publish that waits on the pinned subscriber
 	// must fail the await below, not hang the test.
