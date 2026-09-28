@@ -18,6 +18,7 @@ package vtbrowser
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,11 @@ const defaultTimeout = 20 * time.Second
 
 const pollInterval = 50 * time.Millisecond
 
+// launchMargin is how long before the test's deadline a pending launch gives
+// up: the test binary panics at the deadline, and Open must fail first to
+// report the browser's output.
+const launchMargin = 5 * time.Second
+
 var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "google-chrome-stable", "headless-shell"}
 
 // Session is a live headless-browser tab bound to an httptest server running the
@@ -56,7 +62,10 @@ type Session struct {
 
 // Open starts an httptest server for handler, launches headless Chromium,
 // navigates to the app root, and returns the bound Session. The test is skipped
-// when no Chrome/Chromium binary is found (set VIA_CHROME to point at one).
+// when no Chrome/Chromium binary is found (set VIA_CHROME to point at one). The
+// launch waits for the browser until shortly before the test's deadline
+// (go test -timeout), not a fixed limit, and a failed launch reports the
+// browser's output.
 func Open(t testing.TB, handler http.Handler) *Session {
 	t.Helper()
 	exe := findBrowser()
@@ -71,9 +80,12 @@ func Open(t testing.TB, handler http.Handler) *Session {
 	// no-sandbox: runners commonly run as root, where Chrome's sandbox refuses
 	// to start. disable-dev-shm-usage: a small container /dev/shm crashes the
 	// renderer.
+	output := &launchOutput{}
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.ExecPath(exe),
+			chromedp.WSURLReadTimeout(launchBound(t)),
+			chromedp.CombinedOutput(output),
 			chromedp.Flag("headless", true),
 			chromedp.NoSandbox,
 			chromedp.DisableGPU,
@@ -86,7 +98,13 @@ func Open(t testing.TB, handler http.Handler) *Session {
 	// The browser binds to the context this first Run receives, so it must be
 	// the long-lived browser context — a per-op timeout context would kill the
 	// browser when it expired.
-	if err := chromedp.Run(browse); err != nil {
+	err := chromedp.Run(browse)
+	out := output.stop()
+	if err != nil {
+		// A browser that exited is already quoted in chromedp's error.
+		if out != "" && !strings.Contains(err.Error(), strings.TrimSpace(out)) {
+			t.Fatalf("vtbrowser: start browser %s: %v\n%s", exe, err, out)
+		}
 		t.Fatalf("vtbrowser: start browser %s: %v", exe, err)
 	}
 
@@ -436,6 +454,42 @@ func formatRemoteObject(obj *runtime.RemoteObject) string {
 	default:
 		return string(obj.Type)
 	}
+}
+
+func launchBound(t testing.TB) time.Duration {
+	d, ok := t.(interface{ Deadline() (time.Time, bool) })
+	if !ok {
+		return math.MaxInt64
+	}
+	deadline, ok := d.Deadline()
+	if !ok {
+		return math.MaxInt64
+	}
+	return max(time.Until(deadline)-launchMargin, time.Nanosecond)
+}
+
+// launchOutput records the browser's output until stop. chromedp writes to it
+// from its own goroutine for the browser's whole life.
+type launchOutput struct {
+	mu      sync.Mutex
+	buf     strings.Builder
+	stopped bool
+}
+
+func (o *launchOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.stopped {
+		o.buf.Write(p)
+	}
+	return len(p), nil
+}
+
+func (o *launchOutput) stop() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.stopped = true
+	return o.buf.String()
 }
 
 func findBrowser() string {
