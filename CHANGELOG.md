@@ -95,9 +95,10 @@
   `Initialized` and `OnInitialized` no longer warn. `OnRelay`, `OnInput`
   and `OnEdit` are two slips away and stay quiet.
 
-- A v0.7 `OnConnect(ctx *via.Ctx) error` warns at `Mount` even next to an
-  `OnInit`, and the warning names its replacements: `ctx.OnConnect(fn)` for
-  work on stream open, `ctx.Tick` or `ctx.Listen` for a live feed.
+- A v0.7 `OnConnect(ctx *via.Ctx) error` warns even next to an `OnInit` (at
+  `Mount` on the page, on a child's first render), and the warning names its
+  replacements: `ctx.OnConnect(fn)` for work on stream open, `ctx.Tick` or
+  `ctx.Listen` for a live feed.
 
 - An action POST without `Datastar-Request: true` that is not
   `multipart/form-data` answers 400 with the reason instead of
@@ -264,11 +265,14 @@
 - A session whose first save the store refuses sets no cookie. The cookie
   named an id the store never took.
 
+- A child's near-miss hook warning goes to the `WithLogger` logger, once per
+  Router. It went to `slog.Default()`, once per process, so a second Router
+  or test was never told.
+
 - `vtbrowser`'s polling helpers (`WaitFor`, `WaitTextContains`,
   `WaitValue`, `WaitEvalTrue` and the waits built on them) treat a failed
-  evaluation as "not yet" and keep polling. A poll that landed while the
-  page reloaded failed the test at once. A timeout now also prints the last
-  error.
+  evaluation as "not yet". A poll that landed while the page reloaded
+  failed the test at once. A timeout now also prints the last error.
 
 ### Documented (behaviour unchanged)
 
@@ -536,8 +540,8 @@ the v2 core. **Requires Go 1.27.**
 
 - **`PageMeta` — a page describes itself, and owns its own CSP.** A root
   composition declares its document with one `PageMeta() via.Meta` method,
-  duck-typed like `OnInit` and read after it (and after `OnReload`), so
-  data-dependent metadata works. `Meta` carries `Title`, `Description`,
+  duck-typed like `OnInit` and read after it, so data-dependent metadata
+  works. `Meta` carries `Title`, `Description`,
   `Canonical`, `Robots`, `OG`, `Twitter` — all inert, HTML-escaped, free to
   vary with the request — plus `Assets`, which is not. Only the mounted
   root's counts: an embedded child's is ignored and `Child` logs one line
@@ -837,11 +841,10 @@ as a re-read of the README rather than a diff.
   a deeper path, replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
   The offsets stay as the internal key, so hydration is unchanged and
   reflection runs once per composition type at `Mount`/`Child`, never per
-  render. A plain nested struct joins with one underscore, a child boundary
-  with two, so a parent that binds `p.C.S` itself (`c_s`) and also embeds
-  `p.C` (`c__s`) keeps the two copies apart. Two fields of the same type in
-  one parent are ambiguous — `Child`'s argument order need not match
-  declaration order — so those fall back to the positional key (`i0__s`).
+  render. A plain nested struct joins with one underscore (`c_s`), a child
+  boundary with two (`c__s`). Two fields of the same type in one parent are
+  ambiguous — `Child`'s argument order need not match declaration order —
+  so those fall back to the positional key (`i0__s`).
 - **`Signal[T].Ref()`** returns the signal's Datastar expression (`"$count"`)
   for hand-written attributes the typed API does not cover:
   `h.Data("show", p.Open.Ref())`. Field-held signals are named before the View

@@ -153,9 +153,11 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 		// A throwaway dedupe map: the boot render must not use up the warning
 		// the first real render of this child owes the app.
 		checkHooks(bootPolicy.log, inst.typ, &sync.Map{}, false)
+	} else if parent.policy != nil {
+		checkHooks(parent.logger(), inst.typ, parent.policy.hookWarned, false)
 	} else {
-		// slog.Default(): no Router in scope.
-		checkHooks(slog.Default(), inst.typ, &childHookWarned, false)
+		// A bare render has no Router, so nothing outlives it to dedupe against.
+		checkHooks(slog.Default(), inst.typ, &sync.Map{}, false)
 	}
 
 	key := parent.keyOf(len(parent.children))
@@ -212,11 +214,9 @@ func childViewer(r *hcore.Renderer, inst instance, site childSite) {
 	}
 	child.isChild = true
 	child.childKey = key
-	// The double underscore marks the scope boundary: a plain nested struct
-	// joins with a single one, so a parent that binds p.C.S in its own View
-	// (slot "c_s") and also embeds p.C (slot "c__s") keeps the two apart —
-	// different copies that must never share a slot. Stamped onto the instance
-	// because a live child's push re-renders with no parent in scope.
+	// The double underscore marks the scope boundary; a plain nested struct
+	// joins with a single one. Stamped onto the instance because a live
+	// child's push re-renders with no parent in scope.
 	inst.ident = ident
 	if name != "" {
 		inst.slotPrefix = parent.scopePrefix() + name + "__"

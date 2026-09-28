@@ -286,8 +286,8 @@ type Router struct {
 	// second test — still gets told.
 	noChange    sync.Map
 	unknownActs idDedupe // see mount.unknownAction
-	// hookWarned dedupes the near-miss hook warning, per Router for the same
-	// reason noChange is.
+	// hookWarned dedupes the near-miss hook warning, root's and children's,
+	// per Router for the same reason noChange is.
 	hookWarned sync.Map
 	// errCSP is the router-wide floor an error page renders under; see
 	// WithErrorPage for why it is never a mount's own, wider policy.
@@ -310,7 +310,7 @@ func (r *Router) init(opts []Option) {
 	r.once.Do(func() {
 		r.cfg = newConfig(opts)
 		r.sessions = newSessionManager(r.cfg)
-		r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log}
+		r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
 		r.mux = http.NewServeMux()
 		r.reg = newRegistry(r.cfg.maxSSEConn)
 		r.liveCount = &atomic.Int64{}
@@ -736,12 +736,6 @@ func implementsAs[T any](pt reflect.Type) bool {
 }
 
 var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
-
-// childHookWarned dedupes Child's near-miss warning, which would otherwise
-// repeat on every render of the child. Mount passes the Router's own map
-// instead, so a second app in the same binary — or a second test — is still
-// told (see warnNoChange).
-var childHookWarned sync.Map
 
 // checkHooks catches the ways a composition can miss a hook it meant to
 // implement. A method literally named OnInit/OnReload/PageMeta with the wrong

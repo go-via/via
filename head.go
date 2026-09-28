@@ -114,7 +114,7 @@ type Preload struct {
 // pageMetaer lets the root page composition describe its own document: title,
 // description, social cards, and the assets the page needs. It is a method
 // rather than a struct field because real metadata is data-dependent, and it
-// runs after OnInit (and OnReload), so the data is already loaded.
+// is read after OnInit, so the data is already loaded.
 //
 // Assets is the exception and is checked as one: it is read at Mount from the
 // literal you mounted, before any request, because the CSP is built there — one
@@ -129,7 +129,7 @@ type Preload struct {
 type pageMetaer interface{ PageMeta() Meta }
 
 // pageMetaOf reads the root's declaration. At write time that is after OnInit
-// and OnReload have loaded the data metadata is usually derived from; at Mount
+// has loaded the data metadata is usually derived from; at Mount
 // it is the literal you mounted, which is what makes the Assets constancy check
 // meaningful.
 func pageMetaOf(root any) Meta {

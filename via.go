@@ -49,7 +49,7 @@
 // ErrNotFound is 404, ErrForbidden 403, anything else 500.
 //
 // PageMeta names the document — title, description, social cards, assets —
-// and is read after OnInit and OnReload, so the data is already loaded.
+// and is read after OnInit, so the data is already loaded.
 // Only the mounted root's is read, and it takes effect on a render that
 // writes a document (the GET, and the full-page answer to a native form
 // submit), never on an SSE push. See [Meta].

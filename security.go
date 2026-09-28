@@ -60,10 +60,12 @@ func originAllowed(req *http.Request, cfg *config) bool {
 }
 
 // routerPolicy is the router-wide configuration a Ctx reads outside the
-// session: Redirect's trusted origins and the logger.
+// session: Redirect's trusted origins, the logger, and the Router's near-miss
+// hook dedupe (see Router.hookWarned).
 type routerPolicy struct {
 	trustedOrigins map[string]bool
 	log            *slog.Logger
+	hookWarned     *sync.Map
 	tickWarn       sync.Once
 }
 

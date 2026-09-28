@@ -132,6 +132,32 @@ type pair struct{ X, Y namer }
 
 func (p *pair) View() h.H { return h.Div(via.Child(p.X), via.Child(p.Y)) }
 
+type misnamedReloadKid struct{ N via.Signal[int] }
+
+func (k *misnamedReloadKid) Reload(*via.Ctx) error { return nil }
+func (k *misnamedReloadKid) View() h.H             { return h.Div(k.N.Display()) }
+
+type misnamedReloadKidHost struct{ Kid misnamedReloadKid }
+
+func (p *misnamedReloadKidHost) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_warnsOnAMisnamedHookOncePerRouterThroughItsLogger(t *testing.T) {
+	t.Parallel()
+	const warning = "misnamedReloadKid.Reload looks like a mis-named OnReload"
+	for range 2 {
+		var buf lockedBuf
+		r := via.NewRouter(logTo(&buf))
+		via.Mount(r, "/", misnamedReloadKidHost{})
+		assert.NotContains(t, buf.String(), warning, "the boot render at Mount must not log")
+		srv := serve(t, r)
+
+		getPage(t, srv.Client(), srv.URL)
+		assert.Equal(t, 1, strings.Count(buf.String(), warning))
+		getPage(t, srv.Client(), srv.URL)
+		assert.Equal(t, 1, strings.Count(buf.String(), warning))
+	}
+}
+
 func TestChild_childSignalsAreScopedPerChild(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(pair{})), http.MethodGet, "/", "")

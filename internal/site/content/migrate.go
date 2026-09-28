@@ -33,7 +33,7 @@ func main() {
 const (
 	byCompiler = "compiler"
 	byPanic    = "panic at Mount"
-	byWarn     = "warning at Mount"
+	byWarn     = "warning"
 	bySilent   = "silent"
 )
 
@@ -95,8 +95,8 @@ var changes = []change{
 	{"`WithLang`, `app.AppendToHead`, `app.AppendToFoot`", "`via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in `Assets`", byCompiler},
 	{"`WithPlugins(picocss.…)`", "your own CSS in `Head.Assets.Styles`", byCompiler},
 	{"`WithPlugins(echarts.…)`, `maplibre`", "an island: `h.DataIgnoreMorph` and `h.DataEffect` around a script of yours", byCompiler},
-	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only over TLS or `X-Forwarded-Proto: https`; behind a proxy that sends neither set `WithSecureCookies`", bySilent},
-	{"`ctx.Redirect(\"https://other.example/…\")`", "dropped and logged; leave the site with `ctx.RedirectExternal`", bySilent},
+	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only over TLS or `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a proxy that sends neither set `WithSecureCookies`", bySilent},
+	{"`ctx.Redirect(\"https://other.example/…\")`", "dropped and logged (Unreleased; v0.8.3 follows it); leave the site with `ctx.RedirectExternal`", bySilent},
 	{"`app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic`", "your own `http.ServeMux` and middleware around the `*via.Router`", byCompiler},
 	{"`WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize`", "`WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload`", byCompiler},
 	{"`WithNotFound`", "`WithErrorPage`", byCompiler},
@@ -141,7 +141,7 @@ func (p *Migrate) View() h.H {
 		d.H3("View is pure and takes no context"),
 		h.P(inline("Anything a view needs is a field before `View` runs. `OnInit(*via.Ctx) error` loads it, on every "+
 			"request. v0.7 logged an `OnInit` error and rendered anyway; v0.8 stops: `via.ErrNotFound` answers 404, "+
-			"any other error 500. The hooks are duck-typed, so Mount panics on a hook name with the wrong signature "+
+			"any other error 500. The hooks are duck-typed, so via panics on a hook name with the wrong signature "+
 			"and warns on a near-miss name that has the right one.")...),
 		d.H3("Composition is via.Child, and roots are taken by value"),
 		h.P(join(inline("v0.7 rendered a child by calling its `View` by hand, `p.A.View(ctx, …)`, passing whatever it "+
@@ -163,13 +163,13 @@ func (p *Migrate) View() h.H {
 
 		d.H2("Mapping"),
 		h.P(inline("Ordered by how early a port hits each change. Caught by says what tells you: the compiler, "+
-			"a panic or a warning when `Mount` walks the type at startup, or nothing.")...),
+			"a panic or a warning when `Mount` walks the type at startup (a child's warning waits for its first render), or nothing.")...),
 		table([]string{"v0.7", "v0.8", "Caught by"}, mappingRows()...),
 
 		d.H2("What the compiler won't catch"),
 		h.P(h.Str("These compile and start. The first sign is behaviour:")),
 		h.Ul(silentRows()...),
-		h.P(inline("A leftover `OnConnect(ctx) error` is warned about at `Mount`, with or without an `OnInit` next to it. "+
+		h.P(inline("A leftover `OnConnect(ctx) error` is warned about, with or without an `OnInit` next to it: at `Mount` on the page, on a child's first render. "+
 			"A leftover `OnDispose(ctx)` has an action's shape, so nothing reports it.")...),
 
 		d.H2("Removed outright"),
@@ -206,7 +206,7 @@ func (p *Migrate) View() h.H {
 			h.Li(inline("Two fields that mint the same slot name panic: a nested `A.B` (`a_b`) next to a field `A_b`.")...),
 			h.Li(inline("`Mount` renders the mounted value once, without `OnInit`, and panics on a wiring mistake it "+
 				"reaches: a func literal bound per row, an interface or ambiguous value-receiver method, "+
-				"`h.El(\"script\")`, a Signal with no slot, a child without a `View`. One behind a branch the "+
+				"`h.El(\"script\")`, a Signal with no slot, a signal named `viatab`, a child without a `View`. One behind a branch the "+
 				"empty value skips panics at the first render that takes it.")...),
 			h.Li(inline("A `Mount` path with a `{name...}` or `{$}` wildcard, or one named `{child}` or `{act}`, "+
 				"panics, and so does mounting both `/docs` and `/docs/`.")...),

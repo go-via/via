@@ -470,13 +470,12 @@ harness rather than by reaching into unexported state. If a behavior genuinely
 cannot be observed through the public surface even with `vt`, that is a design
 signal — change the surface, not the test boundary.
 
-Pairing has three exemptions. The first is `sourcelint_test.go`. It holds the
-source-TEXT lints (the reflect allowlist, the no-`&`/no-closure guard over the
-examples, the guard that keeps hcore's binder plumbing off every public
-package, and the black-box test lint) — they parse the tree and assert on what
-is written in it, so they pair with every source file and therefore with none.
-They are named and isolated so a failure there reads as "the source drifted
-from a design rule", never as a behavioral regression.
+Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
+(the reflect allowlist, the no-`&`/no-closure guard over the examples, the
+guard that keeps hcore's binder plumbing off every public package, and the
+black-box test lint) parse the tree and assert on what it says, so they pair
+with every source file and therefore with none. A failure there means the
+source drifted from a design rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A
