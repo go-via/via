@@ -1,7 +1,11 @@
 # Migrating from v0.7 to v0.8
 
+This document tracks `main`. Lines marked Unreleased describe behaviour the
+latest tag, v0.8.3, does not have; [Upgrading from
+v0.8.3](#upgrading-from-v083) lists all of it.
+
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
-changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.1 as
+changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.3 as
 an ordinary bump and hands you a tree that shares almost no identifiers with
 the one you were using. No tooling will warn you. There is no compatibility
 shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you
@@ -96,12 +100,14 @@ interface: a composition is a live child when it *acts* like one, meaning its
 `OnInit`. `OnDispose(ctx)` becomes `ctx.OnDispose(fn)`, registered in `OnInit`;
 `ctx.Listen` disposes itself with the child.
 
-Both hooks are duck-typed. That is the one place in this migration where
+The hooks are duck-typed. That is the one place in this migration where
 getting a port wrong does not fail to compile: a method with the wrong name or
 the wrong signature is not the hook, so it never runs. There is nothing to
-assert against — the hook interfaces are unexported — so the boot check is
-the safety net: `Mount`/`Child` walk the composition type at startup and
-catch two of the three ways to get this wrong:
+assert against — the hook interfaces are unexported — so the type check is
+the safety net. `Mount` checks the page's type at startup; a child's type is
+checked when it renders, so its panics fire at `Mount` if the boot render
+reaches it, and its warnings on its first real render, usually the first GET.
+It catches two of the three ways to get this wrong:
 
 - **Panics**: a method literally named `OnInit` or `OnReload` whose signature is
   not `func(*via.Ctx) error`, or one named `PageMeta` that is not
@@ -198,8 +204,8 @@ never reaches the client.
 ## Mapping
 
 Ordered by how early a port hits each change. "Caught by" says what tells you:
-the compiler, a panic or a warning when `Mount` walks the type at startup, or
-nothing.
+the compiler, a panic or a warning when `Mount` walks the type at startup (a
+child's warning waits for its first render), or nothing.
 
 - `h.Text(s)`, `h.T(s)`, `h.Textf(f, …)` → `h.Str(s)`,
   `h.Str(fmt.Sprintf(f, …))`. Caught by: compiler.
@@ -289,7 +295,7 @@ nothing.
   → `topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit`. Caught by:
   compiler.
 - `OnConnect(ctx) error` → `ctx.Tick` or `ctx.Listen` in `OnInit`;
-  `ctx.OnConnect(fn)` for work on stream open. Caught by: warning at Mount.
+  `ctx.OnConnect(fn)` for work on stream open. Caught by: warning.
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`. Caught by:
   silent.
 - `via.Stream(ctx, d, fn)` → `ctx.Tick(d, fn)` in `OnInit`. Caught by: compiler.
@@ -313,8 +319,11 @@ nothing.
 - `WithPlugins(echarts.…)`, `maplibre` → an island: `h.DataIgnoreMorph` and
   `h.DataEffect` around a script of yours. Caught by: compiler.
 - a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
-  `X-Forwarded-Proto: https`; behind a proxy that sends neither set
-  `WithSecureCookies`. Caught by: silent.
+  `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a
+  proxy that sends neither set `WithSecureCookies`. Caught by: silent.
+- `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
+  v0.8.3 follows it); leave the site with `ctx.RedirectExternal`. Caught by:
+  silent.
 - `app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic` → your own
   `http.ServeMux` and middleware around the `*via.Router`. Caught by: compiler.
 - `WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize` →
@@ -339,14 +348,14 @@ These compile and start; the first sign is behaviour:
   the first, so put one struct
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`
 - a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
-  `X-Forwarded-Proto: https`; behind a proxy that sends neither set
-  `WithSecureCookies`
-- `ctx.Redirect("https://other.example/…")` → dropped and logged; leave the site
-  with `ctx.RedirectExternal`
+  `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a
+  proxy that sends neither set `WithSecureCookies`
+- `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
+  v0.8.3 follows it); leave the site with `ctx.RedirectExternal`
 
-A leftover `OnConnect(ctx) error` is warned about at `Mount`, with or without
-an `OnInit` next to it. A leftover `OnDispose(ctx)` has an action's shape, so
-nothing reports it.
+A leftover `OnConnect(ctx) error` is warned about, with or without an `OnInit`
+next to it: at `Mount` on the page, on a child's first render. A leftover
+`OnDispose(ctx)` has an action's shape, so nothing reports it.
 
 ## Names deprecated inside v0.8
 
@@ -471,10 +480,11 @@ the full reasoning; the short form:
 - **The session cookie is Secure only when via can tell the browser is on
   https.** v0.7 set `Secure` unless `WithInsecureCookies` cleared it. v0.8
   sets it when the request arrived over TLS (`req.TLS != nil`) or a proxy
-  says `X-Forwarded-Proto: https` or `Forwarded: proto=https`. Caddy sends
-  `X-Forwarded-Proto` by default; nginx needs `proxy_set_header
-  X-Forwarded-Proto $scheme`. Behind a proxy that sends neither, set
-  `WithSecureCookies`. `WithInsecureCookies` is gone.
+  says `X-Forwarded-Proto: https` or `Forwarded: proto=https` (the proxy
+  headers are Unreleased; v0.8.3 reads TLS only). Caddy sends
+  `X-Forwarded-Proto` by default; nginx needs
+  `proxy_set_header X-Forwarded-Proto $scheme`. Behind a proxy that sends
+  neither, set `WithSecureCookies`. `WithInsecureCookies` is gone.
 - **The origin check is new, and off until you configure it.** v0.7 had no
   origin check; its CSRF defence was the per-tab `via_tab` token. v0.8 adds an
   origin floor, read off `Origin`/`Sec-Fetch-Site`, but accepts every action
@@ -538,7 +548,8 @@ can break:
 ## Wire break: action URLs
 
 v0.7 posted every action to `POST /_action/{id}`. v0.8's action endpoint is
-`{path}/_via/a/{child}/{id}` with an optional `?a=` row datum. `{child}` is `r`
+`{path}/_via/a/{child}/{id}` with an optional `?a=` row datum, and `?u=`, the
+child's call-site identity, on a child's action. `{child}` is `r`
 for the page root, or the acting child's key: its ordinal among its parent's
 `Child` calls, composed onto the parent's, so the second `Child` inside the
 first is `0-1`. `id` is a hash of the handler method's own Go name
@@ -572,16 +583,16 @@ name too, but a `via:"name"` tag could override it; v0.8 has no override. The
 field offset is the internal key, and the name is resolved once per
 composition type at `Mount`/`Child`, never per render.
 
-A plain nested struct joins its path with one underscore, a child boundary
-with two — so a parent that binds `p.C.S` in its own View (`c_s`) and also
-children `p.C` (`c__s`) keeps the two copies apart, as it must: they are
-different structs. A parent holding two fields of the child's type is
-ambiguous (`Child`'s argument order need not match declaration
-order), so those children fall back to the positional key: `i0__s`, `i1__s`,
-and `i0_0__s` for a nested one. The key's own depth separator is `-`
-(`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS identifier character and
-`Ref()` hands slot names straight to Datastar expressions, so the slot spells
-it `_`.
+A plain nested struct joins its path with one underscore (`c_s`), a child
+boundary with two (`c__s`). A parent cannot bind its child's signal itself:
+with `C` a composition, `p.C.S` in the parent's View has no slot in the
+parent's unit and panics at `Mount`. A parent holding two fields of the
+child's type is ambiguous (`Child`'s argument order need not match
+declaration order), so those children fall back to the positional key:
+`i0__s`, `i1__s`, and `i0_0__s` for a nested one. The key's own depth
+separator is `-` (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS
+identifier character and `Ref()` hands slot names straight to Datastar
+expressions, so the slot spells it `_`.
 
 `Signal[T].Ref()` is the companion: it returns `"$count"` as an `expr.Expr`
 (`h.DataShow(p.Open.Ref())`), so a name you need in markup comes off the struct
@@ -623,11 +634,12 @@ an upgrade in code that compiled fine before.
 - `Mount` renders the mounted value once, without running `OnInit`, and
   panics on a wiring mistake that render reaches: a func literal bound once
   per row, a method taken through an interface field or an ambiguous value
-  receiver, `h.El("script")`, a Signal with no slot, a child without a
-  `View` or with a wrong hook signature. The message starts `via: found at
-  Mount`. Any other panic there (a nil dereference of data `OnInit` would
-  load) is ignored. The check is best-effort: a mistake behind a branch the
-  empty value does not take still panics at the first render that takes it.
+  receiver, `h.El("script")`, a Signal with no slot, a signal named `viatab`,
+  a child without a `View` or with a wrong hook signature. The message starts
+  `via: found at Mount`. Any other panic there (a nil dereference of data
+  `OnInit` would load) is ignored. The check is best-effort: a mistake behind
+  a branch the empty value does not take still panics at the first render
+  that takes it.
 - A `Mount` path with a `{name...}` or `{$}` wildcard panics, since a page's
   action and stream routes live under its path, and so does one naming a
   wildcard `{child}` or `{act}`, which the action route reserves. Mounting
@@ -655,16 +667,18 @@ func (p *ThreadPage) PageMeta() via.Meta {
 Four rules:
 
 - It is a **method, not a field**, because real metadata is data-dependent. It
-  runs after `OnInit` and after `OnReload`, so the data is loaded. A
-  composition that already has a `PageMeta` *field* must rename the field — Go
-  forbids a method and a field sharing a name.
+  is read after `OnInit`, so the data is loaded. A composition that already
+  has a `PageMeta` *field* must rename the field — Go forbids a method and a
+  field sharing a name.
 - Only the **mounted root's** counts. An embedded child's `PageMeta` is ignored;
   `Child` logs one line when it sees one.
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
 - `Assets` is the one field that is **not** inert: it decides the mount's CSP,
   is read once at `Mount` off the literal you mounted, and must be a constant of
-  the type. Making it depend on request data panics on the first GET.
+  the type. Making it depend on request data panics at `Mount`, or on the
+  first GET if `PageMeta` panicked on Mount's probe copy and the check was
+  skipped, which `Mount` logs.
 
 ## Gating on a signal
 
@@ -753,18 +767,45 @@ last stretch of the rebuild. This section is the diff for that jump: what
 renamed, whether the compiler will find it for you, and what a silent one
 looks like at runtime.
 
+- **`r.Mount(path, page)`** → `via.Mount(r, path, page)`. **Compiler** —
+  `Mount` is no longer a `*Router` method.
 - **`via.Embed(child)`** → `via.Child(child)`. **Compiler** — `Embed` is gone.
-- **`vt.EmbedAction`** → `vt.ChildAction`. **Compiler** — `EmbedAction` is gone.
+- **`Slot`, `Child[C]`, `NewChild`, `Fill` and the `.Child` method** → a
+  plain child field rendered with `via.Child(p.Field)`; a generic layout is
+  `Shell[C]{Body C}`. **Compiler** — the old names are gone.
+- **`via.Param[T](ctx, n)`, `via.Redirect(ctx, path)`, `via.Listen`** →
+  `ctx.Param[T](n)`, `ctx.Redirect(path)`, `ctx.Listen(topic, fn)`.
+  **Compiler** — the package functions are gone.
+- **`via.Initer`, `via.Reloader`, `via.PageMetaer`** → unexported.
+  **Compiler** — delete any `var _ via.Initer = (*Page)(nil)` pin; the hooks
+  stay duck-typed.
+- **`Signal.Ref()` and `SignalCS.Ref()` returned `string`** → `expr.Expr`.
+  **Compiler** where the result was concatenated; compose it
+  (`sig.Ref().Ne("")`) or cast.
+- **`Signal.Ref()` on a signal with no wire name returned `"$"`** → it
+  panics. **Panic**, at `Mount` when the boot render reaches it; the old
+  expression parsed and did nothing.
+- **`h.Dyn`, `h.DynAttr`, `h.NewRenderer`, `h.Renderer`, `h.Binder`** →
+  internal. **Compiler** — `h` is elements, attributes and `Str`.
+- **`h.SafeURL`** → gone. **Compiler** — the typed `h.Href`/`h.Src`/`h.Action`
+  attributes and `ctx.Redirect` apply the URL policy.
+- **`WithInsecureOrigin`** → gone. **Compiler** — the origin check is off
+  until `WithTrustedOrigin` names an origin.
+- **The `X-Via-Tab` header** → the `viatab` signal. Wire-only — see "Wire
+  break: the tab id signal" above.
+- **`(*vt.App).EmbedAction`** → `ChildAction`. **Compiler** — `EmbedAction` is
+  gone.
 - **The `{embed}` action-URL segment** → `{child}`. Wire-only; nothing in
   your code names it — see "Wire break: action URLs" above.
-- **`via.Handler(...)` returned `http.Handler`** → now returns `*via.Router`.
-  **Compiler** for a typed variable (`var h http.Handler = via.Handler(...)`);
-  **Source-compatible** for `http.Handle("/", via.Handler(...))`, since
-  `*Router` implements `ServeHTTP` — this is what makes `Router.Close()`
-  reachable.
+- **`via.Handler(...)` returned `http.Handler`** → now returns `*via.Router`,
+  which is what makes `Router.Close()` reachable. **Source-compatible**:
+  `*Router` implements `ServeHTTP`, so `var h http.Handler = via.Handler(...)`
+  and `http.Handle("/", via.Handler(...))` both compile. Only a variable
+  inferred from it (`h := via.Handler(...)`) and later assigned another
+  handler fails to compile.
 - **`Title() string` hook** (briefly `via.Titler`) → `PageMeta() via.Meta`.
-  **Warned, not silent** — a leftover `Title() string` is named at boot on
-  stderr, once per type, and never called; the build still succeeds.
+  **Warned, not silent** — a leftover `Title() string` is logged once per
+  type and never called; the build still succeeds.
 - **`Head{Title, InlineStyle, ScriptOrigins, StyleOrigins, FontOrigins}`** →
   `Head{Lang, Raw, Assets}`, `Assets{Scripts, Styles, Preload, FontOrigins}`.
   **Compiler** — the old fields don't exist; also new: `Head.Raw` now panics at
@@ -776,15 +817,13 @@ looks like at runtime.
   but are deprecated and removed in v0.9.)
 - **`via.Live` interface, `OnConnect(*via.Ctx) error`** → one
   `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open
-  acquire. **Silent** — `via.Live` no longer exists to assert against, so a
-  leftover `OnConnect(ctx *via.Ctx) error` method compiles as dead code
-  nothing calls. Symptom: the unit never becomes live from that hook (no
-  `Tick`/`Listen` runs, whatever the old `OnConnect` acquired never
-  happens), and nothing logs it.
+  acquire. **Warned, not silent** — `via.Live` no longer exists to assert
+  against, so a leftover `OnConnect(ctx *via.Ctx) error` compiles and is never
+  called, but it is logged once per type, even next to an `OnInit`, naming
+  `ctx.OnConnect`, `ctx.Tick` and `ctx.Listen` as the replacements.
 - **`Reloader.Reload(*via.Ctx) error`** → an `OnReload(*via.Ctx) error`
-  method. **Warned, not silent** — `Mount`/`Child` recognise `Reload` as a
-  near-miss name and log it once at boot; the build still succeeds and the
-  method still never runs.
+  method. **Warned, not silent** — `Reload` is a known near-miss name, logged
+  once per type; the build still succeeds and the method still never runs.
 - **`List.Update`** → `List.Append` / `List.Remove`. **Compiler** — `Update` is
   gone.
 - **`SignalClientOnly[T]`** → removed, `Signal[T]` is the one client-value
@@ -832,10 +871,8 @@ nothing:
 - **`Ctx.OnConnect`/`Ctx.OnDispose` called after `OnInit` returns.** Both used
   to append silently to a snapshot nobody reads again — the fn never ran,
   with no log line, while the sibling `ctx.Tick`/`ctx.Listen` already
-  warned in the same situation. All four now warn. If you were relying on the
-  old silence, you'll see a new stderr line naming the call site; nothing about
-  your code needs to change unless the call was too late, in which case
-  move it earlier in `OnInit`.
+  warned in the same situation. All four now warn: `via: OnConnect called
+  after OnInit returned — ignored; …`. Move the call into `OnInit`.
 - **A GET of an action URL now answers `405`,** not `400`. If you were
   switching on the raw status code instead of `PageError.Reason` /
   `ReasonMethodNotAllowed`, update the check; anything reading `Reason` is
@@ -848,6 +885,10 @@ spelling outright.
 
 ## Upgrading from v0.8.3
 
+- **The session cookie is Secure when a proxy reports https**
+  (`X-Forwarded-Proto: https` or `Forwarded: proto=https`), as over direct
+  TLS. An http site behind a proxy that sends either loses its session; fix
+  the proxy's header.
 - **Under `WithTrustedOrigin`, an http `Origin` answers 403 when a proxy
   reports https** (`X-Forwarded-Proto` or `Forwarded`), as over direct TLS.
   An http page of yours that posts to the https host must move to https.
@@ -867,6 +908,12 @@ spelling outright.
   type the unit holds at two or more fields or at none, panics**: a click
   could run another field's handler. Use a pointer receiver with the
   concrete type in the field. See "New startup panics".
+- **`Mount` renders the page once at boot and panics on a wiring mistake it
+  reaches**, such as a func literal bound once per row, a child without a
+  `View`, or a signal named `viatab`. The message starts `via: found at
+  Mount`. See "New startup panics".
+- **A render-time wiring panic's value is an `error`, not a `string`.** A
+  `recover` that type-asserts `string` misses it; assert `error`.
 - **Action ids of methods on fields, promoted methods and value-receiver
   methods changed.** A tab open across the upgrade 410s its first click on
   one and reloads; there is nothing to port.

@@ -112,7 +112,7 @@ var hooks = []row{
 	{"OnReload(*via.Ctx) error",
 		"Runs after one of the unit's actions and before the render that answers it, so a handler that mutated a store re-reads here. Skipped behind a Redirect."},
 	{"PageMeta() via.Meta",
-		"The mounted root's own document: title, description, social cards, assets. Read after OnInit and OnReload, on a render that writes a document, never on an SSE push."},
+		"The mounted root's own document: title, description, social cards, assets. Read after OnInit, on a render that writes a document, never on an SSE push."},
 }
 
 type dataHelper struct{ name, attr, use string }
