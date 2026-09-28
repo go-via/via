@@ -216,9 +216,9 @@ func (f *Forum) OnInit(ctx *via.Ctx) error {
 	return f.OnReload(ctx)
 }
 
-// Reload re-reads the thread list after one of this page's actions ran. Without
-// it New would write a thread the response render never sees, because OnInit
-// filled f.threads before the handler touched the store.
+// OnReload re-reads the thread list after one of this page's actions ran.
+// Without it New would write a thread the response render never sees, because
+// OnInit filled f.threads before the handler touched the store.
 func (f *Forum) OnReload(ctx *via.Ctx) error { f.threads = f.store.allThreads(); return nil }
 
 func (f *Forum) New(ctx *via.Ctx) {
@@ -280,8 +280,8 @@ func (p *ThreadPage) OnReload(ctx *via.Ctx) error {
 	return nil
 }
 
-// Send needs no Redirect: Reload re-reads the thread, so the reply is in the
-// response render.
+// Send needs no Redirect: OnReload re-reads the thread, so the reply is in
+// the response render.
 func (p *ThreadPage) Send(ctx *via.Ctx) {
 	if !p.found {
 		return
@@ -313,17 +313,11 @@ func (p *ThreadPage) View() h.H {
 }
 
 func main() {
-	// The cookie signing key must outlive the process, or every restart logs
-	// everyone out. Never hardcode one.
-	key := os.Getenv("VIA_SESSION_KEY")
-	if key == "" {
-		log.Fatal("VIA_SESSION_KEY is unset: export 32+ random bytes before starting the forum")
-	}
-
 	store := newStore()
-	// Head is router-wide; each page names itself with PageMeta().
+	// Head is router-wide; each page names itself with PageMeta(). No
+	// WithSessionKey: via reads VIA_SESSION_KEY, and without it signs cookies
+	// with a random per-process key, so every restart logs everyone out.
 	app := via.NewRouter(
-		via.WithSessionKey([]byte(key)),
 		via.WithHead(via.Head{Lang: "en"}),
 		via.WithErrorPage(errorPage),
 	)

@@ -106,7 +106,7 @@ type Dashboard struct {
 func (d *Dashboard) View() h.H {
 	return h.Div(
 		h.H1(h.Str("dashboard")),
-		h.Button(h.DataOn("click", d.Details.Ref().Toggle()), h.Str("details: "), d.Details.Display()),
+		h.Button(on.ClickCS(d.Details.Ref().Toggle()), h.Str("details: "), d.Details.Display()),
 		h.Div(h.DataShow(d.Details.Ref()), via.Child(d.Header)),
 		via.Child(d.Uptime),
 		via.Child(d.Queue),
