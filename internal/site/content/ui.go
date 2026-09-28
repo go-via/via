@@ -67,8 +67,8 @@ func LinkCard(href, title, line string) h.H {
 // and after, or another framework and via. Stacked at every width, because the
 // text column is too narrow for two halves of code.
 //
-//	Compare("v0.7", snippet.Region("migrate/v07.go", "counter", snippet.Title("")),
-//		"v0.8", snippet.Region("migrate/v08.go", "counter", snippet.Title("")))
+//	Compare("React", snippet.Text("", reactProps),
+//		"via", snippet.Region("compositions/component.go", "props", snippet.Title("")))
 func Compare(leftLabel string, left h.H, rightLabel string, right h.H) h.H {
 	return h.Div(h.Class("compare"),
 		h.Figure(h.Class("compare-side"), h.Figcaption(h.Str(leftLabel)), left),

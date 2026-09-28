@@ -94,7 +94,7 @@ func (p *Start) View() h.H {
 		table([]string{"Request", "What via does"},
 			[]h.H{Code("GET /"), h.Str("Renders Counter to HTML. The View displayed a State, so the page also opens an SSE stream for this tab.")},
 			[]h.H{Code("POST"), h.Span(h.Str("A click runs "), Code("Inc"), h.Str(" on this tab's Counter, which publishes the new count."))},
-			[]h.H{Code("204"), h.Str("The POST's answer carries no body: with a live unit on the page, the change travels on the stream instead.")},
+			[]h.H{Code("204"), h.Str("The POST's answer carries no body: Counter is a live unit, so the change travels on the stream instead.")},
 			[]h.H{h.Str("SSE patch"), h.Span(h.Str("Every tab's State receives the value through "), API("via.Ctx.Listen"),
 				h.Str(", re-renders its Counter, and via pushes the changed element down that tab's stream."))},
 		),

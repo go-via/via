@@ -74,7 +74,7 @@ func (p *Security) View() h.H {
 			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; otherwise the "), Code("Origin"),
 			h.Str(" host must equal the request's "), Code("Host"),
 			h.Str(", and be https when the request arrived over TLS or the proxy says "), Code("X-Forwarded-Proto: https"),
-			h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
+			h.Str(" or "), Code("Forwarded: proto=https"), h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
 				"Behind a proxy, list the public origin: the allowlist is checked first, so a rewritten Host does not matter. "+
 				"A listed origin is compared as the browser sends it: host case, a default port and a trailing \"/\" do not "+
 				"matter, and a value with a path, query, fragment or userinfo panics at startup.")),

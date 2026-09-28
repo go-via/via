@@ -136,7 +136,7 @@ func (p *Deploy) View() h.H {
 				h.Str("Fails open: actions accept requests from every origin, including ones that carry no " +
 					"origin signal at all. via logs one warning at startup.")},
 			[]h.H{h.Str("Secure cookies"), API("via.WithSecureCookies"),
-				h.Str("Secure follows TLS or the proxy's X-Forwarded-Proto. Unneeded behind Caddy, or nginx " +
+				h.Str("Secure follows TLS, or the proxy's X-Forwarded-Proto or Forwarded header. Unneeded behind Caddy, or nginx " +
 					"configured as below.")},
 			[]h.H{h.Str("Stream cap"), API("via.WithMaxSSEConn"),
 				h.Str("10000 streams per router; the next connect answers 503.")},
@@ -259,9 +259,10 @@ func (p *Deploy) View() h.H {
 			h.Str(" and signal values start from their seeds, and the session carries over if the store is "+
 				"shared. An action against a tab the server no longer knows answers 410, and the client "+
 				"reloads the same way.")),
-		Callout(Warning, "A connect refused 503 does not retry",
+		Callout(Warning, "A connect refused 503 stops after two reloads",
 			h.P(h.Str("A tab whose stream connect lands on a closed router, or one past "), API("via.WithMaxSSEConn"),
-				h.Str(", stops on the banner with a Reconnect button and waits for the user. Fail readiness "+
+				h.Str(", probes and reloads like any other drop. After two automatic reloads, or 20 failed probes, it "+
+					"stops on the banner with a Reconnect button and waits for the user. Fail readiness "+
 					"before "), API("via.Router.Shutdown"), h.Str(" so reloading tabs land on a pod that is "+
 					"staying up."))),
 		h.P(h.Str("Roll one pod at a time. Unsent client edits and any action in flight on the closing pod are "+

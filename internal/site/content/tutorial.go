@@ -107,8 +107,8 @@ func (p *Tutorial) View() h.H {
 		run(h.P(h.Str("The heading reads 1 online. Open a second tab: both read 2. Close it: back to 1."))),
 		h.P(APIText("via.State.Track", "Online.Track"), h.Str(" keeps a "), API("via.State"),
 			h.Str(" equal to a store: it seeds from "), Code("count"), h.Str(", seeds again once the stream has "+
-				"subscribed, then applies every value on "), Code("presence"), h.Str(". OnInit runs on the plain GET and on "+
-				"every action as well as on the stream, so joining there would count requests. "), API("via.Ctx.OnConnect"),
+				"subscribed, then applies every value on "), Code("presence"), h.Str(". OnInit runs on the plain GET as well "+
+				"as on the stream, so joining there would count requests. "), API("via.Ctx.OnConnect"),
 			h.Str(" and "), API("via.Ctx.OnDispose"), h.Str(" run once each, when the stream opens and when it closes. "),
 			Code("add"), h.Str(" holds the mutex across the change and the publish, so two tabs joining at once cannot "+
 				"publish their counts out of order.")),

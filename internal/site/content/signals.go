@@ -118,7 +118,7 @@ func (p *Signals) View() h.H {
 		demo.Card(d.H3("Copy to clipboard"),
 			h.P(API("expr.CopyTextOf"), h.Str(" copies the text of an element next to the button, read from the page at click time. "),
 				API("expr.Class"), h.Str(" flags the button for a moment: feedback that needs no signal. "+
-					"The clipboard works only in a secure context and from a click. A refused write does not reach the page; the browser logs it as an unhandled rejection.")),
+					"The clipboard works only in a secure context and from a click. A refused write is swallowed, so it fails with nothing in the console.")),
 			via.Child(p.Copy), "signals_copy.go",
 			demo.Try(h.Str("Click Copy, then paste somewhere."),
 				h.Str("Open the Wire pane: no request appears. Copying never involves the server."))),
