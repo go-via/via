@@ -60,8 +60,8 @@ func (p *Live) View() h.H {
 			"for the tab and pushes element patches down it. One stream per tab, not per unit: every "),
 			h.A(h.Href(d.Href("/glossary#live-unit")), h.Str("live unit")), h.Str(" on the page shares one connection. "+
 				"A tab is that one connection, so \"per tab\" in these docs means per connection: a reload is a new tab.")),
-		h.P(h.Str("Actions do not change transport. A click still POSTs; with a live unit on the page the answer arrives "+
-			"as a frame on the stream instead of as the POST's own body.")),
+		h.P(h.Str("Actions do not change transport. A click still POSTs; an action on a live unit answers "+
+			"as a frame on the stream instead of in the POST's own body.")),
 		h.P(h.Str("Liveness is decided once, by the render that served the page. An action cannot turn a plain "+
 			"page into a live one.")),
 

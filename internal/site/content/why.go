@@ -45,7 +45,7 @@ func (p *Why) View() h.H {
 			via.Child(p.Quote), "why_quote.go",
 			demo.WireOpen(),
 			demo.Try(h.Str("Change the quantity: the Signals box follows it and no request is sent."),
-				h.Span(h.Str("Press Price: one POST, then one patch carrying the "), Code("<output>"), h.Str(".")),
+				h.Span(h.Str("Press Price: one POST, then one patch that re-renders the whole unit, "), Code("<output>"), h.Str(" included.")),
 				h.Str("Type -5 and press Price: the action clamps it, because a signal is client input."))),
 
 		d.H2("What you get"),
@@ -69,7 +69,7 @@ func (p *Why) View() h.H {
 				h.Str("The "), link("/glossary#datastar", "Datastar"), h.Str(" client is embedded in the via module and served by the router. "+
 					"When a view needs a JS library, an "), link("/islands", "island"), h.Str(" hands it one subtree.")),
 			h.Li(h.Strong(h.Str("Only the standard library at run time. ")),
-				h.Str("via's one module requirement is testify, for its own tests.")),
+				h.Str("via's module requires testify, for its own tests, and staticcheck, as a tool. Neither is built into your program.")),
 		),
 
 		d.H2("What it costs"),

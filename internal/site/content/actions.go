@@ -201,16 +201,16 @@ func (p *Actions) View() h.H {
 		d.H2("Errors and panics"),
 		table([]string{"Status", "When"},
 			[]h.H{h.Str("400"), h.Str("The ?a= argument does not decode into the handler's type, or the body is malformed. A JSON body without Datastar-Request: true is read as a form, and the 400 names the header.")},
-			[]h.H{h.Str("403"), h.Span(h.Str("The Origin is not trusted (see "), API("via.WithTrustedOrigin"), h.Str("), or the tab's stream is bound to another session."))},
+			[]h.H{h.Str("403"), h.Span(h.Str("The Origin is not trusted (see "), API("via.WithTrustedOrigin"), h.Str("), the tab's stream is bound to another session, or OnInit or OnReload returned "), API("via.ErrForbidden"), h.Str("."))},
 			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
 			[]h.H{h.Str("410"), h.Str("The render does not bind this action, or not with this argument, or the tab's stream is gone.")},
 			[]h.H{h.Str("413"), h.Str("The body is over WithMaxBody, or a native submit is over WithMaxUpload.")},
 			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
 			[]h.H{h.Str("503"), h.Str("The session store did not answer, a live tab's goroutine did not pick the action up in time, too many actions are already waiting for their streams, or the router is shutting down.")},
 		),
-		h.P(h.Str("An action posted by Datastar leaves the page as it was. On a page with a live unit, via's reconnect script reacts: "+
-			"a 410 shows \"Page is out of date\" and reloads, and a 403 or 5xx shows \"Disconnected.\" with a Reconnect button. "+
-			"On a page with no live unit nothing is shown; listen for the "), Code("datastar-fetch"), h.Str(" event of type "), Code("error"),
+		h.P(h.Str("An action posted by Datastar leaves the page as it was. On a page with a live unit, a 410 shows "+
+			"\"Page is out of date\" and reloads. Any other failure (a 500 from a handler panic, a 503, a 403) shows nothing. "+
+			"Listen for the "), Code("datastar-fetch"), h.Str(" event of type "), Code("error"),
 			h.Str(" to show your own notice. A PostForm submit navigates to the error response: plain text, or the document "),
 			API("via.WithErrorPage"), h.Str(" renders.")),
 	)

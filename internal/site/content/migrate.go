@@ -55,7 +55,7 @@ var changes = []change{
 	{"`via:\"name,init=v\"` field tag", "`via:\"init=<json>\"`; the wire name is the field name, and a string seed is JSON: `init=\"all\"`", byPanic},
 	{"a child rendered by hand: `p.A.View(ctx, …)`", "`via.Child(p.A)`; what the child's `View` took as arguments becomes its fields", byCompiler},
 	{"an action `func(*via.Ctx) error`, `WithActionErrorHandler`", "`func(*via.Ctx)`; handle the error inside", byCompiler},
-	{"an `OnInit` error, logged while the page renders anyway", "an `OnInit` error aborts: `via.ErrNotFound` answers 404, any other 500", bySilent},
+	{"an `OnInit` error, logged while the page renders anyway", "an `OnInit` error aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500", bySilent},
 	{"`path:\"id\"` field tag", "`ctx.Param[T](\"id\")` in `OnInit`, stored in a field", bySilent},
 	{"`query:\"q\"` field tag", "`ctx.Request().URL.Query()` in `OnInit`; it is empty on actions, so list state belongs in the path or the session", bySilent},
 	{"`h.If(cond, node)`", "`via.When(cond, p.part)`: the node becomes a method returning `h.H`, called only when cond holds", byCompiler},
@@ -95,7 +95,7 @@ var changes = []change{
 	{"`WithLang`, `app.AppendToHead`, `app.AppendToFoot`", "`via.WithHead(via.Head{Lang, Raw, Assets})`; scripts and styles go in `Assets`", byCompiler},
 	{"`WithPlugins(picocss.…)`", "your own CSS in `Head.Assets.Styles`", byCompiler},
 	{"`WithPlugins(echarts.…)`, `maplibre`", "an island: `h.DataIgnoreMorph` and `h.DataEffect` around a script of yours", byCompiler},
-	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only over TLS or `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a proxy that sends neither set `WithSecureCookies`", bySilent},
+	{"a Secure session cookie unless `WithInsecureCookies`", "Secure only over TLS, `X-Forwarded-Proto: https` or `Forwarded: proto=https` (Unreleased; v0.8.3 reads TLS only); behind a proxy that sends neither set `WithSecureCookies`", bySilent},
 	{"`ctx.Redirect(\"https://other.example/…\")`", "dropped and logged (Unreleased; v0.8.3 follows it); leave the site with `ctx.RedirectExternal`", bySilent},
 	{"`app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic`", "your own `http.ServeMux` and middleware around the `*via.Router`", byCompiler},
 	{"`WithLogger(via.Logger)`, `WithMaxRequestBody`, `WithMaxUploadSize`", "`WithLogger(*slog.Logger)`, `WithMaxBody`, `WithMaxUpload`", byCompiler},
@@ -141,7 +141,7 @@ func (p *Migrate) View() h.H {
 		d.H3("View is pure and takes no context"),
 		h.P(inline("Anything a view needs is a field before `View` runs. `OnInit(*via.Ctx) error` loads it, on every "+
 			"request. v0.7 logged an `OnInit` error and rendered anyway; v0.8 stops: `via.ErrNotFound` answers 404, "+
-			"any other error 500. The hooks are duck-typed, so via panics on a hook name with the wrong signature "+
+			"`via.ErrForbidden` 403, any other error 500. The hooks are duck-typed, so via panics on a hook name with the wrong signature "+
 			"and warns on a near-miss name that has the right one.")...),
 		d.H3("Composition is via.Child, and roots are taken by value"),
 		h.P(join(inline("v0.7 rendered a child by calling its `View` by hand, `p.A.View(ctx, …)`, passing whatever it "+
@@ -157,7 +157,7 @@ func (p *Migrate) View() h.H {
 		d.H3("The counter, both ways"),
 		h.P(h.Str("v0.7, with per-tab state and the numeric shape:")),
 		demo.Code(counterV07),
-		h.P(inline("v0.8, the same counter as a `State[int]`. This is the live demo's source:")...),
+		h.P(inline("v0.8, the same counter as a `State[int]`, the source of the Counter card on Actions:")...),
 		demo.Source("counter.go"),
 		h.P(inline("Serve it with `http.ListenAndServe(\":3000\", via.Handler(Counter{}))`.")...),
 

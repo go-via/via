@@ -21,7 +21,7 @@ const exampleTree = "https://github.com/go-via/via/tree/main/internal/example/"
 type example struct {
 	name    string
 	teaches h.H
-	demo    string // "/page#anchor" of the card showing the same idea, or ""
+	demo    string // "/page#anchor" of the demo showing the same idea, or ""
 }
 
 func (p *Examples) View() h.H {
@@ -50,7 +50,7 @@ func (p *Examples) View() h.H {
 		d.H2("First steps"),
 		h.P(s("Read these three in order. Each adds one idea to the one before.")),
 		rows(
-			example{name: "counter", demo: "/actions#counter", teaches: h.Span(
+			example{name: "counter", demo: "/", teaches: h.Span(
 				s("The whole model with nothing live: a struct, a "), Code("View"), s(" method, handler methods, and "),
 				API("on.Click"), s(" wiring them. A click POSTs, the handler mutates a store, the page morphs.")),
 			},
@@ -85,7 +85,7 @@ func (p *Examples) View() h.H {
 				API("via.Signal.Set"), s(" on a signal the View never binds, and a client-only "), API("via.SignalCS"),
 				s(" seeded by a "), Code(`via:"init=..."`), s(" tag.")),
 			},
-			example{name: "chat", demo: "/live#tabs-connected", teaches: h.Span(
+			example{name: "chat", demo: "/tutorial#live-chat", teaches: h.Span(
 				s("Both topic shapes: "), API("via.Ctx.Listen"), s(" appends each message to a "), API("via.List"),
 				s(", "), API("via.State.Track"), s(" follows the head-count. "), API("via.Ctx.OnConnect"), s(" and "),
 				API("via.Ctx.OnDispose"), s(" count presence; "), API("via.Router.Close"), s(" runs before "),
@@ -99,7 +99,7 @@ func (p *Examples) View() h.H {
 
 		d.H2("Apps"),
 		rows(
-			example{name: "poll", demo: "/actions#vote", teaches: h.Span(
+			example{name: "poll", demo: "/actions#arguments", teaches: h.Span(
 				s("A list that re-sorts on every render. "), API("on.WithArg"),
 				s(" carries each row's id, so a vote lands on the option clicked, wherever it now sits. "),
 				API("h.DataAttr"), s(" disables the add button while the draft is empty.")),

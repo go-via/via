@@ -13,7 +13,7 @@ can pin it indefinitely.
 
 So this document is not a rename list you can apply mechanically. Most v0.7
 code does not port line by line, because the things that changed are the
-ideas, not the spellings. Read the four shifts below first; the mapping table
+ideas, not the spellings. Read the four shifts below first; the mapping list
 after them assumes them.
 
 **Short version:** replace `h.Text` with `h.Str`; delete
@@ -234,7 +234,8 @@ child's warning waits for its first render), or nothing.
 - an action `func(*via.Ctx) error`, `WithActionErrorHandler` → `func(*via.Ctx)`;
   handle the error inside. Caught by: compiler.
 - an `OnInit` error, logged while the page renders anyway → an `OnInit` error
-  aborts: `via.ErrNotFound` answers 404, any other 500. Caught by: silent.
+  aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other
+  500. Caught by: silent.
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field.
   Caught by: silent.
 - `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
@@ -318,9 +319,10 @@ child's warning waits for its first render), or nothing.
   compiler.
 - `WithPlugins(echarts.…)`, `maplibre` → an island: `h.DataIgnoreMorph` and
   `h.DataEffect` around a script of yours. Caught by: compiler.
-- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
-  `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a
-  proxy that sends neither set `WithSecureCookies`. Caught by: silent.
+- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS,
+  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (Unreleased; v0.8.3
+  reads TLS only); behind a proxy that sends neither set `WithSecureCookies`.
+  Caught by: silent.
 - `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
   v0.8.3 follows it); leave the site with `ctx.RedirectExternal`. Caught by:
   silent.
@@ -338,7 +340,7 @@ child's warning waits for its first render), or nothing.
 These compile and start; the first sign is behaviour:
 
 - an `OnInit` error, logged while the page renders anyway → an `OnInit` error
-  aborts: `via.ErrNotFound` answers 404, any other 500
+  aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field
 - `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
   on actions, so list state belongs in the path or the session
@@ -347,9 +349,9 @@ These compile and start; the first sign is behaviour:
 - one session value per type → one value per session: a second `Put` replaces
   the first, so put one struct
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`
-- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS or
-  `X-Forwarded-Proto: https` (Unreleased; v0.8.3 reads TLS only); behind a
-  proxy that sends neither set `WithSecureCookies`
+- a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS,
+  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (Unreleased; v0.8.3
+  reads TLS only); behind a proxy that sends neither set `WithSecureCookies`
 - `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
   v0.8.3 follows it); leave the site with `ctx.RedirectExternal`
 
