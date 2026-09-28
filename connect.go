@@ -458,6 +458,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		lc.bindSession(u.session.sid())
 	}
 
+	// Watched before the first sweep and the OnConnect pushes: both run Listen
+	// and OnConnect handlers, and a Rotate elsewhere while they run must end
+	// this stream. Not before the OnConnect fns, which may mint the session;
+	// a Rotate during one is caught by the first beat's revalidate.
+	lc.watchSession(bind.session)
+	defer lc.unwatchSession()
+
 	m.reg.put(id, lc) // a live action POST routes to this connection by tab id
 	registered = true
 	defer func() { m.reg.del(id, m.tombFor(stream)) }()
@@ -494,11 +501,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Watched only from here: no action or push runs on this connection
-	// before runStream does, and a Rotate elsewhere in the gap is caught by
-	// the first beat's revalidate.
-	lc.watchSession(bind.session)
-	defer lc.unwatchSession()
 	streaming = true
 	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, pushq, func() {
 		keepalive()

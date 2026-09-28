@@ -1833,6 +1833,52 @@ func (p *namePutter) onName(ctx *via.Ctx, name string) {
 
 func (p *namePutter) View() h.H { return h.Div(h.Str("names")) }
 
+// joinHolder publishes its join from OnConnect, so its Listen handler runs in
+// the connect's first sweep, and holds there until released.
+type joinHolder struct {
+	Names *topic.Topic[string]
+	held  chan struct{}
+	hold  chan struct{}
+}
+
+func (p *joinHolder) OnInit(ctx *via.Ctx) error {
+	ctx.Listen(p.Names, p.onName)
+	ctx.OnConnect(func() { p.Names.Publish("alice") })
+	return nil
+}
+
+func (p *joinHolder) onName(*via.Ctx, string) {
+	close(p.held)
+	<-p.hold
+}
+
+func (p *joinHolder) View() h.H { return h.Div(h.Str("names")) }
+
+func TestSession_aRotateElsewhereWhileTheConnectRunsItsHandlersEndsTheStream(t *testing.T) {
+	t.Parallel()
+	names := topic.New[string]()
+	jh := joinHolder{Names: names, held: make(chan struct{}), hold: make(chan struct{})}
+	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	via.Mount(r, "/", loginComp{})
+	via.Mount(r, "/live", jh)
+	app := vt.Serve(t, r)
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	app.Client().Jar = jar
+	c := app.Client()
+
+	fireAction(t, c, app.URL(), 0) // SignIn
+	conn := app.ConnectAt("/live", "{}")
+	select {
+	case <-jh.held:
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "the Listen handler never ran in the connect's first sweep")
+	}
+	fireAction(t, c, app.URL(), 3) // Rotate, while the connect is still in its handlers
+	close(jh.hold)
+	require.NoError(t, conn.AwaitClose(), "a Rotate during the connect's own handlers ends the stream")
+}
+
 func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *testing.T) {
 	t.Parallel()
 	names := topic.New[string]()
