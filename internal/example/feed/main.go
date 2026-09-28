@@ -1,5 +1,5 @@
 // Command feed is a multi-user broadcast: one server-side publisher sends to a
-// Topic and every connected browser shows the latest message. Open it in two tabs.
+// Topic and every connected browser lists each message. Open it in two tabs.
 package main
 
 import (
@@ -18,26 +18,35 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Feed is a live child fed by a shared Topic. recv updates Last and via
+// Feed is a live child fed by a shared Topic. recv appends to Events and via
 // element-patches the re-render over SSE.
 type Feed struct {
-	room *topic.Topic[string]
-	Last via.State[string]
+	room   *topic.Topic[string]
+	Events via.List[string]
 }
+
+// keep bounds Events: the publisher never stops, and each push re-renders the
+// whole list.
+const keep = 10
 
 func (f *Feed) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(f.room, f.recv)
 	return nil
 }
 
-func (f *Feed) recv(ctx *via.Ctx, msg string) { f.Last.Set(msg) }
+func (f *Feed) recv(ctx *via.Ctx, msg string) {
+	events := append(f.Events.Get(), msg)
+	f.Events.Set(events[max(0, len(events)-keep):])
+}
 
 func (f *Feed) View() h.H {
 	return h.Div(
 		h.H1(h.Str("Broadcast feed")),
-		h.P(h.Str("latest: "), f.Last.Display()),
+		h.Ul(f.Events.Each(f.row)),
 	)
 }
+
+func (f *Feed) row(msg string) h.H { return h.Li(h.Str(msg)) }
 
 func publish(ctx context.Context, room *topic.Topic[string]) {
 	t := time.NewTicker(time.Second)

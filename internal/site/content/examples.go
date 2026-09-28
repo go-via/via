@@ -22,7 +22,6 @@ type example struct {
 	name    string
 	teaches h.H
 	demo    string // "/page#anchor" of the card showing the same idea, or ""
-	run     string // command override, for an example that needs env
 }
 
 func (p *Examples) View() h.H {
@@ -34,13 +33,9 @@ func (p *Examples) View() h.H {
 			if e.demo != "" {
 				links = append(links, h.Str(" · "), h.A(h.Href(d.Href(e.demo)), h.Str("demo")))
 			}
-			run := e.run
-			if run == "" {
-				run = "go run ./internal/example/" + e.name
-			}
 			cells = append(cells, []h.H{
 				h.Span(h.Strong(h.Str(e.name)), h.Br(), h.Small(append([]h.H{h.Class("ex-links")}, links...)...)),
-				h.Div(h.Div(e.teaches), h.Div(Code(run))),
+				h.Div(h.Div(e.teaches), h.Div(Code("go run ./internal/example/"+e.name))),
 			})
 		}
 		return table([]string{"Example", "What it teaches"}, cells...)
@@ -83,7 +78,7 @@ func (p *Examples) View() h.H {
 			},
 			example{name: "feed", demo: "/live#broadcast-feed", teaches: h.Span(
 				API("via.Ctx.Listen"), s(" on a "), API("topic.Topic"),
-				s(": a server goroutine publishes and every connected tab receives each value, not only the latest.")),
+				s(": a server goroutine publishes and every connected tab lists each value, keeping the newest ten.")),
 			},
 			example{name: "dashboard", demo: "/islands#sparkline-on-a-clock", teaches: h.Span(
 				s("Several live units on one stream, each patching only itself. A canvas island fed by "),
@@ -110,7 +105,6 @@ func (p *Examples) View() h.H {
 				API("h.DataAttr"), s(" disables the add button while the draft is empty.")),
 			},
 			example{name: "forum", demo: "/security#sign-in-sign-out",
-				run: "VIA_SESSION_KEY=$(head -c32 /dev/urandom | xxd -p -c64) go run ./internal/example/forum",
 				teaches: h.Span(
 					API("via.NewRouter"), s(" and "), API("via.Mount"), s(" across five pages: sessions, "),
 					API("via.PostForm"), s(" with "), API("via.Ctx.Redirect"), s(", "), API("via.Ctx.Param"),
@@ -121,9 +115,9 @@ func (p *Examples) View() h.H {
 			snippet.Mark("ctx.Session().Get", "ctx.Param", "OnReload(ctx *via.Ctx)")),
 		h.P(s("A page guards itself in OnInit: no session, redirect. OnReload re-reads the store after an action, "+
 			"so a reply is in the render that answers it without a redirect.")),
-		Callout(Note, "Needs a key",
-			h.P(s("forum refuses to start without "), Code("VIA_SESSION_KEY"),
-				s(": the cookie signing key must outlive the process, or a restart signs everyone out. Keep the "+
-					"key fixed across restarts in a real deployment."))),
+		Callout(Note, "Session key",
+			h.P(s("forum passes no "), API("via.WithSessionKey"), s(", so via reads "), Code("VIA_SESSION_KEY"),
+				s(". Without it via signs cookies with a random per-process key and logs a warning, so a restart "+
+					"signs everyone out. Set a fixed key in a real deployment."))),
 	)
 }

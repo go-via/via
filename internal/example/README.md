@@ -37,7 +37,7 @@ once, `forum` for the multi-page/router/session/upload side.
 - **`dashboard`**: live regions on one stream; a canvas island;
   tag-seeded signals.
 - **`chat`**: a `Topic` message bus plus a presence count tracked from
-  `OnInit`.
+  `OnInit`; `Router.Close` before `Shutdown` on Ctrl-C.
 - **`forum`**: a multi-page app: router, sessions, `PostForm` +
   `Redirect`, upload.
 
@@ -46,8 +46,6 @@ once, `forum` for the multi-page/router/session/upload side.
 These are documented API with no example to copy from. Go to `go doc` (and the
 site page named) rather than hunting for one:
 
-- **`Router.Close` and graceful shutdown ordering**:
-  `go doc via.Router.Close`, go-via.dev/deploy "Shutdown order".
 - **`SessionStore` / `WithSessionStore`** (durable, multi-pod sessions):
   `go doc via.SessionStore`, go-via.dev/deploy "Restarts" and "Horizontal
   scaling".
@@ -63,7 +61,9 @@ site page named) rather than hunting for one:
 - **Listen address:** `cmp.Or(os.Getenv("VIA_ADDR"), ":8080")`, so two examples
   can run side by side without editing code.
 - **Serving:** `http.Handle` on the default `ServeMux`, and
-  `log.Fatal(http.ListenAndServe(...))` — the error is never dropped.
+  `log.Fatal(http.ListenAndServe(...))` — the error is never dropped. `feed`
+  and `chat` run an `http.Server` instead and shut down on Ctrl-C:
+  `Router.Close` first, so open streams don't hold `Shutdown` to its deadline.
 - **Field export:** via locates fields by offset, so exporting is not required.
   These examples export the reactive fields (`Signal`, `State`, `List`) and keep
   injected dependencies and plain app data unexported.
