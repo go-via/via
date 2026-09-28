@@ -317,10 +317,10 @@ func (p *ThreadPage) View() h.H {
 
 func main() {
 	store := newStore()
-	// Head is router-wide; each page names itself with PageMeta(). No
-	// WithSessionKey: via reads VIA_SESSION_KEY, and without it signs cookies
+	// No WithSessionKey: via reads VIA_SESSION_KEY, and without it signs cookies
 	// with a random per-process key, so every restart logs everyone out.
 	app := via.NewRouter(
+		// Head is router-wide; each page names itself with PageMeta().
 		via.WithHead(via.Head{Lang: "en"}),
 		via.WithErrorPage(errorPage),
 	)

@@ -61,9 +61,10 @@ site page named) rather than hunting for one:
 - **Listen address:** `cmp.Or(os.Getenv("VIA_ADDR"), ":8080")`, so two examples
   can run side by side without editing code.
 - **Serving:** `http.Handle` on the default `ServeMux`, and
-  `log.Fatal(http.ListenAndServe(...))` — the error is never dropped. `feed`
-  and `chat` run an `http.Server` instead and shut down on Ctrl-C:
-  `Router.Close` first, so open streams don't hold `Shutdown` to its deadline.
+  `log.Fatal(http.ListenAndServe(...))`, so the error is never dropped.
+- **Shutdown:** `feed` and `chat` run an `http.Server` and shut down on
+  Ctrl-C. They call `Router.Close` before `Shutdown`, so open streams don't
+  hold `Shutdown` to its deadline.
 - **Field export:** via locates fields by offset, so exporting is not required.
   These examples export the reactive fields (`Signal`, `State`, `List`) and keep
   injected dependencies and plain app data unexported.
