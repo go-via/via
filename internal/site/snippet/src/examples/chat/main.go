@@ -54,7 +54,7 @@ func (r *Room) count() int64 {
 }
 
 // snippet:start live
-// Chat is one connected tab's live child.
+// Chat is the mounted root, one instance per connected tab.
 type Chat struct {
 	room *Room
 

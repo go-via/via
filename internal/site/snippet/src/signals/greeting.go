@@ -20,7 +20,7 @@ func (g *Greeting) View() h.H {
 // snippet:end
 
 // GreetingHTML is the root element Greeting renders on first paint, as the
-// page shows it. greeting_test.go pins it to a real render.
+// page shows it. signals_test.go pins it to a real render.
 const GreetingHTML = `<div id="root" data-signals='{"name":"Ada"}'>
   <div>
     <input data-bind="name">

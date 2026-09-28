@@ -92,6 +92,19 @@ type Board struct{ Msg via.State[string] }
 func (b *Board) Post(ctx *via.Ctx) { b.Msg.Set("hello") }
 func (b *Board) View() h.H         { return h.Div(b.Msg.Display(), h.Button(on.Click(b.Post))) }
 
+func TestTodos_deleteLeavesTheMountedRowsAlone(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(troubleshooting.Todos{Items: []troubleshooting.Todo{
+		{ID: 1, Title: "a"}, {ID: 2, Title: "b"}, {ID: 3, Title: "c"},
+	}}))
+
+	status, _ := app.Action(0).Fire() // the first row's delete
+	require.Equal(t, 200, status)
+
+	_, body := app.Get("/")
+	assert.Equal(t, 1, strings.Count(body, `id="todo-3"`))
+}
+
 func TestGone_liveActionWithoutItsStream(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Board{}))

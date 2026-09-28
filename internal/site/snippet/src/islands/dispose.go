@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/go-via/via"
+	"github.com/go-via/via/expr"
+	"github.com/go-via/via/h"
 )
 
 // snippet:start dispose
@@ -22,6 +24,11 @@ func (p *Prices) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *Prices) poll(ctx *via.Ctx) { p.Series.Set(feed.Last()) }
+
+func (p *Prices) View() h.H {
+	return h.Canvas(h.DataIgnoreMorph(), h.Role("img"), h.Aria("label", "Price chart"),
+		h.DataEffect(expr.Call("viaChart", expr.El, p.Series.Ref())))
+}
 
 // snippet:end
 

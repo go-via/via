@@ -66,8 +66,8 @@ func (p *Ping) Send(ctx *via.Ctx) {
 	p.sid = ctx.Session().Ensure()
 	p.Notice.Set("scheduled")
 	// A goroutine may not touch unit state; publishing is how it reaches one.
-	// gone is closed by OnDispose on the live unit; a request-scoped instance
-	// never closes it, and its ping is delivered to nobody.
+	// OnDispose closes gone when this tab's stream ends, so a ping from a tab
+	// closed within 3s is dropped.
 	to, gone := p.sid, p.gone
 	time.AfterFunc(3*time.Second, func() {
 		select {
