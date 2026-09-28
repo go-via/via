@@ -1834,7 +1834,7 @@ func (p *namePutter) onName(ctx *via.Ctx, name string) {
 func (p *namePutter) View() h.H { return h.Div(h.Str("names")) }
 
 // joinHolder publishes its join from OnConnect, so its Listen handler runs in
-// the connect's first sweep, and holds there until released.
+// the connect's first sweep and blocks there until hold closes.
 type joinHolder struct {
 	Names *topic.Topic[string]
 	held  chan struct{}

@@ -458,10 +458,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		lc.bindSession(u.session.sid())
 	}
 
-	// Watched before the first sweep and the OnConnect pushes: both run Listen
-	// and OnConnect handlers, and a Rotate elsewhere while they run must end
-	// this stream. Not before the OnConnect fns, which may mint the session;
-	// a Rotate during one is caught by the first beat's revalidate.
+	// Watched before the first sweep and the OnConnect pushes, which run app
+	// handlers: a Rotate elsewhere while they run must end this stream. Not
+	// before the OnConnect fns, which may mint the session; a Rotate during
+	// one waits for the first beat's revalidate.
 	lc.watchSession(bind.session)
 	defer lc.unwatchSession()
 
