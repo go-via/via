@@ -345,8 +345,8 @@
 - `/_via/datastar.js` is cacheable. Pages load it as
   `/_via/datastar.js?v=<content hash>`, served
   `Cache-Control: public, max-age=31536000, immutable`; the bare path still
-  works, with `max-age=3600, must-revalidate`. Both carry a strong ETag and
-  answer a matching `If-None-Match` with 304.
+  works, with `public, max-age=3600, must-revalidate`. Both carry a strong
+  ETag and answer a matching `If-None-Match` with 304.
 
 ## v0.8.2 — events by function (2026-09-25)
 
@@ -401,8 +401,8 @@ the Go module proxy has cached it, so the tag cannot move. Use v0.8.1. The notes
 below cover v0.7 → v0.8.1.
 
 v0.8 is a rebuild. The v0.7 tree is replaced by a smaller core with no plugins,
-no subpackages beyond `h` and `topic`, and no configuration knob that a
-constant could serve instead. Module path is now
+five subpackages (`h`, `expr`, `topic`, `vt`, `vtbrowser`), and no
+configuration knob that a constant could serve instead. Module path is now
 `github.com/go-via/via` — unchanged, and still v0.x, so nothing in the module
 path or the version marks the break; v0.7 history is merged, the tree is
 the v2 core. **Requires Go 1.27.**
@@ -410,8 +410,8 @@ the v2 core. **Requires Go 1.27.**
 ### Documented (behaviour unchanged)
 
 - Query strings do not reach action handlers. An action POSTs to
-  `{mount}/_via/a/{n}/…`, built from the mount pattern's path params and
-  nothing else, so the discovery render runs unfiltered and a row that only
+  `{mount}/_via/a/{child}/{act}`, built from the mount pattern's path params
+  and nothing else, so the discovery render runs unfiltered and a row that only
   exists under `?q=` answers `410` when clicked. Page state — filter, page,
   sort, tab — belongs in path params or the session. On `Ctx.Param` and in the
   README.
@@ -419,8 +419,8 @@ the v2 core. **Requires Go 1.27.**
   do. A unit that only `Get`s a State is silently plain. On `State.Get`.
 - `Ctx` has no response writer, so a file download is a sibling `net/http`
   handler. On `Ctx.Request`.
-- The README and the `Reloader` godoc claimed `OnInit` "seeds signals from the
-  request URL". No such code path exists or ever existed; the claim is deleted.
+- The README claimed `OnInit` "seeds signals from the request URL". No such
+  code path exists or ever existed; the claim is deleted.
 
 ### New
 
@@ -509,7 +509,7 @@ the v2 core. **Requires Go 1.27.**
   Statuses and reasons are unchanged — this changes the body only. The page
   renders under the router-wide CSP floor, never a mount's own, and a handler
   that panics or returns nil falls back to the plain text and logs once.
-  `example/forum` ships one.
+  `internal/example/forum` ships one.
 
   `Reason` stays coarse — one code per status class — and the two failures an
   app answers differently from the rest of their class arrive as sentinels on
@@ -525,9 +525,9 @@ the v2 core. **Requires Go 1.27.**
   run, so the "join a room" pattern `OnConnect`'s own doc names could not work:
   a presence unit that published its join on connect and rendered the count
   from its `Listen` showed the pre-join count in a fresh tab until some other
-  tab joined or left. `example/chat`'s online count had exactly this defect.
-  Subscriptions now start before the first `OnConnect`, still only on the SSE
-  handler, so a plain GET still leaks no subscription.
+  tab joined or left. `internal/example/chat`'s online count had exactly this
+  defect. Subscriptions now start before the first `OnConnect`, still only on
+  the SSE handler, so a plain GET still leaks no subscription.
 
 - **An unchanged live render ships no frame.** The plain path has always
   answered `204` when an action changes nothing the render shows; the live path
@@ -548,7 +548,7 @@ the v2 core. **Requires Go 1.27.**
   naming the type, because a shared per-request head would let any nested
   unit silently rename the page.
 
-  `Meta.Assets` (`Script`, `Style`, `Preload`, `FontOrigins`) makes the
+  `Meta.Assets` (`Scripts`, `Styles`, `Preload`, `FontOrigins`) makes the
   **Content-Security-Policy per mount**: it is built once at `Mount` from the
   router-wide `Head.Assets` plus that page's own — one string per mount, zero
   work per request — so one page's CDN never widens another page's policy. A
@@ -625,8 +625,8 @@ the v2 core. **Requires Go 1.27.**
   `via.Handler` returns the `*Router` it builds, not an `http.Handler`, so
   `Close` is reachable from the entry point every single-page app starts with —
   no type assertion, nothing to document around. `*Router` implements
-  `ServeHTTP`, so existing call sites are unchanged. `example/chat` shows the
-  whole shutdown path: SIGINT, `r.Close()`, then `srv.Shutdown`.
+  `ServeHTTP`, so existing call sites are unchanged. `internal/example/chat`
+  shows the whole shutdown path: SIGINT, `r.Close()`, then `srv.Shutdown`.
 
 - **A clean stream close now reaches the user.** The bundled Datastar client
   defaults each `@post` to `retry:"auto"`, and under `"auto"` a response body
@@ -705,16 +705,16 @@ the v2 core. **Requires Go 1.27.**
   JSON-encodable (it panics if not) and a value written under a type that has
   since been renamed reads back as absent.
 
-- **`Reloader`**: `OnReload(*via.Ctx) error`, run after an action and before the
-  response render, on the plain path and the live path alike. It fixes the
+- **`OnReload(*via.Ctx) error`** runs after an action and before the response
+  render, on the plain path and the live path alike. It fixes the
   commonest week-one defect: `OnInit` loads, the handler mutates the store, and
   the render still shows what `OnInit` read, so the action answers 204 and the
   UI never moves. `OnReload` is a second hook rather than a second `OnInit` run
-  because `OnInit` is an initializer: it mints and defaults the session, seeds
-  signals from the request URL, registers `Tick`/`Listen`, and may `Redirect`
-  or return `ErrNotFound`, none of which is safe to repeat once a handler has
-  committed a mutation. `Tick`/`Listen` are no-ops inside `OnReload` (liveness
-  stays the GET/connect verdict), and it is skipped when the handler queued a
+  because `OnInit` is an initializer: it mints and defaults the session,
+  registers `Tick`/`Listen`, and may `Redirect` or return `ErrNotFound`, none
+  of which is safe to repeat once a handler has committed a mutation.
+  `Tick`/`Listen` are no-ops inside `OnReload` (liveness stays the
+  GET/connect verdict), and it is skipped when the handler queued a
   `Redirect`. A unit that declares neither hook and answers 204 now logs one
   line naming `OnReload`, so the failure is never silent again.
 
@@ -736,26 +736,25 @@ the v2 core. **Requires Go 1.27.**
   now path-escaped where the base is built AND HTML-escaped where the attribute
   is written. `Param[T]` still sees the decoded value.
 
-Read this even if you read nothing else. Two defaults moved in the
-permissive direction relative to v0.7, deliberately, and neither announces
-itself at runtime unless you look:
+Read this even if you read nothing else. Two defaults are permissive,
+deliberately, and neither announces itself at runtime unless you look:
 
 - **Origin enforcement (the "origin floor": the check on every state-changing
   request that its `Origin`/`Sec-Fetch-Site` names a host you trust) is OPEN by
-  default.** v0.7 enforced; v0.8 accepts every action and the SSE connect from
-  any origin, including a request with no origin signal at all, until
-  `WithTrustedOrigin` names one, at which point enforcement switches on for the
-  whole endpoint. The reasoning: on a live page the per-tab id is a
-  synchronizer token and does the load-bearing work, and local development
-  over plain http has to work with no configuration. The limit of that
-  reasoning: a plain action has no connection and no tab id (`viatab` and
+  default.** v0.7 had no origin check. v0.8 adds one but accepts every action
+  and the SSE connect from any origin, including a request with no origin signal
+  at all, until `WithTrustedOrigin` names one, at which point enforcement
+  switches on for the whole endpoint. The reasoning: on a live page the per-tab
+  id is a synchronizer token and does the load-bearing work, and local
+  development over plain http has to work with no configuration. The limit of
+  that reasoning: a plain action has no connection and no tab id (`viatab` and
   `_viatab` are empty), so with the floor open a cross-origin `PostForm` submit
   is accepted, and what defends it is the session cookie's `SameSite=Lax`: the
   request arrives unauthenticated. The consequence: **a production deployment
-  that never calls `WithTrustedOrigin` is running with cross-origin
-  enforcement off.** The option name describes what it allows and says nothing
-  about it also flipping enforcement, so via logs a warning at startup when no
-  trusted origin is set. Set the option in production.
+  that never calls `WithTrustedOrigin` is running with cross-origin enforcement
+  off.** The option name describes what it allows and says nothing about it also
+  flipping enforcement, so via logs a warning at startup when no trusted origin
+  is set. Set the option in production.
 - **Sessions are always on**, lazily: the cookie is issued on first write. If
   no key is configured, via mints a random per-process one and warns once. The
   key signs the cookie only; the data lives behind the new `SessionStore`
@@ -763,9 +762,6 @@ itself at runtime unless you look:
   restart or spanning pods takes both `WithSessionKey`/`VIA_SESSION_KEY` and
   `WithSessionStore`; via warns once at the first session mint when the store
   is the process-local default.
-
-`WithInsecureOrigin` is gone, because there is no longer a secure default to
-opt out of.
 
 ### Breaking
 
@@ -781,9 +777,9 @@ as a re-read of the README rather than a diff.
 - `Signal.Ref` and `SignalCS.Ref` return `expr.Expr`, not `string`. A call site
   that concatenated the result now composes it (`sig.Ref().Ne("")`) or casts.
 
-- `Initer`, `Reloader` and `PageMetaer` are no longer exported — delete any
-  `var _ via.Initer = (*Page)(nil)` pin. The hooks stay duck-typed, and
-  `Mount` still panics on a hook name with the wrong signature and logs a
+- v0.7's `Initializer` interface is gone — delete any
+  `var _ via.Initializer = (*Page)(nil)` pin. The hooks are duck-typed, and
+  `Mount` panics on a hook name with the wrong signature and logs a
   near-miss name.
 
 - **Requires Go 1.27.**
@@ -824,18 +820,12 @@ as a re-read of the README rather than a diff.
   on every page's `<body>` and every `@post`/`PostForm` carries it. A stateless
   page sends the empty id, which matches no connection and falls through to the
   stateless path, as does a plain child embedded on a live page.
-- **The tab id is a signal, not the `X-Via-Tab` header** (wire break). Datastar
-  builds request headers per call (`Object.assign({}, {Accept,
-  'Datastar-Request'}, opts.headers)`, with no ancestor inheritance and no
-  config hook), so a header had to be spelled out on every binding (33 bytes
-  each). It filters out only signals matching `/(^|\.)_/`, so dropping the
-  leading underscore is all it takes for the tab id to ride in the signal store
-  every `@post` already sends. The header is no longer read. Security is
-  unchanged: the id is still a synchronizer token set by same-origin JS and
-  never auto-attached by the browser, the `Datastar-Request` check stays, and
-  the origin floor is untouched. `PostForm` is the one exception: a native
-  form submit carries neither signals nor headers, so it keeps its hidden
-  `_viatab` field, now bound to `$viatab`.
+- **The tab id signal is `viatab`, not v0.7's `via_tab`** (wire break). Every
+  `@post` sends it in the signal store, from which Datastar drops only names
+  matching `/(^|\.)_/`. The id is still a synchronizer token set by same-origin
+  JS and never auto-attached by the browser. `PostForm` is the one exception: a
+  native form submit carries neither signals nor headers, so it carries a hidden
+  `_viatab` field, bound to `$viatab`.
 - **A signal's wire name is its Go field name** (wire break): `count`,
   `chat__draft` for one inside an embedded `Chat`, `outer__mid__kid__step` for
   a deeper path, replacing the opaque field offsets (`f0`, `f48`, `i0_f0`).
@@ -985,12 +975,11 @@ as a re-read of the README rather than a diff.
   declared host works under the strict CSP and an undeclared one stays
   blocked. Malformed heads panic at startup; the zero `Head` serves what via
   served without the option.
-- **Resilience floor** — the fixed, non-configurable guarantees a live
-  stream makes about surviving a flaky network: SSE keepalive comment
-  frames (fixed 25s), per-frame write deadlines (fixed 10s), half-open
-  teardown, a client reconnect manager with a "Reconnecting…" banner and a
-  capped reload-to-re-bootstrap (2), a fixed 10,000-connection cap (503
-  over it).
+- **Resilience floor** — the guarantees a live stream makes about surviving a
+  flaky network: SSE keepalive comment frames (fixed 25s), per-frame write
+  deadlines (fixed 10s), half-open teardown, a client reconnect manager with a
+  "Reconnecting…" banner and a capped reload-to-re-bootstrap (2), and a
+  10,000-connection cap (503 over it; `WithMaxSSEConn` sets it).
 - **`vt.App.Client()`**: the harness's `*http.Client`, wired to reach its
   in-memory server. A test that hand-rolls a request past the `Get`/`Action`/
   `Connect` builders must send it through this, not `http.DefaultClient` —
@@ -1107,8 +1096,8 @@ as a re-read of the README rather than a diff.
   did not carry, so an input that appears for the first time in the response is
   seeded instead of inheriting whatever the client store still held.
 - **Actions are addressed by handler rather than by render position**
-  (`/_via/a/{island}/{id}`, plus `?a=` for a value-carrying action). `id` is a
-  short hash of the handler method's fully-qualified Go name, so it is stable
+  (`/_via/a/{child}/{act}`, plus `?a=` for a value-carrying action). `act` is
+  a short hash of the handler method's fully-qualified Go name, so it is stable
   across renders, across instances and across rebuilds — a deploy does not
   invalidate the URLs open tabs are holding. This is a **wire break**: a tab
   open across the upgrade 410s its first click, then reloads correct.
@@ -1117,9 +1106,10 @@ as a re-read of the README rather than a diff.
   signal order and the action count, so on a page backed by a shared store
   every per-row `OnArg` was its own action slot and another user adding or
   removing a row silently 410'd every other open tab's buttons — untouched
-  ones included, permanently, until reload (`example/poll` demonstrated it).
-  The digest also did no security work: CSRF is the origin floor plus the
-  per-connection tab id, and the digest never stopped a forged in-range `n`.
+  ones included, permanently, until reload (`internal/example/poll`
+  demonstrated it). The digest also did no security work: CSRF is the
+  origin floor plus the per-connection tab id, and the digest never stopped
+  a forged in-range `n`.
 
   A click now 410s only when the current render does not bind that handler at
   all — a closed branch, or the classic wiring mistake of an `OnInit` that
@@ -1316,15 +1306,11 @@ as a re-read of the README rather than a diff.
   firing one action left every later timer or subscription callback reading
   that action's request instead of the connection's. Each action now runs
   against a fresh, per-dispatch Ctx instead.
-- **A native `PostForm` submit inside a live unit now runs its handler and
-  answers with a full-page re-render.** A real browser form submit can't set
-  the `X-Via-Tab` header (that's fetch-only), so it used to miss the
-  connection entirely and 410 ("no live connection for this tab"), or — if
-  the header were somehow present — 500 on a live dispatch's `nil`
-  native-render path. `PostForm` now also renders a hidden `_viatab` field,
-  kept in sync with the `$_viatab` signal, that dispatch reads as a fallback
-  when the header is absent; it is checked against the same per-mount
-  ownership the header gets.
+- **A native `PostForm` submit inside a live unit runs its handler and answers
+  with a full-page re-render.** A browser form submit carries neither Datastar's
+  signals nor its headers, so `PostForm` renders a hidden `_viatab` field, bound
+  to the `$viatab` signal, that carries the tab id. Dispatch checks it against
+  the same per-mount ownership as the signal.
 - **An action POST against a live unit no longer waits on that unit's own
   SSE push.** A stalled reader could block the write behind an action for up
   to the (fixed, non-disableable) write timeout, while the connection's
@@ -1429,6 +1415,8 @@ as a re-read of the README rather than a diff.
 - A session that idles past its TTL while a live stream is open turns every
   later dispatch on that tab into a 403 "session mismatch" until the page is
   reloaded — the stream itself does not keep the session warm.
+  **Unreleased:** the 403 lasts at most one keepalive (25s), then the stream
+  ends and the tab reloads. The stream still does not keep the session warm.
 - A `View` that panics part-way through a live push's display render can lose
   exactly one later `Signal.Set`. `Signal.bind` stamps the signal's dirty sink
   at bind time, so the signals rendered before the panic point are left
@@ -1470,14 +1458,21 @@ as a re-read of the README rather than a diff.
   stream, and `Rotate` on it is refused rather than re-issuing a cookie over
   the one the browser now holds. Reads still serve the connect-time snapshot.
   Reconnecting the stream picks up the new id.
+  **Unreleased:** a `Rotate` ends the stream of every other tab on the session,
+  the rotating tab's handles follow the new id, and a session write reaches
+  every tab's `Tick` and `Listen` handlers. A `Rotate` in another process
+  sharing the store is seen on the next keepalive, so for up to 25s those
+  handles still drop their writes. `Rotate` from `Tick`/`Listen` is still
+  refused.
 
 ### Verification
 
 - The suite is `-race`-clean, and nine examples build and run against the tree.
 - The live stack is verified in real headless browsers, not just against the
-  Go transport: `vtbrowser/`, behind `-tags browser` (chromedp). `example/chat`
-  is verified with two browsers against one server — a message typed in one
-  reaches the other, and the presence count moves in both.
+  Go transport: `vtbrowser/`, behind `-tags browser` (chromedp).
+  `internal/example/chat` is verified with two browsers against one server —
+  a message typed in one reaches the other, and the presence count moves in
+  both.
 - The hardened core carries a test per claim: by-value `Handler`/`Mount`, the
   origin floor, the hash-admitted CSP, the request body cap, panic-recovery on
   every transport path, the compile-time `View` constraint, and the

@@ -776,9 +776,8 @@ looks like at runtime.
 - **`via.Param[T](ctx, n)`, `via.Redirect(ctx, path)`, `via.Listen`** →
   `ctx.Param[T](n)`, `ctx.Redirect(path)`, `ctx.Listen(topic, fn)`.
   **Compiler** — the package functions are gone.
-- **`via.Initer`, `via.Reloader`, `via.PageMetaer`** → unexported.
-  **Compiler** — delete any `var _ via.Initer = (*Page)(nil)` pin; the hooks
-  stay duck-typed.
+- **`via.Initializer`** → gone. **Compiler** — delete any
+  `var _ via.Initializer = (*Page)(nil)` pin; the hooks are duck-typed.
 - **`Signal.Ref()` and `SignalCS.Ref()` returned `string`** → `expr.Expr`.
   **Compiler** where the result was concatenated; compose it
   (`sig.Ref().Ne("")`) or cast.
@@ -789,9 +788,7 @@ looks like at runtime.
   internal. **Compiler** — `h` is elements, attributes and `Str`.
 - **`h.SafeURL`** → gone. **Compiler** — the typed `h.Href`/`h.Src`/`h.Action`
   attributes and `ctx.Redirect` apply the URL policy.
-- **`WithInsecureOrigin`** → gone. **Compiler** — the origin check is off
-  until `WithTrustedOrigin` names an origin.
-- **The `X-Via-Tab` header** → the `viatab` signal. Wire-only — see "Wire
+- **The `via_tab` signal** → `viatab`. Wire-only — see "Wire
   break: the tab id signal" above.
 - **`(*vt.App).EmbedAction`** → `ChildAction`. **Compiler** — `EmbedAction` is
   gone.
