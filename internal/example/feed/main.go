@@ -1,5 +1,6 @@
 // Command feed is a multi-user broadcast: one server-side publisher sends to a
-// Topic and every connected browser lists each message. Open it in two tabs.
+// Topic and every connected browser shows the newest messages. Open it in two
+// tabs.
 package main
 
 import (
