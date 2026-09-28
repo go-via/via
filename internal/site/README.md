@@ -70,7 +70,8 @@ test pins it.
 
 A demo that mutates shared state takes a `Limiter` field, set by the demo's
 own `New*` constructor from a limiter the page owns, and checks
-`Lim.Allow(ctx)` first.
+`Lim.Allow(ctx)` first. The front page's counter is the one exception: it has
+no limiter, and `ResetAll` zeroes it every 15 minutes.
 
 ## Public-state bounds
 
