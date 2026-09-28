@@ -99,9 +99,12 @@ func TestResetAll_zeroesEveryCounter(t *testing.T) {
 	c := demos.NewStartCounter(allowAll{})
 	s := demos.NewShared(allowAll{})
 	l := demos.NewLandingCounter()
+	v := demos.NewVote(allowAll{})
 	c.Inc(nil)
 	s.Inc(nil)
 	l.Inc(nil)
+	v.Cast(nil, 0)
+	require.NotZero(t, demos.VoteTallies()[0])
 
 	demos.ResetAll()
 
@@ -110,4 +113,7 @@ func TestResetAll_zeroesEveryCounter(t *testing.T) {
 	assert.Zero(t, startLoad())
 	assert.Zero(t, sharedLoad())
 	assert.Zero(t, demos.LandingCount())
+	for i, n := range demos.VoteTallies() {
+		assert.Zero(t, n, "vote tally %d", i)
+	}
 }

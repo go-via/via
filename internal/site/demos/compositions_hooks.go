@@ -52,6 +52,7 @@ var hookInstances atomic.Int64
 // the visitor has a session there is nowhere to keep lines across instances, so
 // each instance shows only its own; the first action mints one.
 type HookLog struct {
+	// trim: see shared_contract.go.
 	Log via.List[string]
 	n   int64
 	sid string

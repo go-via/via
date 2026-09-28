@@ -85,9 +85,8 @@ func (g *MapGrid) Shuffle(ctx *via.Ctx) {
 func (g *MapGrid) View() h.H {
 	grid := []h.H{h.Class("map-grid")}
 	for i, v := range g.views()[:g.N.Get()] {
-		// A stable id so a removal patches away the map that left, not the
-		// last one; DataIgnoreMorph so the patch leaves MapLibre's own DOM
-		// alone.
+		// A stable id so a morph pairs each map with its own element;
+		// DataIgnoreMorph so the patch leaves MapLibre's own DOM alone.
 		// MapLibre injects a focusable canvas, so the group is the screen
 		// reader's handle; outside the ignore-morph container, its label
 		// follows the shuffle.

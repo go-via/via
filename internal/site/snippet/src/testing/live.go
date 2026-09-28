@@ -27,7 +27,7 @@ func (b *Board) View() h.H {
 
 func TestBoard_pushesOverTheStream(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Board{}))
+	app := vt.Serve(t, via.Handler(Board{}, via.WithLogger(vt.Logger(t))))
 	conn := app.Connect()
 
 	status, _ := app.Action(0).Over(conn).Fire()
@@ -47,7 +47,7 @@ func (c *Clock) View() h.H                 { return h.P(h.Str("ticks="), c.n.Dis
 
 func TestClock_ticksOncePerMinute(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		app := vt.Serve(t, via.Handler(Clock{}))
+		app := vt.Serve(t, via.Handler(Clock{}, via.WithLogger(vt.Logger(t))))
 		conn := app.Connect()
 
 		time.Sleep(59 * time.Second)
@@ -70,7 +70,7 @@ func TestClock_ticksOncePerMinute(t *testing.T) {
 // snippet:start close
 func TestBoard_shutdownEndsTheStreamCleanly(t *testing.T) {
 	t.Parallel()
-	r := via.Handler(Board{})
+	r := via.Handler(Board{}, via.WithLogger(vt.Logger(t)))
 	app := vt.Serve(t, r)
 	conn := app.Connect()
 

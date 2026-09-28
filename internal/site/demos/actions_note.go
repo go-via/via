@@ -14,6 +14,7 @@ import (
 type Note struct {
 	Draft via.Signal[string]
 	Err   via.Signal[string]
+	// trim: see shared_contract.go.
 	Notes via.List[string]
 }
 

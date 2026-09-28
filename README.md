@@ -140,8 +140,8 @@ It runs gofmt, vet, staticcheck and the race tests for via and the site
 module (`internal/site`), then the browser tier in `vtbrowser`, which needs
 Chromium or Chrome; `--no-browser` skips it. It reports, never rewrites.
 
-[`CONVENTIONS.md`](CONVENTIONS.md) has the code and test conventions, and
-[`AGENTS.md`](AGENTS.md) the bar for a new duck-typed method.
+[`CONVENTIONS.md`](CONVENTIONS.md) has the code and test conventions,
+including the bar for a new duck-typed method.
 
 ## License
 

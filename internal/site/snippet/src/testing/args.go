@@ -30,7 +30,7 @@ func (s *Stepper) View() h.H {
 // snippet:start body
 func TestStepper_addsThePostedStep(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Stepper{n: new(atomic.Int64)}))
+	app := vt.Serve(t, via.Handler(Stepper{n: new(atomic.Int64)}, via.WithLogger(vt.Logger(t))))
 
 	status, body := app.Action(0).Body(`{"step":5}`).Fire()
 	require.Equal(t, 200, status)
@@ -57,7 +57,8 @@ func (s *Shelf) View() h.H {
 // snippet:start arg
 func TestShelf_eachRowCarriesItsOwnArg(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Shelf{titles: []string{"Solaris", "Dune", "Ubik"}}))
+	app := vt.Serve(t, via.Handler(Shelf{titles: []string{"Solaris", "Dune", "Ubik"}},
+		via.WithLogger(vt.Logger(t))))
 
 	_, body := app.Action(1).Fire() // the second row's button
 	assert.Contains(t, body, `"picked":"Dune"`)
@@ -80,7 +81,7 @@ func (l *Layout) View() h.H { return h.Main(via.Child(l.Search)) }
 
 func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Layout{}))
+	app := vt.Serve(t, via.Handler(Layout{}, via.WithLogger(vt.Logger(t))))
 
 	// "0" is the root's first Child; its signals are prefixed with its field name.
 	_, body := app.ChildAction("0", 0).Body(`{"search__q":"via"}`).Fire()
@@ -93,7 +94,7 @@ func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 func TestCounter_refusesCrossSitePosts(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Counter{n: new(atomic.Int64)},
-		via.WithTrustedOrigin("https://example.com")))
+		via.WithTrustedOrigin("https://example.com"), via.WithLogger(vt.Logger(t))))
 
 	status, _ := app.Action(1).Fire() // same-origin by default
 	assert.Equal(t, 200, status)
@@ -111,7 +112,7 @@ func TestCounter_refusesCrossSitePosts(t *testing.T) {
 func TestCounter_overTLSRefusesAnHTTPOrigin(t *testing.T) {
 	t.Parallel()
 	app := vt.ServeTLS(t, via.Handler(Counter{n: new(atomic.Int64)},
-		via.WithTrustedOrigin("https://example.com")))
+		via.WithTrustedOrigin("https://example.com"), via.WithLogger(vt.Logger(t))))
 
 	status, _ := app.Action(1).Host("app.example").Origin("https://app.example").Fire()
 	assert.Equal(t, 200, status)

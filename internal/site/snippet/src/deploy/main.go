@@ -3,6 +3,7 @@
 package deploy
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -73,7 +74,7 @@ func Run() error {
 
 	// snippet:start server
 	srv := &http.Server{
-		Addr:              os.Getenv("VIA_ADDR"),
+		Addr:              cmp.Or(os.Getenv("VIA_ADDR"), "127.0.0.1:8080"),
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,

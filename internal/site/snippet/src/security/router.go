@@ -13,9 +13,9 @@ import (
 
 // snippet:start router
 func newRouter() *via.Router {
-	key := os.Getenv("SESSION_KEY")
+	key := os.Getenv("VIA_SESSION_KEY")
 	if key == "" {
-		log.Fatal("SESSION_KEY is unset: export 32+ random bytes")
+		log.Fatal("VIA_SESSION_KEY is unset: export 32+ random bytes")
 	}
 	return via.NewRouter(
 		via.WithTrustedOrigin("https://example.com"),

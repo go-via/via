@@ -31,7 +31,7 @@ func (r *Room) View() h.H {
 
 func TestRoom_aPublishReachesEveryTab(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(Room{bus: topic.New[string]()}))
+	app := vt.Serve(t, via.Handler(Room{bus: topic.New[string]()}, via.WithLogger(vt.Logger(t))))
 	alice, bob := app.Connect(), app.Connect()
 	assert.NotEqual(t, alice.TabID(), bob.TabID())
 

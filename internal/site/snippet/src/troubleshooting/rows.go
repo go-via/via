@@ -3,6 +3,7 @@
 package troubleshooting
 
 import (
+	"slices"
 	"strconv"
 
 	"github.com/go-via/via"
@@ -20,7 +21,9 @@ type Todos struct{ Items []Todo }
 func (l *Todos) Delete(ctx *via.Ctx, id int) {
 	for i, t := range l.Items {
 		if t.ID == id {
-			l.Items = append(l.Items[:i], l.Items[i+1:]...)
+			// Items shares its backing array with the literal passed to
+			// Mount, so deleting in place would edit every later request's rows.
+			l.Items = slices.Concat(l.Items[:i], l.Items[i+1:])
 			return
 		}
 	}

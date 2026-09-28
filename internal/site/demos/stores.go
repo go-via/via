@@ -1,6 +1,10 @@
 package demos
 
-import "github.com/go-via/via/topic"
+import (
+	"slices"
+
+	"github.com/go-via/via/topic"
+)
 
 // No card shows this file. It hands tests the stores the counter demos share:
 // a _test.go in this package would be embedded and served, so those tests
@@ -14,6 +18,13 @@ func SharedStore() (*topic.Topic[int64], func() int64) { return sharedTopic, sha
 
 // LandingCount is the front page counter's current value.
 func LandingCount() int64 { return landingCount.Load() }
+
+// VoteTallies is a copy of the /actions vote counts, in option order.
+func VoteTallies() []int {
+	votes.mu.Lock()
+	defer votes.mu.Unlock()
+	return slices.Clone(votes.counts)
+}
 
 // ChatPresenceStore is the tutorial chat's head-count topic, its locked read,
 // and the step a connect or disconnect applies.
