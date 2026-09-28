@@ -60,16 +60,26 @@ jobs:
       - name: Install Chromium
         # ubuntu-latest runners ship Google Chrome preinstalled; install
         # Chromium only when no browser is present so the job stays fast
-        # on hosted runners but still works on bare self-hosted ones.
+        # on hosted runners but still works on bare self-hosted ones. The
+        # pick goes to VIA_CHROME so the tests run the binary checked here.
         run: |
-          if ! command -v google-chrome >/dev/null 2>&1 \
-            && ! command -v chromium >/dev/null 2>&1 \
-            && ! command -v chromium-browser >/dev/null 2>&1; then
+          find_chrome() {
+            for c in chromium chromium-browser chrome google-chrome google-chrome-stable headless-shell; do
+              if command -v "$c" >/dev/null 2>&1; then
+                command -v "$c"
+                return 0
+              fi
+            done
+            return 1
+          }
+          if ! chrome=$(find_chrome); then
             sudo apt-get update
             sudo apt-get install -y chromium-browser
+            # Fail loudly here rather than letting the tier skip or flake later.
+            chrome=$(find_chrome) || { echo "no browser binary after install" >&2; exit 1; }
           fi
-          # Fail loudly here rather than letting the tier skip or flake later.
-          command -v google-chrome || command -v chromium || command -v chromium-browser
+          echo "using $chrome"
+          echo "VIA_CHROME=$chrome" >> "$GITHUB_ENV"
 
       - name: Run browser tier (vtbrowser, -tags browser)
         run: cd vtbrowser && go test -race -tags browser ./...

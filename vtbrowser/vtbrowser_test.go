@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -186,6 +189,43 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	s.Click("#via-i0 button")
 	s.WaitTextContains("#via-i0 p", "clicks 2")
 	s.RequireCleanConsole()
+}
+
+// deadlineTB reports a chosen test deadline and turns Fatal into a message on
+// fatal, so a test can watch Open fail without failing itself.
+type deadlineTB struct {
+	testing.TB
+	deadline time.Time
+	fatal    chan string
+}
+
+func (d deadlineTB) Deadline() (time.Time, bool) { return d.deadline, true }
+
+func (d deadlineTB) Fatal(args ...any) {
+	d.fatal <- fmt.Sprint(args...)
+	runtime.Goexit()
+}
+
+func (d deadlineTB) Fatalf(format string, args ...any) {
+	d.fatal <- fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+func TestOpen_aHungLaunchFailsBeforeTheTestDeadlineWithTheBrowserOutput(t *testing.T) {
+	fake := filepath.Join(t.TempDir(), "fake-chrome")
+	script := "#!/bin/sh\necho 'fake-chrome: still starting' >&2\nexec sleep 600\n"
+	require.NoError(t, os.WriteFile(fake, []byte(script), 0o755))
+	t.Setenv("VIA_CHROME", fake)
+
+	stub := deadlineTB{TB: t, deadline: time.Now().Add(7 * time.Second), fatal: make(chan string, 1)}
+	go vtbrowser.Open(stub, http.NotFoundHandler())
+
+	select {
+	case msg := <-stub.fatal:
+		assert.Contains(t, msg, "fake-chrome: still starting", "launch failure omits the browser output")
+	case <-time.After(15 * time.Second):
+		t.Fatal("launch still waiting: the 20s chromedp default, not the test deadline, bounds it")
+	}
 }
 
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {

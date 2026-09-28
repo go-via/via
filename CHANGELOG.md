@@ -274,6 +274,11 @@
   evaluation as "not yet". A poll that landed while the page reloaded
   failed the test at once. A timeout now also prints the last error.
 
+- `vtbrowser.Open` waits for the browser to start until the test's deadline
+  (`go test -timeout`) instead of chromedp's fixed 20s, so a slow first
+  launch on a cold machine no longer fails. A failed launch reports the
+  browser's output.
+
 ### Documented (behaviour unchanged)
 
 - `/testing` describes the wire protocol for a client without vt (action
