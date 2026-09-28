@@ -279,6 +279,11 @@
   launch on a cold machine no longer fails. A failed launch reports the
   browser's output.
 
+- A `Session.Rotate` in another request ends a tab whose stream is still
+  connecting. One during the connect's first `Listen` sweep or its
+  `OnConnect` pushes was missed, and the tab streamed as the rotated-away
+  session until the next keepalive (25s).
+
 ### Documented (behaviour unchanged)
 
 - `/testing` describes the wire protocol for a client without vt (action
