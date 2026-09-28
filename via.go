@@ -794,8 +794,8 @@ type paramMiss struct {
 // path matters there.
 //
 // Path params survive an action; query params do not. An action POSTs to
-// {mount}/_via/a/{n}/…, built from the mount pattern with its {name} segments
-// filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
+// {mount}/_via/a/{child}/{act}, built from the mount pattern with its {name}
+// segments filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
 // URL, so the discovery render that decides what is dispatchable runs against
 // the unfiltered page: a row that only exists under the filter binds no action
 // in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
