@@ -152,9 +152,10 @@ Caddyfile only changes when the proxy contract does; reload Caddy, do not
 restart it, so in-flight TLS handshakes survive.
 
 Pages link static files by fingerprinted URL (`/static/<hash8>/site.css`),
-served `immutable` for a year, so a redeploy needs no cache purge. A plain
-`/static/x` URL, or a fingerprint that no longer matches the file, gets the
-current file with `max-age=3600, must-revalidate` and an ETag. Don't add
+served `public, max-age=31536000, immutable`, so a redeploy needs no cache
+purge. A plain `/static/x` URL, or a fingerprint that no longer matches the
+file, gets the current file with `public, max-age=3600, must-revalidate` and
+an ETag. Don't add
 caching for `/static/` in Caddy: the binary sets `Cache-Control` itself.
 
 ## Versions
