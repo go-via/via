@@ -16,6 +16,7 @@
     404: "not found: no such route, or no stream for this tab",
     410: "gone: the server no longer holds what this request names; reload",
     413: "request body over the size cap",
+    429: "too many requests: this client's click budget is spent; wait a few seconds",
     500: "the handler panicked; the server logged it",
     503: "unavailable: the tab's goroutine is busy, the stream cap is reached or the session store did not answer; retry",
   };

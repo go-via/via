@@ -43,10 +43,16 @@ func NewLimiter(perMinute int) *Limiter {
 // Allow spends a token if the client has one. Buckets are keyed on the client
 // IP, so a visitor cannot buy a fresh budget by dropping the session cookie.
 func (l *Limiter) Allow(ctx *via.Ctx) bool {
+	return l.AllowRequest(ctx.Request())
+}
+
+// AllowRequest is Allow for a handler in front of the router, where no Ctx
+// exists yet.
+func (l *Limiter) AllowRequest(r *http.Request) bool {
 	if l.calls.Add(1)%sweepEvery == 0 {
 		l.sweep()
 	}
-	key := clientKey(ctx.Request())
+	key := clientKey(r)
 	v, ok := l.buckets.Load(key)
 	if !ok {
 		v, _ = l.buckets.LoadOrStore(key, &bucket{tokens: l.perMinute, last: time.Now()})
