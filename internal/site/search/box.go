@@ -48,7 +48,7 @@ func (b *Box) Find(ctx *via.Ctx) {
 func (b *Box) View() h.H {
 	open := expr.Rawf("%s.length >= %s && %s > 0", b.Query.Ref(), expr.Val(minLength), b.Count.Ref())
 	return h.Search(h.Class("search"),
-		on.KeydownCS(focusKeys(), on.Window()),
+		on.KeydownCS(focusKeys(), on.WithWindow()),
 		h.Label(h.Class("sr-only"), h.For(inputID), h.Str("Search the docs")),
 		icon.Search(),
 		h.Input(h.ID(inputID), h.Type("search"), h.Placeholder("Search Via"), h.AutoComplete("off"),
@@ -58,7 +58,7 @@ func (b *Box) View() h.H {
 			h.DataAttr("aria-activedescendant", expr.Rawf("%s >= 0 ? %s + %s : ''",
 				b.Active.Ref(), expr.Val(optionID), b.Active.Ref())),
 			b.Query.Bind(),
-			on.Input(b.Find, on.Debounce(250*time.Millisecond)),
+			on.Input(b.Find, on.WithDebounce(250*time.Millisecond)),
 			on.KeydownCS(b.keys()),
 			// The response re-renders this region; morphing the input would
 			// drop whatever was typed after the request left.

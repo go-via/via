@@ -42,7 +42,7 @@ func (p *profilePage) OnInit(ctx *via.Ctx) error {
 }
 func (p *profilePage) SignIn(ctx *via.Ctx) { ctx.Session().Put(acct{Name: "alice"}) }
 func (p *profilePage) View() h.H {
-	return h.Div(h.P(h.Str(p.greeting)), h.Button(via.On("click", p.SignIn), h.Str("in")))
+	return h.Div(h.P(h.Str(p.greeting)), h.Button(on.Click(p.SignIn), h.Str("in")))
 }
 
 func jarGet(t *testing.T, c *http.Client, url string) string {
@@ -73,7 +73,7 @@ type redirectPage struct{}
 func (p *redirectPage) Go(ctx *via.Ctx)   { ctx.Redirect("/dest") }
 func (p *redirectPage) Evil(ctx *via.Ctx) { ctx.Redirect("javascript:alert(1)") }
 func (p *redirectPage) View() h.H {
-	return h.Div(h.Button(via.On("click", p.Go)), h.Button(via.On("click", p.Evil)))
+	return h.Div(h.Button(on.Click(p.Go)), h.Button(on.Click(p.Evil)))
 }
 
 // cspOf fetches a page and returns the Content-Security-Policy it served.
@@ -167,7 +167,7 @@ type echoPage struct{ echoed int }
 
 func (p *echoPage) Echo(ctx *via.Ctx) { p.echoed = ctx.Param[int]("id") }
 func (p *echoPage) View() h.H {
-	return h.Div(h.Button(via.On("click", p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
+	return h.Div(h.Button(on.Click(p.Echo)), h.P(h.Str("echoed "), h.Str(p.echoed)))
 }
 
 // avatarPage uploads a file via PostForm (always multipart); Save reads it with
@@ -803,7 +803,7 @@ func (p *slugPage) Bump(ctx *via.Ctx) {}
 func (p *slugPage) View() h.H {
 	return h.Div(
 		h.P(h.Str("slug=["), h.Str(p.slug), h.Str("]")),
-		h.Button(via.On("click", p.Bump), h.Str("b")),
+		h.Button(on.Click(p.Bump), h.Str("b")),
 		via.PostForm(p.Bump, h.Button(h.Str("go"))),
 	)
 }
@@ -1043,7 +1043,7 @@ type livePushChild struct {
 func (k *livePushChild) Bump(ctx *via.Ctx) { k.n++ }
 
 func (k *livePushChild) View() h.H {
-	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(via.On("click", k.Bump)))
+	return h.Div(h.Str(k.n), k.seen.Display(), h.Button(on.Click(k.Bump)))
 }
 
 type livePushParent struct{ I livePushChild }
@@ -1076,7 +1076,7 @@ type paramChild struct{ n int }
 
 func (k *paramChild) Bump(ctx *via.Ctx) { k.n++ }
 
-func (k *paramChild) View() h.H { return h.Div(h.Str(k.n), h.Button(via.On("click", k.Bump))) }
+func (k *paramChild) View() h.H { return h.Div(h.Str(k.n), h.Button(on.Click(k.Bump))) }
 
 type paramParent struct{ I paramChild }
 
@@ -1110,7 +1110,7 @@ func (p *staleLoader) OnInit(ctx *via.Ctx) error { p.shown = p.s.Value(); return
 func (p *staleLoader) Bump(ctx *via.Ctx) { p.s.Add(1) }
 
 func (p *staleLoader) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(on.Click(p.Bump)))
 }
 
 // reloadingLoader is staleLoader with the one method that fixes it.
@@ -1126,7 +1126,7 @@ func (p *reloadingLoader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); 
 func (p *reloadingLoader) Bump(ctx *via.Ctx) { p.s.Add(1) }
 
 func (p *reloadingLoader) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(on.Click(p.Bump)))
 }
 
 func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
@@ -1180,7 +1180,7 @@ func (p *liveReloader) OnReload(ctx *via.Ctx) error { p.shown = p.s.Value(); ret
 func (p *liveReloader) Bump(ctx *via.Ctx) { p.s.Add(1) }
 
 func (p *liveReloader) View() h.H {
-	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(via.On("click", p.Bump)))
+	return h.Div(p.beat.Display(), h.P(h.Str("n="+fmt.Sprint(p.shown))), h.Button(on.Click(p.Bump)))
 }
 
 func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
@@ -1207,7 +1207,7 @@ func (p *reloadNotFound) OnReload(ctx *via.Ctx) error {
 
 func (p *reloadNotFound) Drop(ctx *via.Ctx) { p.gone = true }
 
-func (p *reloadNotFound) View() h.H { return h.Div(h.Button(via.On("click", p.Drop))) }
+func (p *reloadNotFound) View() h.H { return h.Div(h.Button(on.Click(p.Drop))) }
 
 func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
 	t.Parallel()
@@ -1225,7 +1225,7 @@ func (p *reloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhe
 
 func (p *reloadRedirector) Go(ctx *via.Ctx) {}
 
-func (p *reloadRedirector) View() h.H { return h.Div(h.Button(via.On("click", p.Go))) }
+func (p *reloadRedirector) View() h.H { return h.Div(h.Button(on.Click(p.Go))) }
 
 func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 	t.Parallel()
@@ -1250,7 +1250,7 @@ func (p *tickingReload) OnReload(ctx *via.Ctx) error {
 func (p *tickingReload) Bump(ctx *via.Ctx) { p.n++ }
 
 func (p *tickingReload) View() h.H {
-	return h.Div(h.P(h.Str(p.n)), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.Str(p.n)), h.Button(on.Click(p.Bump)))
 }
 
 func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
@@ -1283,7 +1283,7 @@ func (p *reloadedChild) OnInit(ctx *via.Ctx) error { return p.OnReload(ctx) }
 func (p *reloadedChild) Bump(ctx *via.Ctx) { p.s.Add(1) }
 
 func (p *reloadedChild) View() h.H {
-	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.ID("n"), h.Str(p.shown)), h.Button(on.Click(p.Bump)))
 }
 
 type reloadedChildParent struct{ C reloadedChild }
@@ -1324,7 +1324,7 @@ func (p *closablePage) beat(ctx *via.Ctx) {
 func (p *closablePage) dispose()      { close(p.gone) }
 func (p *closablePage) Bump(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *closablePage) View() h.H {
-	return h.Div(h.Button(via.On("click", p.Bump), h.Str("bump")), h.Span(p.n.Display()))
+	return h.Div(h.Button(on.Click(p.Bump), h.Str("bump")), h.Span(p.n.Display()))
 }
 
 func closableRouter(t *testing.T) (*via.Router, *closablePage) {
@@ -1723,7 +1723,7 @@ func (p *blockedTick) tick(*via.Ctx) {
 func (p *blockedTick) Bump(*via.Ctx) {}
 
 func (p *blockedTick) View() h.H {
-	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump)))
+	return h.Div(p.n.Display(), h.Button(on.Click(p.Bump)))
 }
 
 func newBlockedTick() blockedTick {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,8 +39,8 @@ func (c *counter) Dec(ctx *via.Ctx) { c.count.Add(-1) }
 func (c *counter) View() h.H {
 	return h.Div(
 		h.H1(h.Str(c.count.Value())),
-		h.Button(via.On("click", c.Dec), h.Str("-")),
-		h.Button(via.On("click", c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Dec), h.Str("-")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }
 
@@ -303,7 +304,7 @@ type noopComp struct{}
 
 func (n *noopComp) Ping(*via.Ctx) {}
 func (n *noopComp) View() h.H {
-	return h.Div(h.Button(via.On("click", n.Ping), h.Str("ping")))
+	return h.Div(h.Button(on.Click(n.Ping), h.Str("ping")))
 }
 
 func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
@@ -319,28 +320,21 @@ type formComp struct{ q via.Signal[string] }
 
 func (c *formComp) Go(ctx *via.Ctx) {}
 func (c *formComp) View() h.H {
-	return h.Form(via.On("submit", c.Go), h.Input(c.q.Bind()))
+	return h.Form(on.Submit(c.Go), h.Input(c.q.Bind()))
 }
 
-func TestOn_submitWiresAPostAction(t *testing.T) {
+func TestSubmit_wiresAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(formComp{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, "r", 0)+`'`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
-func TestOn_panicsOnAnEventNameThatBreaksOutOfTheAttribute(t *testing.T) {
+func TestEvent_panicsOnAnEventNameThatBreaksOutOfTheAttribute(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"", `click" onmouseover="x`, "click onload", "click=x", "click>", "Click", "click__", "click__once x", `click__debounce.1'`} {
-		assert.Panics(t, func() { via.On(name, (&noopComp{}).Ping) }, name)
-		assert.Panics(t, func() { via.OnArg(name, func(*via.Ctx, int) {}, 1) }, name)
-	}
-}
-
-func TestOn_acceptsDatastarModifiers(t *testing.T) {
-	t.Parallel()
-	for _, name := range []string{"click", "via:patch", "keydown__window", "input__debounce.500ms", "input__debounce.1.5ms__prevent", "scroll__throttle.1s__once__stop__outside"} {
-		assert.NotPanics(t, func() { via.On(name, (&noopComp{}).Ping) }, name)
+		assert.Panics(t, func() { on.Event(name, (&noopComp{}).Ping) }, name)
+		assert.Panics(t, func() { on.Event(name, on.Bind(func(*via.Ctx, int) {}, 1)) }, name)
 	}
 }
 
@@ -350,7 +344,7 @@ type reqEchoer struct{ echo string }
 
 func (r *reqEchoer) Grab(ctx *via.Ctx) { r.echo = ctx.Request().Header.Get("X-Echo") }
 func (r *reqEchoer) View() h.H {
-	return h.Div(h.Button(via.On("click", r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
+	return h.Div(h.Button(on.Click(r.Grab), h.Str("x")), h.P(h.Str(r.echo)))
 }
 
 func TestAction_canReadTheTriggeringRequest(t *testing.T) {
@@ -374,7 +368,7 @@ type nulEchoer struct {
 
 func (c *nulEchoer) Grab(ctx *via.Ctx) { c.echo = c.q.Get() }
 func (c *nulEchoer) View() h.H {
-	return h.Div(h.Input(c.q.Bind()), h.Button(via.On("click", c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
+	return h.Div(h.Input(c.q.Bind()), h.Button(on.Click(c.Grab), h.Str("x")), h.P(h.Str(c.echo)))
 }
 
 func TestAction_nulInUserTextRendersAsTheReplacementCharacter(t *testing.T) {
@@ -392,23 +386,23 @@ func TestAction_nulInUserTextRendersAsTheReplacementCharacter(t *testing.T) {
 	assert.NotContains(t, body, nul, "a raw NUL reached the response")
 }
 
-// changePicker exercises On("change", ...): a select whose commit posts an action,
-// with no value carried (that's OnArg's job, tested elsewhere).
+// changePicker exercises on.Change: a select whose commit posts an action,
+// with no value carried (that's on.Bind's job, tested elsewhere).
 type changePicker struct{ got string }
 
 func (a *changePicker) Pick(ctx *via.Ctx) { a.got = "picked" }
 func (a *changePicker) View() h.H {
 	return h.Div(
-		h.El("select", via.On("change", a.Pick)),
+		h.El("select", on.Change(a.Pick)),
 		h.P(h.Str(a.got)),
 	)
 }
 
-func TestOn_changeFiresHandlerOnCommit(t *testing.T) {
+func TestChange_firesHandlerOnCommit(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(changePicker{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `data-on:change`, `On("change", ...) must bind the change event`)
+	assert.Contains(t, page, `data-on:change`, "on.Change must bind the change event")
 
 	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
 	assert.Contains(t, body, "picked", "the change handler did not run")

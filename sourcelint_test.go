@@ -12,7 +12,7 @@ package via_test
 // Each one guards a promise made in the README and the docs:
 //   - reflection-free wiring (the reflect allowlist)
 //   - no '&' and no closures where via takes a handler (the example lint)
-//   - no binder plumbing on any public package (it stays in internal/hcore)
+//   - no binder plumbing on any public package (it stays in internal/render)
 //   - black-box tests, and none of package main (CONVENTIONS.md)
 
 import (
@@ -48,8 +48,7 @@ const viaPkg = "github.com/go-via/via"
 // a pointer.
 var handlerSites = map[string]bool{
 	viaPkg + ".Handler": true, viaPkg + ".Mount": true, viaPkg + ".Child": true,
-	viaPkg + ".When": true, viaPkg + ".Each": true, viaPkg + ".On": true,
-	viaPkg + ".OnArg": true, viaPkg + ".PostForm": true,
+	viaPkg + ".When": true, viaPkg + ".Each": true, viaPkg + ".PostForm": true,
 	viaPkg + ".List.Each":     true,
 	viaPkg + ".Ctx.OnDispose": true, viaPkg + ".Ctx.Listen": false,
 }
@@ -162,9 +161,9 @@ func (p *P) OnInit(ctx *via.Ctx) error {
 		{"closure to List.Each", header + `
 func (p *P) V() h.H { return p.L.Each(func(int) h.H { return nil }) }`,
 			[]string{"closure passed to via.List.Each: pass a named method value"}},
-		{"address-of to on.WithArg", header + `
-func (p *P) V() h.H { return h.Button(on.Click(on.WithArg(p.Pick, &p.N))) }`,
-			[]string{"'&' passed to via/on.WithArg: via takes compositions by value"}},
+		{"address-of to on.Bind", header + `
+func (p *P) V() h.H { return h.Button(on.Click(on.Bind(p.Pick, &p.N))) }`,
+			[]string{"'&' passed to via/on.Bind: via takes compositions by value"}},
 		{"literal to via.Child", header + `
 func (p *P) V() h.H { return via.Child(C{}) }`,
 			[]string{"composite literal passed to via.Child: pass the parent's field (p.Chat)"}},
@@ -427,15 +426,15 @@ func TestBinderPlumbingLint_flagsEveryExportedDeclOutsideInternal(t *testing.T) 
 	t.Parallel()
 	root := t.TempDir()
 	for name, src := range map[string]string{
-		"p.go":                "package via\n\ntype Ctx struct{}\n\nfunc (*Ctx) Bind() {}",
-		"h/p.go":              "package h\n\ntype (\n\tRenderer int\n\tFine int\n)",
-		"h/p_test.go":         "package h_test\n\ntype Binder int",
-		"on/p.go":             "package on\n\nvar (\n\tDyn, fine = 1, 2\n)\n\nconst DynAttr = 0",
-		"vt/p.go":             "package vt\n\ntype T struct{}\n\nfunc (T) Binder() {}\n\nfunc NewRenderer() {}",
-		"internal/hcore/p.go": "package hcore\n\ntype Binder interface{}",
-		"cmd/main.go":         "package main\n\nvar Renderer = 1",
-		".hidden/p.go":        "package p\n\ntype Binder int",
-		"testdata/p.go":       "package p\n\ntype Binder int",
+		"p.go":                 "package via\n\ntype Ctx struct{}\n\nfunc (*Ctx) Bind() {}",
+		"h/p.go":               "package h\n\ntype (\n\tRenderer int\n\tFine int\n)",
+		"h/p_test.go":          "package h_test\n\ntype Binder int",
+		"on/p.go":              "package on\n\nvar (\n\tDyn, fine = 1, 2\n)\n\nconst DynAttr = 0",
+		"vt/p.go":              "package vt\n\ntype T struct{}\n\nfunc (T) Binder() {}\n\nfunc NewRenderer() {}",
+		"internal/render/p.go": "package render\n\ntype Binder interface{}",
+		"cmd/main.go":          "package main\n\nvar Renderer = 1",
+		".hidden/p.go":         "package p\n\ntype Binder int",
+		"testdata/p.go":        "package p\n\ntype Binder int",
 	} {
 		path := filepath.Join(root, name)
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -443,7 +442,7 @@ func TestBinderPlumbingLint_flagsEveryExportedDeclOutsideInternal(t *testing.T) 
 	}
 	got, err := binderPlumbingExports(root)
 	require.NoError(t, err)
-	const why = " — binder plumbing belongs to internal/hcore"
+	const why = " — binder plumbing belongs to internal/render"
 	assert.Equal(t, []string{
 		filepath.Join("h", "p.go") + ": exports Renderer" + why,
 		filepath.Join("on", "p.go") + ": exports Dyn" + why,
@@ -453,7 +452,7 @@ func TestBinderPlumbingLint_flagsEveryExportedDeclOutsideInternal(t *testing.T) 
 	}, got)
 }
 
-// Every importable package is public surface; internal/hcore is where the
+// Every importable package is public surface; internal/render is where the
 // plumbing lives, and package main exports nothing anyone can import.
 func binderPlumbingExports(root string) ([]string, error) {
 	banned := map[string]bool{
@@ -485,7 +484,7 @@ func binderPlumbingExports(root string) ([]string, error) {
 		}
 		flag := func(qual, name string) {
 			if banned[name] {
-				out = append(out, rel+": exports "+qual+name+" — binder plumbing belongs to internal/hcore")
+				out = append(out, rel+": exports "+qual+name+" — binder plumbing belongs to internal/render")
 			}
 		}
 		for _, decl := range f.Decls {

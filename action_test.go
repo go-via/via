@@ -47,7 +47,7 @@ type todoList struct{ box *todoBox }
 
 func (l *todoList) Del(ctx *via.Ctx, id int) { l.box.remove(id) }
 func (l *todoList) row(t todoItem) h.H {
-	return h.Li(h.Str(t.Text), h.Button(via.OnArg("click", l.Del, t.ID), h.Str("x")))
+	return h.Li(h.Str(t.Text), h.Button(on.Click(on.Bind(l.Del, t.ID)), h.Str("x")))
 }
 func (l *todoList) View() h.H { return h.Ul(via.Each(l.box.items, l.row)) }
 
@@ -83,7 +83,7 @@ type twoEvents struct{ got *store }
 func (p *twoEvents) Add(ctx *via.Ctx, n int) { p.got.Add(n) }
 func (p *twoEvents) View() h.H {
 	return h.Div(h.P(h.Str("got "+strconv.Itoa(p.got.Value()))),
-		h.Input(on.Click(on.WithArg(p.Add, 1)), on.Change(on.WithArg(p.Add, 2))))
+		h.Input(on.Click(on.Bind(p.Add, 1)), on.Change(on.Bind(p.Add, 2))))
 }
 
 func TestActionArg_twoEventsOnOneElementEachDispatchTheirOwnArg(t *testing.T) {
@@ -228,8 +228,8 @@ func (c *twinButtons) Inc(ctx *via.Ctx) { c.count.Add(1) }
 func (c *twinButtons) View() h.H {
 	return h.Div(
 		h.H1(h.Str(strconv.Itoa(c.count.Value()))),
-		h.Button(via.On("click", c.Inc)),
-		h.Button(via.On("click", c.Inc)),
+		h.Button(on.Click(c.Inc)),
+		h.Button(on.Click(c.Inc)),
 	)
 }
 
@@ -268,7 +268,7 @@ type idCounter struct {
 func (c *idCounter) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
 
 func (c *idCounter) View() h.H {
-	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+	return h.Div(h.Button(on.Click(c.Inc), h.Str("+")), c.N.Display())
 }
 
 type idPair struct{ A, B idCounter }
@@ -289,7 +289,7 @@ type idTwin struct {
 func (c *idTwin) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
 
 func (c *idTwin) row() h.H {
-	return h.Div(h.Button(via.On("click", c.Inc), h.Str("+")), c.N.Display())
+	return h.Div(h.Button(on.Click(c.Inc), h.Str("+")), c.N.Display())
 }
 
 type idTwins struct{ A, B idTwin }
@@ -354,8 +354,8 @@ func (c *idSameMethodTwice) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
 
 func (c *idSameMethodTwice) View() h.H {
 	return h.Div(
-		h.Button(via.On("click", c.Inc), h.Str("+")),
-		h.Button(via.On("click", c.Inc), h.Str("also +")),
+		h.Button(on.Click(c.Inc), h.Str("+")),
+		h.Button(on.Click(c.Inc), h.Str("also +")),
 	)
 }
 
@@ -371,7 +371,7 @@ type idClosurePair struct{ hits [2]int }
 func (p *idClosurePair) View() h.H {
 	var kids []h.H
 	for i := range p.hits {
-		kids = append(kids, h.Button(via.On("click", func(ctx *via.Ctx) { p.hits[i]++ })))
+		kids = append(kids, h.Button(on.Click(func(ctx *via.Ctx) { p.hits[i]++ })))
 	}
 	return h.Div(kids...)
 }
@@ -417,11 +417,11 @@ func TestActionID_indistinguishableHandlersPanicNamingTheFix(t *testing.T) {
 		fix   []string
 	}{
 		{"func literal per row", func(r *via.Router) { via.Mount(r, "/", idClosurePair{}) },
-			"Mount", []string{"func literal", "on.WithArg"}},
+			"Mount", []string{"func literal", "on.Bind"}},
 		{"receivers behind pointer fields", func(r *via.Router) { via.Mount(r, "/", ptrCells{}) },
 			"render", []string{"pointer", "via.Child"}},
 		{"value copies keyed to the one field of their type", func(r *via.Router) { via.Mount(r, "/", valHeldOnce{}) },
-			"render", []string{"slice", "on.WithArg"}},
+			"render", []string{"slice", "on.Bind"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -632,7 +632,7 @@ type gridBench struct{ rows []int }
 
 func (g *gridBench) Hit(ctx *via.Ctx) {}
 
-func (g *gridBench) row(int) h.H { return h.Button(via.On("click", g.Hit)) }
+func (g *gridBench) row(int) h.H { return h.Button(on.Click(g.Hit)) }
 
 func (g *gridBench) View() h.H { return h.Div(via.Each(g.rows, g.row)) }
 
@@ -685,12 +685,12 @@ func (o *ownedRows) mine() []int {
 }
 
 func (o *ownedRows) systemRow() h.H {
-	return h.Li(h.ID("system"), h.Button(via.OnArg("click", o.Delete, 9), h.Str("drop system")))
+	return h.Li(h.ID("system"), h.Button(on.Click(on.Bind(o.Delete, 9)), h.Str("drop system")))
 }
 
 func (o *ownedRows) row(id int) h.H {
 	return h.Li(h.ID("r"+strconv.Itoa(id)), h.Str(strconv.Itoa(id)),
-		h.Button(via.OnArg("click", o.Delete, id), h.Str("delete")))
+		h.Button(on.Click(on.Bind(o.Delete, id)), h.Str("delete")))
 }
 
 func (o *ownedRows) View() h.H {
@@ -735,7 +735,7 @@ type liveOwnedRows struct{ last via.State[string] }
 
 func (l *liveOwnedRows) Delete(ctx *via.Ctx, id int) { l.last.Set("deleted " + strconv.Itoa(id)) }
 func (l *liveOwnedRows) View() h.H {
-	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Delete, 2)))
+	return h.Div(l.last.Display(), h.Button(on.Click(on.Bind(l.Delete, 2))))
 }
 
 func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
@@ -773,7 +773,7 @@ func TestActionArg_renderedArgStillDispatches(t *testing.T) {
 type bigList struct{ hit int }
 
 func (b *bigList) Pick(ctx *via.Ctx, id int) { b.hit = id }
-func (b *bigList) row(id int) h.H            { return h.Li(h.Button(via.OnArg("click", b.Pick, id))) }
+func (b *bigList) row(id int) h.H            { return h.Li(h.Button(on.Click(on.Bind(b.Pick, id)))) }
 func (b *bigList) View() h.H {
 	ids := make([]int, 1000)
 	for i := range ids {
@@ -934,12 +934,12 @@ func (p *rowPage) OnInit(ctx *via.Ctx) error {
 func (p *rowPage) Pick(ctx *via.Ctx, id string) { p.Store.pick(id) }
 
 func (p *rowPage) row(id string) h.H {
-	return h.Li(h.ID("row-"+id), h.Button(on.Click(on.WithArg(p.Pick, id)), h.Str(id)))
+	return h.Li(h.ID("row-"+id), h.Button(on.Click(on.Bind(p.Pick, id)), h.Str(id)))
 }
 
 func (p *rowPage) View() h.H { return h.Ul(via.Each(p.ids, p.row)) }
 
-func TestOnArg_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing.T) {
+func TestBind_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing.T) {
 	t.Parallel()
 	store := &rowStore{ids: []string{"a", "b", "c"}}
 	app := vt.Serve(t, via.Handler(rowPage{Store: store}))

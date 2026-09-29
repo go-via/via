@@ -44,10 +44,10 @@ func glossaryTerms() []glossaryTerm {
 	s := h.Str[string]
 	return []glossaryTerm{
 		{"Action",
-			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"), s(" bound with "), API("on.WithArg"),
+			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"), s(" bound with "), API("on.Bind"),
 				s(", attached to a DOM event with package "), Code("on"), s(". The browser POSTs to it; via runs it on the server, then OnReload, then re-renders the unit and answers with the patch. It returns nothing: a failure the user can fix goes into state, and a panic is a 500.")},
 			[]seeLink{{"Actions", "/actions#handling-a-click"}, {"Action signatures", "/actions#action-signatures"}},
-			[]h.H{API("on.Click"), API("on.WithArg")}},
+			[]h.H{API("on.Click"), API("on.Bind")}},
 		{"Composition",
 			[]h.H{s("A Go struct with a "), Code("View() h.H"), s(" method. Its fields are its state, its methods are its actions, and the optional hooks OnInit, OnReload and PageMeta opt it into lifecycle phases. "),
 				API("via.Mount"), s(" serves one at a path and "), API("via.Child"), s(" renders one as a field of another; both take it by value.")},

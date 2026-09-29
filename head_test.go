@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -378,7 +379,7 @@ type assetCounter struct{ n int }
 func (*assetCounter) PageMeta() via.Meta { return assetPage{}.PageMeta() }
 func (c *assetCounter) Inc(*via.Ctx)     { c.n++ }
 func (c *assetCounter) View() h.H {
-	return h.Div(h.Str(c.n), h.Button(via.On("click", c.Inc), h.Str("+")))
+	return h.Div(h.Str(c.n), h.Button(on.Click(c.Inc), h.Str("+")))
 }
 
 func TestPageMeta_patchResponsesCarryTheFloorCSPNotTheDocuments(t *testing.T) {

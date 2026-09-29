@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // urlBearingAttrs are the RawAttr names that carry a URL and so must go
@@ -63,13 +63,13 @@ func srcsetURLs(v string) []string {
 	return urls
 }
 
-// safeURL admits what hcore.SafeURL admits (hcore.SafeHref for an href);
+// safeURL admits what render.SafeURL admits (render.SafeHref for an href);
 // everything else — javascript:, data:, vbscript:, protocol-relative // and \\
 // — neutralizes to "#" with a loud log. It owns the neutralization, not the
-// policy: the predicates live in internal/hcore so via's Redirect gate cannot
+// policy: the predicates live in internal/render so via's Redirect gate cannot
 // drift from this one.
 func safeURL(u, where string) string {
-	if strings.EqualFold(where, "href") && hcore.SafeHref(u) || hcore.SafeURL(u) {
+	if strings.EqualFold(where, "href") && render.SafeHref(u) || render.SafeURL(u) {
 		return u
 	}
 	// slog.Default(): no Router in scope.
@@ -83,10 +83,10 @@ func safeURL(u, where string) string {
 //
 // Href, [Src] and [Action] each run the URL gate exactly once, so an unsafe
 // value is logged once rather than per layer.
-func Href(u string) Attr { return hcore.RawAttr("href", safeURL(u, "href")) }
+func Href(u string) Attr { return render.RawAttr("href", safeURL(u, "href")) }
 
 // Src is the typed src attribute, gated like Href but without mailto: and tel:.
-func Src(u string) Attr { return hcore.RawAttr("src", safeURL(u, "src")) }
+func Src(u string) Attr { return render.RawAttr("src", safeURL(u, "src")) }
 
 // Action is the typed form-action attribute, gated like [Src].
-func Action(u string) Attr { return hcore.RawAttr("action", safeURL(u, "action")) }
+func Action(u string) Attr { return render.RawAttr("action", safeURL(u, "action")) }

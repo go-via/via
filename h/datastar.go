@@ -3,7 +3,7 @@ package h
 import (
 	"strings"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // One typed attribute per Datastar plugin, key spelled once. [Data] covers
@@ -53,7 +53,7 @@ func DataRef[V ~string](sig V) Attr { return Data("ref", signalName(sig)) }
 // only when the old and the new one both carry it, so put it on a container
 // whose subtree some JS owns (a chart canvas, a map) and a live patch will
 // leave that subtree alone.
-func DataIgnoreMorph() Attr { return hcore.BoolAttr("data-ignore-morph", true) }
+func DataIgnoreMorph() Attr { return render.BoolAttr("data-ignore-morph", true) }
 
 // A Ref() spells "$name"; indicator and ref want the bare name, and "$name"
 // would declare a signal literally called "$name".

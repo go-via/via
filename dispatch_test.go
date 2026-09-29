@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -48,7 +49,7 @@ type liveRedirector struct{ n via.State[int] }
 func (c *liveRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
 
 func (c *liveRedirector) View() h.H {
-	return h.Div(c.n.Display(), h.Button(via.On("click", c.Go)))
+	return h.Div(c.n.Display(), h.Button(on.Click(c.Go)))
 }
 
 func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
@@ -80,7 +81,7 @@ type childRedirector struct{}
 
 func (r *childRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }
 
-func (r *childRedirector) View() h.H { return h.Div(h.Button(via.On("click", r.Go))) }
+func (r *childRedirector) View() h.H { return h.Div(h.Button(on.Click(r.Go))) }
 
 type childRedirectorParent struct{ I childRedirector }
 
@@ -117,7 +118,7 @@ type sigChild struct{ Name, Other via.Signal[string] }
 func (s *sigChild) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
 
 func (s *sigChild) View() h.H {
-	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(via.On("click", s.Reset)))
+	return h.Div(s.Name.Bind(), s.Other.Bind(), h.Button(on.Click(s.Reset)))
 }
 
 type sigPage struct{ I sigChild }
@@ -143,7 +144,7 @@ type guardedChild struct{}
 
 func (g *guardedChild) Ping(ctx *via.Ctx) {}
 
-func (g *guardedChild) View() h.H { return h.Div(h.Button(via.On("click", g.Ping))) }
+func (g *guardedChild) View() h.H { return h.Div(h.Button(on.Click(g.Ping))) }
 
 type guardedParent struct{ I guardedChild }
 
@@ -185,7 +186,7 @@ func (p *mixedPage) Save(ctx *via.Ctx) { ctx.Redirect("/done") }
 func (p *mixedPage) View() h.H {
 	return h.Div(
 		h.Str(p.n),
-		h.Button(via.On("click", p.Bump), h.Str("+")), // action 0
+		h.Button(on.Click(p.Bump), h.Str("+")),        // action 0
 		via.PostForm(p.Save, h.Button(h.Str("save"))), // action 1
 	)
 }
@@ -224,7 +225,7 @@ func (p *panicLive) Boom(ctx *via.Ctx) { panic("boom") }
 func (p *panicLive) Ping(ctx *via.Ctx) {}
 
 func (p *panicLive) View() h.H {
-	return h.Div(p.n.Display(), h.Button(via.On("click", p.Boom)), h.Button(via.On("click", p.Ping)))
+	return h.Div(p.n.Display(), h.Button(on.Click(p.Boom)), h.Button(on.Click(p.Ping)))
 }
 
 func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
@@ -253,9 +254,9 @@ func (b *branchy) Reveal(ctx *via.Ctx) { b.shown.Set(true) }
 func (b *branchy) Extra(ctx *via.Ctx) {}
 
 func (b *branchy) View() h.H {
-	kids := []h.H{b.n.Display(), h.Button(via.On("click", b.Reveal))}
+	kids := []h.H{b.n.Display(), h.Button(on.Click(b.Reveal))}
 	if b.shown.Get() {
-		kids = append(kids, h.Button(via.On("click", b.Extra), h.Str("extra")))
+		kids = append(kids, h.Button(on.Click(b.Extra), h.Str("extra")))
 	}
 	return h.Div(kids...)
 }
@@ -634,7 +635,7 @@ func (a *signalGatedAdmin) OnInit(ctx *via.Ctx) error {
 func (a *signalGatedAdmin) Delete(ctx *via.Ctx, id int) { a.gone = append(a.gone, id) }
 
 func (a *signalGatedAdmin) rows() h.H {
-	return h.Ul(h.Li(h.Button(via.OnArg("click", a.Delete, 7), h.Str("delete 7"))))
+	return h.Ul(h.Li(h.Button(on.Click(on.Bind(a.Delete, 7)), h.Str("delete 7"))))
 }
 
 func (a *signalGatedAdmin) panel() h.H { return via.When(a.Admin.Get(), a.rows) }
@@ -706,7 +707,7 @@ type echoedSignal struct {
 func (e *echoedSignal) Save(ctx *via.Ctx) { e.saw = e.Name.Get() }
 
 func (e *echoedSignal) View() h.H {
-	return h.Div(h.P(h.Str("saw: "+e.saw)), h.Input(e.Name.Bind()), h.Button(via.On("click", e.Save)))
+	return h.Div(h.P(h.Str("saw: "+e.saw)), h.Input(e.Name.Bind()), h.Button(on.Click(e.Save)))
 }
 
 func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
@@ -791,7 +792,7 @@ func (d *disclosure) Save(ctx *via.Ctx) { d.seen = "saw:" + d.Name.Get() }
 func (d *disclosure) Reveal(ctx *via.Ctx) { d.revealed = true }
 
 func (d *disclosure) form() h.H {
-	return h.Div(h.Input(d.Name.Bind()), h.Button(via.On("click", d.Reveal), h.Str("reveal")))
+	return h.Div(h.Input(d.Name.Bind()), h.Button(on.Click(d.Reveal), h.Str("reveal")))
 }
 
 func (d *disclosure) body() h.H { return via.When(d.Mode.Get() == "x", d.form) }
@@ -800,11 +801,11 @@ func (d *disclosure) beat() h.H { return d.n.Display() }
 
 func (d *disclosure) View() h.H {
 	return h.Div(
-		h.Select(d.Mode.Bind(), via.On("change", d.Pick)),
+		h.Select(d.Mode.Bind(), on.Change(d.Pick)),
 		via.When(true, d.body),
 		h.P(h.Str("seen: "+d.seen)),
 		h.P(h.Str("revealed: "+fmt.Sprint(d.revealed))),
-		h.Button(via.On("click", d.Save), h.Str("save")),
+		h.Button(on.Click(d.Save), h.Str("save")),
 		via.When(d.keepalive, d.beat),
 	)
 }
@@ -843,7 +844,7 @@ type echoKidHost struct{ K echoKid }
 
 func (p *echoKidHost) Noop(ctx *via.Ctx) {}
 func (p *echoKidHost) View() h.H {
-	return h.Div(via.Child(p.K), h.Button(via.On("click", p.Noop)))
+	return h.Div(via.Child(p.K), h.Button(on.Click(p.Noop)))
 }
 
 func TestDispatchPlain_aNoOpRootActionWithAPostedChildSignalAnswers204(t *testing.T) {
@@ -906,7 +907,7 @@ func (k *fixKid) OnInit(ctx *via.Ctx) error { k.loaded = "init"; return nil }
 func (k *fixKid) Save(ctx *via.Ctx) { k.seen = "seen:" + k.loaded }
 
 func (k *fixKid) View() h.H {
-	return h.Div(h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
+	return h.Div(h.P(h.Str(k.seen)), h.Button(on.Click(k.Save), h.Str("save")))
 }
 
 type fixParent struct {
@@ -946,7 +947,7 @@ func (r *argRows) View() h.H {
 	return h.Div(
 		h.Input(r.Filter.Bind()),
 		h.Ul(via.Each(r.ids(), func(id int) h.H {
-			return h.Li(h.Button(via.OnArg("click", r.Del, id), h.Str("del")))
+			return h.Li(h.Button(on.Click(on.Bind(r.Del, id)), h.Str("del")))
 		})),
 		h.P(h.Str(r.del)),
 	)
@@ -990,7 +991,7 @@ func (r *liveArgRows) View() h.H {
 	return h.Div(
 		h.Input(r.Filter.Bind()),
 		h.Ul(via.Each(r.ids(), func(id int) h.H {
-			return h.Li(h.Button(via.OnArg("click", r.Del, id), h.Str("del")))
+			return h.Li(h.Button(on.Click(on.Bind(r.Del, id)), h.Str("del")))
 		})),
 		h.P(h.Str(r.del)),
 	)
@@ -1028,11 +1029,11 @@ func (s *shiftBase) Hit(ctx *via.Ctx) { s.hit = true }
 
 type shiftA struct{ shiftBase }
 
-func (a *shiftA) View() h.H { return h.Div(h.Str("A"), h.Button(via.On("click", a.Hit))) }
+func (a *shiftA) View() h.H { return h.Div(h.Str("A"), h.Button(on.Click(a.Hit))) }
 
 type shiftB struct{ shiftBase }
 
-func (b *shiftB) View() h.H { return h.Div(h.Str("B"), h.Button(via.On("click", b.Hit))) }
+func (b *shiftB) View() h.H { return h.Div(h.Str("B"), h.Button(on.Click(b.Hit))) }
 
 // Flip is Bind()ed, so the POST body can flip it — and the When around Child(A)
 // then shifts B from key "1" up to key "0". via.Child's docs forbid exactly
@@ -1057,7 +1058,7 @@ func (p *shiftPage) Ping(ctx *via.Ctx) {}
 func (p *shiftPage) View() h.H {
 	return h.Div(
 		h.Input(p.Flip.Bind()),
-		h.Button(via.On("click", p.Ping), h.Str("ping")),
+		h.Button(on.Click(p.Ping), h.Str("ping")),
 		via.When(!p.Flip.Get(), func() h.H { return via.Child(p.A) }),
 		via.Child(p.B),
 	)
@@ -1113,7 +1114,7 @@ func (k *scopeKid) OnInit(ctx *via.Ctx) error { k.from = ctx.Request().Method; r
 func (k *scopeKid) Save(ctx *via.Ctx) { k.seen = "method:" + k.from }
 
 func (k *scopeKid) View() h.H {
-	return h.Div(h.Input(k.Q.Bind()), h.P(h.Str(k.seen)), h.Button(via.On("click", k.Save), h.Str("save")))
+	return h.Div(h.Input(k.Q.Bind()), h.P(h.Str(k.seen)), h.Button(on.Click(k.Save), h.Str("save")))
 }
 
 type scopePage struct{ K scopeKid }
@@ -1147,7 +1148,7 @@ type liveReqEchoer struct{ echo via.State[string] }
 func (e *liveReqEchoer) Grab(ctx *via.Ctx) { e.echo.Set(ctx.Request().Header.Get("X-Echo")) }
 
 func (e *liveReqEchoer) View() h.H {
-	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(via.On("click", e.Grab), h.Str("x")))
+	return h.Div(h.P(h.Str("echo: "), e.echo.Display()), h.Button(on.Click(e.Grab), h.Str("x")))
 }
 
 func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
@@ -1183,7 +1184,7 @@ func (r *renderCounter) Bump(*via.Ctx) { r.count.Set(r.count.Get() + 1) }
 
 func (r *renderCounter) View() h.H {
 	r.views.Add(1)
-	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(via.On("click", r.Bump)))
+	return h.Div(h.P(h.Str("count: "), r.count.Display()), h.Button(on.Click(r.Bump)))
 }
 
 func TestLive_actionRunsWithoutPreRender(t *testing.T) {
@@ -1235,7 +1236,7 @@ type liveArg struct{ last via.State[int] }
 func (l *liveArg) Set(ctx *via.Ctx, v int) { l.last.Set(v) }
 
 func (l *liveArg) View() h.H {
-	return h.Div(l.last.Display(), h.Button(via.OnArg("click", l.Set, 7)))
+	return h.Div(l.last.Display(), h.Button(on.Click(on.Bind(l.Set, 7))))
 }
 
 func TestLive_malformedActionArgAnswers400(t *testing.T) {
@@ -1295,7 +1296,7 @@ func (p *tickAfterBadArg) Bump(ctx *via.Ctx, v int) {}
 func (p *tickAfterBadArg) View() h.H {
 	return h.Div(
 		h.Input(p.Idx.Bind()),
-		h.Button(via.OnArg("click", p.Bump, 7)),
+		h.Button(on.Click(on.Bind(p.Bump, 7))),
 		p.Idx.Display(),
 		h.P(h.Str("seen: "+strconv.Itoa(p.seen))),
 	)
@@ -1339,7 +1340,7 @@ type abandonedAction struct {
 func (a *abandonedAction) Act(ctx *via.Ctx) { a.applied.Add(1) }
 
 func (a *abandonedAction) View() h.H {
-	return h.Div(a.n.Display(), h.Button(via.On("click", a.Act)))
+	return h.Div(a.n.Display(), h.Button(on.Click(a.Act)))
 }
 
 func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T) {
@@ -1401,7 +1402,7 @@ func (b *busyStream) Hold(*via.Ctx) { <-b.release }
 func (b *busyStream) Act(*via.Ctx) { b.applied.Add(1) }
 
 func (b *busyStream) View() h.H {
-	return h.Div(b.n.Display(), h.Button(via.On("click", b.Hold)), h.Button(via.On("click", b.Act)))
+	return h.Div(b.n.Display(), h.Button(on.Click(b.Hold)), h.Button(on.Click(b.Act)))
 }
 
 func TestLiveAction_abandonedRequestAnswersWhileTheStreamIsBusy(t *testing.T) {
@@ -1495,15 +1496,15 @@ func (p *livePriv) NukeArg(ctx *via.Ctx, id int) { p.nukedArg = id }
 
 func (p *livePriv) admin() h.H {
 	return h.Div(
-		h.Button(via.On("click", p.Nuke), h.Str("nuke")),
-		h.Button(via.OnArg("click", p.NukeArg, 42), h.Str("nukearg")),
+		h.Button(on.Click(p.Nuke), h.Str("nuke")),
+		h.Button(on.Click(on.Bind(p.NukeArg, 42)), h.Str("nukearg")),
 	)
 }
 
 func (p *livePriv) View() h.H {
 	return h.Div(
 		h.Input(p.IsAdmin.Bind()),
-		h.Button(via.On("click", p.Safe), h.Str("safe")),
+		h.Button(on.Click(p.Safe), h.Str("safe")),
 		via.When(p.IsAdmin.Get(), p.admin),
 		h.P(h.Str("nuked: "+fmt.Sprint(p.nuked)+"/"+fmt.Sprint(p.nukedArg)+" safe: "+fmt.Sprint(p.safeN))),
 	)
@@ -1520,7 +1521,7 @@ func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, code, "the ungated action must still work")
 	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE what its own signals opened")
 
-	for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
+	for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 		url := conn.ActionURL("r", n)
 		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"isAdmin":true}`).Fire()
 		assert.Equal(t, http.StatusGone, code, what+" must not be dispatchable: "+url)
@@ -1581,7 +1582,7 @@ type liveConjuredGrandchild struct{ poked bool }
 func (g *liveConjuredGrandchild) Poke(ctx *via.Ctx) { g.poked = true }
 
 func (g *liveConjuredGrandchild) View() h.H {
-	return h.Div(h.Button(via.On("click", g.Poke), h.Str("poke")))
+	return h.Div(h.Button(on.Click(g.Poke), h.Str("poke")))
 }
 
 // liveConjuredSecret is the child a posted Gate signal conjures into a live
@@ -1592,7 +1593,7 @@ func (s *liveConjuredSecret) Reveal(ctx *via.Ctx) {}
 
 func (s *liveConjuredSecret) View() h.H {
 	return h.Div(
-		h.Button(via.On("click", s.Reveal), h.Str("reveal")),
+		h.Button(on.Click(s.Reveal), h.Str("reveal")),
 		via.Child(s.Grand),
 	)
 }
@@ -1612,7 +1613,7 @@ func (r *liveConjuredRoot) Ping(ctx *via.Ctx) {}
 func (r *liveConjuredRoot) View() h.H {
 	return h.Div(
 		h.Input(r.Gate.Bind()),
-		h.Button(via.On("click", r.Ping), h.Str("ping")),
+		h.Button(on.Click(r.Ping), h.Str("ping")),
 		via.When(r.Gate.Get(), func() h.H { return via.Child(r.Secret) }),
 	)
 }
@@ -1652,7 +1653,7 @@ func (p *paramLive) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 func (p *paramLive) Boom(ctx *via.Ctx) { _ = ctx.Param[int]("id") }
-func (p *paramLive) View() h.H         { return h.Div(h.Button(via.On("click", p.Boom), h.Str("b"))) }
+func (p *paramLive) View() h.H         { return h.Div(h.Button(on.Click(p.Boom), h.Str("b"))) }
 
 func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	t.Parallel()
@@ -1725,7 +1726,7 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		require.Equal(t, http.StatusNoContent, code)
 		require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
 
-		for n, what := range map[int]string{1: "the gated action", 2: "its gated OnArg arg"} {
+		for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 			url := conn.ActionURL("0", n)
 			code, body := app.Action(0).Over(conn).Raw(url).Body(`{"priv__isAdmin":true}`).Fire()
 			assert.Equal(t, http.StatusGone, code, "round %d: %s must not be dispatchable: %s", beat, what, url)
@@ -1833,8 +1834,8 @@ func (p *dirtyAfterPanic) Noop(ctx *via.Ctx) {}
 func (p *dirtyAfterPanic) View() h.H {
 	return h.Div(
 		h.Input(p.X.Bind()),
-		h.Button(via.On("click", p.SetAndBoom)),
-		h.Button(via.On("click", p.Noop)),
+		h.Button(on.Click(p.SetAndBoom)),
+		h.Button(on.Click(p.Noop)),
 		p.X.Display(),
 	)
 }
@@ -1901,13 +1902,13 @@ func (g *gatedEach) secret() []int {
 	return nil
 }
 func (g *gatedEach) row(id int) h.H {
-	return h.Li(h.Button(via.OnArg("click", g.Nuke, id), h.Str("nuke")))
+	return h.Li(h.Button(on.Click(on.Bind(g.Nuke, id)), h.Str("nuke")))
 }
 
 func (g *gatedEach) View() h.H {
 	return h.Div(
 		h.Input(g.IsAdmin.Bind()),
-		h.Button(via.On("click", g.Safe), h.Str("safe")),
+		h.Button(on.Click(g.Safe), h.Str("safe")),
 		h.Ul(via.Each(g.secret(), g.row)),
 		h.P(h.Str("nuked: "+fmt.Sprint(g.hits.Load()))),
 	)
@@ -1916,7 +1917,7 @@ func (g *gatedEach) View() h.H {
 type gatedChild struct{ hits *gatedHits }
 
 func (c *gatedChild) Nuke(ctx *via.Ctx) { c.hits.Add(7) }
-func (c *gatedChild) View() h.H         { return h.Div(h.Button(via.On("click", c.Nuke), h.Str("nuke"))) }
+func (c *gatedChild) View() h.H         { return h.Div(h.Button(on.Click(c.Nuke), h.Str("nuke"))) }
 
 type gatedMid struct{ Leaf gatedChild }
 
@@ -1953,7 +1954,7 @@ func (p *gatedChildPage) gated() h.H {
 func (p *gatedChildPage) View() h.H {
 	return h.Div(
 		h.Input(p.IsAdmin.Bind()),
-		h.Button(via.On("click", p.Safe), h.Str("safe")),
+		h.Button(on.Click(p.Safe), h.Str("safe")),
 		via.When(p.live, p.clock),
 		via.When(p.IsAdmin.Get(), p.gated),
 		h.P(h.Str("nuked: "+fmt.Sprint(p.hits.Load()))),
@@ -2219,7 +2220,7 @@ func (p *pinnedLive) hold(ctx *via.Ctx) {
 func (p *pinnedLive) Bump(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1) }
 
 func (p *pinnedLive) View() h.H {
-	return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump), h.Str("+")))
+	return h.Div(p.n.Display(), h.Button(on.Click(p.Bump), h.Str("+")))
 }
 
 func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOncePerPath(t *testing.T) {
@@ -2273,7 +2274,7 @@ func (p *slowActionLive) Slow(ctx *via.Ctx) {
 }
 
 func (p *slowActionLive) View() h.H {
-	return h.Div(p.beat.Display(), p.n.Display(), h.Button(via.On("click", p.Slow), h.Str("go")))
+	return h.Div(p.beat.Display(), p.n.Display(), h.Button(on.Click(p.Slow), h.Str("go")))
 }
 
 func TestDispatch_actionRunningPastThePinnedDeadlineStillAnswersItsResult(t *testing.T) {
@@ -2421,7 +2422,7 @@ func (s *sessBoundLive) OnInit(ctx *via.Ctx) error {
 }
 func (s *sessBoundLive) Bump(ctx *via.Ctx) { s.n.Set(s.n.Get() + 1) }
 func (s *sessBoundLive) View() h.H {
-	return h.Div(s.n.Display(), h.Button(via.On("click", s.Bump), h.Str("+")))
+	return h.Div(s.n.Display(), h.Button(on.Click(s.Bump), h.Str("+")))
 }
 
 func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
@@ -2533,7 +2534,7 @@ type bumpLive struct{ n via.State[int] }
 
 func (b *bumpLive) Bump(ctx *via.Ctx) { b.n.Set(b.n.Get() + 1) }
 func (b *bumpLive) View() h.H {
-	return h.Div(b.n.Display(), h.Button(via.On("click", b.Bump), h.Str("+")))
+	return h.Div(b.n.Display(), h.Button(on.Click(b.Bump), h.Str("+")))
 }
 
 func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
@@ -2621,8 +2622,8 @@ func (s *sessEcho) Poke(ctx *via.Ctx)   {}
 
 func (s *sessEcho) View() h.H {
 	return h.Div(s.got.Display(),
-		h.Button(via.On("click", s.SignIn)), // action 0
-		h.Button(via.On("click", s.Poke)))   // action 1
+		h.Button(on.Click(s.SignIn)), // action 0
+		h.Button(on.Click(s.Poke)))   // action 1
 }
 
 func TestDispatch_listenHandlerSeesTheSessionALaterActionOnItsTabCarried(t *testing.T) {
@@ -2718,7 +2719,7 @@ func (p *failingBump) Bump(*via.Ctx) {
 }
 
 func (p *failingBump) View() h.H {
-	return h.Div(h.P(h.Str(fmt.Sprint("n=", p.n.Get()))), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.Str(fmt.Sprint("n=", p.n.Get()))), h.Button(on.Click(p.Bump)))
 }
 
 func TestLiveAction_aFailedActionStillPushesWhatItChanged(t *testing.T) {

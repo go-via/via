@@ -734,7 +734,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
 	// Discovery is two-phase. auth is the render the client did not influence:
-	// it alone decides what is dispatchable (see OnArg). Then the body is
+	// it alone decides what is dispatchable (see on.Bind). Then the body is
 	// applied to the slots that render made client-writable and the tree is
 	// re-rendered, so a Bind()ed signal opening a lazy branch gets the slots
 	// inside it hydrated too — without this their posted values were silently
@@ -919,7 +919,7 @@ func rebindFrom(auth *Ctx) *Ctx {
 // dispatchPlain's signal that another render may uncover more.
 //
 // Deliberately not done during the render, which is what decides what is
-// dispatchable (see OnArg): hydrating from the body let a client flip a Signal
+// dispatchable (see on.Bind): hydrating from the body let a client flip a Signal
 // OnInit set from the session — via.When(p.Admin.Get(), …) opened by posting
 // {"admin":true} — and mint its own authorization. Later passes do see hydrated
 // values, but only to widen the set of hydratable slots; the action table they
@@ -1113,7 +1113,7 @@ const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
 // writeRedirectScript answers a @post with the navigation script. The target is
 // JSON-encoded into a header and reaches the DOM through setAttribute, never
 // through the HTML parser, and respond has already cleared it through
-// hcore.SafeURL (see redirectTo) — so no javascript: target and no attribute
+// render.SafeURL (see redirectTo) — so no javascript: target and no attribute
 // escape.
 func writeRedirectScript(w http.ResponseWriter, target string) {
 	attrs, err := json.Marshal(map[string]string{"data-via-to": target})
@@ -1131,7 +1131,7 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 // respond is dispatch's one response policy for every action POST — root,
 // child, live, or native form. A queued Redirect wins: a native submit gets a
 // 303, a Datastar @post gets the navigation script above. Either way the target
-// must clear Redirect's host check and hcore.SafeURL, the same URL policy
+// must clear Redirect's host check and render.SafeURL, the same URL policy
 // runOnInit and rendered href/src URLs use; a refused one is dropped, not
 // followed. Otherwise renderNative or renderPatch (nil for
 // "unchanged" / "the live push already carried it") decides the body.

@@ -18,7 +18,7 @@ func (c *SignalsCopy) View() h.H {
 		h.Pre(h.Code(h.Str("go get github.com/go-via/via"))),
 		h.Button(h.Class("copy"), h.Type("button"),
 			on.ClickCS(expr.Do(expr.CopyTextOf("pre"), expr.Class("copied", true))),
-			on.ClickCS(expr.Class("copied", false), on.Debounce(1500*time.Millisecond)),
+			on.ClickCS(expr.Class("copied", false), on.WithDebounce(1500*time.Millisecond)),
 			h.Span(h.Class("icon-clip"), h.Str("Copy")),
 			h.Span(h.Class("copy-done"), h.Aria("live", "polite"), h.Str("Copied")),
 		),

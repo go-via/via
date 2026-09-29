@@ -30,7 +30,7 @@ func (t *Todos) Remove(ctx *via.Ctx, id int) {
 // snippet:start row
 func (t *Todos) row(x Todo) h.H {
 	id := "todo-" + strconv.Itoa(x.ID)
-	del := on.WithArg(t.Remove, x.ID)
+	del := on.Bind(t.Remove, x.ID)
 	return h.Li(h.ID(id),
 		h.Str(x.Title),
 		h.Button(on.Click(del),

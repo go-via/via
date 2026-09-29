@@ -74,11 +74,6 @@ func TestVal_escapesAtSignsDatastarWouldRewrite(t *testing.T) {
 	}
 }
 
-func TestLit_matchesVal(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, expr.Val("send @post('/x')"), expr.Lit("send @post('/x')"))
-}
-
 func TestAllAny_returnASingleArgumentUnchanged(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "$a", expr.All(expr.Expr("$a")).String())

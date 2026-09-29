@@ -2,7 +2,7 @@ package via
 
 import (
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // Each renders row(item) for every item, in order, in place — a row method
@@ -12,11 +12,11 @@ import (
 // trap: Datastar morphs the re-rendered list by position, which is right for an
 // append-only list but wrong for reorder or delete — give each row a stable id
 // (h.RawAttr("id", …)) so the morph matches by id instead. Per-row actions use
-// on.WithArg, carrying the row's own key with the click. Per-row signals are not
+// on.Bind, carrying the row's own key with the click. Per-row signals are not
 // supported: a Signal inside a slice element is outside the composition struct,
 // so it has no field offset to name itself by and rendering it panics.
 func Each[T any](items []T, row func(T) h.H) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		for _, item := range items {
 			r.Render(row(item))
 		}
@@ -29,7 +29,7 @@ func Each[T any](items []T, row func(T) h.H) h.H {
 // build is a named method value, never a closure at the call site.
 //
 // cond decides what is dispatchable, not just what is drawn: a handler or
-// on.WithArg arg inside a closed branch is not bound, so a POST for it answers
+// on.Bind arg inside a closed branch is not bound, so a POST for it answers
 // 410 before the handler runs. So gate on session or database state — a
 // Bind()ed Signal is whatever the client last set it to, which makes it a fine
 // switch for a disclosure the user controls and never an authorization check.
@@ -39,7 +39,7 @@ func Each[T any](items []T, row func(T) h.H) h.H {
 // signals and content inside the branch round-trip normally but a handler that
 // only exists inside it answers 410. Put it outside the branch, or go live.
 func When(cond bool, build func() h.H) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		if cond {
 			r.Render(build())
 		}

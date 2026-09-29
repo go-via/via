@@ -82,7 +82,7 @@ func (v *Vote) Cast(ctx *via.Ctx, option int) {
 
 func (v *Vote) row(r VoteRow) h.H {
 	return h.Li(h.Class("row"),
-		h.Button(on.Click(on.WithArg(v.Cast, r.Option)), h.Str("vote")),
+		h.Button(on.Click(on.Bind(v.Cast, r.Option)), h.Str("vote")),
 		h.Span(h.Str(r.Label)),
 		h.Output(h.Str(r.Count)),
 	)

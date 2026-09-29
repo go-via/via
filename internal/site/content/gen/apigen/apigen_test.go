@@ -64,7 +64,6 @@ func TestLoad_describesEachKind(t *testing.T) {
 	}{
 		{"option func", "via.WithSessionTTL", "func", "func WithSessionTTL(d time.Duration) Option", false},
 		{"method", "expr.Expr.Eq", "method", "func (e Expr) Eq(v any) Expr", false},
-		{"deprecated func", "expr.Lit", "func", "func Lit(v any) Expr", true},
 		{"sentinel var", "via.ErrNotFound", "var", "", false},
 		{"struct type", "via.PageError", "type", "type PageError struct{ … }", false},
 		{"typed const", "via.ReasonNotFound", "const", "", false},

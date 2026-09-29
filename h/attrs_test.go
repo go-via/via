@@ -10,14 +10,14 @@ import (
 
 func TestBoolAttr_offRendersNothingAtAll(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Button(h.Disabled(false), h.Str("go")))
+	got := markup(t, h.Button(h.Disabled(false), h.Str("go")))
 	assert.NotContains(t, got, "disabled", "an off boolean attribute must not appear in the tag in any form")
 	assert.Equal(t, "<button>go</button>", got)
 }
 
 func TestBoolAttr_onRendersTheBareName(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Button(h.Disabled(true), h.Str("go")))
+	got := markup(t, h.Button(h.Disabled(true), h.Str("go")))
 	assert.Equal(t, "<button disabled>go</button>", got)
 }
 
@@ -49,8 +49,8 @@ func TestBoolAttrs_everyHelperIsPresentOrAbsent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, "<div "+tt.name+"></div>", render(t, h.Div(tt.fn(true))), tt.name+" on")
-			assert.Equal(t, "<div></div>", render(t, h.Div(tt.fn(false))), tt.name+" off")
+			assert.Equal(t, "<div "+tt.name+"></div>", markup(t, h.Div(tt.fn(true))), tt.name+" on")
+			assert.Equal(t, "<div></div>", markup(t, h.Div(tt.fn(false))), tt.name+" off")
 		})
 	}
 }
@@ -88,22 +88,22 @@ func TestValueAttrs_eachRendersItsOwnName(t *testing.T) {
 		`rowspan="3"`:                   h.RowSpan(3),
 		`tabindex="-1"`:                 h.TabIndex(-1),
 	} {
-		assert.Equal(t, "<div "+want+"></div>", render(t, h.Div(attr)), want)
+		assert.Equal(t, "<div "+want+"></div>", markup(t, h.Div(attr)), want)
 	}
 }
 
 func TestValue_stringishTypesAgree(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, render(t, h.Div(h.Value("7"))), render(t, h.Div(h.Value(7))))
-	assert.Equal(t, render(t, h.Div(h.Value("7"))), render(t, h.Div(h.Value(uint8(7)))))
+	assert.Equal(t, markup(t, h.Div(h.Value("7"))), markup(t, h.Div(h.Value(7))))
+	assert.Equal(t, markup(t, h.Div(h.Value("7"))), markup(t, h.Div(h.Value(uint8(7)))))
 }
 
 func TestClass_joinsAndDropsEmpties(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, `<div class="card wide"></div>`, render(t, h.Div(h.Class("card", "wide"))))
-	assert.Equal(t, `<div class="card"></div>`, render(t, h.Div(h.Class("", "card", ""))))
-	assert.Equal(t, `<div></div>`, render(t, h.Div(h.Class("", ""))), "no surviving class means no attribute")
-	assert.Equal(t, `<div></div>`, render(t, h.Div(h.Class())), "no arguments means no attribute")
+	assert.Equal(t, `<div class="card wide"></div>`, markup(t, h.Div(h.Class("card", "wide"))))
+	assert.Equal(t, `<div class="card"></div>`, markup(t, h.Div(h.Class("", "card", ""))))
+	assert.Equal(t, `<div></div>`, markup(t, h.Div(h.Class("", ""))), "no surviving class means no attribute")
+	assert.Equal(t, `<div></div>`, markup(t, h.Div(h.Class())), "no arguments means no attribute")
 }
 
 func TestValueAttrs_stillEscapeTheValue(t *testing.T) {
@@ -114,7 +114,7 @@ func TestValueAttrs_stillEscapeTheValue(t *testing.T) {
 		h.Class(`x" onmouseover="alert(1)`),
 		h.Value(`x" onmouseover="alert(1)`),
 	} {
-		got := render(t, h.Div(attr))
+		got := markup(t, h.Div(attr))
 		assert.NotContains(t, got, `onmouseover="`, "a quote in the value must not break out of the attribute")
 		assert.True(t, strings.Contains(got, "&#34;"), "the quote must be escaped: "+got)
 	}
@@ -122,7 +122,7 @@ func TestValueAttrs_stillEscapeTheValue(t *testing.T) {
 
 func TestAria_rendersPrefixedName(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, render(t, h.Button(h.Aria("label", "Close"))), `aria-label="Close"`)
+	assert.Contains(t, markup(t, h.Button(h.Aria("label", "Close"))), `aria-label="Close"`)
 }
 
 func TestAria_panicsOnInvalidName(t *testing.T) {

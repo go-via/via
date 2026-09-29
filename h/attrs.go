@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // This file is the typed attribute vocabulary. Every helper here is a thin
-// wrapper over RawAttr or hcore.BoolAttr with the name spelled once, in one
+// wrapper over RawAttr or render.BoolAttr with the name spelled once, in one
 // place, correctly: h.Placeholder("name") cannot be misspelled the way
 // h.RawAttr("placholder", "name") can, and the compiler catches the difference.
 // URL-valued attributes (Href, Src, Action) live in url.go because they carry a
@@ -41,7 +41,7 @@ func Class(names ...string) Attr {
 		}
 	}
 	if len(kept) == 0 {
-		return hcore.NoAttr()
+		return render.NoAttr()
 	}
 	return RawAttr("class", strings.Join(kept, " "))
 }
@@ -137,48 +137,48 @@ func TabIndex(n int) Attr { return RawAttr("tabindex", stringish(n)) }
 // Boolean attributes. Each renders as a bare name when on and emits nothing
 // when off — never disabled="false", which disables the control.
 
-func Disabled(on bool) Attr { return hcore.BoolAttr("disabled", on) }
+func Disabled(on bool) Attr { return render.BoolAttr("disabled", on) }
 
-func Checked(on bool) Attr { return hcore.BoolAttr("checked", on) }
+func Checked(on bool) Attr { return render.BoolAttr("checked", on) }
 
 // Required marks a control required when on. Browser-side only: validate on the
 // server too.
-func Required(on bool) Attr { return hcore.BoolAttr("required", on) }
+func Required(on bool) Attr { return render.BoolAttr("required", on) }
 
 // ReadOnly makes a control read-only when on. Unlike Disabled, its value is
 // still submitted.
-func ReadOnly(on bool) Attr { return hcore.BoolAttr("readonly", on) }
+func ReadOnly(on bool) Attr { return render.BoolAttr("readonly", on) }
 
-func Selected(on bool) Attr { return hcore.BoolAttr("selected", on) }
+func Selected(on bool) Attr { return render.BoolAttr("selected", on) }
 
 // Multiple allows multiple values on a select or file input when on.
-func Multiple(on bool) Attr { return hcore.BoolAttr("multiple", on) }
+func Multiple(on bool) Attr { return render.BoolAttr("multiple", on) }
 
 // AutoFocus focuses the control on load when on. Use at most one per page.
-func AutoFocus(on bool) Attr { return hcore.BoolAttr("autofocus", on) }
+func AutoFocus(on bool) Attr { return render.BoolAttr("autofocus", on) }
 
-func Hidden(on bool) Attr { return hcore.BoolAttr("hidden", on) }
+func Hidden(on bool) Attr { return render.BoolAttr("hidden", on) }
 
-func Open(on bool) Attr { return hcore.BoolAttr("open", on) }
+func Open(on bool) Attr { return render.BoolAttr("open", on) }
 
 // NoValidate skips the browser's own form validation when on.
-func NoValidate(on bool) Attr { return hcore.BoolAttr("novalidate", on) }
+func NoValidate(on bool) Attr { return render.BoolAttr("novalidate", on) }
 
-func Async(on bool) Attr { return hcore.BoolAttr("async", on) }
+func Async(on bool) Attr { return render.BoolAttr("async", on) }
 
-func Defer(on bool) Attr { return hcore.BoolAttr("defer", on) }
+func Defer(on bool) Attr { return render.BoolAttr("defer", on) }
 
-func Inert(on bool) Attr { return hcore.BoolAttr("inert", on) }
+func Inert(on bool) Attr { return render.BoolAttr("inert", on) }
 
 // Loop restarts media playback when on.
-func Loop(on bool) Attr { return hcore.BoolAttr("loop", on) }
+func Loop(on bool) Attr { return render.BoolAttr("loop", on) }
 
-func Muted(on bool) Attr { return hcore.BoolAttr("muted", on) }
+func Muted(on bool) Attr { return render.BoolAttr("muted", on) }
 
-func Controls(on bool) Attr { return hcore.BoolAttr("controls", on) }
+func Controls(on bool) Attr { return render.BoolAttr("controls", on) }
 
 // PlaysInline plays video inline rather than fullscreen when on.
-func PlaysInline(on bool) Attr { return hcore.BoolAttr("playsinline", on) }
+func PlaysInline(on bool) Attr { return render.BoolAttr("playsinline", on) }
 
 // Reversed numbers an ordered list descending when on.
-func Reversed(on bool) Attr { return hcore.BoolAttr("reversed", on) }
+func Reversed(on bool) Attr { return render.BoolAttr("reversed", on) }

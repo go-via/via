@@ -73,7 +73,7 @@ func (p *Picker) View() h.H {
 }
 
 func (p *Picker) button(choice string) h.H {
-	return h.Button(on.Click(on.WithArg(p.Pick, choice)), h.Str(choice))
+	return h.Button(on.Click(on.Bind(p.Pick, choice)), h.Str(choice))
 }
 
 func (s *Summary) View() h.H {

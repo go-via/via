@@ -1,6 +1,6 @@
-// Package hcore is the h DSL's render core. It is internal so the via package
-// can reach the renderer/binder plumbing while h's public surface stays
-// user-vocabulary only (elements, attributes, Str).
+// Package render is the render core shared by h, on and via. It is internal
+// so those packages can reach the renderer/binder plumbing while their public
+// surface stays user vocabulary only (elements, attributes, events, Str).
 //
 // The tree is built from a single sealed interface, H. Two flavours implement
 // it: element/text nodes (rendered in the element body) and attributes
@@ -9,7 +9,7 @@
 // Hard guarantees of this package: no user-facing identifier strings beyond the
 // tag/attr names the caller passes, no reflection, no any in the element/child
 // signatures, no closures required at user call sites. stdlib only.
-package hcore
+package render
 
 import (
 	"bytes"
@@ -36,11 +36,12 @@ type Attr interface {
 	isAttr()
 }
 
-// Binder bridges h into the via package without an import cycle. A rendered
-// signal declares its slot and registers its hydrator through it. via names
-// the slots itself (a signal's field path, an action's handler-name hash), so
-// the Binder allocates nothing. The via package supplies the implementation;
-// h only depends on this interface.
+// Binder bridges h and on into the via package without an import cycle. A
+// rendered signal declares its slot and registers its hydrator through it, and
+// package on binds its actions through it. via names the slots itself (a
+// signal's field path, an action's handler-name hash), so the Binder allocates
+// nothing. The via package supplies the implementation; h and on depend only
+// on this interface.
 type Binder interface {
 	// DeclareSignal records that slot participates in this render with the given
 	// initial value, for the page-level data-signals declaration. Idempotent
@@ -50,6 +51,11 @@ type Binder interface {
 	// action can update the underlying value in place without a re-render. fn
 	// reports whether the value decoded.
 	Hydrator(slot string, fn func(json.RawMessage) bool)
+	// Action binds fn, a func(*via.Ctx), to event on the element r is writing.
+	Action(r *Renderer, event string, fn any)
+	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. decode turns
+	// a dispatched arg into the func(*via.Ctx) that calls fn with it.
+	ArgAction(r *Renderer, event string, fn, arg any, decode func(raw []byte) (any, error))
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
@@ -175,7 +181,7 @@ func (d dynAttr) render(r *Renderer) { d.fn(r) }
 func (d dynAttr) isAttr()            {}
 
 // DynAttr wraps fn as a dynamic attribute. via uses this for event bindings
-// (On) and Signal.Bind, which register with the render pass's Ctx.
+// (package on) and Signal.Bind, which register with the render pass's Ctx.
 func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 
 // El builds a generic element with the given tag and children. tag must match

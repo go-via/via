@@ -32,20 +32,20 @@ func TestData_emitsTheDatastarAttributes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Contains(t, render(t, h.Div(tt.attr)), tt.want)
+			assert.Contains(t, markup(t, h.Div(tt.attr)), tt.want)
 		})
 	}
 }
 
 func TestDataIndicator_stripsOneLeadingDollar(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, render(t, h.Div(h.DataIndicator(ex("$busy")))), `data-indicator="busy"`)
-	assert.Contains(t, render(t, h.Div(h.DataRef(ex("$box")))), `data-ref="box"`)
+	assert.Contains(t, markup(t, h.Div(h.DataIndicator(ex("$busy")))), `data-indicator="busy"`)
+	assert.Contains(t, markup(t, h.Div(h.DataRef(ex("$box")))), `data-ref="box"`)
 }
 
 func TestData_escapesTheExpression(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, render(t, h.Div(h.DataShow(ex(`$q !== "x"`)))), `data-show="$q !== &#34;x&#34;"`)
+	assert.Contains(t, markup(t, h.Div(h.DataShow(ex(`$q !== "x"`)))), `data-show="$q !== &#34;x&#34;"`)
 }
 
 func TestData_panicsOnNoStatements(t *testing.T) {
@@ -62,5 +62,5 @@ func TestData_panicsOnAnInvalidName(t *testing.T) {
 
 func TestDataIgnoreMorph_rendersTheBareDatastarAttribute(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, `<div id="chart" data-ignore-morph></div>`, render(t, h.Div(h.ID("chart"), h.DataIgnoreMorph())))
+	assert.Equal(t, `<div id="chart" data-ignore-morph></div>`, markup(t, h.Div(h.ID("chart"), h.DataIgnoreMorph())))
 }

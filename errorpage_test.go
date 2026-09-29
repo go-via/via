@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -284,7 +285,7 @@ type errLive struct {
 func (l *errLive) Bump(*via.Ctx) { l.n.Set(l.n.Get() + 1) }
 
 func (l *errLive) View() h.H {
-	return h.Div(h.Button(via.On("click", l.Bump), h.Str("+")), l.n.Display())
+	return h.Div(h.Button(on.Click(l.Bump), h.Str("+")), l.n.Display())
 }
 
 // nativePost submits a multipart body with no Datastar-Request header — a real
@@ -455,7 +456,7 @@ func (l *errLiveSess) OnInit(ctx *via.Ctx) error { ctx.Session().Put("u1"); retu
 func (l *errLiveSess) Bump(*via.Ctx)             { l.n.Set(l.n.Get() + 1) }
 
 func (l *errLiveSess) View() h.H {
-	return h.Div(h.Button(via.On("click", l.Bump), h.Str("+")), l.n.Display())
+	return h.Div(h.Button(on.Click(l.Bump), h.Str("+")), l.n.Display())
 }
 
 func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {

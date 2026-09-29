@@ -100,7 +100,7 @@ func (p *Examples) View() h.H {
 		d.H2("Apps"),
 		rows(
 			example{name: "poll", demo: "/actions#arguments", teaches: h.Span(
-				s("A list that re-sorts on every render. "), API("on.WithArg"),
+				s("A list that re-sorts on every render. "), API("on.Bind"),
 				s(" carries each row's id, so a vote lands on the option clicked, wherever it now sits. "),
 				API("h.DataAttr"), s(" disables the add button while the draft is empty.")),
 			},

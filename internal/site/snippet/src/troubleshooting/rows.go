@@ -34,7 +34,7 @@ func (l *Todos) row(t Todo) h.H {
 	return h.Li(h.ID("todo-"+strconv.Itoa(t.ID)),
 		h.Input(h.Type("checkbox")),
 		h.Str(t.Title),
-		h.Button(on.Click(on.WithArg(l.Delete, t.ID)), h.Str("delete")),
+		h.Button(on.Click(on.Bind(l.Delete, t.ID)), h.Str("delete")),
 	)
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ type nameComp struct{ name via.Signal[string] }
 // 204) is returned, letting the test inspect how the value is reflected.
 func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get() + "!") }
 func (c *nameComp) View() h.H {
-	return h.Div(h.Input(c.name.Bind()), h.Button(via.On("click", c.Touch), h.Str("x")), c.name.Display())
+	return h.Div(h.Input(c.name.Bind()), h.Button(on.Click(c.Touch), h.Str("x")), c.name.Display())
 }
 
 func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
@@ -133,7 +134,7 @@ func (f *boundForm) Save(ctx *via.Ctx) { f.Name.Set(f.Name.Get() + "!") }
 func (f *boundForm) View() h.H {
 	return h.Div(
 		h.Input(f.Name.Bind()),
-		h.Button(via.On("click", f.Save), h.Str("save")),
+		h.Button(on.Click(f.Save), h.Str("save")),
 		h.P(f.Name.Display()),
 	)
 }
@@ -170,7 +171,7 @@ func (i *island) View() h.H {
 	return h.Div(
 		i.beat.Display(),
 		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
-		h.Button(via.On("click", i.Load), h.Str("load")),
+		h.Button(on.Click(i.Load), h.Str("load")),
 	)
 }
 
@@ -195,7 +196,7 @@ func (i *plainIsland) View() h.H {
 	return h.Div(
 		h.Str(strings.Repeat("x", i.n)),
 		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
-		h.Button(via.On("click", i.Load), h.Str("load")),
+		h.Button(on.Click(i.Load), h.Str("load")),
 	)
 }
 
@@ -254,7 +255,7 @@ func (t *twoSignals) View() h.H {
 	return h.Div(
 		h.Input(t.Written.Bind()),
 		h.Input(t.Left.Bind()),
-		h.Button(via.On("click", t.Fill), h.Str("fill")),
+		h.Button(on.Click(t.Fill), h.Str("fill")),
 	)
 }
 
@@ -290,14 +291,14 @@ func (w *wizard) View() h.H {
 	if w.Step.Get() == 0 {
 		return h.Div(
 			h.Input(w.Name.Bind()),
-			h.Button(via.On("click", w.Next), h.Str("next")),
+			h.Button(on.Click(w.Next), h.Str("next")),
 			w.Step.Display(),
 			w.note.Display(),
 		)
 	}
 	return h.Div(
 		h.Input(w.Email.Bind()),
-		h.Button(via.On("click", w.Save), h.Str("save")),
+		h.Button(on.Click(w.Save), h.Str("save")),
 		w.Step.Display(),
 		w.note.Display(),
 		h.Str("name="+w.Name.Get()+" email="+w.Email.Get()),
@@ -376,7 +377,7 @@ func (w *plainWizard) Next(ctx *via.Ctx) { w.Step.Set(1) }
 
 func (w *plainWizard) View() h.H {
 	if w.Step.Get() == 0 {
-		return h.Div(h.Input(w.Name.Bind()), h.Button(via.On("click", w.Next), h.Str("next")), w.Step.Display())
+		return h.Div(h.Input(w.Name.Bind()), h.Button(on.Click(w.Next), h.Str("next")), w.Step.Display())
 	}
 	return h.Div(h.Input(w.Email.Bind()), w.Step.Display())
 }
@@ -460,7 +461,7 @@ func (g *gatedFlag) View() h.H {
 		h.P(h.ID("note"), h.Str(g.note)),
 		g.Admin.Display(),
 		via.When(g.loaded, g.panel),
-		h.Button(via.On("click", g.Bump), h.Str("bump")),
+		h.Button(on.Click(g.Bump), h.Str("bump")),
 	)
 }
 
@@ -492,7 +493,7 @@ func (g *liveGatedFlag) View() h.H {
 		g.n.Display(),
 		g.Admin.Display(),
 		via.When(g.loaded, g.panel),
-		h.Button(via.On("click", g.Bump), h.Str("bump")),
+		h.Button(on.Click(g.Bump), h.Str("bump")),
 	)
 }
 
@@ -578,7 +579,7 @@ func (f *dropForm) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
 func (f *dropForm) View() h.H {
 	return h.Div(
 		h.Input(f.N.Bind()), f.N.Display(), h.Input(f.Bump.Bind()),
-		h.Button(via.On("click", f.Save), h.Str("save")),
+		h.Button(on.Click(f.Save), h.Str("save")),
 	)
 }
 
@@ -615,7 +616,7 @@ func (f *dropFormLive) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
 func (f *dropFormLive) View() h.H {
 	return h.Div(
 		f.beat.Display(), h.Input(f.N.Bind()), f.N.Display(),
-		h.Button(via.On("click", f.Save), h.Str("save")),
+		h.Button(on.Click(f.Save), h.Str("save")),
 	)
 }
 
@@ -654,7 +655,7 @@ func (f *dropFormWide) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
 func (f *dropFormWide) View() h.H {
 	return h.Div(
 		h.Input(f.A.Bind()), h.Input(f.B.Bind()), h.Input(f.C.Bind()), h.Input(f.D.Bind()),
-		h.Input(f.Bump.Bind()), h.Button(via.On("click", f.Save), h.Str("save")),
+		h.Input(f.Bump.Bind()), h.Button(on.Click(f.Save), h.Str("save")),
 	)
 }
 
@@ -757,7 +758,7 @@ func (g *csGated) View() h.H {
 		h.P(h.ID("note"), h.Str(g.note)),
 		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
 		g.Open.Display(),
-		h.Button(via.On("click", g.Bump), h.Str("bump")),
+		h.Button(on.Click(g.Bump), h.Str("bump")),
 	)
 }
 
@@ -864,7 +865,7 @@ func (g *csSeedGated) View() h.H {
 		h.P(h.ID("note"), h.Str(g.note)),
 		h.Div(h.DataShow(g.Open.Ref()), h.Str("panel")),
 		g.Open.Display(),
-		h.Button(via.On("click", g.Bump), h.Str("bump")),
+		h.Button(on.Click(g.Bump), h.Str("bump")),
 	)
 }
 
@@ -930,7 +931,7 @@ func (p *seedTagPosted) View() h.H {
 	return h.Div(
 		h.P(h.ID("seen"), h.Str(p.seen)),
 		h.Input(p.Count.Bind()),
-		h.Button(via.On("click", p.Read), h.Str("read")),
+		h.Button(on.Click(p.Read), h.Str("read")),
 	)
 }
 

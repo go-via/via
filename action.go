@@ -12,7 +12,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 type action struct {
@@ -20,12 +20,13 @@ type action struct {
 	name   string       // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
 	handle actionHandle // runtime identity, compared to catch an id collision
 	// args is the set of ?a= payloads this render bound for the handler, in the
-	// exact JSON the binding shipped. nil marks an argless action (On/PostForm).
+	// exact JSON the binding shipped. nil marks an argless action (on.Event,
+	// PostForm).
 	args map[string]struct{}
 }
 
 // actionSlot registers run under the content-addressed id of ident — for
-// OnArg that is the user's fn, not the decoding wrapper, which would name the
+// bindArg that is the user's fn, not the decoding wrapper, which would name the
 // same via-internal closure for every row.
 //
 // The id hashes the func's Go name plus the field path of its receiver inside
@@ -69,7 +70,7 @@ func (c *Ctx) claimSlot(ident any) (string, string, action) {
 	id, name, ah := c.actionID(ident)
 	prev, dup := c.actions[id]
 	if dup && prev.handle != ah {
-		panic(hcore.Miswired(sharedID(id, prev.name, name)))
+		panic(render.Miswired(sharedID(id, prev.name, name)))
 	}
 	return id, name, action{name: name, handle: ah, args: prev.args}
 }
@@ -79,17 +80,17 @@ func (c *Ctx) claimSlot(ident any) (string, string, action) {
 // method collides when its receivers sit outside the unit's struct.
 func sharedID(id, prev, name string) string {
 	msg := "via: two different actions share the action id " + id + ": " + prev + " and " + name
-	withArg := "bind a method and carry the row with on.WithArg(p.Method, row.ID)"
+	useBind := "bind a method and carry the row with on.Bind(p.Method, row.ID)"
 	child := "hold each receiver as a direct struct field (not behind a pointer, slice or map), " +
 		"rendering a child through its own via.Child"
 	if !strings.HasSuffix(name, "-fm") {
 		return msg + " — likely a func literal bound once per row (in Each or a loop). via identifies " +
-			"a func literal by its code, so the copies look alike. Instead, " + withArg +
+			"a func literal by its code, so the copies look alike. Instead, " + useBind +
 			". If each copy belongs to a separate receiver, " + child + "."
 	}
 	return msg + " — their receivers are outside this unit's struct (reached through a pointer, " +
 		"slice or map field), so via has no field to tell them apart by. Instead, " + child +
-		". For one handler per row, " + withArg + "."
+		". For one handler per row, " + useBind + "."
 }
 
 // actionHandle is a handler's runtime identity within one render: its code
@@ -183,7 +184,7 @@ func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	if meta.method && !meta.ptr {
 		v := valueMethodID(c.unitV.typ, pc, meta)
 		if v.refusal != "" {
-			panic(hcore.Miswired(v.refusal))
+			panic(render.Miswired(v.refusal))
 		}
 		return v.id, meta.name, actionHandle{code: pc, copy: v.copyDigest(self)}
 	}

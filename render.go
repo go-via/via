@@ -7,7 +7,7 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // renderRootBase renders inst into <div id="root">…</div> and returns the bind
@@ -78,7 +78,7 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	declareSignals, only := ctx.declare, ctx.declareOnly
 	prebindSignals(ctx, ctx.unitV)
 	ctx.viewRan = true
-	rr := hcore.NewRenderer(binderCtx{ctx})
+	rr := render.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
@@ -172,7 +172,7 @@ var bootPolicy = &routerPolicy{log: slog.New(slog.DiscardHandler)}
 func bootRender(inst instance) (miswired string) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			if m, ok := rec.(hcore.Miswired); ok {
+			if m, ok := rec.(render.Miswired); ok {
 				miswired = string(m)
 			}
 		}

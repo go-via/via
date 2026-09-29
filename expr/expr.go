@@ -160,9 +160,6 @@ func Do(es ...Expr) Expr { return Expr(strings.Join(sources(es), "; ")) }
 // is escaped so Datastar does not read an @name( in a string as an action call.
 func Val(v any) Expr { return Expr(operand(v)) }
 
-// Deprecated: use Val. Lit is kept for v0.8 callers and goes in v0.9.
-func Lit(v any) Expr { return Val(v) }
-
 var callName = regexp.MustCompile(`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$`)
 
 // Call applies a function by name, which may be a dotted path

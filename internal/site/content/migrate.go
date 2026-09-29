@@ -63,7 +63,7 @@ var changes = []change{
 	{"`h.IfElse`, `h.WhenElse`, `h.Switch`, `h.Maybe`", "a Go `if` or `switch` in a method returning `h.H`", byCompiler},
 	{"`h.Each(items, fn)`, `h.EachIndexed`, `h.EachSeq`", "`via.Each(items, p.row)`, or a loop", byCompiler},
 	{"`h.Fragment(…)`", "pass the nodes to the parent element, or collect a `[]h.H` and spread it", byCompiler},
-	{"`on.Debounce(\"250ms\")`, `on.Throttle(\"1s\")`", "a `time.Duration`: `on.Debounce(250*time.Millisecond)`", byCompiler},
+	{"`on.Debounce(\"250ms\")`, `on.Throttle(\"1s\")`", "a `time.Duration`: `on.WithDebounce(250*time.Millisecond)`", byCompiler},
 	{"`on.Key(\"Enter\", fn)`", "`on.Keydown(fn)`, which has no key filter", byCompiler},
 	{"`on.Indicator(sig)`, `on.Confirm`, `on.SetSignal`", "`h.DataIndicator(sig.Ref())`; `Confirm` and `SetSignal` are gone", byCompiler},
 	{"`sig.Show()`, `sig.ShowUnless()`", "`h.DataShow(sig.Ref())`, `h.DataShow(sig.Ref().Not())`", byCompiler},
@@ -212,11 +212,11 @@ func (p *Migrate) View() h.H {
 				"panics, and so does mounting both `/docs` and `/docs/`.")...),
 		),
 
-		d.H2("Names deprecated inside v0.8"),
-		h.P(inline("Port straight to package `on` and `expr.Val`. `via.On` and `via.OnArg` still compile but are "+
-			"deprecated in favour of `on.Click`, `on.Event` and `on.WithArg`, and `expr.Lit` is a deprecated alias "+
-			"of `expr.Val`; all three are removed in v0.9. Package `on` and `expr.Val` are newer than the v0.8.1 "+
-			"tag: on v0.8.1 itself, a click is `via.On(\"click\", p.Inc)`.")...),
+		d.H2("Names removed after v0.8"),
+		h.P(inline("Port straight to package `on` and `expr.Val`. v0.8 deprecated `via.On` and `via.OnArg` in "+
+			"favour of `on.Click`, `on.Event` and `on.WithArg` (now `on.Bind`), and `expr.Lit` in favour of "+
+			"`expr.Val`; all three are removed. Package `on` and `expr.Val` are newer than the v0.8.1 tag: on "+
+			"v0.8.1 itself, a click is `via.On(\"click\", p.Inc)`.")...),
 
 		d.H2("Staying on v0.7"),
 		h.P(h.Str("The v1 branch is preserved and its tags still resolve:")),

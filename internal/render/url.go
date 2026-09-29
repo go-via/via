@@ -1,4 +1,4 @@
-package hcore
+package render
 
 import (
 	"net/url"

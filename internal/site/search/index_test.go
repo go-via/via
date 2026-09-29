@@ -67,7 +67,7 @@ func rankIndex() *search.Index {
 	idx := &search.Index{}
 	idx.Add(search.Doc{Title: "Actions", Href: "/actions", Sections: []search.Section{
 		{Text: "Actions A click POSTs to a method on your page type, and via renders the page again."},
-		{Heading: "Split views", Anchor: "split-views", Text: "Split the page into panes; each one throttles its own updates."},
+		{Heading: "Split views", Anchor: "split-views", Text: "Split the page into panes; each one throttles its own updates to an interval."},
 	}})
 	idx.Add(search.Doc{Title: "API reference", Href: "/reference", Sections: []search.Section{
 		{Heading: "Events", Anchor: "events", Text: "Package on names each DOM event as a function."},
@@ -76,7 +76,7 @@ func rankIndex() *search.Index {
 		{Heading: "via.Signal[T], via.SignalCS[T]", Anchor: "via.Signal", Text: "Client-resident state that round-trips per request."},
 		{Heading: "via.WithTrustedOrigin(origin)", Anchor: "via.WithTrustedOrigin", Text: "Turns on origin enforcement for the action endpoint."},
 		{Heading: "via.WithSessionTTL(d)", Anchor: "via.WithSessionTTL", Text: "How long an idle session lives."},
-		{Heading: "expr.Val(v), expr.Lit(v)", Anchor: "expr.Val", Text: "Encodes v as a JavaScript literal. Lit is the deprecated alias."},
+		{Heading: "expr.Val(v)", Anchor: "expr.Val", Text: "Encodes v as a JavaScript literal."},
 	}})
 	idx.Add(search.Doc{Title: "Signals", Href: "/signals", Sections: []search.Section{
 		{Text: "Signals A Signal lives in the browser, and its wire name is its field name."},
@@ -95,7 +95,7 @@ func TestIndex_ranksIdentifiersAndHeadingsFirst(t *testing.T) {
 		name, q, want string
 	}{
 		{"camel-case part of an identifier", "ttl", "/reference#via.WithSessionTTL"},
-		{"dotted segment, not a substring of split", "lit", "/reference#expr.Val"},
+		{"dotted segment, not a substring of interval", "val", "/reference#expr.Val"},
 		{"page title over a reference row", "signal", "/signals"},
 		{"identifier over body text", "origin", "/reference#via.WithTrustedOrigin"},
 		{"every term on one row", "on click", "/reference#on.Click"},

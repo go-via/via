@@ -21,7 +21,7 @@ var stdlib = []string{
 }
 
 // Search filters on the server as you type. The input is a bound Signal, so
-// every keystroke updates the signal in the browser; on.Debounce holds the
+// every keystroke updates the signal in the browser; on.WithDebounce holds the
 // POST until typing pauses, and the handler sees the latest value.
 type Search struct {
 	Query via.Signal[string]
@@ -49,7 +49,7 @@ func (s *Search) View() h.H {
 		rows = append(rows, h.Li(h.Code(h.Str(p))))
 	}
 	return h.Div(
-		h.Input(s.Query.Bind(), on.Input(s.Run, on.Debounce(300*time.Millisecond)),
+		h.Input(s.Query.Bind(), on.Input(s.Run, on.WithDebounce(300*time.Millisecond)),
 			h.Type("search"), h.Placeholder("http, sync, …"), h.AutoComplete("off")),
 		h.P(h.Class("notice"), h.Str(status)),
 		h.Ul(rows...),

@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-via/via/expr"
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
@@ -52,8 +52,8 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 	// Marshalled one slot at a time, not as one map: a single unmarshalable
 	// value used to fail the whole object and emit data-signals='', wiping the
 	// client store for every signal on the page with nothing in the log. Drop
-	// the offender, keep the rest — the same treatment an unmarshalable OnArg
-	// value gets.
+	// the offender, keep the rest — the same treatment an unmarshalable on.Bind
+	// arg gets.
 	var obj bytes.Buffer
 	obj.WriteByte('{')
 	n := 0
@@ -200,7 +200,7 @@ func jsonSeed[T any](raw string) (any, error) {
 // produced a bare "$" and a silently dead Datastar expression.
 func (s *Signal[T]) Ref() expr.Expr {
 	if s.slot == "" {
-		panic(hcore.Miswired("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
+		panic(render.Miswired("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
@@ -248,10 +248,10 @@ func (s *Signal[T]) Set(v T) {
 // writable is true only for Bind(), which emits data-bind. A Display()-only
 // signal is a value the server publishes downward, so an inbound value for it
 // is not an echo but a forgery — accepting it would let a client overwrite a
-// flag OnInit set from the session and mint its own authorization (see OnArg).
+// flag OnInit set from the session and mint its own authorization (see on.Bind).
 // So the hydrator is registered for writable slots only, and an unwritable
 // slot's inbound value is ignored on every path.
-func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
+func (s *Signal[T]) bind(r *render.Renderer, writable bool) {
 	b := r.Binder()
 	s.bound = ctxOf(b)
 	if s.bound == nil {
@@ -305,7 +305,7 @@ func (s *Signal[T]) bind(r *hcore.Renderer, writable bool) {
 // Bind it does not make the slot client-writable — an inbound value for a
 // Display-only signal is ignored (see Signal.bind).
 func (s *Signal[T]) Display() h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		s.bind(r, false)
 		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(s.val)))
 	})
@@ -316,7 +316,7 @@ func (s *Signal[T]) Display() h.H {
 // slot under client control: its value is thereafter whatever the client last
 // set, so never gate an authorization decision on a Bind()ed signal.
 func (s *Signal[T]) Bind() h.Attr {
-	return hcore.DynAttr(func(r *hcore.Renderer) {
+	return render.DynAttr(func(r *render.Renderer) {
 		s.bind(r, true)
 		r.Render(h.Data("bind", s.slot))
 	})
@@ -325,7 +325,7 @@ func (s *Signal[T]) Bind() h.Attr {
 // textHandle uses any so it can serve any signal T without appearing on a
 // public signature.
 func textHandle(v any) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
+	return render.Dyn(func(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
 }
 
 // SignalCS is a client-only signal: the server never reads or writes it. Its
@@ -358,7 +358,7 @@ func (*SignalCS[T]) seedApplier(any) func(unsafe.Pointer) any { return nil }
 // array or map field, which has no field name to be named by.
 func (s *SignalCS[T]) Ref() expr.Expr {
 	if s.slot == "" {
-		panic(hcore.Miswired("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
+		panic(render.Miswired("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
@@ -367,7 +367,7 @@ func (s *SignalCS[T]) Ref() expr.Expr {
 
 // bind declares the slot at its seed value and returns the seed, so Display
 // can render it without a second, stale zero value of its own.
-func (s *SignalCS[T]) bind(r *hcore.Renderer) any {
+func (s *SignalCS[T]) bind(r *render.Renderer) any {
 	b := r.Binder()
 	c := ctxOf(b)
 	if c == nil {
@@ -387,7 +387,7 @@ func (s *SignalCS[T]) bind(r *hcore.Renderer) any {
 // Display renders the signal as a Datastar text-bound span, showing the seed
 // value until the client changes it.
 func (s *SignalCS[T]) Display() h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		seed := s.bind(r)
 		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(seed)))
 	})
@@ -396,7 +396,7 @@ func (s *SignalCS[T]) Display() h.H {
 // Bind returns a two-way data-bind="<slot>" attribute for an input. The value
 // stays in the browser: unlike [Signal.Bind] it makes nothing server-readable.
 func (s *SignalCS[T]) Bind() h.Attr {
-	return hcore.DynAttr(func(r *hcore.Renderer) {
+	return render.DynAttr(func(r *render.Renderer) {
 		s.bind(r)
 		r.Render(h.Data("bind", s.slot))
 	})

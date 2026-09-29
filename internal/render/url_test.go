@@ -1,9 +1,9 @@
-package hcore_test
+package render_test
 
 import (
 	"testing"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,7 +34,7 @@ func TestURLOrigin_readsTheOriginTheBrowserNavigatesTo(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			origin, ok := hcore.URLOrigin(c.in)
+			origin, ok := render.URLOrigin(c.in)
 			assert.Equal(t, c.ok, ok)
 			assert.Equal(t, c.origin, origin)
 		})

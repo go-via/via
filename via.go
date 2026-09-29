@@ -105,7 +105,7 @@ import (
 	"net/url"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.
@@ -482,7 +482,7 @@ func childFieldName(parent, child reflect.Type) string {
 		// two different fields.
 		for own := range signalsOf(parent).names {
 			if strings.HasPrefix(own, name+"__") {
-				panic(hcore.Miswired("via: signal slot " + own + " on " + parent.String() +
+				panic(render.Miswired("via: signal slot " + own + " on " + parent.String() +
 					" collides with the child prefix of field " + name + " — rename the field"))
 			}
 		}
@@ -636,16 +636,24 @@ func (c *Ctx) dirtyAll() map[string]any {
 	return all
 }
 
-// binderCtx adapts a Ctx to hcore.Binder so the binder plumbing stays off
+// binderCtx adapts a Ctx to render.Binder so the binder plumbing stays off
 // Ctx's public surface.
 type binderCtx struct{ c *Ctx }
 
 func (b binderCtx) DeclareSignal(slot string, initial any)              { b.c.declareSignal(slot, initial) }
 func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage) bool) { b.c.hydrator(slot, fn) }
 
+func (b binderCtx) Action(r *render.Renderer, event string, fn any) {
+	bind(r, b.c, event, fn.(func(*Ctx)))
+}
+
+func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, decode func([]byte) (any, error)) {
+	bindArg(r, b.c, event, fn, arg, decode)
+}
+
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
 // via's own (a bare h render).
-func ctxOf(b hcore.Binder) *Ctx {
+func ctxOf(b render.Binder) *Ctx {
 	if bc, ok := b.(binderCtx); ok {
 		return bc.c
 	}
@@ -669,7 +677,7 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 			}
 		}
 	}
-	panic(hcore.Miswired("via: a rendered Signal has no slot in its unit — a child composition must be rendered " +
+	panic(render.Miswired("via: a rendered Signal has no slot in its unit — a child composition must be rendered " +
 		"through via.Child, not by calling its View; and View needs a POINTER receiver with every " +
 		"Signal (and every child) held as a plain struct field, not behind a pointer, slice, array, " +
 		"map or interface"))
@@ -715,13 +723,13 @@ func (c *Ctx) collectSlots(dst map[string]bool) {
 
 // declareSignal records slot's initial value for the data-signals declaration.
 // Idempotent within a render: the first call fixes the order, later ones (a
-// Bind and a Display of one signal) only refresh the value. hcore.Binder.
+// Bind and a Display of one signal) only refresh the value. render.Binder.
 func (c *Ctx) declareSignal(slot string, initial any) {
 	if slot == tabSignal {
 		// A user signal landing on this name would overwrite the tab id
 		// the next action routes by (see tabSignal). Loud at the first render,
 		// never a silent mid-session 410 storm.
-		panic(hcore.Miswired("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field"))
+		panic(render.Miswired("via: a signal named " + tabSignal + " collides with via's own tab-id signal — rename the field"))
 	}
 	if _, seen := c.initial[slot]; !seen {
 		c.order = append(c.order, slot)
@@ -731,7 +739,7 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 
 // hydrator records slot's update function. A live unit keeps the table from
 // its last render (every push is a render), so a live action hydrates in place
-// without re-rendering. hcore.Binder.
+// without re-rendering. render.Binder.
 func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
 	c.hydrators[slot] = fn
 }
@@ -755,14 +763,14 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
 // submit carries neither Datastar's signal store nor its headers, so dispatch
 // routes on this field instead — under the same per-mount ownership check.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		ctx := ctxOf(r.Binder())
 		if ctx == nil {
 			return
 		}
 		idx := ctx.actionSlot(handler)
 		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			hcore.EscapeString(actionPath(ctx, idx)) + `">`)
+			render.EscapeString(actionPath(ctx, idx)) + `">`)
 		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
 		for _, c := range children {
 			r.Render(c)
@@ -856,105 +864,56 @@ func (c *Ctx) Redirect(path string) {
 // redirect Redirect refuses.
 func (c *Ctx) RedirectExternal(target string) {
 	r := redirectTo{url: target}
-	if !hcore.SafeURL(target) {
+	if !render.SafeURL(target) {
 		r.refused = notHTTP
 	}
 	c.redirect = r
 }
 
-// On wires a named DOM event (e.g. "click", "submit", "change") to a POST
-// action. fn is a named method value (e.g. c.Inc) — pointer-bound to the
-// via-owned instance, so no '&' at the call site. Datastar auto-prevents a
-// wired form's default submit, so no prevent modifier is needed for "submit".
-// It panics on an event name package on would refuse; Datastar modifiers
-// ("click__debounce.500ms") are allowed.
-//
-// Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
-func On(event string, fn func(*Ctx)) h.Attr {
-	mustActionEvent("On", event)
-	return hcore.DynAttr(func(r *hcore.Renderer) {
-		ctx := ctxOf(r.Binder())
-		if ctx == nil {
-			return
-		}
-		// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
-		// never the one bound here at render time (see liveRunAction).
-		idx := ctx.actionSlot(fn)
-		writeActionAttr(r, ctx, event, idx, "")
-	})
+// bind wires event to a POST of fn, for package on.
+func bind(r *render.Renderer, ctx *Ctx, event string, fn func(*Ctx)) {
+	mustActionEvent("package on", event)
+	// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
+	// never the one bound here at render time (see liveRunAction).
+	idx := ctx.actionSlot(fn)
+	writeActionAttr(r, ctx, event, idx, "")
 }
 
-// OnArg wires a named DOM event to an action that carries a value: the row's
-// own datum rides with the event, so the handler acts on that item regardless
-// of its render position. fn is a named method value (e.g. l.Delete); arg is
-// plain data (e.g. todo.ID), not an identifier string.
-//
-// DISPATCHABLE-IFF-RENDERED (this is the canonical statement of the property;
-// Signal.bind and hydrateTree defer to it). Dispatch identity is
-// the (handler, arg) pair. The render that precedes every dispatch — the
-// discovery render on a plain page, the last push on a live one — rebuilds the
-// set of args it binds for fn, and a POST whose ?a= is not in that set is 410'd
-// before fn ever runs. So an arg the caller's own render does not produce
-// (another user's row, an id behind a When branch closed for them) is not
-// dispatchable by them, and fn may treat its parameter as already authorized.
-// Keep the render honest — filter the list by the caller's identity — and the
-// handler needs no check of its own.
-//
-// That render is server state alone: an inbound value is accepted only for a
-// slot the render put under client control (Bind), and the body is applied
-// after the discovery render, so a POST cannot open the branch that authorizes
-// it. A Bind()ed signal IS client-controlled, so gating on one is the client's
-// decision to make — an authorization gate belongs on session or database
-// state, never on a signal.
-//
-// trap: arg must be a stable identity (a row's primary key), never a value
-// that moves between renders. A pagination cursor or count bound as an arg
-// goes stale the moment any push re-renders the button, and the click already
-// in flight 410s. Read changing state from the composition in an argless On
-// handler instead.
-//
-// It panics on an event name On would refuse.
-//
-// Deprecated: use package on (on.Click, on.Event, on.WithArg). Removed in v0.9.
-func OnArg[T any](event string, fn func(*Ctx, T), arg T) h.Attr {
-	mustActionEvent("OnArg", event)
-	return hcore.DynAttr(func(r *hcore.Renderer) {
-		ctx := ctxOf(r.Binder())
-		if ctx == nil {
+// bindArg wires event to a POST of fn carrying arg, for on.Bind, whose godoc
+// states the dispatchable-iff-rendered property this enforces.
+func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, decode func([]byte) (any, error)) {
+	mustActionEvent("on.Bind", event)
+	// Marshalled before the slot is claimed: the encoded arg is both what
+	// the binding ships and what dispatch matches against, so one that
+	// cannot encode has no authorizable identity — binding it anyway would
+	// render a button whose every click 410s.
+	data, err := json.Marshal(arg)
+	if err != nil {
+		ctx.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
+		return
+	}
+	idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
+		if rc.req == nil {
 			return
 		}
-		// Marshalled before the slot is claimed: the encoded arg is both what
-		// the binding ships and what dispatch matches against, so one that
-		// cannot encode has no authorizable identity — binding it anyway would
-		// render a button whose every click 410s.
-		data, err := json.Marshal(arg)
+		raw := rc.req.URL.Query().Get("a")
+		if raw == "" || raw == "null" {
+			panic(badActionArg{err: errors.New("missing action arg")})
+		}
+		run, err := decode([]byte(raw))
 		if err != nil {
-			ctx.logger().Warn("via: OnArg arg does not encode; the binding is dropped", "event", event, "err", err)
-			return
+			panic(badActionArg{err: err})
 		}
-		idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
-			if rc.req == nil {
-				return
-			}
-			var v T
-			raw := rc.req.URL.Query().Get("a")
-			if raw == "" || raw == "null" {
-				panic(badActionArg{err: errors.New("missing action arg")})
-			}
-			if err := json.Unmarshal([]byte(raw), &v); err != nil {
-				panic(badActionArg{err: err})
-			}
-			// The dispatchable-iff-rendered check (see OnArg). Matching the
-			// exact bytes the binding shipped means a client echoing the URL it
-			// was served passes, while any arg it invents — even a re-spelling
-			// of a legitimate one — fails closed.
-			if _, ok := bound[raw]; !ok {
-				panic(unrenderedArg{name: name, raw: strconv.Quote(raw), have: len(bound)})
-			}
-			fn(rc, v)
-		}, string(data))
-		writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
-	})
+		// The dispatchable-iff-rendered check (see on.Bind). Matching the
+		// exact bytes the binding shipped means a client echoing the URL it
+		// was served passes, while any arg it invents — even a re-spelling
+		// of a legitimate one — fails closed.
+		if _, ok := bound[raw]; !ok {
+			panic(unrenderedArg{name: name, raw: strconv.Quote(raw), have: len(bound)})
+		}
+		run.(func(*Ctx))(rc)
+	}, string(data))
+	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 }
 
 // actionEvent is package on's event-name grammar followed by Datastar
@@ -996,7 +955,7 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // writeActionAttr writes the data-on:<event>="@post('PATH')" binding for a
 // claimed action slot. Written raw, not via h.Data: the value is a Datastar
 // expression whose single quotes must survive verbatim, and every byte of it is
-// via-generated or checked (fixed template, an event name On and OnArg held to
+// via-generated or checked (fixed template, an event name bind and bindArg hold to
 // actionEvent, hashed id, url-encoded arg), so no attribute-breaking byte
 // reaches it. The colon spelling is
 // mandatory — see h.Data.
@@ -1014,7 +973,7 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // than in a header, because Datastar builds headers per call (Object.assign
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
-func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, arg string) {
+func writeActionAttr(r *render.Renderer, ctx *Ctx, event, idx, arg string) {
 	path := "/_via/a/" + rootAddr + "/" + idx
 	if ctx != nil {
 		path = actionPath(ctx, idx) // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
@@ -1025,12 +984,12 @@ func writeActionAttr(r *hcore.Renderer, ctx *Ctx, event, idx, arg string) {
 	}
 	query += arg
 	if query == "" {
-		r.WriteString(` data-on:` + event + `="@post('` + hcore.EscapeString(path) + `')"`)
+		r.WriteString(` data-on:` + event + `="@post('` + render.EscapeString(path) + `')"`)
 		return
 	}
 	qAttr := "data-via-q-" + event
-	r.WriteString(` ` + qAttr + `="` + hcore.EscapeString("?"+query) + `" data-on:` + event + `="@post('` +
-		hcore.EscapeString(path) + `' + (el.getAttribute('` + qAttr + `') ?? ''))"`)
+	r.WriteString(` ` + qAttr + `="` + render.EscapeString("?"+query) + `" data-on:` + event + `="@post('` +
+		render.EscapeString(path) + `' + (el.getAttribute('` + qAttr + `') ?? ''))"`)
 }
 
 // Handler builds a single-page app: a [Router] with root mounted at "/". root

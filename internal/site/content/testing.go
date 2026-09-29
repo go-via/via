@@ -64,7 +64,7 @@ func (p *Testing) View() h.H {
 		h.P(API("vt.Action.Body"), h.Str(" sets the JSON the browser would post: the page's signals, keyed by wire name. "+
 			"The handler reads them with "), API("via.Signal.Get"), h.Str(" as it would from a real click.")),
 		snippet.Region("testing/args.go", "arg", snippet.Title("shelf_test.go"), snippet.Mark("Action(1)")),
-		h.P(h.Str("An action bound with "), API("on.WithArg"),
+		h.P(h.Str("An action bound with "), API("on.Bind"),
 			h.Str(" renders one URL per row, each carrying its own argument. Picking a row by position picks its argument; "+
 				"there is nothing to encode.")),
 		snippet.Region("testing/args.go", "child", snippet.Title("layout_test.go"), snippet.Mark("ChildAction")),
@@ -192,8 +192,8 @@ func (p *Testing) View() h.H {
 			h.Li(h.Strong(h.Str("Client-only signals are sent. ")),
 				h.Str("A browser never posts a signal whose name starts with an underscore; "), API("vt.Action.Body"),
 				h.Str(" posts whatever you write. A test can pass on input a real page never sends.")),
-			h.Li(h.Strong(h.Str("No event modifiers or bind coercion. ")), API("on.Debounce"), h.Str(", "),
-				API("on.Throttle"), h.Str(", key filters and "), Code("data-bind"),
+			h.Li(h.Strong(h.Str("No event modifiers or bind coercion. ")), API("on.WithDebounce"), h.Str(", "),
+				API("on.WithThrottle"), h.Str(", key filters and "), Code("data-bind"),
 				h.Str(" value coercion run in the browser. vt posts the action directly.")),
 			h.Li(h.Strong(h.Str("Frames are text. ")), API("vt.Conn.Await"),
 				h.Str(" matches a substring of one frame line, not a parsed DOM. It cannot assert structure, and it can "+

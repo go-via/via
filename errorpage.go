@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // Reason is the stable code a [WithErrorPage] handler switches on, so an app
@@ -320,7 +320,7 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 		})
 		return nil, false
 	}
-	rr := hcore.NewRenderer(binderCtx{ctx})
+	rr := render.NewRenderer(binderCtx{ctx})
 	rr.Render(node)
 	return rr.Bytes(), true
 }

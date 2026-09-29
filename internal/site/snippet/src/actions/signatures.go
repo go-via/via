@@ -34,7 +34,7 @@ func (t *Todos) Delete(ctx *via.Ctx, id int) {
 func (t *Todos) row(it Todo) h.H {
 	return h.Li(
 		h.Span(h.Str(it.Title)),
-		h.Button(on.Click(on.WithArg(t.Delete, it.ID)), h.Str("×")),
+		h.Button(on.Click(on.Bind(t.Delete, it.ID)), h.Str("×")),
 	)
 }
 
