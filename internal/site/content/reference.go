@@ -71,18 +71,19 @@ var overrides = map[string]string{
 	"via.PageError":    "Everything via knows about a failure it is about to answer, handed to the WithErrorPage handler. Status and Reason are the contract; Detail and Err are for logs and dev builds.",
 	"via.Reason":       "The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status class, so a switch with a default is exhaustive.",
 
-	"on.Click":    "Binds a DOM event to a method: the click posts to the method, not to a URL you invented. Takes a method value or an on.WithArg, then modifiers.",
-	"on.WithArg":  "Attaches a typed value to the method, so the row's own datum rides with the event. Only an argument the render bound is dispatchable.",
-	"on.Event":    "Posts a method on an event with no function of its own. The name must be lower-case, such as \"pointerdown\" or \"via:patch\"; anything else panics.",
-	"on.ClickCS":  "The client-only twin of Click: runs the expression in the browser and posts nothing.",
-	"on.EventCS":  "The client-only twin of Event: runs the expression in the browser and posts nothing.",
-	"on.Debounce": "Runs the handler once the event stops firing for d. A non-positive d panics.",
-	"on.Throttle": "Runs the handler at most once per d. A non-positive d panics.",
-	"on.Once":     "Runs the handler once.",
-	"on.Prevent":  "Calls preventDefault.",
-	"on.Stop":     "Calls stopPropagation.",
-	"on.Outside":  "Fires only for targets outside the element.",
-	"on.Window":   "Listens on window.",
+	"on.Click":        "Binds a DOM event to a method: the click posts to the method, not to a URL you invented. Takes a method value or an on.Bind, then options.",
+	"on.Bind":         "Attaches a typed value to the method, so the row's own datum rides with the event. Only an argument the render bound is dispatchable.",
+	"on.Event":        "Posts a method on an event with no function of its own. The name must be lower-case, such as \"pointerdown\" or \"via:patch\"; anything else panics.",
+	"on.ClickCS":      "The client-only twin of Click: runs the expression in the browser and posts nothing.",
+	"on.EventCS":      "The client-only twin of Event: runs the expression in the browser and posts nothing.",
+	"on.WithDebounce": "Runs the handler once the event stops firing for d. A non-positive d panics.",
+	"on.WithThrottle": "Runs the handler at most once per d. A non-positive d panics.",
+	"on.WithOnce":     "Runs the handler once.",
+	"on.WithPrevent":  "Calls preventDefault.",
+	"on.WithStop":     "Calls stopPropagation.",
+	"on.WithOutside":  "Fires only for targets outside the element.",
+	"on.WithWindow":   "Listens on window.",
+	"on.WithModifier": "Appends a Datastar modifier the typed options do not cover, such as \"delay.300ms\". A malformed or covered one panics.",
 
 	"expr.El":              "The element the attribute is written on.",
 	"expr.Val":             "Encodes v as a JavaScript literal; an Expr passes through unchanged. An @ is escaped so Datastar does not read an @name( in it as an action call.",
@@ -179,9 +180,8 @@ var refPackages = []refPackage{
 		)
 	}},
 	{name: "on", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. "+
-			"Each has a server form that posts a method and a CS twin that runs an expression in the browser. "),
-			API("via.On"), h.Str(" and "), API("via.OnArg"), h.Str(" still work, but are deprecated and removed in v0.9."))
+		return h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. " +
+			"Each has a server form that posts a method and a CS twin that runs an expression in the browser."))
 	}},
 	{name: "expr", intro: func(*shell.Doc) h.H {
 		return h.P(h.Str("The small JavaScript expressions Datastar evaluates in the browser. "),

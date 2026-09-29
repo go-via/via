@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -665,7 +666,7 @@ type clicker struct{ count via.State[int] }
 func (c *clicker) Bump(ctx *via.Ctx) { c.count.Set(c.count.Get() + 1) }
 
 func (c *clicker) View() h.H {
-	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("count: "), c.count.Display()), h.Button(on.Click(c.Bump), h.Str("+")))
 }
 
 func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T) {
@@ -699,8 +700,8 @@ func (f *flakyRender) View() h.H {
 	}
 	return h.Div(
 		h.P(h.Str("n: "), f.n.Display()),
-		h.Button(via.On("click", f.Trigger)),
-		h.Button(via.On("click", f.Fix)),
+		h.Button(on.Click(f.Trigger)),
+		h.Button(on.Click(f.Fix)),
 	)
 }
 
@@ -731,7 +732,7 @@ type racyDirtySignal struct {
 func (r *racyDirtySignal) Inc(ctx *via.Ctx) { r.n.Set(r.n.Get() + 1) }
 
 func (r *racyDirtySignal) View() h.H {
-	return h.Div(r.n.Display(), r.beat.Display(), h.Button(via.On("click", r.Inc), h.Str("inc")))
+	return h.Div(r.n.Display(), r.beat.Display(), h.Button(on.Click(r.Inc), h.Str("inc")))
 }
 
 func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {

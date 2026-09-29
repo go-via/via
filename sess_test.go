@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -55,10 +56,10 @@ func (c *loginComp) Refresh(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (c *loginComp) View() h.H {
 	return h.Div(
 		h.P(h.Str(c.greeting)),
-		h.Button(via.On("click", c.SignIn), h.Str("in")),      // action 0
-		h.Button(via.On("click", c.Greet), h.Str("greet")),    // action 1
-		h.Button(via.On("click", c.SignOut), h.Str("out")),    // action 2
-		h.Button(via.On("click", c.Refresh), h.Str("rotate")), // action 3
+		h.Button(on.Click(c.SignIn), h.Str("in")),      // action 0
+		h.Button(on.Click(c.Greet), h.Str("greet")),    // action 1
+		h.Button(on.Click(c.SignOut), h.Str("out")),    // action 2
+		h.Button(on.Click(c.Refresh), h.Str("rotate")), // action 3
 	)
 }
 
@@ -80,8 +81,8 @@ func (c *counterComp) Show(ctx *via.Ctx) {
 func (c *counterComp) View() h.H {
 	return h.Div(
 		h.P(h.Str("n="), h.Str(c.shown)),
-		h.Button(via.On("click", c.Bump), h.Str("+")),    // action 0
-		h.Button(via.On("click", c.Show), h.Str("show")), // action 1
+		h.Button(on.Click(c.Bump), h.Str("+")),    // action 0
+		h.Button(on.Click(c.Show), h.Str("show")), // action 1
 	)
 }
 
@@ -841,7 +842,7 @@ func (s *sessInAction) Save(ctx *via.Ctx) {
 }
 
 func (s *sessInAction) View() h.H {
-	return h.Div(h.Input(s.Q.Bind()), h.P(h.Str(s.who)), h.Button(via.On("click", s.Save), h.Str("save")))
+	return h.Div(h.Input(s.Q.Bind()), h.P(h.Str(s.who)), h.Button(on.Click(s.Save), h.Str("save")))
 }
 
 func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) {
@@ -892,7 +893,7 @@ func (p *sessSiblings) View() h.H {
 		h.Input(p.Q.Bind()),
 		via.Child(p.A), via.Child(p.B),
 		h.P(h.Str(p.hit)),
-		h.Button(via.On("click", p.Save)),
+		h.Button(on.Click(p.Save)),
 	)
 }
 
@@ -1045,15 +1046,15 @@ func auditValStr(n int, ok bool) string {
 func (p *auditPage) View() h.H {
 	return h.Div(
 		h.P(h.Str(p.shown)),
-		h.Button(via.On("click", p.Put1), h.Str("a1")),       // 0
-		h.Button(via.On("click", p.Put2), h.Str("a2")),       // 1
-		h.Button(via.On("click", p.Put9), h.Str("b9")),       // 2
-		h.Button(via.On("click", p.Put3), h.Str("b3")),       // 3
-		h.Button(via.On("click", p.Del), h.Str("dela")),      // 4
-		h.Button(via.On("click", p.Rot), h.Str("rot")),       // 5
-		h.Button(via.On("click", p.Put2Rotate), h.Str("ar")), // 6
-		h.Button(via.On("click", p.PutTwice), h.Str("two")),  // 7
-		h.Button(via.On("click", p.Show), h.Str("show")),     // 8
+		h.Button(on.Click(p.Put1), h.Str("a1")),       // 0
+		h.Button(on.Click(p.Put2), h.Str("a2")),       // 1
+		h.Button(on.Click(p.Put9), h.Str("b9")),       // 2
+		h.Button(on.Click(p.Put3), h.Str("b3")),       // 3
+		h.Button(on.Click(p.Del), h.Str("dela")),      // 4
+		h.Button(on.Click(p.Rot), h.Str("rot")),       // 5
+		h.Button(on.Click(p.Put2Rotate), h.Str("ar")), // 6
+		h.Button(on.Click(p.PutTwice), h.Str("two")),  // 7
+		h.Button(on.Click(p.Show), h.Str("show")),     // 8
 	)
 }
 
@@ -1665,9 +1666,9 @@ func (c *idComp) View() h.H {
 	return h.Div(
 		h.P(h.Str("id=["), h.Str(c.shown), h.Str("]")),
 		h.P(h.Str("before=["), h.Str(c.before), h.Str("] after=["), h.Str(c.after), h.Str("]")),
-		h.Button(via.On("click", c.Show), h.Str("show")),   // 0
-		h.Button(via.On("click", c.Put), h.Str("put")),     // 1
-		h.Button(via.On("click", c.Cycle), h.Str("cycle")), // 2
+		h.Button(on.Click(c.Show), h.Str("show")),   // 0
+		h.Button(on.Click(c.Put), h.Str("put")),     // 1
+		h.Button(on.Click(c.Cycle), h.Str("cycle")), // 2
 	)
 }
 
@@ -1733,7 +1734,7 @@ func (c *ensureComp) View() h.H {
 	return h.Div(
 		h.P(h.Str("sid="), h.Str(c.sid)),
 		h.P(h.Str("value="), h.Str(c.value)),
-		h.Button(via.On("click", c.Mint), h.Str("mint")), // action 0
+		h.Button(on.Click(c.Mint), h.Str("mint")), // action 0
 	)
 }
 

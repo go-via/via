@@ -20,7 +20,7 @@ type Actions struct {
 }
 
 func (p *Actions) PageMeta() via.Meta {
-	m := p.meta("Events as Go methods: package on, action signatures, on.WithArg, on.Submit and PostForm, uploads, modifiers, concurrency and error statuses.")
+	m := p.meta("Events as Go methods: package on, action signatures, on.Bind, on.Submit and PostForm, uploads, modifiers, concurrency and error statuses.")
 	m.Assets = demo.Assets(p.site.Asset)
 	return m
 }
@@ -60,9 +60,9 @@ func (p *Actions) View() h.H {
 		snippet.Region("actions/signatures.go", "signatures", snippet.Mark("Clear(ctx *via.Ctx)", "Delete(ctx *via.Ctx, id int)")),
 		table([]string{"Handler", "Result"},
 			[]h.H{Code("func (t *T) M(ctx *via.Ctx)"), h.Span(h.Str("Bind with "), Code("on.Click(t.M)"), h.Str("."))},
-			[]h.H{Code("func (t *T) M(ctx *via.Ctx, v V)"), h.Span(h.Str("Bind with "), Code("on.Click(on.WithArg(t.M, v))"), h.Str("; see Arguments below."))},
-			[]h.H{h.Str("A return value, no Ctx, a second argument without WithArg"), h.Span(h.Str("Does not compile: the binders accept "), Code("func(*via.Ctx)"), h.Str(" or an "), API("on.Bound"), h.Str(" only."))},
-			[]h.H{h.Str("A func literal in a loop or an Each row"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value has no rows: every copy has the same Go name, so via cannot tell them apart. Use a method and WithArg.")},
+			[]h.H{Code("func (t *T) M(ctx *via.Ctx, v V)"), h.Span(h.Str("Bind with "), Code("on.Click(on.Bind(t.M, v))"), h.Str("; see Arguments below."))},
+			[]h.H{h.Str("A return value, no Ctx, a second argument without on.Bind"), h.Span(h.Str("Does not compile: the binders accept "), Code("func(*via.Ctx)"), h.Str(" or an "), API("on.Bound"), h.Str(" only."))},
+			[]h.H{h.Str("A func literal in a loop or an Each row"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value has no rows: every copy has the same Go name, so via cannot tell them apart. Use a method and on.Bind.")},
 			[]h.H{h.Str("A method taken through an interface field, or a value receiver whose type sits at two fields or at none"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value does not reach it: via cannot tell which value the method belongs to. Give the method a pointer receiver and hold the concrete type in the field; a value receiver on the page, or on a type only one field holds, works.")},
 		),
 		h.P(h.Str("An action returns nothing. Report a failure the user can fix by setting state, such as an error Signal; a panic is a 500. "+
@@ -89,7 +89,7 @@ func (p *Actions) View() h.H {
 
 		d.H2("Arguments"),
 		demo.Card(d.H3("Vote"),
-			h.P(APIText("on.WithArg", "on.WithArg(v.Cast, r.Option)"), h.Str(" puts the row's option index in the action URL as JSON, and "),
+			h.P(APIText("on.Bind", "on.Bind(v.Cast, r.Option)"), h.Str(" puts the row's option index in the action URL as JSON, and "),
 				Code("Cast"), h.Str(" receives it as an int. Dispatch accepts only an argument that the render before it bound for "+
 					"that handler, and answers 410 to any other before Cast runs, so the handler can index with it. "+
 					"The tallies are shared with everyone reading this, hence the cap.")),
@@ -168,7 +168,7 @@ func (p *Actions) View() h.H {
 
 		d.H2("Event modifiers"),
 		demo.Card(d.H3("Live search"),
-			h.P(API("on.Input"), h.Str(" fires on every keystroke. "), APIText("on.Debounce", "on.Debounce(300*time.Millisecond)"),
+			h.P(API("on.Input"), h.Str(" fires on every keystroke. "), APIText("on.WithDebounce", "on.WithDebounce(300*time.Millisecond)"),
 				h.Str(" holds the POST until typing stops for 300 ms. The box is a bound Signal, so the handler reads the latest text whatever the timing.")),
 			via.Child(p.Search), "actions_search.go",
 			demo.Try(
@@ -176,13 +176,14 @@ func (p *Actions) View() h.H {
 				h.Str("Type, pause, type again: one POST per pause."),
 			)),
 		table([]string{"Option", "Effect", "Datastar modifier"},
-			[]h.H{API("on.Debounce"), h.Str("Runs once the event has stopped firing for d."), Code("__debounce.300ms")},
-			[]h.H{API("on.Throttle"), h.Str("Runs at most once per d."), Code("__throttle.300ms")},
-			[]h.H{API("on.Once"), h.Str("Removes the listener after its first run."), Code("__once")},
-			[]h.H{API("on.Prevent"), h.Str("Calls preventDefault. Not needed with on.Submit."), Code("__prevent")},
-			[]h.H{API("on.Stop"), h.Str("Calls stopPropagation."), Code("__stop")},
-			[]h.H{API("on.Outside"), h.Str("Fires only for events whose target is outside the element."), Code("__outside")},
-			[]h.H{API("on.Window"), h.Str("Listens on window instead of the element."), Code("__window")},
+			[]h.H{API("on.WithDebounce"), h.Str("Runs once the event has stopped firing for d."), Code("__debounce.300ms")},
+			[]h.H{API("on.WithThrottle"), h.Str("Runs at most once per d."), Code("__throttle.300ms")},
+			[]h.H{API("on.WithOnce"), h.Str("Removes the listener after its first run."), Code("__once")},
+			[]h.H{API("on.WithPrevent"), h.Str("Calls preventDefault. Not needed with on.Submit."), Code("__prevent")},
+			[]h.H{API("on.WithStop"), h.Str("Calls stopPropagation."), Code("__stop")},
+			[]h.H{API("on.WithOutside"), h.Str("Fires only for events whose target is outside the element."), Code("__outside")},
+			[]h.H{API("on.WithWindow"), h.Str("Listens on window instead of the element."), Code("__window")},
+			[]h.H{API("on.WithModifier"), h.Str("Any other Datastar modifier, such as delay.300ms or passive. A modifier a typed option covers panics."), Code("__delay.300ms")},
 		),
 		h.P(h.Str("The options take the same form on the …CS twins. A duration of zero or less panics, and so do two different durations for one option on the same binding.")),
 

@@ -34,7 +34,25 @@
   refused URL neutralizes the whole value. A `srcset` URL that contains a
   comma may now be refused.
 
+### Breaking
+
+- **`via.On`, `via.OnArg` and `expr.Lit` are removed.** `via.On("click",
+  fn)` is `on.Click(fn)`, or `on.Event(name, fn)` for an event package `on`
+  has no function for; `via.OnArg` is `on.Click(on.Bind(fn, arg))`;
+  `expr.Lit` is `expr.Val`. A modifier spelled into the event name becomes an
+  option such as `on.WithDebounce(d)`, or `on.WithModifier` where no typed
+  option exists.
+
+- **Package `on` renames:** `on.WithArg` is `on.Bind`, and the options are
+  `WithDebounce`, `WithThrottle`, `WithOnce`, `WithOutside`, `WithPrevent`,
+  `WithStop` and `WithWindow`, so `With` marks only options.
+
 ### New
+
+- **`on.WithModifier(raw)`** appends a Datastar modifier package `on` has no
+  option for: `on.Click(c.Save, on.WithModifier("delay.300ms"))`. It panics
+  on a malformed modifier and on one a typed option covers, naming the
+  option.
 
 - **`WithUnsafeEval()`** puts `'unsafe-eval'` back in every mount's
   `script-src`, next to the nonce and hashes, for a library that compiles
@@ -60,7 +78,7 @@
 ### Changed
 
 - **An action's query moved out of its Datastar expression.** `?a=`
-  (`on.WithArg`) and `?u=` (a child) sit in a `data-via-q-<event>`
+  (`on.Bind`) and `?u=` (a child) sit in a `data-via-q-<event>`
   attribute that the expression appends, so each action and event compiles
   one expression instead of one per row; Datastar never evicts its compile
   cache. The URL posted is unchanged. A test that scrapes `@post('…')` from
@@ -106,7 +124,7 @@
 
 - The "two different actions share the action id" panic names both fixes:
   for a func literal bound once per row (in `Each` or a loop), bind a method
-  with `on.WithArg`; for receivers behind a pointer, slice or map field,
+  with `on.Bind`; for receivers behind a pointer, slice or map field,
   hold each as a direct struct field, a child through its own `via.Child`.
 
 - `Session.Rotate` ends the stream of every other open tab on the session,
@@ -157,12 +175,11 @@
   conflicting option instead of the last one winning. Other options stay
   last-wins.
 
-- **`via.On` and `via.OnArg` panic on an event name package `on` would
-  refuse.** The name was written raw into the attribute name, so
-  `On("click\" onmouseover=\"x", …)` added an attribute. Datastar modifiers
-  (`input__debounce.250ms`) are still accepted.
-
 ### Fixed
+
+- `on.WithDebounce` and `on.WithThrottle` render a sub-millisecond duration
+  rounded up to whole milliseconds. `debounce.1.5ms` was read by Datastar as
+  the tags `1` and `5ms`, so 1.5ms ran as 1ms; it is now `debounce.2ms`.
 
 - `ctx.Tick`, `ctx.Listen` and `ctx.OnConnect` called from `OnReload` now
   log a warning, as `State.Track` already did. They still register nothing:
@@ -300,8 +317,7 @@
   `Get` returns the initial value; name each input, read it with
   `FormValue` and `Set` the Signal. In a live unit the answer is a fresh
   page and those values are lost. Covered on `PostForm`, `Signal.Get` and
-  `/actions`; `PostForm`'s godoc points at `on.Submit`, not the deprecated
-  `On("submit", …)`.
+  `/actions`; `PostForm`'s godoc points at `on.Submit`.
 
 - `/signals` said a Signal behind a pointer panics at render or `Ref`;
   `Mount` panics on it. Only one behind an interface panics at render.

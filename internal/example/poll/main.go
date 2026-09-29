@@ -1,5 +1,5 @@
 // Command poll is a CRUD list with per-row actions. The list re-sorts by vote
-// count on every render, and on.WithArg carries each row's id with the click, so a
+// count on every render, and on.Bind carries each row's id with the click, so a
 // vote lands on the option you clicked rather than whatever now sits in that slot.
 package main
 
@@ -87,8 +87,8 @@ func (a *PollApp) Remove(ctx *via.Ctx, id int) { a.poll.remove(id) }
 func (a *PollApp) row(o Option) h.H {
 	return h.Li(
 		h.Span(h.Str(o.Label+" — "), h.Str(o.Votes)),
-		h.Button(on.Click(on.WithArg(a.Vote, o.ID)), h.Str("vote")),
-		h.Button(on.Click(on.WithArg(a.Remove, o.ID)), h.Str("remove")),
+		h.Button(on.Click(on.Bind(a.Vote, o.ID)), h.Str("vote")),
+		h.Button(on.Click(on.Bind(a.Remove, o.ID)), h.Str("remove")),
 	)
 }
 

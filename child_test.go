@@ -227,7 +227,7 @@ type liveClicker struct{ n via.State[int] }
 
 func (c *liveClicker) Bump(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *liveClicker) View() h.H {
-	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(via.On("click", c.Bump), h.Str("+")))
+	return h.Div(h.P(h.Str("c="), c.n.Display()), h.Button(on.Click(c.Bump), h.Str("+")))
 }
 
 // panel children two live clickers.
@@ -280,7 +280,7 @@ func (r *hitsRoot) View() h.H {
 	return h.Div(
 		h.Span(h.Str("hits:"), h.Str(r.hits)),
 		via.Child(r.Isl),
-		h.Button(via.On("click", r.Hit), h.Str("hit")),
+		h.Button(on.Click(r.Hit), h.Str("hit")),
 	)
 }
 
@@ -323,8 +323,8 @@ func (k *kid) Noop(ctx *via.Ctx) {} // changes nothing the View reads
 func (k *kid) View() h.H {
 	return h.Div(
 		h.P(h.Str("n="), h.Str(k.n)),
-		h.Button(via.On("click", k.Bump), h.Str("+")),    // action 0
-		h.Button(via.On("click", k.Noop), h.Str("noop")), // action 1
+		h.Button(on.Click(k.Bump), h.Str("+")),    // action 0
+		h.Button(on.Click(k.Noop), h.Str("noop")), // action 1
 	)
 }
 
@@ -568,7 +568,7 @@ func (c *gatedLiveChild[G]) grand() h.H    { return via.Child(c.Grand) }
 func (c *gatedLiveChild[G]) View() h.H {
 	return h.Div(
 		h.Input(c.Gate.Bind()),
-		h.Button(via.On("click", c.Ping), h.Str("ping")),
+		h.Button(on.Click(c.Ping), h.Str("ping")),
 		c.n.Display(),
 		via.When(c.Gate.Get(), c.grand),
 	)
@@ -625,7 +625,7 @@ func (c *gatedLiveChildFastTick[G]) grand() h.H    { return via.Child(c.Grand) }
 func (c *gatedLiveChildFastTick[G]) View() h.H {
 	return h.Div(
 		h.Input(c.Gate.Bind()),
-		h.Button(via.On("click", c.Ping), h.Str("ping")),
+		h.Button(on.Click(c.Ping), h.Str("ping")),
 		c.n.Display(),
 		via.When(c.Gate.Get(), c.grand),
 	)
@@ -683,9 +683,9 @@ func (c *flipChild) Bump(*via.Ctx)  {}
 func (c *flipChild) Extra(*via.Ctx) {}
 func (c *flipChild) View() h.H {
 	if *c.extra {
-		return h.Div(h.Button(via.On("click", c.Bump)), h.Button(via.On("click", c.Extra)))
+		return h.Div(h.Button(on.Click(c.Bump)), h.Button(on.Click(c.Extra)))
 	}
-	return h.Div(h.Button(via.On("click", c.Bump)))
+	return h.Div(h.Button(on.Click(c.Bump)))
 }
 
 // flipRoot has its own dispatchable action (child 0) and children flipChild —
@@ -697,7 +697,7 @@ type flipRoot struct {
 }
 
 func (r *flipRoot) Act(*via.Ctx) { r.hits++ }
-func (r *flipRoot) View() h.H    { return h.Div(h.Button(via.On("click", r.Act)), via.Child(r.Child)) }
+func (r *flipRoot) View() h.H    { return h.Div(h.Button(on.Click(r.Act)), via.Child(r.Child)) }
 
 func TestChild_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 	t.Parallel()
@@ -987,7 +987,7 @@ type plainKid struct{ hits int }
 
 func (k *plainKid) Bump(ctx *via.Ctx) { k.hits++ }
 func (k *plainKid) View() h.H {
-	return h.Div(h.Str("kid-hits="), h.Str(strconv.Itoa(k.hits)), h.Button(via.On("click", k.Bump)))
+	return h.Div(h.Str("kid-hits="), h.Str(strconv.Itoa(k.hits)), h.Button(on.Click(k.Bump)))
 }
 
 type livePageWithPlainKid struct {
@@ -1021,7 +1021,7 @@ type deepCounter struct {
 func (c *deepCounter) Inc(*via.Ctx) { c.n.Set(c.n.Get() + c.Step.Get()) }
 func (c *deepCounter) View() h.H {
 	return h.Div(h.Str("n="), c.n.Display(),
-		h.Input(c.Step.Bind()), h.Button(via.On("click", c.Inc), h.Str("+step")))
+		h.Input(c.Step.Bind()), h.Button(on.Click(c.Inc), h.Str("+step")))
 }
 
 // deepPanel is a plain middle child: it has its own Signal and action, and its
@@ -1035,7 +1035,7 @@ type deepPanel struct {
 func (p *deepPanel) Search(*via.Ctx) { p.hits.Add(1) }
 func (p *deepPanel) View() h.H {
 	return h.Section(h.Input(p.Query.Bind()),
-		h.Button(via.On("click", p.Search), h.Str("search")),
+		h.Button(on.Click(p.Search), h.Str("search")),
 		h.Span(h.Str("hits="), h.Str(int(p.hits.Load()))), via.Child(p.Kid))
 }
 
@@ -1142,7 +1142,7 @@ type initRoot struct {
 func (p *initRoot) Bump(ctx *via.Ctx) { p.hits++ }
 func (p *initRoot) View() h.H {
 	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(p.hits)),
-		h.Button(via.On("click", p.Bump)), via.Child(p.Kid))
+		h.Button(on.Click(p.Bump)), via.Child(p.Kid))
 }
 
 func TestChild_rootActionPatchInitsNestedChildren(t *testing.T) {
@@ -1165,7 +1165,7 @@ type initMid struct {
 func (m *initMid) Note(ctx *via.Ctx) { m.hits++ }
 func (m *initMid) View() h.H {
 	return h.Div(h.Str("hits="), h.Str(strconv.Itoa(m.hits)),
-		h.Button(via.On("click", m.Note)), via.Child(m.Kid))
+		h.Button(on.Click(m.Note)), via.Child(m.Kid))
 }
 
 type initHost struct{ Mid initMid }
@@ -1470,7 +1470,7 @@ type argTwin struct{ picked string }
 func (w *argTwin) Pick(ctx *via.Ctx, id string) { w.picked = id }
 
 func (w *argTwin) View() h.H {
-	return h.Div(h.P(h.Str("picked="+w.picked)), h.Button(on.Click(on.WithArg(w.Pick, "x7")), h.Str("pick")))
+	return h.Div(h.P(h.Str("picked="+w.picked)), h.Button(on.Click(on.Bind(w.Pick, "x7")), h.Str("pick")))
 }
 
 type argTwins struct{ A, B argTwin }

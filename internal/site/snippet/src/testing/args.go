@@ -49,7 +49,7 @@ func (s *Shelf) Pick(ctx *via.Ctx, i int) { s.Picked.Set(s.titles[i]) }
 func (s *Shelf) View() h.H {
 	var rows []h.H
 	for i, title := range s.titles {
-		rows = append(rows, h.Li(h.Button(on.Click(on.WithArg(s.Pick, i)), h.Str(title))))
+		rows = append(rows, h.Li(h.Button(on.Click(on.Bind(s.Pick, i)), h.Str(title))))
 	}
 	return h.Div(h.Ul(rows...), h.P(s.Picked.Display()))
 }

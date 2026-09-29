@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,15 +59,15 @@ var urlCorpus = []struct {
 func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {
 	t.Parallel()
 	for _, c := range urlCorpus {
-		assert.Equal(t, c.safe, hcore.SafeURL(c.url), "predicate verdict for %q", c.url)
-		assert.Equal(t, c.href, hcore.SafeHref(c.url), "href predicate verdict for %q", c.url)
+		assert.Equal(t, c.safe, render.SafeURL(c.url), "predicate verdict for %q", c.url)
+		assert.Equal(t, c.href, render.SafeHref(c.url), "href predicate verdict for %q", c.url)
 
-		rendered := render(t, h.A(h.Href(c.url)))
+		rendered := markup(t, h.A(h.Href(c.url)))
 		neutralized := strings.Contains(rendered, `href="#"`)
 		assert.Equal(t, !c.href, neutralized,
 			"the href gate and the predicate disagree about %q: rendered %s", c.url, rendered)
 
-		rendered = render(t, h.Img(h.Src(c.url)))
+		rendered = markup(t, h.Img(h.Src(c.url)))
 		neutralized = strings.Contains(rendered, `src="#"`)
 		assert.Equal(t, !c.safe, neutralized,
 			"the src gate and the predicate disagree about %q: rendered %s", c.url, rendered)
@@ -76,12 +76,12 @@ func TestURLPolicy_attributeGateAgreesWithThePredicate(t *testing.T) {
 
 func TestURLPolicy_coversEveryTypedAttribute(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, render(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
-	assert.Contains(t, render(t, h.Img(h.Src("javascript:alert(1)"))), `src="#"`)
-	assert.Contains(t, render(t, h.Form(h.Action("javascript:alert(1)"))), `action="#"`)
-	assert.Contains(t, render(t, h.A(h.Href("/ok"))), `href="/ok"`)
-	assert.Contains(t, render(t, h.Img(h.Src("/ok.png"))), `src="/ok.png"`)
-	assert.Contains(t, render(t, h.Form(h.Action("/ok"))), `action="/ok"`)
+	assert.Contains(t, markup(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
+	assert.Contains(t, markup(t, h.Img(h.Src("javascript:alert(1)"))), `src="#"`)
+	assert.Contains(t, markup(t, h.Form(h.Action("javascript:alert(1)"))), `action="#"`)
+	assert.Contains(t, markup(t, h.A(h.Href("/ok"))), `href="/ok"`)
+	assert.Contains(t, markup(t, h.Img(h.Src("/ok.png"))), `src="/ok.png"`)
+	assert.Contains(t, markup(t, h.Form(h.Action("/ok"))), `action="/ok"`)
 }
 
 func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
@@ -93,16 +93,16 @@ func TestRawAttr_gatesEveryURLBearingAttributeName(t *testing.T) {
 		"formaction", "FormAction", "action", "href", "src",
 		"poster", "data", "cite", "background", "ping", "manifest",
 	} {
-		got := render(t, h.El("a", h.RawAttr(name, "javascript:alert(1)")))
+		got := markup(t, h.El("a", h.RawAttr(name, "javascript:alert(1)")))
 		assert.Containsf(t, got, `="#"`, "h.RawAttr(%q, javascript:...) must neutralize to \"#\", got %s", name, got)
 	}
 	// srcset carries a list, not a bare scheme, but a scheme-only payload must
 	// still be caught.
-	assert.Contains(t, render(t, h.El("img", h.RawAttr("srcset", "javascript:alert(1)"))), `="#"`)
+	assert.Contains(t, markup(t, h.El("img", h.RawAttr("srcset", "javascript:alert(1)"))), `="#"`)
 
-	assert.Contains(t, render(t, h.El("a", h.RawAttr("formaction", "/ok"))), `formaction="/ok"`,
+	assert.Contains(t, markup(t, h.El("a", h.RawAttr("formaction", "/ok"))), `formaction="/ok"`,
 		"a legitimate relative URL on a gated name must render untouched")
-	assert.Contains(t, render(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`,
+	assert.Contains(t, markup(t, h.El("a", h.RawAttr("href", "/ok"))), `href="/ok"`,
 		"a legitimate relative URL on a gated name must render untouched")
 }
 
@@ -117,7 +117,7 @@ func TestRawAttr_gatesEveryURLInAListValuedAttribute(t *testing.T) {
 		{"ping", "/track\t//evil.example/beacon"},
 		{"Ping", "https://ok.example/p data:text/plain,x"},
 	} {
-		got := render(t, h.El("img", h.RawAttr(c.name, c.val)))
+		got := markup(t, h.El("img", h.RawAttr(c.name, c.val)))
 		assert.Containsf(t, got, `="#"`, "h.RawAttr(%q, %q) must neutralize: every URL in the list is gated, got %s",
 			c.name, c.val, got)
 	}
@@ -126,7 +126,7 @@ func TestRawAttr_gatesEveryURLInAListValuedAttribute(t *testing.T) {
 		{"srcset", "https://cdn.example/a.png?w=1,2 480w, /b.png 800w"},
 		{"ping", "/track https://ok.example/p"},
 	} {
-		got := render(t, h.El("img", h.RawAttr(c.name, c.val)))
+		got := markup(t, h.El("img", h.RawAttr(c.name, c.val)))
 		assert.Containsf(t, got, `="`+c.val+`"`, "h.RawAttr(%q, %q) must render untouched, got %s", c.name, c.val, got)
 	}
 }
@@ -134,13 +134,13 @@ func TestRawAttr_gatesEveryURLInAListValuedAttribute(t *testing.T) {
 func TestURLPolicy_mailtoAndTelPassInHrefOnly(t *testing.T) {
 	t.Parallel()
 	for _, u := range []string{"mailto:a@b.c", "tel:+15550100"} {
-		assert.Contains(t, render(t, h.A(h.Href(u))), `href="`+u+`"`)
-		assert.Contains(t, render(t, h.El("a", h.RawAttr("href", u))), `href="`+u+`"`)
-		assert.Contains(t, render(t, h.El("a", h.RawAttr("HREF", u))), `="`+u+`"`)
-		assert.Contains(t, render(t, h.Img(h.Src(u))), `src="#"`)
-		assert.Contains(t, render(t, h.Form(h.Action(u))), `action="#"`)
+		assert.Contains(t, markup(t, h.A(h.Href(u))), `href="`+u+`"`)
+		assert.Contains(t, markup(t, h.El("a", h.RawAttr("href", u))), `href="`+u+`"`)
+		assert.Contains(t, markup(t, h.El("a", h.RawAttr("HREF", u))), `="`+u+`"`)
+		assert.Contains(t, markup(t, h.Img(h.Src(u))), `src="#"`)
+		assert.Contains(t, markup(t, h.Form(h.Action(u))), `action="#"`)
 		for _, name := range []string{"src", "action", "formaction", "ping", "poster"} {
-			assert.Containsf(t, render(t, h.El("a", h.RawAttr(name, u))), `="#"`,
+			assert.Containsf(t, markup(t, h.El("a", h.RawAttr(name, u))), `="#"`,
 				"h.RawAttr(%q, %q) must neutralize: only href admits mailto:/tel:", name, u)
 		}
 	}
@@ -172,7 +172,7 @@ func TestURLPolicy_typedAttributesNeutralizeThroughASingleGate(t *testing.T) {
 	for _, u := range []string{"javascript:alert(1)", "data:text/html,x", "//evil.example/x"} {
 		for _, g := range gates {
 			logs.Reset()
-			rendered := render(t, g.node(u))
+			rendered := markup(t, g.node(u))
 			assert.Contains(t, rendered, g.attr+`="#"`, "%s=%q must neutralize", g.attr, u)
 			assert.NotContains(t, rendered, u, "the hostile URL must not survive anywhere in the markup")
 			assert.Equal(t, 1, strings.Count(logs.String(), "neutralized"),

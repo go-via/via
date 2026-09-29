@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -87,8 +88,8 @@ func (s *sessionLive) Peek(ctx *via.Ctx) { ctx.Session().Get[member]() } // read
 
 func (s *sessionLive) View() h.H {
 	return h.Div(s.n.Display(),
-		h.Button(via.On("click", s.Bump)), // action 0
-		h.Button(via.On("click", s.Peek))) // action 1
+		h.Button(on.Click(s.Bump)), // action 0
+		h.Button(on.Click(s.Peek))) // action 1
 }
 
 // liveActionRequest builds a raw dispatch POST against child/n using the
@@ -203,7 +204,7 @@ func signIn(t *testing.T, srv *httptest.Server, c *http.Client, path string) {
 type namedLogin struct{ name string }
 
 func (l *namedLogin) SignIn(ctx *via.Ctx) { ctx.Session().Put(member{Name: l.name}) }
-func (l *namedLogin) View() h.H           { return h.Button(via.On("click", l.SignIn), h.Str("in")) }
+func (l *namedLogin) View() h.H           { return h.Button(on.Click(l.SignIn), h.Str("in")) }
 
 // whoLive publishes, over the stream, whose session its action ran under.
 type whoLive struct{ who via.State[string] }
@@ -215,7 +216,7 @@ func (w *whoLive) Whoami(ctx *via.Ctx) {
 	}
 }
 func (w *whoLive) View() h.H {
-	return h.Div(h.P(h.Str("who: "), w.who.Display()), h.Button(via.On("click", w.Whoami)))
+	return h.Div(h.P(h.Str("who: "), w.who.Display()), h.Button(on.Click(w.Whoami)))
 }
 
 func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.T) {
@@ -344,9 +345,9 @@ func (p *liveLoginer) Rotate(ctx *via.Ctx) { ctx.Session().Rotate() } // action 
 
 func (p *liveLoginer) View() h.H {
 	return h.Div(p.n.Display(),
-		h.Button(via.On("click", p.Bump)),
-		h.Button(via.On("click", p.Login)),
-		h.Button(via.On("click", p.Rotate)))
+		h.Button(on.Click(p.Bump)),
+		h.Button(on.Click(p.Login)),
+		h.Button(on.Click(p.Rotate)))
 }
 
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
@@ -390,7 +391,7 @@ func (o *onConnectLoginer) OnInit(ctx *via.Ctx) error {
 func (o *onConnectLoginer) Bump(ctx *via.Ctx) { o.n.Set(o.n.Get() + 1) } // action 0
 
 func (o *onConnectLoginer) View() h.H {
-	return h.Div(o.n.Display(), h.Button(via.On("click", o.Bump)))
+	return h.Div(o.n.Display(), h.Button(on.Click(o.Bump)))
 }
 
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
@@ -520,8 +521,8 @@ func (p *raceLoginer) Login(ctx *via.Ctx) {
 
 func (p *raceLoginer) View() h.H {
 	return h.Div(p.n.Display(),
-		h.Button(via.On("click", p.Bump)),
-		h.Button(via.On("click", p.Login)))
+		h.Button(on.Click(p.Bump)),
+		h.Button(on.Click(p.Login)))
 }
 
 func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
@@ -696,10 +697,10 @@ func (p *sessionTicker) Rotate(ctx *via.Ctx) { ctx.Session().Rotate() }
 func (p *sessionTicker) Rename(ctx *via.Ctx) { ctx.Session().Put(member{Name: "bob"}) }
 func (p *sessionTicker) View() h.H {
 	return h.Div(h.P(h.Str("who:"+p.who.Get())),
-		h.Button(via.On("click", p.Login)),
-		h.Button(via.On("click", p.Logout)),
-		h.Button(via.On("click", p.Rotate)),
-		h.Button(via.On("click", p.Rename)))
+		h.Button(on.Click(p.Login)),
+		h.Button(on.Click(p.Logout)),
+		h.Button(on.Click(p.Rotate)),
+		h.Button(on.Click(p.Rename)))
 }
 
 // servedWithJar is vt.Serve whose client keeps cookies, so every Connect and
@@ -834,7 +835,7 @@ func (p *bigFrames) OnInit(ctx *via.Ctx) error {
 func (p *bigFrames) tick(*via.Ctx) { p.n.Set(p.n.Get() + 1) }
 func (p *bigFrames) Bump(*via.Ctx) {}
 func (p *bigFrames) View() h.H {
-	return h.Div(h.P(h.Str(strings.Repeat("x", 256<<10)), p.n.Display()), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.P(h.Str(strings.Repeat("x", 256<<10)), p.n.Display()), h.Button(on.Click(p.Bump)))
 }
 
 func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T) {
@@ -1231,7 +1232,7 @@ func (p *slowJoin) OnInit(ctx *via.Ctx) error {
 func (p *slowJoin) join()              { p.room.Publish(1) }
 func (p *slowJoin) recv(*via.Ctx, int) { time.Sleep(5 * time.Second) }
 func (p *slowJoin) Bump(ctx *via.Ctx)  { p.n.Set(p.n.Get() + 1) }
-func (p *slowJoin) View() h.H          { return h.Div(p.n.Display(), h.Button(via.On("click", p.Bump))) }
+func (p *slowJoin) View() h.H          { return h.Div(p.n.Display(), h.Button(on.Click(p.Bump))) }
 
 func TestDispatch_aParkedActionsWholeWaitIsBoundedByThePinnedDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -1281,7 +1282,7 @@ func (o *ordered) C(*via.Ctx) { o.log.add("C") }
 
 func (o *ordered) View() h.H {
 	return h.Div(o.n.Display(),
-		h.Button(via.On("click", o.A)), h.Button(via.On("click", o.B)), h.Button(via.On("click", o.C)))
+		h.Button(on.Click(o.A)), h.Button(on.Click(o.B)), h.Button(on.Click(o.C)))
 }
 
 func TestDispatch_parkedActionsRunInArrivalOrder(t *testing.T) {

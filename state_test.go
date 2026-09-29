@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,7 @@ func (e *stateEcho) Set(ctx *via.Ctx) { e.msg.Set("<b>Ada</b>") }
 func (e *stateEcho) View() h.H {
 	return h.Div(
 		h.P(h.Str("msg: "), e.msg.Display()),
-		h.Button(via.On("click", e.Set), h.Str("set")),
+		h.Button(on.Click(e.Set), h.Str("set")),
 	)
 }
 
@@ -132,7 +133,7 @@ func (t *listChild) View() h.H {
 		// A marker that changes with the length, so a test can await the
 		// post-removal frame rather than matching the row it expects gone.
 		h.P(h.RawAttr("id", "count-"+strconv.Itoa(len(t.items.Get())))),
-		h.Button(via.On("click", t.DropFirst), h.Str("drop")),
+		h.Button(on.Click(t.DropFirst), h.Str("drop")),
 	)
 }
 
@@ -186,7 +187,7 @@ type hooklessCounter struct{ n via.State[int] }
 
 func (c *hooklessCounter) Inc(ctx *via.Ctx) { c.n.Set(c.n.Get() + 1) }
 func (c *hooklessCounter) View() h.H {
-	return h.Div(h.Str("n="), c.n.Display(), h.Button(via.On("click", c.Inc)))
+	return h.Div(h.Str("n="), c.n.Display(), h.Button(on.Click(c.Inc)))
 }
 
 func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
@@ -212,7 +213,7 @@ func (p *lateLive) msg() h.H { return p.Msg.Display() }
 
 func (p *lateLive) View() h.H {
 	return h.Div(
-		h.Button(via.On("click", p.Open), h.Str("open")),
+		h.Button(on.Click(p.Open), h.Str("open")),
 		via.When(p.open, p.msg),
 	)
 }
@@ -508,7 +509,7 @@ func (w *trackFromAction) View() h.H {
 	return h.Div(
 		h.Str("n="), w.N.Display(),
 		h.Str(" bumps="), w.Bumps.Display(),
-		h.Button(via.On("click", w.Bump)),
+		h.Button(on.Click(w.Bump)),
 	)
 }
 

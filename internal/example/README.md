@@ -20,7 +20,7 @@ After that, pick by what you need: `shared` for a value the app owns and every
 tab tracks through `via.StateTrack` on the field, with no `OnInit` at all
 (state shared across tabs — `State` alone is per connection), `feed` for
 `Topic` + `ctx.Listen`, which is what you want when each event matters rather
-than only the latest, `poll` for `on.WithArg` per-row
+than only the latest, `poll` for `on.Bind` per-row
 actions, `dashboard` for several live children on one stream plus a JS island
 fed by `Set` and a client-only `SignalCS`, `chat` for both topic shapes at
 once, `forum` for the multi-page/router/session/upload side.
@@ -32,7 +32,7 @@ once, `forum` for the multi-page/router/session/upload side.
 - **`shared`**: an app-owned counter every tab follows with
   `via.StateTrack`.
 - **`feed`**: a `Topic` broadcast fanning out to every connected tab.
-- **`poll`**: a reordering list where `on.WithArg` carries each row's id;
+- **`poll`**: a reordering list where `on.Bind` carries each row's id;
   `h.DataAttr`.
 - **`dashboard`**: live regions on one stream; a canvas island;
   tag-seeded signals.

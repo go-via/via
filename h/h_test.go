@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,23 +18,27 @@ func (*stubBinder) DeclareSignal(string, any) {}
 
 func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
-func render(t *testing.T, node h.H) string {
+func (*stubBinder) Action(*render.Renderer, string, any) {}
+
+func (*stubBinder) ArgAction(*render.Renderer, string, any, any, func([]byte) (any, error)) {}
+
+func markup(t *testing.T, node h.H) string {
 	t.Helper()
-	r := hcore.NewRenderer(&stubBinder{})
+	r := render.NewRenderer(&stubBinder{})
 	r.Render(node)
 	return string(r.Bytes())
 }
 
 func TestChildText_isHTMLEscapedToPreventInjection(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Div(h.Str("<script>&\"'")))
+	got := markup(t, h.Div(h.Str("<script>&\"'")))
 	assert.NotContains(t, got, "<script>", "raw <script> leaked into output, XSS risk")
 	assert.Equal(t, "<div>&lt;script&gt;&amp;&#34;&#39;</div>", got, "escaping mismatch")
 }
 
 func TestNumericText_rendersAsItsDecimalForm(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Span(h.Str(42)))
+	got := markup(t, h.Span(h.Str(42)))
 	assert.Equal(t, "<span>42</span>", got)
 }
 
@@ -42,7 +46,7 @@ func TestAttributes_renderInsideOpeningTagAndChildrenInBody(t *testing.T) {
 	t.Parallel()
 	// Attr children must land in the opening tag regardless of their position
 	// among node children; node children stay in the body in order.
-	got := render(t, h.Div(
+	got := markup(t, h.Div(
 		h.Str("a"),
 		h.RawAttr("id", "x"),
 		h.Str("b"),
@@ -52,21 +56,21 @@ func TestAttributes_renderInsideOpeningTagAndChildrenInBody(t *testing.T) {
 
 func TestAttributeValues_areEscapedToPreventTagBreakout(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Span(h.RawAttr("title", `"><script>`)))
+	got := markup(t, h.Span(h.RawAttr("title", `"><script>`)))
 	assert.NotContains(t, got, `"><script>`, "attr value broke out of the quoted tag")
 	assert.Equal(t, `<span title="&#34;&gt;&lt;script&gt;"></span>`, got)
 }
 
 func TestDataHelper_emitsEscapedDataAttribute(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Input(h.Data("signals", `{"s0":1}`)))
+	got := markup(t, h.Input(h.Data("signals", `{"s0":1}`)))
 	assert.Equal(t, `<input data-signals="{&#34;s0&#34;:1}">`, got)
 }
 
 func TestVoidElement_selfClosesWithoutBody(t *testing.T) {
 	t.Parallel()
 	// input is a void element: no closing tag, children-as-nodes dropped.
-	got := render(t, h.Input(h.RawAttr("type", "text")))
+	got := markup(t, h.Input(h.RawAttr("type", "text")))
 	assert.Equal(t, `<input type="text">`, got, "void element rendered with a body")
 }
 
@@ -86,20 +90,20 @@ func TestNonVoidElements_alwaysEmitClosingTag(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tc.want, render(t, tc.node))
+			assert.Equal(t, tc.want, markup(t, tc.node))
 		})
 	}
 }
 
 func TestNestedElements_renderRecursively(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Main(h.Div(h.H1(h.Str("hi")))))
+	got := markup(t, h.Main(h.Div(h.H1(h.Str("hi")))))
 	assert.Equal(t, "<main><div><h1>hi</h1></div></main>", got)
 }
 
 func TestMultipleAttributes_keepSourceOrder(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.El("a",
+	got := markup(t, h.El("a",
 		h.RawAttr("href", "/x"),
 		h.RawAttr("rel", "next"),
 		h.Str("go"),
@@ -123,18 +127,18 @@ func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
 		{h.Col(), "<col>"}, {h.Area(), "<area>"},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, render(t, c.node))
+		assert.Equal(t, c.want, markup(t, c.node))
 	}
 }
 
 func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, render(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
-	assert.Contains(t, render(t, h.A(h.Href("https://example.com/x"))), `href="https://example.com/x"`)
-	assert.Contains(t, render(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
-	assert.Contains(t, render(t, h.Img(h.Src("data:text/html,x"))), `src="#"`)
-	assert.Contains(t, render(t, h.A(h.Href("//evil.example/x"))), `href="#"`)
-	assert.Contains(t, render(t, h.Form(h.Action("/login"))), `action="/login"`)
+	assert.Contains(t, markup(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
+	assert.Contains(t, markup(t, h.A(h.Href("https://example.com/x"))), `href="https://example.com/x"`)
+	assert.Contains(t, markup(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
+	assert.Contains(t, markup(t, h.Img(h.Src("data:text/html,x"))), `src="#"`)
+	assert.Contains(t, markup(t, h.A(h.Href("//evil.example/x"))), `href="#"`)
+	assert.Contains(t, markup(t, h.Form(h.Action("/login"))), `action="/login"`)
 }
 
 func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {
@@ -156,7 +160,7 @@ func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {
 
 func TestText_escapesCarriageReturnThatWouldSplitAnSSEFrame(t *testing.T) {
 	t.Parallel()
-	got := render(t, h.Span(h.Str("before\rafter")))
+	got := markup(t, h.Span(h.Str("before\rafter")))
 	assert.NotContains(t, got, "\r", "a bare CR splits an SSE data line")
 	assert.Contains(t, got, "&#13;")
 }
@@ -182,7 +186,7 @@ func TestRawAttr_acceptsOrdinaryHTMLAttributeNames(t *testing.T) {
 	} {
 		var got string
 		require.NotPanicsf(t, func() {
-			got = render(t, h.El("a", h.RawAttr(tc.name, "x")))
+			got = markup(t, h.El("a", h.RawAttr(tc.name, "x")))
 		}, "RawAttr(%q) must be accepted", tc.name)
 		assert.Equal(t, tc.want, got)
 	}
@@ -197,10 +201,10 @@ func TestData_rendersDatastarPluginNamesVerbatim(t *testing.T) {
 		{"attr:disabled", "$busy", `data-attr:disabled="$busy"`},
 		{"show", "$open", `data-show="$open"`},
 	} {
-		got := render(t, h.Div(h.Data(tc.suffix, tc.val)))
+		got := markup(t, h.Div(h.Data(tc.suffix, tc.val)))
 		assert.Containsf(t, got, tc.want, "h.Data(%q) must render the Datastar attribute verbatim", tc.suffix)
 
-		raw := render(t, h.Div(h.RawAttr("data-"+tc.suffix, tc.val)))
+		raw := markup(t, h.Div(h.RawAttr("data-"+tc.suffix, tc.val)))
 		assert.Containsf(t, raw, tc.want, "h.RawAttr(%q) must render the Datastar attribute verbatim", "data-"+tc.suffix)
 	}
 }
@@ -210,7 +214,7 @@ func TestRawAttr_rejectsInlineEventHandlers(t *testing.T) {
 	for _, name := range []string{"onclick", "onerror", "ONCLICK", "onload", "OnMouseOver", "onfocus"} {
 		assert.Panicsf(t, func() { h.RawAttr(name, "alert(1)") },
 			"RawAttr(%q) must panic — inline event handlers are script sinks", name)
-		assert.Panicsf(t, func() { hcore.BoolAttr(name, true) },
+		assert.Panicsf(t, func() { render.BoolAttr(name, true) },
 			"BoolAttr(%q) must panic — inline event handlers are script sinks", name)
 	}
 	// The prefix rule must not swallow data-on:*, which is Datastar, not a DOM
@@ -235,12 +239,12 @@ func maybe(show bool) h.H {
 
 func TestEl_rendersANilChildAsNothing(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "<div><b></b></div>", render(t, h.Div(nil, h.B(), nil)))
+	assert.Equal(t, "<div><b></b></div>", markup(t, h.Div(nil, h.B(), nil)))
 }
 
 func TestEl_rendersANilFromAHelperAsNothing(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "<div><span>shown</span></div>", render(t, h.Div(maybe(true), maybe(false))))
+	assert.Equal(t, "<div><span>shown</span></div>", markup(t, h.Div(maybe(true), maybe(false))))
 }
 
 func TestEl_panicsOnAScriptTagInAnyCase(t *testing.T) {

@@ -312,7 +312,7 @@ inline script. A gate that checks the raw string passes values the browser
 then treats as something else.
 
 Rule: Each gate that admits a value into a page, a redirect or a request
-lives once, in `internal/hcore`, and every caller uses that copy. It
+lives once, in `internal/render`, and every caller uses that copy. It
 normalizes input the way the browser's parser does before deciding. Its test
 is a table of inputs that differ only after browser normalization. A
 boot-time check that can only refuse more, like `head.go` parsing
@@ -513,10 +513,10 @@ signal — change the surface, not the test boundary.
 
 Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
 (the reflect allowlist, the no-`&`/no-closure guard over the examples, the
-guard that keeps hcore's binder plumbing off every public package, and the
-black-box test lint) parse the tree and assert on what it says, so they pair
-with every source file and therefore with none. A failure there means the
-source drifted from a design rule, not a behavioral regression.
+guard that keeps `internal/render`'s binder plumbing off every public
+package, and the black-box test lint) parse the tree and assert on what it
+says, so they pair with every source file and therefore with none. A failure
+there means the source drifted from a design rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A

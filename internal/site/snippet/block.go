@@ -110,7 +110,7 @@ func frame(label string, pre h.H) h.H {
 		pre,
 		h.Button(h.Class("copy"), h.Type("button"), h.Aria("label", "Copy code"),
 			on.ClickCS(expr.Do(expr.CopyTextOf("pre"), expr.Class("copied", true))),
-			on.ClickCS(expr.Class("copied", false), on.Debounce(1500*time.Millisecond)),
+			on.ClickCS(expr.Class("copied", false), on.WithDebounce(1500*time.Millisecond)),
 			icon.Clipboard(), icon.Check(),
 			h.Span(h.Class("copy-done"), h.Aria("live", "polite"), h.Str("Copied"))),
 	)

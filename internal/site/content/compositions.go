@@ -136,16 +136,16 @@ func (p *Compositions) View() h.H {
 				API("via.Ctx.OnConnect"), h.Str(", which only a real connection reaches."))),
 
 		d.H2("Conditionals and lists"),
-		snippet.Region("compositions/lists.go", "list", snippet.Mark("h.ID(", "on.WithArg")),
+		snippet.Region("compositions/lists.go", "list", snippet.Mark("h.ID(", "on.Bind")),
 		h.P(APIText("via.When", "via.When(cond, build)"), h.Str(" calls build only when cond holds. "), API("via.Each"),
 			h.Str(" and "), API("via.List.Each"), h.Str(" call a row method per item. A row is markup, not a unit: "+
-				"its action is a method on the list's owner, and "), API("on.WithArg"),
+				"its action is a method on the list's owner, and "), API("on.Bind"),
 			h.Str(" carries the row's id with the click. A Signal inside a slice element has no field to be named by, and rendering it panics.")),
 		h.P(h.Str("Give each row a stable "), API("h.ID"), h.Str(". Datastar morphs a re-rendered list by position, "+
 			"which is right for an append-only log and wrong after a delete or a reorder: without ids, the rows after the removed one "+
 			"are patched in place from their neighbours.")),
 		h.P(h.Str("The render that handles an action decides what it may do. An action answers 410 Gone when that render "+
-			"does not contain it: its When branch is closed, its row is gone, its "), API("on.WithArg"),
+			"does not contain it: its When branch is closed, its row is gone, its "), API("on.Bind"),
 			h.Str(" value is one no row rendered, or its child key holds nothing or a unit of another type. "+
 				"The check runs before the handler, so a handler only sees arguments the render offered.")),
 		Callout(Warning, "Gate on server data",
@@ -177,7 +177,7 @@ func (p *Compositions) View() h.H {
 		d.H3("Lists with keys"),
 		Compare("React", snippet.Text("", reactList), "via", snippet.Region("compositions/lists.go", "row", snippet.Title(""))),
 		h.P(Code("key"), h.Str(" becomes the row's id, and the closure over "), Code("t.id"), h.Str(" becomes "),
-			API("on.WithArg"), h.Str(".")),
+			API("on.Bind"), h.Str(".")),
 
 		d.H3("Events up"),
 		Compare("React", snippet.Text("", reactEvents), "via", snippet.Region("demos/compositions_relay.go", "relay", snippet.Title(""))),
@@ -237,7 +237,7 @@ func (p *Compositions) View() h.H {
 			h.Li(h.Str("Anything that needs Go is a round trip: every action is a POST, and the answer is a patch. "+
 				"Typing, toggling and derived text can stay in the browser; validation that needs the database cannot.")),
 			h.Li(h.Str("A child's action re-renders that child only. Units that must react to each other share a topic.")),
-			h.Li(h.Str("A list row is markup, not a unit: no per-row signals, and per-row actions go through "), API("on.WithArg"), h.Str(".")),
+			h.Li(h.Str("A list row is markup, not a unit: no per-row signals, and per-row actions go through "), API("on.Bind"), h.Str(".")),
 			h.Li(h.Str("Keys are positions, so a Child's presence must not change while the page is open.")),
 			h.Li(h.Str("A live unit may not contain another live unit, and a live child may not call Child at all. "+
 				"Keep the live units side by side under a plain parent. Both rules panic at render:")),

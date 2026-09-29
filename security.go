@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // maxActionBody bounds an action body against memory exhaustion; 1 MiB is far
@@ -37,7 +37,7 @@ func originAllowed(req *http.Request, cfg *config) bool {
 		return true
 	}
 	origin := req.Header.Get("Origin")
-	if norm, ok := hcore.URLOrigin(origin); ok && norm != "" && cfg.trustedOrigins[norm] {
+	if norm, ok := render.URLOrigin(origin); ok && norm != "" && cfg.trustedOrigins[norm] {
 		return true
 	}
 	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
@@ -82,7 +82,7 @@ func (r redirectTo) LogValue() slog.Value { return slog.StringValue(r.url) }
 // refusal re-runs the scheme gate at the sink, so a redirectTo built without
 // Redirect or RedirectExternal still cannot navigate to javascript: or data:.
 func (r redirectTo) refusal() string {
-	if r.refused == "" && !hcore.SafeURL(r.url) {
+	if r.refused == "" && !render.SafeURL(r.url) {
 		return notHTTP
 	}
 	return r.refused
@@ -94,7 +94,7 @@ const notHTTP = "not http(s) or relative"
 // request's host, or one on a WithTrustedOrigin origin; otherwise the reason
 // it is refused.
 func (c *Ctx) offSite(target string) string {
-	origin, ok := hcore.URLOrigin(target)
+	origin, ok := render.URLOrigin(target)
 	switch {
 	case !ok:
 		return notHTTP

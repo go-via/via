@@ -116,7 +116,7 @@ func (p *Troubleshooting) View() h.H {
 		snippet.Text("log", tsGoneLog),
 		h.P(h.Str("An action is dispatchable only if the render before it bound that handler, with that argument, in that "+
 			"child. A 410 means the render the server last ran no longer contains what the client clicked: the button "+
-			"sits inside a "), API("via.When"), h.Str(" that is now closed, the "), API("on.WithArg"),
+			"sits inside a "), API("via.When"), h.Str(" that is now closed, the "), API("on.Bind"),
 			h.Str(" argument changed since the page was drawn, or the "), API("via.Child"),
 			h.Str(" moved. The two stream messages are a live unit's action with no open stream behind it.")),
 		h.Ul(
@@ -201,7 +201,7 @@ func (p *Troubleshooting) View() h.H {
 		h.P(h.Str("Datastar morphs a re-rendered list by position. Delete the second of three rows without ids and the "+
 			"browser keeps the second element and rewrites its text, so a ticked checkbox, typed input or open "),
 			Code("<details>"), h.Str(" now belongs to the row below. A stable "), Code("id"),
-			h.Str(" per row makes the morph match by id. The click itself is not affected: "), API("on.WithArg"),
+			h.Str(" per row makes the morph match by id. The click itself is not affected: "), API("on.Bind"),
 			h.Str(" carries the row's key.")),
 		tsSee(d, "/actions#arguments", "Actions: Arguments"),
 

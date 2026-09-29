@@ -16,7 +16,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // initer is the lifecycle hook that runs first, on a page or any embedded
@@ -178,7 +178,7 @@ func checkViewReceiver(t reflect.Type) {
 		return
 	}
 	if t != nil && t.Implements(viewerType) && len(signalsOf(t).fields) > 0 {
-		panic(hcore.Miswired("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
+		panic(render.Miswired("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
 			"View must take a POINTER receiver (func (p *" + t.Name() + ") View() h.H), or every " +
 			"rendered Signal binds against a discarded copy"))
 	}
@@ -617,7 +617,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 		// path-escaped in concreteBase — both layers are needed; see
 		// concreteBase.
 		bodyOpen = `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}' data-init="@post('` +
-			hcore.EscapeString(base+"/_via/sse") + `')">`
+			render.EscapeString(base+"/_via/sse") + `')">`
 	}
 	var head strings.Builder
 	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce) + `<head><meta charset="utf-8">`)
@@ -758,7 +758,7 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	if _, done := hookSigChecked.Load(t); !done {
 		for _, hook := range hookSpecs {
 			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
-				panic(hcore.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
+				panic(render.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
 					withoutReceiver(m.Type) + ", not " + hook.want +
 					" — so the hook will never run"))
 			}

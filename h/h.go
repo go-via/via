@@ -67,7 +67,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // H is every node of a view: elements, text and attributes alike. It is what
@@ -84,7 +84,7 @@ import (
 //
 // The zero H is nil, and a nil H renders as nothing. That makes conditional
 // children cheap to write, but prefer via.When for a readable one.
-type H = hcore.H
+type H = render.H
 
 // Attr is an H that renders inside the opening tag instead of the element
 // body: h.Class, h.Href, h.Data, [RawAttr], on.Click and Signal.Bind all return
@@ -96,7 +96,7 @@ type H = hcore.H
 // neutralised rather than rendered. Attribute names are not escaped: they are
 // validated and an invalid one panics, on the reasoning that a name is written
 // by the programmer, never taken from a request.
-type Attr = hcore.Attr
+type Attr = render.Attr
 
 // El builds an element with an arbitrary tag, for the handful of tags h has no
 // named constructor for (a custom element, an SVG child). The tag is validated
@@ -104,7 +104,7 @@ type Attr = hcore.Attr
 // <script> that arrives in a live patch the page's nonce, so it would run.
 // Declare scripts in via.Meta.Assets. Prefer the named constructors: they
 // know which tags are void and must not emit a closing tag.
-func El(tag string, kids ...H) H { return hcore.El(tag, kids...) }
+func El(tag string, kids ...H) H { return render.El(tag, kids...) }
 
 // Stringish is what [Str] accepts: ~string plus every built-in integer and
 // float type, including named types whose underlying type is one of those.
@@ -114,12 +114,12 @@ func El(tag string, kids ...H) H { return hcore.El(tag, kids...) }
 // It deliberately does not include bool, time.Time, fmt.Stringer or error.
 // Rendering those means choosing a format, and h will not choose one for you:
 // format the value in Go and pass the string.
-type Stringish = hcore.Stringish
+type Stringish = render.Stringish
 
 // Str is the only way to put text in a view. The value is HTML-escaped at
 // render time, so a string taken straight from a request or a database is safe
 // here; there is no unescaped counterpart.
-func Str[T Stringish](v T) H { return hcore.Str(v) }
+func Str[T Stringish](v T) H { return render.Str(v) }
 
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
 // must match [A-Za-z][A-Za-z0-9-]*, with ':', '_' and '.' additionally allowed
@@ -148,7 +148,7 @@ func RawAttr(name, val string) Attr {
 	if isURLBearingAttr(name) {
 		val = gateURLAttr(name, val)
 	}
-	return hcore.RawAttr(name, val)
+	return render.RawAttr(name, val)
 }
 
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. It
@@ -160,4 +160,4 @@ func RawAttr(name, val string) Attr {
 // Spell the separator as a colon, never a hyphen: Datastar splits a key on the
 // first colon, so data-attr-value names a plugin "attr-value" that does not
 // exist and is silently ignored — no console error, no attribute applied.
-func Data(name, val string) Attr { return hcore.Data(name, val) }
+func Data(name, val string) Attr { return render.Data(name, val) }

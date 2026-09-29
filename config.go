@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // config holds Handler's optional settings. The zero set is the dev-friendly
@@ -154,7 +154,7 @@ func bareOrigin(origin string) string {
 	case u.Fragment != "" || strings.Contains(origin, "#"):
 		bad("has a fragment")
 	}
-	norm, ok := hcore.URLOrigin(origin)
+	norm, ok := render.URLOrigin(origin)
 	if !ok || norm == "" {
 		bad("is not an origin")
 	}

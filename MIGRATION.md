@@ -251,7 +251,7 @@ child's warning waits for its first render), or nothing.
 - `h.Fragment(…)` → pass the nodes to the parent element, or collect a `[]h.H`
   and spread it. Caught by: compiler.
 - `on.Debounce("250ms")`, `on.Throttle("1s")` → a `time.Duration`:
-  `on.Debounce(250*time.Millisecond)`. Caught by: compiler.
+  `on.WithDebounce(250*time.Millisecond)`. Caught by: compiler.
 - `on.Key("Enter", fn)` → `on.Keydown(fn)`, which has no key filter. Caught by:
   compiler.
 - `on.Indicator(sig)`, `on.Confirm`, `on.SetSignal` →
@@ -359,13 +359,13 @@ A leftover `OnConnect(ctx) error` is warned about, with or without an `OnInit`
 next to it: at `Mount` on the page, on a child's first render. A leftover
 `OnDispose(ctx)` has an action's shape, so nothing reports it.
 
-## Names deprecated inside v0.8
+## Names removed after v0.8
 
-Port straight to package `on` and `expr.Val`. `via.On` and `via.OnArg` still
-compile but are deprecated in favour of `on.Click`, `on.Event` and
-`on.WithArg`, and `expr.Lit` is a deprecated alias of `expr.Val`; all three
-are removed in v0.9. Package `on` and `expr.Val` are newer than the v0.8.1
-tag: on v0.8.1 itself, a click is `via.On("click", p.Inc)`.
+Port straight to package `on` and `expr.Val`. v0.8 deprecated `via.On` and
+`via.OnArg` in favour of `on.Click`, `on.Event` and `on.WithArg` (now
+`on.Bind`), and `expr.Lit` in favour of `expr.Val`; all three are removed.
+Package `on` and `expr.Val` are newer than the v0.8.1 tag: on v0.8.1 itself,
+a click is `via.On("click", p.Inc)`.
 
 ## Removed outright
 
@@ -692,7 +692,7 @@ rather than during it. If you were gating a branch on a signal and depending on
 the client's value round-tripping, `Bind()` it; if the gate is an authorization
 decision, move it to session or database state, where it belonged already.
 
-## A volatile `on.WithArg` arg 410s
+## A volatile `on.Bind` arg 410s
 
 A value-carrying action authorizes its `?a=` against the latest render — the
 discovery render for a plain action, the last push for a live one. An arg that
@@ -811,9 +811,8 @@ looks like at runtime.
   boot if it contains `<script` or `<style` (declare it in `Assets`
   instead).
 - **`OnClick`/`OnSubmit`/`OnChange`/`OnClickArg`** → `on.Click(fn)` /
-  `on.Submit(fn)` / `on.Change(fn)` / `on.Click(on.WithArg(fn, arg))`.
-  **Compiler** — the old names are gone. (`via.On` and `via.OnArg` also work,
-  but are deprecated and removed in v0.9.)
+  `on.Submit(fn)` / `on.Change(fn)` / `on.Click(on.Bind(fn, arg))`.
+  **Compiler** — the old names are gone.
 - **`via.Live` interface, `OnConnect(*via.Ctx) error`** → one
   `OnInit(*via.Ctx) error` hook, plus `ctx.OnConnect(fn)` for a stream-open
   acquire. **Warned, not silent** — `via.Live` no longer exists to assert
@@ -943,6 +942,16 @@ spelling outright.
   first, or drop the option and set `VIA_SESSION_KEY`.
 - **A second `WithSessionStore` or `WithSessionKey` panics.** Pass each
   once; a helper that appends its own must not also receive the caller's.
-- **`via.On` and `via.OnArg` panic on an event name outside package `on`'s
-  grammar** (lower-case letters and digits joined by `:`, `.` or `-`, then
-  Datastar modifiers). Package `on` already refuses such names; move to it.
+- **`via.On`, `via.OnArg` and `expr.Lit` are removed.** `via.On("click", fn)`
+  → `on.Click(fn)`, and `on.Event("name", fn)` for an event with no function
+  of its own; `via.OnArg("click", fn, arg)` → `on.Click(on.Bind(fn, arg))`;
+  `expr.Lit(v)` → `expr.Val(v)`. A modifier spelled into the name
+  (`"input__debounce.250ms"`) becomes an option:
+  `on.Input(fn, on.WithDebounce(250*time.Millisecond))`; one with no typed
+  option goes through `on.WithModifier`: `via.On("click__delay.300ms", fn)` →
+  `on.Click(fn, on.WithModifier("delay.300ms"))`. **Compiler.**
+- **Package `on` renamed `WithArg` to `Bind`, and its options take a `With`
+  prefix:** `on.Debounce`, `on.Throttle`, `on.Once`, `on.Outside`,
+  `on.Prevent`, `on.Stop`, `on.Window` → `on.WithDebounce`, `on.WithThrottle`,
+  `on.WithOnce`, `on.WithOutside`, `on.WithPrevent`, `on.WithStop`,
+  `on.WithWindow`. **Compiler.**

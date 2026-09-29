@@ -6,7 +6,7 @@ import (
 	"unsafe"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 	"github.com/go-via/via/topic"
 )
 
@@ -152,7 +152,7 @@ func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
 // every action after it 410. Render the State unconditionally (put via.When
 // inside the row, not around the Display), or register a Tick/Listen in OnInit.
 func (s *State[T]) Display() h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		markLive(r)
 		r.WriteEscaped(fmt.Sprint(s.val))
 	})
@@ -191,7 +191,7 @@ func (l *List[E]) Remove(i int) { l.Set(slices.Delete(l.Get(), i, i+1)) }
 // via.Each(l.Get(), row), and like State.Display it marks the unit live. Same
 // by-position morph trap as via.Each.
 func (l *List[E]) Each(row func(E) h.H) h.H {
-	return hcore.Dyn(func(r *hcore.Renderer) {
+	return render.Dyn(func(r *render.Renderer) {
 		markLive(r)
 		r.Render(Each(l.Get(), row))
 	})
@@ -199,7 +199,7 @@ func (l *List[E]) Each(row func(E) h.H) h.H {
 
 // markLive marks the rendering unit live: rendering server-authoritative state
 // is itself what earns the unit a connection.
-func markLive(r *hcore.Renderer) {
+func markLive(r *render.Renderer) {
 	if ctx := ctxOf(r.Binder()); ctx != nil {
 		ctx.live = true
 	}

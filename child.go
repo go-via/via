@@ -12,7 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/go-via/via/h"
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // Child renders a child composition — a plain struct field of the parent,
@@ -53,13 +53,13 @@ import (
 // one expression that renders either copy (a loop, a closure built per copy,
 // c := p.A; if swap { c = p.B }; via.Child(c)), and any Child built outside
 // the render, such as markup OnInit or OnReload stores in a field. A row is
-// markup with on.WithArg, not a Child.
+// markup with on.Bind, not a Child.
 //
 // It panics if the child has no View() method.
 func Child[C any](child C) h.H {
 	v, isView := any(&child).(viewer)
 	if !isView {
-		panic(hcore.Miswired("via: via.Child(child) requires child to have a View() method"))
+		panic(render.Miswired("via: via.Child(child) requires child to have a View() method"))
 	}
 	// &child, not the parent's field: the copy is what the child's View binds
 	// against for the life of this render (and, for a live child, for the life
@@ -69,7 +69,7 @@ func Child[C any](child C) h.H {
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	var site childSite
 	runtime.Callers(2, site[:])
-	return hcore.Dyn(func(r *hcore.Renderer) { childViewer(r, inst, site) })
+	return render.Dyn(func(r *render.Renderer) { childViewer(r, inst, site) })
 }
 
 // childSite is the call stack above a via.Child call. It is what tells apart
@@ -80,7 +80,7 @@ type childSite [8]uintptr
 var (
 	childSiteIDs sync.Map // childSite -> string
 	viaPkg       = reflect.TypeOf(instance{}).PkgPath() + "."
-	hcorePkg     = reflect.TypeOf((*hcore.Renderer)(nil)).Elem().PkgPath() + "."
+	renderPkg    = reflect.TypeOf((*render.Renderer)(nil)).Elem().PkgPath() + "."
 )
 
 // id hashes the user frames of the site, from the Child call up to the first
@@ -109,7 +109,7 @@ func (s childSite) id() string {
 	frames := runtime.CallersFrames(s[:n])
 	for {
 		f, more := frames.Next()
-		if strings.HasPrefix(f.Function, viaPkg) || strings.HasPrefix(f.Function, hcorePkg) {
+		if strings.HasPrefix(f.Function, viaPkg) || strings.HasPrefix(f.Function, renderPkg) {
 			rendering = renderCaller(f.Function)
 			break
 		}
@@ -144,7 +144,7 @@ func renderCaller(fn string) bool {
 // signals/actions into a child-scoped Ctx, and appends it to the parent's
 // children so a push or action patches exactly this one. A non-Ctx binder is a
 // bare render with no parent to attach to, so it writes nothing.
-func childViewer(r *hcore.Renderer, inst instance, site childSite) {
+func childViewer(r *render.Renderer, inst instance, site childSite) {
 	parent := ctxOf(r.Binder())
 	if parent == nil {
 		return
@@ -303,7 +303,7 @@ func initChild(child *Ctx, v any) {
 func renderChildInner(child *Ctx, v viewer) []byte {
 	prebindSignals(child, child.unitV)
 	child.viewRan = true
-	rr := hcore.NewRenderer(binderCtx{child})
+	rr := render.NewRenderer(binderCtx{child})
 	rr.Render(v.View())
 	return rr.Bytes()
 }

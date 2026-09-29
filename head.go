@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/go-via/via/internal/hcore"
+	"github.com/go-via/via/internal/render"
 )
 
 // Head describes the router-wide document shell: the <html lang>, raw head
@@ -218,7 +218,7 @@ func validAssetURL(where, field, raw string) {
 	}
 	// A protocol-relative URL has no scheme to read an origin off, so the CSP
 	// would admit it only as 'self' and the browser would block the load.
-	if u.Scheme == "" && !hcore.SafeURL(raw) {
+	if u.Scheme == "" && !render.SafeURL(raw) {
 		panic(where + ": " + field + " " + quote(raw) + " is protocol-relative; write it as https://… so its origin can join the CSP")
 	}
 }

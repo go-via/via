@@ -732,7 +732,7 @@ type grower struct {
 func (g *grower) Grow(ctx *via.Ctx)        { g.n.Set(g.n.Get() + 1) }
 func (g *grower) Pick(ctx *via.Ctx, i int) { g.last.Set(i) }
 func (g *grower) item(i int) h.H {
-	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.WithArg(g.Pick, i)))
+	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.Bind(g.Pick, i)))
 }
 func (g *grower) upTo() []int {
 	out := make([]int, g.n.Get())
@@ -774,7 +774,7 @@ func (p *picker) Pick(ctx *via.Ctx, i int) {
 }
 
 func (p *picker) row(i int) h.H {
-	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.WithArg(p.Pick, i)))
+	return h.Button(h.ID("pick"+strconv.Itoa(i)), on.Click(on.Bind(p.Pick, i)))
 }
 
 func (p *picker) View() h.H {
@@ -782,8 +782,8 @@ func (p *picker) View() h.H {
 		h.P(h.ID("last"), h.Str("last "), p.last.Display()),
 		h.P(h.ID("hits"), h.Str("hits "), p.hits.Display()),
 		via.Each([]int{1, 2, 3}, p.row),
-		h.Input(h.ID("both"), on.Click(on.WithArg(p.Pick, 10)), on.Change(on.WithArg(p.Pick, 20))),
-		h.Button(h.ID("slow"), on.Click(on.WithArg(p.Pick, 30), on.Debounce(200*time.Millisecond))),
+		h.Input(h.ID("both"), on.Click(on.Bind(p.Pick, 10)), on.Change(on.Bind(p.Pick, 20))),
+		h.Button(h.ID("slow"), on.Click(on.Bind(p.Pick, 30), on.WithDebounce(200*time.Millisecond))),
 	)
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -127,7 +128,7 @@ type panicComp struct{}
 
 func (p *panicComp) Boom(*via.Ctx) { panic("boom") }
 func (p *panicComp) View() h.H {
-	return h.Div(h.Button(via.On("click", p.Boom), h.Str("x")))
+	return h.Div(h.Button(on.Click(p.Boom), h.Str("x")))
 }
 
 func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) {
@@ -442,13 +443,13 @@ type unsafeRoot struct{ n int }
 
 func (u *unsafeRoot) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
 
-func (u *unsafeRoot) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+func (u *unsafeRoot) View() h.H { return h.Div(h.Str(u.n), h.Button(on.Click(u.Go))) }
 
 type unsafeChild struct{ n int }
 
 func (u *unsafeChild) Go(ctx *via.Ctx) { u.n++; ctx.Redirect("javascript:alert(1)") }
 
-func (u *unsafeChild) View() h.H { return h.Div(h.Str(u.n), h.Button(via.On("click", u.Go))) }
+func (u *unsafeChild) View() h.H { return h.Div(h.Str(u.n), h.Button(on.Click(u.Go))) }
 
 type unsafeParent struct{ I unsafeChild }
 
@@ -503,7 +504,7 @@ func (p *hop) queue(ctx *via.Ctx) {
 	ctx.Redirect(p.to)
 }
 func (p *hop) Go(ctx *via.Ctx) { p.n++; p.queue(ctx) }
-func (p *hop) View() h.H       { return h.Div(h.Str(p.n), h.Button(via.On("click", p.Go))) }
+func (p *hop) View() h.H       { return h.Div(h.Str(p.n), h.Button(on.Click(p.Go))) }
 
 type hopForm struct{ hop }
 
@@ -667,15 +668,15 @@ func (b *branchedView) View() h.H {
 	locked, ran := b.st.snapshot()
 	if locked {
 		return h.Div(
-			h.Button(via.On("click", b.Delete)), // locked: Delete=0
-			h.Button(via.On("click", b.Flip)),   // locked: Flip=1 (Save is gone)
+			h.Button(on.Click(b.Delete)), // locked: Delete=0
+			h.Button(on.Click(b.Flip)),   // locked: Flip=1 (Save is gone)
 			h.P(h.Str("locked:"), h.Str(ran)),
 		)
 	}
 	return h.Div(
-		h.Button(via.On("click", b.Save)),   // unlocked: Save=0
-		h.Button(via.On("click", b.Delete)), // unlocked: Delete=1
-		h.Button(via.On("click", b.Flip)),   // unlocked: Flip=2
+		h.Button(on.Click(b.Save)),   // unlocked: Save=0
+		h.Button(on.Click(b.Delete)), // unlocked: Delete=1
+		h.Button(on.Click(b.Flip)),   // unlocked: Flip=2
 		h.P(h.Str("unlocked:"), h.Str(ran)),
 	)
 }
@@ -690,7 +691,7 @@ type xmChild struct {
 func (x *xmChild) Fire(*via.Ctx) { *x.fired++ }
 
 func (x *xmChild) View() h.H {
-	return h.Div(x.n.Display(), h.Button(via.On("click", x.Fire)))
+	return h.Div(x.n.Display(), h.Button(on.Click(x.Fire)))
 }
 
 func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
@@ -757,7 +758,7 @@ func (g *tabGuard) tick(ctx *via.Ctx) {}
 
 func (g *tabGuard) Bump(ctx *via.Ctx) { *g.hits++ }
 
-func (g *tabGuard) View() h.H { return h.Div(h.Button(via.On("click", g.Bump))) }
+func (g *tabGuard) View() h.H { return h.Div(h.Button(on.Click(g.Bump))) }
 
 func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 	t.Parallel()
@@ -840,7 +841,7 @@ func (g *liveBoundRoot) tick(ctx *via.Ctx) {}
 func (g *liveBoundRoot) Bump(ctx *via.Ctx) { *g.hits++ }
 
 func (g *liveBoundRoot) View() h.H {
-	return h.Div(h.Input(g.Q.Bind()), h.Button(via.On("click", g.Bump)))
+	return h.Div(h.Input(g.Q.Bind()), h.Button(on.Click(g.Bump)))
 }
 
 func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T) {

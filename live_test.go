@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
@@ -255,7 +256,7 @@ func (c *chatChild) row(m string) h.H { return h.Li(h.Str(m)) }
 func (c *chatChild) View() h.H {
 	return h.Div(
 		h.Ul(via.Each(c.Log.Get(), c.row)),
-		h.Form(via.On("submit", c.Send), h.Input(c.Draft.Bind())),
+		h.Form(on.Submit(c.Send), h.Input(c.Draft.Bind())),
 	)
 }
 
@@ -334,7 +335,7 @@ func (p *pathTicker) View() h.H {
 	return h.Div(
 		h.P(h.Str("path: "), p.path.Display()),
 		h.P(h.Str("n: "), p.n.Display()),
-		h.Button(via.On("click", p.Bump)),
+		h.Button(on.Click(p.Bump)),
 	)
 }
 
@@ -480,7 +481,7 @@ func (r *racyTicker) tick(*via.Ctx) { r.n.Set(r.n.Get() + 1) }
 func (r *racyTicker) Bump(*via.Ctx) {}
 
 func (r *racyTicker) View() h.H {
-	return h.Div(r.n.Display(), h.Button(via.On("click", r.Bump)))
+	return h.Div(r.n.Display(), h.Button(on.Click(r.Bump)))
 }
 
 func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
@@ -1304,7 +1305,7 @@ func (a *actionTicker) Bump(ctx *via.Ctx) {
 func (a *actionTicker) tick(*via.Ctx) { a.beats.Add(1) }
 
 func (a *actionTicker) View() h.H {
-	return h.Div(h.Str("n="), a.N.Display(), h.Button(via.On("click", a.Bump)))
+	return h.Div(h.Str("n="), a.N.Display(), h.Button(on.Click(a.Bump)))
 }
 
 func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
@@ -1350,7 +1351,7 @@ func (p *plainTicker) Bump(ctx *via.Ctx) {
 func (p *plainTicker) tick(*via.Ctx) { p.beats.Add(1) }
 
 func (p *plainTicker) View() h.H {
-	return h.Div(h.Str("n="), p.N.Display(), h.Button(via.On("click", p.Bump)))
+	return h.Div(h.Str("n="), p.N.Display(), h.Button(on.Click(p.Bump)))
 }
 
 func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
@@ -1424,7 +1425,7 @@ func (r *reloadRegistrar) stop()              {}
 func (r *reloadRegistrar) Bump(*via.Ctx)      { r.n++ }
 
 func (r *reloadRegistrar) View() h.H {
-	return h.Div(h.P(h.Str(r.n)), h.Button(via.On("click", r.Bump)))
+	return h.Div(h.P(h.Str(r.n)), h.Button(on.Click(r.Bump)))
 }
 
 func fireReloadRegistrar(t *testing.T, hook string) string {
