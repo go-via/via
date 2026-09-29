@@ -872,7 +872,7 @@ func (c *Ctx) RedirectExternal(target string) {
 
 // bind wires event to a POST of fn, for package on.
 func bind(r *render.Renderer, ctx *Ctx, event string, fn func(*Ctx)) {
-	mustActionEvent("on.Event", event)
+	mustActionEvent("package on", event)
 	// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
 	// never the one bound here at render time (see liveRunAction).
 	idx := ctx.actionSlot(fn)

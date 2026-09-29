@@ -80,17 +80,17 @@ func (c *Ctx) claimSlot(ident any) (string, string, action) {
 // method collides when its receivers sit outside the unit's struct.
 func sharedID(id, prev, name string) string {
 	msg := "via: two different actions share the action id " + id + ": " + prev + " and " + name
-	withArg := "bind a method and carry the row with on.Bind(p.Method, row.ID)"
+	useBind := "bind a method and carry the row with on.Bind(p.Method, row.ID)"
 	child := "hold each receiver as a direct struct field (not behind a pointer, slice or map), " +
 		"rendering a child through its own via.Child"
 	if !strings.HasSuffix(name, "-fm") {
 		return msg + " — likely a func literal bound once per row (in Each or a loop). via identifies " +
-			"a func literal by its code, so the copies look alike. Instead, " + withArg +
+			"a func literal by its code, so the copies look alike. Instead, " + useBind +
 			". If each copy belongs to a separate receiver, " + child + "."
 	}
 	return msg + " — their receivers are outside this unit's struct (reached through a pointer, " +
 		"slice or map field), so via has no field to tell them apart by. Instead, " + child +
-		". For one handler per row, " + withArg + "."
+		". For one handler per row, " + useBind + "."
 }
 
 // actionHandle is a handler's runtime identity within one render: its code

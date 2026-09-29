@@ -45,7 +45,7 @@ type Bound struct {
 //
 //	h.Button(on.Click(on.Bind(l.Delete, todo.ID)), h.Str("×"))
 //
-// DISPATCHABLE-IFF-RENDERED. Dispatch identity is the (handler,
+// Dispatch identity is the (handler,
 // arg) pair. The render that precedes every dispatch — the discovery render on
 // a plain page, the last push on a live one — rebuilds the set of args it
 // binds for fn, and a POST whose ?a= is not in that set is 410'd before fn
