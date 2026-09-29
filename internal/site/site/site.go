@@ -4,17 +4,22 @@
 package site
 
 import (
+	"crypto/rand"
 	"html"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"go-via.dev/site/content"
+	"go-via.dev/site/demo"
+	"go-via.dev/site/demos"
 	"go-via.dev/site/icon"
 	"go-via.dev/site/search"
 	"go-via.dev/site/shell"
@@ -42,6 +47,8 @@ type Options struct {
 }
 
 var validBase = regexp.MustCompile(`^(/[A-Za-z0-9._-]+)+$`)
+
+const counterPerMinute = 30
 
 // New returns the router and the handler in front of it. Close the router when
 // the server is done — http.Server.Shutdown does not drain the live half.
@@ -255,8 +262,48 @@ func newMux(app http.Handler, s *shell.Site, version string) *http.ServeMux {
 	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.Href("/static/brand/icon-amber-ink.svg"), http.StatusMovedPermanently)
 	})
-	mux.Handle("/", canonicalSlash(app, s))
+	root := canonicalSlash(app, s)
+	mux.Handle("POST "+s.Base+"/_via/a/{child}/{act}", limitCounter(root, demo.NewLimiter(counterPerMinute)))
+	mux.Handle("/", root)
 	return mux
+}
+
+// limitCounter spends a token per front-page counter click. That page shows
+// landing_counter.go whole, so the check other demos make in their actions
+// runs here.
+func limitCounter(next http.Handler, lim *demo.Limiter) http.Handler {
+	acts := counterActs()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if acts[r.PathValue("act")] && !lim.AllowRequest(r) {
+			w.Header().Set("Retry-After", strconv.Itoa(60/counterPerMinute))
+			http.Error(w, "too many requests", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+var counterAct = regexp.MustCompile(`@post\('[^']*/_via/a/[^/']+/([^/']+)'\)`)
+
+// An action id hashes the handler and its receiver's path within its own unit,
+// so a mount of the counter alone yields the ids it has as the front page's
+// child. The session key is throwaway: NewRouter requires one.
+func counterActs() map[string]bool {
+	key := make([]byte, 32)
+	rand.Read(key)
+	r := via.NewRouter(via.WithSessionKey(key), via.WithLogger(slog.New(slog.DiscardHandler)))
+	defer r.Close()
+	via.Mount(r, "/", demos.NewLandingCounter())
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	acts := map[string]bool{}
+	for _, m := range counterAct.FindAllStringSubmatch(rec.Body.String(), -1) {
+		acts[m[1]] = true
+	}
+	if len(acts) == 0 {
+		panic("site: the counter mount rendered no actions")
+	}
+	return acts
 }
 
 // canonicalSlash 308s "/page/" to "/page" for a page that exists, so a

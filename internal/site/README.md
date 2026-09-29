@@ -70,8 +70,9 @@ test pins it.
 
 A demo that mutates shared state takes a `Limiter` field, set by the demo's
 own `New*` constructor from a limiter the page owns, and checks
-`Lim.Allow(ctx)` first. The front page's counter is the one exception: it has
-no limiter, and `ResetAll` zeroes it every 15 minutes.
+`Lim.Allow(ctx)` first. The front page's counter is the exception: that page
+shows its file whole, so `site.New` checks the limit in front of the router and
+answers 429. The Wire pane shows the refusal; the counter does not.
 
 ## Public-state bounds
 
@@ -83,6 +84,6 @@ no limiter, and `ResetAll` zeroes it every 15 minutes.
 - Mutating actions spend a per-client token, keyed on the client IP. Dropping
   the session cookie buys no fresh budget.
   - 20/min: the feed, shared counter and pings on `/live`; the tutorial chat.
-  - 30/min: the vote on `/actions`; the counter on `/start`.
+  - 30/min: the vote on `/actions`; the counter on `/start`; the front page's
+    counter (a 429, no notice).
   - 10/min: the upload on `/actions`.
-  - None: the front page's counter.

@@ -291,6 +291,51 @@ func TestSite_searchReturnsAnchoredHits(t *testing.T) {
 	assert.Contains(t, string(out), `href="/deploy#shutdown-order"`)
 }
 
+var counterInc = regexp.MustCompile(`data-on:click="@post\('([^']+)'\)">\+<`)
+
+func postFrom(t *testing.T, srv *httptest.Server, path, body, client string) int {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Datastar-Request", "true")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Forwarded-For", client)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+func TestSite_limitsTheFrontPageCounterPerClient(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	_, body := get(t, srv, "/", nil)
+	inc := counterInc.FindStringSubmatch(body)
+	slot := searchSlot.FindStringSubmatch(body)
+	find := searchPost.FindStringSubmatch(body)
+	require.NotNil(t, inc, "no + button on /")
+	require.NotNil(t, slot, "no bound search input on /")
+	require.NotNil(t, find, "no search action on /")
+	incURL := html.UnescapeString(inc[1])
+
+	require.Equal(t, http.StatusOK, postFrom(t, srv, incURL, "{}", "203.0.113.1"))
+	limited := false
+	for range 3 * 30 {
+		if postFrom(t, srv, incURL, "{}", "203.0.113.1") == http.StatusTooManyRequests {
+			limited = true
+			break
+		}
+	}
+	require.True(t, limited, "the counter never answered 429 within three times its budget")
+
+	assert.Equal(t, http.StatusOK, postFrom(t, srv, incURL, "{}", "203.0.113.2"), "another client has its own budget")
+	assert.Equal(t, http.StatusOK, postFrom(t, srv, html.UnescapeString(find[2]+find[1]),
+		`{"viatab":"","`+slot[1]+`":"shutdown order"}`, "203.0.113.1"), "search on / is not the counter")
+}
+
 func TestSite_labelsTheCellsOfWideTables(t *testing.T) {
 	t.Parallel()
 	srv := siteServer(t, site.Options{})
