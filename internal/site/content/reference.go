@@ -48,7 +48,7 @@ var overrides = map[string]string{
 	"via.Ctx.Redirect":         "Navigates the browser after the current handler returns, from OnInit, OnReload, a PostForm submit or an action alike. The render that called it ships nothing. Only a relative path or a URL on this site's host or a trusted origin is followed; anything else is dropped and logged.",
 	"via.Ctx.RedirectExternal": "Redirect to any http(s) URL, for a hand-off that leaves the site (OAuth, payment). Other schemes are still dropped. Build the target yourself; one taken from the request is an open redirect.",
 
-	"via.WithHead":                "The router-wide document shell: lang, raw head markup, and the assets every page carries. An invalid head panics at startup.",
+	"via.WithHead":                "The router-wide document shell: lang, raw head markup, the <html> and <body> attributes, and the assets every page carries. An invalid head panics at startup.",
 	"via.WithErrorPage":           "Renders via's failures as HTML documents instead of plain text. It applies to document responses only.",
 	"via.WithTrustedOrigin":       "Turns on origin enforcement for the action endpoint and the stream connect and allowlists one origin. Without any set, every action and the stream connect accept any origin and via logs a warning at startup — set this in production. Host case, a default port and a trailing \"/\" don't matter; a value with a path, query, fragment or userinfo panics.",
 	"via.WithSessionKey":          "The HMAC key signing the session cookie id; at least 16 bytes, or it panics, as an empty key or a second WithSessionKey does. Without the option, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process.",
@@ -113,7 +113,7 @@ var hooks = []row{
 	{"OnReload(*via.Ctx) error",
 		"Runs after one of the unit's actions and before the render that answers it, so a handler that mutated a store re-reads here. Skipped behind a Redirect."},
 	{"PageMeta() via.Meta",
-		"The mounted root's own document: title, description, social cards, assets. Read after OnInit, on a render that writes a document, never on an SSE push."},
+		"The mounted root's own document: title, description, social cards, assets, <html> and <body> attributes. Read after OnInit, on a render that writes a document, never on an SSE push."},
 }
 
 type dataHelper struct{ name, attr, use string }

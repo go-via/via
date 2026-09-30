@@ -483,8 +483,11 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	// zero-data literal: one string per mount, none per request. writeHTMLPage
 	// re-reads it and panics if the request-time value disagrees.
 	lit := root
-	assets := pageMetaOf(PT(&lit)).Assets
+	meta := pageMetaOf(PT(&lit))
+	assets := meta.Assets
 	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
+	validateAttrs("via: "+rootType.String()+".PageMeta().HTMLAttrs", meta.HTMLAttrs)
+	validateAttrs("via: "+rootType.String()+".PageMeta().BodyAttrs", meta.BodyAttrs)
 	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets, r.cfg.unsafeEval), assets.fingerprint()
 	// …and proved constant here, not on the first GET. A second reading off a
 	// probe copy — the same literal with its zero fields filled in, which is
@@ -609,18 +612,19 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	// live page carries its id from the first byte, so a click before the
 	// stream connects already names the tab it will reach. tab is base64url:
 	// nothing in it needs JSON or attribute escaping.
-	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}'>`
+	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}'`
 	if hasLive {
 		// data-signals first: Datastar applies an element's attributes in
 		// document order, and a data-init ahead of it would post the connect
 		// body before the id is in the store. Attribute-escaped here,
 		// path-escaped in concreteBase — both layers are needed; see
 		// concreteBase.
-		bodyOpen = `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}' data-init="@post('` +
-			render.EscapeString(base+"/_via/sse") + `')">`
+		bodyOpen += ` data-init="@post('` + render.EscapeString(base+"/_via/sse") + `')"`
 	}
+	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))
+	bodyOpen += attrString(mergeAttrs(m.cfg.head.BodyAttrs, pageAttrs(m.cfg.log, root, "BodyAttrs", meta.BodyAttrs))) + ">"
 	var head strings.Builder
-	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce) + `<head><meta charset="utf-8">`)
+	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce, htmlAttrs) + `<head><meta charset="utf-8">`)
 	meta.render(&head)
 	head.WriteString(m.cfg.head.Raw)
 	m.cfg.head.Assets.render(&head)
@@ -632,6 +636,17 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	w.Write([]byte(head.String()))
 	w.Write(body)
 	w.Write([]byte(`</body></html>`))
+}
+
+// pageAttrs rechecks a page's attributes per render, because Mount saw only
+// the literal and these may come from OnInit's data. A refused one is dropped
+// rather than failing the page: unlike Assets, it cannot widen the CSP.
+func pageAttrs(log *slog.Logger, root any, field string, attrs []Attr) []Attr {
+	kept, refused := checkAttrs(attrs)
+	if len(refused) > 0 {
+		log.Warn("via: PageMeta attribute dropped", "page", typeName(root), "field", field, "reason", strings.Join(refused, "; "))
+	}
+	return kept
 }
 
 // hookSpecs are via's optional, duck-typed hooks. Opting in is having the

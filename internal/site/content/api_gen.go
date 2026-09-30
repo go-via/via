@@ -4,6 +4,7 @@ package content
 
 var apiSymbols = []apiSymbol{
 	{"via", "Assets", "type", "type Assets struct{ … }", "Assets is the CSP-governed half of the document head: everything that loads or executes.", ""},
+	{"via", "Attr", "type", "type Attr struct{ … }", "Attr is one attribute via writes on <html> or <body>, as Name=\"Value\" with the value escaped.", ""},
 	{"via", "Child", "func", "func Child[C any](child C) h.H", "Child renders a child composition — a plain struct field of the parent, seeded at the parent's literal — into its own positional container.", ""},
 	{"via", "Ctx", "type", "type Ctx struct{ … }", "Ctx is the per-request binder: it names signal slots by field offset and actions by handler identity during a render pass, hydrates signals from the request, and records per-slot initial values.", ""},
 	{"via", "Ctx.Context", "method", "func (c *Ctx) Context() context.Context", "Context returns the context that bounds this unit's work.", ""},
@@ -22,7 +23,7 @@ var apiSymbols = []apiSymbol{
 	{"via", "ErrStaleTab", "var", "var ErrStaleTab = errors.New(\"via: stale tab\")", "ErrStaleTab means the tab that would have bound this action is gone: its stream closed, or the id belongs to a render that no longer exists.", ""},
 	{"via", "ErrStoreDown", "var", "var ErrStoreDown = errors.New(\"via: session store unavailable\")", "ErrStoreDown means the session store could not be read for this request.", ""},
 	{"via", "Handler", "func", "func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) *Router", "Handler builds a single-page app: a Router with root mounted at \"/\".", ""},
-	{"via", "Head", "type", "type Head struct{ … }", "Head describes the router-wide document shell: the <html lang>, raw head markup, and the assets every page of the app carries.", ""},
+	{"via", "Head", "type", "type Head struct{ … }", "Head describes the router-wide document shell: the <html lang>, the attributes on <html> and <body>, raw head markup, and the assets every page of the app carries.", ""},
 	{"via", "List", "type", "type List[E any] struct{ … }", "List is server-authoritative slice state — a chat log, a feed, a todo list.", ""},
 	{"via", "List.Append", "method", "func (l *List[E]) Append(v E)", "Append adds v to the end of this connection's list and schedules the push, like any Set.", ""},
 	{"via", "List.Each", "method", "func (l *List[E]) Each(row func(E) h.H) h.H", "Each renders row(item) for every element, in order — sugar over via.Each(l.Get(), row), and like State.Display it marks the unit live.", ""},
@@ -86,7 +87,7 @@ var apiSymbols = []apiSymbol{
 	{"via", "VersionedSessionStore", "type", "type VersionedSessionStore interface{ … }", "VersionedSessionStore is the optional half of SessionStore, for a backend that can make a write conditional on the revision it read.", ""},
 	{"via", "When", "func", "func When(cond bool, build func() h.H) h.H", "When renders build()'s result when cond is true, and does not call build otherwise — lazy, so a branch only valid when the condition holds (it reads a value present only when logged in) is never evaluated on the false path.", ""},
 	{"via", "WithErrorPage", "func", "func WithErrorPage(fn func(*Ctx, PageError) h.H) Option", "WithErrorPage renders via's failures as HTML documents instead of plain text.", ""},
-	{"via", "WithHead", "func", "func WithHead(head Head) Option", "WithHead sets the router-wide document shell: lang, raw head markup, and the assets every page carries.", ""},
+	{"via", "WithHead", "func", "func WithHead(head Head) Option", "WithHead sets the router-wide document shell: lang, raw head markup, the <html> and <body> attributes, and the assets every page carries.", ""},
 	{"via", "WithLogger", "func", "func WithLogger(l *slog.Logger) Option", "WithLogger routes via's own diagnostics to l.", ""},
 	{"via", "WithMaxBody", "func", "func WithMaxBody(bytes int64) Option", "WithMaxBody caps an action POST body in bytes, and how much of a native form submit stays in RAM before the rest spills to a temp file (default 1 MiB).", ""},
 	{"via", "WithMaxSSEConn", "func", "func WithMaxSSEConn(n int) Option", "WithMaxSSEConn caps how many live SSE streams this Router serves at once (default 10000); past the cap a connect is refused 503.", ""},
