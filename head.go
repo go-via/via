@@ -10,9 +10,10 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
-// Head describes the router-wide document shell: the <html lang>, raw head
-// markup, and the assets every page of the app carries. Per-page slots — the
-// title and the rest of [Meta] — belong to the mounted page, not here.
+// Head describes the router-wide document shell: the <html lang>, the
+// attributes on <html> and <body>, raw head markup, and the assets every page
+// of the app carries. Per-page slots — the title and the rest of [Meta] —
+// belong to the mounted page, not here.
 //
 // Raw is emitted verbatim and via never parses it, so it may not carry a
 // <script> or <style>: those are CSP-governed and must be declared in Assets,
@@ -23,6 +24,12 @@ import (
 type Head struct {
 	// Lang is the <html lang> value (e.g. "en", "pt-PT"). Empty omits it.
 	Lang string
+
+	// HTMLAttrs and BodyAttrs are written on every page's <html> and <body>,
+	// error pages included, after via's own. See [Meta] for how a page's are
+	// laid over them.
+	HTMLAttrs []Attr
+	BodyAttrs []Attr
 
 	// Raw is head markup emitted verbatim after <meta charset> — icons,
 	// viewport meta, whatever the app needs. Scripts and styles are refused:
@@ -35,8 +42,9 @@ type Head struct {
 }
 
 // Meta is what a mounted page declares about its own document, via the
-// PageMeta() Meta hook on the mounted root. Everything but Assets is inert:
-// escaped text written into the head, free to depend on data OnInit loaded.
+// PageMeta() Meta hook on the mounted root. The head slots are inert: escaped
+// text written into the head, free to depend on data OnInit loaded, though a
+// data-* attribute on <html> or <body> is live Datastar.
 //
 // Assets is not inert — it decides the page's Content-Security-Policy, which is
 // built once at Mount. It must therefore be a constant of the type: via reads
@@ -70,7 +78,21 @@ type Meta struct {
 	// Assets are this page's own scripts, styles and preloads. Must be a
 	// constant of the type: see the type doc.
 	Assets Assets
+
+	// HTMLAttrs and BodyAttrs are laid over [Head]'s by name, replacing in
+	// place, with the rest appended; class values are joined instead. A
+	// refused one panics at Mount, or is dropped and logged if only request
+	// data produces it.
+	HTMLAttrs []Attr
+	BodyAttrs []Attr
 }
+
+// Attr is one attribute via writes on <html> or <body>, as Name="Value" with
+// the value escaped. A name is a letter then [a-zA-Z0-9:._-]*, compared
+// case-insensitively, at most once per list. via refuses the names it writes
+// itself (lang, data-nonce, data-signals, data-init) and the ones the CSP
+// blocks (style, on*).
+type Attr struct{ Name, Value string }
 
 // Assets is the CSP-governed half of the document head: everything that loads
 // or executes. Declaring it here is what lets via derive a policy that admits
@@ -139,12 +161,12 @@ func pageMetaOf(root any) Meta {
 	return Meta{}
 }
 
-// WithHead sets the router-wide document shell: lang, raw head markup, and the
-// assets every page carries.
+// WithHead sets the router-wide document shell: lang, raw head markup, the
+// <html> and <body> attributes, and the assets every page carries.
 //
 // Invalid heads panic at startup rather than serving a broken document: a Lang
-// that isn't a language tag, a Raw carrying a script or style, or an asset that
-// fails [Assets] validation.
+// that isn't a language tag, a Raw carrying a script or style, an attribute
+// [Attr] refuses, or an asset that fails [Assets] validation.
 func WithHead(head Head) Option {
 	return func(c *config) { c.head = head }
 }
@@ -163,6 +185,86 @@ func (hd Head) validate() {
 		}
 	}
 	hd.Assets.validate("via: WithHead: Assets")
+	validateAttrs("via: WithHead: HTMLAttrs", hd.HTMLAttrs)
+	validateAttrs("via: WithHead: BodyAttrs", hd.BodyAttrs)
+}
+
+// validateAttrs panics on the first attribute checkAttrs refuses.
+func validateAttrs(where string, attrs []Attr) {
+	if _, refused := checkAttrs(attrs); len(refused) > 0 {
+		panic(where + ": " + refused[0])
+	}
+}
+
+// checkAttrs splits attrs into the ones via writes and a reason for each it
+// refuses.
+func checkAttrs(attrs []Attr) (kept []Attr, refused []string) {
+	seen := make(map[string]bool, len(attrs))
+	for _, a := range attrs {
+		low := strings.ToLower(a.Name)
+		why := ""
+		switch {
+		case !isAttrName(a.Name):
+			why = "is not an attribute name (want a letter, then letters, digits, ':', '.', '_' or '-')"
+		case low == "lang":
+			why = "is written by via; set Head.Lang instead"
+		case low == "data-nonce" || low == "data-signals" || low == "data-init":
+			why = "is written by via"
+		case strings.HasPrefix(low, "on"):
+			why = "is an inline event handler, which the CSP blocks; use a data-on: attribute"
+		case low == "style":
+			why = "is an inline style, which the CSP blocks; use a class"
+		case seen[low]:
+			why = "is set twice"
+		}
+		seen[low] = true
+		if why != "" {
+			refused = append(refused, quote(a.Name)+" "+why)
+			continue
+		}
+		kept = append(kept, a)
+	}
+	return kept, refused
+}
+
+func isAttrName(s string) bool {
+	if s == "" || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z') {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte(":._-", c) >= 0) {
+			return false
+		}
+	}
+	return true
+}
+
+// mergeAttrs lays a page's attributes over the router's: see [Meta].
+func mergeAttrs(router, page []Attr) []Attr {
+	out := slices.Clone(router)
+	for _, p := range page {
+		i := slices.IndexFunc(out, func(a Attr) bool { return strings.EqualFold(a.Name, p.Name) })
+		switch {
+		case i < 0:
+			out = append(out, p)
+		case !strings.EqualFold(p.Name, "class"):
+			out[i].Value = p.Value
+		case out[i].Value == "":
+			out[i].Value = p.Value
+		case p.Value != "":
+			out[i].Value += " " + p.Value
+		}
+	}
+	return out
+}
+
+func attrString(attrs []Attr) string {
+	var b strings.Builder
+	for _, a := range attrs {
+		b.WriteString(" " + a.Name + `="` + html.EscapeString(a.Value) + `"`)
+	}
+	return b.String()
 }
 
 // validate rejects assets that cannot be served safely. where labels the
@@ -343,8 +445,8 @@ func (a Assets) render(b *strings.Builder) {
 }
 
 // htmlOpen renders <html>, carrying nonce for Datastar to compile expressions
-// under when the document runs Datastar ("" for one that does not).
-func (hd Head) htmlOpen(nonce string) string {
+// under when the document runs Datastar ("" for one that does not), then attrs.
+func (hd Head) htmlOpen(nonce string, attrs []Attr) string {
 	open := "<html"
 	if hd.Lang != "" {
 		open += ` lang="` + html.EscapeString(hd.Lang) + `"`
@@ -352,7 +454,7 @@ func (hd Head) htmlOpen(nonce string) string {
 	if nonce != "" {
 		open += ` data-nonce="` + nonce + `"`
 	}
-	return open + ">"
+	return open + attrString(attrs) + ">"
 }
 
 // isLangTag is a syntax gate on BCP 47 shape, not a registry lookup: the point

@@ -111,7 +111,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"What an action body can do", "/actions#what-an-action-body-can-do"}, {"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"PageMeta",
-			[]h.H{Code("PageMeta() via.Meta"), s(" names the document: title, description, social cards and assets. Only the mounted root's counts. It must be pure: via reads it at Mount, and after OnInit on every document render, never on an SSE push.")},
+			[]h.H{Code("PageMeta() via.Meta"), s(" names the document: title, description, social cards, assets and <html>/<body> attributes. Only the mounted root's counts. It must be pure: via reads it at Mount, and after OnInit on every document render, never on an SSE push.")},
 			[]seeLink{{"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			[]h.H{API("via.Meta")}},
 		{"Plain vs live page",
