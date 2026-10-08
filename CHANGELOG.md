@@ -49,6 +49,12 @@
 
 ### New
 
+- **`Head.HTMLAttrs`/`BodyAttrs` and `Meta.HTMLAttrs`/`BodyAttrs`** set
+  attributes on `<html>` and `<body>`. A page's are laid over the router's by
+  name, `class` joined; error pages carry the router's. via's own names,
+  `style`, `on*` and repeats are refused: a panic at `WithHead` or `Mount`, or
+  dropped with a WARN when only request data produces them.
+
 - **`on.WithModifier(raw)`** appends a Datastar modifier package `on` has no
   option for: `on.Click(c.Save, on.WithModifier("delay.300ms"))`. It panics
   on a malformed modifier and on one a typed option covers, naming the

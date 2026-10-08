@@ -19,6 +19,7 @@ var (
 	beforeTag = regexp.MustCompile(`\s*\n\s*<`)
 	inTag     = regexp.MustCompile(`\s*\n\s*`)
 	root      = regexp.MustCompile(`(?s)<div id="root" data-signals='\{\}'>(.*)</div></body>`)
+	nonce     = regexp.MustCompile(`data-nonce="[^"]+"`)
 )
 
 // flat undoes the line breaks the page shows: one beside a tag boundary
@@ -75,4 +76,12 @@ func TestInviteHTML_matchesTheRender(t *testing.T) {
 func TestColonHTML_matchesTheDemo(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, body(t, via.Handler(colonPage{})), flat(hs.ColonHTML))
+}
+
+func TestShellHTML_matchesTheRender(t *testing.T) {
+	t.Parallel()
+	got := nonce.ReplaceAllString(body(t, via.Handler(hs.Settings{}, hs.Shell)), `data-nonce="…"`)
+	for line := range strings.Lines(hs.ShellHTML) {
+		assert.Contains(t, got, strings.TrimSpace(line))
+	}
 }
