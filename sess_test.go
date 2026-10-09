@@ -1311,6 +1311,21 @@ func TestSession_setsNoCookieWhenTheStoreRefusesTheFirstSave(t *testing.T) {
 	assert.Empty(t, resp.Header.Values("Set-Cookie"), "a cookie for a session the store never saved names nothing")
 }
 
+func TestSession_plainStoreSaveFailureKeepsTheStoredValue(t *testing.T) {
+	t.Parallel()
+	fs := newFailStore()
+	base, acts := auditServer(t, via.WithSessionStore(newPlainGap(fs)))
+	c := jarClient(t)
+
+	auditPost(t, c, base, acts[audPut1])
+	fs.set(&fs.saveErr, errors.New("redis down"))
+	auditPost(t, c, base, acts[audPut2])
+	fs.set(&fs.saveErr, nil)
+
+	_, body := auditPost(t, c, base, acts[audShow])
+	assert.Contains(t, body, "V=1", "a failed Save on a store without CAS still changed the session")
+}
+
 func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 	t.Parallel()
 	fs := newFailStore()
