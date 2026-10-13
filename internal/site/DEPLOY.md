@@ -12,8 +12,9 @@ files you install by hand. Nothing here assumes a distribution.
 - `/etc/caddy/Caddyfile` — below.
 - A system user `go-via`, no shell, no home directory on disk. The service
   runs as it.
-- Caddy from the distribution's package, unpinned: rerun
-  [3. Check](#3-check) after a system upgrade.
+- `/usr/local/bin/caddy` — Caddy built with the brotli plugin (see
+  [Caddy with brotli](#caddy-with-brotli)). The distribution's package stays
+  installed for its user and service; its init script points at this binary.
 
 The binary listens on `VIA_ADDR` (`127.0.0.1:8080`), Caddy terminates TLS
 and proxies to it. Certificates come over TLS-ALPN; port 80 is open only to
@@ -42,7 +43,8 @@ subsystem, where `scp` fails.
 As root on the host.
 
 ```sh
-# Caddy from the distribution (apt, apk, dnf, pacman ...).
+# Caddy from the distribution (apt, apk, dnf, pacman ...) for its user and
+# service; the binary is swapped in Caddy with brotli below.
 # busybox: adduser -S -D -H -s /sbin/nologin go-via
 useradd -r -M -s /sbin/nologin go-via
 install -m 0755 stage/site-amd64 /usr/local/bin/go-via-site
@@ -218,6 +220,33 @@ upstream has to see the path the browser used.
 These `handle` blocks replace the single `reverse_proxy` in the site block
 below.
 
+## Caddy with brotli
+
+Stock Caddy compresses with zstd and gzip only. Build it with the pure-Go
+brotli plugin, on your machine:
+
+```sh
+CGO_ENABLED=0 go run github.com/caddyserver/xcaddy/cmd/xcaddy@v0.4.5 \
+  build v2.11.7 --with github.com/ueffel/caddy-brotli@v1.6.0 \
+  --output .build/caddy-amd64
+ssh user@host 'cat > stage/caddy' < .build/caddy-amd64
+```
+
+On the host, install it next to the packaged binary and point the service at
+it. A package upgrade then replaces only the unused `/usr/sbin/caddy`, and apk
+keeps the edited init script.
+
+```sh
+install -m 0755 stage/caddy /usr/local/bin/caddy
+sed -i 's#^command=/usr/sbin/caddy$#command=/usr/local/bin/caddy#' \
+  /etc/init.d/caddy      # systemd: an ExecStart override in a drop-in
+caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+rc-service caddy restart
+```
+
+A new binary needs a restart; a reload keeps the old one. Rebuild on each
+Caddy release, then rerun [3. Check](#3-check).
+
 ## Caddyfile
 
 ```caddyfile
@@ -241,7 +270,13 @@ go-via.dev {
 		max_size 2MB
 	}
 
-	encode zstd gzip
+	# Block form: the shorthand "encode br ..." skips the brotli plugin's config
+	# and runs it at quality 0, which compresses each stream frame on its own.
+	encode {
+		br
+		zstd
+		gzip
+	}
 
 	reverse_proxy 127.0.0.1:8080 {
 		# SSE: never buffer the upstream stream.
