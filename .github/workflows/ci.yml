@@ -7,6 +7,10 @@ on:
   pull_request:
     branches:
       - main
+  # Weekly on go-version: stable, so a new Go release that breaks a tool
+  # (go1.27.2 vs staticcheck v0.8.1) fails here, not on someone's PR.
+  schedule:
+    - cron: '17 5 * * 1'
 
 permissions:
   contents: read
