@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Documented (behaviour unchanged)
+
+- `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
+  shorthand `encode br zstd gzip` runs it at quality 0, so each stream frame
+  is compressed on its own (145 bytes against 13).
+
 ## v0.9.1 — compression, <html> and <body> attributes (2026-10-13)
 
 ### New

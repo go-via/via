@@ -162,7 +162,8 @@ func (p *Deploy) View() h.H {
 		h.P(h.Str("Compress at the proxy. Caddy's "), Code("encode"), h.Str(" and Traefik's "), Code("compress"),
 			h.Str(" middleware compress the stream frame by frame, measured on Caddy 2.11.7 and Traefik 3.5.2. "+
 				"Caddy 2.6 to 2.10 send it uncompressed; no version tested delays a frame. Stock Caddy has zstd and gzip; brotli needs a plugin such as "), Code("caddy-brotli"),
-			h.Str(". With no compressing proxy, or for a coding the proxy lacks, via compresses on its own: "),
+			h.Str(", listed in "), Code("encode"), h.Str("'s block form: the shorthand "), Code("encode br zstd gzip"),
+			h.Str(" runs it at quality 0, which compresses each frame on its own. With no compressing proxy, or for a coding the proxy lacks, via compresses on its own: "),
 			API("via.WithPageCompression"), h.Str(" for pages and actions, "), API("via.WithSSECompression"),
 			h.Str(" for the stream, which it flushes after every frame. A proxy leaves a response via already "+
 				"compressed as it is. Compression makes a response's length depend on its content, which is what BREACH reads: keep "+
