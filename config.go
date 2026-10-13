@@ -31,6 +31,8 @@ type config struct {
 	maxBody        int64
 	maxUpload      int64
 	unsafeEval     bool
+	pageEnc        []Encoder
+	sseEnc         []Encoder
 }
 
 // sseHeartbeat is the keepalive cadence. Fixed, never configurable: a failed
@@ -345,6 +347,39 @@ func WithMaxUpload(bytes int64) Option {
 			panic("via: WithMaxUpload must be positive")
 		}
 		c.maxUpload = bytes
+	}
+}
+
+// WithPageCompression compresses every response except the SSE stream —
+// pages, action patches, error pages and the Datastar client — with the first
+// of encs the request's Accept-Encoding allows, in the order given. With no
+// encs it uses gzip at its default level; without the option nothing is
+// compressed. It panics on an Encoder missing its Token or NewWriter, on a
+// duplicate Token, and on a second WithPageCompression.
+//
+// Compression makes a response's length depend on its content, which is what
+// BREACH reads: keep long-lived secrets out of rendered output.
+func WithPageCompression(encs ...Encoder) Option {
+	return func(c *config) {
+		if c.pageEnc != nil {
+			panic("via: conflicting WithPageCompression options; pass one")
+		}
+		c.pageEnc = encoderList("WithPageCompression", encs)
+	}
+}
+
+// WithSSECompression compresses the live SSE stream the way
+// WithPageCompression compresses the rest, flushing the encoder after every
+// frame so no patch waits for the next one. The encoder lives as long as the
+// tab, so its memory multiplies by the streams WithMaxSSEConn allows: size a
+// brotli window (LGWin) or the gzip level for that. It panics like
+// WithPageCompression.
+func WithSSECompression(encs ...Encoder) Option {
+	return func(c *config) {
+		if c.sseEnc != nil {
+			panic("via: conflicting WithSSECompression options; pass one")
+		}
+		c.sseEnc = encoderList("WithSSECompression", encs)
 	}
 }
 

@@ -20,18 +20,7 @@ func (p *Deploy) PageMeta() via.Meta {
 }
 
 const deployCaddyfile = `example.com {
-	# text/* would also compress, and so buffer, text/event-stream.
-	encode zstd gzip {
-		match {
-			header Content-Type text/html*
-			header Content-Type text/css*
-			header Content-Type text/plain*
-			header Content-Type text/javascript*
-			header Content-Type application/javascript*
-			header Content-Type application/json*
-			header Content-Type image/svg+xml*
-		}
-	}
+	encode zstd gzip
 
 	reverse_proxy 127.0.0.1:8080 {
 		# SSE: never buffer the upstream stream.
@@ -164,12 +153,20 @@ func (p *Deploy) View() h.H {
 		snippet.Text("Caddyfile", deployCaddyfile),
 		snippet.Text("nginx.conf", deployNginx),
 		h.P(h.Str("A tab's stream is one long "), Code("text/event-stream"), h.Str(" response to a POST. A proxy "+
-			"that buffers or compresses it holds every patch back, and the page never updates while clicks "+
+			"that buffers it holds every patch back, and the page never updates while clicks "+
 			"still POST. Do not strip a path prefix: action and stream URLs sit under each mount, so the "+
 			"upstream has to see the path the browser used. With nginx, forward "), Code("Host"), h.Str(" and "),
 			Code("X-Forwarded-Proto"), h.Str(": without a trusted origin match, via's same-origin check compares the "+
 				"browser's Origin with Host, and the proto decides whether the session cookie is Secure. Caddy sends both "+
 				"as is.")),
+		h.P(h.Str("Compress at the proxy. Caddy's "), Code("encode"), h.Str(" and Traefik's "), Code("compress"),
+			h.Str(" middleware compress the stream frame by frame, measured on Caddy 2.11.7 and Traefik 3.5.2. "+
+				"Caddy 2.6 to 2.10 send it uncompressed; no version tested delays a frame. Stock Caddy has zstd and gzip; brotli needs a plugin such as "), Code("caddy-brotli"),
+			h.Str(". With no compressing proxy, or for a coding the proxy lacks, via compresses on its own: "),
+			API("via.WithPageCompression"), h.Str(" for pages and actions, "), API("via.WithSSECompression"),
+			h.Str(" for the stream, which it flushes after every frame. A proxy leaves a response via already "+
+				"compressed as it is. Compression makes a response's length depend on its content, which is what BREACH reads: keep "+
+				"long-lived secrets out of rendered output.")),
 
 		d.H2("Limits and dead peers"),
 		h.P(h.Str("Limit connections and request rates per client at the proxy: via sees only the proxy's address. nginx does it with "),

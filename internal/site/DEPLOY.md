@@ -57,7 +57,7 @@ Then a service that:
 
 - runs `/usr/local/bin/go-via-site` as `go-via`,
 - sets `VIA_ADDR=127.0.0.1:8080`, `VIA_ORIGIN=https://go-via.dev` and
-  `VIA_VERSIONS="v0.8=/,v0.7=https://go-via.github.io/via/"` (see
+  `VIA_VERSIONS="v0.9=/,v0.8=/v0.8,v0.7=https://go-via.github.io/via/"` (see
   [Versions](#versions)),
 - sources `/etc/go-via.env`,
 - restarts on exit with a short delay and no retry cap (a crash loop must
@@ -78,7 +78,7 @@ StartLimitIntervalSec=0
 ExecStart=/usr/local/bin/go-via-site
 Environment=VIA_ADDR=127.0.0.1:8080
 Environment=VIA_ORIGIN=https://go-via.dev
-Environment="VIA_VERSIONS=v0.8=/,v0.7=https://go-via.github.io/via/"
+Environment="VIA_VERSIONS=v0.9=/,v0.8=/v0.8,v0.7=https://go-via.github.io/via/"
 EnvironmentFile=/etc/go-via.env
 User=go-via
 Restart=always
@@ -241,18 +241,7 @@ go-via.dev {
 		max_size 2MB
 	}
 
-	# text/* would also compress, and so buffer, text/event-stream.
-	encode zstd gzip {
-		match {
-			header Content-Type text/html*
-			header Content-Type text/css*
-			header Content-Type text/plain*
-			header Content-Type text/javascript*
-			header Content-Type application/javascript*
-			header Content-Type application/json*
-			header Content-Type image/svg+xml*
-		}
-	}
+	encode zstd gzip
 
 	reverse_proxy 127.0.0.1:8080 {
 		# SSE: never buffer the upstream stream.

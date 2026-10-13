@@ -1,11 +1,10 @@
 # Migrating from v0.7 to v0.8
 
-This document tracks `main`. Lines marked Unreleased describe behaviour the
-latest tag, v0.8.3, does not have; [Upgrading from
-v0.8.3](#upgrading-from-v083) lists all of it.
+This document tracks `main`. Lines marked v0.9.0 describe behaviour v0.8.3
+does not have; [Upgrading from v0.8.3](#upgrading-from-v083) lists all of it.
 
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
-changes without a module-path change — so `go get -u` walks v0.7.0 → v0.8.3 as
+changes without a module-path change — so `go get -u` walks v0.7.0 → v0.9.1 as
 an ordinary bump and hands you a tree that shares almost no identifiers with
 the one you were using. No tooling will warn you. There is no compatibility
 shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you
@@ -320,10 +319,10 @@ child's warning waits for its first render), or nothing.
 - `WithPlugins(echarts.…)`, `maplibre` → an island: `h.DataIgnoreMorph` and
   `h.DataEffect` around a script of yours. Caught by: compiler.
 - a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS,
-  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (Unreleased; v0.8.3
+  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (v0.9.0; v0.8.3
   reads TLS only); behind a proxy that sends neither set `WithSecureCookies`.
   Caught by: silent.
-- `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
+- `ctx.Redirect("https://other.example/…")` → dropped and logged (v0.9.0;
   v0.8.3 follows it); leave the site with `ctx.RedirectExternal`. Caught by:
   silent.
 - `app.Use`, `app.Group`, `app.Handle`, `app.HandleStatic` → your own
@@ -350,9 +349,9 @@ These compile and start; the first sign is behaviour:
   the first, so put one struct
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`
 - a Secure session cookie unless `WithInsecureCookies` → Secure only over TLS,
-  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (Unreleased; v0.8.3
+  `X-Forwarded-Proto: https` or `Forwarded: proto=https` (v0.9.0; v0.8.3
   reads TLS only); behind a proxy that sends neither set `WithSecureCookies`
-- `ctx.Redirect("https://other.example/…")` → dropped and logged (Unreleased;
+- `ctx.Redirect("https://other.example/…")` → dropped and logged (v0.9.0;
   v0.8.3 follows it); leave the site with `ctx.RedirectExternal`
 
 A leftover `OnConnect(ctx) error` is warned about, with or without an `OnInit`
@@ -483,7 +482,7 @@ the full reasoning; the short form:
   https.** v0.7 set `Secure` unless `WithInsecureCookies` cleared it. v0.8
   sets it when the request arrived over TLS (`req.TLS != nil`) or a proxy
   says `X-Forwarded-Proto: https` or `Forwarded: proto=https` (the proxy
-  headers are Unreleased; v0.8.3 reads TLS only). Caddy sends
+  headers need v0.9.0; v0.8.3 reads TLS only). Caddy sends
   `X-Forwarded-Proto` by default; nginx needs
   `proxy_set_header X-Forwarded-Proto $scheme`. Behind a proxy that sends
   neither, set `WithSecureCookies`. `WithInsecureCookies` is gone.
