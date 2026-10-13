@@ -61,6 +61,8 @@ var overrides = map[string]string{
 	"via.WithPinnedDeadline":      "How long an action POST waits for the tab's stream goroutine to pick it up before answering 503 and logging the tab as pinned (default 5s; 0 or less panics). An action that has started is waited for, since it writes the POST's own response. The same deadline covers the wait for a tab's stream that has not connected yet, capped at 2s: 410 if it has not come by then, and at once if via itself ended it.",
 	"via.WithMaxBody":             "Caps an action POST body, and how much of a form submit stays in RAM before spilling to a temp file (default 1 MiB). Over the cap answers 413.",
 	"via.WithMaxUpload":           "Caps a native form submit's whole multipart body (default 8 MiB). Over the cap answers 413.",
+	"via.WithPageCompression":     "Compresses every response but the stream with the first of encs the client accepts, in the order given; none means gzip. Off by default. An Encoder plugs in any other coding, such as brotli. A duplicate token or a second WithPageCompression panics.",
+	"via.WithSSECompression":      "Compresses the stream the same way, flushing after every frame. The encoder lives as long as the tab, so its memory counts against WithMaxSSEConn.",
 	"via.WithLogger":              "Routes via's own diagnostics to l. Default is slog.Default().",
 	"via.WithUnsafeEval":          "Adds 'unsafe-eval' to every page's script-src, for a library that compiles code from strings. The nonce and hashes stay. While set, via logs a warning at startup: a string that reaches eval, Function or setTimeout(string) runs as script.",
 

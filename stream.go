@@ -332,10 +332,9 @@ func writeSignalsFrame(w io.Writer, signalsJSON string) {
 	_, _ = io.WriteString(w, "\n\n")
 }
 
-// writeSSEHeaders sets the event-stream headers; Cache-Control keeps proxies
-// and the browser from buffering frames. A session's stricter no-store (see
-// noStore) is kept; anything else, such as a middleware's public max-age, is
-// replaced.
+// writeSSEHeaders sets the event-stream headers. A session's stricter no-store
+// (see noStore) is kept; anything else, such as a middleware's public max-age,
+// is replaced.
 func writeSSEHeaders(w http.ResponseWriter) {
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/event-stream")
@@ -353,6 +352,8 @@ func writeSSEHeaders(w http.ResponseWriter) {
 func canFlush(w http.ResponseWriter) bool {
 	for {
 		switch v := w.(type) {
+		case interface{ flushable() bool }:
+			return v.flushable()
 		case interface{ FlushError() error }:
 			return true
 		case http.Flusher:

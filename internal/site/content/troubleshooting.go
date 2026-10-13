@@ -100,7 +100,8 @@ func (p *Troubleshooting) View() h.H {
 					"response patches it, and nothing else can.")),
 			h.Li(h.Strong(h.Str("The proxy buffers the stream. ")), h.Str("Caddy needs "), Code("flush_interval -1"),
 				h.Str(" on the "), Code("reverse_proxy"), h.Str("; nginx needs "), Code("proxy_buffering off;"),
-				h.Str(". Compression middleware on "), Code("text/event-stream"), h.Str(" holds frames back the same way.")),
+				h.Str(". Compression is not the cause with Caddy's "), Code("encode"), h.Str(" or Traefik's "),
+				Code("compress"), h.Str(": both flush each frame.")),
 			h.Li(h.Strong(h.Str("An idle timeout under 25 s. ")), h.Str("via writes a keepalive every 25 seconds, fixed. "+
 				"A proxy or balancer that closes a silent connection sooner drops every quiet stream; 60 s is enough.")),
 			h.Li(h.Strong(h.Str("The State sits behind a closed branch. ")), h.Str("The GET rendered no State, so the page was "+

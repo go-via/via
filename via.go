@@ -116,7 +116,7 @@ var datastarJS []byte
 // datastarHash names this build's client. Pages load it as
 // /_via/datastar.js?v=<hash>, so the versioned URL can be cached as immutable:
 // a new client is a new URL. The bare path keeps working for anything that
-// hard-coded it, and revalidates against the same hash as its ETag.
+// hard-coded it, and revalidates against its ETag.
 var datastarHash = func() string {
 	sum := sha256.Sum256(datastarJS)
 	return hex.EncodeToString(sum[:8])

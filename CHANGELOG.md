@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased
+## v0.9.1 — compression, <html> and <body> attributes (2026-10-13)
+
+### New
+
+- **`WithPageCompression(encs...)` and `WithSSECompression(encs...)`**
+  compress responses, off by default. Pages, actions, error pages and the
+  Datastar client take one encoder list and the stream takes the other, each
+  picking the first coding the client accepts, in the order given. With no
+  encoders an option uses gzip. The stream flushes its encoder after every
+  frame. `via.Gzip(level)` ships with via; an `Encoder` adapter brings any
+  other coding, such as brotli, so via stays standard-library only.
+  The Datastar client's ETag hashes the encoded bytes, one per coding.
+
+- **`Head.HTMLAttrs`/`BodyAttrs` and `Meta.HTMLAttrs`/`BodyAttrs`** set
+  attributes on `<html>` and `<body>`. A page's are laid over the router's by
+  name, `class` joined; error pages carry the router's. via's own names,
+  `style`, `on*` and repeats are refused: a panic at `WithHead` or `Mount`, or
+  dropped with a WARN when only request data produces them.
+
+### Documented (behaviour unchanged)
+
+- `/deploy`, `/live` and `/troubleshooting` said a compressing proxy holds
+  stream frames back. Traefik v3.5.2's `compress` and Caddy v2.11.7's
+  `encode` compress the stream frame by frame; Caddy 2.6 to 2.10 send it
+  uncompressed, without delay. The Caddyfile on `/deploy` now compresses it
+  too, and `/deploy` says when to compress in via instead.
+
+## v0.9.0 — events by option, safer defaults (2026-09-29)
 
 ### Security defaults changed
 
@@ -48,12 +75,6 @@
   `WithStop` and `WithWindow`, so `With` marks only options.
 
 ### New
-
-- **`Head.HTMLAttrs`/`BodyAttrs` and `Meta.HTMLAttrs`/`BodyAttrs`** set
-  attributes on `<html>` and `<body>`. A page's are laid over the router's by
-  name, `class` joined; error pages carry the router's. via's own names,
-  `style`, `on*` and repeats are refused: a panic at `WithHead` or `Mount`, or
-  dropped with a WARN when only request data produces them.
 
 - **`on.WithModifier(raw)`** appends a Datastar modifier package `on` has no
   option for: `on.Click(c.Save, on.WithModifier("delay.300ms"))`. It panics

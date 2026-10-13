@@ -3,6 +3,8 @@ package via
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -293,6 +295,8 @@ type Router struct {
 	// WithErrorPage for why it is never a mount's own, wider policy.
 	errCSP      string
 	errPageWarn sync.Once
+	// datastarEnc caches the Datastar client per Content-Encoding token.
+	datastarEnc sync.Map
 }
 
 // NewRouter builds an empty router. Mount pages onto it, then serve it, and
@@ -317,24 +321,60 @@ func (r *Router) init(opts []Option) {
 		r.maxLive = r.cfg.maxSSEConn
 		r.ctx, r.cancel = context.WithCancel(context.Background())
 		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
-		r.mux.HandleFunc("GET /_via/datastar.js", func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("Content-Type", "text/javascript")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Header().Set("ETag", `"`+datastarHash+`"`)
-			if req.URL.Query().Get("v") == datastarHash {
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "public, max-age=3600, must-revalidate")
-			}
-			http.ServeContent(w, req, "", time.Time{}, bytes.NewReader(datastarJS))
-		})
+		r.mux.HandleFunc("GET /_via/datastar.js", r.serveDatastar)
 	})
+}
+
+func (r *Router) serveDatastar(w http.ResponseWriter, req *http.Request) {
+	hdr := w.Header()
+	hdr.Set("Content-Type", "text/javascript")
+	hdr.Set("X-Content-Type-Options", "nosniff")
+	body, etag := datastarJS, datastarHash
+	if e, ok := negotiate(req.Header.Get("Accept-Encoding"), r.cfg.pageEnc); ok {
+		body, etag = r.datastarEncoded(e)
+		hdr.Set("Content-Encoding", e.Token)
+	}
+	hdr.Set("ETag", `"`+etag+`"`)
+	if req.URL.Query().Get("v") == datastarHash {
+		hdr.Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		hdr.Set("Cache-Control", "public, max-age=3600, must-revalidate")
+	}
+	http.ServeContent(w, req, "", time.Time{}, bytes.NewReader(body))
+}
+
+// datastarEncoded compresses the client once per coding. The ETag hashes the
+// encoded bytes, not the source: they change with the encoder's settings, and
+// a Range request spliced across two builds would be corrupt.
+func (r *Router) datastarEncoded(e Encoder) ([]byte, string) {
+	type encoded struct {
+		body []byte
+		etag string
+	}
+	if v, ok := r.datastarEnc.Load(e.Token); ok {
+		d := v.(encoded)
+		return d.body, d.etag
+	}
+	var buf bytes.Buffer
+	zw := e.NewWriter(&buf)
+	zw.Write(datastarJS)
+	zw.Close()
+	sum := sha256.Sum256(buf.Bytes())
+	d := encoded{buf.Bytes(), hex.EncodeToString(sum[:8])}
+	r.datastarEnc.Store(e.Token, d)
+	return d.body, d.etag
 }
 
 // ServeHTTP lazily runs r.init on first use, so a zero Router (var r via.Router)
 // is ready to Mount and serve without an explicit constructor call.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.init(nil)
+	// Compression sits under the error page writer: that one buffers a caught
+	// body as the page's Detail, which must stay readable text.
+	if cw := r.wrapForCompression(w, req); cw != nil {
+		defer cw.close()
+		w = cw
+	}
 	ew := r.wrapForErrorPage(w, req)
 	if ew == nil {
 		r.mux.ServeHTTP(w, req)

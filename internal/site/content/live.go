@@ -172,9 +172,9 @@ func (p *Live) View() h.H {
 		h.P(h.Str("A live State anywhere in a unit makes the whole unit the patch. At 1000 open tabs, one change is 168 MB "+
 			"against 100 KB. When a small part changes often, keep the large part plain and move the small part into its "+
 			"own live Child. A live List sends every row on every change, so cap or page one that can grow.")),
-		h.P(h.Str("Patches are not compressed. The "), h.A(h.Href(d.Href("/deploy")+"#reverse-proxy"), h.Str("Caddyfile")),
-			h.Str(" on the deploy page leaves "), Code("text/event-stream"), h.Str(" out of "), Code("encode"),
-			h.Str(", because a compressing proxy holds patches back. Size the unit instead.")),
+		h.P(h.Str("Compression at the "), h.A(h.Href(d.Href("/deploy")+"#reverse-proxy"), h.Str("proxy")),
+			h.Str(" or with "), API("via.WithSSECompression"), h.Str(" shrinks each frame on the wire, but via still "+
+				"renders and writes the whole unit for every tab. Size the unit either way.")),
 
 		d.H2("Connection lifecycle"),
 		table([]string{"Event", "What happens"},
