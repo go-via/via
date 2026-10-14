@@ -608,8 +608,6 @@ func (r *registry) unpark(id string, s *tabSlot, w *waiter) {
 // The key is per process, not the shared session key: only the pod holding
 // a tab's stream can run its actions, so an id another pod issued is refused
 // at once rather than parked for connectWait before the same 410.
-const tabRandLen = 22 // randomToken's length
-
 func (m *mount) newTabID(cred string) string {
 	r := randomToken()
 	return r + m.tabTag(r, cred)
@@ -620,14 +618,14 @@ func (m *mount) newTabID(cred string) string {
 func (m *mount) tabTag(r, cred string) string {
 	mac := hmac.New(sha256.New, m.reg.key[:])
 	mac.Write([]byte(m.patternBase + "\x00" + cred + "\x00" + r))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))[:tabRandLen]
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))[:tokenLen]
 }
 
 func (m *mount) issuedTab(id, cred string) bool {
-	if len(id) != 2*tabRandLen {
+	if len(id) != 2*tokenLen {
 		return false
 	}
-	return hmac.Equal([]byte(id[tabRandLen:]), []byte(m.tabTag(id[:tabRandLen], cred)))
+	return hmac.Equal([]byte(id[tokenLen:]), []byte(m.tabTag(id[:tokenLen], cred)))
 }
 
 // tombFor is how long a tab id stays tombstoned once s ends: the pinned

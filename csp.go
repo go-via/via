@@ -7,11 +7,16 @@ import (
 	"strings"
 )
 
+const (
+	tokenBytes = 16
+	tokenLen   = (tokenBytes*8 + 5) / 6 // randomToken's length in unpadded base64
+)
+
 // randomToken returns a 128-bit (the OWASP recommendation) URL-safe token,
 // backing session ids and tab ids alike. rand.Read failing is an unrecoverable
 // infrastructure fault, so it panics.
 func randomToken() string {
-	var b [16]byte
+	var b [tokenBytes]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic("via: crypto/rand failed: " + err.Error())
 	}

@@ -45,15 +45,14 @@ type Bound struct {
 //
 //	h.Button(on.Click(on.Bind(l.Delete, todo.ID)), h.Str("×"))
 //
-// Dispatch identity is the (handler,
-// arg) pair. The render that precedes every dispatch — the discovery render on
-// a plain page, the last push on a live one — rebuilds the set of args it
-// binds for fn, and a POST whose ?a= is not in that set is 410'd before fn
-// ever runs. So an arg the caller's own render does not produce (another
-// user's row, an id behind a When branch closed for them) is not dispatchable
-// by them, and fn may treat its parameter as already authorized. Keep the
-// render honest — filter the list by the caller's identity — and the handler
-// needs no check of its own.
+// Dispatch identity is the (handler, arg) pair. The render that precedes every
+// dispatch — the discovery render on a plain page, the last push on a live
+// one — rebuilds the set of args it binds for fn, and a POST whose ?a= is not
+// in that set is 410'd before fn ever runs. So an arg the caller's own render
+// does not produce (another user's row, an id behind a When branch closed for
+// them) is not dispatchable by them, and fn may treat its parameter as already
+// authorized. Keep the render honest — filter the list by the caller's
+// identity — and the handler needs no check of its own.
 //
 // That render is server state alone: an inbound value is accepted only for a
 // slot the render put under client control (Signal.Bind), and the body is

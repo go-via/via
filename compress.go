@@ -62,11 +62,16 @@ func (p pooledGzip) Close() error {
 	return err
 }
 
-// encoderList validates an option's encoders. None means gzip at its default
+// setEncoders validates an option's encoders and stores them in dst. A set dst
+// means the option was passed twice. No encoders means gzip at its default
 // level.
-func encoderList(option string, encs []Encoder) []Encoder {
+func setEncoders(dst *[]Encoder, option string, encs []Encoder) {
+	if *dst != nil {
+		panic("via: conflicting " + option + " options; pass one")
+	}
 	if len(encs) == 0 {
-		return []Encoder{Gzip(gzip.DefaultCompression)}
+		*dst = []Encoder{Gzip(gzip.DefaultCompression)}
+		return
 	}
 	seen := map[string]bool{}
 	for _, e := range encs {
@@ -79,7 +84,7 @@ func encoderList(option string, encs []Encoder) []Encoder {
 		}
 		seen[tok] = true
 	}
-	return slices.Clone(encs)
+	*dst = slices.Clone(encs)
 }
 
 // negotiate picks the first of encs the Accept-Encoding header allows. The

@@ -550,6 +550,133 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 const sessionSaveRetries = 8
 
 func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
+	sid, own, dirty, mintFailed, ok := m.snapshot(d)
+	if !ok {
+		return false
+	}
+
+	ctx, cancel := m.bounded(ctx)
+	defer cancel()
+	cas, _ := m.store.(VersionedSessionStore)
+	for attempt := 0; ; attempt++ {
+		if cas != nil && attempt >= sessionSaveRetries {
+			m.logger().Error("via: session write gave up after CAS attempts — the store is under pathological "+
+				"contention on one session; the write is dropped rather than clobbering the writers "+
+				"that got through", "attempts", sessionSaveRetries)
+			return false
+		}
+		b, ver, live, err := m.loadLive(ctx, cas, id, sid)
+		if err != nil {
+			// Writing d's copy over a store that could not be read is exactly
+			// the clobber this merge exists to avoid.
+			m.logger().Error("via: session store Load failed before save", "err", err)
+			return false
+		}
+		if !live && !mint {
+			m.retire(d, mintFailed)
+			return false
+		}
+		vals := mergeVals(own, b, live, dirty)
+		exp := time.Now().Add(m.ttl)
+		applied, ok := m.persist(ctx, cas, id, sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals}, ver)
+		if !ok {
+			return false
+		}
+		if !applied {
+			continue // another request wrote first; re-merge onto its blob
+		}
+		d.mu.Lock()
+		// The merged view is what this request should read back too: a Tick
+		// handler holding a connect-time snapshot otherwise keeps serving
+		// values another request has since replaced.
+		d.vals, d.exp = vals, exp
+		d.mu.Unlock()
+		m.fanout(d, vals, exp)
+		return true
+	}
+}
+
+// persist encodes and writes b under id. ok is false on a logged failure;
+// applied is false when a CAS store saw a newer version than ver.
+func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore, id string, b sessionBlob, ver uint64) (applied, ok bool) {
+	blob, err := json.Marshal(b)
+	if err != nil {
+		m.logger().Error("via: session encode failed", "err", err)
+		return false, false
+	}
+	if cas != nil {
+		applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
+		if err != nil {
+			m.logger().Error("via: session store SaveIf failed", "err", err)
+			return false, false
+		}
+		return applied, true
+	}
+	if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
+		m.logger().Error("via: session store Save failed", "err", err)
+		return false, false
+	}
+	return true, true
+}
+
+// mergeVals overlays dirty onto the stored values when b is live, else onto
+// own. A nil value in dirty is a tombstone.
+func mergeVals(own map[string]json.RawMessage, b sessionBlob, live bool, dirty map[string]json.RawMessage) map[string]json.RawMessage {
+	vals := b.Vals
+	if !live || vals == nil {
+		vals = make(map[string]json.RawMessage, len(own))
+		maps.Copy(vals, own)
+	}
+	for k, v := range dirty {
+		if v == nil {
+			delete(vals, k)
+			continue
+		}
+		vals[k] = v
+	}
+	return vals
+}
+
+// retire marks d's id dead after a write found nothing live to merge into.
+func (m *sessionManager) retire(d *sessionData, mintFailed bool) {
+	if mintFailed {
+		m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
+			"so there is nothing under its id to merge into")
+	} else {
+		m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
+			"writing under it would revive an id that no longer names this session")
+	}
+	d.mu.Lock()
+	d.retired = true
+	d.mu.Unlock()
+}
+
+// loadLive reads the blob under id and reports whether it is still sid's
+// unexpired session. ver is only meaningful when cas is non-nil.
+func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore, id, sid string) (b sessionBlob, ver uint64, live bool, err error) {
+	var (
+		raw []byte
+		ok  bool
+	)
+	if cas != nil {
+		raw, ver, ok, err = cas.LoadVersion(ctx, id)
+	} else {
+		raw, ok, err = m.store.Load(ctx, id)
+	}
+	if err != nil {
+		return b, ver, false, err
+	}
+	// Deliberately no b.Vals != nil clause: get accepts a nil value map as
+	// an empty session, and a store that normalises {} to null would
+	// otherwise yield a session that reads fine and retires on first write.
+	live = ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
+		(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
+	return b, ver, live, nil
+}
+
+// snapshot copies what save needs from d under one lock, or reports false when
+// the handle is already retired.
+func (m *sessionManager) snapshot(d *sessionData) (sid string, own, dirty map[string]json.RawMessage, mintFailed, ok bool) {
 	d.mu.Lock()
 	if d.retired {
 		first := !d.dropLogged
@@ -563,108 +690,10 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
 				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
 		}
-		return false
+		return "", nil, nil, false, false
 	}
-	mintFailed := d.mintFailed
-	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
-	for k, v := range d.dirty {
-		dirty[k] = v
-	}
-	own := make(map[string]json.RawMessage, len(d.vals))
-	for k, v := range d.vals {
-		own[k] = v
-	}
-	d.mu.Unlock()
-
-	ctx, cancel := m.bounded(ctx)
-	defer cancel()
-	cas, _ := m.store.(VersionedSessionStore)
-	for attempt := 0; ; attempt++ {
-		if cas != nil && attempt >= sessionSaveRetries {
-			m.logger().Error("via: session write gave up after CAS attempts — the store is under pathological "+
-				"contention on one session; the write is dropped rather than clobbering the writers "+
-				"that got through", "attempts", sessionSaveRetries)
-			return false
-		}
-		var (
-			raw []byte
-			ver uint64
-			ok  bool
-			err error
-		)
-		if cas != nil {
-			raw, ver, ok, err = cas.LoadVersion(ctx, id)
-		} else {
-			raw, ok, err = m.store.Load(ctx, id)
-		}
-		if err != nil {
-			// Writing d's copy over a store that could not be read is exactly
-			// the clobber this merge exists to avoid.
-			m.logger().Error("via: session store Load failed before save", "err", err)
-			return false
-		}
-		var b sessionBlob
-		// Deliberately no b.Vals != nil clause: get accepts a nil value map as
-		// an empty session, and a store that normalises {} to null would
-		// otherwise yield a session that reads fine and retires on first write.
-		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
-			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
-		if !live && !mint {
-			if mintFailed {
-				m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
-					"so there is nothing under its id to merge into")
-			} else {
-				m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
-					"writing under it would revive an id that no longer names this session")
-			}
-			d.mu.Lock()
-			d.retired = true
-			d.mu.Unlock()
-			return false
-		}
-		vals := make(map[string]json.RawMessage, len(own))
-		for k, v := range own {
-			vals[k] = v
-		}
-		if live && b.Vals != nil {
-			vals = b.Vals
-		}
-		for k, v := range dirty {
-			if v == nil {
-				delete(vals, k)
-				continue
-			}
-			vals[k] = v
-		}
-
-		exp := time.Now().Add(m.ttl)
-		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
-		if err != nil {
-			m.logger().Error("via: session encode failed", "err", err)
-			return false
-		}
-		if cas != nil {
-			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
-			if err != nil {
-				m.logger().Error("via: session store SaveIf failed", "err", err)
-				return false
-			}
-			if !applied {
-				continue // another request wrote first; re-merge onto its blob
-			}
-		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
-			m.logger().Error("via: session store Save failed", "err", err)
-			return false
-		}
-		d.mu.Lock()
-		// The merged view is what this request should read back too: a Tick
-		// handler holding a connect-time snapshot otherwise keeps serving
-		// values another request has since replaced.
-		d.vals, d.exp = vals, exp
-		d.mu.Unlock()
-		m.fanout(d, vals, exp)
-		return true
-	}
+	defer d.mu.Unlock()
+	return d.sid, maps.Clone(d.vals), maps.Clone(d.dirty), d.mintFailed, true
 }
 
 func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
