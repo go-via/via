@@ -565,29 +565,13 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 				"that got through", "attempts", sessionSaveRetries)
 			return false
 		}
-		var (
-			raw []byte
-			ver uint64
-			ok  bool
-			err error
-		)
-		if cas != nil {
-			raw, ver, ok, err = cas.LoadVersion(ctx, id)
-		} else {
-			raw, ok, err = m.store.Load(ctx, id)
-		}
+		b, ver, live, err := m.loadLive(ctx, cas, id, sid)
 		if err != nil {
 			// Writing d's copy over a store that could not be read is exactly
 			// the clobber this merge exists to avoid.
 			m.logger().Error("via: session store Load failed before save", "err", err)
 			return false
 		}
-		var b sessionBlob
-		// Deliberately no b.Vals != nil clause: get accepts a nil value map as
-		// an empty session, and a store that normalises {} to null would
-		// otherwise yield a session that reads fine and retires on first write.
-		live := ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
-			(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
 		if !live && !mint {
 			if mintFailed {
 				m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
@@ -644,6 +628,29 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		m.fanout(d, vals, exp)
 		return true
 	}
+}
+
+// loadLive reads the blob under id and reports whether it is still sid's
+// unexpired session. ver is only meaningful when cas is non-nil.
+func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore, id, sid string) (b sessionBlob, ver uint64, live bool, err error) {
+	var (
+		raw []byte
+		ok  bool
+	)
+	if cas != nil {
+		raw, ver, ok, err = cas.LoadVersion(ctx, id)
+	} else {
+		raw, ok, err = m.store.Load(ctx, id)
+	}
+	if err != nil {
+		return b, ver, false, err
+	}
+	// Deliberately no b.Vals != nil clause: get accepts a nil value map as
+	// an empty session, and a store that normalises {} to null would
+	// otherwise yield a session that reads fine and retires on first write.
+	live = ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
+		(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
+	return b, ver, live, nil
 }
 
 // snapshot copies what save needs from d under one lock, or reports false when
