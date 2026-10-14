@@ -62,8 +62,8 @@ func (p pooledGzip) Close() error {
 	return err
 }
 
-// setEncoders validates an option's encoders and stores them in dst, which a
-// second use of the option finds already set. None means gzip at its default
+// setEncoders validates an option's encoders and stores them in dst. A set dst
+// means the option was passed twice. No encoders means gzip at its default
 // level.
 func setEncoders(dst *[]Encoder, option string, encs []Encoder) {
 	if *dst != nil {
