@@ -578,23 +578,12 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		}
 		vals := mergeVals(own, b, live, dirty)
 		exp := time.Now().Add(m.ttl)
-		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
-		if err != nil {
-			m.logger().Error("via: session encode failed", "err", err)
+		applied, ok := m.persist(ctx, cas, id, sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals}, ver)
+		if !ok {
 			return false
 		}
-		if cas != nil {
-			applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
-			if err != nil {
-				m.logger().Error("via: session store SaveIf failed", "err", err)
-				return false
-			}
-			if !applied {
-				continue // another request wrote first; re-merge onto its blob
-			}
-		} else if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
-			m.logger().Error("via: session store Save failed", "err", err)
-			return false
+		if !applied {
+			continue // another request wrote first; re-merge onto its blob
 		}
 		d.mu.Lock()
 		// The merged view is what this request should read back too: a Tick
@@ -605,6 +594,29 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		m.fanout(d, vals, exp)
 		return true
 	}
+}
+
+// persist encodes and writes b under id. ok is false on a logged failure;
+// applied is false when a CAS store saw a newer version than ver.
+func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore, id string, b sessionBlob, ver uint64) (applied, ok bool) {
+	blob, err := json.Marshal(b)
+	if err != nil {
+		m.logger().Error("via: session encode failed", "err", err)
+		return false, false
+	}
+	if cas != nil {
+		applied, err := cas.SaveIf(ctx, id, blob, m.ttl, ver)
+		if err != nil {
+			m.logger().Error("via: session store SaveIf failed", "err", err)
+			return false, false
+		}
+		return applied, true
+	}
+	if err := m.store.Save(ctx, id, blob, m.ttl); err != nil {
+		m.logger().Error("via: session store Save failed", "err", err)
+		return false, false
+	}
+	return true, true
 }
 
 // mergeVals overlays dirty onto the stored values when b is live, else onto
