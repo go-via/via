@@ -1476,7 +1476,7 @@ as a re-read of the README rather than a diff.
 - A session that idles past its TTL while a live stream is open turns every
   later dispatch on that tab into a 403 "session mismatch" until the page is
   reloaded — the stream itself does not keep the session warm.
-  **Unreleased:** the 403 lasts at most one keepalive (25s), then the stream
+  **Since v0.9.0:** the 403 lasts at most one keepalive (25s), then the stream
   ends and the tab reloads. The stream still does not keep the session warm.
 - A `View` that panics part-way through a live push's display render can lose
   exactly one later `Signal.Set`. `Signal.bind` stamps the signal's dirty sink
@@ -1519,7 +1519,7 @@ as a re-read of the README rather than a diff.
   stream, and `Rotate` on it is refused rather than re-issuing a cookie over
   the one the browser now holds. Reads still serve the connect-time snapshot.
   Reconnecting the stream picks up the new id.
-  **Unreleased:** a `Rotate` ends the stream of every other tab on the session,
+  **Since v0.9.0:** a `Rotate` ends the stream of every other tab on the session,
   the rotating tab's handles follow the new id, and a session write reaches
   every tab's `Tick` and `Listen` handlers. A `Rotate` in another process
   sharing the store is seen on the next keepalive, so for up to 25s those
