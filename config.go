@@ -360,12 +360,7 @@ func WithMaxUpload(bytes int64) Option {
 // Compression makes a response's length depend on its content, which is what
 // BREACH reads: keep long-lived secrets out of rendered output.
 func WithPageCompression(encs ...Encoder) Option {
-	return func(c *config) {
-		if c.pageEnc != nil {
-			panic("via: conflicting WithPageCompression options; pass one")
-		}
-		c.pageEnc = encoderList("WithPageCompression", encs)
-	}
+	return func(c *config) { setEncoders(&c.pageEnc, "WithPageCompression", encs) }
 }
 
 // WithSSECompression compresses the live SSE stream the way
@@ -375,12 +370,7 @@ func WithPageCompression(encs ...Encoder) Option {
 // brotli window (LGWin) or the gzip level for that. It panics like
 // WithPageCompression.
 func WithSSECompression(encs ...Encoder) Option {
-	return func(c *config) {
-		if c.sseEnc != nil {
-			panic("via: conflicting WithSSECompression options; pass one")
-		}
-		c.sseEnc = encoderList("WithSSECompression", encs)
-	}
+	return func(c *config) { setEncoders(&c.sseEnc, "WithSSECompression", encs) }
 }
 
 // WithUnsafeEval adds 'unsafe-eval' to every mount's script-src, for a
