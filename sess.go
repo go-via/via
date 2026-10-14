@@ -576,21 +576,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			m.retire(d, mintFailed)
 			return false
 		}
-		vals := make(map[string]json.RawMessage, len(own))
-		for k, v := range own {
-			vals[k] = v
-		}
-		if live && b.Vals != nil {
-			vals = b.Vals
-		}
-		for k, v := range dirty {
-			if v == nil {
-				delete(vals, k)
-				continue
-			}
-			vals[k] = v
-		}
-
+		vals := mergeVals(own, b, live, dirty)
 		exp := time.Now().Add(m.ttl)
 		blob, err := json.Marshal(sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals})
 		if err != nil {
@@ -619,6 +605,24 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		m.fanout(d, vals, exp)
 		return true
 	}
+}
+
+// mergeVals overlays dirty onto the stored values when b is live, else onto
+// own. A nil value in dirty is a tombstone.
+func mergeVals(own map[string]json.RawMessage, b sessionBlob, live bool, dirty map[string]json.RawMessage) map[string]json.RawMessage {
+	vals := make(map[string]json.RawMessage, len(own))
+	maps.Copy(vals, own)
+	if live && b.Vals != nil {
+		vals = b.Vals
+	}
+	for k, v := range dirty {
+		if v == nil {
+			delete(vals, k)
+			continue
+		}
+		vals[k] = v
+	}
+	return vals
 }
 
 // retire marks d's id dead after a write found nothing live to merge into.
