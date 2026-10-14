@@ -622,10 +622,10 @@ func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore,
 // mergeVals overlays dirty onto the stored values when b is live, else onto
 // own. A nil value in dirty is a tombstone.
 func mergeVals(own map[string]json.RawMessage, b sessionBlob, live bool, dirty map[string]json.RawMessage) map[string]json.RawMessage {
-	vals := make(map[string]json.RawMessage, len(own))
-	maps.Copy(vals, own)
-	if live && b.Vals != nil {
-		vals = b.Vals
+	vals := b.Vals
+	if !live || vals == nil {
+		vals = make(map[string]json.RawMessage, len(own))
+		maps.Copy(vals, own)
 	}
 	for k, v := range dirty {
 		if v == nil {
