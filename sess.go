@@ -573,16 +573,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 			return false
 		}
 		if !live && !mint {
-			if mintFailed {
-				m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
-					"so there is nothing under its id to merge into")
-			} else {
-				m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
-					"writing under it would revive an id that no longer names this session")
-			}
-			d.mu.Lock()
-			d.retired = true
-			d.mu.Unlock()
+			m.retire(d, mintFailed)
 			return false
 		}
 		vals := make(map[string]json.RawMessage, len(own))
@@ -628,6 +619,20 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		m.fanout(d, vals, exp)
 		return true
 	}
+}
+
+// retire marks d's id dead after a write found nothing live to merge into.
+func (m *sessionManager) retire(d *sessionData, mintFailed bool) {
+	if mintFailed {
+		m.logger().Error("via: session write dropped — the store rejected this session's first write, " +
+			"so there is nothing under its id to merge into")
+	} else {
+		m.logger().Warn("via: session id retired (rotated away or expired); write dropped — " +
+			"writing under it would revive an id that no longer names this session")
+	}
+	d.mu.Lock()
+	d.retired = true
+	d.mu.Unlock()
 }
 
 // loadLive reads the blob under id and reports whether it is still sid's
