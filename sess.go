@@ -550,31 +550,10 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 const sessionSaveRetries = 8
 
 func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
-	d.mu.Lock()
-	if d.retired {
-		first := !d.dropLogged
-		d.dropLogged = true
-		d.mu.Unlock()
-		if first {
-			// Every other drop in save() logs its own cause; this branch is the
-			// short-circuit for a handle already known to be retired, and was
-			// the one path that lost a user's Put in silence. Session.Put
-			// returns nothing, so the log is the only place the drop surfaces.
-			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
-				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
-		}
+	sid, own, dirty, mintFailed, ok := m.snapshot(d)
+	if !ok {
 		return false
 	}
-	mintFailed := d.mintFailed
-	sid, dirty := d.sid, make(map[string]json.RawMessage, len(d.dirty))
-	for k, v := range d.dirty {
-		dirty[k] = v
-	}
-	own := make(map[string]json.RawMessage, len(d.vals))
-	for k, v := range d.vals {
-		own[k] = v
-	}
-	d.mu.Unlock()
 
 	ctx, cancel := m.bounded(ctx)
 	defer cancel()
@@ -665,6 +644,28 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		m.fanout(d, vals, exp)
 		return true
 	}
+}
+
+// snapshot copies what save needs from d under one lock, or reports false when
+// the handle is already retired.
+func (m *sessionManager) snapshot(d *sessionData) (sid string, own, dirty map[string]json.RawMessage, mintFailed, ok bool) {
+	d.mu.Lock()
+	if d.retired {
+		first := !d.dropLogged
+		d.dropLogged = true
+		d.mu.Unlock()
+		if first {
+			// Every other drop in save() logs its own cause; this branch is the
+			// short-circuit for a handle already known to be retired, and was
+			// the one path that lost a user's Put in silence. Session.Put
+			// returns nothing, so the log is the only place the drop surfaces.
+			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
+				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
+		}
+		return "", nil, nil, false, false
+	}
+	defer d.mu.Unlock()
+	return d.sid, maps.Clone(d.vals), maps.Clone(d.dirty), d.mintFailed, true
 }
 
 func (m *sessionManager) create(ctx context.Context) (string, *sessionData) {
