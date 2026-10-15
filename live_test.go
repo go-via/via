@@ -229,7 +229,7 @@ func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 	})
 }
 
-// chatChild mirrors internal/example/chat (string messages) for an httptest fan-out
+// chatChild mirrors the chat example (string messages) for an httptest fan-out
 // check: a Send on one connection must reach every connection via the Topic.
 type chatRoom struct{ bus *topic.Topic[string] }
 
@@ -1121,7 +1121,7 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 // the first thing its viewer count has to reflect. The Listen starters used to
 // run inside runStream — i.e. after every OnConnect — so the join was published
 // into a topic this unit had not subscribed to yet: a fresh tab showed the
-// pre-join count until some other tab joined or left. internal/example/chat's presence
+// pre-join count until some other tab joined or left. The chat example's presence
 // count had exactly this defect.
 
 type connectPublisher struct {

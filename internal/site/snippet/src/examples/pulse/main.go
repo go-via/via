@@ -32,18 +32,22 @@ func (p *Pulse) View() h.H {
 	)
 }
 
+// snippet:start meta
 // PageMeta carries the page's own stylesheet: Assets is CSP-governed, so
 // declaring it here is what gets its sha256 into style-src.
 func (Pulse) PageMeta() via.Meta {
 	return via.Meta{
 		Title:       "Server pulse",
 		Description: "A live server pulse, pushed over SSE.",
-		Assets: via.Assets{Styles: []via.Style{{Inline: `[data-via-connection="offline"] body{opacity:.5}` +
-			`[data-via-connection="offline"] #pulse-state::after{content:" (disconnected)"}` +
-			`[data-via-connection="connecting"] #pulse-state::after{content:" (reconnecting...)"}`}},
-		},
+		Assets: via.Assets{Styles: []via.Style{{
+			Inline: `[data-via-connection="offline"] body{opacity:.5}` +
+				`[data-via-connection="offline"] #pulse-state::after{content:" (disconnected)"}` +
+				`[data-via-connection="connecting"] #pulse-state::after{content:" (reconnecting...)"}`,
+		}}},
 	}
 }
+
+// snippet:end
 
 func main() {
 	// via publishes the live connection's state as data-via-connection on

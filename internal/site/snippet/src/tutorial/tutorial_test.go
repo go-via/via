@@ -33,7 +33,7 @@ func TestSteps_build(t *testing.T) {
 
 func TestLastStep_matchesTheChatExampleWithoutComments(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, code(t, "../../../../example/chat/main.go"), code(t, steps[len(steps)-1]+"/main.go"))
+	assert.Equal(t, code(t, "../examples/chat/main.go"), code(t, steps[len(steps)-1]+"/main.go"))
 }
 
 // code prints a file's syntax tree, which drops its comments and normalises

@@ -1,20 +1,4 @@
-# Compiled example programs land at the repo root with no extension (e.g.
-# `chat` from `go build ./internal/example/chat`). gitignore has no
-# "no-extension" glob, so: ignore every root-level entry, then re-include
-# directories, any file that HAS an extension, and LICENSE (the only
-# extensionless tracked file). Net effect — extensionless root files (build
-# artifacts) are ignored, everything else is tracked as normal.
-#
-# NB: this also ignores a new extensionless root file you DO want tracked
-# (e.g. Makefile, Dockerfile); add an explicit `!/Makefile` line for those.
-/*
-!/*/
-!/*.*
-!/LICENSE
-
-# Cross-platform binaries / plugins. Listed after the block above so they
-# re-assert the ignore for root files the blanket `!/*.*` would otherwise
-# un-ignore, and so they apply inside subdirectories too.
+# Cross-platform binaries / plugins
 *.exe
 *.exe~
 *.dll
@@ -47,9 +31,6 @@ go.work.sum
 
 # Air artifacts
 *tmp/
-
-# Nested example/showcase build outputs (root-level ones are caught by /* above).
-/viashowcase/showcase
 
 # Research clones (not part of the project)
 /.research/
