@@ -512,16 +512,16 @@ cannot be observed through the public surface even with `vt`, that is a design
 signal — change the surface, not the test boundary.
 
 Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
-(the reflect allowlist, the no-`&`/no-closure guard over the examples, the
-guard that keeps `internal/render`'s binder plumbing off every public
-package, and the black-box test lint) parse the tree and assert on what it
-says, so they pair with every source file and therefore with none. A failure
+(the reflect allowlist, the no-`&`/no-closure guard over the site's demos and
+snippets, the guard that keeps `internal/render`'s binder plumbing off every
+public package, and the black-box test lint) parse the tree and assert on what
+it says, so they pair with every source file and therefore with none. A failure
 there means the source drifted from a design rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A
-test-only directory (`demos/storetest`, `snippet/src/examples`,
-`snippet/src/tutorial`) has no source to pair with.
+test-only directory (`demos/storetest`, `snippet/src/tutorial`) has no
+source to pair with.
 
 ### No tests of package main
 
@@ -539,9 +539,22 @@ importing them (`snippet/src/tutorial`) is not beside one, so it passes.
 
 ### Internal Packages
 
-Rule: Use `internal/` for code that must not be imported by consumers
-but is shared across packages within the module. Do not use `internal/`
-as a dumping ground — the same responsibility rules apply.
+Reasoning: Go keeps a type's methods in the type's package, so every public
+type, and the code bound to it, stays in root `via`. Code that never touches
+those types can still be fenced off, and a package boundary is the only fence
+the compiler checks.
+
+Rule: Use `internal/` for code that must not be imported by consumers and
+either is shared across packages within the module, or is split out of root
+to hide one decision. A package split out of root never imports `via` and
+imports a sibling only where a lint allows it. Do not use `internal/` as a
+dumping ground — the same responsibility rules apply.
+
+- ✅ `internal/render` holds the binder plumbing that root, `h` and `on`
+  share.
+- ✅ A package that owns the session cookie and blob layout, imported only
+  by root.
+- ❌ An `internal/util` that collects helpers from several concerns.
 
 ## Behaviour Changes Carry Their Docs
 
@@ -568,6 +581,26 @@ each detail. Tests pin its program to the snippet, its Go version to
 - ✅ "A page is plain HTTP until something on it goes live; then its tab
   holds one stream", linking to /live.
 - ❌ "The current release is v0.8.3", or a copy of /why's list of costs.
+
+## Release Tags
+
+Reasoning: Go reads a nested module's version only from a tag prefixed with
+its directory. A module released without one has only pseudo-versions and no
+pkg.go.dev page, and links to it break. The Go proxy keeps a pushed version
+for good, so a tag cannot be taken back.
+
+Rule: A release tags every importable module in the repo on the same commit,
+annotated: `vX.Y.Z` for root and `<dir>/vX.Y.Z` for each nested module whose
+path sits under `github.com/go-via/via`. On that commit, each nested
+`go.mod` requires the root at `vX.Y.Z`. Push all of a release's tags
+together. A wrong tag is fixed by a new patch version, never by moving or
+deleting it. A module with a path outside the repo's, like `internal/site`,
+is deployed, not imported, so it gets no tag.
+
+- ✅ `v0.9.1` and `vtbrowser/v0.9.1` on `6e37e04`, whose `vtbrowser/go.mod`
+  requires `via v0.9.1`.
+- ❌ Tag `v0.9.2` alone: `go get .../vtbrowser@v0.9.2` fails, and
+  pkg.go.dev shows `vtbrowser` at v0.9.1.
 
 ## Markdown
 

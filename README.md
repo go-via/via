@@ -116,8 +116,7 @@ Live state is held on the server.
 
 - [Getting started](https://go-via.dev/start)
 - [Tutorial](https://go-via.dev/tutorial)
-- [Examples](https://go-via.dev/examples), with their source in
-  [`internal/example`](internal/example/README.md)
+- [Examples](https://go-via.dev/examples)
 - [API reference](https://go-via.dev/reference), and
   [pkg.go.dev](https://pkg.go.dev/github.com/go-via/via)
 - [Deploy](https://go-via.dev/deploy)

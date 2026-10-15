@@ -7,6 +7,12 @@
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
   shorthand `encode br zstd gzip` runs it at quality 0, so each stream frame
   is compressed on its own (145 bytes against 13).
+- `vtbrowser` has its own tags from v0.9.1 (`vtbrowser/v0.9.1`), so
+  `go get github.com/go-via/via/vtbrowser@v0.9.1` works and pkg.go.dev lists it.
+- `internal/example` is gone. The site's demos already showed greeting, feed,
+  shared, dashboard and poll. pulse moved next to counter, chat and forum in
+  `internal/site/snippet/src/examples`, and `/examples` lists those four with
+  a `go run` from `internal/site`.
 
 ## v0.9.1 — compression, <html> and <body> attributes (2026-10-13)
 

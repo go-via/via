@@ -12,11 +12,11 @@ type Examples struct{ page }
 func NewExamples(env Env) Examples { return Examples{page: newPage("/examples", env)} }
 
 func (p *Examples) PageMeta() via.Meta {
-	return p.meta("Nine runnable via programs, from a one-action counter to a multi-page forum, each with its source and the command to run it.")
+	return p.meta("Four runnable via programs, from a one-action counter to a multi-page forum, each with its source and the command to run it.")
 }
 
 // exampleTree is the directory view on GitHub, since forum spans two files.
-const exampleTree = "https://github.com/go-via/via/tree/main/internal/example/"
+const exampleTree = "https://github.com/go-via/via/tree/main/internal/site/snippet/src/examples/"
 
 type example struct {
 	name    string
@@ -35,29 +35,25 @@ func (p *Examples) View() h.H {
 			}
 			cells = append(cells, []h.H{
 				h.Span(h.Strong(h.Str(e.name)), h.Br(), h.Small(append([]h.H{h.Class("ex-links")}, links...)...)),
-				h.Div(h.Div(e.teaches), h.Div(Code("go run ./internal/example/"+e.name))),
+				h.Div(h.Div(e.teaches), h.Div(Code("go run ./snippet/src/examples/"+e.name))),
 			})
 		}
 		return table([]string{"Example", "What it teaches"}, cells...)
 	}
 	s := h.Str[string]
 	return d.Page(
-		h.P(s("Nine programs under "), Code("internal/example"), s(", each one "), Code("main"),
-			s(" package with no dependency past via. Run them from a checkout of the repo; each listens on "),
+		h.P(s("Four programs under "), Code("internal/site/snippet/src/examples"), s(", each one "), Code("main"),
+			s(" package with no dependency past via. Run them from "), Code("internal/site"),
+			s(" in a checkout of the repo; each listens on "),
 			Code(":8080"), s(", or on "), Code("VIA_ADDR"), s(" when set, so two can run side by side.")),
-		snippet.Text("", "git clone https://github.com/go-via/via\ncd via\ngo run ./internal/example/counter"),
+		snippet.Text("", "git clone https://github.com/go-via/via\ncd via/internal/site\ngo run ./snippet/src/examples/counter"),
 
 		d.H2("First steps"),
-		h.P(s("Read these three in order. Each adds one idea to the one before.")),
+		h.P(s("Read these two in order. The second adds what the first leaves out: state the server pushes.")),
 		rows(
 			example{name: "counter", demo: "/", teaches: h.Span(
 				s("The whole model with nothing live: a struct, a "), Code("View"), s(" method, handler methods, and "),
 				API("on.Click"), s(" wiring them. A click POSTs, the handler mutates a store, the page morphs.")),
-			},
-			example{name: "greeting", demo: "/signals#greeting", teaches: h.Span(
-				s("A "), API("via.Signal"), s(": state in the browser. "), API("via.Signal.Bind"), s(" and "),
-				API("via.Signal.Display"), s(" share one wire name, so typing updates the text with no request. "),
-				API("via.Signal.Ref"), s(" feeds "), API("h.DataShow"), s(".")),
 			},
 			example{name: "pulse", demo: "/live#pulse", teaches: h.Span(
 				s("A "), API("via.State"), s(": state on the server, pushed over SSE by "), API("via.Ctx.Tick"),
@@ -68,23 +64,13 @@ func (p *Examples) View() h.H {
 		snippet.Region("examples/counter/main.go", "model", snippet.Title("counter/main.go"), snippet.Mark("on.Click")),
 		h.P(s("The store is a plain dependency held by pointer, so every tab reads the same count; a second tab "+
 			"sees a change on its next click or reload, since nothing in counter streams.")),
+		snippet.Region("examples/pulse/main.go", "meta", snippet.Title("pulse/main.go"), snippet.Mark("Inline:")),
+		h.P(s("via sets "), Code("data-via-connection"), s(" on "), Code("<html>"), s(" while the stream is "+
+			"connecting or offline, so one inline style is pulse's whole answer to a drop. The style is in "),
+			API("via.Assets"), s(", so its sha256 is in the page's CSP.")),
 
 		d.H2("Live"),
-		h.P(s("Pick by what you need to push.")),
 		rows(
-			example{name: "shared", demo: "/live#shared-counter", teaches: h.Span(
-				s("An app-owned value every tab follows. "), API("via.StateTrack"),
-				s(" on the field literal follows a "), API("topic.Topic"), s(", so the page has no OnInit at all.")),
-			},
-			example{name: "feed", demo: "/live#broadcast-feed", teaches: h.Span(
-				API("via.Ctx.Listen"), s(" on a "), API("topic.Topic"),
-				s(": a server goroutine publishes and every connected tab lists each value, keeping the newest ten.")),
-			},
-			example{name: "dashboard", demo: "/islands#sparkline-on-a-clock", teaches: h.Span(
-				s("Several live units on one stream, each patching only itself. A canvas island fed by "),
-				API("via.Signal.Set"), s(" on a signal the View never binds, and a client-only "), API("via.SignalCS"),
-				s(" seeded by a "), Code(`via:"init=..."`), s(" tag.")),
-			},
 			example{name: "chat", demo: "/tutorial#live-chat", teaches: h.Span(
 				s("Both topic shapes: "), API("via.Ctx.Listen"), s(" appends each message to a "), API("via.List"),
 				s(", "), API("via.State.Track"), s(" follows the head-count. "), API("via.Ctx.OnConnect"), s(" and "),
@@ -99,11 +85,6 @@ func (p *Examples) View() h.H {
 
 		d.H2("Apps"),
 		rows(
-			example{name: "poll", demo: "/actions#arguments", teaches: h.Span(
-				s("A list that re-sorts on every render. "), API("on.Bind"),
-				s(" carries each row's id, so a vote lands on the option clicked, wherever it now sits. "),
-				API("h.DataAttr"), s(" disables the add button while the draft is empty.")),
-			},
 			example{name: "forum", demo: "/security#sign-in-sign-out",
 				teaches: h.Span(
 					API("via.NewRouter"), s(" and "), API("via.Mount"), s(" across five pages: sessions, "),

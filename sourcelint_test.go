@@ -1,7 +1,7 @@
 package via_test
 
 // These are source-text lints, not behaviour tests. They parse via's own and
-// the examples' .go files and assert on what is written there — the identifiers
+// the site's demo and snippet .go files and assert on what is written there — the identifiers
 // used, the shape of an argument at a call site. Nothing here exercises the
 // running system, and a rename or a refactor can break one without anything
 // being wrong with via; that is the price of guarding a design constraint the
@@ -11,7 +11,7 @@ package via_test
 //
 // Each one guards a promise made in the README and the docs:
 //   - reflection-free wiring (the reflect allowlist)
-//   - no '&' and no closures where via takes a handler (the example lint)
+//   - no '&' and no closures where via takes a handler (the call-site lint)
 //   - no binder plumbing on any public package (it stays in internal/render)
 //   - black-box tests, and none of package main (CONVENTIONS.md)
 
@@ -53,43 +53,35 @@ var handlerSites = map[string]bool{
 	viaPkg + ".Ctx.OnDispose": true, viaPkg + ".Ctx.Listen": false,
 }
 
-func TestExamples_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
+func TestDemos_takeNoAddressOfOrClosureAtViaCallSites(t *testing.T) {
 	t.Parallel()
-	// The site's demos and snippets are held to the same rule: each is shown
-	// verbatim as documentation of the call-site shape. internal/site is its
-	// own module, so it is listed from its own directory.
-	for _, mod := range []struct {
-		dir      string
-		patterns []string
-	}{
-		{".", []string{"./internal/example/..."}},
-		{filepath.Join("internal", "site"), []string{"./demos/...", "./snippet/src/..."}},
-	} {
-		listed := listPackages(t, mod.dir, mod.patterns...)
-		fset := token.NewFileSet()
-		imp := exportImporter(fset, listed)
-		var linted int
-		for _, p := range listed {
-			if p.DepOnly {
-				continue
-			}
-			linted++
-			t.Run(p.ImportPath, func(t *testing.T) {
-				var files []*ast.File
-				for _, name := range p.GoFiles {
-					f, err := parser.ParseFile(fset, filepath.Join(p.Dir, name), nil, 0)
-					require.NoError(t, err)
-					files = append(files, f)
-				}
-				info, err := typeCheck(fset, imp, p.ImportPath, files)
-				require.NoError(t, err)
-				for _, v := range callSiteViolations(fset, files, info) {
-					assert.Fail(t, v.msg, "%s", v.pos)
-				}
-			})
+	// Each demo and snippet is shown verbatim as documentation of the
+	// call-site shape. internal/site is its own module, so it is listed from
+	// its own directory.
+	listed := listPackages(t, filepath.Join("internal", "site"), "./demos/...", "./snippet/src/...")
+	fset := token.NewFileSet()
+	imp := exportImporter(fset, listed)
+	var linted int
+	for _, p := range listed {
+		if p.DepOnly {
+			continue
 		}
-		require.NotZero(t, linted, "expected example sources to lint under %s", mod.dir)
+		linted++
+		t.Run(p.ImportPath, func(t *testing.T) {
+			var files []*ast.File
+			for _, name := range p.GoFiles {
+				f, err := parser.ParseFile(fset, filepath.Join(p.Dir, name), nil, 0)
+				require.NoError(t, err)
+				files = append(files, f)
+			}
+			info, err := typeCheck(fset, imp, p.ImportPath, files)
+			require.NoError(t, err)
+			for _, v := range callSiteViolations(fset, files, info) {
+				assert.Fail(t, v.msg, "%s", v.pos)
+			}
+		})
 	}
+	require.NotZero(t, linted, "expected site demos and snippets to lint")
 }
 
 func TestCallSiteLint_flagsOnlyViaHandlerCallees(t *testing.T) {

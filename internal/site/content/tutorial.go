@@ -8,7 +8,7 @@ import (
 	"go-via.dev/site/snippet"
 )
 
-// Tutorial builds internal/example/chat in five runnable steps.
+// Tutorial builds the chat example in five runnable steps.
 type Tutorial struct {
 	page
 	Chat demos.TutorialChat
@@ -33,7 +33,7 @@ func (p *Tutorial) View() h.H {
 		)
 	}
 	return d.Page(
-		h.P(h.Str("Build the repo's "), h.A(h.Href(exampleTree+"chat"), Code("internal/example/chat")),
+		h.P(h.Str("Build the "), h.A(h.Href(d.Href("/examples")), h.Str("chat example")),
 			h.Str(" from an empty main.go: a room every tab shares, a composer, a send action, a clean shutdown and a "+
 				"live head-count. Each step is the whole file and it builds; highlighted lines are new or changed since "+
 				"the step before. Start in a module that has via, as in "),
@@ -119,7 +119,7 @@ func (p *Tutorial) View() h.H {
 		),
 		h.P(h.Str("Every live unit on a page shares the tab's one SSE stream; actions still POST. "),
 			h.A(h.Href(d.Href("/live")), h.Str("Live state")), h.Str(" covers the rest.")),
-		h.P(h.Str("This file is "), Code("internal/example/chat/main.go"), h.Str(" without its comments, and a test in "+
+		h.P(h.Str("This file is the chat example's "), Code("main.go"), h.Str(" without its comments, and a test in "+
 			"this site's build fails if the two drift. A "), Code("diff"), h.Str(" shows comment lines only.")),
 
 		d.H2("Try it here"),
