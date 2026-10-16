@@ -28,10 +28,11 @@ answers with, so stamp the tag or commit you are shipping:
 ```sh
 cd internal/site
 go vet ./... && go test ./...
+v=$(git describe --tags --match 'v[0-9]*')  # skip vtbrowser/ tags
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -trimpath -ldflags "-s -w -X main.version=$(git describe --tags)" \
+  go build -trimpath -ldflags "-s -w -X main.version=$v" \
   -o .build/site-amd64 .
-ssh user@host 'cat > stage/site-amd64' < .build/site-amd64
+ssh user@host 'mkdir -p stage && cat > stage/site-amd64' < .build/site-amd64
 ```
 
 Use `GOARCH=arm64` for an arm host. `.build/` is gitignored. Compare
