@@ -273,16 +273,10 @@ func (c *tabStream) run(reqCtx context.Context, deadline time.Time, t *parkTicke
 	return <-a.result, runOK
 }
 
-// unitType names the Go type driving this connection, for a log line that has
-// to point at the handler to go read.
-func (c *tabStream) unitType() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if u := c.units[rootAddr]; u != nil && u.unitV.typ != nil {
-		return u.unitV.typ.String()
-	}
-	return "unknown"
-}
+// unitType names the mount's root type, for a log line that has to point at
+// the handler to go read. Not the root unit's: a plain root with a live child
+// registers no root unit.
+func (c *tabStream) unitType() string { return c.mount.newInst().typ.String() }
 
 // warnPinTimer is the pin timer's report, deduped separately from an
 // action's.
