@@ -105,6 +105,7 @@ func answerInit(w http.ResponseWriter, req *http.Request, ctx *Ctx, sse bool, er
 		if _, isMiss := rec.(paramMiss); !isMiss {
 			panic(rec)
 		}
+		noteErr(w, ErrNotFound)
 		http.Error(w, "not found", http.StatusNotFound)
 		*err = ErrNotFound
 		return

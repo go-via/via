@@ -527,3 +527,18 @@ func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the wrapper caught a redirect it must pass through")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
 }
+
+func TestErrorPage_carriesErrNotFoundForAParamOnInitCannotDecode(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/thread/{id}", errParams{})
+	t.Cleanup(r.Close)
+
+	resp, _ := errGet(t, r, "/thread/abc")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrNotFound, "OnInit's Param miss must report what OnReload's does")
+}

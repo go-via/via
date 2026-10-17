@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A `Param` that `OnInit` cannot decode now sets `PageError.Err` to `ErrNotFound`, as the same miss in `OnReload` already did.
 - `h.El` with a void tag in upper case (`"BR"`), or `"base"`, renders without
   a closing tag, as `"br"` already did.
 - `on.WithDebounce` and `on.WithThrottle` with a duration near the maximum no
