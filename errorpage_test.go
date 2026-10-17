@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -633,4 +634,42 @@ func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
 		require.Equal(t, http.StatusSeeOther, resp.StatusCode, path)
 		assert.Equal(t, want, resp.Header.Get("Location"), path)
 	}
+}
+
+type errRotate struct{}
+
+func (errRotate) Out(ctx *via.Ctx) { ctx.Session().Rotate() }
+func (p errRotate) View() h.H      { return h.Button(on.Click(p.Out), h.Str("out")) }
+
+func TestErrorPage_carriesErrStaleTabOnANativeSubmitToAnEndedStream(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(testSessionKey, via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/", errLiveSess{})
+	via.Mount(r, "/out", errRotate{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	page := jarGet(t, c, srv.URL+"/")
+	lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", "")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+	jarPost(t, c, srv.URL+actionURL(t, jarGet(t, c, srv.URL+"/out"), "r", 0))
+	drained := time.After(5 * time.Second)
+	for open := true; open; {
+		select {
+		case _, open = <-lines:
+		case <-drained:
+			require.Fail(t, "the rotate did not end the other tab's stream")
+		}
+	}
+
+	resp, _ := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrStaleTab)
 }
