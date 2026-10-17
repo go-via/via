@@ -513,7 +513,7 @@ type Ctx struct {
 	actions     map[string]action                     // content-addressed action table, keyed by handler identity
 	hydrators   map[string]func(json.RawMessage) bool // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	ticks       []tickReg
-	subs        []subStarter
+	subs        []subscription
 	onConnect   []func() // run once when the stream opens
 	disposers   []func() // run on disconnect
 	live        bool     // OnInit registered a Tick/Listen, or the View rendered server State

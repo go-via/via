@@ -185,18 +185,11 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
-	defer func() {
-		for _, child := range children {
-			for _, d := range child.disposers {
-				runRecovered(log, g, d)
-			}
-		}
-		g.close(log)
-	}()
-	for _, child := range children {
-		for _, t := range child.ticks {
-			startTicker(reqCtx, child, t, pushq)
+func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*Ctx, listeners []subscription, wake chan struct{}, lc *tabStream, interval time.Duration) {
+	defer disposeUnits(log, g, units)
+	for _, u := range units {
+		for _, t := range u.ticks {
+			go runTicker(reqCtx, u, t, lc.pushq)
 		}
 	}
 	beat := time.NewTicker(interval)
@@ -205,23 +198,61 @@ func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, children 
 		select {
 		case <-reqCtx.Done():
 			return
-		case fn := <-pushq:
-			runPushItem(log, g, fn)
+		case it := <-lc.pushq:
+			runPushItem(log, g, it)
 		case <-wake:
 			sweepListeners(log, g, listeners)
 		case <-beat.C:
-			runPushItem(log, g, keepalive)
+			runPushItem(log, g, pushItem{beat: lc})
 		}
+	}
+}
+
+// disposeUnits runs every unit's disposers, then closes the guard.
+func disposeUnits(log *slog.Logger, g *pushGuard, units []*Ctx) {
+	for _, u := range units {
+		for _, d := range u.disposers {
+			runRecovered(log, g, d)
+		}
+	}
+	g.close(log)
+}
+
+// pushItem is one piece of serialized stream work. Exactly one of its work
+// fields is set.
+type pushItem struct {
+	unit   *Ctx         // the unit tick runs against
+	tick   func(*Ctx)   // a Tick handler; the unit is pushed after it
+	listen subscription // a Listen whose backlog was just drained
+	action *liveAction  // a POST's action, handed over by tabStream.run
+	push   *unitPusher  // a bare push, after the unit's OnConnect fns
+	beat   *tabStream   // the keepalive: frame it, then revalidate the session
+}
+
+func (it pushItem) run() {
+	switch {
+	case it.tick != nil:
+		it.tick(it.unit)
+		it.unit.pusher.push()
+	case it.listen != nil:
+		it.listen.deliver()
+	case it.action != nil:
+		it.action.run()
+	case it.push != nil:
+		it.push.push()
+	case it.beat != nil:
+		it.beat.wire.keepalive()
+		it.beat.revalidate()
 	}
 }
 
 // sweepListeners drains every listener once, in registration order, so two
 // Listens fire deterministically instead of racing two reader goroutines;
 // one wake token may stand for any number of pending subscriptions.
-func sweepListeners(log *slog.Logger, g *pushGuard, listeners []listener) {
+func sweepListeners(log *slog.Logger, g *pushGuard, listeners []subscription) {
 	for _, l := range listeners {
-		if work := l.poll(); work != nil {
-			runPushItem(log, g, work)
+		if l.drain() {
+			runPushItem(log, g, pushItem{listen: l})
 		}
 	}
 }
@@ -235,10 +266,11 @@ func sweepListeners(log *slog.Logger, g *pushGuard, listeners []listener) {
 // beat repeats, and ending it would trade a unit that stopped updating for a
 // reload loop that ends in a "Disconnected." banner over units that still
 // work. pushGuard keeps the log to one stack per site.
-func runPushItem(log *slog.Logger, g *pushGuard, fn func()) {
+func runPushItem(log *slog.Logger, g *pushGuard, it pushItem) {
 	g.arm()
 	defer g.disarm()
-	runRecovered(log, g, fn)
+	defer g.recoverPanic(log)
+	it.run()
 }
 
 // runRecovered is runPushItem without the pin timer, for OnDispose: the tab is
@@ -246,12 +278,14 @@ func runPushItem(log *slog.Logger, g *pushGuard, fn func()) {
 // pinned tab. Still recovered, since a disposer is user code and one panicking
 // must not skip the rest and leak what they release.
 func runRecovered(log *slog.Logger, g *pushGuard, fn func()) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			g.panicked(log, rec)
-		}
-	}()
+	defer g.recoverPanic(log)
 	fn()
+}
+
+func (g *pushGuard) recoverPanic(log *slog.Logger) {
+	if rec := recover(); rec != nil {
+		g.panicked(log, rec)
+	}
 }
 
 // panicSummaryEvery bounds how often a panic that repeats at one site is

@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,7 +18,7 @@ import (
 // with that render's bind Ctx — always the render the client's DOM reflects.
 type tabStream struct {
 	mount    *mount          // a tab id is valid only on its mount, never another sharing the router-wide registry
-	pushq    chan func()     // serialization channel, shared by all this connection's units
+	pushq    chan pushItem   // serialization channel, shared by all this connection's units
 	done     <-chan struct{} // closed on disconnect
 	mu       sync.Mutex      // replace runs on the child goroutine, unit is read from the dispatching request's
 	units    map[string]*Ctx // dispatch address → current unit Ctx, at any embedding depth
@@ -242,33 +241,19 @@ func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDe
 // whose goroutine never arrives are told apart rather than collapsed.
 // deadline is the one the action may already have spent parked in
 // registry.enter, so the two waits together never pass the pinned deadline.
-// picked runs as soon as the pickup is decided, handing the tab's turn to the
-// next parked action.
+// t's leave runs as soon as the pickup is decided, handing the tab's turn to
+// the next parked action.
 //
 // res.pushWork runs after result is sent, still on this goroutine: the POST
 // proceeds at once while pushWork stays serialized in the order its mutation
 // ran. A detached goroutine would race other actions' and push out of order.
-func (c *tabStream) run(reqCtx context.Context, deadline time.Time, picked func(), fn func() actionResult) (actionResult, runOutcome) {
-	result := make(chan actionResult, 1)
+func (c *tabStream) run(reqCtx context.Context, deadline time.Time, t *parkTicket, a *liveAction) (actionResult, runOutcome) {
+	a.result = make(chan actionResult, 1)
 	pinned := time.NewTimer(time.Until(deadline))
 	defer pinned.Stop()
 	outcome := runOK
 	select {
-	case c.pushq <- func() {
-		var res actionResult
-		defer func() {
-			if rec := recover(); rec != nil {
-				c.mount.cfg.log.Error("via: live action panic",
-					"tab", c.id, "unit", c.unitType(), "err", rec, "stack", string(debug.Stack()))
-				res = actionResult{panicked: true}
-			}
-			result <- res
-			if res.pushWork != nil {
-				res.pushWork.push()
-			}
-		}()
-		res = fn()
-	}:
+	case c.pushq <- pushItem{action: a}:
 	case <-c.done:
 		outcome = runClosed
 	case <-reqCtx.Done():
@@ -277,15 +262,15 @@ func (c *tabStream) run(reqCtx context.Context, deadline time.Time, picked func(
 		c.warnPinned(&c.pinnedLogged)
 		outcome = runPinned
 	}
-	picked()
+	t.leave()
 	if outcome != runOK {
 		return actionResult{}, outcome
 	}
 	// pushq is unbuffered, so the send above means the stream goroutine is
-	// already running fn, and neither a closing stream nor a hung-up client
-	// stops it. fn writes this request's w (a session cookie, a redirect), so
+	// already running a, and neither a closing stream nor a hung-up client
+	// stops it. a writes this request's w (a session cookie, a redirect), so
 	// returning before it finishes would hand w back to net/http mid-write.
-	return <-result, runOK
+	return <-a.result, runOK
 }
 
 // unitType names the Go type driving this connection, for a log line that has
@@ -491,7 +476,7 @@ func (r *registry) del(id string, tomb time.Duration) {
 type enterOutcome int
 
 const (
-	enterReady     enterOutcome = iota // lc is the stream; call leave once it has taken the action
+	enterReady     enterOutcome = iota // lc is the stream; call the ticket's leave once it has taken the action
 	enterNoStream                      // nothing holds the id and the caller may not park
 	enterGone                          // the server ended the id's stream: 410
 	enterTimeout                       // no stream took the action by the deadline
@@ -510,9 +495,9 @@ const connectWait = 2 * time.Second
 // ahead is returned at once. Otherwise, when park is set, the action joins
 // the slot's queue and waits for its turn at a ready stream: until deadline,
 // and for the stream to register at all, until connectWait at most.
-// leave must be called once the stream has taken the action (or refused it),
-// so the next in line gets its turn.
-func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (lc *tabStream, leave func(), out enterOutcome) {
+// The ticket's leave must be called once the stream has taken the action (or
+// refused it), so the next in line gets its turn.
+func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (lc *tabStream, t *parkTicket, out enterOutcome) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -522,7 +507,7 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 	case s != nil && !s.gone.IsZero():
 		return nil, nil, enterGone
 	case s != nil && s.lc != nil && len(s.queue) == 0:
-		return s.lc, func() {}, enterReady
+		return s.lc, nil, enterReady
 	case !park:
 		return nil, nil, enterNoStream
 	case r.parked >= r.maxParked:
@@ -532,11 +517,7 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 	w := &waiter{}
 	s.queue = append(s.queue, w)
 	r.parked++
-	leave = func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.unpark(id, s, w)
-	}
+	t = &parkTicket{r: r, id: id, s: s, w: w}
 	connectBy := now.Add(connectWait)
 	if deadline.Before(connectBy) {
 		connectBy = deadline
@@ -549,7 +530,7 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 			r.unpark(id, s, w)
 			return nil, nil, enterGone
 		case s.lc != nil && s.queue[0] == w:
-			return s.lc, leave, enterReady
+			return s.lc, t, enterReady
 		}
 		if w.wake == nil {
 			w.wake = make(chan struct{})
@@ -580,6 +561,25 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 		r.unpark(id, s, w)
 		return nil, nil, out
 	}
+}
+
+// parkTicket is an action's place in its tab slot's queue. A nil ticket is an
+// action that never queued, so leave is a no-op.
+type parkTicket struct {
+	r  *registry
+	id string
+	s  *tabSlot
+	w  *waiter
+}
+
+// leave hands the tab's turn to the next action in line.
+func (t *parkTicket) leave() {
+	if t == nil {
+		return
+	}
+	t.r.mu.Lock()
+	defer t.r.mu.Unlock()
+	t.r.unpark(t.id, t.s, t.w)
 }
 
 func (r *registry) unpark(id string, s *tabSlot, w *waiter) {

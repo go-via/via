@@ -14,13 +14,74 @@ type tickReg struct {
 	fn func(*Ctx)
 }
 
-// subStarter subscribes one ctx.Listen onto the connection's shared wake
-// channel and returns the listener runStream polls. Spawns no goroutine.
-type subStarter func(wake chan struct{}) listener
+// subscription is one ctx.Listen, erased of its topic's element type. OnInit
+// records it; only the SSE handler subscribes it.
+type subscription interface {
+	// start subscribes onto the connection's shared wake channel. It spawns no
+	// goroutine.
+	start(wake chan struct{})
+	// drain takes the whole queued backlog and reports whether it was non-empty.
+	drain() bool
+	// deliver runs the handler over the drained backlog, then pushes.
+	deliver()
+}
 
-// listener is one live subscription, erased of its topic's element type. poll
-// takes the whole queued backlog and returns its work item, or nil.
-type listener struct{ poll func() func() }
+type listenSub[T any] struct {
+	c       *Ctx
+	t       *topic.Topic[T]
+	handler func(*Ctx, T)
+	sub     *topic.Sub[T]
+	batch   []T
+}
+
+func (l *listenSub[T]) start(wake chan struct{}) {
+	// This call and runStream's disposer sweep both run on the one stream
+	// goroutine, the start strictly first, so the append needs no lock.
+	l.sub = l.t.Subscribe()
+	l.sub.WakeOn(wake)
+	// Not c.OnDispose: this runs at stream start, long after OnInit returned,
+	// and the public method rejects (and logs) a late call.
+	l.c.disposers = append(l.c.disposers, l.sub.Stop)
+}
+
+// drain takes one batch per push item: values published while the item runs
+// pile up for the next drain, so a burst costs a bounded number of frames.
+func (l *listenSub[T]) drain() bool {
+	l.batch, _ = l.sub.Drain()
+	return len(l.batch) > 0
+}
+
+// deliver pushes only this unit's container, so a fan-out never re-renders a
+// sibling. One recover per value, and the push runs regardless: the batch is a
+// frame-rate optimisation, not a failure domain, so a panic on value k must not
+// swallow k+1..n or the re-render the surviving values earned.
+func (l *listenSub[T]) deliver() {
+	for _, v := range l.batch {
+		l.callHandler(v)
+	}
+	l.batch = nil
+	l.c.pusher.push()
+}
+
+// callHandler recovers per call, so a panicking handler does not tear down
+// the connection's push goroutine.
+func (l *listenSub[T]) callHandler(v T) {
+	defer l.c.recoverListener()
+	l.handler(l.c, v)
+}
+
+func (c *Ctx) recoverListener() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if c.guard != nil {
+		c.guard.panicked(c.logger(), r)
+		return
+	}
+	c.logger().Error("via: panic in a Listen handler",
+		"unit", fmt.Sprintf("%T", c.unitV.v), "err", r, "stack", string(debug.Stack()))
+}
 
 // Tick schedules fn to run every d for the life of the unit's connection, and
 // is one of three things that make a unit live (Listen and rendering a State or
@@ -134,70 +195,24 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 		return
 	}
 	c.live = true
-	c.subs = append(c.subs, func(wake chan struct{}) listener {
-		// This call and runStream's disposer sweep both run on the one stream
-		// goroutine, the starter strictly first, so the append needs no lock.
-		sub := t.Subscribe()
-		sub.WakeOn(wake)
-		// Not c.OnDispose: this runs at stream start, long after OnInit
-		// returned, and the public method rejects (and logs) a late call.
-		c.disposers = append(c.disposers, sub.Stop)
-		return listener{poll: func() func() {
-			batch, _ := sub.Drain()
-			if len(batch) == 0 {
-				return nil
-			}
-			// One push item per batch: values published while this item runs
-			// pile up for the next Drain, so a burst costs a bounded number of
-			// frames. The item pushes only this child's container, so a fan-out
-			// never re-renders a sibling.
-			return func() {
-				// One recover per value, and the push runs regardless: the
-				// batch is a frame-rate optimisation, not a failure domain, so
-				// a panic on value k must not swallow k+1..n or the re-render
-				// the surviving values earned.
-				for _, v := range batch {
-					callListener(c, handler, v)
-				}
-				c.pusher.push()
-			}
-		}}
-	})
+	c.subs = append(c.subs, &listenSub[T]{c: c, t: t, handler: handler})
 }
 
-// callListener recovers per call, so a panicking handler does not tear down
-// the connection's push goroutine.
-func callListener[T any](c *Ctx, handler func(*Ctx, T), v T) {
-	defer func() {
-		if r := recover(); r != nil {
-			if c.guard != nil {
-				c.guard.panicked(c.logger(), r)
-				return
-			}
-			c.logger().Error("via: panic in a Listen handler",
-				"unit", fmt.Sprintf("%T", c.unitV.v), "err", r, "stack", string(debug.Stack()))
-		}
-	}()
-	handler(c, v)
-}
-
-func startTicker(reqCtx context.Context, child *Ctx, t tickReg, pushq chan<- func()) {
-	go func() {
-		tk := time.NewTicker(t.d)
-		defer tk.Stop()
-		for {
+// runTicker queues t on pushq every t.d until reqCtx ends. The item pushes
+// only this unit's container, so a tick never re-renders a sibling.
+func runTicker(reqCtx context.Context, unit *Ctx, t tickReg, pushq chan<- pushItem) {
+	tk := time.NewTicker(t.d)
+	defer tk.Stop()
+	for {
+		select {
+		case <-reqCtx.Done():
+			return
+		case <-tk.C:
 			select {
+			case pushq <- pushItem{unit: unit, tick: t.fn}:
 			case <-reqCtx.Done():
 				return
-			case <-tk.C:
-				// Push only this child's container, so a tick never re-renders
-				// a sibling.
-				select {
-				case pushq <- func() { t.fn(child); child.pusher.push() }:
-				case <-reqCtx.Done():
-					return
-				}
 			}
 		}
-	}()
+	}
 }

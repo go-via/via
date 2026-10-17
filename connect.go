@@ -294,7 +294,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	if m.routerCtx != nil {
 		defer context.AfterFunc(m.routerCtx, stream.end)()
 	}
-	pushq := make(chan func())
 
 	// The credential dispatch requires a match against, so that a leaked tab id
 	// is not on its own a bearer token good from any origin with no session at
@@ -362,13 +361,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		connSID = sessDat.sid
 	}
 
-	// Built before the connect loop so each push closure can register itself as
+	// Built before the connect loop so each pusher can register its unit as
 	// the current unit on every render — a live action always runs against the
 	// last render's actions/hydrators.
 	lc := &tabStream{
 		id:              id,
 		mount:           m,
-		pushq:           pushq,
+		pushq:           make(chan pushItem),
 		done:            streamCtx.Done(),
 		units:           map[string]*Ctx{},
 		sess:            connSID,
@@ -401,22 +400,23 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Subscriptions are started before any OnConnect runs, and their queued
 	// values are drained by runStream below. A unit whose OnConnect publishes
 	// (the "join a room" pattern the hook's doc names) would otherwise miss its
-	// own join: the starters used to run inside runStream, i.e. after every
+	// own join: subscriptions used to start inside runStream, i.e. after every
 	// OnConnect, so the join was published into a topic this unit had not
 	// subscribed to yet and the first frame showed the pre-join world. The
-	// starters stay off the plain-GET path — this is the SSE handler, and
-	// Ctx.Listen still only records a starter closure at OnInit time.
+	// subscriptions stay off the plain-GET path — this is the SSE handler, and
+	// Ctx.Listen only records one at OnInit time.
 	//
 	// One wake channel shared by every subscription: a Listen used to cost a
 	// goroutine per subscription per connection purely to bridge its Ready
 	// channel onto runStream's select. Capacity 1 and coalescing, so a
 	// publisher never blocks and N pending values still cost one sweep.
 	wake := make(chan struct{}, 1)
-	var listeners []listener
+	var listeners []subscription
 	for _, u := range units {
 		u.streamCtx = streamCtx
-		for _, start := range u.subs {
-			listeners = append(listeners, start(wake))
+		for _, l := range u.subs {
+			l.start(wake)
+			listeners = append(listeners, l)
 		}
 	}
 
@@ -476,13 +476,10 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// only if the render moved off the baseline taken before the fns ran.
 	for _, u := range units {
 		if len(u.onConnect) > 0 {
-			runPushItem(m.cfg.log, guard, u.pusher.push)
+			runPushItem(m.cfg.log, guard, pushItem{push: u.pusher})
 		}
 	}
 
 	streaming = true
-	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, pushq, func() {
-		stream.keepalive()
-		lc.revalidate()
-	}, sseHeartbeat)
+	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc, sseHeartbeat)
 }

@@ -285,7 +285,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// for it is on its way, and the plain path could only 410 a live unit.
 	// An address via never renders is not worth a slot.
 	park := tab != "" && validAddr(child) && isActionID(act) && m.issuedTab(tab, tabCredential(m.sessions, req))
-	lc, leave, out := m.reg.enter(req.Context(), m.routerCtx, tab, deadline, park)
+	lc, ticket, out := m.reg.enter(req.Context(), m.routerCtx, tab, deadline, park)
 	switch out {
 	case enterGone:
 		noteErr(w, ErrStaleTab)
@@ -303,7 +303,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		return
 	case enterReady:
 		if lc.mount != m {
-			leave()
+			ticket.leave()
 			// The registry is router-wide, and a tab id from another mount is
 			// otherwise structurally valid here (same field, same action-id
 			// space), so nothing else would fail first.
@@ -316,10 +316,10 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// is safe off the child goroutine, unlike the staleness lookup
 		// dispatchOverStream still does there.
 		if lc.unit(child) != nil {
-			m.dispatchOverStream(w, req, mode, lc, deadline, leave, child, act, in, base)
+			m.dispatchOverStream(w, req, mode, lc, deadline, ticket, child, act, in, base)
 			return
 		}
-		leave()
+		ticket.leave()
 	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
 }
@@ -389,49 +389,8 @@ func formError(req *http.Request, err error) string {
 // wait for the goroutine to pick the action up is bounded by req.Context(), the
 // connection closing and the pinned deadline; an action already running is
 // waited for, since it writes this response.
-func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, picked func(), child string, act string, in map[string]json.RawMessage, base string) {
-	res, outcome := lc.run(req.Context(), deadline, picked, func() actionResult {
-		// The client hung up between the handoff and now: applying the action
-		// would double-apply on its retry, and nobody reads this answer.
-		if req.Context().Err() != nil {
-			return actionResult{gone: "request abandoned"}
-		}
-		// Checked here, not before the closure was posted: a cookieless
-		// dispatch that passed a pre-queue check while the connection was
-		// unbound could be applied after a concurrent live login bound it. Here
-		// the compare and the run are atomic on one serialized goroutine.
-		// Resolved once, here, for both the binding check and the action. The
-		// store error is kept, not discarded: a store that could not answer
-		// yields a nil session, which used to read as "wrong session" (or "no
-		// prior session") rather than an outage.
-		sessID, sess, err := m.sessions.resolve(req)
-		if err != nil {
-			return actionResult{unavailable: "session store unavailable"}
-		}
-		if bound := lc.boundSession(); bound != "" {
-			// A dispatch must carry the same session, compared by sid (a Rotate
-			// moves the cookie id, never the sid). Otherwise a leaked tab id is a
-			// bearer credential good from any request, session or none, once
-			// the origin floor is open.
-			if sess == nil || sess.sid != bound {
-				return actionResult{forbidden: "session mismatch"}
-			}
-		}
-		// Also looked up here, not before the closure was posted: a concurrent
-		// push replaces lc.units, so a unit read earlier could be stale. That
-		// is more than an address mismatch — Signal.bind stamps the dirty sink
-		// at render time, so acting against an older unit attributes the write
-		// to a Ctx nothing downstream reads, silently dropping the patch.
-		u := lc.unit(child)
-		if u == nil || u.unitV.ident != req.URL.Query().Get(unitIdentParam) {
-			return actionResult{gone: "no such child"}
-		}
-		a, ok := u.actions[act]
-		if !ok {
-			return actionResult{gone: m.unknownAction(u, act)}
-		}
-		return liveRunAction(w, req, m.sessions, m.policy, sessID, sess, lc, u, in, a)
-	})
+func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, t *parkTicket, child string, act string, in map[string]json.RawMessage, base string) {
+	res, outcome := lc.run(req.Context(), deadline, t, &liveAction{m: m, w: w, req: req, lc: lc, child: child, act: act, in: in})
 	switch outcome {
 	case runPinned:
 		// 503, not 410: the tab is fine and the action is legitimate — this
@@ -489,6 +448,83 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		return
 	}
 	m.respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
+}
+
+// liveAction is one action POST handed to its tab's stream goroutine.
+type liveAction struct {
+	m      *mount
+	w      http.ResponseWriter
+	req    *http.Request
+	lc     *tabStream
+	child  string
+	act    string
+	in     map[string]json.RawMessage
+	result chan actionResult
+}
+
+// run applies the action, answers the waiting POST, then pushes.
+func (a *liveAction) run() {
+	res := a.applyRecovered()
+	a.result <- res
+	if res.pushWork != nil {
+		res.pushWork.push()
+	}
+}
+
+func (a *liveAction) applyRecovered() (res actionResult) {
+	defer a.recoverPanic(&res)
+	return a.apply()
+}
+
+func (a *liveAction) recoverPanic(res *actionResult) {
+	if rec := recover(); rec != nil {
+		a.lc.mount.cfg.log.Error("via: live action panic",
+			"tab", a.lc.id, "unit", a.lc.unitType(), "err", rec, "stack", string(debug.Stack()))
+		*res = actionResult{panicked: true}
+	}
+}
+
+func (a *liveAction) apply() actionResult {
+	// The client hung up between the handoff and now: applying the action
+	// would double-apply on its retry, and nobody reads this answer.
+	if a.req.Context().Err() != nil {
+		return actionResult{gone: "request abandoned"}
+	}
+	// Checked here, not before the action was posted: a cookieless
+	// dispatch that passed a pre-queue check while the connection was
+	// unbound could be applied after a concurrent live login bound it. Here
+	// the compare and the run are atomic on one serialized goroutine.
+	// Resolved once, here, for both the binding check and the action. The
+	// store error is kept, not discarded: a store that could not answer
+	// yields a nil session, which used to read as "wrong session" (or "no
+	// prior session") rather than an outage.
+	sessID, sess, err := a.m.sessions.resolve(a.req)
+	if err != nil {
+		return actionResult{unavailable: "session store unavailable"}
+	}
+	if bound := a.lc.boundSession(); bound != "" {
+		// A dispatch must carry the same session, compared by sid (a Rotate
+		// moves the cookie id, never the sid). Otherwise a leaked tab id is a
+		// bearer credential good from any request, session or none, once
+		// the origin floor is open.
+		if sess == nil || sess.sid != bound {
+			return actionResult{forbidden: "session mismatch"}
+		}
+	}
+	// Also looked up here, not before the action was posted: a concurrent
+	// push replaces lc.units, so a unit read earlier could be stale. That
+	// is more than an address mismatch — Signal.bind stamps the dirty sink
+	// at render time, so acting against an older unit attributes the write
+	// to a Ctx nothing downstream reads, silently dropping the patch.
+	u := a.lc.unit(a.child)
+	if u == nil || u.unitV.ident != a.req.URL.Query().Get(unitIdentParam) {
+		return actionResult{gone: "no such child"}
+	}
+	act, ok := u.actions[a.act]
+	if !ok {
+		return actionResult{gone: a.m.unknownAction(u, a.act)}
+	}
+	return liveRunAction(a.w, a.req, a.m.sessions, a.m.policy, sessID, sess, a.lc, u, a.in, act)
 }
 
 // liveRunAction hydrates unit's signals from in and runs act. unit is the bind
@@ -884,7 +920,7 @@ func actedViewer(inst instance, u *Ctx) any {
 //
 // Reset are exactly the things a render produces and the next render must
 // produce again (slot order/initials, the action and hydrator tables, the
-// child tree, the rendered bytes and push closure, this dispatch's dirty set
+// child tree, the rendered bytes and pusher, this dispatch's dirty set
 // and redirect), plus the root's OnInit registrations — OnInit does not re-run
 // here and nothing on the plain path consumes them. `live` is not reset: it is
 // auth's verdict, and a later pass may only widen it (I5).
