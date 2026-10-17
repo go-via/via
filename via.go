@@ -578,7 +578,7 @@ type Ctx struct {
 // export, an image) is a sibling net/http handler, registered next to the via
 // one and linked to like any other URL:
 //
-//	mux.Handle("/app/", viaRouter)
+//	mux.Handle("/", viaRouter)
 //	mux.HandleFunc("/files/{id}", serveAttachment) // http.ServeContent, not via
 func (c *Ctx) Request() *http.Request { return c.req }
 

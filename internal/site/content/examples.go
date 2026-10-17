@@ -12,7 +12,7 @@ type Examples struct{ page }
 func NewExamples(env Env) Examples { return Examples{page: newPage("/examples", env)} }
 
 func (p *Examples) PageMeta() via.Meta {
-	return p.meta("Four runnable via programs, from a one-action counter to a multi-page forum, each with its source and the command to run it.")
+	return p.meta("Four runnable via programs, from a two-button counter to a multi-page forum, each with its source and the command to run it.")
 }
 
 // exampleTree is the directory view on GitHub, since forum spans two files.

@@ -40,7 +40,7 @@ type note string
 func (n note) render() h.H { return h.P(h.Str(string(n))) }
 
 // errorPage turns via's plain-text failures into documents. It runs for a
-// mistyped URL as well as for a thread that no longer exists, so it may not
+// mistyped URL as well as for a thread id that is not a number, so it may not
 // assume any page resolved - ctx carries the request and the session, nothing
 // more.
 func errorPage(ctx *via.Ctx, e via.PageError) h.H {
