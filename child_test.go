@@ -1711,7 +1711,7 @@ func (p *tickRootWithPlainForm) View() h.H { return h.Div(via.Child(p.Form)) }
 type plainForm struct{}
 
 func (f *plainForm) Save(*via.Ctx) {}
-func (f *plainForm) View() h.H    { return via.PostForm(f.Save, h.Button(h.Str("save"))) }
+func (f *plainForm) View() h.H     { return via.PostForm(f.Save, h.Button(h.Str("save"))) }
 
 func TestChild_aPlainChildsNativeSubmitAnswersALivePageForALiveRoot(t *testing.T) {
 	t.Parallel()
