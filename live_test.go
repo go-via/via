@@ -1250,7 +1250,7 @@ func TestConnect_anUnchangedTickRenderShipsNoFrame(t *testing.T) {
 
 		// A real change still ships — exactly once.
 		want.Store(7)
-		require.Contains(t, conn.Await("n: 7"), "n: 7")
+		conn.Await("n: 7")
 		time.Sleep(200 * time.Millisecond)
 		synctest.Wait()
 		assert.Zero(t, countFrames(conn, "n: 7"),

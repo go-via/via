@@ -696,8 +696,8 @@ func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *
 	status, _ := app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 
-	assert.Contains(t, conn.Await("grand=here"), "grand=here",
-		"a hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing")
+	// A hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing.
+	conn.Await("grand=here")
 }
 
 // flipChild's own action count depends on a pointer shared with its parent —

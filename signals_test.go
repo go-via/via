@@ -435,8 +435,8 @@ func TestSignal_childFieldPrefixSurvivesALivePush(t *testing.T) {
 
 	conn := app.Connect()
 	defer conn.Close()
-	assert.Contains(t, conn.Await(`data-bind="room__draft"`), `data-bind="room__draft"`,
-		"the push must mint the same field-path slot the first paint did")
+	// The push must mint the same field-path slot the first paint did.
+	conn.Await(`data-bind="room__draft"`)
 }
 
 // gatedFlag is the shape the writable-slot rule exists for: a Signal an OnInit

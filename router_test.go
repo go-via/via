@@ -1201,8 +1201,8 @@ func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
 
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Less(t, code, 300)
-	assert.Contains(t, conn.Await("n=1"), "n=1",
-		"the pushed frame must carry post-action data, not the connect-time snapshot")
+	// The pushed frame must carry post-action data, not the connect-time snapshot.
+	conn.Await("n=1")
 }
 
 // reloadNotFound models the row an action just deleted: OnReload says the page's

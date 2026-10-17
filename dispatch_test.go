@@ -878,7 +878,7 @@ func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.
 
 	code, _ = app.Action(2).Over(conn).Body(`{"mode":"x","name":"bob"}`).Fire()
 	require.Less(t, code, 300)
-	assert.Contains(t, conn.Await("seen: saw:bob"), "seen: saw:bob")
+	conn.Await("seen: saw:bob")
 }
 
 func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
@@ -1518,7 +1518,8 @@ func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 	// where the connect body is allowed to show.
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, code, "the ungated action must still work")
-	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE what its own signals opened")
+	// The client may still SEE what its own signals opened.
+	conn.Await("nuke")
 
 	for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 		url := conn.ActionURL("r", n)
@@ -1540,7 +1541,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) 
 	// allowed to call — the second door, and the one a connect-only fix misses.
 	code, _ := app.Action(0).Over(conn).Body(`{"isAdmin":true}`).Fire()
 	require.Equal(t, http.StatusNoContent, code)
-	require.Contains(t, conn.Await("nuke"), "nuke")
+	conn.Await("nuke")
 
 	for n := 1; n <= 2; n++ {
 		url := conn.ActionURL("r", n)
@@ -1624,7 +1625,8 @@ func TestDispatchPlain_aLivePagesConjuredChildIsNotDispatchable(t *testing.T) {
 
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, code, "the root's own action must still work")
-	require.Contains(t, conn.Await("reveal"), "reveal", "the client may still SEE what its own signal conjured")
+	// The client may still SEE what its own signal conjured.
+	conn.Await("reveal")
 
 	// Secret is a plain via.Child of a live root, so it never gets its own
 	// stream registration (only the root does) — this POST falls to
@@ -1723,7 +1725,8 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		// The forgery rides on an action Priv IS allowed to call.
 		code, _ := app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, code)
-		require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
+		// The client may still SEE the branch its own signals opened.
+		conn.Await("nuke")
 
 		for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 			url := conn.ActionURL("0", n)
@@ -1812,10 +1815,10 @@ func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
 	app := vt.Serve(t, via.Handler(tickSetsBoundSignal{}))
 	conn := app.ConnectWith(`{"n":7}`)
 
-	assert.Contains(t, conn.Await(`"n":3`), `"n":3`,
-		"the signal patch must carry the server's value, not the client's posted 7")
-	assert.Contains(t, conn.Await(">3<"), ">3<",
-		"the display render must not paint the client's posted 7 back over the server's value")
+	// The signal patch must carry the server's value, not the client's posted 7.
+	conn.Await(`"n":3`)
+	// The display render must not paint the client's posted 7 back over the server's value.
+	conn.Await(">3<")
 }
 
 type dirtyAfterPanic struct{ X via.Signal[int] }
@@ -1850,8 +1853,8 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 	status, _ = app.Action(1).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 
-	assert.Contains(t, conn.Await(`"x":1`), `"x":1`,
-		"the panicking action's Set must still reach the client on the next push")
+	// The panicking action's Set must still reach the client on the next push.
+	conn.Await(`"x":1`)
 	frame := conn.Await(">1<")
 	assert.Contains(t, frame, ">1<",
 		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
@@ -2182,8 +2185,8 @@ func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 			// connect body to the live instance. The second is the one whose
 			// handler reads the instance afterwards.
 			bus.Publish("one")
-			require.Contains(t, conn.Await(">ATTACKER<"), ">ATTACKER<",
-				"the client must still SEE what it posted")
+			// The client must still SEE what it posted.
+			conn.Await(">ATTACKER<")
 
 			bus.Publish("two")
 			frame := conn.Await("/two]")
