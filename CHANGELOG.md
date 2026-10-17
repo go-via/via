@@ -9,6 +9,11 @@
   slices the `With*` constructors' results is unchanged; nothing outside via
   could build one by hand, since the config they set is unexported.
 
+- `Ctx.OnDispose` called from `OnReload` logs "OnDispose called from OnReload
+  — ignored", as Tick, Listen and OnConnect already did. It used to be ignored
+  without a word. `State.Track` from `OnReload` now names OnReload in its
+  warning instead of "after OnInit returned".
+
 ### Documented (behaviour unchanged)
 
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the

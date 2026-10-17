@@ -36,7 +36,7 @@ var overrides = map[string]string{
 	"via.ListOf":          "Seeds a List from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.StateTrack":      "A State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, then follows the topic. For a source fixed at mount; State.Track in OnInit is for one that depends on the request.",
 
-	"via.Ctx":                  "The per-request binder, handed to every callback but View. It is not safe for concurrent use: call it only from the via callback it was given to.",
+	"via.Ctx":                  "The per-request binder, handed to OnInit, OnReload, actions, Tick and Listen handlers and the error page. It is not safe for concurrent use: call it only from the via callback it was given to.",
 	"via.Ctx.Param":            "The mount pattern's named segment, decoded into T. A segment that will not decode answers 404 rather than a zero value, and naming a segment the pattern does not have panics.",
 	"via.Ctx.Request":          "The request behind this render. Its query string is populated on the GET and empty on every action, because an action's URL is the mount pattern and nothing else.",
 	"via.Ctx.Context":          "The context bounding this unit's work: the stream's on a live unit, the request's otherwise. Never nil. Watch it in a Tick or Listen handler to abandon a slow call against a dead socket.",
@@ -66,12 +66,12 @@ var overrides = map[string]string{
 	"via.WithLogger":              "Routes via's own diagnostics to l. Default is slog.Default().",
 	"via.WithUnsafeEval":          "Adds 'unsafe-eval' to every page's script-src, for a library that compiles code from strings. The nonce and hashes stay. While set, via logs a warning at startup: a string that reaches eval, Function or setTimeout(string) runs as script.",
 
-	"via.ErrNotFound":  "Return it from OnInit when the data the page needs no longer exists: the request was honest, so the answer is 404, not 500. Wrap it freely; errors.Is matches.",
+	"via.ErrNotFound":  "Return it from OnInit or OnReload when the data the page needs no longer exists: the request was honest, so the answer is 404, not 500. Wrap it freely; errors.Is matches.",
 	"via.ErrForbidden": "Denies with a 403. For \"you may not do this\"; queue a ctx.Redirect instead for \"please sign in\".",
 	"via.ErrStoreDown": "The session store could not be read for this request. The request was fine, a dependency is not; answer it like an outage.",
 	"via.ErrStaleTab":  "The tab that would have bound this action is gone: its stream closed, or the id belongs to a render that no longer exists. The one failure a reload fixes.",
 	"via.PageError":    "Everything via knows about a failure it is about to answer, handed to the WithErrorPage handler. Status and Reason are the contract; Detail and Err are for logs and dev builds.",
-	"via.Reason":       "The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status class, so a switch with a default is exhaustive.",
+	"via.Reason":       "The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status via answers with; give the switch a default.",
 
 	"on.Click":        "Binds a DOM event to a method: the click posts to the method, not to a URL you invented. Takes a method value or an on.Bind, then options.",
 	"on.Bind":         "Attaches a typed value to the method, so the row's own datum rides with the event. Only an argument the render bound is dispatchable.",

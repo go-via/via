@@ -44,8 +44,8 @@ func glossaryTerms() []glossaryTerm {
 	s := h.Str[string]
 	return []glossaryTerm{
 		{"Action",
-			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"), s(" bound with "), API("on.Bind"),
-				s(", attached to a DOM event with package "), Code("on"), s(". The browser POSTs to it; via runs it on the server, then OnReload, then re-renders the unit and answers with the patch. It returns nothing: a failure the user can fix goes into state, and a panic is a 500.")},
+			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"),
+				s(", attached to a DOM event with package "), Code("on"), s("; the second takes its argument through "), API("on.Bind"), s(". The browser POSTs to it; via runs it on the server, then OnReload, then re-renders the unit and answers with the patch. It returns nothing: a failure the user can fix goes into state, and a panic is a 500.")},
 			[]seeLink{{"Actions", "/actions#handling-a-click"}, {"Action signatures", "/actions#action-signatures"}},
 			[]h.H{API("on.Click"), API("on.Bind")}},
 		{"Composition",
@@ -107,7 +107,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"OnReload",
-			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick, Listen and OnConnect called inside it register nothing and log a warning.")},
+			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick, Listen, OnConnect, OnDispose and Track called inside it register nothing and log a warning.")},
 			[]seeLink{{"What an action body can do", "/actions#what-an-action-body-can-do"}, {"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"PageMeta",

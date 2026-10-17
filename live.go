@@ -146,11 +146,12 @@ func (c *Ctx) OnConnect(fn func()) {
 // closes — stop subscriptions, release producers. fn is a named method value
 // (e.g. sub.Stop). Valid only inside OnInit, and only meaningful on a unit
 // something else has already made live: a unit that never ticks, listens, or
-// renders State opens no connection to tear down. Like Tick, a call after
-// OnInit returned registers nothing and logs.
+// renders State opens no connection to tear down. Like Tick, a call from
+// OnReload or after OnInit returned registers nothing and logs.
 func (c *Ctx) OnDispose(fn func()) {
 	if c.reinit {
-		return // see Tick
+		c.logger().Warn("via: OnDispose called from OnReload — ignored; OnDispose is valid only inside OnInit")
+		return
 	}
 	if !c.inInit {
 		c.logger().Warn("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")

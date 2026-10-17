@@ -1,6 +1,7 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
 // Datastar client: plain request/response pages, SSE-backed live units,
-// server-authoritative State/List/Signal, and always-on sessions.
+// server-authoritative State/List, client-resident Signal, and always-on
+// sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
 // reflection in the public API surface (inside, reflect walks each composition
@@ -43,8 +44,8 @@
 // session, registers Tick/Listen, and may Redirect or return [ErrNotFound],
 // all wrong to repeat once a handler has committed a mutation. It runs on
 // the plain path and the live path alike, once per action, and is skipped
-// when the handler queued a Redirect. Tick, Listen, OnConnect and Track
-// called inside it register nothing and log a warning: liveness is the
+// when the handler queued a Redirect. Tick, Listen, OnConnect, OnDispose and
+// Track called inside it register nothing and log a warning: liveness is the
 // GET/connect verdict. A non-nil error is answered like OnInit's —
 // ErrNotFound is 404, ErrForbidden 403, anything else 500.
 //
@@ -190,7 +191,8 @@ var seededMarker = reflect.TypeOf((*seeded)(nil)).Elem()
 var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 
 // typeSignals is one composition type's signal table: every Signal-typed
-// field's byte offset paired with the wire name its Go field path gives it.
+// field's byte offset, the key a render looks it up by, paired with the wire
+// name its Go field path gives it.
 type typeSignals struct {
 	fields []signalField
 	seeds  []seedField  // State/List fields carrying a via:"init=…" tag: no wire name, only a value to write
@@ -355,8 +357,8 @@ func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 }
 
 // checkSignalReachable panics when a field hides a Signal behind an indirection.
-// A Signal is named by its byte offset in the composition, so one reached
-// through a pointer, slice, array or map has no name at all: its writes land on
+// A Signal is found by its byte offset in the composition, so one reached
+// through a pointer, slice, array or map cannot be found at all: its writes land on
 // memory the render discards. That used to surface only when the View first
 // rendered it — a per-request 500 for the life of the process — so it is caught
 // here instead, on the type walk Mount and Child do once.
@@ -373,7 +375,7 @@ func checkSignalReachable(owner reflect.Type, f reflect.StructField) {
 		return
 	}
 	panic("via: " + owner.String() + "." + f.Name + " holds a via.Signal behind a " +
-		f.Type.Kind().String() + " — a Signal is named by its field offset, so it must be a plain " +
+		f.Type.Kind().String() + " — a Signal is found by its field offset, so it must be a plain " +
 		"struct field of the composition (through plain nested structs if you like), never behind a " +
 		"pointer, slice, array, map or interface")
 }
@@ -511,7 +513,7 @@ type ptrViewer[T any] = interface {
 	viewer
 }
 
-// Ctx is the per-request binder: it names signal slots by field offset and
+// Ctx is the per-request binder: it keys signal slots by field offset and
 // actions by handler identity during a render pass, hydrates signals from the
 // request, and records per-slot initial values.
 //
@@ -682,7 +684,7 @@ func ctxOf(b render.Binder) *Ctx {
 	return nil
 }
 
-// signalSlot names the signal at field by its byte offset in the composition,
+// signalSlot finds the signal at field by its byte offset in the composition,
 // so a signal's wire identity is independent of where the View renders it.
 //
 // Anything else panics. A Signal behind a pointer, slice, array, map or interface field,

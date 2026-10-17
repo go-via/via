@@ -43,8 +43,8 @@ type initer interface{ OnInit(*Ctx) error }
 // committed a mutation. The contract callers read is in the package doc.
 type reloader interface{ OnReload(*Ctx) error }
 
-// ErrNotFound is the sentinel an OnInit returns when the data the page needs no
-// longer exists — the request is honest, so the answer is 404, not 500. Wrap it
+// ErrNotFound is the sentinel an OnInit or OnReload returns when the data the
+// page needs no longer exists — the request is honest, so the answer is 404, not 500. Wrap it
 // freely; errors.Is matches.
 var ErrNotFound = errors.New("via: not found")
 

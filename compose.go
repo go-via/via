@@ -14,7 +14,7 @@ import (
 // (h.RawAttr("id", …)) so the morph matches by id instead. Per-row actions use
 // on.Bind, carrying the row's own key with the click. Per-row signals are not
 // supported: a Signal inside a slice element is outside the composition struct,
-// so it has no field offset to name itself by and rendering it panics.
+// so it has no field offset to be found by and rendering it panics.
 func Each[T any](items []T, row func(T) h.H) h.H {
 	return render.Dyn(eachNode[T]{items: items, row: row})
 }

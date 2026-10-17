@@ -1392,7 +1392,10 @@ type reloadRegistrar struct {
 	hook string
 	room *topic.Topic[int]
 	n    int
+	N    via.State[int]
 }
+
+func (r *reloadRegistrar) load() int { return 0 }
 
 func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
 	switch r.hook {
@@ -1402,6 +1405,10 @@ func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
 		ctx.Listen(r.room, r.recv)
 	case "OnConnect":
 		ctx.OnConnect(r.stop)
+	case "OnDispose":
+		ctx.OnDispose(r.stop)
+	case "Track":
+		r.N.Track(ctx, r.room, r.load)
 	}
 	return nil
 }
@@ -1443,4 +1450,16 @@ func TestOnConnect_warnsWhenCalledFromOnReload(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, fireReloadRegistrar(t, "OnConnect"), "via: OnConnect called from OnReload — ignored",
 		"an OnConnect from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestTrack_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Track"), "via: Track called from OnReload — ignored",
+		"a Track from OnReload registers nothing, and must say so by name")
+}
+
+func TestOnDispose_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "OnDispose"), "via: OnDispose called from OnReload — ignored",
+		"an OnDispose from OnReload registers nothing, and must say so like a late Track does")
 }

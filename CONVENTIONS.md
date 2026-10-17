@@ -385,7 +385,7 @@ it.
 
 ```go
 // ✅ Adds information the name doesn't
-// ErrNotFound from OnInit answers 404; any other error answers 500.
+// ErrNotFound from OnInit or OnReload answers 404; any other error answers 500.
 var ErrNotFound = errors.New("via: not found")
 
 // ✅ States a non-obvious contract

@@ -13,8 +13,8 @@ import (
 )
 
 // Reason is the stable code a [WithErrorPage] handler switches on, so an app
-// never has to parse via's plain-text bodies. One reason per status class:
-// the status is the contract, the body text is not.
+// never has to parse via's plain-text bodies. One reason per status via
+// answers with: the status is the contract, the body text is not.
 type Reason string
 
 // The reasons via reports. A status via does not currently emit maps to
@@ -33,8 +33,8 @@ const (
 
 // The errors via reports through [PageError].Err for the failures an app can
 // reasonably answer differently from the rest of their status class. Match
-// with errors.Is; Err is nil for every other failure, so a switch must have a
-// default.
+// with errors.Is. Err otherwise carries a failed OnInit/OnReload's error or a
+// recovered panic, or is nil, so a switch must have a default.
 //
 // There is deliberately no sentinel for the 503s the SSE connect raises (at
 // capacity, shutting down): that route is client-consumed and never renders an
@@ -55,8 +55,8 @@ var (
 	// one failure a reload actually fixes.
 	ErrStaleTab = errors.New("via: stale tab")
 
-	// ErrForbidden denies with a 403. Return it from OnInit for "you may not
-	// do this"; queue a Ctx.Redirect instead for "please sign in".
+	// ErrForbidden denies with a 403. Return it from OnInit or OnReload for
+	// "you may not do this"; queue a Ctx.Redirect instead for "please sign in".
 	ErrForbidden = errors.New("via: forbidden")
 )
 

@@ -120,7 +120,7 @@ func (p *Compositions) View() h.H {
 					API("via.State.Track"), h.Str(" register only here; anywhere else they log and do nothing. Return "),
 					API("via.ErrNotFound"), h.Str(" for a 404, "), API("via.ErrForbidden"), h.Str(" for a 403."))},
 			[]h.H{Code("OnReload"), h.Str("Re-read what the action changed, before the render that answers it."),
-				h.Str("Runs on the acted unit only, and not after a Redirect. Tick and Listen are ignored here.")},
+				h.Str("Runs on the acted unit only, and not after a Redirect. Tick, Listen, OnConnect, OnDispose and Track register nothing here and log.")},
 			[]h.H{Code("View"), h.Str("Render."), h.Str("No ctx, no I/O, no side effects. It can run more than once per request.")},
 			[]h.H{Code("PageMeta"), h.Span(h.Str("Name the document: title, description, "), API("via.Meta"), h.Str(" assets, "), Code("<html>"), h.Str(" and "), Code("<body>"), h.Str(" attributes.")),
 				h.Str("Read on the mounted root only. Pure: it is read at Mount and on every document render.")},

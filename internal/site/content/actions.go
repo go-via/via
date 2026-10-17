@@ -203,7 +203,7 @@ func (p *Actions) View() h.H {
 		table([]string{"Status", "When"},
 			[]h.H{h.Str("400"), h.Str("The ?a= argument does not decode into the handler's type, or the body is malformed. A JSON body without Datastar-Request: true is read as a form, and the 400 names the header.")},
 			[]h.H{h.Str("403"), h.Span(h.Str("The Origin is not trusted (see "), API("via.WithTrustedOrigin"), h.Str("), the tab's stream is bound to another session, or OnInit or OnReload returned "), API("via.ErrForbidden"), h.Str("."))},
-			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
+			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnInit or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
 			[]h.H{h.Str("410"), h.Str("The render does not bind this action, or not with this argument, or the tab's stream is gone.")},
 			[]h.H{h.Str("413"), h.Str("The body is over WithMaxBody, or a native submit is over WithMaxUpload.")},
 			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},

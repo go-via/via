@@ -127,6 +127,10 @@ func (s *State[T]) Set(v T) { s.val = v }
 // may return one field of a larger store, in which case t carries that field's
 // type.
 func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
+	if ctx.reinit {
+		ctx.logger().Warn("via: Track called from OnReload — ignored; Track is valid only inside OnInit")
+		return
+	}
 	if !ctx.inInit {
 		// No partial seed: a one-shot copy that never follows is the trap this
 		// whole method exists to remove.
