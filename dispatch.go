@@ -808,51 +808,9 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 // action, then answers per mode.
 func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
-	// Discovery is two-phase. auth is the render the client did not influence:
-	// it alone decides what is dispatchable (see on.Bind). Then the body is
-	// applied to the slots that render made client-writable and the tree is
-	// re-rendered, so a Bind()ed signal opening a lazy branch gets the slots
-	// inside it hydrated too — without this their posted values were silently
-	// dropped. The action must be present in both, so the executed render is an
-	// intersection with auth, never a superset.
-	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
-	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
-	// several malformed slots at once still logs one Warn, not one per slot per
-	// pass (rebindFrom copies the pointer; childViewer carries it to children).
-	auth.badDecodeLogged = new(atomic.Bool)
-	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
-	auth.passUnits = map[string]*Ctx{}
-	prebindSignals(auth, inst)
-	if runOnInit(inst.v, auth, w, req, m.sessions, m.policy, false) != nil {
+	auth, bind, rootBefore, ok := m.discoverPlain(w, req, inst, child, act, in, base)
+	if !ok {
 		return
-	}
-	rootBefore := renderRootWith(auth, inst.v)
-	bind := auth
-	done := map[string]bool{}
-	n := 0
-	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
-		bind = rebindFrom(auth)
-		rootBefore = renderRootWith(bind, inst.v)
-	}
-	if n == maxHydratePasses {
-		// Never expected: done grows monotonically, so a View would have to
-		// bind a fresh slot on every pass. Loud, because the alternative is a
-		// silently half-hydrated render.
-		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
-			"passes", maxHydratePasses, "act", act)
-	}
-	if child == rootAddr && n > 0 && len(auth.passUnits) > 0 {
-		// The response render re-copies every child from its field, as it must
-		// to show what the root action did to them, so the render it is
-		// compared against has to as well: the last pass shows the children's
-		// hydrated copies, and every root action would differ from it. bind is
-		// rendered again afterwards so the handler's Sets land on the Ctx the
-		// response reads.
-		fresh := rebindFrom(auth)
-		fresh.passUnits = nil
-		rootBefore = renderRootWith(fresh, inst.v)
-		bind = rebindFrom(auth)
-		renderRootWith(bind, inst.v)
 	}
 	ua := auth.unit(child)
 	if ua == nil {
@@ -938,6 +896,58 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		m.warnNoChange(act, a.name, actedViewer(inst, u))
 	}
 	writePatch(w, b)
+}
+
+// discoverPlain runs OnInit and the discovery renders for a plain action;
+// rootBefore is the root markup the response render is diffed against.
+func (m *mount) discoverPlain(w http.ResponseWriter, req *http.Request, inst instance, child, act string, in map[string]json.RawMessage, base string) (auth, bind *Ctx, rootBefore []byte, ok bool) {
+	// Discovery is two-phase. auth is the render the client did not influence:
+	// it alone decides what is dispatchable (see on.Bind). Then the body is
+	// applied to the slots that render made client-writable and the tree is
+	// re-rendered, so a Bind()ed signal opening a lazy branch gets the slots
+	// inside it hydrated too — without this their posted values were silently
+	// dropped. The action must be present in both, so the executed render is an
+	// intersection with auth, never a superset.
+	auth = newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
+	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
+	// several malformed slots at once still logs one Warn, not one per slot per
+	// pass (rebindFrom copies the pointer; childViewer carries it to children).
+	auth.badDecodeLogged = new(atomic.Bool)
+	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
+	auth.passUnits = map[string]*Ctx{}
+	prebindSignals(auth, inst)
+	if runOnInit(inst.v, auth, w, req, m.sessions, m.policy, false) != nil {
+		return nil, nil, nil, false
+	}
+	rootBefore = renderRootWith(auth, inst.v)
+	bind = auth
+	done := map[string]bool{}
+	n := 0
+	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
+		bind = rebindFrom(auth)
+		rootBefore = renderRootWith(bind, inst.v)
+	}
+	if n == maxHydratePasses {
+		// Never expected: done grows monotonically, so a View would have to
+		// bind a fresh slot on every pass. Loud, because the alternative is a
+		// silently half-hydrated render.
+		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
+			"passes", maxHydratePasses, "act", act)
+	}
+	if child == rootAddr && n > 0 && len(auth.passUnits) > 0 {
+		// The response render re-copies every child from its field, as it must
+		// to show what the root action did to them, so the render it is
+		// compared against has to as well: the last pass shows the children's
+		// hydrated copies, and every root action would differ from it. bind is
+		// rendered again afterwards so the handler's Sets land on the Ctx the
+		// response reads.
+		fresh := rebindFrom(auth)
+		fresh.passUnits = nil
+		rootBefore = renderRootWith(fresh, inst.v)
+		bind = rebindFrom(auth)
+		renderRootWith(bind, inst.v)
+	}
+	return auth, bind, rootBefore, true
 }
 
 // actedViewer is the composition the action just mutated: the root, or the
