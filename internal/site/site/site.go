@@ -4,6 +4,7 @@
 package site
 
 import (
+	"errors"
 	"html"
 	"log"
 	"log/slog"
@@ -94,12 +95,21 @@ func (p errorPages) render(ctx *via.Ctx, e via.PageError) h.H {
 	case via.ReasonTooLarge:
 		title = "Request too large"
 	case via.ReasonUnavailable:
-		title, detail = "Temporarily unavailable", "The session store did not answer. Nothing you did caused this; try again shortly."
+		title, detail = "Temporarily unavailable", unavailableDetail(e)
 	}
 	return s.Doc(shell.NavItem{Title: title}, nil).Page(
 		h.P(h.Str(detail)),
 		h.P(h.A(h.Href(s.Href("/")), h.Str("Back to the front page"))),
 	)
+}
+
+// unavailableDetail names the store only when it was the cause: a native
+// submit to a busy or shutting-down live tab is a 503 with no Err.
+func unavailableDetail(e via.PageError) string {
+	if errors.Is(e.Err, via.ErrStoreDown) {
+		return "The session store did not answer. Nothing you did caused this; try again shortly."
+	}
+	return "The server is busy. Nothing you did caused this; try again shortly."
 }
 
 // notFound offers the closest nav entry and a search. The error page carries
