@@ -147,7 +147,7 @@ func (p *Deploy) View() h.H {
 			h.P(h.Str("via reads one environment variable. "), Code("VIA_ORIGIN"), h.Str(" and "), Code("VIA_ADDR"),
 				h.Str(" are read by the "), Code("main.go"), h.Str(" on this page, and the unit files below "+
 					"set them for it. Why the origin check and Secure cookie matter is in "),
-				h.A(h.Href(d.Href("/security")+"#origin-checks-and-csrf"), h.Str("Origin checks and CSRF")), h.Str("."))),
+				d.Link("/security#origin-checks-and-csrf", "Origin checks and CSRF"), h.Str("."))),
 
 		d.H2("Reverse proxy"),
 		snippet.Text("Caddyfile", deployCaddyfile),

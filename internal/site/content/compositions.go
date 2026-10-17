@@ -33,7 +33,6 @@ func (p *Compositions) PageMeta() via.Meta {
 
 func (p *Compositions) View() h.H {
 	d := p.doc()
-	link := func(path, label string) h.H { return h.A(h.Href(d.Href(path)), h.Str(label)) }
 	return d.Page(
 		h.P(h.Str("A via page is a tree of Go structs. A struct is a component: fields hold its props and state, "+
 			"methods are its actions, and "), Code("View"), h.Str(" renders it.")),
@@ -60,7 +59,7 @@ func (p *Compositions) View() h.H {
 			Code("OnInit"), h.Str(" and actions. The argument must be a field selector: Child copies the child at every render, "+
 				"and a composite literal there would re-seed it each time. Value fields are copied, so each connection has its own; "+
 				"pointer fields are shared, which is how two children reach one store.")),
-		h.P(h.Str("A child's "), h.A(h.Href(d.Href("/glossary#positional-child-key")), h.Str("key")), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
+		h.P(h.Str("A child's "), d.Link("/glossary#positional-child-key", "key"), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
 			h.Str(", "), Code("0-1"), h.Str(". The key is the container id ("), Code("#via-i0-1"),
 			h.Str(") and the address in the child's action URLs. Signal names come from the field path instead: the child's field name "+
 				"and a double underscore, so "), Code("Draft"), h.Str(" inside "), Code("Inbox.Chat"), h.Str(" is "),
@@ -198,7 +197,7 @@ func (p *Compositions) View() h.H {
 		h.P(h.Str("The owner holds the state and sets the child's field in its action; the push that follows copies the child "+
 			"with the new value. Cart must be the mounted root: a live child may not render children of its own. "+
 			"For state that many tabs share, keep it in a store and give each unit a "), API("via.StateTrack"),
-			h.Str(" on its topic; see "), link("/live", "Live state"), h.Str(".")),
+			h.Str(" on its topic; see "), d.Link("/live", "Live state"), h.Str(".")),
 
 		d.H3("Context and providers"),
 		Compare("React", snippet.Text("", reactContext), "via", snippet.Region("compositions/recipes.go", "context", snippet.Title(""))),
@@ -222,7 +221,7 @@ func (p *Compositions) View() h.H {
 		Compare("React / Vue", snippet.Text("", reactDerived), "via", snippet.Region("compositions/recipes.go", "derived", snippet.Title(""))),
 		h.P(h.Str("A method is a computed value: View calls it at render, and it can reach anything Go can. "+
 			"For a value that follows typing with no request, build an "), API("expr.Expr"),
-			h.Str(" over the signals; the browser re-evaluates it. See "), link("/signals", "Signals"), h.Str(".")),
+			h.Str(" over the signals; the browser re-evaluates it. See "), d.Link("/signals", "Signals"), h.Str(".")),
 
 		d.H3("Effects"),
 		Compare("React", snippet.Text("", reactEffect), "via", snippet.Region("compositions/recipes.go", "effect", snippet.Title(""))),
@@ -244,7 +243,7 @@ func (p *Compositions) View() h.H {
 		),
 		snippet.Text("panic", liveNesting),
 		h.P(h.Str("For UI whose state is mostly in the browser (a map, a chart you pan, an editor), mount a JavaScript "+
-			"island and talk to it through signals; see "), link("/islands", "Islands"), h.Str(".")),
+			"island and talk to it through signals; see "), d.Link("/islands", "Islands"), h.Str(".")),
 	)
 }
 

@@ -54,7 +54,7 @@ func (p *Start) View() h.H {
 
 		d.H2("The parts"),
 		h.Ul(
-			h.Li(h.Str("A "), h.A(h.Href(d.Href("/compositions")), h.Str("composition")),
+			h.Li(h.Str("A "), d.Link("/compositions", "composition"),
 				h.Str(" is a struct. "), Code("Counter"), h.Str(" holds a pointer to the count, so every request's copy shares it.")),
 			h.Li(h.Str("Its "), Code("View"), h.Str(" is a pure, ctx-free method that returns the markup.")),
 			h.Li(h.Str("An action is a method taking "), API("via.Ctx"), h.Str(". "), API("on.Click"),
@@ -80,7 +80,7 @@ func (p *Start) View() h.H {
 
 		demo.Card(d.H3("Two tabs, one count"),
 			h.P(h.Str("The program above, running. Open this page in a second tab and click there: "+
-				"this card's "), h.A(h.Href(d.Href("/glossary#wire-pane")), h.Str("Wire pane")), h.Str(" shows the patch arriving on this tab's stream with no POST from it. "+
+				"this card's "), d.Link("/glossary#wire-pane", "Wire pane"), h.Str(" shows the patch arriving on this tab's stream with no POST from it. "+
 				"Clicks are capped at 30 a minute per client.")),
 			via.Child(p.Counter), "start_counter.go", demo.WireOpen(),
 			demo.Try(h.Str("Open this page in a second tab, click + there, and come back."),

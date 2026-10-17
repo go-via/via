@@ -219,7 +219,7 @@ func (p *Reference) View() h.H {
 		h.P(h.Str("Every exported name, generated from the source by go generate; a test fails when this page "+
 			"and the code disagree. Each name links to its pkg.go.dev entry, and each row has an anchor: "),
 			h.Code(h.Str("/reference#via.WithSessionTTL")), h.Str(". To install, see "),
-			h.A(h.Href(d.Href("/start")), h.Str("Getting started")), h.Str(".")),
+			d.Link("/start", "Getting started"), h.Str(".")),
 		h.P(jumps...),
 	}
 	for _, rp := range refPackages {

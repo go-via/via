@@ -54,7 +54,7 @@ func (p *Actions) View() h.H {
 		h.P(h.Str("Every DOM event binds the same way: "), API("on.Change"), h.Str(", "), API("on.Keydown"), h.Str(", "),
 			API("on.Submit"), h.Str(", and "), API("on.Event"), h.Str(" for an event without its own function. The "),
 			Code("…CS"), h.Str(" twins, such as "), API("on.ClickCS"), h.Str(", run an expression in the browser and post nothing; they are on "),
-			h.A(h.Href(d.Href("/signals")), h.Str("Signals")), h.Str(".")),
+			d.Link("/signals", "Signals"), h.Str(".")),
 
 		d.H2("Action signatures"),
 		snippet.Region("actions/signatures.go", "signatures", snippet.Mark("Clear(ctx *via.Ctx)", "Delete(ctx *via.Ctx, id int)")),
@@ -85,7 +85,7 @@ func (p *Actions) View() h.H {
 				"There is no response writer; a download is a separate net/http handler that the page links to. "),
 			API("via.Ctx.Tick"), h.Str(" and "), API("via.Ctx.Listen"), h.Str(" register only in OnInit; in an action they log and do nothing. "+
 				"To re-read a store after the action wrote to it, implement OnReload, which is covered on "),
-			h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")), h.Str(".")),
+			d.Link("/compositions", "Compositions"), h.Str(".")),
 
 		d.H2("Arguments"),
 		demo.Card(d.H3("Vote"),

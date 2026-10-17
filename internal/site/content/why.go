@@ -25,7 +25,6 @@ func (p *Why) PageMeta() via.Meta {
 
 func (p *Why) View() h.H {
 	d := p.doc()
-	link := func(path, label string) h.H { return h.A(h.Href(d.Href(path)), h.Str(label)) }
 	return d.Page(
 		h.P(h.Str("via builds server-rendered web UI from Go structs. A page is a struct, its actions are methods, "+
 			"and the browser runs a small client via ships, so there is no JavaScript to write and no build step.")),
@@ -57,7 +56,7 @@ func (p *Why) View() h.H {
 			h.Li(h.Strong(h.Str("Plain pages stay plain HTTP. ")),
 				h.Str("A page streams only if it holds a live unit: one that renders a "), API("via.State"), h.Str(" or "), API("via.List"),
 				h.Str(", or registers "), API("via.Ctx.Tick"), h.Str(" or "), API("via.Ctx.Listen"),
-				h.Str(". Otherwise a GET is a response and an action is a POST, with no connection held. "), link("/live", "Live state"), h.Str(" has the rules.")),
+				h.Str(". Otherwise a GET is a response and an action is a POST, with no connection held. "), d.Link("/live", "Live state"), h.Str(" has the rules.")),
 			h.Li(h.Strong(h.Str("Two kinds of state, picked by field type. ")),
 				API("via.Signal"), h.Str(" lives in the browser and travels with each action. "), API("via.State"), h.Str(" and "), API("via.List"),
 				h.Str(" live on the server, one copy per tab, and never reach the client as data.")),
@@ -66,8 +65,8 @@ func (p *Why) View() h.H {
 				h.Str("; each tab's unit follows it with "), API("via.State.Track"), h.Str(" or "), API("via.Ctx.Listen"),
 				h.Str(", on the unit's own goroutine, so handlers need no locks.")),
 			h.Li(h.Strong(h.Str("No JavaScript and no build step. ")),
-				h.Str("The "), link("/glossary#datastar", "Datastar"), h.Str(" client is embedded in the via module and served by the router. "+
-					"When a view needs a JS library, an "), link("/islands", "island"), h.Str(" hands it one subtree.")),
+				h.Str("The "), d.Link("/glossary#datastar", "Datastar"), h.Str(" client is embedded in the via module and served by the router. "+
+					"When a view needs a JS library, an "), d.Link("/islands", "island"), h.Str(" hands it one subtree.")),
 			h.Li(h.Strong(h.Str("Only the standard library at run time. ")),
 				h.Str("via's module requires testify, for its own tests, and staticcheck, as a tool. Neither is built into your program.")),
 		),
@@ -83,14 +82,14 @@ func (p *Why) View() h.H {
 					"Push is SSE only; there is no WebSocket transport.")),
 			h.Li(h.Strong(h.Str("A "), Code("data-*"), h.Str(" attribute is script. ")),
 				h.Str("Datastar compiles every expression in the page under its nonce, so the CSP cannot stop an injected one; "),
-				link("/security#content-security-policy", "Sessions & security"), h.Str(" says what that costs.")),
+				d.Link("/security#content-security-policy", "Sessions & security"), h.Str(" says what that costs.")),
 			h.Li(h.Strong(h.Str("One process unless you bridge. ")),
 				h.Str("A tab lives on the process that opened its stream, and a topic fans out inside one process. "+
-					"More than one instance needs sticky routing and your own bus between them; "), link("/deploy", "Deploy"), h.Str(" shows both.")),
+					"More than one instance needs sticky routing and your own bus between them; "), d.Link("/deploy", "Deploy"), h.Str(" shows both.")),
 			h.Li(h.Strong(h.Str("Coupled to Datastar. ")),
 				h.Str("via does not abstract over its client. Datastar's reconnect and morph behaviour is via's behaviour.")),
 			h.Li(h.Strong(h.Str("Pre-1.0. ")),
-				h.Str("APIs change between minor versions; "), link("/migrate", "Migrating from v0.7"), h.Str(" lists what v0.8 broke.")),
+				h.Str("APIs change between minor versions; "), d.Link("/migrate", "Migrating from v0.7"), h.Str(" lists what v0.8 broke.")),
 		),
 
 		d.H2("When not to use via"),
@@ -99,7 +98,7 @@ func (p *Why) View() h.H {
 				h.Str("Actions and pushes need the server. A tab that loses its stream shows a banner and reloads when it can; it does not queue work.")),
 			h.Li(h.Strong(h.Str("Heavy client-side interaction. ")),
 				h.Str("A canvas editor, a drag-heavy board or a game wants every frame in the browser, not a round trip. "+
-					"If that part is one widget in an otherwise server-driven page, make it an "), link("/islands", "island"),
+					"If that part is one widget in an otherwise server-driven page, make it an "), d.Link("/islands", "island"),
 				h.Str("; if it is the whole app, use a client framework.")),
 			h.Li(h.Strong(h.Str("Public static content. ")),
 				h.Str("Docs, blogs and marketing pages served as files from a CDN need no process at all.")),

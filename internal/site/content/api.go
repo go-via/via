@@ -12,13 +12,15 @@ type apiSymbol struct {
 
 func (s apiSymbol) id() string { return s.pkg + "." + s.name }
 
-var apiIndex = func() map[string]apiSymbol {
+var apiIndex = indexAPI()
+
+func indexAPI() map[string]apiSymbol {
 	m := make(map[string]apiSymbol, len(apiSymbols))
 	for _, s := range apiSymbols {
 		m[s.id()] = s
 	}
 	return m
-}()
+}
 
 // API is sym as inline code linking to its /reference row. sym is the row id:
 // package, then name, as in "via.WithTrustedOrigin", "expr.Val" or

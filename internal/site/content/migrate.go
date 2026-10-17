@@ -115,7 +115,7 @@ func (p *Migrate) PageMeta() via.Meta {
 func (p *Migrate) View() h.H {
 	d := p.doc()
 	plugins := append(inline("Plugins. picocss and its themes become your own CSS through `WithHead`; "+
-		"echarts and maplibre become an "), h.A(h.Href(d.Href("/islands")), h.Str("island")), h.Str("."))
+		"echarts and maplibre become an "), d.Link("/islands", "island"), h.Str("."))
 	return d.Page(
 		h.P(h.Str("v0.8 is a rebuild. The module never left v0.x, so "), Code("go get -u"), h.Str(" moves v0.7 to v0.8 as an "+
 			"ordinary bump and nothing warns you. Most v0.7 code does not port line by line, because the ideas "+

@@ -100,6 +100,16 @@ func (d *Doc) inlineTOC() h.H {
 // Href is path on this build of the site.
 func (d *Doc) Href(path string) string { return d.site.Href(path) }
 
+// Link is a link to path, which may carry a #fragment, on this build of the
+// site.
+func (d *Doc) Link(path, label string) h.H { return h.A(h.Href(d.Href(path)), h.Str(label)) }
+
+// SecondTabLink opens path in a new tab, for a demo whose point is what a
+// second tab sees.
+func (d *Doc) SecondTabLink(path string) h.H {
+	return h.A(h.Href(d.Href(path)), h.Target("_blank"), h.Rel("noopener"), h.Str("Open in a second tab ↗"))
+}
+
 // Page renders body under the page's heading in the site chrome. Go evaluates
 // every argument, so every d.H2 in body, before the method runs: by then
 // d.heads is complete and the contents list sees them all.

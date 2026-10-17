@@ -200,7 +200,7 @@ func (p *Glossary) View() h.H {
 			if i > 0 {
 				see = append(see, h.Str(", "))
 			}
-			see = append(see, h.A(h.Href(d.Href(l.href)), h.Str(l.text())))
+			see = append(see, d.Link(l.href, l.text()))
 		}
 		for _, a := range t.api {
 			see = append(see, h.Str(", "), a)

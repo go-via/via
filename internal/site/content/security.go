@@ -146,7 +146,7 @@ func (p *Security) View() h.H {
 		h.P(h.Str("Rotate and the first Put need a response to carry the cookie: call them in "), Code("OnInit"),
 			h.Str(" or an action, not in a Tick or Listen handler. Auth is a check in "), Code("OnInit"),
 			h.Str(" and a branch in "), Code("View"), h.Str("; composition and the hooks are on "),
-			h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")), h.Str(".")),
+			d.Link("/compositions", "Compositions"), h.Str(".")),
 		Callout(Warning, "Nothing rotates on its own",
 			h.P(h.Str("Call Rotate at every auth-state change: login, logout, privilege change. Put does not rotate."))),
 
@@ -213,7 +213,7 @@ func (p *Security) View() h.H {
 		h.P(h.Str("The stream cap is router-wide, with no per-client share: one client can hold all of it. Set it to what the "+
 			"machine has memory for, since each stream holds a goroutine and a composition tree for the tab's life. A per-client "+
 			"limit belongs at the proxy, which sees the client's address; see "),
-			h.A(h.Href(d.Href("/deploy")+"#limits-and-dead-peers"), h.Str("Limits and dead peers")), h.Str(".")),
+			d.Link("/deploy#limits-and-dead-peers", "Limits and dead peers"), h.Str(".")),
 
 		d.H2("Middleware"),
 		snippet.Region("security/middleware.go", "middleware", snippet.Mark("Unwrap()", "accessLog(securityHeaders(app))")),

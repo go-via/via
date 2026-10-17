@@ -147,10 +147,10 @@ func (p *Testing) View() h.H {
 			h.Str(". Echo it as the "), Code("viatab"),
 			h.Str(" signal in every action body and the action routes to that stream. A live page's action without it answers 410, "+
 				"and so does one whose stream has closed and not come back; see "),
-			h.A(h.Href(d.Href("/live")+"#connection-lifecycle"), h.Str("Connection lifecycle")), h.Str(".")),
+			d.Link("/live#connection-lifecycle", "Connection lifecycle"), h.Str(".")),
 		h.P(h.Str("Every POST passes the origin check first; a browser's same-origin fetch sends "),
 			Code("Sec-Fetch-Site: same-origin"), h.Str(", so send it too. See "),
-			h.A(h.Href(d.Href("/security")+"#origin-checks-and-csrf"), h.Str("Origin checks and CSRF")), h.Str(".")),
+			d.Link("/security#origin-checks-and-csrf", "Origin checks and CSRF"), h.Str(".")),
 		snippet.Text("shell", testingWire),
 
 		d.H2("Real browser tests"),

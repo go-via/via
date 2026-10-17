@@ -60,7 +60,7 @@ Uncaught Error: Blocked by CSP.`
 const tsEval = `EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script`
 
 func tsSee(d *shell.Doc, path, label string) h.H {
-	return h.P(h.Str("See "), h.A(h.Href(d.Href(path)), h.Str(label)), h.Str("."))
+	return h.P(h.Str("See "), d.Link(path, label), h.Str("."))
 }
 
 func (p *Troubleshooting) View() h.H {
