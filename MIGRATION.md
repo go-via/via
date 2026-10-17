@@ -87,8 +87,8 @@ func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 
 A leftover `path:"id"` tag compiles and leaves the field at its zero value.
 `query:"q"` tags go the same way; read `ctx.Request().URL.Query()` in `OnInit`
-instead. The query string is empty on actions, so list state
-(filter, page, sort) belongs in the path or the session.
+instead. An action never sees the page's query string, so list state (filter,
+page, sort) belongs in the path or the session.
 
 The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
@@ -238,8 +238,8 @@ child's warning waits for its first render), or nothing.
   500. Caught by: silent.
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field.
   Caught by: silent.
-- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
-  on actions, so list state belongs in the path or the session. Caught by:
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; actions
+  never see it, so list state belongs in the path or the session. Caught by:
   silent.
 - `h.If(cond, node)` → `via.When(cond, p.part)`: the node becomes a method
   returning `h.H`, called only when cond holds. Caught by: compiler.
@@ -342,8 +342,8 @@ These compile and start; the first sign is behaviour:
 - an `OnInit` error, logged while the page renders anyway → an `OnInit` error
   aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field
-- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
-  on actions, so list state belongs in the path or the session
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; actions
+  never see it, so list state belongs in the path or the session
 - `h.Title(s)`, the `<title>` element → `PageMeta()` returning
   `via.Meta{Title: s}`; `h.Title` is now the `title` attribute
 - one session value per type → one value per session: a second `Put` replaces

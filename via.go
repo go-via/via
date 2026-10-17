@@ -830,7 +830,8 @@ type paramMiss struct {
 // URL, so the discovery render that decides what is dispatchable runs against
 // the unfiltered page: a row that only exists under the filter binds no action
 // in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
-// therefore readable on the GET and empty on every action.
+// therefore the page's on the GET; on an action it holds only via's own a and
+// u keys.
 //
 // So a page's list state — filter, page number, sort, tab — belongs in path
 // params or in the session, never in the query string:

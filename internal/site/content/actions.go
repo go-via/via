@@ -75,7 +75,7 @@ func (p *Actions) View() h.H {
 		table([]string{"Call", "Gives you"},
 			[]h.H{API("via.Ctx.Request"), h.Str("The POST's headers, cookies and RemoteAddr. Read-only: the body is already decoded. On a PostForm submit, FormValue and FormFile.")},
 			[]h.H{API("via.Ctx.Session"), h.Span(h.Str("The browser session: "), API("via.Session.Get"), h.Str(", "), API("via.Session.Put"), h.Str(", and "), API("via.Session.Rotate"), h.Str(" after a login."))},
-			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. The query string is empty on every action.")},
+			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. An action's URL carries none of the page's query string, only via's own ?a= and ?u=.")},
 			[]h.H{API("via.Ctx.Context"), h.Str("A context to pass to slow calls. On a live unit it is cancelled when the tab disconnects.")},
 			[]h.H{API("via.Ctx.Redirect"), h.Str("Navigate once the handler returns, on this site only. The answer skips OnReload and the render.")},
 			[]h.H{API("via.Ctx.RedirectExternal"), h.Str("The same, to another site: an OAuth provider, a payment page.")},

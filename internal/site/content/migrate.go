@@ -57,7 +57,7 @@ var changes = []change{
 	{"an action `func(*via.Ctx) error`, `WithActionErrorHandler`", "`func(*via.Ctx)`; handle the error inside", byCompiler},
 	{"an `OnInit` error, logged while the page renders anyway", "an `OnInit` error aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500", bySilent},
 	{"`path:\"id\"` field tag", "`ctx.Param[T](\"id\")` in `OnInit`, stored in a field", bySilent},
-	{"`query:\"q\"` field tag", "`ctx.Request().URL.Query()` in `OnInit`; it is empty on actions, so list state belongs in the path or the session", bySilent},
+	{"`query:\"q\"` field tag", "`ctx.Request().URL.Query()` in `OnInit`; actions never see it, so list state belongs in the path or the session", bySilent},
 	{"`h.If(cond, node)`", "`via.When(cond, p.part)`: the node becomes a method returning `h.H`, called only when cond holds", byCompiler},
 	{"`h.When(cond, fn)`", "`via.When(cond, fn)`", byCompiler},
 	{"`h.IfElse`, `h.WhenElse`, `h.Switch`, `h.Maybe`", "a Go `if` or `switch` in a method returning `h.H`", byCompiler},

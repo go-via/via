@@ -38,7 +38,7 @@ var overrides = map[string]string{
 
 	"via.Ctx":                  "The per-request binder, handed to OnInit, OnReload, actions, Tick and Listen handlers and the error page. It is not safe for concurrent use: call it only from the via callback it was given to.",
 	"via.Ctx.Param":            "The mount pattern's named segment, decoded into T. A segment that will not decode answers 404 rather than a zero value, and naming a segment the pattern does not have panics.",
-	"via.Ctx.Request":          "The request behind this render. Its query string is populated on the GET and empty on every action, because an action's URL is the mount pattern and nothing else.",
+	"via.Ctx.Request":          "The request behind this render. Its query string is the page's on the GET. An action's URL is the mount pattern plus via's own ?a= and ?u=, so none of the page's query reaches it.",
 	"via.Ctx.Context":          "The context bounding this unit's work: the stream's on a live unit, the request's otherwise. Never nil. Watch it in a Tick or Listen handler to abandon a slow call against a dead socket.",
 	"via.Ctx.Session":          "The browser session — one value, Get/Put/Delete, ID and Rotate — resolved from the signed cookie and created lazily on the first write.",
 	"via.Ctx.Tick":             "Runs the handler every d for the life of the connection and re-renders the unit after each run; a d of 0 or less runs every second, with one warning. Makes the unit live. OnInit only.",
