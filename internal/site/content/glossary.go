@@ -120,7 +120,7 @@ func glossaryTerms() []glossaryTerm {
 			nil},
 		{"Positional child key",
 			[]h.H{s("The key via gives each Child: its position among its parent's Child calls, joined to the parent's key ("), Code("0"), s(", "), Code("0-0"),
-				s("). An action URL names the mounted root "), Code("r"), s(" in its place. The child's container id and action address derive from it, and so does its signal prefix when two fields share its type (otherwise the prefix is the field name), so it must be the same on every render for the life of a connection. A "),
+				s("). An action URL names the mounted root "), Code("r"), s(" in its place. The child's container id and action address derive from it, and so does its signal prefix, unless the child sits in a direct field of its parent whose type no other direct field shares (then the prefix is that field name), so it must be the same on every render for the life of a connection. A "),
 				API("via.When"), s(" around a Child shifts its later siblings, so it may depend only on data fixed by OnInit or the field literal.")},
 			[]seeLink{{"Children and keys", "/compositions#children-and-keys"}, {"Conditional children shift keys", "/compositions#conditional-children-shift-keys"}},
 			[]h.H{API("via.Child")}},
