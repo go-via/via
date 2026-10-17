@@ -234,7 +234,7 @@ func validAddr(child string) bool {
 }
 
 func unitAddr(c *Ctx) string {
-	if c != nil && c.isChild {
+	if c.isChild {
 		return c.childKey
 	}
 	return rootAddr

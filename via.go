@@ -977,11 +977,8 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
 func writeActionAttr(r *render.Renderer, ctx *Ctx, event, idx, arg string) {
-	path := "/_via/a/" + rootAddr + "/" + idx
-	if ctx != nil {
-		path = actionPath(ctx, idx) // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
-	}
-	path, query, _ := strings.Cut(path, "?")
+	// Mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}.
+	path, query, _ := strings.Cut(actionPath(ctx, idx), "?")
 	if arg != "" && query != "" {
 		query += "&"
 	}
