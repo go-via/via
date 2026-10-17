@@ -943,3 +943,16 @@ func TestSignal_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
 	assertMountPanic(t, `seedTagSignalMalformed.Count has a via:"init=…" value that is not JSON for its `+
 		`via.Signal[int] type`, func() { via.Handler(seedTagSignalMalformed{}) })
 }
+
+func TestSignal_aLivePushDeclaresASlotItsBranchJustOpened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(wizard{}))
+		conn := app.Connect()
+		defer conn.Close()
+		_, step0 := app.Get("/")
+		require.NotContains(t, step0, `"email"`, "step 0 must not declare the email slot")
+
+		app.Action(0).Over(conn).Fire()
+		conn.Await(`"email":""`) // the client store has no value for it, so a Display would read undefined
+	})
+}

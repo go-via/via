@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -196,6 +197,59 @@ func (c *tabStream) flushDirty(u *Ctx) {
 		c.wire.signals(string(raw))
 	}
 	clearDirty(u)
+}
+
+// declareOpened seeds the slots cur declares and prev did not: a branch the
+// push opened. The element push omits data-signals, so without this the client
+// store has no value for them and a Display reads undefined.
+func (c *tabStream) declareOpened(prev, cur *Ctx) {
+	if sameSlots(prev, cur) {
+		return
+	}
+	had := map[string]bool{}
+	declaredSlots(prev, had)
+	opened := map[string]any{}
+	openedSlots(cur, had, opened)
+	if len(opened) == 0 {
+		return
+	}
+	if raw, err := json.Marshal(opened); err == nil {
+		c.wire.signals(string(raw))
+	}
+}
+
+// sameSlots is the allocation-free common case: a push that re-rendered the
+// same tree declares the same slots in the same order.
+func sameSlots(a, b *Ctx) bool {
+	if !slices.Equal(a.order, b.order) || len(a.children) != len(b.children) {
+		return false
+	}
+	for i := range a.children {
+		if !sameSlots(a.children[i], b.children[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func declaredSlots(c *Ctx, into map[string]bool) {
+	for _, slot := range c.order {
+		into[slot] = true
+	}
+	for _, isl := range c.children {
+		declaredSlots(isl, into)
+	}
+}
+
+func openedSlots(c *Ctx, had map[string]bool, into map[string]any) {
+	for _, slot := range c.order {
+		if !had[slot] {
+			into[slot] = c.initial[slot]
+		}
+	}
+	for _, isl := range c.children {
+		openedSlots(isl, had, into)
+	}
 }
 
 func clearDirty(c *Ctx) {

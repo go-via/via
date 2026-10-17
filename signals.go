@@ -233,8 +233,8 @@ func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and declares the slot, which is what carries the change
 // to the client: a live action pushes a patch-signals frame, a plain action's
-// element patch carries a data-signals restricted to the slots it wrote, plus
-// any slot the pre-action render did not carry. A signal the action left
+// element patch carries a data-signals restricted to the slots it wrote. Either
+// way, a slot the previous render did not carry is seeded too. A signal the action left
 // alone is not declared, so one the user is mid-edit is never overwritten
 // behind them.
 //

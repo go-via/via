@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A live push seeds a signal slot its render newly declares, such as one in a branch an action opened; the client store had no value for it, so its `Display` showed `undefined`.
 - A native form submit on a plain child answers with a live page when the root is live through a `Tick` or `Listen`; the page had no stream, so the root stopped updating.
 - A leading newline in `<textarea>`, `<pre>` or `<listing>` content survives the render; the HTML parser dropped it, so a textarea lost its first blank line on every render and patch.
 - `WithTrustedOrigin` panics on a wildcard host or an empty port, which no browser Origin header can match; it accepted them and refused every request they were meant to admit.

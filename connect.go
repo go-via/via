@@ -154,7 +154,9 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 func (p *unitPusher) push() {
 	p.lc.flushDirty(p.last)
 	defer p.recoverFatal()
+	prev := p.last
 	body := p.rebind()
+	p.lc.declareOpened(prev, p.last)
 	if bytes.Equal(body, p.lastBody) {
 		return
 	}
