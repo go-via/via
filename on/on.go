@@ -72,6 +72,9 @@ type Bound struct {
 // An arg that does not encode as JSON, or encodes as null (a nil slice, map or
 // pointer), drops the binding and logs a warning.
 func Bind[T any](fn func(*via.Ctx, T), arg T) Bound {
+	if fn == nil {
+		panic("on: nil handler")
+	}
 	return Bound{fn: fn, arg: arg, call: argCall[T]{fn}}
 }
 
@@ -291,6 +294,9 @@ func Event[F func(*via.Ctx) | Bound](name string, fn F, opts ...Option) h.Attr {
 	k := key(name, opts)
 	switch f := any(fn).(type) {
 	case func(*via.Ctx):
+		if f == nil {
+			panic("on: nil handler")
+		}
 		return render.DynAttr(actionAttr{event: k, fn: f})
 	case Bound:
 		if f.call == nil {

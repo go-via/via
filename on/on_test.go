@@ -252,3 +252,9 @@ func TestEventCS_namesTheBadInputInThePanic(t *testing.T) {
 		`on: event name "click__once" must be lower-case letters and digits, optionally joined by ':', '.' or '-' (such as "click" or "via:patch")`,
 		func() { on.EventCS("click__once", expr.Expr("$n").Add(1)) })
 }
+
+func TestEvent_aNilHandlerPanicsWhereItIsBound(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t, "on: nil handler", func() { on.Click((func(*via.Ctx))(nil)) })
+	assert.PanicsWithValue(t, "on: nil handler", func() { on.Bind[int](nil, 1) })
+}

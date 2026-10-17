@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A nil handler passed to an `on` event or to `on.Bind` panics where it is bound. It used to render a binding whose every click answered 500.
 - A live action's `Ctx.Context` is the tab's stream context, as documented. It was the POST's, so it ended with the request and `Router.Shutdown` never cancelled it.
 - A live action's panic now sets `PageError.Err`, as a plain action's already did.
 - A `Param` that `OnInit`, a child's `OnInit` or an action cannot decode now sets `PageError.Err` to `ErrNotFound`, as the same miss in `OnReload` already did.
