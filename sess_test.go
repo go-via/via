@@ -1961,3 +1961,42 @@ func sessionActionResponse(t *testing.T, c *http.Client, base string, n int, hea
 	resp.Body.Close()
 	return resp
 }
+
+// ctxStore fails every call whose context is done, as a database driver does.
+type ctxStore struct{ *via.MemorySessionStore }
+
+func (s ctxStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return s.MemorySessionStore.Load(ctx, id)
+}
+
+func (s ctxStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.MemorySessionStore.Save(ctx, id, data, ttl)
+}
+
+// hungUp serves every request with its context already cancelled: a client
+// that hung up mid-request.
+type hungUp struct{ next http.Handler }
+
+func (h hungUp) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	h.next.ServeHTTP(w, req.WithContext(ctx))
+}
+
+func TestSession_writesLandAfterTheClientHungUp(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(loginComp{}, testSessionKey, via.WithSessionStore(ctxStore{via.NewMemorySessionStore()}))
+	srv := httptest.NewServer(hungUp{app})
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	fireAction(t, c, srv.URL, 0)            // SignIn
+	_, body := fireAction(t, c, srv.URL, 1) // Greet
+	assert.Contains(t, body, "hi alice", "store calls must not inherit the request's cancellation")
+}
