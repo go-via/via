@@ -369,9 +369,10 @@ func (o maxSSEConnOption) apply(c *config) {
 // Set it below the load balancer's own timeout so via answers first. It
 // panics on a value of 0 or less.
 //
-// The tab is logged as pinned too when any one handler, or one frame write to
-// a client that stopped reading, runs past d with no action waiting, so a tab
-// nobody clicks on is still reported. The line says which of the two it is.
+// The tab is logged as pinned too when any one handler, one frame write to a
+// client that stopped reading, or one keepalive session check waiting on the
+// store runs past d with no action waiting, so a tab nobody clicks on is still
+// reported. The line says which of the three it is.
 func WithPinnedDeadline(d time.Duration) Option {
 	return pinnedDeadlineOption{d}
 }
