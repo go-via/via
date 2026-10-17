@@ -625,3 +625,17 @@ func TestSecurity_printsTheDirectivesItsResponseCarries(t *testing.T) {
 	assert.NotZero(t, present, "the page listed no directive the header carries")
 	assert.NotZero(t, absent, "the page listed no directive the header omits")
 }
+
+func TestSecurityPage_cspTranscriptHashesMatchTheServedHeader(t *testing.T) {
+	t.Parallel()
+	srv := siteServer(t, site.Options{})
+
+	resp, body := get(t, srv, "/security", nil)
+	hash := regexp.MustCompile(`sha256-[A-Za-z0-9+/]+=*`)
+	shown := hash.FindAllString(body, -1)
+	require.NotEmpty(t, shown)
+	served := resp.Header.Get("Content-Security-Policy")
+	for _, h := range shown {
+		assert.Contains(t, served, h)
+	}
+}

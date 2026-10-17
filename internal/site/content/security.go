@@ -47,7 +47,7 @@ Content-Length: 0`
 const cspTranscript = `$ curl -sI https://example.com/security \
     | grep -i '^content-security-policy' | tr ';' '\n'
 Content-Security-Policy: default-src 'self'
- script-src 'self' 'nonce-KSfGODYz22EjHLF6Vse7nw' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-LqIkD2ynqYz8zKSe58JjW3qRObZHPM+TRdfHp4SBKu4=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
+ script-src 'self' 'nonce-KSfGODYz22EjHLF6Vse7nw' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-g7YdaHyafXvG7LGcI8Rr65SfNdLx6li/nDY+t9Lb4sY=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
  style-src 'self'
  object-src 'none'
  base-uri 'self'
