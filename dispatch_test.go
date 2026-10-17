@@ -159,7 +159,7 @@ func (p *guardedParent) View() h.H { return h.Div(via.Child(p.I)) }
 
 func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/g", guardedParent{})
 	srv := serve(t, r)
 
@@ -2281,7 +2281,7 @@ func TestDispatch_actionRunningPastThePinnedDeadlineStillAnswersItsResult(t *tes
 	synctest.Test(t, func(t *testing.T) {
 		p := slowActionLive{running: make(chan struct{}), block: make(chan struct{})}
 		srv := liveServer(t, via.Handler(p, via.WithPinnedDeadline(50*time.Millisecond),
-			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+			testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		tab := awaitTabID(t, lines)
@@ -2323,7 +2323,7 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
 	app := vt.Serve(t, via.Handler(sessBoundLive{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar
@@ -2348,7 +2348,7 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 func TestDispatch_liveActionOnAnUnboundTabAnswers503WhileTheStoreIsDown(t *testing.T) {
 	t.Parallel()
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
-	r := via.NewRouter(via.WithSessionStore(store), via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(via.WithSessionStore(store), testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLive{})
 	srv := httptest.NewServer(r)
@@ -2393,7 +2393,7 @@ func TestDispatch_aBoundLiveActionReadsTheSessionStoreOnce(t *testing.T) {
 	store := &loadCounter{SessionStore: via.NewMemorySessionStore()}
 	app := vt.Serve(t, via.Handler(sessBoundLive{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar
@@ -2630,7 +2630,7 @@ func TestDispatch_listenHandlerSeesTheSessionALaterActionOnItsTabCarried(t *test
 	t.Parallel()
 	tp, box := topic.New[string](), &sidBox{}
 	app := vt.Serve(t, via.Handler(sessEcho{Topic: tp, Box: box},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar

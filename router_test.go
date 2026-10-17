@@ -91,7 +91,7 @@ func cspOf(t *testing.T, c *http.Client, url string) string {
 
 func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
@@ -109,7 +109,7 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 
 func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
@@ -142,7 +142,7 @@ func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 
 func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/p", profilePage{})
 	srv := serve(t, r)
 	jar, _ := cookiejar.New(nil)
@@ -362,7 +362,7 @@ func TestRouter_paramUnknownNamePanics(t *testing.T) {
 
 func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
@@ -460,7 +460,7 @@ func TestRouter_onInitParamMissWinsOverAQueuedRedirect(t *testing.T) {
 
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
@@ -476,7 +476,7 @@ func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 
 func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
@@ -529,7 +529,7 @@ func postForm(c *http.Client, t *testing.T, url, field, value string) *http.Resp
 
 func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -587,7 +587,7 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 
 func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -600,7 +600,7 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 
 func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -992,7 +992,7 @@ func TestOnInit_seesTheConnectRequest(t *testing.T) {
 
 func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 

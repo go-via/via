@@ -41,7 +41,7 @@ func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testi
 	defer log.SetOutput(prev)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(tickSessionWriter{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickSessionWriter{}, testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)
@@ -76,7 +76,7 @@ func TestConnectUnit_tickSessionWriteWarnsEvenAfterOnInitReadTheSession(t *testi
 	defer log.SetOutput(prev)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(tickSessionWriterOnConnectRead{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickSessionWriterOnConnectRead{}, testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)

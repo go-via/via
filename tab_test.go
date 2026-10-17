@@ -107,7 +107,7 @@ func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, child stri
 
 func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})  // plain — establishes the session cookie
 	via.Mount(r, "/live", sessionLive{}) // Live root, shares the router-wide session manager
 	srv := httptest.NewServer(r)
@@ -160,7 +160,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 
 func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -221,7 +221,7 @@ func (w *whoLive) View() h.H {
 
 func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/as-victim", namedLogin{name: "vicky"})
 	via.Mount(r, "/as-attacker", namedLogin{name: "mallory"})
 	via.Mount(r, "/live", whoLive{})
@@ -264,7 +264,7 @@ func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.
 
 func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLive{})
 	srv := httptest.NewServer(r)
@@ -301,7 +301,7 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 
 func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -352,7 +352,7 @@ func (p *liveLoginer) View() h.H {
 
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -396,7 +396,7 @@ func (o *onConnectLoginer) View() h.H {
 
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -419,7 +419,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 
 func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	linesA, cancelA := openStreamAt(t, srv, "/_via/sse")
@@ -456,7 +456,7 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 
 func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 
@@ -528,7 +528,7 @@ func (p *raceLoginer) View() h.H {
 func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
 	t.Parallel()
 	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
-	srv := httptest.NewServer(via.Handler(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(root, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -590,7 +590,7 @@ func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p
 
 func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLiveChild{})
 	srv := httptest.NewServer(r)
@@ -643,7 +643,7 @@ func (p *liveLoginerChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p
 
 func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginerChild{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginerChild{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 

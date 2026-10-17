@@ -469,7 +469,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 			return h.Div(h.Str("x"))
 		}),
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
+		testSessionKey,
 	)
 	via.Mount(r, "/", errLiveSess{})
 	t.Cleanup(r.Close)

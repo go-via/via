@@ -385,7 +385,7 @@ func TestSSE_refusesToConnectWhileTheSessionStoreIsDown(t *testing.T) {
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
 	srv := serve(t, via.Handler(liveSessStream{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 
 	ck := sseSessionCookie(t, srv)
 	require.NotNil(t, ck, "precondition: a healthy connect establishes the session cookie")
