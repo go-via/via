@@ -80,3 +80,12 @@ func TestEl_acceptsOrdinaryTagNames(t *testing.T) {
 		assert.Equal(t, "<"+tag+"></"+tag+">", got)
 	}
 }
+
+func TestEl_aVoidTagInAnyCaseHasNoClosingTag(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{"BR", "base"} {
+		r := render.NewRenderer(&stubBinder{})
+		r.Render(render.El(tag))
+		assert.NotContains(t, string(r.Bytes()), "</", tag)
+	}
+}

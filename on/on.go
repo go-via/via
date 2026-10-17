@@ -277,7 +277,11 @@ func key(event string, opts []Option) string {
 // "1.5ms" would read as the tags "1" and "5ms", and a positive d must not
 // become 0.
 func millis(d time.Duration) string {
-	return strconv.FormatInt(int64((d+time.Millisecond-1)/time.Millisecond), 10) + "ms"
+	ms := d / time.Millisecond
+	if d%time.Millisecond != 0 {
+		ms++ // after the division, so a d near the maximum cannot overflow
+	}
+	return strconv.FormatInt(int64(ms), 10) + "ms"
 }
 
 // Event posts fn on the named DOM event, for events without their own

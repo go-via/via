@@ -1,6 +1,7 @@
 package on_test
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"testing"
@@ -97,6 +98,7 @@ func TestCS_emitsTheEventAndModifiers(t *testing.T) {
 		{"debounce seconds", on.InputCS(n.Add(1), on.WithDebounce(2*time.Second)), `data-on:input__debounce.2000ms=`},
 		{"debounce sub-ms rounds up", on.InputCS(n.Add(1), on.WithDebounce(1500*time.Microsecond)), `data-on:input__debounce.2ms=`},
 		{"debounce 1µs is 1ms", on.InputCS(n.Add(1), on.WithDebounce(time.Microsecond)), `data-on:input__debounce.1ms=`},
+		{"debounce at the maximum does not overflow", on.InputCS(n.Add(1), on.WithDebounce(time.Duration(math.MaxInt64))), `data-on:input__debounce.9223372036855ms=`},
 		{"throttle sub-ms rounds up", on.ScrollCS(n.Add(1), on.WithThrottle(time.Nanosecond)), `data-on:scroll__throttle.1ms=`},
 		{"throttle", on.ScrollCS(n.Add(1), on.WithThrottle(100*time.Millisecond)), `data-on:scroll__throttle.100ms=`},
 		{"once", on.ClickCS(n.Add(1), on.WithOnce()), `data-on:click__once=`},

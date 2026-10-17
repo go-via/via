@@ -137,7 +137,7 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 }
 
 var voidElements = map[string]bool{
-	"area": true, "br": true, "col": true, "embed": true, "hr": true,
+	"area": true, "base": true, "br": true, "col": true, "embed": true, "hr": true,
 	"img": true, "input": true, "link": true, "meta": true, "source": true,
 	"track": true, "wbr": true,
 }
@@ -155,7 +155,7 @@ func (e element) render(r *Renderer) {
 			a.render(r)
 		}
 	}
-	if voidElements[e.tag] {
+	if voidElements[strings.ToLower(e.tag)] {
 		r.WriteString(">")
 		return
 	}

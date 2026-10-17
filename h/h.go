@@ -102,8 +102,8 @@ type Attr = render.Attr
 // named constructor for (a custom element, an SVG child). The tag is validated
 // and an invalid one panics, as does script in any case: Datastar gives a
 // <script> that arrives in a live patch the page's nonce, so it would run.
-// Declare scripts in via.Meta.Assets. Prefer the named constructors: they
-// know which tags are void and must not emit a closing tag.
+// Declare scripts in via.Meta.Assets. A void tag (br, img, input…), in any
+// case, renders without a closing tag.
 func El(tag string, kids ...H) H { return render.El(tag, kids...) }
 
 // Stringish is what [Str] accepts: ~string plus every built-in integer and
@@ -113,7 +113,9 @@ func El(tag string, kids ...H) H { return render.El(tag, kids...) }
 //
 // It deliberately does not include bool, time.Time, fmt.Stringer or error.
 // Rendering those means choosing a format, and h will not choose one for you:
-// format the value in Go and pass the string.
+// format the value in Go and pass the string. A number goes through
+// fmt.Sprint, so a named numeric type's String method is used (h.Str(time.Second)
+// is "1s") and a float prints in %v form (1.234567e+06).
 type Stringish = render.Stringish
 
 // Str is the only way to put text in a view. The value is HTML-escaped at

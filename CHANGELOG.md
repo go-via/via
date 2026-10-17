@@ -19,6 +19,10 @@
 
 ### Fixed
 
+- `h.El` with a void tag in upper case (`"BR"`), or `"base"`, renders without
+  a closing tag, as `"br"` already did.
+- `on.WithDebounce` and `on.WithThrottle` with a duration near the maximum no
+  longer overflow into a negative millisecond count.
 - `on.Bind` with an arg that encodes as null (a nil slice, map or pointer)
   drops the binding and logs a warning, as an arg that does not encode
   already did. It used to render a button whose every click answered 400.
