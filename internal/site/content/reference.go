@@ -189,8 +189,9 @@ func viaExtra(d *shell.Doc) h.H {
 func hExtra(d *shell.Doc) h.H {
 	return h.Div(
 		d.H3("Datastar attributes"),
-		h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. The helpers take "+
-			"an expr.Expr, and "), API("h.Data"), h.Str(" writes a plugin attribute h has no helper for.")),
+		h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. Each takes its "+
+			"expression as any string type, so an "), API("expr.Expr"), h.Str(" passes as it is, and "), API("h.Data"),
+			h.Str(" writes a plugin attribute h has no helper for.")),
 		helperTable(),
 	)
 }
