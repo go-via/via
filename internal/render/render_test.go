@@ -89,3 +89,15 @@ func TestEl_aVoidTagInAnyCaseHasNoClosingTag(t *testing.T) {
 		assert.NotContains(t, string(r.Bytes()), "</", tag)
 	}
 }
+
+func TestEl_keepsALeadingNewlineThatTheParserWouldEat(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{"textarea", "pre", "listing"} {
+		r := render.NewRenderer(&stubBinder{})
+		r.Render(render.El(tag, render.Str("\nx")))
+		assert.Equal(t, "<"+tag+">\n\nx</"+tag+">", string(r.Bytes()), tag)
+	}
+	r := render.NewRenderer(&stubBinder{})
+	r.Render(render.El("pre", render.Str("x\n")))
+	assert.Equal(t, "<pre>x\n</pre>", string(r.Bytes()), "only a leading newline is doubled")
+}

@@ -142,6 +142,8 @@ var voidElements = map[string]bool{
 	"track": true, "wbr": true,
 }
 
+var newlineEaters = map[string]bool{"pre": true, "textarea": true, "listing": true}
+
 type element struct {
 	tag  string
 	kids []H
@@ -160,6 +162,7 @@ func (e element) render(r *Renderer) {
 		return
 	}
 	r.WriteString(">")
+	body := r.buf.Len()
 	for _, k := range e.kids {
 		// A nil child is the documented "renders as nothing" (h.H's godoc), and
 		// a helper returning nil on an empty case is the idiom that produces
@@ -170,6 +173,14 @@ func (e element) render(r *Renderer) {
 		if _, ok := k.(Attr); !ok {
 			k.render(r)
 		}
+	}
+	if newlineEaters[strings.ToLower(e.tag)] && r.buf.Len() > body && r.buf.Bytes()[body] == '\n' {
+		// The HTML parser drops one newline right after these opening tags,
+		// so a leading newline of the content needs a second one to survive.
+		tail := bytes.Clone(r.buf.Bytes()[body:])
+		r.buf.Truncate(body)
+		r.buf.WriteByte('\n')
+		r.buf.Write(tail)
 	}
 	r.WriteString("</")
 	r.WriteString(e.tag)
