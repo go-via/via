@@ -467,10 +467,7 @@ func (w *trackLater) View() h.H {
 
 func TestState_trackAfterOnInitIsIgnored(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	n := &atomic.Int64{}
 	n.Store(5)
@@ -515,10 +512,7 @@ func (w *trackFromAction) View() h.H {
 
 func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	n := &atomic.Int64{}
 	n.Store(7)

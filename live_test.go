@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -357,10 +356,7 @@ func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(reTicker{}))
@@ -394,10 +390,7 @@ func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
 
 func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	room := topic.New[string]()
 	synctest.Test(t, func(t *testing.T) {
@@ -433,10 +426,7 @@ func (r *lateRegistrar) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_onConnectAndOnDisposeAfterConnectAreLoudNoOps(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(lateRegistrar{}))
@@ -1297,10 +1287,7 @@ func (a *actionTicker) View() h.H {
 
 func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	beats := &atomic.Int64{}
 	synctest.Test(t, func(t *testing.T) {
@@ -1343,10 +1330,7 @@ func (p *plainTicker) View() h.H {
 
 func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	beats := &atomic.Int64{}
 	app := vt.Serve(t, via.Handler(plainTicker{beats: beats}))

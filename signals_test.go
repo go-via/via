@@ -1,9 +1,7 @@
 package via_test
 
 import (
-	"bytes"
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -589,10 +587,7 @@ func TestSignal_undecodableValueIsDroppedAndLogged(t *testing.T) {
 	_, page := app.Get("/")
 	slot := bindSlots(page)[0]
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	status, frag := app.Action(0).Body(`{"` + slot + `":"not-a-number"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
@@ -626,10 +621,7 @@ func TestSignal_undecodableValueIsLoggedOncePerConnection(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	for range 3 {
 		status, _ := app.Action(0).Over(conn).Body(`{"n":"not-a-number"}`).Fire()
@@ -665,10 +657,7 @@ func TestSignal_undecodableValuesAreLoggedOncePerRequest(t *testing.T) {
 	_, page := app.Get("/")
 	slots := bindSlots(page)[:4] // A, B, C, D — Bump stays well-formed
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	body := `{"` + strings.Join(slots, `":"x","`) + `":"x"}`
 	status, _ := app.Action(0).Body(body).Fire()

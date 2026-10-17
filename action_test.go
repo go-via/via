@@ -1,10 +1,8 @@
 package via_test
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -247,10 +245,7 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 
 func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
@@ -2426,10 +2425,7 @@ func (s *sessBoundLive) View() h.H {
 }
 
 func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}))
 	conn := app.Connect()
@@ -2538,10 +2534,7 @@ func (b *bumpLive) View() h.H {
 }
 
 func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}, via.WithMaxSSEConn(1)))
 
@@ -2562,10 +2555,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 }
 
 func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(panicLive{}))
 	conn := app.Connect()

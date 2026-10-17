@@ -1,7 +1,6 @@
 package via_test
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -10,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"net/http"
 	"net/http/cookiejar"
@@ -1342,10 +1340,7 @@ func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 	c := jarClient(t)
 	auditPost(t, c, base, acts[audPut1])
 
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	fs.set(&fs.delErr, errors.New("redis down"))
 	fs.set(&fs.plainSaveErr, errors.New("redis down"))
@@ -1587,10 +1582,7 @@ func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audRot], old) })
 	auditPostAs(t, base, acts[audPutTwice], old) // both writes land on a retired id
@@ -1791,10 +1783,7 @@ func (u *tickEnsurer) View() h.H { return h.Div(u.got.Display()) }
 
 func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
 		srv := liveServer(t, via.Handler(tickEnsurer{}, testSessionKey))

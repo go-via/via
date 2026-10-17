@@ -954,6 +954,17 @@ func TestMount_staysQuietForAnOrdinaryActionThatSharesAHookLookalikeName(t *test
 	assert.NotContains(t, logged, "mis-named")
 }
 
+// globalLog sends the global log to a buffer until the test ends. A test that
+// uses it must not run in parallel.
+func globalLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
