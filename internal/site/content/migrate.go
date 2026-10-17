@@ -195,7 +195,7 @@ func (p *Migrate) View() h.H {
 				"the handler's Go name and the field it was called on. A stale tab's click answers 404.")...),
 			h.Li(inline("The tab id signal is `viatab`, not `via_tab`.")...),
 			h.Li(inline("A signal's wire name is its field path, first letter lower-cased: `count`, and "+
-				"`chat__draft` inside an embedded `Chat`. The `via:\"name\"` override is gone.")...),
+				"`chat__draft` inside a `Chat` child. The `via:\"name\"` override is gone.")...),
 		),
 
 		d.H2("New startup panics"),

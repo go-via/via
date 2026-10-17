@@ -67,7 +67,7 @@ func (p *Actions) View() h.H {
 		),
 		h.P(h.Str("An action returns nothing. Report a failure the user can fix by setting state, such as an error Signal; a panic is a 500. "+
 			"Mount checks the lifecycle hooks' signatures, not actions': the two rows above are the only action checks, and a render has to reach the binding to run them.")),
-		h.P(h.Str("An action's id is the method's Go name plus the path of the field it was called on, such as "), Code("Stats.A"),
+		h.P(h.Str("An action's id is an 8-character hash of the method's Go name plus the path of the field it was called on, such as "), Code("Stats.A"),
 			h.Str(". A deploy that reorders fields keeps every button's id; one that renames a field answers 410 to a tab still holding the old name.")),
 
 		d.H2("What an action body can do"),

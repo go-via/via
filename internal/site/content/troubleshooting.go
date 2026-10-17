@@ -127,14 +127,15 @@ func (p *Troubleshooting) View() h.H {
 			h.Li(h.Str("On a plain page, a handler that exists only inside a branch opened by a bound Signal always 410s: "+
 				"the render that authorises runs before the posted signals apply. Move the handler outside the branch.")),
 		),
-		h.P(h.Str("The browser reloads the tab on its own after a 410, with a \"Page is out of date - reloading…\" banner. "+
+		h.P(h.Str("On a page with a live unit the browser reloads the tab on its own after a 410, with a \"Page is out of date - reloading…\" banner; "+
+			"a plain page ships no reconnect script, so nothing shows until the user reloads. "+
 			"An action for a live tab whose stream is still connecting, or reconnecting, waits up to 2 seconds (less if "),
 			API("via.WithPinnedDeadline"), h.Str(" is shorter) for it, and answers 410 only if the stream has not come by then. "+
 				"When via ended the stream itself, the 410 comes at once.")),
 		tsSee(d, "/actions#arguments", "Actions: Arguments"),
 
 		d.H2("A Disconnected banner, or the tab keeps reloading"),
-		h.P(h.Str("via's reconnect script shows a banner at the top of the page. What each state means:")),
+		h.P(h.Str("On a page with a live unit, via's reconnect script shows a banner at the top of the page. What each state means:")),
 		table([]string{"Banner", "Cause", "What happens next"},
 			[]h.H{h.Str("Reconnecting…"), h.Str("The network dropped the stream."), h.Str("The browser retries; the banner clears on the next patch.")},
 			[]h.H{h.Str("Disconnected."), h.Str("The stream ended cleanly: a deploy, a restart, Router.Close."),
