@@ -165,11 +165,11 @@ func (c *Ctx) OnDispose(fn func()) {
 // write to it from any request reaches handler: a logout in another tab is
 // seen at once in this process, and on the next keepalive when it happened on
 // another process (see [Session]). A tab that connected before its session
-// existed sees none until an action posted with its tab id carries a session
-// cookie: that binds the tab to the session, and handler sees it from then on
-// (a reconnect with the cookie does the same). A session minted by another tab
-// does not reach it by itself, because only a request naming this tab can bind
-// it. Read the id from ctx.Session() in handler rather than caching it in
+// existed sees none until an action on one of its live units carries a
+// session cookie: that binds the tab to the session, and handler sees it from
+// then on (a reconnect with the cookie does the same). An action on a plain
+// child of the page does not bind it, and neither does a session minted by
+// another tab. Read the id from ctx.Session() in handler rather than caching it in
 // OnInit, and mint the session in OnInit if every tab must be addressable by
 // session from its first frame.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
