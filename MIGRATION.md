@@ -391,8 +391,8 @@ a click is `via.On("click", p.Inc)`.
   write deadline (10s) are fixed, where v0.7 had `WithSSEHeartbeat` and
   `WithSSEWriteTimeout`. The connection cap (`WithMaxSSEConn`, default 10,000)
   and the pinned deadline (`WithPinnedDeadline`, default 5s) are the two SSE
-  limits; `WithSSECompression` (v0.9.1) picks the stream's encoders. Open an issue if a
-  deployment needs another one tunable.
+  limits; `WithSSECompression` (v0.9.1) picks the stream's encoders. Open an
+  issue if a deployment needs another one tunable.
 
 ## Worked example: protecting a page
 
@@ -680,9 +680,9 @@ Four rules:
   submit. An SSE push patches inside `<body>` and never rewrites the head.
 - `Assets` is the one field that is **not** inert: it decides the mount's CSP,
   is read at `Mount` off the literal you mounted and a probe copy, then again
-  on every document render, so it must be a constant of the type. Making it depend on request data panics at `Mount`, or on the
-  first GET if `PageMeta` panicked on Mount's probe copy and the check was
-  skipped, which `Mount` logs.
+  on every document render, so it must be a constant of the type. Making it
+  depend on request data panics at `Mount`, or on the first GET if `PageMeta`
+  panicked on Mount's probe copy and the check was skipped, which `Mount` logs.
 
 ## Gating on a signal
 
