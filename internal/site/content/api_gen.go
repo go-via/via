@@ -343,7 +343,7 @@ var apiSymbols = []apiSymbol{
 	{"topic", "Sub", "type", "type Sub[T any] struct{ … }", "Sub is a subscription.", ""},
 	{"topic", "Sub.Drain", "method", "func (s *Sub[T]) Drain() (batch []T, ok bool)", "Drain removes and returns every queued value in publish order.", ""},
 	{"topic", "Sub.Dropped", "method", "func (s *Sub[T]) Dropped() int", "Dropped reports how many values this subscription lost to its queue limit.", ""},
-	{"topic", "Sub.Ready", "method", "func (s *Sub[T]) Ready() <-chan struct{}", "Ready fires whenever the queue goes from empty to non-empty, and is closed by Stop.", ""},
+	{"topic", "Sub.Ready", "method", "func (s *Sub[T]) Ready() <-chan struct{}", "Ready holds one pending wake-up after any publish, and is closed by Stop.", ""},
 	{"topic", "Sub.Stop", "method", "func (s *Sub[T]) Stop()", "Stop unsubscribes and closes Ready, ending the reader's loop.", ""},
 	{"topic", "Sub.WakeOn", "method", "func (s *Sub[T]) WakeOn(ch chan<- struct{})", "WakeOn routes this subscription's wake-ups to ch as well as to Ready, so one reader can multiplex many subscriptions on a single channel — a live connection drives every ctx.Listen from its own select loop instead of spending a goroutine per subscription.", ""},
 	{"topic", "Topic", "type", "type Topic[T any] struct{ … }", "Topic is a typed fan-out broker.", ""},

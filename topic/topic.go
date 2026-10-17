@@ -21,7 +21,7 @@ type Topic[T any] struct {
 // New builds a Topic with no subscribers. A Topic is safe for concurrent use
 // and is meant to live for the process: declare it as a package-level var and
 // let children subscribe to it with ctx.Listen. It has no Close; a Topic with no
-// subscribers costs a map lookup per publish.
+// subscribers costs one lock per publish.
 func New[T any]() *Topic[T] {
 	return &Topic[T]{
 		subs:  make(map[*Sub[T]]struct{}),
@@ -169,9 +169,9 @@ func (s *Sub[T]) WakeOn(ch chan<- struct{}) {
 	}
 }
 
-// Ready fires whenever the queue goes from empty to non-empty, and is closed by
-// Stop. It carries no values: one wake-up may cover any number of them, so
-// every wake-up must be followed by Drain.
+// Ready holds one pending wake-up after any publish, and is closed by Stop. It
+// carries no values: one wake-up may cover any number of them, and one may find
+// the queue already drained, so every wake-up must be followed by Drain.
 func (s *Sub[T]) Ready() <-chan struct{} { return s.ready }
 
 // Drain removes and returns every queued value in publish order. ok is false

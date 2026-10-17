@@ -206,7 +206,7 @@ func DynAttr(d Dynamic) Attr { return dynAttr{d: d} }
 // every <script> a patch inserts, so one rendered in a live push would run
 // even though the same element in the first document is blocked.
 func El(tag string, kids ...H) H {
-	if !validTagName(tag) {
+	if !plainName(tag) {
 		panic(fmt.Sprintf("h: invalid tag name %q (must match [A-Za-z][A-Za-z0-9-]*)", tag))
 	}
 	if strings.EqualFold(tag, "script") {
@@ -216,16 +216,16 @@ func El(tag string, kids ...H) H {
 	return element{tag: tag, kids: kids}
 }
 
-// validTagName holds tag to the same strict ASCII allowlist as a non-data
-// attribute name: a leading letter, then letters, digits or hyphens. No
-// spaces, so a tag string cannot smuggle a second attribute or an inline
-// event handler into the opening tag.
-func validTagName(tag string) bool {
-	if tag == "" {
+// plainName is the strict ASCII allowlist for a tag and a non-data attribute
+// name: a leading letter, then letters, digits or hyphens. No spaces, so a
+// name cannot smuggle a second attribute or an inline event handler into the
+// opening tag.
+func plainName(name string) bool {
+	if name == "" {
 		return false
 	}
-	for i := range len(tag) {
-		c := tag[i]
+	for i := range len(name) {
+		c := name[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
 		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
@@ -278,19 +278,7 @@ func validAttrName(name string) bool {
 	if len(name) >= 2 && (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N') {
 		return false
 	}
-	if name == "" {
-		return false
-	}
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
-		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
+	return plainName(name)
 }
 
 func cutDataPrefix(name string) (string, bool) {
