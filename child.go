@@ -69,8 +69,15 @@ func Child[C any](child C) h.H {
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	var site childSite
 	runtime.Callers(2, site[:])
-	return render.Dyn(func(r *render.Renderer) { childViewer(r, inst, site) })
+	return render.Dyn(&childNode{inst: inst, site: site})
 }
+
+type childNode struct {
+	inst instance
+	site childSite
+}
+
+func (n *childNode) RenderTo(r *render.Renderer) { childViewer(r, n.inst, n.site) }
 
 // childSite is the call stack above a via.Child call. It is what tells apart
 // two children the parent holds in fields of one type: the copy Child gets
@@ -132,7 +139,7 @@ func (s childSite) id() string {
 // a render: the two View callers and via.When's branch. A rename here that
 // this list misses degrades to the shared site, which the twin tests catch.
 func renderCaller(fn string) bool {
-	for _, name := range []string{"renderRootWith", "renderChildInner", "When."} {
+	for _, name := range []string{"renderRootWith", "renderChildInner", "whenNode.RenderTo"} {
 		if strings.HasPrefix(fn, viaPkg+name) {
 			return true
 		}

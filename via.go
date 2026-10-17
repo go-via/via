@@ -89,7 +89,6 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
-	"errors"
 	"log/slog"
 	"maps"
 	"reflect"
@@ -647,8 +646,8 @@ func (b binderCtx) Action(r *render.Renderer, event string, fn any) {
 	bind(r, b.c, event, fn.(func(*Ctx)))
 }
 
-func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, decode func([]byte) (any, error)) {
-	bindArg(r, b.c, event, fn, arg, decode)
+func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, call render.ArgCall) {
+	bindArg(r, b.c, event, fn, arg, call)
 }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
@@ -763,20 +762,27 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
 // submit carries neither Datastar's signal store nor its headers, so dispatch
 // routes on this field instead — under the same per-mount ownership check.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		ctx := ctxOf(r.Binder())
-		if ctx == nil {
-			return
-		}
-		idx := ctx.actionSlot(handler)
-		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			render.EscapeString(actionPath(ctx, idx)) + `">`)
-		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
-		for _, c := range children {
-			r.Render(c)
-		}
-		r.WriteString(`</form>`)
-	})
+	return render.Dyn(postForm{handler: handler, children: children})
+}
+
+type postForm struct {
+	handler  func(*Ctx)
+	children []h.H
+}
+
+func (f postForm) RenderTo(r *render.Renderer) {
+	ctx := ctxOf(r.Binder())
+	if ctx == nil {
+		return
+	}
+	idx := ctx.actionSlot(f.handler)
+	r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
+		render.EscapeString(actionPath(ctx, idx)) + `">`)
+	r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
+	for _, c := range f.children {
+		r.Render(c)
+	}
+	r.WriteString(`</form>`)
 }
 
 // paramMiss is the sentinel Param panics with when a segment cannot decode
@@ -881,7 +887,7 @@ func bind(r *render.Renderer, ctx *Ctx, event string, fn func(*Ctx)) {
 
 // bindArg wires event to a POST of fn carrying arg, for on.Bind, whose godoc
 // states the dispatchable-iff-rendered property this enforces.
-func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, decode func([]byte) (any, error)) {
+func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call render.ArgCall) {
 	mustActionEvent("on.Bind", event)
 	// Marshalled before the slot is claimed: the encoded arg is both what
 	// the binding ships and what dispatch matches against, so one that
@@ -892,27 +898,7 @@ func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, decode fun
 		ctx.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
 		return
 	}
-	idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
-		if rc.req == nil {
-			return
-		}
-		raw := rc.req.URL.Query().Get("a")
-		if raw == "" || raw == "null" {
-			panic(badActionArg{err: errors.New("missing action arg")})
-		}
-		run, err := decode([]byte(raw))
-		if err != nil {
-			panic(badActionArg{err: err})
-		}
-		// The dispatchable-iff-rendered check (see on.Bind). Matching the
-		// exact bytes the binding shipped means a client echoing the URL it
-		// was served passes, while any arg it invents — even a re-spelling
-		// of a legitimate one — fails closed.
-		if _, ok := bound[raw]; !ok {
-			panic(unrenderedArg{name: name, raw: strconv.Quote(raw), have: len(bound)})
-		}
-		run.(func(*Ctx))(rc)
-	}, string(data))
+	idx := ctx.actionSlotArg(fn, call, string(data))
 	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 }
 

@@ -304,29 +304,35 @@ func (s *Signal[T]) bind(r *render.Renderer, writable bool) {
 // signal in several places reuses its name, so they all update together. Unlike
 // Bind it does not make the slot client-writable — an inbound value for a
 // Display-only signal is ignored (see Signal.bind).
-func (s *Signal[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		s.bind(r, false)
-		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(s.val)))
-	})
+func (s *Signal[T]) Display() h.H { return render.Dyn(signalDisplay[T]{s}) }
+
+type signalDisplay[T any] struct{ s *Signal[T] }
+
+func (d signalDisplay[T]) RenderTo(r *render.Renderer) {
+	d.s.bind(r, false)
+	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(d.s.val)))
 }
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input, sharing the
 // signal's name with Display regardless of source order. Bind is what puts the
 // slot under client control: its value is thereafter whatever the client last
 // set, so never gate an authorization decision on a Bind()ed signal.
-func (s *Signal[T]) Bind() h.Attr {
-	return render.DynAttr(func(r *render.Renderer) {
-		s.bind(r, true)
-		r.Render(h.Data("bind", s.slot))
-	})
+func (s *Signal[T]) Bind() h.Attr { return render.DynAttr(signalBind[T]{s}) }
+
+type signalBind[T any] struct{ s *Signal[T] }
+
+func (b signalBind[T]) RenderTo(r *render.Renderer) {
+	b.s.bind(r, true)
+	r.Render(h.Data("bind", b.s.slot))
 }
 
 // textHandle uses any so it can serve any signal T without appearing on a
 // public signature.
-func textHandle(v any) h.H {
-	return render.Dyn(func(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
-}
+func textHandle(v any) h.H { return render.Dyn(anyText{v}) }
+
+type anyText struct{ v any }
+
+func (t anyText) RenderTo(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(t.v)) }
 
 // SignalCS is a client-only signal: the server never reads or writes it. Its
 // wire name is "_"-prefixed, which Datastar's fetch filter drops from every
@@ -386,18 +392,22 @@ func (s *SignalCS[T]) bind(r *render.Renderer) any {
 
 // Display renders the signal as a Datastar text-bound span, showing the seed
 // value until the client changes it.
-func (s *SignalCS[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		seed := s.bind(r)
-		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(seed)))
-	})
+func (s *SignalCS[T]) Display() h.H { return render.Dyn(csDisplay[T]{s}) }
+
+type csDisplay[T any] struct{ s *SignalCS[T] }
+
+func (d csDisplay[T]) RenderTo(r *render.Renderer) {
+	seed := d.s.bind(r)
+	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(seed)))
 }
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input. The value
 // stays in the browser: unlike [Signal.Bind] it makes nothing server-readable.
-func (s *SignalCS[T]) Bind() h.Attr {
-	return render.DynAttr(func(r *render.Renderer) {
-		s.bind(r)
-		r.Render(h.Data("bind", s.slot))
-	})
+func (s *SignalCS[T]) Bind() h.Attr { return render.DynAttr(csBind[T]{s}) }
+
+type csBind[T any] struct{ s *SignalCS[T] }
+
+func (b csBind[T]) RenderTo(r *render.Renderer) {
+	b.s.bind(r)
+	r.Render(h.Data("bind", b.s.slot))
 }

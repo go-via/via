@@ -53,9 +53,18 @@ type Binder interface {
 	Hydrator(slot string, fn func(json.RawMessage) bool)
 	// Action binds fn, a func(*via.Ctx), to event on the element r is writing.
 	Action(r *Renderer, event string, fn any)
-	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. decode turns
-	// a dispatched arg into the func(*via.Ctx) that calls fn with it.
-	ArgAction(r *Renderer, event string, fn, arg any, decode func(raw []byte) (any, error))
+	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. call
+	// decodes a dispatched arg and calls fn with it.
+	ArgAction(r *Renderer, event string, fn, arg any, call ArgCall)
+}
+
+// ArgCall is on.Bind's typed half of an arg action: via checks the raw arg
+// against what the render bound between Decode and Call.
+type ArgCall interface {
+	// Decode turns a dispatched arg into the handler's argument type.
+	Decode(raw []byte) (any, error)
+	// Call runs the handler on ctx, a *via.Ctx, with a value Decode returned.
+	Call(ctx, v any)
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
@@ -162,27 +171,26 @@ func (e element) render(r *Renderer) {
 	r.WriteString(">")
 }
 
-// dynNode wraps a render function into a sealed H. It is the bridge the via
-// package uses to define dynamic body nodes (signals, children) that read the
-// Binder during the render pass, without breaking the seal or exposing render
-// itself. Users never construct one directly.
-type dynNode struct{ fn func(*Renderer) }
+// Dynamic is markup that reads the Binder during the render pass: signals,
+// children, bound actions. via and on implement it on unexported types and
+// wrap them with Dyn or DynAttr, which keeps H sealed and render unexported.
+type Dynamic interface{ RenderTo(*Renderer) }
 
-func (d dynNode) render(r *Renderer) { d.fn(r) }
+type dynNode struct{ d Dynamic }
 
-// Dyn wraps fn as a dynamic body node. via uses this for signal handles that
-// must read the Binder at render time. The fn is an internal detail of via,
-// never a user-supplied closure at a public call site.
-func Dyn(fn func(*Renderer)) H { return dynNode{fn: fn} }
+func (n dynNode) render(r *Renderer) { n.d.RenderTo(r) }
 
-type dynAttr struct{ fn func(*Renderer) }
+// Dyn wraps d as a dynamic body node.
+func Dyn(d Dynamic) H { return dynNode{d: d} }
 
-func (d dynAttr) render(r *Renderer) { d.fn(r) }
-func (d dynAttr) isAttr()            {}
+type dynAttr struct{ d Dynamic }
 
-// DynAttr wraps fn as a dynamic attribute. via uses this for event bindings
-// (package on) and Signal.Bind, which register with the render pass's Ctx.
-func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
+func (a dynAttr) render(r *Renderer) { a.d.RenderTo(r) }
+func (a dynAttr) isAttr()            {}
+
+// DynAttr wraps d as a dynamic attribute: event bindings (package on) and
+// Signal.Bind, which register with the render pass's Ctx.
+func DynAttr(d Dynamic) Attr { return dynAttr{d: d} }
 
 // El builds a generic element with the given tag and children. tag must match
 // [A-Za-z][A-Za-z0-9-]* — an invalid tag panics, since it is a

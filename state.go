@@ -151,11 +151,13 @@ func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
 // connection it never opened — via fails that action loudly rather than letting
 // every action after it 410. Render the State unconditionally (put via.When
 // inside the row, not around the Display), or register a Tick/Listen in OnInit.
-func (s *State[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		markLive(r)
-		r.WriteEscaped(fmt.Sprint(s.val))
-	})
+func (s *State[T]) Display() h.H { return render.Dyn(stateDisplay[T]{s}) }
+
+type stateDisplay[T any] struct{ s *State[T] }
+
+func (d stateDisplay[T]) RenderTo(r *render.Renderer) {
+	markLive(r)
+	r.WriteEscaped(fmt.Sprint(d.s.val))
 }
 
 // List is server-authoritative slice state — a chat log, a feed, a todo list.
@@ -190,11 +192,16 @@ func (l *List[E]) Remove(i int) { l.Set(slices.Delete(l.Get(), i, i+1)) }
 // Each renders row(item) for every element, in order — sugar over
 // via.Each(l.Get(), row), and like State.Display it marks the unit live. Same
 // by-position morph trap as via.Each.
-func (l *List[E]) Each(row func(E) h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		markLive(r)
-		r.Render(Each(l.Get(), row))
-	})
+func (l *List[E]) Each(row func(E) h.H) h.H { return render.Dyn(listEach[E]{l: l, row: row}) }
+
+type listEach[E any] struct {
+	l   *List[E]
+	row func(E) h.H
+}
+
+func (n listEach[E]) RenderTo(r *render.Renderer) {
+	markLive(r)
+	r.Render(Each(n.l.Get(), n.row))
 }
 
 // markLive marks the rendering unit live: rendering server-authoritative state

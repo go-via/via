@@ -20,7 +20,7 @@ func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func (*stubBinder) Action(*render.Renderer, string, any) {}
 
-func (*stubBinder) ArgAction(*render.Renderer, string, any, any, func([]byte) (any, error)) {}
+func (*stubBinder) ArgAction(*render.Renderer, string, any, any, render.ArgCall) {}
 
 func markup(t *testing.T, node h.H) string {
 	t.Helper()

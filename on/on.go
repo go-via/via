@@ -35,7 +35,9 @@ import (
 
 // Bound is an action with its argument attached, made by [Bind].
 type Bound struct {
-	bind func(event string) h.Attr
+	fn   any // the user's func(*via.Ctx, T): the action's identity
+	arg  any
+	call render.ArgCall
 }
 
 // Bind attaches arg to fn, so the row's own datum rides with the event and the
@@ -67,20 +69,43 @@ type Bound struct {
 // in flight 410s. Read changing state from the composition in an argless
 // handler instead.
 func Bind[T any](fn func(*via.Ctx, T), arg T) Bound {
-	decode := func(raw []byte) (any, error) {
-		var v T
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, err
-		}
-		return func(rc *via.Ctx) { fn(rc, v) }, nil
+	return Bound{fn: fn, arg: arg, call: argCall[T]{fn}}
+}
+
+type argCall[T any] struct{ fn func(*via.Ctx, T) }
+
+func (argCall[T]) Decode(raw []byte) (any, error) {
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
 	}
-	return Bound{bind: func(event string) h.Attr {
-		return render.DynAttr(func(r *render.Renderer) {
-			if b := r.Binder(); b != nil {
-				b.ArgAction(r, event, fn, arg, decode)
-			}
-		})
-	}}
+	return v, nil
+}
+
+func (c argCall[T]) Call(ctx, v any) { c.fn(ctx.(*via.Ctx), v.(T)) }
+
+// boundAttr renders a Bound's binding for one event.
+type boundAttr struct {
+	event string
+	b     Bound
+}
+
+func (a boundAttr) RenderTo(r *render.Renderer) {
+	if b := r.Binder(); b != nil {
+		b.ArgAction(r, a.event, a.b.fn, a.b.arg, a.b.call)
+	}
+}
+
+// actionAttr renders an argless action's binding for one event.
+type actionAttr struct {
+	event string
+	fn    func(*via.Ctx)
+}
+
+func (a actionAttr) RenderTo(r *render.Renderer) {
+	if b := r.Binder(); b != nil {
+		b.Action(r, a.event, a.fn)
+	}
 }
 
 // Option is a Datastar event modifier.
@@ -209,16 +234,12 @@ func Event[F func(*via.Ctx) | Bound](name string, fn F, opts ...Option) h.Attr {
 	k := key(name, opts)
 	switch f := any(fn).(type) {
 	case func(*via.Ctx):
-		return render.DynAttr(func(r *render.Renderer) {
-			if b := r.Binder(); b != nil {
-				b.Action(r, k, f)
-			}
-		})
+		return render.DynAttr(actionAttr{event: k, fn: f})
 	case Bound:
-		if f.bind == nil {
+		if f.call == nil {
 			panic("on: zero Bound; build one with on.Bind")
 		}
-		return f.bind(k)
+		return render.DynAttr(boundAttr{event: k, b: f})
 	}
 	panic("unreachable")
 }

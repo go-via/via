@@ -3,6 +3,7 @@ package via
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"reflect"
@@ -16,18 +17,19 @@ import (
 )
 
 type action struct {
-	fn     func(*Ctx)
-	name   string       // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
-	handle actionHandle // runtime identity, compared to catch an id collision
+	fn     func(*Ctx)     // argless only
+	call   render.ArgCall // arg actions (on.Bind) only
+	name   string         // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
+	handle actionHandle   // runtime identity, compared to catch an id collision
 	// args is the set of ?a= payloads this render bound for the handler, in the
 	// exact JSON the binding shipped. nil marks an argless action (on.Event,
 	// PostForm).
 	args map[string]struct{}
 }
 
-// actionSlot registers run under the content-addressed id of ident — for
-// bindArg that is the user's fn, not the decoding wrapper, which would name the
-// same via-internal closure for every row.
+// actionSlot registers run under the content-addressed id of run itself;
+// actionSlotArg does the same for on.Bind's fn, never its ArgCall, which is
+// the same via-internal type for every row.
 //
 // The id hashes the func's Go name plus the field path of its receiver inside
 // the unit ("A", "Stats.A", "Rows[1]"), not its code pointer or byte offset:
@@ -49,18 +51,44 @@ func (c *Ctx) actionSlot(run func(*Ctx)) string {
 // actionSlotArg is actionSlot for a value-carrying action: it records arg in
 // the slot's allowed set, so dispatch can reject a (handler, arg) pair this
 // render never produced. The set is created once per slot and mutated in place
-// as later rows claim it, so the closure stored here (the last row's) closes
-// over the finished set no matter which row wrote it.
-func (c *Ctx) actionSlotArg(ident any, run func(rc *Ctx, name string, bound map[string]struct{}), arg string) string {
-	id, name, a := c.claimSlot(ident)
+// as later rows claim it, so every row's copy of the action shares it.
+func (c *Ctx) actionSlotArg(ident any, call render.ArgCall, arg string) string {
+	id, _, a := c.claimSlot(ident)
 	if a.args == nil {
 		a.args = map[string]struct{}{}
 	}
 	a.args[arg] = struct{}{}
-	args := a.args
-	a.fn = func(rc *Ctx) { run(rc, name, args) }
+	a.call = call
 	c.actions[id] = a
 	return id
+}
+
+// run calls the handler on rc: directly when argless, else with the arg the
+// request carries, which must be one this render bound.
+func (a action) run(rc *Ctx) {
+	if a.call == nil {
+		a.fn(rc)
+		return
+	}
+	if rc.req == nil {
+		return
+	}
+	raw := rc.req.URL.Query().Get("a")
+	if raw == "" || raw == "null" {
+		panic(badActionArg{err: errors.New("missing action arg")})
+	}
+	v, err := a.call.Decode([]byte(raw))
+	if err != nil {
+		panic(badActionArg{err: err})
+	}
+	// The dispatchable-iff-rendered check (see on.Bind). Matching the exact
+	// bytes the binding shipped means a client echoing the URL it was served
+	// passes, while any arg it invents — even a re-spelling of a legitimate
+	// one — fails closed.
+	if _, ok := a.args[raw]; !ok {
+		panic(unrenderedArg{name: a.name, raw: strconv.Quote(raw), have: len(a.args)})
+	}
+	a.call.Call(rc, v)
 }
 
 // claimSlot resolves ident's action id and rejects a collision between two

@@ -609,7 +609,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// on every dispatch dropped an earlier action's Set the moment it panicked
 	// or reloadUnit errored — no push ran to flush it, and this line wiped it
 	// before the next action's push ever saw it.
-	act.fn(rc)
+	act.run(rc)
 
 	// Re-load the unit the same way the plain path does: the handler mutated
 	// state this unit's OnInit had already read, and the push render below
@@ -871,7 +871,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	u.sessions = m.sessions
 	u.policy = m.policy
 	u.sessW = w
-	a.fn(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
+	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
 	// The handler mutated state the acted unit's OnInit had already read, so
 	// the response render below would frame the pre-action data — a 204 and a

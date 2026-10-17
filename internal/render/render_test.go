@@ -17,7 +17,7 @@ func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
 
 func (*stubBinder) Action(*render.Renderer, string, any) {}
 
-func (*stubBinder) ArgAction(*render.Renderer, string, any, any, func([]byte) (any, error)) {}
+func (*stubBinder) ArgAction(*render.Renderer, string, any, any, render.ArgCall) {}
 
 func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	t.Parallel()
@@ -36,17 +36,21 @@ func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	assert.Equal(t, "<b>&lt;b&gt;", string(r.Bytes()))
 }
 
+type rawText string
+
+func (s rawText) RenderTo(r *render.Renderer) { r.WriteString(string(s)) }
+
 func TestDyn_rendersInTheElementBody(t *testing.T) {
 	t.Parallel()
 	r := render.NewRenderer(&stubBinder{})
-	r.Render(render.El("span", render.Dyn(func(r *render.Renderer) { r.WriteString("dyn") })))
+	r.Render(render.El("span", render.Dyn(rawText("dyn"))))
 	assert.Equal(t, "<span>dyn</span>", string(r.Bytes()))
 }
 
 func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	t.Parallel()
 	r := render.NewRenderer(&stubBinder{})
-	attr := render.DynAttr(func(r *render.Renderer) { r.WriteString(` data-x="1"`) })
+	attr := render.DynAttr(rawText(` data-x="1"`))
 	r.Render(render.El("span", attr, render.Str("body")))
 	assert.Equal(t, `<span data-x="1">body</span>`, string(r.Bytes()))
 }
