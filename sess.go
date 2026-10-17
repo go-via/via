@@ -529,6 +529,13 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 	return d, nil
 }
 
+// sessionSaveRetries caps save's CAS loop. Contention on one session id is a
+// handful of tabs, not a thundering herd, so exhausting it means the store is
+// pathological; the write is dropped rather than applied unconditionally over
+// a blob up to that many revisions stale, which is the very lost update the
+// CAS loop exists to prevent.
+const sessionSaveRetries = 8
+
 // save writes d back under id, merging rather than replacing: the blob the
 // store holds right now is re-read and only this request's write set is
 // overlaid onto it. Two requests on one session therefore each keep their own
@@ -542,14 +549,6 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 // pre-rotation id would re-create a valid session under it on its next write:
 // the rotated-away session never sees the write, and the id Rotate exists to
 // invalidate resolves again.
-//
-// sessionSaveRetries caps the CAS loop. Contention on one session id is a
-// handful of tabs, not a thundering herd, so exhausting it means the store is
-// pathological; the write is dropped rather than applied unconditionally over
-// a blob up to that many revisions stale, which is the very lost update the
-// CAS loop exists to prevent.
-const sessionSaveRetries = 8
-
 func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mint bool) bool {
 	sid, own, dirty, mintFailed, ok := m.snapshot(d)
 	if !ok {

@@ -42,7 +42,7 @@ type action struct {
 // interface method value has no receiver address: valueMethodID keys it by its
 // type's one path in the unit, or refuses it.
 func (c *Ctx) actionSlot(run func(*Ctx)) string {
-	id, _, a := c.claimSlot(run)
+	id, a := c.claimSlot(run)
 	a.fn = run
 	c.actions[id] = a
 	return id
@@ -53,7 +53,7 @@ func (c *Ctx) actionSlot(run func(*Ctx)) string {
 // render never produced. The set is created once per slot and mutated in place
 // as later rows claim it, so every row's copy of the action shares it.
 func (c *Ctx) actionSlotArg(ident any, call render.ArgCall, arg string) string {
-	id, _, a := c.claimSlot(ident)
+	id, a := c.claimSlot(ident)
 	if a.args == nil {
 		a.args = map[string]struct{}{}
 	}
@@ -92,15 +92,15 @@ func (a action) run(rc *Ctx) {
 }
 
 // claimSlot resolves ident's action id and rejects a collision between two
-// handlers via cannot tell apart, returning the id, the handler name, and the
-// row to fill in (carrying any args a previous claim on this id recorded).
-func (c *Ctx) claimSlot(ident any) (string, string, action) {
+// handlers via cannot tell apart, returning the id and the row to fill in
+// (carrying any args a previous claim on this id recorded).
+func (c *Ctx) claimSlot(ident any) (string, action) {
 	id, name, ah := c.actionID(ident)
 	prev, dup := c.actions[id]
 	if dup && prev.handle != ah {
 		panic(render.Miswired(sharedID(id, prev.name, name)))
 	}
-	return id, name, action{name: name, handle: ah, args: prev.args}
+	return id, action{name: name, handle: ah, args: prev.args}
 }
 
 // sharedID leads with the likelier cause, read off the name: a func literal is
