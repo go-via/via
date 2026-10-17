@@ -1219,7 +1219,6 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID())
 
 		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
 		status, _ := app.Action(0).Raw(url).Over(conn).Fire()

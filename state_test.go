@@ -45,9 +45,8 @@ func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
 		"a page whose View renders State must bootstrap the stream")
 
-	c := app.Connect()
-	defer c.Close()
-	assert.NotEmpty(t, c.TabID(), "the connect must hand back a tab id, not 404")
+	// Connect fails the test unless the stream answers with a tab id.
+	app.Connect().Close()
 }
 
 // stateEcho is a live child whose action writes a user-influenced value into

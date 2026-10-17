@@ -774,11 +774,9 @@ func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "an id past the end of the list must not dispatch")
 }
 
-// The arg set's cost, measured rather than asserted by eye: rendering 1000
-// value-carrying bindings must stay within a small constant per binding. The
-// ceiling is deliberately loose (it is a regression tripwire, not a budget) —
-// what it catches is the set turning into something super-linear, or the args
-// being retained per row rather than merged per slot.
+// Reports the arg set's cost for rendering 1000 value-carrying bindings, so a
+// set turning super-linear, or args retained per row rather than merged per
+// slot, shows in the allocs.
 func BenchmarkEachArgSet(b *testing.B) {
 	h := via.Handler(bigList{})
 	srv := httptest.NewServer(h)

@@ -673,7 +673,6 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID(), "the SSE must hand the client its tab id")
 
 		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
@@ -709,7 +708,6 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(flakyRender{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID())
 
 		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "the mutation applies and answers before its render panics")
