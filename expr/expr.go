@@ -22,8 +22,8 @@ type Expr string
 // String returns the expression source.
 func (e Expr) String() string { return string(e) }
 
-// Not is JavaScript's !, parenthesized.
-func (e Expr) Not() Expr { return "(!" + e + ")" }
+// Not is JavaScript's !, parenthesized, with a composite operand grouped.
+func (e Expr) Not() Expr { return Expr("(!" + grouped(e) + ")") }
 
 // Eq compares with JavaScript's strict ===.
 func (e Expr) Eq(v any) Expr { return e.binary("===", v) }
@@ -62,7 +62,7 @@ func (e Expr) Add(v any) Expr {
 }
 
 func (e Expr) binary(op string, v any) Expr {
-	return "(" + e + " " + Expr(op) + " " + Expr(operand(v)) + ")"
+	return Expr("(" + grouped(e) + " " + op + " " + operand(v) + ")")
 }
 
 var bareRef = regexp.MustCompile(`^\$[A-Za-z_][A-Za-z0-9_]*$`)
@@ -77,7 +77,7 @@ func (e Expr) mustBeRef(op string) {
 // which is also a JavaScript literal for every type json can reach.
 func operand(v any) string {
 	if e, ok := v.(Expr); ok {
-		return string(e)
+		return grouped(e)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

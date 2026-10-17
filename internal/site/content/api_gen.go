@@ -332,7 +332,7 @@ var apiSymbols = []apiSymbol{
 	{"expr", "Expr.Le", "method", "func (e Expr) Le(v any) Expr", "Le is <=.", ""},
 	{"expr", "Expr.Lt", "method", "func (e Expr) Lt(v any) Expr", "Lt is <.", ""},
 	{"expr", "Expr.Ne", "method", "func (e Expr) Ne(v any) Expr", "Ne compares with JavaScript's strict !==.", ""},
-	{"expr", "Expr.Not", "method", "func (e Expr) Not() Expr", "Not is JavaScript's !, parenthesized.", ""},
+	{"expr", "Expr.Not", "method", "func (e Expr) Not() Expr", "Not is JavaScript's !, parenthesized, with a composite operand grouped.", ""},
 	{"expr", "Expr.String", "method", "func (e Expr) String() string", "String returns the expression source.", ""},
 	{"expr", "Expr.Toggle", "method", "func (e Expr) Toggle() Expr", "Toggle negates the signal in place.", ""},
 	{"expr", "Raw", "func", "func Raw(js string) Expr", "Raw emits js verbatim and unchecked.", ""},

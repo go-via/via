@@ -163,3 +163,11 @@ func TestRawf_countsOnlyRealVerbsInTheMismatchPanic(t *testing.T) {
 		expr.Rawf("%%%s %s", expr.Expr("$a"))
 	})
 }
+
+func TestExpr_groupsACompositeRawOperand(t *testing.T) {
+	t.Parallel()
+	or := expr.Raw("$a || $b")
+	assert.Equal(t, expr.Expr("(!($a || $b))"), or.Not())
+	assert.Equal(t, expr.Expr("(($a || $b) === 1)"), or.Eq(1))
+	assert.Equal(t, expr.Expr("($n < ($a || $b))"), expr.Raw("$n").Lt(or))
+}

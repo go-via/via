@@ -17,6 +17,13 @@
   reconnects, and the ignored-PageMeta warning on a child names the mounted
   root.
 
+### Fixed
+
+- `expr` groups a composite operand: `expr.Raw("$a || $b").Not()` is
+  `(!($a || $b))` and `.Eq(1)` is `(($a || $b) === 1)`. Both used to bind to
+  the last term only. A bare `$name`, a literal and an already parenthesized
+  expression are emitted as before.
+
 ### Documented (behaviour unchanged)
 
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
