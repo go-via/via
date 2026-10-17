@@ -116,7 +116,8 @@ type unitPusher struct {
 	// from is what makes a live root's plain children survive a push: Child
 	// re-copies each child from the root's field every render, so a child whose
 	// fields OnInit filled comes back zero-valued unless that OnInit runs again.
-	// Cost: a plain child of a live unit runs its OnInit once per pushed frame —
+	// Cost: a plain child of a live unit runs its OnInit on every pushed frame,
+	// once per render livePush makes (two on a page carrying a Bind()) —
 	// keep it cheap, or hold the data on the live unit. It also carries the
 	// unit's liveness, which a Tick or Listen set at connect and no push re-runs.
 	from        *Ctx

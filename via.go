@@ -35,7 +35,8 @@
 // whose authorization changes after that keeps acting on the stream until
 // the tab next acts and is denied, the stream closes, or the router shuts
 // down. A plain child of a live root is the exception: it is a fresh copy on
-// every pushed frame, so its OnInit runs once per frame.
+// every pushed frame, so its OnInit runs on every frame (twice on a page
+// carrying a Bind()).
 //
 // OnReload is the fix for the commonest week-one defect — OnInit loads, the
 // handler mutates the store, and the render answering the action still shows

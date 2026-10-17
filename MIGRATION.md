@@ -710,7 +710,8 @@ composition in an argless handler.
 ## A live root re-inits its plain children every frame
 
 A live root re-renders its whole tree on every pushed frame, and each plain
-child is a fresh copy, so its `OnInit` runs once per frame. That is
+child is a fresh copy, so its `OnInit` runs on every frame: once, or more
+on a page carrying a `Bind()`, where each frame renders the tree twice. That is
 what keeps such a child from coming back zero-valued, but any side effect in
 that `OnInit` repeats at the frame rate. Keep it cheap and pure, or hold the
 data on the live root and pass it down the field.
