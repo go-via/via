@@ -19,6 +19,9 @@
 
 ### Fixed
 
+- `on.Bind` with an arg that encodes as null (a nil slice, map or pointer)
+  drops the binding and logs a warning, as an arg that does not encode
+  already did. It used to render a button whose every click answered 400.
 - A `List` seeded by `ListOf` or a `via:"init=…"` tag no longer leaks one tab's
   edits into others. Each tab copies the mounted literal, so all of them
   shared the seed's array, and `Remove` shifted it in place: after one tab

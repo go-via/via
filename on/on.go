@@ -68,6 +68,9 @@ type Bound struct {
 // goes stale the moment any push re-renders the button, and the click already
 // in flight 410s. Read changing state from the composition in an argless
 // handler instead.
+//
+// An arg that does not encode as JSON, or encodes as null (a nil slice, map or
+// pointer), drops the binding and logs a warning.
 func Bind[T any](fn func(*via.Ctx, T), arg T) Bound {
 	return Bound{fn: fn, arg: arg, call: argCall[T]{fn}}
 }

@@ -917,6 +917,11 @@ func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call rende
 		ctx.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
 		return
 	}
+	// Dispatch reads null as a missing arg, so the binding would 400 on every click.
+	if string(data) == "null" {
+		ctx.logger().Warn("via: on.Bind arg is null; the binding is dropped", "event", event)
+		return
+	}
 	idx := ctx.actionSlotArg(fn, call, string(data))
 	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 }

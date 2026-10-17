@@ -976,3 +976,17 @@ func TestActionID_valueReceiverHeldAtOnePathDispatches(t *testing.T) {
 		})
 	}
 }
+
+type nilArgPage struct{}
+
+func (p *nilArgPage) Pick(ctx *via.Ctx, ids []int) {}
+func (p *nilArgPage) View() h.H {
+	return h.Button(h.ID("b"), on.Click(on.Bind(p.Pick, []int(nil))))
+}
+
+func TestBind_aNilArgDropsTheBindingAndSaysSo(t *testing.T) {
+	logs := globalLog(t)
+	_, page := do(t, serve(t, via.Handler(nilArgPage{})), http.MethodGet, "/", "")
+	assert.NotContains(t, page, "data-on:click", "a null arg answers 400 on every click, so it must not render")
+	assert.Contains(t, logs.String(), "on.Bind arg is null")
+}
