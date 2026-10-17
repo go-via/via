@@ -123,7 +123,7 @@ func (p *Testing) View() h.H {
 			h.Li(h.Strong(h.Str("GET the page. ")), h.Str("Action URLs are in its markup: "),
 				Code("@post('/_via/a/<child>/<id>')"), h.Str(" in a "), Code("data-on:"), h.Str(" attribute, or a "),
 				API("via.PostForm"), h.Str("'s "), Code("action"), h.Str(". The id is a hash of the handler, so read it off "+
-					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and a child's instance as "), Code("?u="),
+					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and which Child call site rendered a child as "), Code("?u="),
 				h.Str(". A binding with a query carries it in a "), Code("data-via-q-<event>"),
 				h.Str(" attribute on the same element, and the expression appends it to the path: "),
 				Code(`data-via-q-click="?a=2" data-on:click="@post('/_via/a/r/<id>' + (el.getAttribute('data-via-q-click') ?? ''))"`),
