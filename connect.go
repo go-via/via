@@ -380,7 +380,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	pushOnConnect(m.cfg.log, guard, units)
 
 	streaming = true
-	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc, sseHeartbeat)
+	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc)
 }
 
 func startListeners(units []*Ctx, streamCtx context.Context, wake chan struct{}) []subscription {

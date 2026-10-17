@@ -185,14 +185,14 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*Ctx, listeners []subscription, wake chan struct{}, lc *tabStream, interval time.Duration) {
+func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*Ctx, listeners []subscription, wake chan struct{}, lc *tabStream) {
 	defer disposeUnits(log, g, units)
 	for _, u := range units {
 		for _, t := range u.ticks {
 			go runTicker(reqCtx, u, t, lc.pushq)
 		}
 	}
-	beat := time.NewTicker(interval)
+	beat := time.NewTicker(sseHeartbeat)
 	defer beat.Stop()
 	for {
 		select {
