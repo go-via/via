@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- The reconnect banner stops probing after 20 failed probes, as documented; it ran a 21st.
 - A live unit's native form submit answers with a page whose OnInit sees the session its action wrote; it read the request's pre-action cookie, so a login there rendered logged out.
 - A plain grandchild that a live child's push reveals runs its `OnInit`, as it does under a live root. A live grandchild revealed under a unit that is live through a `Tick` or `Listen` alone now aborts the push, as it does when the unit renders `State`.
 - A `Signal.Set` inside an `OnConnect` fn reaches the client. The baseline render taken before `OnConnect` runs bound the handles to a throwaway copy, so the Set never shipped.

@@ -161,7 +161,7 @@ func (p *Actions) View() h.H {
 		snippet.Region("actions/upload.go", "upload", snippet.Mark("FormFile", "DetectContentType", "CreateTemp")),
 		snippet.Region("actions/upload.go", "router", snippet.Mark("WithMaxUpload", "WithMaxBody")),
 		h.P(API("via.WithMaxUpload"), h.Str(" caps the whole multipart body (default 8 MiB), and a larger one answers 413 before the handler runs. "),
-			API("via.WithMaxBody"), h.Str(" caps how much of it is held in memory (default 1 MiB); via spills the rest to temp files and removes them after the handler returns.")),
+			API("via.WithMaxBody"), h.Str(" caps how much of its file parts is held in memory (default 1 MiB); via spills the rest to temp files and removes them after the handler returns. Text fields stay in memory, up to WithMaxBody plus 10 MiB.")),
 		Callout(Warning, "Filename and Content-Type are client input",
 			h.P(h.Str("The header's Filename can hold "), Code("../"), h.Str(" and its Content-Type is whatever the browser claims. "+
 				"Name the file yourself and sniff the bytes."))),
@@ -206,7 +206,7 @@ func (p *Actions) View() h.H {
 			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnInit or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
 			[]h.H{h.Str("410"), h.Str("The render does not bind this action, or not with this argument, or the tab's stream is gone.")},
 			[]h.H{h.Str("413"), h.Str("The body is over WithMaxBody, or a native submit is over WithMaxUpload.")},
-			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
+			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnInit or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
 			[]h.H{h.Str("503"), h.Str("The session store did not answer, a live tab's goroutine did not pick the action up in time, too many actions are already waiting for their streams, or the router is shutting down.")},
 		),
 		h.P(h.Str("An action posted by Datastar leaves the page as it was. On a page with a live unit, a 410 shows "+

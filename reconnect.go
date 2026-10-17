@@ -110,7 +110,7 @@ var reconnectInit = `(()=>{if(window.__viaRC)return;window.__viaRC=1;` +
 	`if(g!==gen)return;if(!r.ok)throw 0;` +
 	`try{sessionStorage.setItem(K,+(sessionStorage.getItem(K)||0)+1)}catch(_){}` +
 	`location.reload()}).catch(function(){if(g!==gen)return;` +
-	`if(++fails>20){stop('Disconnected.');return}` +
+	`if(++fails>=20){stop('Disconnected.');return}` +
 	`probe(Math.min(Math.max(d,250)*2,8000),g)})},d+Math.floor(Math.random()*250))}` +
 	`function lost(m){conn('offline');var n=0;try{n=+(sessionStorage.getItem(K)||0)}catch(_){}` +
 	// At the cap the button is the only way out: another auto-probe would just
