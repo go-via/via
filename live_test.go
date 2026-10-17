@@ -106,7 +106,7 @@ func (m *mixedChild) View() h.H {
 	)
 }
 
-func TestLive_tickAndSubscribeShareOneStreamGoroutineAndTearDownCleanly(t *testing.T) {
+func TestLive_tickAndListenFramesShareOneStreamAndDisposeRuns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})

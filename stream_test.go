@@ -958,7 +958,7 @@ func TestLive_connectsThroughAMiddlewareThatWrapsTheWriter(t *testing.T) {
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
-	require.NotNil(t, lines)
+	awaitTabID(t, lines)
 }
 
 // deadRW is a ResponseWriter and nothing more — no Flush, no Unwrap, the shape

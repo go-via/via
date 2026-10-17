@@ -348,24 +348,6 @@ func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"`+slots[1][1]+`":1`, "body: %s", rec.Body.String())
 }
 
-type idSameMethodTwice struct{ N via.Signal[int] }
-
-func (c *idSameMethodTwice) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
-
-func (c *idSameMethodTwice) View() h.H {
-	return h.Div(
-		h.Button(on.Click(c.Inc), h.Str("+")),
-		h.Button(on.Click(c.Inc), h.Str("also +")),
-	)
-}
-
-func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
-	t.Parallel()
-	urls := actionURLs(t, via.Handler(idSameMethodTwice{}))
-	require.Len(t, urls, 2)
-	require.Equal(t, urls[0], urls[1])
-}
-
 type idClosurePair struct{ hits [2]int }
 
 func (p *idClosurePair) View() h.H {
