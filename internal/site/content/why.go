@@ -110,7 +110,7 @@ func (p *Why) View() h.H {
 
 		d.H2("Compared with"),
 		table([]string{"", "Views in", "Client runtime", "UI state", "Event wiring"},
-			[]h.H{h.Strong(h.Str("via v0.8")), h.Str("Go functions returning h.H"), h.Str("Datastar, embedded in via"),
+			[]h.H{h.Strong(h.Str("via")), h.Str("Go functions returning h.H"), h.Str("Datastar, embedded in via"),
 				h.Str("Signal in the browser; State and List per tab on the server"),
 				h.Str("Method values; checked by the compiler")},
 			[]h.H{h.Strong(h.Str("templ + htmx")), h.Str(".templ files compiled to Go"), h.Str("htmx"),

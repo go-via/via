@@ -271,6 +271,9 @@ func (p *Deploy) View() h.H {
 		h.P(h.Str("A "), API("via.SessionStore"), h.Str(" is three methods over opaque bytes. Against Redis "+
 			"they are GET, SET with an expiry, and DEL. Implement "), API("via.VersionedSessionStore"),
 			h.Str(" as well if the backend can make a write conditional on the revision it read.")),
+		h.P(h.Str("Every open stream bound to a session calls Load once per 25-second keepalive, so a Rotate, logout or "+
+			"expiry on another process reaches its tabs: open streams / 25 Loads a second. Against a database each is a "+
+			"query, so size the pool for them or put a cache in front.")),
 		h.P(h.Str("Rotate is a Save under the new id, then a Delete of the old. If the Save fails, or the old id "+
 			"can be neither deleted nor expired, "), API("via.Session.Rotate"), h.Str(" panics and the request "+
 			"answers 500 rather than report a rotation that did not happen. Expiry is the ttl handed to Save, "+
