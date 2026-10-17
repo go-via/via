@@ -181,7 +181,11 @@ type List[E any] struct{ State[[]E] }
 
 // ListOf seeds a List with the given elements — the [StateOf] of lists, and the
 // same choice against a zero List filled in OnInit.
-func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true}} }
+func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: slices.Clip(v), lit: true}} }
+
+// A seed's array is shared by every tab copied from the mounted literal, so it
+// is clipped: the first Append reallocates instead of writing into it.
+func (*List[E]) seedApplier(v any) seedApplier { return stateSeed[[]E]{slices.Clip(v.([]E))} }
 
 // Append adds v to the end of this connection's list and schedules the push,
 // like any Set. It re-slices in place when there is capacity, so appending in a
@@ -191,9 +195,12 @@ func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true
 func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
 
 // Remove deletes the element at i, shifting the rest left, and panics if i is
-// out of range. The freed slot is zeroed, so a pointer element does not stay
-// reachable through the backing array.
-func (l *List[E]) Remove(i int) { l.Set(slices.Delete(l.Get(), i, i+1)) }
+// out of range. It builds a new array rather than shifting in place, since the
+// old one may be a seed other tabs still hold.
+func (l *List[E]) Remove(i int) {
+	s := l.Get()
+	l.Set(append(append(make([]E, 0, len(s)-1), s[:i]...), s[i+1:]...))
+}
 
 // Each renders row(item) for every element, in order — sugar over
 // via.Each(l.Get(), row), and like State.Display it marks the unit live. Same

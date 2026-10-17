@@ -108,15 +108,13 @@ func TestList_outOfRangeIndexPanics(t *testing.T) {
 	assert.Panics(t, func() { newList().Remove(1) }, "Remove past the end")
 }
 
-func TestList_removeZeroesTheFreedSlot(t *testing.T) {
+func TestList_removeLeavesTheOldArrayUntouched(t *testing.T) {
 	t.Parallel()
-	var l via.List[*string]
-	a, b := "a", "b"
-	l.Append(&a)
-	l.Append(&b)
-	full := l.Get()[:2]
+	l := via.ListOf("a", "b")
+	before := l.Get()
 	l.Remove(0)
-	assert.Nil(t, full[1], "the vacated tail slot must be zeroed, not left aliasing the element")
+	assert.Equal(t, []string{"a", "b"}, before, "another tab may still hold the old array")
+	assert.Equal(t, []string{"b"}, l.Get())
 }
 
 // listChild is the canonical case item 04 claimed was impossible: a live list
@@ -647,4 +645,36 @@ func TestStateTrack_makesThePageLive(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `@post('/_via/sse')`,
 		"a literal-tracked State must earn the page a stream even when nothing renders it")
+}
+
+// sharedSeed is a List seeded by a literal and by a tag, each mounted once and
+// so copied into every tab.
+type sharedSeed struct {
+	Lit    via.List[string]
+	Tagged via.List[string] `via:"init=[\"x\",\"y\",\"z\"]"`
+}
+
+func (p *sharedSeed) Drop(ctx *via.Ctx) { p.Lit.Remove(0); p.Tagged.Remove(0) }
+func (p *sharedSeed) Grow(ctx *via.Ctx) { p.Lit.Append("new"); p.Tagged.Append("new") }
+
+func (p *sharedSeed) View() h.H {
+	return h.Div(h.Button(on.Click(p.Drop)), h.Button(on.Click(p.Grow)),
+		h.P(h.Str("lit="), p.Lit.Each(seedItem)), h.P(h.Str("tagged="), p.Tagged.Each(seedItem)))
+}
+
+func seedItem(s string) h.H { return h.Str(s + ",") }
+
+func TestList_aTabsRemoveAndAppendLeaveTheSeedOtherTabsGet(t *testing.T) {
+	app := vt.Serve(t, via.Handler(sharedSeed{Lit: via.ListOf("a", "b", "c")}))
+	conn := app.Connect()
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+	conn.Await("lit=b,c,<")
+	status, _ = app.Action(1).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+	conn.Await("lit=b,c,new,<")
+
+	_, page := app.Get("/")
+	assert.Contains(t, page, "lit=a,b,c,<")
+	assert.Contains(t, page, "tagged=x,y,z,<")
 }
