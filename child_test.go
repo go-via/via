@@ -636,28 +636,30 @@ type plainRootWithFastTickGatedLiveChild[G any] struct{ Kid gatedLiveChildFastTi
 func (p *plainRootWithFastTickGatedLiveChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
 
 func TestChild_liveNestingViolationAbortsTheStreamAndLogsOnce(t *testing.T) {
-	t.Parallel()
-	var out lockedBuf
-	r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
-	via.Mount(r, "/", plainRootWithFastTickGatedLiveChild[gcLive]{})
-	app := vt.Serve(t, r)
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+		via.Mount(r, "/", plainRootWithFastTickGatedLiveChild[gcLive]{})
+		app := vt.Serve(t, r)
 
-	conn := app.Connect()
-	defer conn.Close()
+		conn := app.Connect()
+		defer conn.Close()
 
-	app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
 
-	require.Eventually(t, func() bool {
-		return strings.Contains(out.String(), "live push aborted")
-	}, 2*time.Second, 5*time.Millisecond,
-		"the violation must abort the stream")
+		require.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "live push aborted")
+		}, 2*time.Second, 5*time.Millisecond,
+			"the violation must abort the stream")
 
-	// The Tick fires every 10ms; give a broken abort many chances to re-log
-	// before checking the count stayed at one.
-	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, 1, strings.Count(out.String(), "live push aborted"),
-		"a permanent nesting violation re-panics identically on every following tick — "+
-			"one log line from tearing the stream down, not one per beat")
+		// The Tick fires every 10ms; give a broken abort many chances to re-log
+		// before checking the count stayed at one.
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Equal(t, 1, strings.Count(out.String(), "live push aborted"),
+			"a permanent nesting violation re-panics identically on every following tick — "+
+				"one log line from tearing the stream down, not one per beat")
+	})
 }
 
 func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *testing.T) {

@@ -1421,25 +1421,26 @@ func TestRouterClose_isSafeToCallTwice(t *testing.T) {
 }
 
 func TestRouterClose_stopsTheTickGoroutine(t *testing.T) {
-	t.Parallel()
-	r, p := closableRouter(t)
-	app := vt.Serve(t, r)
-	conn := app.Connect()
-	<-p.beats
-	r.Close()
-	require.NoError(t, conn.AwaitClose())
+	synctest.Test(t, func(t *testing.T) {
+		r, p := closableRouter(t)
+		app := vt.Serve(t, r)
+		conn := app.Connect()
+		<-p.beats
+		r.Close()
+		require.NoError(t, conn.AwaitClose())
 
-	// Drain whatever the last live tick already queued, then prove the timer
-	// is gone rather than merely between beats.
-	select {
-	case <-p.beats:
-	default:
-	}
-	select {
-	case <-p.beats:
-		assert.Fail(t, "a Tick fired after Close returned")
-	case <-time.After(50 * time.Millisecond):
-	}
+		// Drain whatever the last live tick already queued, then prove the timer
+		// is gone rather than merely between beats.
+		select {
+		case <-p.beats:
+		default:
+		}
+		select {
+		case <-p.beats:
+			assert.Fail(t, "a Tick fired after Close returned")
+		case <-time.After(50 * time.Millisecond):
+		}
+	})
 }
 
 func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {

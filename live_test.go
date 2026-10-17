@@ -1215,13 +1215,15 @@ func (p *connectNoop) onN(ctx *via.Ctx, n int) { p.N.Set(n) }
 func (p *connectNoop) View() h.H               { return h.P(h.Str("n: "), p.N.Display()) }
 
 func TestConnect_anOnConnectThatChangesNothingShipsNoFrame(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(connectNoop{bus: topic.New[int]()}))
-	conn := app.Connect()
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(connectNoop{bus: topic.New[int]()}))
+		conn := app.Connect()
 
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: "),
-		"an OnConnect fn that changes nothing must not ship an element patch")
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: "),
+			"an OnConnect fn that changes nothing must not ship an element patch")
+	})
 }
 
 // A push whose render is byte-identical to the last one ships no frame.
@@ -1261,24 +1263,27 @@ func countFrames(c *vt.Conn, needle string) int {
 }
 
 func TestConnect_anUnchangedTickRenderShipsNoFrame(t *testing.T) {
-	t.Parallel()
-	want := &atomic.Int64{}
-	app := vt.Serve(t, via.Handler(unchangedTick{want: want}))
-	conn := app.Connect()
+	synctest.Test(t, func(t *testing.T) {
+		want := &atomic.Int64{}
+		app := vt.Serve(t, via.Handler(unchangedTick{want: want}))
+		conn := app.Connect()
 
-	require.Contains(t, conn.Await("n: "), "n: 0", "the first push always ships")
+		require.Contains(t, conn.Await("n: "), "n: 0", "the first push always ships")
 
-	// ~40 further ticks, every one of them rendering the same bytes.
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: 0"),
-		"an unchanged tick render must not ship an element patch")
+		// ~40 further ticks, every one of them rendering the same bytes.
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: 0"),
+			"an unchanged tick render must not ship an element patch")
 
-	// A real change still ships — exactly once.
-	want.Store(7)
-	require.Contains(t, conn.Await("n: 7"), "n: 7")
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: 7"),
-		"the ticks after the change repeat the same bytes and must ship nothing")
+		// A real change still ships — exactly once.
+		want.Store(7)
+		require.Contains(t, conn.Await("n: 7"), "n: 7")
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: 7"),
+			"the ticks after the change repeat the same bytes and must ship nothing")
+	})
 }
 
 // actionTicker is live via a Listen on a topic nothing publishes to, so its
