@@ -284,6 +284,10 @@ func (c *tabStream) unitType() string {
 	return "unknown"
 }
 
+// warnPinTimer is the pin timer's report, deduped separately from an
+// action's.
+func (c *tabStream) warnPinTimer() { c.warnPinned(&c.pinTimerLogged) }
+
 // warnPinned fires once per connection per path (once is that path's flag): a
 // pinned goroutine stays pinned, and every later click would repeat the line.
 // Keepalives stop too (runStream's beat is on the same goroutine), so a proxy
@@ -291,10 +295,6 @@ func (c *tabStream) unitType() string {
 // line is the only signal. It fires from an action that could not be picked
 // up, and from the stream when one item outlives the deadline, so a tab no one
 // clicks on is reported too.
-// warnPinTimer is the pin timer's report, deduped separately from an
-// action's.
-func (c *tabStream) warnPinTimer() { c.warnPinned(&c.pinTimerLogged) }
-
 func (c *tabStream) warnPinned(once *atomic.Bool) {
 	if once.Swap(true) {
 		return

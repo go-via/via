@@ -939,7 +939,7 @@ type badActionArg struct{ err error }
 // unrenderedArg is the sentinel for a ?a= that decodes fine but names a value
 // this request's render never bound (→ 410). A sentinel and not a dispatch-site
 // check because the distinction only exists once the arg is decoded into T:
-// dispatch has no T, the slot's own closure does.
+// dispatch has no T; the arg's ArgCall decodes it in action.run.
 type unrenderedArg struct {
 	name string
 	raw  string

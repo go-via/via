@@ -231,7 +231,9 @@ type pushItem struct {
 
 func (it pushItem) run() {
 	switch {
-	case it.tick != nil:
+	case it.unit != nil:
+		// Keyed on unit, not tick: a nil Tick handler panics here, on the
+		// beat, where the guard logs it.
 		it.tick(it.unit)
 		it.unit.pusher.push()
 	case it.listen != nil:

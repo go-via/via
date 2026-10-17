@@ -1463,3 +1463,25 @@ func TestOnDispose_warnsWhenCalledFromOnReload(t *testing.T) {
 	assert.Contains(t, fireReloadRegistrar(t, "OnDispose"), "via: OnDispose called from OnReload — ignored",
 		"an OnDispose from OnReload registers nothing, and must say so like a late Track does")
 }
+
+// nilTick registers a Tick with no handler, a wiring slip the beat surfaces as
+// a logged panic rather than a silent no-op.
+type nilTick struct{ N via.State[int] }
+
+func (p *nilTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, nil)
+	return nil
+}
+func (p *nilTick) View() h.H { return h.P(p.N.Display()) }
+
+func TestTick_aNilHandlerPanicsOnTheBeatAndSaysSo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		srv := liveServer(t, via.Handler(nilTick{}, logTo(&out)))
+		_, cancel := openStream(t, srv)
+		defer cancel()
+		time.Sleep(20 * time.Millisecond)
+		synctest.Wait()
+		assert.Contains(t, out.String(), "live push panic", "a nil Tick handler must not run silently")
+	})
+}

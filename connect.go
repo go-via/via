@@ -71,8 +71,8 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPus
 // slot from the first connect on. Each extra render re-runs every plain child's
 // OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
 func livePush(lc *tabStream, p *unitPusher) (*Ctx, []byte) {
-	// One set for the life of the connection, never replaced: a hydrator closure
-	// notes its undo into the rev of the Ctx that bound the signal, so a second
+	// One set for the life of the connection, never replaced: a signal's
+	// hydrator notes its undo into the rev of the Ctx that bound the signal, so a second
 	// live unit's push swapping lc.rev would leave that unit pointing at a set
 	// nothing restores — and its next action's client value would survive into
 	// the authority render. restore() clears the map, so reuse is not growth:

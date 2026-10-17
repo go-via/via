@@ -891,7 +891,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// The intersection is per (handler, arg), not per handler: a posted signal
 	// that widens an Each would otherwise widen the accepted arg set too, and
 	// an arg only the client's own body produced would dispatch. a.args is the
-	// very map the slot's closure checks against, so pruning it in place is
+	// very map action.run checks against, so pruning it in place is
 	// what fails the unauthorized arg closed.
 	for k := range a.args {
 		if _, ok := authAct.args[k]; !ok {
