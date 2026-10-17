@@ -42,7 +42,7 @@ var overrides = map[string]string{
 	"via.Ctx.Context":          "The context bounding this unit's work: the stream's on a live unit, the request's otherwise. Never nil. Watch it in a Tick or Listen handler to abandon a slow call against a dead socket.",
 	"via.Ctx.Session":          "The browser session — one value, Get/Put/Delete, ID and Rotate — resolved from the signed cookie and created lazily on the first write.",
 	"via.Ctx.Tick":             "Runs the handler every d for the life of the connection and re-renders the unit after each run; a d of 0 or less runs every second, with one warning. Makes the unit live. OnInit only.",
-	"via.Ctx.Listen":           "Subscribes the unit to a topic and runs the handler on the unit's own goroutine for every value, unsubscribing on disconnect. Makes the unit live. OnInit only.",
+	"via.Ctx.Listen":           "Subscribes the unit to a topic and runs the handler on its tab's stream goroutine for every value, unsubscribing on disconnect. Makes the unit live. OnInit only.",
 	"via.Ctx.OnConnect":        "Runs once, when this unit's stream opens, after every Listen has subscribed. OnInit only; on a unit nothing made live it never runs.",
 	"via.Ctx.OnDispose":        "Runs when the unit's connection closes — stop subscriptions, release producers. OnInit only, and only meaningful on a unit something has made live.",
 	"via.Ctx.Redirect":         "Navigates the browser after the current handler returns, from OnInit, OnReload, a PostForm submit or an action alike. The render that called it ships nothing. Only a relative path or a URL on this site's host or a trusted origin is followed; anything else is dropped and logged.",

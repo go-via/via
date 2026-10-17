@@ -51,7 +51,7 @@ func (p *Tutorial) View() h.H {
 		h.P(h.Str("A "), API("topic.Topic"), h.Str(", made with "), API("topic.New"), h.Str(" and kept for the life of "+
 			"the process, fans each published value out to every subscriber. "), API("via.Ctx.Listen"),
 			h.Str(" in OnInit subscribes this tab once its stream opens and runs "), Code("onMessage"),
-			h.Str(" on the unit's own goroutine for every publish, then pushes the re-render. "), Code("Chat"),
+			h.Str(" on its tab's stream goroutine for every publish, then pushes the re-render. "), Code("Chat"),
 			h.Str(" holds a pointer to the room, so the copy each request gets shares it. "), Code("Log"),
 			h.Str(" is a "), API("via.List"), h.Str(": server state, one per tab, rendered by "), API("via.List.Each"), h.Str(".")),
 

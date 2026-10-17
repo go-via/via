@@ -177,7 +177,7 @@ func (bind *Ctx) unit(child string) *Ctx {
 }
 
 // unit returns the connected live unit for dispatch address child. Called on
-// the child goroutine (see dispatchOverStream) so the lookup is atomic with the
+// the stream goroutine (see dispatchOverStream) so the lookup is atomic with the
 // dispatch it guards; it still takes replace's lock, so a future caller reading
 // it from elsewhere need not remember to add one.
 func (c *tabStream) unit(child string) *Ctx {
@@ -329,7 +329,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// A streaming page's plain child echoes the tab id too, and its address
 		// was never registered on the connection. Membership is stable (a unit
 		// is published before the tab id is, and never removed), so this check
-		// is safe off the child goroutine, unlike the staleness lookup
+		// is safe off the stream goroutine, unlike the staleness lookup
 		// dispatchOverStream still does there.
 		if lc.unit(child) != nil {
 			m.dispatchOverStream(w, req, mode, lc, deadline, ticket, child, act, in, base)

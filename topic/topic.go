@@ -1,4 +1,4 @@
-// Package topic is an in-process fan-out broker for live children: one Publish
+// Package topic is an in-process fan-out broker for live units: one Publish
 // reaches every Subscriber. It is the blessed multi-user seam that keeps the
 // via core free of shared state — apps create a Topic, pipe it into a child
 // via ctx.Listen, and Publish to it from an action or any goroutine.

@@ -1,5 +1,5 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
-// Datastar client: plain request/response pages, SSE-backed live children,
+// Datastar client: plain request/response pages, SSE-backed live units,
 // server-authoritative State/List/Signal, and always-on sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
@@ -78,7 +78,7 @@
 // Not safe for concurrent use. Call them only from a via callback. To reach a
 // unit from a goroutine of your own — a background worker, a message consumer,
 // an http.Handler outside via — publish to a [topic.Topic] and have the unit
-// [Ctx.Listen] to it; the value is then delivered on the unit's own goroutine.
+// [Ctx.Listen] to it; the value is then delivered on its tab's stream goroutine.
 //
 //	go func() { prices.Publish(tick) }() // fine: Topic is concurrency-safe
 //	go func() { p.Price.Set(tick) }()    // race: Set is not

@@ -82,7 +82,7 @@ func (p *Live) View() h.H {
 		d.H2("Timers"),
 		demo.Card(d.H3("Pulse"),
 			h.P(APIText("via.Ctx.Tick", "ctx.Tick(time.Second, p.beat)"), h.Str(" is the whole subscription. "+
-				"Every beat runs the handler on the unit's goroutine, re-renders this unit and patches it; the "+
+				"Every beat runs the handler on its tab's stream goroutine, re-renders this unit and patches it; the "+
 				"header, the sidebar and the other demos are not touched. Tick is valid only inside OnInit; a "+
 				"later call registers nothing and logs.")),
 			via.Child(p.Pulse), "pulse.go",
@@ -92,7 +92,7 @@ func (p *Live) View() h.H {
 		demo.Card(d.H3("Broadcast feed"),
 			h.P(h.Str("A "), API("topic.Topic"), h.Str(" is built with "), API("topic.New"),
 				h.Str(" and held for the life of the process; the zero Topic is not usable. "), API("via.Ctx.Listen"),
-				h.Str(" subscribes this unit, runs the handler on the unit's own goroutine for every value, and "+
+				h.Str(" subscribes this unit, runs the handler on its tab's stream goroutine for every value, and "+
 					"unsubscribes when the tab goes away. The list is this tab's own and keeps the newest 50; "+
 					"posting is capped at 20 a minute per client IP.")),
 			via.Child(p.Feed), "feed.go",

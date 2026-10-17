@@ -74,10 +74,10 @@ func (e *errWriter) Write(p []byte) (int, error) {
 // stream serializes every write and tears the stream down on the first write
 // or flush failure. A half-open peer (vanished without a FIN) never cancels the
 // request context, so a failed frame write is the only in-band signal it's
-// gone; cancelling stops the child goroutine, its tickers and subscriptions and
+// gone; cancelling stops the stream goroutine, its tickers and subscriptions and
 // runs disposers instead of leaking them against a dead socket. The per-frame
 // deadline keeps a stalled-but-alive peer from pinning the goroutine forever.
-// All calls run on the child goroutine, so it needs no lock.
+// All calls run on the stream goroutine, so it needs no lock.
 type stream struct {
 	w       io.Writer
 	rc      *http.ResponseController

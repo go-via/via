@@ -6,8 +6,9 @@ import (
 	"github.com/go-via/via/on"
 )
 
-// Counter is the smallest live unit: rendering a State is what earns this
-// child its own SSE stream, and a click patches only this region.
+// Counter is the smallest live unit: rendering a State is what makes this
+// child live, so the tab opens its SSE stream, and a click patches only this
+// region.
 type Counter struct{ N via.State[int] }
 
 func (c *Counter) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }

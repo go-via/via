@@ -41,7 +41,7 @@ type config struct {
 const sseHeartbeat = 25 * time.Second
 
 // sseWriteTimeout caps a single frame write, so a stalled peer can't pin the
-// child's goroutine. Fixed: disabling it would let one pin a net/http goroutine
+// stream goroutine. Fixed: disabling it would let one pin a net/http goroutine
 // per click, since an action POST waits behind this same deadline.
 const sseWriteTimeout = 10 * time.Second
 
@@ -49,7 +49,7 @@ const sseWriteTimeout = 10 * time.Second
 // connect is refused 503. See WithMaxSSEConn.
 const defaultMaxSSEConn = 10_000
 
-// defaultPinnedDeadline is how long a dispatch waits for the child goroutine
+// defaultPinnedDeadline is how long a dispatch waits for the stream goroutine
 // before declaring it pinned. See WithPinnedDeadline.
 const defaultPinnedDeadline = 5 * time.Second
 

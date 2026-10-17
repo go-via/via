@@ -63,7 +63,7 @@ func (p *Why) View() h.H {
 			h.Li(h.Strong(h.Str("Shared state is your store plus a topic. ")),
 				h.Str("via holds no global state. Keep the shared value in your own store and publish changes on a "), API("topic.Topic"),
 				h.Str("; each tab's unit follows it with "), API("via.State.Track"), h.Str(" or "), API("via.Ctx.Listen"),
-				h.Str(", on the unit's own goroutine, so handlers need no locks.")),
+				h.Str(", on its tab's stream goroutine, so handlers need no locks.")),
 			h.Li(h.Strong(h.Str("No JavaScript and no build step. ")),
 				h.Str("The "), d.Link("/glossary#datastar", "Datastar"), h.Str(" client is embedded in the via module and served by the router. "+
 					"When a view needs a JS library, an "), d.Link("/islands", "island"), h.Str(" hands it one subtree.")),

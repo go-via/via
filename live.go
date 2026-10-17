@@ -160,7 +160,7 @@ func (c *Ctx) OnDispose(fn func()) {
 }
 
 // Listen wires a unit to a Topic: it subscribes, pumps every published value
-// into handler on the unit's own goroutine (serialized with Tick, so unit state
+// into handler on its tab's stream goroutine (serialized with Tick, so unit state
 // is mutated race-free), pushes this unit's re-render, and stops on disconnect.
 // Like Tick it makes the unit live and is valid only inside OnInit.
 //

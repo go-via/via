@@ -336,7 +336,7 @@ func (a *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Conn is an open SSE stream to a live child, carrying its per-connection tab id.
+// Conn is an open SSE stream to a live page, carrying its per-connection tab id.
 type Conn struct {
 	t        testing.TB
 	app      *App

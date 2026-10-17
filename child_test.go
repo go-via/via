@@ -855,7 +855,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 
 	// liveServer's httptest.NewTestServer only routes through its own
 	// srv.Client()'s transport (an in-memory network, needed for a live
-	// unit's own goroutines to run inside synctest) — a plain &http.Client{}
+	// stream goroutines to run inside synctest) — a plain &http.Client{}
 	// would try to dial the real network instead.
 	client := srv.Client()
 	jar, err := cookiejar.New(nil)
