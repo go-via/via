@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A native form submit on a plain child answers with a live page when the root is live through a `Tick` or `Listen`; the page had no stream, so the root stopped updating.
 - A leading newline in `<textarea>`, `<pre>` or `<listing>` content survives the render; the HTML parser dropped it, so a textarea lost its first blank line on every render and patch.
 - `WithTrustedOrigin` panics on a wildcard host or an empty port, which no browser Origin header can match; it accepted them and refused every request they were meant to admit.
 - `Session.Rotate` on a request with no session logs the random-key and in-memory-store warnings, as any other first write does.

@@ -1697,3 +1697,31 @@ func TestChild_aPlainGrandchildALiveChildsPushRevealsRunsItsOnInit(t *testing.T)
 		conn.Await("grand=[inited]")
 	})
 }
+
+// tickRootWithPlainForm is live through its root's Tick alone, and holds a
+// plain child whose native form is the one submitted.
+type tickRootWithPlainForm struct{ Form plainForm }
+
+func (p *tickRootWithPlainForm) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *tickRootWithPlainForm) View() h.H { return h.Div(via.Child(p.Form)) }
+
+type plainForm struct{}
+
+func (f *plainForm) Save(*via.Ctx) {}
+func (f *plainForm) View() h.H    { return via.PostForm(f.Save, h.Button(h.Str("save"))) }
+
+func TestChild_aPlainChildsNativeSubmitAnswersALivePageForALiveRoot(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(tickRootWithPlainForm{}))
+	t.Cleanup(srv.Close)
+	c := srv.Client()
+
+	page := jarGet(t, c, srv.URL+"/")
+	require.Contains(t, page, "data-init")
+	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "0", 0), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "data-init", "the answering page must reconnect its live root")
+}

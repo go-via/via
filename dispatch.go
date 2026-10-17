@@ -253,7 +253,7 @@ func (m *mount) serveGet(w http.ResponseWriter, req *http.Request) {
 	// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 	// leaving every live child under a parametrised mount dead.
 	base := concreteBase(m.patternBase, req, m.names)
-	m.writePage(w, req, m.newInst(), base, nil, nil)
+	m.writePage(w, req, m.newInst(), base, nil, nil, false)
 }
 
 // recoverRequest answers a panic on a plain request transport.
@@ -457,7 +457,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// run, not a snapshot of the dying connection's live tree (which the
 		// reconnect is about to reseed anyway). The request's cookie predates
 		// the action's Put or Rotate, so OnInit reads the action's session.
-		m.writePage(w, req, m.newInst(), base, nil, res.session)
+		m.writePage(w, req, m.newInst(), base, nil, res.session, false)
 		return
 	}
 	writePatch(w, nil) // the push already framed it
@@ -789,11 +789,12 @@ func noStream(mode actionMode, tab string) string {
 //
 // from non-nil already ran OnInit for this request; it carries that wiring down
 // (inheritRequestScope) instead of running OnInit twice.
-func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx, sess *Session) {
+func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx, sess *Session, rootLive bool) {
 	ctx, body := inst.renderPage(w, req, m, base, from, sess)
 	if ctx == nil {
 		return
 	}
+	ctx.live = ctx.live || rootLive
 	tab := ""
 	if len(liveUnits(ctx)) > 0 {
 		tab = m.newTabID(pageTabCredential(ctx, m.sessions, req))
@@ -906,7 +907,9 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		return
 	}
 	if mode == modeNative {
-		m.writePage(w, req, inst, base, u, nil)
+		// auth ran the root's OnInit, so its verdict holds a Tick or Listen the
+		// re-render below cannot re-derive.
+		m.writePage(w, req, inst, base, u, nil, auth.live)
 		return
 	}
 	b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
