@@ -236,35 +236,11 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	base := concreteBase(m.patternBase, req, m.names)
-	// Increment-then-check so the gauge can't be raced past the limit.
-	if n := m.liveCount.Add(1); n > int64(m.maxLive) {
-		m.liveCount.Add(-1)
-		m.warnAtCapacity(n - 1)
-		http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
+	adm, ok := m.admit(w)
+	if !ok {
 		return
 	}
-	defer m.liveCount.Add(-1)
-	// A connect arriving after Router.Close is refused rather than opened and
-	// torn down a microsecond later, so a client reconnecting into a shutdown
-	// gets one deterministic answer. The AfterFunc below is what makes the race
-	// with a Close landing just after this check harmless: it fires immediately
-	// on an already-cancelled router context.
-	if m.routerCtx != nil {
-		// Under liveMu so the check and the Add are one step against Close: an
-		// Add landing while Close is already parked in Wait is a WaitGroup
-		// misuse throw, not a recoverable panic.
-		m.liveMu.RLock()
-		select {
-		case <-m.routerCtx.Done():
-			m.liveMu.RUnlock()
-			http.Error(w, "server shutting down", http.StatusServiceUnavailable)
-			return
-		default:
-		}
-		m.live.Add(1)
-		m.liveMu.RUnlock()
-		defer m.live.Done()
-	}
+	defer adm.release()
 	headersSent := false
 	defer m.recoverConnect(w, req, &headersSent)
 	pv := m.newInst()
@@ -310,32 +286,11 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	registered := false
 	defer m.releaseUnregistered(id, stream, &registered)
 
-	// OnInit runs on the very Ctx the discovery render then binds, so a
-	// Tick/Listen it registers is what makes the root a live unit.
-	//
-	// Un-hydrated, unlike every earlier version of this line: the connect body
-	// is the client's, and this render is what decides the connection's action
-	// table and its liveness (I1). The body is kept as lc.client and applied to
-	// the display render of every push instead (livePush) — which is the only
-	// place it was ever visible, since connect frames no elements of its own.
-	rev := newRevertSet()
-	logFlag := new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
-	bind := newRootCtx(false, base, nil)
-	bind.rev = rev
-	bind.badDecodeLogged = logFlag
-	bind.unitV = pv
-	prebindSignals(bind, pv)
-	// OnInit gets the load above rather than a second one: when that load slid
-	// the idle window, only its handle knows to re-send the cookie, and a
-	// reconnect may be the only request an open tab ever makes.
-	bind.req, bind.sessions, bind.policy, bind.sessW = req, m.sessions, m.policy, w
-	bind.adoptSession(sessID, sessDat, nil)
-	if runOnInit(pv.v, bind, w, req, m.sessions, m.policy, true) != nil {
+	bind, ok := m.discover(w, req, pv, base, sessID, sessDat)
+	if !ok {
 		return
 	}
-	renderRootWith(bind, pv.v)
 	units := liveUnits(bind)
-
 	if len(units) == 0 {
 		http.Error(w, "no stream for this tab", http.StatusNotFound)
 		return
@@ -360,8 +315,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		sess:            connSID,
 		handlers:        units,
 		client:          connectClient(bind, connectSig),
-		rev:             rev,
-		badDecodeLogged: logFlag,
+		rev:             bind.rev,
+		badDecodeLogged: bind.badDecodeLogged,
 		end:             stream.end,
 		wire:            stream,
 		guard:           guard,
@@ -389,31 +344,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// channel onto runStream's select. Capacity 1 and coalescing, so a
 	// publisher never blocks and N pending values still cost one sweep.
 	wake := make(chan struct{}, 1)
-	var listeners []subscription
-	for _, u := range units {
-		u.streamCtx = streamCtx
-		for _, l := range u.subs {
-			l.start(wake)
-			listeners = append(listeners, l)
-		}
-	}
-
-	for _, u := range units {
-		p := connectUnit(u, stream, base, lc)
-		// The post-connect push below compares against the unit's last framed
-		// body; without this it would be empty and that push would ship a full
-		// frame even for an OnConnect fn that changed nothing.
-		if len(u.onConnect) > 0 {
-			p.baseline()
-		}
-		for _, fn := range u.onConnect {
-			fn()
-		}
-		// OnInit may have minted a session where the connect cookie left
-		// lc.sess empty — bind it now so the connection isn't left as a
-		// bare-tab-id credential.
-		lc.bindSession(u.session.sid())
-	}
+	listeners := startListeners(units, streamCtx, wake)
+	runOnConnect(units, stream, base, lc)
 
 	// Watched before the first sweep and the OnConnect pushes, which run app
 	// handlers: a Rotate elsewhere while they run must end this stream. Not
@@ -436,12 +368,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// would let its Session().Put SetCookie on a dead response: no error, no
 	// cookie, a session minted and orphaned until TTL (I2). Clearing it makes
 	// Session.ensure's "no cookie can be set" warning fire, as documented.
-	for _, u := range units {
-		u.sessW = nil
-		if u.session != nil {
-			u.session.w = nil // the handle cached w at resolve time; clearing the Ctx alone left it live
-		}
-	}
+	detachResponse(units)
 
 	// Whatever an OnConnect published is drained first, so the connect's own
 	// frame carries it rather than a pre-handler render the next sweep would
@@ -452,14 +379,137 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// A Set inside an OnConnect fn has no push to ride — runStream does no
 	// initial push — so it must be pushed explicitly here. It ships a frame
 	// only if the render moved off the baseline taken before the fns ran.
-	for _, u := range units {
-		if len(u.onConnect) > 0 {
-			runPushItem(m.cfg.log, guard, pushItem{push: u.pusher})
-		}
-	}
+	pushOnConnect(m.cfg.log, guard, units)
 
 	streaming = true
 	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc, sseHeartbeat)
+}
+
+func startListeners(units []*Ctx, streamCtx context.Context, wake chan struct{}) []subscription {
+	var listeners []subscription
+	for _, u := range units {
+		u.streamCtx = streamCtx
+		for _, l := range u.subs {
+			l.start(wake)
+			listeners = append(listeners, l)
+		}
+	}
+	return listeners
+}
+
+// runOnConnect wires each unit's pusher and runs its OnConnect fns.
+func runOnConnect(units []*Ctx, stream *stream, base string, lc *tabStream) {
+	for _, u := range units {
+		p := connectUnit(u, stream, base, lc)
+		// pushOnConnect compares against the unit's last framed body; without
+		// this it would be empty and that push would ship a full frame even for
+		// an OnConnect fn that changed nothing.
+		if len(u.onConnect) > 0 {
+			p.baseline()
+		}
+		for _, fn := range u.onConnect {
+			fn()
+		}
+		// OnInit may have minted a session where the connect cookie left
+		// lc.sess empty — bind it now so the connection isn't left as a
+		// bare-tab-id credential.
+		lc.bindSession(u.session.sid())
+	}
+}
+
+func detachResponse(units []*Ctx) {
+	for _, u := range units {
+		u.sessW = nil
+		if u.session != nil {
+			u.session.w = nil // the handle cached w at resolve time; clearing the Ctx alone left it live
+		}
+	}
+}
+
+// pushOnConnect ships a frame for each unit whose render moved off the
+// baseline runOnConnect took before its OnConnect fns ran.
+func pushOnConnect(log *slog.Logger, g *pushGuard, units []*Ctx) {
+	for _, u := range units {
+		if len(u.onConnect) > 0 {
+			runPushItem(log, g, pushItem{push: u.pusher})
+		}
+	}
+}
+
+// discover runs the root's OnInit and the discovery render that binds it.
+// OnInit runs on the very Ctx that render binds, so a Tick/Listen it registers
+// is what makes the root a live unit.
+//
+// Un-hydrated, unlike every earlier version of this step: the connect body is
+// the client's, and this render is what decides the connection's action table
+// and its liveness (I1). The body is kept as lc.client and applied to the
+// display render of every push instead (livePush) — which is the only place it
+// was ever visible, since connect frames no elements of its own.
+func (m *mount) discover(w http.ResponseWriter, req *http.Request, pv instance, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
+	bind := newRootCtx(false, base, nil)
+	bind.rev = newRevertSet()
+	bind.badDecodeLogged = new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
+	bind.unitV = pv
+	prebindSignals(bind, pv)
+	// OnInit gets the session load connect made rather than a second one: when
+	// that load slid the idle window, only its handle knows to re-send the
+	// cookie, and a reconnect may be the only request an open tab ever makes.
+	bind.req, bind.sessions, bind.policy, bind.sessW = req, m.sessions, m.policy, w
+	bind.adoptSession(sessID, sessDat, nil)
+	if runOnInit(pv.v, bind, w, req, m.sessions, m.policy, true) != nil {
+		return nil, false
+	}
+	renderRootWith(bind, pv.v)
+	return bind, true
+}
+
+// admission is one stream counted against the mount's capacity and, under a
+// Router, against the drain Close waits for.
+type admission struct {
+	m       *mount
+	drained bool
+}
+
+// admit counts a stream in, or answers 503 when the mount is at capacity or
+// the router is shutting down.
+func (m *mount) admit(w http.ResponseWriter) (admission, bool) {
+	// Increment-then-check so the gauge can't be raced past the limit.
+	if n := m.liveCount.Add(1); n > int64(m.maxLive) {
+		m.liveCount.Add(-1)
+		m.warnAtCapacity(n - 1)
+		http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
+		return admission{}, false
+	}
+	// A connect arriving after Router.Close is refused rather than opened and
+	// torn down a microsecond later, so a client reconnecting into a shutdown
+	// gets one deterministic answer. connect's AfterFunc is what makes the race
+	// with a Close landing just after this check harmless: it fires immediately
+	// on an already-cancelled router context.
+	if m.routerCtx == nil {
+		return admission{m: m}, true
+	}
+	// Under liveMu so the check and the Add are one step against Close: an
+	// Add landing while Close is already parked in Wait is a WaitGroup
+	// misuse throw, not a recoverable panic.
+	m.liveMu.RLock()
+	select {
+	case <-m.routerCtx.Done():
+		m.liveMu.RUnlock()
+		m.liveCount.Add(-1)
+		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
+		return admission{}, false
+	default:
+	}
+	m.live.Add(1)
+	m.liveMu.RUnlock()
+	return admission{m: m, drained: true}, true
+}
+
+func (a admission) release() {
+	if a.drained {
+		a.m.live.Done()
+	}
+	a.m.liveCount.Add(-1)
 }
 
 // recoverConnect answers a panic before the stream's headers went out, which
