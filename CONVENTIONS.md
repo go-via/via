@@ -212,6 +212,18 @@ A package that needs the same option type a sibling already defines
 should re-export it with an alias (`type Option = spec.Option`) rather
 than expose the shared internal type in its signatures.
 
+## No Func Literals
+
+Non-test code holds no func literals. A callback is a named func, a method
+value, or a small type with a method (an `http.Handler`, a `sort` comparator
+named for its order). Named code has a name in a stack trace and a profile,
+and a typed value states what it captures; a closure on a hot path also
+allocates per call.
+
+`TestSources_holdNoFuncLiterals` in `sourcelint_test.go` enforces this across
+all three modules. Tests are exempt (`t.Run`, `assert.Eventually`), and so is
+`internal/site/snippet/src`, which shows readers plain `net/http` code.
+
 ## Panic on Invalid Registration
 
 Reasoning: Errors during page or router registration are programming
@@ -518,9 +530,10 @@ signal — change the surface, not the test boundary.
 Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
 (the reflect allowlist, the no-`&`/no-closure guard over the site's demos and
 snippets, the guard that keeps `internal/render`'s binder plumbing off every
-public package, and the black-box test lint) parse the tree and assert on what
-it says, so they pair with every source file and therefore with none. A failure
-there means the source drifted from a design rule, not a behavioral regression.
+public package, the black-box test lint and the func-literal lint) parse the
+tree and assert on what it says, so they pair with every source file and
+therefore with none. A failure there means the source drifted from a design
+rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A
