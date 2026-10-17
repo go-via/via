@@ -587,7 +587,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w}
+	rc := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, streamCtx: unit.streamCtx}
 	rc.adoptSession(sessID, beforeSession, nil)
 	rc.session.stream = lc
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
@@ -602,7 +602,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
 	// the tab is navigating away from this render. See reloader.
 	if rc.redirect.url == "" {
-		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base}
+		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
 			return actionResult{initErr: err, pushWork: unit.pusher}
 		}

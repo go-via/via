@@ -1469,3 +1469,28 @@ func TestTick_aNilHandlerPanicsOnTheBeatAndSaysSo(t *testing.T) {
 		assert.Contains(t, out.String(), "live push panic", "a nil Tick handler must not run silently")
 	})
 }
+
+type ctxKeeper struct {
+	n   via.State[int]
+	got chan context.Context
+}
+
+func (p *ctxKeeper) Keep(ctx *via.Ctx) { p.got <- ctx.Context() }
+
+func (p *ctxKeeper) View() h.H { return h.Div(p.n.Display(), h.Button(on.Click(p.Keep))) }
+
+func TestLive_anActionsContextIsTheStreamsNotThePOSTs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		got := make(chan context.Context, 1)
+		app := vt.Serve(t, via.Handler(ctxKeeper{got: got}))
+		conn := app.Connect()
+		code, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		actx := <-got
+
+		require.NoError(t, actx.Err(), "the context must outlive the POST that ran the action")
+		conn.Close()
+		synctest.Wait()
+		assert.Error(t, actx.Err(), "and end with the tab's stream")
+	})
+}
