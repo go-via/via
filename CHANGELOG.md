@@ -23,6 +23,8 @@
   `(!($a || $b))` and `.Eq(1)` is `(($a || $b) === 1)`. Both used to bind to
   the last term only. A bare `$name`, a literal and an already parenthesized
   expression are emitted as before.
+- `vt.Conn` reads a frame line up to 16 MiB. A live view over 64 KB used to
+  end the reader, so `Await` reported the stream closed.
 
 ### Documented (behaviour unchanged)
 

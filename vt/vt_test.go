@@ -157,3 +157,26 @@ type misnamed struct{}
 
 func (misnamed) View() h.H              { return h.Div() }
 func (*misnamed) Oninit(*via.Ctx) error { return nil }
+
+func TestConnAwait_findsAFrameLargerThanAScannerToken(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(tally{Tail: strings.Repeat("x", 100<<10)}, via.WithLogger(vt.Logger(t))))
+		conn := app.Connect()
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+		conn.Await("n=1")
+	})
+}
+
+func TestConnAwait_timeoutCountsTheFramesThisWaitRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{TB: t}
+		app := vt.Serve(rec, via.Handler(tally{}, via.WithLogger(vt.Logger(t))))
+		conn := app.Connect()
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		msg := rec.failure(func() { conn.Await("never") })
+		assert.Contains(t, msg, "1 read by this wait")
+	})
+}

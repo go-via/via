@@ -356,6 +356,9 @@ type Conn struct {
 // push before the one that was expected, few enough to read.
 const recentKept = 3
 
+// maxFrameLine caps one line of the stream.
+const maxFrameLine = 16 << 20
+
 // awaitTimeout bounds every wait on the stream.
 const awaitTimeout = 2 * time.Second
 
@@ -476,6 +479,8 @@ func (c *Conn) read(ctx context.Context, resp *http.Response, frames chan<- stri
 	defer close(frames)
 	defer resp.Body.Close()
 	sc := bufio.NewScanner(resp.Body)
+	// A patch carries the unit's whole HTML on one line, past the default 64 KB.
+	sc.Buffer(nil, maxFrameLine)
 	defer c.endRead(sc)
 	inElements := false
 	for sc.Scan() {
