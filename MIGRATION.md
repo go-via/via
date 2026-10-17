@@ -129,7 +129,8 @@ It catches two of the three ways to get this wrong:
   the walk and only panics on the first render that binds it.
 
 `OnInit` runs per request: on the GET, on every
-action, and on the SSE connect. Pair a connection-scoped acquire with
+plain action, and on the SSE connect, but not on a live action over an
+open stream. Pair a connection-scoped acquire with
 `ctx.OnConnect(fn)` and its release with `ctx.OnDispose(fn)`; both run only
 when a stream opens.
 

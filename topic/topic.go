@@ -121,7 +121,7 @@ func (s *Sub[T]) enqueue(v T) (wake chan<- struct{}, ok bool) {
 		s.mu.Unlock()
 		if warn {
 			// slog.Default(): no Router in scope.
-			slog.Default().Warn("via/topic: subscriber backlog hit its limit; dropping newest values for "+
+			slog.Default().Warn("topic: subscriber backlog hit its limit; dropping newest values for "+
 				"this subscriber only", "limit", s.limit)
 		}
 		return nil, false
