@@ -205,20 +205,12 @@ var logLineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 // sentinel gets the status it means, anything else is a server fault — logged
 // with its stack, answered 500. sse is runOnInit's flag of the same name.
 func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, rec any, what string, sse bool) {
-	if _, ok := rec.(paramMiss); ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
 	if ci, ok := rec.(initOutcome); ok {
 		answerInitFailure(log, w, req, ci, sse)
 		return
 	}
-	if bad, ok := rec.(badActionArg); ok {
-		http.Error(w, "bad action arg: "+bad.err.Error(), http.StatusBadRequest)
-		return
-	}
-	if un, ok := rec.(unrenderedArg); ok {
-		http.Error(w, un.body(log), http.StatusGone)
+	if res, ok := sentinelResult(log, rec); ok {
+		answerSentinel(w, res)
 		return
 	}
 	attrs := []any{"err", rec, "stack", string(debug.Stack())}

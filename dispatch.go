@@ -433,20 +433,11 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, res.forbidden, http.StatusForbidden)
 		return
 	}
-	if res.gone != "" {
-		http.Error(w, res.gone, http.StatusGone)
-		return
-	}
 	if res.initErr != nil {
 		answerReloadFailure(m.cfg.log, w, res.initErr)
 		return
 	}
-	if res.badArg != nil {
-		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
-		return
-	}
-	if res.paramMiss {
-		http.Error(w, "not found", http.StatusNotFound)
+	if answerSentinel(w, res) {
 		return
 	}
 	if res.panicked {
@@ -559,11 +550,10 @@ func (a *liveAction) apply() actionResult {
 func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
 	defer lc.recoverAction(unit, act, &res)
 	// Registered before the hydrate loop so every exit unwinds it, not just the
-	// one that reaches a push: a malformed arg, an unrendered arg, a paramMiss,
-	// a handler panic or a reloadUnit error all return without pushWork, and
-	// livePush's restore is the only other one — so without this the client's
-	// posted values stayed on the instance for the next Tick/Listen handler to
-	// read. Deferred rather than inline so the handler and reloadUnit still see
+	// one that reaches a push: a malformed or unrendered arg returns without
+	// pushWork, and livePush's restore is the only other one — so without this
+	// the client's posted values stayed on the instance for the next
+	// Tick/Listen handler to read. Deferred rather than inline so the handler and reloadUnit still see
 	// the hydrated values; a Set inside the handler drops its own slot, so a
 	// server write still survives.
 	defer lc.rev.restore()
@@ -642,25 +632,53 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // as a handler fault.
 func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
 	if rec := recover(); rec != nil {
-		if bad, ok := rec.(badActionArg); ok {
-			*res = actionResult{badArg: bad.err}
-			return
-		}
-		if un, ok := rec.(unrenderedArg); ok {
-			*res = actionResult{gone: un.body(c.mount.cfg.log)}
-			return
-		}
-		// Same sentinel, same answer as recoverToHTTP gives the plain path:
-		// the URL names something that does not exist, which is a 404, not
-		// a server fault worth a stack dump.
-		if _, ok := rec.(paramMiss); ok {
-			*res = actionResult{paramMiss: true, pushWork: unit.pusher}
+		if r, ok := sentinelResult(c.mount.cfg.log, rec); ok {
+			// Param panics from inside the handler, which may already have
+			// Set state; as after a handler panic, the push flushes it.
+			if r.paramMiss {
+				r.pushWork = unit.pusher
+			}
+			*res = r
 			return
 		}
 		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
 			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
 		*res = actionResult{panicked: true, pushWork: unit.pusher}
 	}
+}
+
+// sentinelResult sorts a recovered panic that is one of via's request
+// sentinels into the actionResult field that answers it. ok is false for
+// anything else, which is a handler fault. Both transports answer through it,
+// so a sentinel means the same status on a plain request and over a stream.
+func sentinelResult(log *slog.Logger, rec any) (res actionResult, ok bool) {
+	switch v := rec.(type) {
+	case badActionArg:
+		return actionResult{badArg: v.err}, true
+	case unrenderedArg:
+		return actionResult{gone: v.body(log)}, true
+	case paramMiss:
+		// The URL names something that does not exist: a 404, not a server
+		// fault worth a stack dump.
+		return actionResult{paramMiss: true}, true
+	}
+	return actionResult{}, false
+}
+
+// answerSentinel writes the answer for res's sentinel field and reports
+// whether it had one.
+func answerSentinel(w http.ResponseWriter, res actionResult) bool {
+	switch {
+	case res.gone != "":
+		http.Error(w, res.gone, http.StatusGone)
+	case res.badArg != nil:
+		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
+	case res.paramMiss:
+		http.Error(w, "not found", http.StatusNotFound)
+	default:
+		return false
+	}
+	return true
 }
 
 // unknownAction is the 410 body for an id this render does not bind — a branch
