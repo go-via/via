@@ -1105,7 +1105,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, au
 	// already-live root — liveAncestor reads that off the discovery tree, since
 	// this re-render's own synthetic root has no ancestor Ctx to walk from.
 	// auth, not bind (I1): liveness is the un-hydrated render's verdict.
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged, liveAncestor(auth, child), nil)
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged, liveAncestor(auth, child))
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil

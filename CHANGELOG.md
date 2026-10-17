@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A plain grandchild that a live child's push reveals runs its `OnInit`, as it does under a live root. A live grandchild revealed under a unit that is live through a `Tick` or `Listen` alone now aborts the push, as it does when the unit renders `State`.
 - A `Signal.Set` inside an `OnConnect` fn reaches the client. The baseline render taken before `OnConnect` runs bound the handles to a throwaway copy, so the Set never shipped.
 - A relative `Redirect` from an action reached by a native form submit resolves against the page, as the `@post` path does. It resolved against the action URL, so `Redirect("?step=2")` landed under `/_via/a/`.
 - A live action that calls `Redirect` no longer pushes its unit's render over the stream, as `Redirect` documents.

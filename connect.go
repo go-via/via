@@ -116,9 +116,9 @@ type unitPusher struct {
 	// from is what makes a live root's plain children survive a push: Child
 	// re-copies each child from the root's field every render, so a child whose
 	// fields OnInit filled comes back zero-valued unless that OnInit runs again.
-	// Cost: a plain child of a live root runs its OnInit once per pushed frame —
-	// keep it cheap, or hold the data on the live root. A live child may not
-	// Child at all (checkLiveNesting), so a child's push ignores it.
+	// Cost: a plain child of a live unit runs its OnInit once per pushed frame —
+	// keep it cheap, or hold the data on the live unit. It also carries the
+	// unit's liveness, which a Tick or Listen set at connect and no push re-runs.
 	from        *Ctx
 	last        *Ctx   // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	childKey    string // empty for the root
@@ -135,7 +135,7 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 	// unit could never have connected otherwise (checkLiveNesting already proved
 	// it at connect). Its own children are under a live ancestor regardless,
 	// since checkLiveUnderLive folds in c.live itself.
-	return renderChildBind(p.childKey, p.inst, p.base, nil, rev, p.lc.badDecodeLogged, false, p.from.policy)
+	return renderChildBind(p.childKey, p.inst, p.base, p.from, rev, p.lc.badDecodeLogged, false)
 }
 
 // push renders and frames the unit. Unchanged frames are dropped (the

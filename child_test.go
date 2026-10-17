@@ -1645,3 +1645,55 @@ func TestChild_aLiveChildsPushKeepsTheRoutersLogger(t *testing.T) {
 		assert.Contains(t, buf.String(), "did not decode", "the warning must reach WithLogger, not slog.Default")
 	})
 }
+
+// tickOnlyGatedChild is live through its Tick alone: its View renders no State,
+// so nothing in a push re-derives its liveness.
+type tickOnlyGatedChild[G any] struct {
+	Gate  via.Signal[bool]
+	Grand G
+}
+
+func (c *tickOnlyGatedChild[G]) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (c *tickOnlyGatedChild[G]) Ping(*via.Ctx) {}
+func (c *tickOnlyGatedChild[G]) grand() h.H    { return via.Child(c.Grand) }
+func (c *tickOnlyGatedChild[G]) View() h.H {
+	return h.Div(h.Input(c.Gate.Bind()), h.Button(on.Click(c.Ping)), via.When(c.Gate.Get(), c.grand))
+}
+
+type plainRootWithTickOnlyChild[G any] struct{ Kid tickOnlyGatedChild[G] }
+
+func (p *plainRootWithTickOnlyChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_aTickOnlyLiveChildsPushCannotGrowALiveGrandchild(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+		via.Mount(r, "/", plainRootWithTickOnlyChild[gcLive]{})
+		app := vt.Serve(t, r)
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		synctest.Wait()
+		assert.Contains(t, out.String(), "live push aborted", "liveness comes from the Tick, which a push does not re-run")
+	})
+}
+
+type initedGrand struct{ seen string }
+
+func (g *initedGrand) OnInit(*via.Ctx) error { g.seen = "inited"; return nil }
+func (g *initedGrand) View() h.H             { return h.Div(h.Str("grand=[" + g.seen + "]")) }
+
+func TestChild_aPlainGrandchildALiveChildsPushRevealsRunsItsOnInit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(plainRootWithGatedLiveChild[initedGrand]{}))
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		conn.Await("grand=[inited]")
+	})
+}
