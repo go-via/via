@@ -62,8 +62,9 @@ func (p *Start) View() h.H {
 			h.Li(API("via.Handler"), h.Str(" and "), API("via.Mount"),
 				h.Str(" take the composition by value: no "), Code("&"), h.Str(" at the call site, and a missing or mistyped "),
 				Code("View"), h.Str(" is a compile error.")),
-			h.Li(APIText("via.Router.Close", "r.Close()"), h.Str(" drains the live half once the server stops. "),
-				Code("http.Server.Shutdown"), h.Str(" does not.")),
+			h.Li(APIText("via.Router.Close", "r.Close()"), h.Str(" ends every open stream the way a closed tab would. "),
+				Code("http.Server.Shutdown"), h.Str(" never ends a stream, so a server with one calls Close first; the "),
+				d.Link("/tutorial#4-running-it", "tutorial"), h.Str(" wires both to Ctrl-C.")),
 		),
 
 		d.H2("Make it live"),
