@@ -139,7 +139,7 @@ func (p *Compositions) View() h.H {
 		h.P(APIText("via.When", "via.When(cond, build)"), h.Str(" calls build only when cond holds. "), API("via.Each"),
 			h.Str(" and "), API("via.List.Each"), h.Str(" call a row method per item. A row is markup, not a unit: "+
 				"its action is a method on the list's owner, and "), API("on.Bind"),
-			h.Str(" carries the row's id with the click. A Signal inside a slice element has no field to be named by, and rendering it panics.")),
+			h.Str(" carries the row's id with the click. A Signal inside a slice element has no field to be named by, so Mount panics on a slice field that holds one.")),
 		h.P(h.Str("Give each row a stable "), API("h.ID"), h.Str(". Datastar morphs a re-rendered list by position, "+
 			"which is right for an append-only log and wrong after a delete or a reorder: without ids, the rows after the removed one "+
 			"are patched in place from their neighbours.")),
